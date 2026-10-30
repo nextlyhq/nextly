@@ -25,6 +25,7 @@ function renderList(fields: BuilderField[]) {
   return render(
     <DndContext>
       <BuilderFieldList
+        kind="collection"
         fields={fields}
         onAddAt={vi.fn()}
         onEditField={vi.fn()}

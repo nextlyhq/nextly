@@ -32,6 +32,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   currentRuleLanguage,
@@ -41,6 +42,10 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  asNotMigrated,
+  collectionNotMigrated,
+} from "../../../database/with-db-errors";
 import { container } from "../../../di/container";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -103,6 +108,7 @@ import {
   callerAccessGrants,
   type ReadAccessRedactions,
   runFieldHooks,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   assertFieldGroupPathsFilterable,
@@ -310,7 +316,7 @@ function namesHiddenColumn(tableName: string, path: string): boolean {
  * single place because three callers agreeing today is not three callers that
  * stay agreed.
  */
-function fieldTrustOf(params: {
+export function fieldTrustOf(params: {
   overrideAccess?: boolean;
   enforceFieldAccess?: boolean;
 }): boolean {
@@ -1021,6 +1027,15 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * Where this service's field rules read a visitor's Public grants, as its
+   * collection gate reads them. A write by query reads it from here, so the
+   * fields its `where` may name are judged as this service's reads judge them.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return this.accessService.fieldRuleVisitor;
+  }
+
+  /**
    * The documents a due release would publish in this collection, if any.
    *
    * Costs a memo read while nothing is scheduled — see `createReleaseVisibility`
@@ -1253,6 +1268,7 @@ export class CollectionQueryService extends BaseService {
           | Record<string, unknown>
           | undefined,
         authenticatedScope: params.authenticatedScope,
+        visitor: this.accessService.fieldRuleVisitor,
       },
     };
     // `params.where` -- what the CALLER sent -- never the hook-settled
@@ -1390,6 +1406,7 @@ export class CollectionQueryService extends BaseService {
         caller: {
           user: caller.user as Record<string, unknown> | undefined,
           authenticatedScope: caller.authenticatedScope,
+          visitor: this.accessService.fieldRuleVisitor,
         },
       }
     );
@@ -1788,6 +1805,8 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     overrideAccess?: boolean;
     status?: StatusOption;
+    /** The user access is judged for; absent for a visitor's read. */
+    accessUser?: UserContext;
   }): Promise<{
     statusFilter: ReturnType<typeof resolveStatusFilter>;
     collection: unknown;
@@ -1803,6 +1822,10 @@ export class CollectionQueryService extends BaseService {
       collectionHasStatus: (collection as { status?: boolean }).status === true,
       overrideAccess: params.overrideAccess === true,
       explicit: params.status,
+      publishedOnly: readsAsVisitor({
+        overrideAccess: params.overrideAccess,
+        user: params.accessUser,
+      }),
     });
 
     return { statusFilter, collection };
@@ -2076,6 +2099,7 @@ export class CollectionQueryService extends BaseService {
       collectionName: params.collectionName,
       overrideAccess: params.overrideAccess,
       status: params.status,
+      accessUser: params.accessUser,
     });
     // The lifecycle predicate: the resolved status set, widened by whatever a
     // due release has made public as of this read's instant. Built here rather
@@ -2657,9 +2681,12 @@ export class CollectionQueryService extends BaseService {
     const fieldGroupCaller = {
       user: params.fieldAccessUser ?? params.user,
       authenticatedScope: params.authenticatedScope,
+      // A visitor is handed the Public role the collection gate read.
       grants: callerAccessGrants(
         params.fieldAccessUser ?? params.user,
-        params.authenticatedScope
+        params.authenticatedScope,
+        undefined,
+        this.accessService.fieldRuleVisitor
       ),
     };
     for (const row of finalData) {
@@ -2977,6 +3004,13 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks (collection-level, field permissions) */
     overrideAccess?: boolean;
     /**
+     * A write rule's filter the list is narrowed to, matched as the read's
+     * own rule filter is. A bulk write lists through a trusted read
+     * (`overrideAccess`), which asks no read rule, and this keeps that list to
+     * the entries the caller's write rule matches.
+     */
+    writeRuleFilter?: RuleFilter;
+    /**
      * Enforce FIELD-level read rules even on a read that is otherwise trusted.
      *
      * `overrideAccess` governs two different trusts with one boolean — "you may
@@ -3189,7 +3223,8 @@ export class CollectionQueryService extends BaseService {
         localeChain,
         // This path has rows to evaluate them over.
         extractGeo: true,
-        ruleFilter: access.filter,
+        // A trusted list asks no read rule; a bulk write's narrows it instead.
+        ruleFilter: access.filter ?? params.writeRuleFilter,
       });
       const hasGeoFilters = geoFilters.length > 0;
 
@@ -3603,7 +3638,14 @@ export class CollectionQueryService extends BaseService {
         message: "Entries fetched successfully",
         data: paginatedResponse,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       // Determine appropriate status code based on error type
       const message =
         error instanceof Error ? error.message : "Failed to fetch entries";
@@ -4013,7 +4055,7 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
-      return this.countFailed(params.collectionName, error);
+      return this.countFailed(params.collectionName, error, params);
     }
   }
 
@@ -4021,10 +4063,18 @@ export class CollectionQueryService extends BaseService {
    * A count that failed, as both counts report it: logged, and returned with
    * the error's own status and code.
    */
-  private countFailed(
+  private async countFailed(
     collectionName: string,
-    error: unknown
-  ): CollectionServiceResult<never> {
+    caught: unknown,
+    caller: { overrideAccess?: boolean; enforceFieldAccess?: boolean } = {}
+  ): Promise<CollectionServiceResult<never>> {
+    // A count the database is not migrated for answers as such, not as a 500.
+    const error = await asNotMigrated(
+      caught,
+      collectionNotMigrated(this.collectionService, collectionName, {
+        trusted: fieldTrustOf(caller),
+      })
+    );
     const message =
       error instanceof Error ? error.message : "Failed to count entries";
     this.logger.error("Error counting entries", {
@@ -4092,7 +4142,7 @@ export class CollectionQueryService extends BaseService {
       };
     } catch (error: unknown) {
       // Reported as `countEntries` reports it, so a refusal stays a typed 403.
-      return this.countFailed(params.collectionName, error);
+      return this.countFailed(params.collectionName, error, params);
     }
   }
 
@@ -4182,7 +4232,14 @@ export class CollectionQueryService extends BaseService {
           truncated: rows.length > cap,
         },
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       const message =
         error instanceof Error ? error.message : "Failed to group entries";
       this.logger.error("Error grouping entries", {
@@ -4326,7 +4383,14 @@ export class CollectionQueryService extends BaseService {
       const counted = countedByBucket(rows);
 
       return this.timeseriesAnswer(window, interval, counted);
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       const message =
         error instanceof Error ? error.message : "Failed to build timeseries";
       this.logger.error("Error building timeseries", {
@@ -4543,6 +4607,9 @@ export class CollectionQueryService extends BaseService {
           collectionName: params.collectionName,
           overrideAccess: params.overrideAccess,
           status: params.status,
+          // The user access is judged for, as the gate above judged it: none
+          // for a trusted read, and none for a visitor's.
+          accessUser: params.overrideAccess ? undefined : params.user,
         });
 
       const idCondition = eq(schema.id, entryId);
@@ -5092,7 +5159,14 @@ export class CollectionQueryService extends BaseService {
         data: finalData,
         resolvedEntryId,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       return {
         success: false,
         statusCode: 500,

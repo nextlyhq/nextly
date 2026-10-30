@@ -30,6 +30,10 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -77,6 +81,7 @@ import {
   runFieldHooks,
   resolvedCallerGrants,
   type CallerGrants,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -95,6 +100,7 @@ import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
@@ -377,6 +383,16 @@ export class SingleMutationService extends BaseService {
       // to a caller who may publish and not update.
       args => this.workingDraftPromotionRefused(args)
     );
+  }
+
+  /**
+   * Where this service's Single gate and field rules read a visitor's Public
+   * grants: the read service's, built over the same database and
+   * access-control service, so a Single's writes and reads judge one Public
+   * role.
+   */
+  private get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return this.queryService.fieldRuleVisitor;
   }
 
   // ============================================================
@@ -670,6 +686,7 @@ export class SingleMutationService extends BaseService {
         overrideAccess: params.overrideAccess,
         routeAuthorized: params.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
         authenticatedScope: params.authenticatedScope,
         logger: this.logger,
       });
@@ -686,7 +703,8 @@ export class SingleMutationService extends BaseService {
       // Resolved before the transaction: they take a pooled connection.
       const grants = await resolvedCallerGrants(
         params.user,
-        params.authenticatedScope
+        params.authenticatedScope,
+        this.fieldRuleVisitor
       );
       const took =
         singleMeta && companion
@@ -717,7 +735,16 @@ export class SingleMutationService extends BaseService {
       return { success: true, statusCode: 200, data };
     } catch (error) {
       return {
-        ...buildSingleErrorResult(error, "Failed to take the live values"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, params.slug, {
+              trusted: fieldTrustOf(params),
+            })
+          ),
+          "Failed to take the live values"
+        ),
         data: undefined,
       };
     }
@@ -779,50 +806,61 @@ export class SingleMutationService extends BaseService {
     }
 
     // The drafts it removed, counted by the delete made under the lock.
-    return this.adapter.transaction(async tx => {
-      // No row means the document has never been written, which cannot have a
-      // pending change against it. The lock serializes this with the
-      // draft-save upserts that lock this row before writing the sidecar.
-      const entryId = await this.lockedSingleRowId(
-        tx,
-        singleMeta.tableName,
-        params.slug,
-        params.entryId,
-        "discard-working-draft-single-replaced"
-      );
-      if (entryId === undefined) return 0;
-
-      const draftLocale = workingDraftLocale({
-        documentLocalized: singleMeta.localized === true,
-        requestLocale: params.locale ?? null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      });
-      const discardedRef = {
-        scopeKind: "single" as const,
-        scopeSlug: params.slug,
-        entryId,
-      };
-      const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-        discardedRef,
-        draftLocale
-      );
-      await releaseSharedBase(tx, discardedRef, draftLocale);
-      // In the Single's history only when there was a draft to discard.
-      if (removed > 0) {
-        await recordWriteEvent(
+    return this.adapter
+      .transaction(async tx => {
+        // No row means the document has never been written, which cannot have a
+        // pending change against it. The lock serializes this with the
+        // draft-save upserts that lock this row before writing the sidecar.
+        const entryId = await this.lockedSingleRowId(
           tx,
-          { adapter: this.adapter },
-          {
-            subject: { kind: "single", slug: params.slug, id: entryId },
-            kind: "draftDiscarded",
-            actor: actorForWrite(params.actor ?? null, params.user),
-            personName: params.user?.name ?? null,
-            ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
-          }
+          singleMeta.tableName,
+          params.slug,
+          params.entryId,
+          "discard-working-draft-single-replaced"
         );
-      }
-      return removed;
-    });
+        if (entryId === undefined) return 0;
+
+        const draftLocale = workingDraftLocale({
+          documentLocalized: singleMeta.localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
+        const discardedRef = {
+          scopeKind: "single" as const,
+          scopeSlug: params.slug,
+          entryId,
+        };
+        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
+          discardedRef,
+          draftLocale
+        );
+        await releaseSharedBase(tx, discardedRef, draftLocale);
+        // In the Single's history only when there was a draft to discard.
+        if (removed > 0) {
+          await recordWriteEvent(
+            tx,
+            { adapter: this.adapter },
+            {
+              subject: { kind: "single", slug: params.slug, id: entryId },
+              kind: "draftDiscarded",
+              actor: actorForWrite(params.actor ?? null, params.user),
+              personName: params.user?.name ?? null,
+              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+            }
+          );
+        }
+        return removed;
+      })
+      .catch(async (error: unknown) => {
+        // A discard the database is not migrated for answers as such. Its
+        // transaction rolls back whole, so a failure never follows a kept write.
+        throw await asNotMigrated(
+          error,
+          // No caller trust to judge: a discard takes no `overrideAccess`, so
+          // it is told the Single alone.
+          singleNotMigrated(this.singleRegistryService, params.slug)
+        );
+      });
   }
 
   /**
@@ -1054,6 +1092,7 @@ export class SingleMutationService extends BaseService {
         trusted: options.trusted,
         routeAuthorized: false,
         rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
         authenticatedScope: options.authenticatedScope,
         logger: this.logger,
       })
@@ -1153,7 +1192,11 @@ export class SingleMutationService extends BaseService {
     // The caller's grants, resolved before the transaction opens, as the
     // write resolves them: a pooled read issued while the transaction holds a
     // connection waits for that connection on a small pool.
-    const grants = await resolvedCallerGrants(params.user, undefined);
+    const grants = await resolvedCallerGrants(
+      params.user,
+      undefined,
+      this.fieldRuleVisitor
+    );
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the live document through one.
     return this.adapter.transaction(async tx => {
@@ -1552,6 +1595,7 @@ export class SingleMutationService extends BaseService {
             user: options.user,
             overrideAccess: options.overrideAccess,
             rbacAccessControlService: this.rbacAccessControlService,
+            visitor: this.fieldRuleVisitor,
             authenticatedScope: options.authenticatedScope,
             logger: this.logger,
           })
@@ -1563,6 +1607,7 @@ export class SingleMutationService extends BaseService {
             // The route attests only an update it ran itself.
             routeAuthorized: gate === "update" && options.routeAuthorized,
             rbacAccessControlService: this.rbacAccessControlService,
+            visitor: this.fieldRuleVisitor,
             // A scoped API key is judged on its own grants here too, so the session
             // super-admin bypass does not apply to it on the primary update gate.
             authenticatedScope: options.authenticatedScope,
@@ -1699,10 +1744,14 @@ export class SingleMutationService extends BaseService {
       // never by its owner's.
       const writeGrants = callerAccessGrants(
         options.user,
-        options.authenticatedScope
+        options.authenticatedScope,
+        undefined,
+        this.fieldRuleVisitor
       );
       const singleWriteAccess = {
-        ...fieldGroupWriteAccessOf(options),
+        // The visitor's loader too, so this access judges one Public role
+        // whether or not a save is handed `writeGrants` with it.
+        ...fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
         grants: writeGrants,
       };
       // The Single's row alone carries no field-group instance, so what an
@@ -1854,7 +1903,11 @@ export class SingleMutationService extends BaseService {
         singleMeta.versions?.drafts?.enabled === true &&
         options.overrideAccess !== true;
       const promoteGrants = mayReachPromoteGate
-        ? await resolvedCallerGrants(options.user, options.authenticatedScope)
+        ? await resolvedCallerGrants(
+            options.user,
+            options.authenticatedScope,
+            this.fieldRuleVisitor
+          )
         : undefined;
 
       // 6.25. Single-level beforeChange hooks, on data the validation gate has
@@ -1933,6 +1986,7 @@ export class SingleMutationService extends BaseService {
           // The route admitted a status change, not this edit.
           routeAuthorized: false,
           rbacAccessControlService: this.rbacAccessControlService,
+          visitor: this.fieldRuleVisitor,
           authenticatedScope: options.authenticatedScope,
           logger: this.logger,
         });
@@ -2014,6 +2068,7 @@ export class SingleMutationService extends BaseService {
                 // transition permission must actually run.
                 routeAuthorized: false,
                 rbacAccessControlService: this.rbacAccessControlService,
+                visitor: this.fieldRuleVisitor,
                 // A scoped API key is judged on its own publish/unpublish grant, not
                 // the key owner's — the route only checked `update` against the scope.
                 authenticatedScope: options.authenticatedScope,
@@ -3330,8 +3385,9 @@ export class SingleMutationService extends BaseService {
               // top-level field rule sees.
               req: options.user ? { user: options.user } : {},
               // Who the write is made as, for each instance's own field rules:
-              // the caller and trust the Single's own fields are judged with.
-              access: fieldGroupWriteAccessOf(options),
+              // the caller and trust the Single's own fields are judged with,
+              // a visitor by the same Public role as the Single's gate.
+              access: fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
             });
             if (
               !holdEdit &&
@@ -3677,12 +3733,14 @@ export class SingleMutationService extends BaseService {
                 fields: fieldConfigs,
                 fieldGroupFields: { get: componentResolver },
                 access: {
-                  ...fieldGroupWriteAccessOf(options),
+                  // The visitor's loader too, kept with the grants below.
+                  ...fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
                   // Inside the write's transaction.
                   grants: callerAccessGrants(
                     options.user,
                     options.authenticatedScope,
-                    tx.getDrizzle()
+                    tx.getDrizzle(),
+                    this.fieldRuleVisitor
                   ),
                 },
                 // What a stored instance holds in each language: a held draft
@@ -4623,6 +4681,7 @@ export class SingleMutationService extends BaseService {
         entry: updatedDoc,
         user: options.user,
         overrideAccess: options.overrideAccess && !options.routeAuthorized,
+        visitor: this.fieldRuleVisitor,
       });
 
       return {
@@ -4646,7 +4705,17 @@ export class SingleMutationService extends BaseService {
       // can throw after the event is already durable; carry `eventRecorded` so
       // the fast-drain still fires for a committed-but-hook-failed write.
       return {
-        ...buildSingleErrorResult(error, "Failed to update Single document"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, slug, {
+              trusted: fieldTrustOf(options),
+            }),
+            { written: committedWrite }
+          ),
+          "Failed to update Single document"
+        ),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,

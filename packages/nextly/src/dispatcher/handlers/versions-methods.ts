@@ -35,6 +35,10 @@ import {
   stripAutosavePasswords,
   withLastViewedMarks,
 } from "../../api/versions-access";
+import {
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadEntity } from "../../auth/entity-read-access";
 import { actorForWrite, type RequestActor } from "../../auth/request-actor";
@@ -796,16 +800,26 @@ async function assertDocumentWriteAllowed(
     slug: string;
     entryId: string;
     user: UserContext;
+    /** The language the write acts in, which the update rule matches in. */
+    locale?: string | null;
   },
   reason: string
 ): Promise<AuthenticatedScope | undefined> {
   const authenticatedScope = await assertDocumentReadAllowed(args, reason);
-  await assertDocumentUpdatable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    authenticatedScope
+  // Asked in the languages the route asked these writes in, the language the
+  // request names kept as named, so the verdict the route kept for them is
+  // the one the update rule's filter is read from.
+  await withRuleLanguage(
+    registeredWriteAsNamedLanguagesFor(args.locale || undefined),
+    () =>
+      assertDocumentUpdatable(
+        args.scopeKind,
+        args.slug,
+        args.entryId,
+        args.user,
+        authenticatedScope,
+        args.locale ?? undefined
+      )
   );
   return authenticatedScope;
 }

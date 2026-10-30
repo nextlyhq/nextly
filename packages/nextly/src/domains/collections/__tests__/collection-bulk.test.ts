@@ -54,6 +54,8 @@ import {
   createMockRbacAccessControlService,
   createMockComponentDataService,
   createSampleEntry,
+  publicMay,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 import { loadDialectTables } from "../../../database/dialect-tables";
 
@@ -150,8 +152,10 @@ const callerLookup = vi.hoisted(() => ({ failure: undefined as unknown }));
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   const real =
     await importOriginal<typeof import("../../../auth/access/resolve-actor")>();
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
   return {
     ...real,
+    actorForVisitor: fake.fakeActorForVisitor,
     actorForUser: (...args: Parameters<typeof real.actorForUser>) =>
       callerLookup.failure === undefined
         ? real.actorForUser(...args)
@@ -186,8 +190,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
     const mockHookRegistry = createMockHookRegistry();
     const mockRbac = createMockRbacAccessControlService();
     // The batch writes here are made with no user, as an anonymous caller
-    // makes them, and an anonymous write needs a rule that allows it. The
-    // mechanics under test start past that gate.
+    // makes them, and an anonymous write needs the Public role's permission
+    // and a rule that allows it. The mechanics under test start past that
+    // gate.
+    resetCallerAccess();
+    publicMay("read", "create", "update", "delete");
     mockRbac.getRegisteredAccess.mockReturnValue({
       create: true,
       update: true,
@@ -521,8 +528,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // throws NextlyError.forbidden so the dispatcher emits a canonical
       // 403 error envelope instead of fabricating a synthetic row in
       // `failures[]` with no real id to attach it to.
+      // The real collection gate refuses: `user-1` holds no role in the
+      // mocked database, which answers every select with no rows, so the
+      // decision finds no permission for the write.
       const mockACS = createMockRbacAccessControlService();
-      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(
@@ -579,8 +588,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // See bulkUpdateByQuery analogue above: a collection-wide access denial
       // is a request-level authorization failure (403), not a partial-success
       // entry in `failures[]`.
+      // The real collection gate refuses: `user-1` holds no role in the
+      // mocked database, which answers every select with no rows, so the
+      // decision finds no permission for the write.
       const mockACS = createMockRbacAccessControlService();
-      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(

@@ -9,7 +9,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resolveCardSettings, unsetSetting } from "../card-settings";
+import {
+  hasFieldSettingValue,
+  resolveCardSettings,
+  staleFieldSettings,
+  unsetSetting,
+} from "../card-settings";
 import { defineWidget } from "../define-widget";
 import { setting } from "../setting-builders";
 
@@ -142,5 +147,71 @@ describe("the values a card is handed", () => {
     });
     expect(Object.getPrototypeOf(resolved)).toBe(null);
     expect("stray" in resolved).toBe(false);
+  });
+});
+
+describe("a Field setting judged against the reader's collections", () => {
+  const settings = {
+    collection: setting.collection({ label: "Collection" }),
+    field: setting.fieldOf({ of: "collection", label: "Field" }),
+  };
+  const orders = {
+    collection: "orders",
+    label: "Orders",
+    lifecycle: false,
+    titleField: "title",
+    fields: [
+      { name: "title", label: "Title", type: "string" as const },
+      { name: "state", label: "State", type: "string" as const },
+    ],
+  };
+  const stale = (values: Record<string, unknown>) =>
+    staleFieldSettings(settings, values, [orders]);
+
+  it("keeps a field the chosen collection offers its reader", () => {
+    expect(stale({ collection: "orders", field: "state" })).toEqual([]);
+  });
+
+  it("finds a field the collection does not offer, or one in a collection the reader may not read", () => {
+    // Removed, or not offered to this reader: either way not among its published fields. With no
+    // default, each is replaced by no value at all.
+    expect(stale({ collection: "orders", field: "cost" })).toEqual([
+      ["field", undefined],
+    ]);
+    // A collection with no published source of the reader's.
+    expect(stale({ collection: "invoices", field: "state" })).toEqual([
+      ["field", undefined],
+    ]);
+  });
+
+  it("replaces a stale field with a default the collection offers, as the settings sheet does", () => {
+    const defaulted = (defaultValue: string, value: string) =>
+      staleFieldSettings(
+        {
+          collection: settings.collection,
+          field: setting.fieldOf({
+            of: "collection",
+            label: "Field",
+            defaultValue,
+          }),
+        },
+        { collection: "orders", field: value },
+        [orders]
+      );
+    expect(defaulted("state", "cost")).toEqual([["field", "state"]]);
+    // The must-differ halves: a default the collection does not offer, and a
+    // stale value that is the default itself, are each replaced by none.
+    expect(defaulted("gone", "cost")).toEqual([["field", undefined]]);
+    expect(defaulted("gone", "gone")).toEqual([["field", undefined]]);
+  });
+
+  it("judges only a Field setting with a value", () => {
+    expect(stale({ collection: "orders" })).toEqual([]);
+    expect(hasFieldSettingValue(settings, { collection: "orders" })).toBe(
+      false
+    );
+    expect(
+      hasFieldSettingValue(settings, { collection: "orders", field: "state" })
+    ).toBe(true);
   });
 });

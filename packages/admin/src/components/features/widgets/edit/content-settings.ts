@@ -8,10 +8,14 @@
  * fields no read rule can refuse, so a field missing from it is one this
  * reader may not filter, sort or group by now, whatever the stored value says.
  */
-import type {
-  AnyWidgetSetting,
-  ContentSetting,
-  PublishedContentSource,
+import {
+  contentFieldFits,
+  staleValueTakesDefault,
+  startsAtDefault,
+  type AnyWidgetSetting,
+  type ContentSetting,
+  type PublishedContentSource,
+  unfitContentField,
 } from "nextly/config";
 
 import { whereToCondition } from "./content-filter";
@@ -109,20 +113,15 @@ function canonical(value: unknown): string {
 type SourceField = PublishedContentSource["fields"][number];
 
 /**
- * Whether a source field may be what this dependent setting names: offered at
- * all; for Group by, one the read will group by; and for Fields, one a row can
- * print that is not the collection's title, which every row already leads with.
+ * Whether a source field may be what this dependent setting names: the rule
+ * the server also judges a stored value by (`contentFieldFits`).
  */
 export function fieldFits(
   setting: DependentSetting,
   field: SourceField,
   titleField?: string
 ): boolean {
-  if (setting.type === "groupBy") return field.groupable !== false;
-  if (setting.type === "fields") {
-    return field.presentable !== false && field.name !== titleField;
-  }
-  return true;
+  return contentFieldFits(setting.type, field, titleField);
 }
 
 /** The first field a dependent setting's value names that it may not use here. */
@@ -131,10 +130,7 @@ function unfitField(
   value: unknown,
   source: PublishedContentSource
 ): string | undefined {
-  return fieldsNamedBy(setting, value).find(name => {
-    const field = source.fields.find(candidate => candidate.name === name);
-    return field === undefined || !fieldFits(setting, field, source.titleField);
-  });
+  return unfitContentField(setting.type, fieldsNamedBy(setting, value), source);
 }
 
 /** Whether every field a dependent setting's value names is one it may use here. */
@@ -150,7 +146,8 @@ function valueFits(
  * What a dependent setting starts at over `collection`: its default when the
  * default names a field it may use there, and none otherwise. A collection
  * whose fields were not sent leaves the default alone, as there is nothing to
- * judge it by.
+ * judge it by. The rule is core's (`startsAtDefault`), which the server reads
+ * too.
  */
 export function startingValue(
   setting: DependentSetting,
@@ -161,8 +158,9 @@ export function startingValue(
   const source = sources?.find(
     candidate => candidate.collection === collection
   );
-  if (source === undefined) return fallback;
-  return valueFits(setting, fallback, source) ? fallback : noneFor(setting);
+  return startsAtDefault(setting.type, fieldsNamedBy(setting, fallback), source)
+    ? fallback
+    : noneFor(setting);
 }
 
 /** A value the sheet replaces, what it replaces it with, and why. */
@@ -220,14 +218,28 @@ function staleDependent(
   const field = unfitField(setting, value, source);
   const label = setting.label ?? setting.name;
   const isDefault = sameSettingValue(value, setting.defaultValue);
+  // Replaced by the rule the server applies before a card's `load` is handed
+  // the value (`staleValueTakesDefault`), so the card loads with what the
+  // sheet shows.
+  const takesDefault = staleValueTakesDefault(
+    setting.type,
+    {
+      isDefault,
+      defaultNames: fieldsNamedBy(
+        setting,
+        setting.defaultValue ?? noneFor(setting)
+      ),
+    },
+    source
+  );
   return {
     name: setting.name,
     notice: isDefault
       ? `${label}'s default, ${field}, is not available for ${source.label}`
       : `${label} was reset: ${field} is no longer available`,
-    replacement: isDefault
-      ? noneFor(setting)
-      : startingValue(setting, values[setting.of], sources),
+    replacement: takesDefault
+      ? (setting.defaultValue ?? noneFor(setting))
+      : noneFor(setting),
   };
 }
 

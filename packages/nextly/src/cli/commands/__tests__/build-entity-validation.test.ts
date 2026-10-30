@@ -27,12 +27,18 @@ import { runBuild } from "../build";
 const loadConfig = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/config-loader", () => ({ loadConfig }));
 
-/** Capture-only logger: records every line so assertions can read the report. */
+/**
+ * Capture-only logger: records every line so assertions can read the report,
+ * with the error the command ends with, which is printed on standard error.
+ */
 function createCaptureLogger(): { logger: Logger; lines: string[] } {
   const lines: string[] = [];
   const record = (message: string): void => {
     lines.push(message);
   };
+  vi.spyOn(console, "error").mockImplementation((message: unknown) => {
+    lines.push(String(message));
+  });
   const logger: Logger = {
     debug: record,
     info: record,
@@ -120,6 +126,7 @@ describe("nextly build refuses a field type no plugin offers", () => {
     await expect(runBuild({}, context)).rejects.toBeInstanceOf(NextlyError);
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(lines.join("\n")).toContain("no-such-type");
+    expect(lines.join("\n")).toContain("(CONFIG_INVALID)");
   });
 
   it("fails on a type offered only on another surface", async () => {
@@ -147,6 +154,7 @@ describe("nextly build refuses a field type no plugin offers", () => {
     await expect(runBuild({}, context)).rejects.toBeInstanceOf(NextlyError);
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(lines.join("\n")).toContain("rating");
+    expect(lines.join("\n")).toContain("(CONFIG_INVALID)");
   });
 
   it("accepts a type that did opt into this surface", async () => {
@@ -193,6 +201,7 @@ describe("nextly build validates every entity kind", () => {
 
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(lines.join("\n")).toContain("policy.kinds must name a kind");
+    expect(lines.join("\n")).toContain("(CONFIG_INVALID)");
     // Not the "no collections, nothing to do" path: that reported success.
     expect(lines.join("\n")).not.toContain("Add collections to your");
   });
@@ -212,6 +221,7 @@ describe("nextly build validates every entity kind", () => {
 
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(lines.join("\n")).toContain("policy.kinds must name a kind");
+    expect(lines.join("\n")).toContain("(CONFIG_INVALID)");
   });
 
   it("builds a project whose only schema is singles", async () => {

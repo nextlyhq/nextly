@@ -30,6 +30,7 @@ import {
   type Actor,
   type KeyActor,
   type UserActor,
+  type VisitorActor,
 } from "./actor";
 import {
   askRule,
@@ -255,12 +256,22 @@ export interface GateQuestion {
    * collection, the permission read from the gate's own database.
    */
   readonly permissionWithoutService: () => Promise<boolean>;
+  /**
+   * Without the access-control service, the visitor as the gate's own
+   * database holds it: the Public role read there, as a signed-in user's
+   * permission is. Absent, the Public role is read on the pool.
+   */
+  readonly visitorWithoutService?: () => Promise<VisitorActor>;
 }
 
 /** What the collection gate is asked. */
 export type CollectionQuestion = GateQuestion;
 
-/** What the Single gate is asked. */
+/**
+ * What the Single gate is asked. Without the service it allows a signed-in
+ * user unread, and reads a visitor's Public role as the collection gate does:
+ * on the asking service's own database where it hands one in.
+ */
 export type SingleQuestion = Omit<GateQuestion, "permissionWithoutService">;
 
 /**
@@ -355,9 +366,9 @@ async function routeAuthorizedVerdict(
   target: AccessTarget
 ): Promise<GateVerdict> {
   if (q.user && readsRouteFilter(kind, q, target)) {
-    // The route's allow said only that the caller may read; the route kept
-    // its verdict for the request, every entry or a read rule's filter, and
-    // the read applies it. The rule is not asked again: the route asked it,
+    // The route's allow said only that the caller may act; the route kept
+    // its verdict for the request, every entry or the rule's filter, and the
+    // read or the write applies it. The rule is not asked again: the route asked it,
     // and a rule may call out to a service, whose second answer could differ
     // from the first.
     const kept = routeVerdictFor({
@@ -367,8 +378,8 @@ async function routeAuthorizedVerdict(
       action: q.action,
       language: currentRuleLanguage(),
     });
-    // A route that judged this read only for another caller of the same user,
-    // or only in another language, said nothing of this one.
+    // A route that judged this only for another caller of the same user, or
+    // only in another language, said nothing of this one.
     if (kept === JUDGED_OTHERWISE) return INSUFFICIENT;
     if (kept && "filter" in kept) return onlyMatching(q, kept.filter, true);
     // `routeAuthorized` is set by server code that has already judged the
@@ -385,21 +396,24 @@ async function routeAuthorizedVerdict(
 }
 
 /**
- * Whether a read the route already authorized reads the filter the route let
- * its caller through on: where the asker applies the rule's filter and the
- * collection's read rule is a function, which may answer one. A plain `true`
- * or `false` was judged by the route, as before.
+ * Whether a read or write the route already authorized reads the filter the
+ * route let its caller through on: where the action is one whose filter is
+ * applied and the collection's rule for it is a function, which may answer
+ * one. A plain `true` or `false` was judged by the route, as before.
+ *
+ * A read reads it only where its asker applies the filter. A write's is read
+ * whoever asks, so an asker that cannot apply a filter the route let the
+ * caller through on refuses, rather than allowing every entry.
  */
 function readsRouteFilter(
   kind: "collection" | "single",
   q: GateQuestion,
   target: AccessTarget
 ): boolean {
-  if (!q.appliesFilter || q.action !== "read" || kind !== "collection") {
-    return false;
-  }
+  if (!FILTER_APPLIED.has(q.action) || kind !== "collection") return false;
+  if (q.action === "read" && !q.appliesFilter) return false;
   return (
-    declaresRule(target, "read") && plainRule(target, "read") === undefined
+    declaresRule(target, q.action) && plainRule(target, q.action) === undefined
   );
 }
 
@@ -408,26 +422,25 @@ function readsRouteFilter(
  * the request names it, and nothing it is not told: a signed-in user and a
  * key are each the user id, the roles and the grants' slugs; a plugin person
  * is the whole person, its attributes included, which the rule is told; a
- * visitor is told nothing. So a narrower scope, or a person whose attributes
- * changed, never reuses an earlier answer, and two asks that hand the rule
- * the same context, whichever way they built the actor, share one.
+ * visitor is the Public role's grants' slugs. So a narrower scope, a person
+ * whose attributes changed, or a Public role whose grants changed, never
+ * reuses an earlier answer, and two asks that hand the rule the same context,
+ * whichever way they built the actor, share one.
  * `undefined` for a person no key can name, whose answer is not kept.
  */
 function ruleContextKeyOf(
   actor: Exclude<Actor, { kind: "system" }>
 ): string | undefined {
+  // The slugs of the grants the rule is handed as its `permissions`.
+  const slugs = (held: UserActor | KeyActor | VisitorActor) =>
+    held.permissions.map(grant => grant.slug);
   switch (actor.kind) {
     case "user":
     case "key":
       // In the order the rule is handed them: a rule may read `roles[0]`,
       // so two scopes holding the same roles in another order are told
       // different things.
-      return JSON.stringify([
-        "staff",
-        actor.userId,
-        actor.roles,
-        actor.permissions.map(grant => grant.slug),
-      ]);
+      return JSON.stringify(["staff", actor.userId, actor.roles, slugs(actor)]);
     case "principal": {
       const person = canonicalJson(actor.principal);
       return person === undefined
@@ -435,7 +448,9 @@ function ruleContextKeyOf(
         : JSON.stringify(["principal", person]);
     }
     case "visitor":
-      return "visitor";
+      // A visitor's rule reads the Public role's grants, which another
+      // instance may change within a long request.
+      return JSON.stringify(["visitor", slugs(actor)]);
   }
 }
 
@@ -488,82 +503,103 @@ async function visitorVerdict(
 ): Promise<GateVerdict> {
   // A Single refuses a visitor's publish before asking its rule.
   if (kind === "single" && isLifecycle(q.action)) return UNAUTHENTICATED;
-  const visitor = actorForVisitor();
-  const outcome = await askedOnce(
+  let visitor: VisitorActor;
+  try {
+    visitor = await visitorOf(q);
+  } catch (error) {
+    // The Public role's grants could not be read: refused, never guessed.
+    return { allowed: false, refusal: "failed", error };
+  }
+  // Asked in the decision's order, the permission before the rule, and once
+  // per request where the asker applies a filter: a visitor never publishes
+  // or unpublishes, and one the Public role does not grant the action is
+  // refused as needing a signed-in caller before its rule, application code,
+  // is run.
+  const outcomes = await askedOnce(
     q,
     visitor,
     target,
-    () => askRule(visitor, q.action, target),
-    "rule"
+    () => askRules(visitor, q.action, target),
+    "rules"
   );
-  // A rule that answers `false` or fails refuses a visitor outright, and a
-  // publish or an unpublish needs a signed-in user whatever the rule says.
+  if (outcomes === null) return UNAUTHENTICATED;
+  return visitorRuleVerdict(visitor, q, target, outcomes.action);
+}
+
+/**
+ * A visitor the Public role grants the action, judged by its rule's outcome,
+ * already asked.
+ */
+function visitorRuleVerdict(
+  visitor: VisitorActor,
+  q: GateQuestion,
+  target: AccessTarget,
+  outcome: RuleOutcome
+): GateVerdict | Promise<GateVerdict> {
+  // A rule that answers `false` or fails refuses a visitor outright.
   if (outcome.declared && ("threw" in outcome || outcome.value === false)) {
     return INSUFFICIENT;
   }
-  if (isLifecycle(q.action)) return UNAUTHENTICATED;
   const filter = readFilterOf(target, q.action, outcome);
-  if (filter) return visitorFilterVerdict(q, target, outcome, filter);
+  if (filter) return visitorFilterVerdict(q, outcome, filter);
   // Otherwise a declared rule lets a visitor through only by answering
   // `true`.
   if (!outcomeAllows(outcome)) {
     noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
     return INSUFFICIENT;
   }
-  return visitorPassVerdict(q, target, outcome.declared);
+  return visitorPassVerdict(visitor, q, target, outcome);
 }
 
 /**
- * A visitor whose read rule answered a filter. An asker that applies it shows
- * the visitor the entries it matches, as the public default shows every entry
- * for a rule answering `true`, where the decision reads the Public role's
- * permissions. Any other asker refuses, as the decision does.
+ * The visitor a gate judges. Without the service, as the gate's own database
+ * holds it where it has one, as a signed-in user's permission is read there;
+ * otherwise on the pool, or the caller's transaction.
  */
-async function visitorFilterVerdict(
+function visitorOf(q: GateQuestion): Promise<VisitorActor> {
+  return !q.rules && q.visitorWithoutService
+    ? q.visitorWithoutService()
+    : actorForVisitor({ executor: q.executor });
+}
+
+/**
+ * A visitor whose read rule answered a filter, and whom the Public role
+ * grants the action. An asker that applies it shows the visitor the entries
+ * it matches, one asking only whether the visitor may read some entries is
+ * told yes, and any other asker refuses, as the decision does.
+ */
+function visitorFilterVerdict(
   q: GateQuestion,
-  target: AccessTarget,
   outcome: RuleOutcome,
   filter: RuleFilter
 ): Promise<GateVerdict> {
-  if (q.appliesFilter || q.asksSomeEntries) {
-    await deviate("visitor-public-default", true, () =>
-      decided(actorForVisitor(), q.action, target)
-    );
-  } else {
+  // The Public role's permission for the action was asked before the rule,
+  // so the visitor holds it: the filter alone narrows what it is shown.
+  if (!q.appliesFilter && !q.asksSomeEntries) {
     noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
   }
-  return onlyMatching(q, filter, false);
+  return onlyMatching(q, filter, true);
 }
 
 /**
  * A visitor whose rule did not refuse: no rule for the action, or one that
- * answered `true`.
+ * answered `true`. The decision, judged from the rule's outcome already
+ * asked, so the rule runs once: the visitor needs the Public role's
+ * permission for the action, and a rule only narrows it.
  *
- * Only a read keeps the public default. Every other action changes data, so
- * with no rule naming it the write needs a signed-in caller: an anonymous
- * create, update or delete is allowed only where the target's author wrote a
- * rule that answers `true`. Asked of every action but a read, so an action
- * added later is refused rather than let through.
+ * A visitor refused for want of that permission is told the action needs a
+ * signed-in caller, as a write no rule names always was: a visitor may hold
+ * no more than the Public role grants, and signing in is how to hold more.
  */
-async function visitorPassVerdict(
+function visitorPassVerdict(
+  visitor: VisitorActor,
   q: GateQuestion,
   target: AccessTarget,
-  ruleDeclared: boolean
-): Promise<GateVerdict> {
-  const visitor = actorForVisitor();
-  if (q.action === "read") {
-    return verdictOf(
-      await deviate("visitor-public-default", true, () =>
-        decided(visitor, q.action, target)
-      )
-    );
-  }
-  if (!ruleDeclared) return UNAUTHENTICATED;
-  return verdictOf(
-    await deviate("visitor-write-by-rule", true, () =>
-      decided(visitor, q.action, target)
-    )
-  );
+  outcome: RuleOutcome
+): GateVerdict {
+  const decision = judge(visitor, q.action, target, { action: outcome });
+  if (decision.allowed) return ALLOWED;
+  return decision.reason === "no-permission" ? UNAUTHENTICATED : INSUFFICIENT;
 }
 
 async function keyVerdict(
