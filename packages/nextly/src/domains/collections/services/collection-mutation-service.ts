@@ -6343,20 +6343,16 @@ export class CollectionMutationService extends BaseService {
       // A translation table dropped after its `ready` verdict was remembered,
       // answered as the update answers it: only for a create that did not
       // commit.
-      const companionGone = committedWrite
-        ? undefined
-        : await this.companionGoneRefusal(
-            params.collectionName,
-            params.locale,
-            error
-          );
-      if (companionGone) {
-        return errorToServiceResult(
-          companionGone,
-          { defaultMessage: "Failed to create entry" },
-          this.dialect
-        );
-      }
+      const companionGone = await this.companionGoneResult(
+        {
+          collectionName: params.collectionName,
+          locale: params.locale,
+          committed: committedWrite,
+          defaultMessage: "Failed to create entry",
+        },
+        error
+      );
+      if (companionGone) return companionGone;
       // Legacy per-kind override messages ("Duplicate value: ...",
       // "Missing required field", etc.) are dropped: the new mapping uses
       // the §13.8-compliant generic strings from fromDatabaseError so the
@@ -11777,20 +11773,16 @@ export class CollectionMutationService extends BaseService {
       // rollback, as a write to a table that is not there is answered. Only
       // for a write that did not commit; a later step's failure keeps the
       // committed write's answer below.
-      const companionGone = committedWrite
-        ? undefined
-        : await this.companionGoneRefusal(
-            params.collectionName,
-            params.locale,
-            error
-          );
-      if (companionGone) {
-        return errorToServiceResult(
-          companionGone,
-          { defaultMessage: "Failed to update entry" },
-          this.dialect
-        );
-      }
+      const companionGone = await this.companionGoneResult(
+        {
+          collectionName: params.collectionName,
+          locale: params.locale,
+          committed: committedWrite,
+          defaultMessage: "Failed to update entry",
+        },
+        error
+      );
+      if (companionGone) return companionGone;
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
@@ -11805,6 +11797,35 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The answer for a write that `error` failed because the collection's translation table is
+   * missing (see {@link companionGoneRefusal}), or `undefined` for any other failure and for a
+   * write that committed, whose later failure keeps its own answer.
+   */
+  private async companionGoneResult(
+    write: {
+      collectionName: string;
+      locale: string | undefined;
+      committed: boolean;
+      defaultMessage: string;
+    },
+    error: unknown
+  ): Promise<CollectionServiceResult | undefined> {
+    if (write.committed) return undefined;
+    const refusal = await this.companionGoneRefusal(
+      write.collectionName,
+      write.locale,
+      error
+    );
+    return refusal
+      ? errorToServiceResult(
+          refusal,
+          { defaultMessage: write.defaultMessage },
+          this.dialect
+        )
+      : undefined;
   }
 
   /**
