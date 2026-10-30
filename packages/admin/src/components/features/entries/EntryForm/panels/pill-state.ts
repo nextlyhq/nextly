@@ -45,3 +45,22 @@ export function pillStateFromForm(
   if (status === "published" && isDirty) return "modified";
   return status === "published" ? "published" : "draft";
 }
+
+/** The states a SAVED document can be in: no unsaved edits counted. */
+export type SavedPillState = Exclude<PillState, "modified">;
+
+/**
+ * Where a saved document stands: Draft, Published, or Changed (published,
+ * with a working draft waiting to be published).
+ *
+ * The one answer the document bar's pill and the panel's Status section both
+ * draw, so the two cannot come to disagree. Unsaved edits are the bar's save
+ * state to report, so they are not counted here.
+ */
+export function savedPillState(
+  status: string | undefined,
+  hasWorkingDraft: boolean
+): SavedPillState {
+  const state = pillStateFromForm(status, false, hasWorkingDraft);
+  return state === "modified" ? "published" : state;
+}

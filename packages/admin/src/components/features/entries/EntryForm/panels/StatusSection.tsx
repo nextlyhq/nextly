@@ -4,7 +4,7 @@
  * The panel's Status section: where the document stands, said as a sentence.
  *
  * Read from the status the document bar's pill reads, for the language being
- * edited, and through the same rule (`pillStateFromForm`), so the sentence and
+ * edited, and through the same helper (`savedPillState`), so the sentence and
  * the pill cannot disagree. On a localized document it names the language, so
  * a translation that lags its default language is not described as if it were
  * the whole document.
@@ -19,7 +19,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useEntryLocale } from "../../EntryLocaleContext";
 
 import { PanelSection } from "./PanelSection";
-import { pillStateFromForm } from "./pill-state";
+import { savedPillState, type SavedPillState } from "./pill-state";
 
 export interface PanelDocumentStatus {
   /** The status in the language being edited ("draft", "published", ...). */
@@ -29,7 +29,7 @@ export interface PanelDocumentStatus {
 }
 
 /** What each of the pill's states means, after the subject that has it. */
-const STANDING: Record<"draft" | "published" | "changed", string> = {
+const STANDING: Record<SavedPillState, string> = {
   draft: "is a draft, not published yet.",
   published: "is published and up to date.",
   changed: "is published. Changes saved since then are not live yet.",
@@ -40,13 +40,12 @@ export function StatusSection({
 }: {
   documentStatus: PanelDocumentStatus;
 }): JSX.Element {
-  // Saved state only: unsaved edits are the bar's save state to report.
-  const state = pillStateFromForm(
+  // The pill's own answer, from the one helper both draw.
+  const state = savedPillState(
     documentStatus.status,
-    false,
     documentStatus.hasWorkingDraft
   );
-  const standing = STANDING[state === "modified" ? "published" : state];
+  const standing = STANDING[state];
   return (
     <PanelSection title="Status">
       <p
