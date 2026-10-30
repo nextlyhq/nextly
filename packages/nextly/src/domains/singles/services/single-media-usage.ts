@@ -17,7 +17,6 @@ import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { mediaUsagePresent } from "../../media/usage/media-usage-store";
-import { recordStoredDocumentUsage } from "../../media/usage/stored-document-usage";
 
 /** What recording a Single's usage needs from the service that wrote it. */
 export interface SingleMediaUsageDeps {
@@ -60,6 +59,10 @@ export async function recordSingleMediaUsage(
       transactionTableProbe(deps.adapter, tx)
     );
     if (!present) return;
+    // Loaded on the first write that records, not with the services.
+    const { recordStoredDocumentUsage } = await import(
+      "../../media/usage/stored-document-usage"
+    );
     // Read only where they are there; remembered, never resolved, inside a
     // transaction, as every in-transaction translations read is.
     const translations =

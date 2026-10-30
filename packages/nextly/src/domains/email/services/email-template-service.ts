@@ -44,7 +44,6 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
-import { recordEmailTemplateUsage } from "../../media/usage/email-template-usage";
 import { mediaUsagePresent } from "../../media/usage/media-usage-store";
 import { MetaService } from "../../meta";
 import {
@@ -1328,6 +1327,10 @@ export class EmailTemplateService extends BaseService {
     write: (db: EmailTemplateService["db"]) => Promise<T>
   ): Promise<T> {
     if (!(await this.recordsMediaUsage())) return write(this.db);
+    // Loaded on the first write that records, not with the service.
+    const { recordEmailTemplateUsage } = await import(
+      "../../media/usage/email-template-usage"
+    );
     if (transactionOpenInFlow(this.adapter)) {
       const result = await write(this.db);
       await recordEmailTemplateUsage(this.adapter, templateId);

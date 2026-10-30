@@ -24,10 +24,7 @@ import {
   storedFilesOf,
   type MediaFilesRecord,
 } from "../../domains/media/stored-files";
-import {
-  reindexMediaUsage,
-  type ReindexUsageResult,
-} from "../../domains/media/usage/reindex-usage";
+import type { ReindexUsageResult } from "../../domains/media/usage/reindex-usage";
 import {
   initializeMediaStorage,
   type MediaStorage,
@@ -543,6 +540,9 @@ async function reindexUsageWithServices(
   );
   const { getImageProcessor } = await import("../../storage/image-processor");
   const { getHookRegistry } = await import("../../hooks/hook-registry");
+  const { reindexMediaUsage } = await import(
+    "../../domains/media/usage/reindex-usage"
+  );
   const { appConfig, pluginConsent, projectRoot } = loaded;
   try {
     await registerServices({

@@ -235,7 +235,6 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { mediaUsagePresent } from "../../media/usage/media-usage-store";
-import { recordStoredDocumentUsage } from "../../media/usage/stored-document-usage";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   sharedComparison,
@@ -1271,6 +1270,10 @@ export class CollectionMutationService extends BaseService {
         transactionTableProbe(this.adapter, tx)
       );
       if (!present) return;
+      // Loaded on the first write that records, not with the service.
+      const { recordStoredDocumentUsage } = await import(
+        "../../media/usage/stored-document-usage"
+      );
       const companion = await this.fileManager.loadCompanionSchema(
         args.collectionName,
         tx.getDrizzle()
