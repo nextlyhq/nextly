@@ -1,0 +1,24 @@
+---
+title: POSTGRES_SCHEMA_UNSUPPORTED
+description: "`db.postgres.schema` names a PostgreSQL schema other than `public`, which Nextly cannot create its tables in yet."
+---
+
+## Cause
+
+`db.postgres.schema` names a PostgreSQL schema other than `public`, which Nextly cannot create its tables in yet.
+
+Nextly creates and migrates its tables in PostgreSQL's `public` schema only, for now. Its push reads the tables it wants as belonging to `public`, so asked to reconcile any other schema it would create nothing there, and the option is refused outright rather than half-honoured.
+
+## Fix
+
+- Remove `db.postgres.schema` from `nextly.config.ts`, or set it to `public`.
+- Remove any schema option given to the database adapter as well, so both name `public`.
+
+## Example
+
+```text
+✗ db.postgres.schema is "tenant_a", but a PostgreSQL schema other than "public" is not supported yet.
+  Why:  Nextly can only create and migrate its tables in "public".
+  Next: Remove db.postgres.schema (and any schema option on the database adapter), or set it to "public".
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-unsupported  (POSTGRES_SCHEMA_UNSUPPORTED)
+```

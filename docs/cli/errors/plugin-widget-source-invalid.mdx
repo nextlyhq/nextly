@@ -1,0 +1,23 @@
+---
+title: PLUGIN_WIDGET_SOURCE_INVALID
+description: "A plugin contributes a widget source with no id, or without the resolver functions a source needs."
+---
+
+## Cause
+
+A plugin contributes a widget source with no id, or without the resolver functions a source needs.
+
+A dashboard widget reads its data through a widget source, found by the source's id and called through its resolver functions. A source with no id, or without a `resolve` function, cannot be read.
+
+## Fix
+
+Give the source an `id` and a `resolve` function (and, if it has one, a `resolveMany` function), or update the plugin that contributes it.
+
+## Example
+
+```text
+✗ "@acme/stats" contributes widget source "acme/visits" without a resolver function.
+  Why:  The dashboard reads a widget's data through its source's resolver, found by the source's id.
+  Next: Give the source an `id` and a `resolve` function (and `resolveMany`, if it declares one, as a function), or update the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-widget-source-invalid  (PLUGIN_WIDGET_SOURCE_INVALID)
+```
