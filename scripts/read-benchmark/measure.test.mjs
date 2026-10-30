@@ -12,6 +12,7 @@ import {
   checkContent,
   checkEveryPage,
   checkKeyBudget,
+  checkPage,
   checkStorage,
   expectedArticles,
   idOf,
@@ -46,11 +47,17 @@ function readBack(i) {
   };
 }
 
-/** Page `page` of the seeded articles, as a list read returns it. */
+/** Page `page` of the seeded articles, as a list read returns it: in `publishedOn` order, which they were seeded in. */
 function pageOf(page) {
   const first = (page - 1) * PAGE_SIZE;
-  return { items: ids.slice(first, first + PAGE_SIZE).map((_, i) => readBack(first + i)) };
+  return {
+    items: ids.slice(first, first + PAGE_SIZE).map((_, i) => readBack(first + i)),
+    meta: { total: ids.length, page, limit: PAGE_SIZE, totalPages: 2, hasNext: page < 2, hasPrev: page > 1 },
+  };
 }
+
+/** The seeded order the list reads ask for. */
+const order = ids;
 
 describe("the checks a measurement makes before it times anything", () => {
   it("reads a create's id from the item or the record", () => {
@@ -109,18 +116,54 @@ describe("the checks a measurement makes before it times anything", () => {
     expect(() => checkContent("direct list", { items: pageOf(1).items.slice(1) }, expected)).toThrow(/items, not/);
   });
 
-  it("walks every list page before timing, and refuses one that loses or repeats an article", async () => {
+  it("takes a list page only as the whole page asked for, in order, with the site's totals", () => {
+    expect(() => checkPage("direct list", pageOf(1), 1, order)).not.toThrow();
+    expect(() => checkPage("rest list", pageOf(2), 2, order)).not.toThrow();
+    // The right articles in reverse, which a mode ignoring the sort direction returns.
+    const reversed = { ...pageOf(1), items: [...pageOf(1).items].reverse() };
+    expect(() => checkPage("direct list", reversed, 1, order)).toThrow(/page 1 is not the page asked for, at ids\[0\]/);
+    // A page overlapping the one before it: page 2 starting at the last article of page 1.
+    const overlapped = { ...pageOf(2), items: [readBack(PAGE_SIZE - 1), ...pageOf(2).items.slice(0, -1)] };
+    expect(() => checkPage("rest list", overlapped, 2, order)).toThrow(/page 2 is not the page asked for, at ids\[0\]/);
+    // Another page's articles answered for this one, and a page in no order at all.
+    expect(() => checkPage("direct list", pageOf(2), 1, order)).toThrow(/at ids\[0\]/);
+    const shuffled = { ...pageOf(1), items: [pageOf(1).items[1], pageOf(1).items[0], ...pageOf(1).items.slice(2)] };
+    expect(() => checkPage("direct list", shuffled, 1, order)).toThrow(/at ids\[0\]/);
+    // A short page, and totals that are not the site's.
+    expect(() => checkPage("direct list", { ...pageOf(1), items: pageOf(1).items.slice(1) }, 1, order)).toThrow(/at ids: expected 20 items/);
+    expect(() => checkPage("direct list", { ...pageOf(1), meta: { ...pageOf(1).meta, total: 39 } }, 1, order)).toThrow(/at meta\.total/);
+    expect(() => checkPage("direct list", { ...pageOf(1), meta: { ...pageOf(1).meta, page: 2 } }, 1, order)).toThrow(/at meta\.page/);
+    expect(() => checkPage("direct list", { items: pageOf(1).items }, 1, order)).toThrow(/at meta: expected a record/);
+  });
+
+  it("walks every page of both list reads before timing, and refuses a page or an article that is wrong", async () => {
     const asked = [];
-    const site = pages => ({ find: async query => (asked.push(query), pages(query.page)) });
-    await checkEveryPage(site(pageOf), expected);
-    expect(asked.map(({ page }) => page)).toEqual([1, 2]);
-    expect(asked[0]).toMatchObject({ collection: "articles", limit: PAGE_SIZE, sort: "publishedOn", depth: 1 });
-    // A page that serves an article of the first page again no longer holds every article once.
-    const repeated = page => (page === 2 ? { items: [readBack(0), ...pageOf(2).items.slice(1)] } : pageOf(page));
-    await expect(checkEveryPage(site(repeated), expected)).rejects.toThrow(/held 39 of the 40/);
+    const list = name => (pages = pageOf) => async page => (asked.push(`${name} ${page}`), pages(page));
+    await checkEveryPage({ "direct list": list("direct")(), "rest list": list("rest")() }, expected);
+    expect(asked).toEqual(["direct 1", "direct 2", "rest 1", "rest 2"]);
+    // A REST list that reverses its pages, while the Direct one is right.
+    const reversed = page => ({ ...pageOf(page), items: [...pageOf(page).items].reverse() });
+    await expect(checkEveryPage({ "direct list": list("direct")(), "rest list": list("rest")(reversed) }, expected)).rejects.toThrow(/rest list page 1 is not the page asked for/);
     // A swapped value on the last page, which no timed read's first answer may reach.
-    const swapped = page => (page === 2 ? { items: [...pageOf(2).items.slice(0, -1), { ...readBack(39), headline: readBack(38).headline }] } : pageOf(page));
-    await expect(checkEveryPage(site(swapped), expected)).rejects.toThrow(/a39 with other content than seeded, at headline/);
+    const swapped = page => (page === 2 ? { ...pageOf(2), items: [...pageOf(2).items.slice(0, -1), { ...readBack(39), headline: readBack(38).headline }] } : pageOf(page));
+    await expect(checkEveryPage({ "direct list": list("direct")(swapped) }, expected)).rejects.toThrow(/a39 with other content than seeded, at headline/);
+  });
+
+  it("asks both list reads for the same page, sorted and populated", async () => {
+    const finds = [];
+    const urls = [];
+    const reads = readsFor({
+      nextly: { find: async query => (finds.push(query), {}), findByID: async () => ({}) },
+      handlers: { GET: async request => (urls.push(new URL(request.url)), { status: 200, json: async () => ({}) }) },
+      keys: { list: "k", detail: "k" },
+      articleIds: ids,
+      options: { seed: 1, iterations: 1, restIterations: 1 },
+    });
+    await reads["direct list"].next();
+    await reads["rest list"].next();
+    expect(finds[0]).toMatchObject({ collection: "articles", limit: PAGE_SIZE, sort: "publishedOn", depth: 1 });
+    expect(Object.fromEntries(urls[0].searchParams)).toEqual({ limit: String(PAGE_SIZE), page: urls[0].searchParams.get("page"), sort: "publishedOn", depth: "1" });
+    expect(urls[0].pathname).toBe("/api/collections/articles/entries");
   });
 
   it("refuses a site whose storage is not its mode's", () => {
@@ -253,5 +296,8 @@ describe("the checks a measurement makes before it times anything", () => {
     expect(() => checkKeyBudget(optionsFrom(["--mode", "main", "--dialect", "sqlite"]))).not.toThrow();
     expect(() => checkKeyBudget({ warmup: 300, restIterations: KEY_REQUESTS_PER_HOUR - 300 - 1 })).not.toThrow();
     expect(() => checkKeyBudget({ warmup: 300, restIterations: KEY_REQUESTS_PER_HOUR - 300 })).toThrow(new RegExp(`over its ${KEY_REQUESTS_PER_HOUR} an hour`));
+    // The page walk's own key reads one page per request.
+    expect(() => checkKeyBudget({ warmup: 0, restIterations: 1, docs: KEY_REQUESTS_PER_HOUR * PAGE_SIZE })).not.toThrow();
+    expect(() => checkKeyBudget({ warmup: 0, restIterations: 1, docs: KEY_REQUESTS_PER_HOUR * PAGE_SIZE + 1 })).toThrow(/page walk reads/);
   });
 });

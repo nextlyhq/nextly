@@ -28,6 +28,8 @@ import { pick, seededRandom, summarize } from "./stats.mjs";
 
 const AUTHORS = 20;
 export const PAGE_SIZE = 20;
+/** The REST path the articles' entries are read under. */
+const ENTRIES = ["collections", "articles", "entries"];
 /**
  * The order list reads page in: a seeded field no two articles share, kept on
  * the main table in both modes, so a page number holds the same articles in
@@ -176,25 +178,55 @@ function fullPage(name, result) {
 }
 
 /**
- * Reads every page the Direct API list read can draw, before anything is timed, and refuses the
- * site unless each article on them reads back exactly as seeded and the pages hold every seeded
- * article once. Each timed read's first answer is checked as well, through `checkContent`, so the
- * detail and REST reads are held to the same content.
+ * The seeded articles' ids in the order the list reads ask for, by `publishedOn`: read off the
+ * seeded content, not assumed from the order the articles were created in.
  */
-export async function checkEveryPage(nextly, expected) {
-  const seen = new Set();
-  for (let page = 1; page <= Math.ceil(expected.size / PAGE_SIZE); page++) {
-    for (const item of itemsOf(await directList(nextly, page))) {
-      checkArticle("direct list", item, expected);
-      seen.add(item.id);
+function listOrder(expected) {
+  const time = id => new Date(expected.get(id).publishedOn).getTime();
+  return [...expected.keys()].sort((a, b) => time(a) - time(b));
+}
+
+/**
+ * Refuses a list page that is not the one asked for, as a whole: its ids, in order, must be
+ * exactly the seeded articles at that page's place in `order`, so a page out of order, unsorted,
+ * overlapping another or leaving a gap is refused, and its totals must be the whole site's.
+ */
+export function checkPage(name, result, page, order) {
+  const first = (page - 1) * PAGE_SIZE;
+  const totalPages = Math.ceil(order.length / PAGE_SIZE);
+  const expected = {
+    ids: order.slice(first, first + PAGE_SIZE),
+    meta: { total: order.length, page, limit: PAGE_SIZE, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
+  };
+  const difference = contentDifference(expected, { ids: itemsOf(result).map(item => item?.id), meta: result?.meta });
+  if (difference !== null) throw new Error(`${name} page ${page} is not the page asked for, at ${difference}`);
+}
+
+/**
+ * Reads every page of each list read, before anything is timed, through the same calls the timed
+ * reads make. Each page must be exactly its place in the seeded order (`checkPage`), and each
+ * article on it must read back as seeded. Each timed read's first answer is checked as well,
+ * through `checkContent`, so the detail reads are held to the same content.
+ */
+export async function checkEveryPage(lists, expected) {
+  const order = listOrder(expected);
+  for (const [name, list] of Object.entries(lists)) {
+    for (let page = 1; page <= Math.ceil(order.length / PAGE_SIZE); page++) {
+      const result = await list(page);
+      checkPage(name, result, page, order);
+      for (const item of itemsOf(result)) checkArticle(name, item, expected);
     }
   }
-  if (seen.size !== expected.size) throw new Error(`direct list pages held ${seen.size} of the ${expected.size} seeded articles`);
 }
 
 /** The Direct API list read the benchmark times: one page of articles in the seeded order, authors populated. */
 function directList(nextly, page) {
   return nextly.find({ collection: "articles", limit: PAGE_SIZE, page, sort: LIST_SORT, depth: 1 });
+}
+
+/** The REST list read the benchmark times, the same page asked for as `directList` asks. */
+function restList(handlers, key, page) {
+  return restGet(handlers, key, ENTRIES, `limit=${PAGE_SIZE}&page=${page}&sort=${LIST_SORT}&depth=1`);
 }
 
 /**
@@ -342,7 +374,8 @@ async function readOnlyKeys(handle) {
     })
   );
   const mint = async name => (await handle.getService("apiKeyService").createApiKey(owner, { name, tokenType: "read-only", expiresIn: "never" })).key;
-  return { list: await mint("read benchmark: list"), detail: await mint("read benchmark: detail") };
+  // The page walk has a key of its own, so the timed reads' keys keep their whole allowance.
+  return { list: await mint("read benchmark: list"), detail: await mint("read benchmark: detail"), pages: await mint("read benchmark: pages") };
 }
 
 /** Refuses REST settings one key's hourly allowance could not carry. */
@@ -350,6 +383,10 @@ export function checkKeyBudget(options) {
   const requests = options.warmup + 1 + options.restIterations;
   if (requests > KEY_REQUESTS_PER_HOUR) {
     throw new RangeError(`a REST read makes ${requests} requests on one key, over its ${KEY_REQUESTS_PER_HOUR} an hour: lower --warmup or --rest-iterations`);
+  }
+  const pages = Math.ceil(options.docs / PAGE_SIZE);
+  if (pages > KEY_REQUESTS_PER_HOUR) {
+    throw new RangeError(`the REST page walk reads ${pages} pages on one key, over its ${KEY_REQUESTS_PER_HOUR} an hour: lower --docs`);
   }
 }
 
@@ -366,7 +403,6 @@ export function readsFor({ nextly, handlers, keys, articleIds, options }) {
   const pages = Math.floor(articleIds.length / PAGE_SIZE);
   const page = random => 1 + pick(random, pages);
   const id = random => articleIds[pick(random, articleIds.length)];
-  const entries = ["collections", "articles", "entries"];
   const read = (offset, count, call) => {
     const random = seededRandom(options.seed + offset);
     return { iterations: count, next: () => call(random) };
@@ -374,8 +410,8 @@ export function readsFor({ nextly, handlers, keys, articleIds, options }) {
   return {
     "direct list": read(1, options.iterations, r => directList(nextly, page(r))),
     "direct detail": read(2, options.iterations, r => nextly.findByID({ collection: "articles", id: id(r), depth: 1 })),
-    "rest list": read(3, options.restIterations, r => restGet(handlers, keys.list, entries, `limit=${PAGE_SIZE}&page=${page(r)}&sort=${LIST_SORT}&depth=1`)),
-    "rest detail": read(4, options.restIterations, r => restGet(handlers, keys.detail, [...entries, id(r)], "depth=1")),
+    "rest list": read(3, options.restIterations, r => restList(handlers, keys.list, page(r))),
+    "rest detail": read(4, options.restIterations, r => restGet(handlers, keys.detail, [...ENTRIES, id(r)], "depth=1")),
   };
 }
 
@@ -438,8 +474,10 @@ async function main(argv) {
     const storage = await storageOf(handle.adapter);
     checkStorage(options.mode, options.docs, storage);
     const { createDynamicHandlers } = await import(new URL("runtime.mjs", NEXTLY_DIST).href);
-    await checkEveryPage(handle.nextly, expected);
-    const reads = readsFor({ nextly: handle.nextly, handlers: createDynamicHandlers(), keys: await readOnlyKeys(handle), articleIds, options });
+    const handlers = createDynamicHandlers();
+    const keys = await readOnlyKeys(handle);
+    await checkEveryPage({ "direct list": page => directList(handle.nextly, page), "rest list": page => restList(handlers, keys.pages, page) }, expected);
+    const reads = readsFor({ nextly: handle.nextly, handlers, keys, articleIds, options });
     const results = {};
     for (const [name, read] of Object.entries(reads)) {
       checkContent(name, await read.next(), expected);
