@@ -51,6 +51,7 @@ The seed gives each role its permissions; change them on the Roles screen at `/a
 Collection access rules in `src/access/` decide by permission, never by a role's name, so a role you create and an API key are judged by what they hold:
 
 - Posts, Categories and Tags: public can read; creating, editing and deleting need the matching permission (`create-posts`, `update-tags`, ...). Publishing a post needs `publish-posts`.
+- Media: a visitor reads it through the built-in Public role's `read-media`, granted once at the first start. Take it away on the Roles screen and it stays away.
 - Posts: editing and deleting are narrowed by who wrote the post (`src/access/own-posts.ts`). A caller holding `publish-posts` changes every post; anyone else only the posts whose `author` is them. Only a `publish-posts` holder sets or changes a post's `author`, and a new post with no author becomes its creator's.
 
 So the seeded editor edits and deletes every post, and the seeded author, who holds `update-posts` and `delete-posts` but not `publish-posts`, only their own. To let another role edit every post, give it `publish-posts`. See [Only their own entries](https://nextlyhq.com/docs/permissions#only-their-own-entries).

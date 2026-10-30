@@ -96,6 +96,9 @@ Three rules under `src/access/` gate each CRUD operation:
 None checks a role's name, so a role you create and an API key are judged by the
 permissions they hold. Publishing a post needs `publish-posts`. Only a caller holding it
 sets or changes a post's `author`; a new post with no author becomes its creator's.
+Media has no rule of its own: a visitor reads it through the built-in Public role's
+`read-media`, granted once at the first start, and taking it away on the Roles screen
+keeps it away.
 
 The demo-content seed creates three roles (`admin`, `editor`, `author`). An author may
 draft posts and edit and delete their own, but holds no `publish-posts`; an editor
