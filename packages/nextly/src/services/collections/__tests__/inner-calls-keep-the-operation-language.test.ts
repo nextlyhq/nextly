@@ -172,7 +172,7 @@ describe("an operation that reaches past the language it names", () => {
     expect(told).toEqual([{ locales: ["en", "fr", "de"] }]);
   });
 
-  it("judges a bulk update by query in every language, as its filter may read any", async () => {
+  it("judges a bulk update by query in the default language it writes, told every language its filter may read", async () => {
     const told = recordLanguages(
       CollectionBulkService.prototype,
       "bulkUpdateByQuery"
@@ -187,6 +187,6 @@ describe("an operation that reaches past the language it names", () => {
       overrideAccess: false,
     });
 
-    expect(told).toEqual([{ locales: ["en", "fr", "de"] }]);
+    expect(told).toEqual([{ locale: "en", locales: ["en", "fr", "de"] }]);
   });
 });
