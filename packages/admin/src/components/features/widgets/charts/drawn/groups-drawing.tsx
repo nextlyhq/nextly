@@ -9,9 +9,10 @@
  *
  * The rows share the card's body: each takes an equal part of its height, and its bar thickens
  * with the row up to `MAX_BAR`, so a few groups fill a tall card without a block of bars at its
- * top, and many keep their bars apart. A name longer than its column ends in "…"; the tooltip and
- * the table hold it whole. The names and the counts are each a category axis over the same rows,
- * so a row's name, bar and count cannot drift apart.
+ * top, and many keep their bars apart. The names' column is as wide as the longest name, up to
+ * `NAME_SHARE` of the drawing (`nameColumnWidth`); a name longer than that ends in "…", and its
+ * `aria-label`, its `<title>`, the tooltip and the table hold it whole. The names and the counts
+ * are each a category axis over the same rows, so a row's name, bar and count cannot drift apart.
  *
  * @module components/features/widgets/charts/drawn/groups-drawing
  */
@@ -41,7 +42,7 @@ import {
 } from "../chart-config";
 import { usePrefersReducedMotion } from "../reduced-motion";
 
-import { fitName } from "./fit-name";
+import { fitName, textWidth } from "./fit-name";
 import {
   PointerIndex,
   TOOLTIP_MARK,
@@ -73,9 +74,20 @@ export interface GroupsDrawingProps {
   tooltip: ReactNode;
 }
 
-/** The name's column and the count's, in pixels: the approved layout's 80 and its counts. */
-const NAME_WIDTH = 80;
+/** The count's column, in pixels. */
 const COUNT_WIDTH = 36;
+/**
+ * The most of the drawing's width the names' column may take. Past it a name ends in "…", so a
+ * long name cannot squeeze every bar to nothing.
+ */
+const NAME_SHARE = 0.4;
+/**
+ * A character's width, as a share of the names' size, where nothing can measure text: wide enough
+ * for most interface text, so a name sized by it is seldom cut.
+ */
+const CHAR_WIDTH = 0.6;
+/** The drawing's width before the engine has measured it, as the engine itself starts it. */
+const INITIAL_WIDTH = 320;
 /** The room between a name and its bar. */
 const NAME_GAP = 8;
 /** A bar is never thicker than this, however tall its row: past it, rows only move apart. */
@@ -92,6 +104,28 @@ const TOOLTIP_GAP = 8;
 /** The names' size, as drawn and as measured for "…". */
 const NAME_SIZE = 12;
 
+/**
+ * The names' column for `labels` in a drawing `drawingWidth` wide, in pixels: the longest name in
+ * `font` and the room before its bar, held to `NAME_SHARE` of the drawing. Measured as `fitName`
+ * measures, or estimated by `CHAR_WIDTH` where nothing can measure, so it is the same width for
+ * the same names on every render.
+ */
+export function nameColumnWidth(
+  labels: readonly string[],
+  drawingWidth: number,
+  font: string
+): number {
+  const cap = Math.floor(drawingWidth * NAME_SHARE);
+  const longest = Math.max(
+    0,
+    ...labels.map(
+      label =>
+        textWidth(label, font) ?? [...label].length * NAME_SIZE * CHAR_WIDTH
+    )
+  );
+  return Math.min(cap, Math.ceil(longest) + NAME_GAP);
+}
+
 export default function GroupsDrawing({
   rows,
   config,
@@ -105,6 +139,13 @@ export default function GroupsDrawing({
   const byKey = new Map(rows.map(row => [row.key, row]));
   const minHeight = rows.length * CHART_ROW_HEIGHT;
   const data = useStableValue(rows.map(row => ({ ...row })));
+  // The drawing's width as the engine measures it, which sets how wide the names may be.
+  const [drawingWidth, setDrawingWidth] = useState(INITIAL_WIDTH);
+  const nameWidth = nameColumnWidth(
+    rows.map(row => row.label),
+    drawingWidth,
+    font.value
+  );
 
   return (
     <div
@@ -124,8 +165,11 @@ export default function GroupsDrawing({
         width="100%"
         height="100%"
         minHeight={minHeight}
-        initialDimension={{ width: 320, height: minHeight }}
+        initialDimension={{ width: INITIAL_WIDTH, height: minHeight }}
         className="pointer-events-none"
+        onResize={width => {
+          if (width > 0) setDrawingWidth(width);
+        }}
       >
         <BarChart
           data={data}
@@ -139,7 +183,7 @@ export default function GroupsDrawing({
             yAxisId="name"
             type="category"
             dataKey="key"
-            width={NAME_WIDTH}
+            width={nameWidth}
             tickLine={false}
             axisLine={false}
             interval={0}
@@ -148,6 +192,7 @@ export default function GroupsDrawing({
                 row={byKey.get(String(payload.value))}
                 y={Number(y)}
                 font={font.value}
+                width={nameWidth}
               />
             )}
           />
@@ -197,7 +242,7 @@ export default function GroupsDrawing({
           className="absolute z-10"
           // design-lint-ok: placed in the neighbouring row, from the bar's end, so it covers
           // neither the bar it describes nor the names.
-          style={tooltipPlace(shown, rows)}
+          style={tooltipPlace(shown, rows, nameWidth)}
         >
           {tooltip}
         </div>
@@ -228,30 +273,45 @@ function useDrawnFont(): {
   };
 }
 
-/** A group's name from the drawing's left edge, cut to its column in the font it is drawn in. */
+/**
+ * A group's name from the drawing's left edge, cut to its column in the font it is drawn in.
+ *
+ * The whole name is always the text's `aria-label`. A cut name also has it as the `<title>` of
+ * the group the text sits in, the tooltip a pointer gets; a name drawn whole shows it already, so
+ * it has no second copy. Beside the text rather than in it, so the text holds only what is drawn.
+ */
 function GroupName({
   row,
   y,
   font,
+  width,
 }: {
   row: GroupsDrawnRow | undefined;
   y: number;
   font: string;
+  width: number;
 }): JSX.Element {
+  const drawn = row ? fitName(row.label, width - NAME_GAP, font) : "";
   return (
-    <text
-      x={0}
-      y={y}
-      dy="0.355em"
-      textAnchor="start"
-      fontSize={NAME_SIZE}
-      fontStyle={row?.placeholder ? "italic" : "normal"}
-      fill={
-        row?.placeholder ? "var(--nx-muted-foreground)" : "var(--nx-foreground)"
-      }
-    >
-      {row ? fitName(row.label, NAME_WIDTH - NAME_GAP, font) : ""}
-    </text>
+    <g>
+      {row && drawn !== row.label ? <title>{row.label}</title> : null}
+      <text
+        x={0}
+        y={y}
+        dy="0.355em"
+        textAnchor="start"
+        fontSize={NAME_SIZE}
+        fontStyle={row?.placeholder ? "italic" : "normal"}
+        fill={
+          row?.placeholder
+            ? "var(--nx-muted-foreground)"
+            : "var(--nx-foreground)"
+        }
+        {...(row ? { "aria-label": row.label } : {})}
+      >
+        {drawn}
+      </text>
+    </g>
   );
 }
 
@@ -263,15 +323,16 @@ function GroupName({
  */
 function tooltipPlace(
   index: number,
-  rows: readonly GroupsDrawnRow[]
+  rows: readonly GroupsDrawnRow[],
+  nameWidth: number
 ): CSSProperties {
   const count = Math.max(1, rows.length);
   const fraction = rows[index]?.fraction ?? 0;
-  const track = `(100% - ${NAME_WIDTH + COUNT_WIDTH}px)`;
+  const track = `(100% - ${nameWidth + COUNT_WIDTH}px)`;
   const across =
     fraction <= 0.5
       ? {
-          left: `calc(${NAME_WIDTH + TOOLTIP_GAP}px + ${track} * ${fraction})`,
+          left: `calc(${nameWidth + TOOLTIP_GAP}px + ${track} * ${fraction})`,
         }
       : {
           right: `calc(${COUNT_WIDTH + TOOLTIP_GAP}px + ${track} * ${1 - fraction})`,
