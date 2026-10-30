@@ -17,6 +17,8 @@ vi.mock("../../../services/lib/permissions", () => ({
   listRoleSlugsForUser: vi.fn(async () => ["super-admin"]),
 }));
 
+import { userActor } from "../../../auth/access/actor";
+import { decide } from "../../../auth/access/decide";
 import { hasPermission, isSuperAdmin } from "../../../services/lib/permissions";
 import { makePrincipal } from "../../../plugins/principals/principal";
 import type { Principal } from "../../../plugins/principals/types";
@@ -133,18 +135,25 @@ describe("a call made as a plugin-defined person", () => {
 describe("a call made by anyone else", () => {
   it("tells a staff user's rule there is no person", async () => {
     let seen: AccessControlContext | undefined;
-    vi.mocked(isSuperAdmin).mockResolvedValueOnce(false);
-    await new RBACAccessControlService().checkAccess({
+    // A user who holds the read and is no super-admin, so the rule is asked.
+    const staff = userActor({
       userId: "u1",
-      operation: "read",
-      resource: "orders",
-      codeAccess: {
+      roles: ["editor"],
+      permissions: [
+        { slug: "read-orders", action: "read", resource: "orders" },
+      ],
+    });
+    await decide(staff, "read", {
+      kind: "collection",
+      slug: "orders",
+      access: {
         read: ctx => {
           seen = ctx;
           return true;
         },
       },
     });
+    expect(seen).toBeDefined();
     expect(seen?.principal).toBeNull();
     expect(seen?.user).toEqual({ id: "u1" });
   });
