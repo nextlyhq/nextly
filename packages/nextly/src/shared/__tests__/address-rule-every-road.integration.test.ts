@@ -179,12 +179,13 @@ async function stateOf(
  * its DDL before recording the collection.
  */
 async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
+  // Stubbed, not assigned: `NODE_ENV` is read-only in the type the tests compile against.
   const previous = process.env.NODE_ENV;
-  process.env.NODE_ENV = "development";
+  vi.stubEnv("NODE_ENV", "development");
   try {
     return await run();
   } finally {
-    process.env.NODE_ENV = previous;
+    vi.stubEnv("NODE_ENV", previous);
   }
 }
 
