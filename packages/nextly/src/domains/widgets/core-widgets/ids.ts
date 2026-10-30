@@ -22,7 +22,7 @@ export const CORE_WIDGET_ID = {
   needsAttention: "core/needs-attention",
   recentlyEdited: "core/recently-edited",
   upcomingReleases: "core/upcoming-releases",
-  recentActivity: "core/recent-activity",
+  teamActivity: "core/team-activity",
   count: "core/count",
   breakdown: "core/breakdown",
   note: "core/note",
@@ -45,7 +45,7 @@ export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.recentlyEdited,
   CORE_WIDGET_ID.upcomingReleases,
-  CORE_WIDGET_ID.recentActivity,
+  CORE_WIDGET_ID.teamActivity,
   CORE_WIDGET_ID.count,
   CORE_WIDGET_ID.breakdown,
   CORE_WIDGET_ID.note,
@@ -66,7 +66,7 @@ void everyIdOrdered;
 /**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
  * there is one path to the default whoever wrote it: the onboarding card, then
- * Needs attention, Recently edited, Recent activity, Content and Upcoming
+ * Needs attention, Recently edited, Team activity, Content and Upcoming
  * releases, each at its widget's starting size. Creating an entry is the
  * header's New button, not a card, so Needs attention takes the full row the
  * Create card shared; the two activity lists share a row and a height. A
@@ -82,7 +82,7 @@ export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
   { widget: CORE_WIDGET_ID.getStarted },
   { widget: CORE_WIDGET_ID.needsAttention, w: 12 },
   { widget: CORE_WIDGET_ID.recentlyEdited },
-  { widget: CORE_WIDGET_ID.recentActivity },
+  { widget: CORE_WIDGET_ID.teamActivity },
   { widget: CORE_WIDGET_ID.content },
   { widget: CORE_WIDGET_ID.upcomingReleases },
 ];
