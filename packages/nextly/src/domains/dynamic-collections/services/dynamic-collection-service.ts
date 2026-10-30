@@ -540,7 +540,8 @@ export class DynamicCollectionService extends BaseService {
     }
 
     const normalizedName = data.name.toLowerCase();
-    const tableName = `dc_${normalizedName}`;
+    // A hyphen in the address is written as an underscore in the table, as configuration names it.
+    const tableName = `dc_${normalizedName.replace(/-/g, "_")}`;
 
     this.validationService.validateCollectionName(normalizedName);
 

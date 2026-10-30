@@ -17,7 +17,11 @@
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetSizeDeclaration } from "../grid-size";
 import type { RangeInterval, TimeseriesRange } from "../query";
-import type { DeclaredComponentProps, WidgetRenderSize } from "../result";
+import type {
+  DeclaredComponentProps,
+  SettingEditorProps,
+  WidgetRenderSize,
+} from "../result";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "../sources";
 import type { WidgetScope } from "../widget-scope";
 
@@ -30,6 +34,8 @@ import type {
 import type {
   DateRange,
   DependentSettings,
+  SettingEditorPathOf,
+  SettingEditorValueAt,
   SettingValues,
   WidgetFilter,
   WidgetSettings,
@@ -830,9 +836,16 @@ export type ComponentPathOf<W> = W extends {
  * ```
  */
 export type WidgetComponentMap<W extends AnyWidget> = {
-  [Path in ComponentPathOf<W>]: (
-    props: PropsOfEach<WidgetsAt<W, Path>>
-  ) => unknown;
+  // Each setting's own editor sits beside the views, by the path its setting
+  // names, taking that setting's value: an editor written for another
+  // setting's value is refused as a view written for another widget is. One
+  // mapped type, not an intersection of two, so a missing path is reported
+  // the same way either side.
+  [Path in
+    | ComponentPathOf<W>
+    | SettingEditorPathOf<W>]: Path extends ComponentPathOf<W>
+    ? (props: PropsOfEach<WidgetsAt<W, Path>>) => unknown
+    : (props: SettingEditorProps<SettingEditorValueAt<W, Path>>) => unknown;
 };
 
 /** The widgets among `W` that name this component path. */

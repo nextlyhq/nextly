@@ -10,10 +10,12 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
+import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
@@ -101,6 +103,15 @@ export function createDebouncedSync(
             releaseOnInterrupt: true,
           },
           async () => {
+            // The configuration's new addresses, judged by the one address rule as a start judges
+            // them, before this sync reads or writes any schema.
+            const liveAdapter = adapter as unknown as DrizzleAdapter;
+            await assertConfiguredAddresses(
+              configToSync.config,
+              await loadBuilderEntities(liveAdapter),
+              table => liveAdapter.tableExists(table)
+            );
+
             // Every entity as the registry records it before the syncs below rewrite it, so the
             // companion pass after them can tell a field this edit newly translates.
             const recordedBefore =
