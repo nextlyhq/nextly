@@ -193,9 +193,9 @@ describe("a command that ends with an error", () => {
     expect(verbose.code).toBe(1);
     const shape = shapeOf(verbose.stderr);
     expect(shape).toEqual(shapeOf(plain.stderr));
-    // The verbose detail is read from below the Docs line, so there must be one.
-    const docs = shape.docs;
-    if (docs === undefined) throw new Error("the error printed no Docs line");
+    // The verbose detail is printed below the shape's last line, its docs link.
+    const { docs } = shape;
+    if (docs === undefined) throw new Error("the error printed no Docs: line");
     const below = verbose.stderr.slice(verbose.stderr.indexOf(docs));
     expect(below).toMatch(/\n {2}Context: \{.*"reason":"load-error"/);
     // The stack opens with its message, which may run to several lines, then its frames.

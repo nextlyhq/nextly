@@ -22,12 +22,10 @@ import type {
   ColumnState,
   DifferenceCause,
 } from "../../domains/schema/repair-columns/types";
+import { databaseEnvError, exitWithError } from "../errors";
 import type { CommandContext, GlobalOptions } from "../program";
-import { createCliAdapter } from "../utils/adapter";
-import {
-  loadConfigOrExit,
-  requireDatabaseEnv,
-} from "../utils/command-prerequisites";
+import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { loadConfig } from "../utils/config-loader";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 const REPAIR_COLUMNS_COMMAND = "repair-columns";
@@ -98,22 +96,23 @@ interface RepairColumnsOptions {
 }
 
 /**
- * Compare and print, returning the findings. Unusable database settings and a configuration that
- * does not load end the run in the CLI's error shape here; anything else that stops it is thrown,
- * and the entry point prints it in that shape.
+ * Compare and print. Returns the findings; anything that stops the run is thrown, unusable
+ * database settings as the CLI error that names them, for the caller to end with.
  */
 async function runRepairColumns(
   options: RepairColumnsOptions,
   context: CommandContext
 ): Promise<ColumnFinding[]> {
   const { logger } = context;
-  const env = requireDatabaseEnv(logger);
+  const env = validateDatabaseEnv();
+  if (!env.valid || env.dialect === undefined) throw databaseEnvError(env);
   const dialect = env.dialect;
   const cwd = options.cwd ?? context.cwd;
-  const { config, projectRoot, deferredExtends } = await loadConfigOrExit(
-    { configPath: options.config, cwd, debug: options.verbose },
-    logger
-  );
+  const { config, projectRoot, deferredExtends } = await loadConfig({
+    configPath: options.config,
+    cwd,
+    debug: options.verbose,
+  });
 
   const [{ readRepairEntities }, { findColumnDifferences }] = await Promise.all(
     [
@@ -178,9 +177,10 @@ export function registerRepairColumnsCommand(
     .action(async (_options: Record<string, never>, cmd: Command) => {
       const globals = cmd.optsWithGlobals<GlobalOptions>();
       const context = createContext(globals);
+      // Every way the run stops ends in the CLI's error shape, with the code that names it.
       await runRepairColumns(
         { config: globals.config, cwd: globals.cwd, verbose: globals.verbose },
         context
-      );
+      ).catch((error: unknown) => exitWithError(context.logger, error));
     });
 }

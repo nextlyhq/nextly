@@ -30,5 +30,3 @@
 ---
 
 `nextly migrate:create` and `nextly migrate:check` work again in a project nothing else has loaded. Neither connects to the database, and both stopped on an unexpected error ("the tables were read before that dialect was loaded"). The schema they compile now loads its dialect's tables itself.
-
-`nextly repair-columns` ends a failed run in the CLI's error shape, with its code and what to do next, like every other command.
