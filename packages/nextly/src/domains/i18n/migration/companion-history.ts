@@ -167,8 +167,11 @@ function replayIntent(
   const columns =
     replay.columns.get(key) ?? new Map<string, LocalizedColumnSpec>();
   const companion = COMPANION_EFFECT[intent.kind](columns, intent.spec.columns);
-  if (companion === "made") replay.present.add(key);
+  // Every kind but a disable leaves a companion there, whether it made it or ran against it: a
+  // field leaving translation empties a companion no file may have made (`migrate:baseline`
+  // adopted it) and keeps it, so a field joining translation later is moved into it.
   if (companion === "dropped") replay.present.delete(key);
+  else replay.present.add(key);
   replay.columns.set(key, columns);
 }
 
@@ -178,7 +181,10 @@ const MAKES_COMPANION = new Set<LocalizationMigrationIntent["kind"]>([
   "enable",
 ]);
 
-/** What a file of each kind does to the companion's columns, and to whether it is there. */
+/**
+ * What a file of each kind does to the companion's columns, and to whether it is there: made, run
+ * against as it is (kept), or dropped.
+ */
 const COMPANION_EFFECT: Record<
   LocalizationMigrationIntent["kind"],
   (

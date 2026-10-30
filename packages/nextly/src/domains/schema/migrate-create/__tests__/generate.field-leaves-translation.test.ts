@@ -590,6 +590,38 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         ]);
       }
     );
+
+    it("moves a field back into the companion its last translated field left, with no file that made it", async () => {
+      // As `migrate:baseline` leaves a project: no localization file made the companion. Then its
+      // last translated field becomes shared, which empties the companion and keeps it.
+      const dir = await projectAfter(dialect, [
+        {
+          collections: [BODY_JOINS],
+          after: async d => {
+            for (const name of await readdir(d)) {
+              if (name.includes("_localization_")) await rm(resolve(d, name));
+            }
+          },
+        },
+        {
+          collections: [
+            {
+              ...BODY_SHARED,
+              fields: [
+                { name: "headline", type: "text", localized: false },
+                { name: "body", type: "text", localized: false },
+              ],
+            },
+          ],
+        },
+      ]);
+
+      // Its column is added to the companion that is there, not a second companion made over it.
+      expect(await filesOfRun(dialect, dir, [BODY_SHARED])).toEqual([
+        expect.stringMatching(/_joins_localization_docs\.sql$/),
+        expect.stringMatching(/_next\.sql$/),
+      ]);
+    });
   }
 );
 

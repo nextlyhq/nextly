@@ -485,6 +485,34 @@ for (const entry of DIALECTS) {
         expect(await columnsOf(table)).not.toContain("body");
       });
 
+      it("moves a field back into the companion its last translated field left, with no file that made it", async () => {
+        await migrateCreate(translated);
+        // As `migrate:baseline` leaves a project: no localization file says it made the companion.
+        // Changed before it runs, as it was written.
+        for (const name of await readdir(migrationsDir)) {
+          if (!name.includes("_localization_")) continue;
+          const path = resolve(migrationsDir, name);
+          const kept = (await readFile(path, "utf-8"))
+            .split("\n")
+            .filter(line => !line.startsWith("-- Localization:"));
+          await writeFile(path, kept.join("\n"), "utf-8");
+        }
+        await migrate();
+        await seed();
+        // Its last translated field becomes shared: the companion is emptied and kept.
+        await migrateCreate(shared);
+        await migrate();
+        await expectShared();
+
+        // Translated again: moved into the companion that is there, English's value with it.
+        await migrateCreate(translated);
+        await migrate();
+        expect(
+          (await companionValues()).find(row => row.locale === "en")?.body
+        ).toBe("Hello");
+        expect(await columnsOf(table)).not.toContain("body");
+      });
+
       it("keeps every language in a project from before translated fields were recorded, once recorded", async () => {
         await migrateCreate(translated);
         // As an early version left the project: no snapshot records the translated fields, and the
