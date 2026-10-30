@@ -41,10 +41,17 @@ import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -110,6 +117,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
@@ -383,6 +391,17 @@ export async function checkSingleAccess(params: {
       refusalReason: `the caller may not read single "${slug}", so its ${operation} is answered as missing`,
     };
   }
+  // A caller with no identity that signing in could let through is asked to
+  // sign in, as REST asks it, rather than told what it may not do.
+  if (verdict.refusal === "unauthenticated") {
+    return {
+      success: false,
+      statusCode: NEXTLY_ERROR_STATUS.AUTH_REQUIRED,
+      code: "AUTH_REQUIRED",
+      refusalReason: `${operation} on single "${slug}" requires an authenticated user`,
+      message: genericPublicMessage("AUTH_REQUIRED"),
+    };
+  }
   // The caller is told what was refused in the site's words. Which check
   // refused rides along for the server's log, written where the refusal
   // reaches its caller: a caller asking only whether it may is not refused.
@@ -390,10 +409,7 @@ export async function checkSingleAccess(params: {
     success: false,
     statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
     code: "FORBIDDEN",
-    refusalReason:
-      verdict.refusal === "unauthenticated"
-        ? `${operation} on single "${slug}" requires an authenticated user`
-        : `the caller may not ${operation} single "${slug}"`,
+    refusalReason: `the caller may not ${operation} single "${slug}"`,
     // Named by the service's caller, so its slug is the site's own.
     message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };
@@ -1349,7 +1365,16 @@ export class SingleQueryService extends BaseService {
       };
     } catch (error) {
       this.logger.error("Failed to get Single document", { slug, error });
-      return buildSingleErrorResult(error, "Failed to get Single document");
+      // A read the database is not migrated for answers as such, not as a 500.
+      return buildSingleErrorResult(
+        await asNotMigrated(
+          error,
+          singleNotMigrated(this.singleRegistryService, slug, {
+            trusted: fieldTrustOf(options),
+          })
+        ),
+        "Failed to get Single document"
+      );
     }
   }
 

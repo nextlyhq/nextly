@@ -104,6 +104,9 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
       name.includes("_locales") ? false : created
     ),
     selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+    // The slug guard also lists the addresses already used, to refuse one with the same
+    // snake_case form; none are.
+    select: vi.fn(async (): Promise<Array<{ id: string; slug: string }>> => []),
     // The delete path sweeps embedded field-group data and the i18n companion before dropping the
     // table, and both ask the adapter what exists. An empty database is the simplest state that
     // reaches the drop, which is the statement these tests order against.

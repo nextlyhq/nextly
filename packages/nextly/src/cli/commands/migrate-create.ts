@@ -56,6 +56,7 @@ import {
   orderedMigrations,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import { assertMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   compileAppStreamTables,
   contributedElementsOf,
@@ -399,9 +400,21 @@ export async function runMigrateCreate(
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
   // survived the merge (code-first wins → shadowed UI slugs are skipped).
+  // Shadowing is per kind, as above: `merged.droppedUiSlugs` is one list for
+  // every kind, and filtering by it would leave out the row of an unshadowed
+  // Single whose slug a shadowed collection shares.
   const metadataUpserts = builderMetadataUpserts(
-    manifest,
-    new Set(merged.droppedUiSlugs),
+    {
+      collections: survivingOf(
+        manifest.collections,
+        configResult.config.collections
+      ),
+      singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
+      components: survivingOf(
+        manifest.components,
+        configResult.config.fieldGroups ?? []
+      ),
+    },
     dialect
   );
 
@@ -421,12 +434,13 @@ export async function runMigrateCreate(
   });
 
   const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
+  // A new address is judged by the one address rule before anything is written.
+  assertMigrationAddresses(merged, latest, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.
   const previousMetadataUpserts = builderMetadataUpserts(
     builderEntriesOf(latest?.data.entities),
-    new Set(),
     dialect
   );
   if (
@@ -508,7 +522,8 @@ export async function runMigrateCreate(
 
 /**
  * The registry-row upserts for UI-built entities (spec §4.12.7), keyed by data
- * table, skipping the slugs a code-first entity shadows.
+ * table. The caller hands in only the entries no code-first entity of the
+ * same kind shadows.
  */
 function builderMetadataUpserts(
   entries: {
@@ -516,7 +531,6 @@ function builderMetadataUpserts(
     singles: readonly UiSchemaEntity[];
     components: readonly UiSchemaEntity[];
   },
-  dropped: ReadonlySet<string>,
   dialect: SupportedDialect
 ): { tableName: string; sql: string }[] {
   const tn = (
@@ -525,21 +539,18 @@ function builderMetadataUpserts(
   ) => `${prefix}${slug.replace(/-/g, "_")}`;
   const upserts: { tableName: string; sql: string }[] = [];
   for (const c of entries.collections) {
-    if (dropped.has(c.slug)) continue;
     upserts.push({
       tableName: tn(c.slug, "dc_"),
       sql: buildCollectionMetadataUpsert(c, dialect),
     });
   }
   for (const s of entries.singles) {
-    if (dropped.has(s.slug)) continue;
     upserts.push({
       tableName: tn(s.slug, "single_"),
       sql: buildSingleMetadataUpsert(s, dialect),
     });
   }
   for (const cp of entries.components) {
-    if (dropped.has(cp.slug)) continue;
     upserts.push({
       tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
       sql: buildComponentMetadataUpsert(cp, dialect),
