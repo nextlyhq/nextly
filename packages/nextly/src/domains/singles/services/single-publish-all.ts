@@ -912,22 +912,17 @@ export class SinglePublishAllService extends BaseService {
       new Map()
     );
 
-    // The components as they stood before the drafts are promoted, for each
-    // language an event's previous state is built in: the promotion rewrites
-    // the component tables that assembly would otherwise read.
-    const priorComponents = await this.componentsBeforePromotion(
-      tx,
-      plan,
-      pending,
-      priorCompanionStatuses
-    );
-    // Each language's translated values before the drafts are promoted, for
-    // the same reason: the promotion rewrites the companion rows too.
-    const priorCompanionValues = await this.companionValuesBeforePromotion(
-      tx,
-      plan,
-      pending
-    );
+    // Every language's content as it stood before the drafts are promoted,
+    // for the previous state its events are built from: the promotion
+    // rewrites the companion rows and component tables they would otherwise
+    // be read from.
+    const { components: priorComponents, values: priorCompanionValues } =
+      await this.stateBeforePromotion(
+        tx,
+        plan,
+        pending,
+        priorCompanionStatuses
+      );
 
     const written = await this.writePublishedStatuses(
       tx,
@@ -1336,20 +1331,52 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * Each language's component subtrees before the drafts are promoted, keyed
-   * by locale ("" for none), for the previous state of this publish's events.
-   * Empty when no event is recorded, or when no pending change holds a
-   * component value: nothing is then rewritten, and the assembly reads the
-   * tables as they stand.
+   * Every language's content before the drafts are promoted, for the previous
+   * state of this publish's events: one capture for every language an event
+   * can be told, so no language's "before" is read after the promotion.
+   *
+   * - `components`: the component subtrees, keyed by locale ("" for none), of
+   *   the default language, every stored translation, and every promoted
+   *   language, a change that creates its translation row included. Empty when
+   *   no pending change holds a component value: nothing is then rewritten,
+   *   and the assembly reads the tables as they stand.
+   * - `values`: the translated values of each promoted language, in one read.
+   *   Every other language's companion row is left as it is, so the values
+   *   read after the publish are the same.
+   *
+   * Both empty when no event is recorded.
    */
-  private async componentsBeforePromotion(
+  private async stateBeforePromotion(
     tx: TransactionContext,
     plan: PublishPlan,
     pending: readonly PendingChange[],
     priorCompanionStatuses: Map<string, string | null>
-  ): Promise<Map<string, Record<string, unknown>>> {
-    const prior = new Map<string, Record<string, unknown>>();
-    if (!plan.recordingEnabled) return prior;
+  ): Promise<{
+    components: Map<string, Record<string, unknown>>;
+    values: Map<string, Record<string, unknown>>;
+  }> {
+    const components = new Map<string, Record<string, unknown>>();
+    if (!plan.recordingEnabled || pending.length === 0) {
+      return { components, values: new Map() };
+    }
+    const promoted = [
+      ...new Set(
+        pending.flatMap(draft => (draft.locale === null ? [] : [draft.locale]))
+      ),
+    ];
+    const { companion } = plan;
+    // One read for every promoted language, however many there are: it runs
+    // while this publish holds the row's lock.
+    const values =
+      companion && plan.companionPublishable
+        ? await readCompanionValuesByLocale(
+            this.adapter,
+            tx,
+            companion,
+            plan.existingDoc.id,
+            promoted
+          )
+        : new Map<string, Record<string, unknown>>();
     const holdsComponents = pending.some(
       draft =>
         Object.keys(
@@ -1359,14 +1386,16 @@ export class SinglePublishAllService extends BaseService {
           )
         ).length > 0
     );
-    if (!holdsComponents || !this.fieldGroupDataService) return prior;
-    const defaultLocale = this.localization?.defaultLocale;
+    if (!holdsComponents || !this.fieldGroupDataService) {
+      return { components, values };
+    }
     const locales = new Set<string | undefined>([
-      defaultLocale,
+      this.localization?.defaultLocale,
       ...priorCompanionStatuses.keys(),
+      ...promoted,
     ]);
     for (const locale of locales) {
-      prior.set(
+      components.set(
         locale ?? "",
         await readComponentSubtrees({
           fieldGroupDataService: this.fieldGroupDataService,
@@ -1380,39 +1409,7 @@ export class SinglePublishAllService extends BaseService {
         })
       );
     }
-    return prior;
-  }
-
-  /**
-   * Each language's translated values before the drafts are promoted, keyed by
-   * locale, for the previous state of this publish's events. Read only for the
-   * languages whose pending change the promotion writes: every other
-   * language's companion row is left as it is, so the values read after the
-   * publish are the same. Empty when no event is recorded.
-   */
-  private async companionValuesBeforePromotion(
-    tx: TransactionContext,
-    plan: PublishPlan,
-    pending: readonly PendingChange[]
-  ): Promise<Map<string, Record<string, unknown>>> {
-    const { companion } = plan;
-    if (!plan.recordingEnabled || pending.length === 0) return new Map();
-    if (!companion || !plan.companionPublishable) return new Map();
-    // One read for every promoted language, however many there are: it runs
-    // while this publish holds the row's lock.
-    return readCompanionValuesByLocale(
-      this.adapter,
-      tx,
-      companion,
-      plan.existingDoc.id,
-      [
-        ...new Set(
-          pending.flatMap(draft =>
-            draft.locale === null ? [] : [draft.locale]
-          )
-        ),
-      ]
-    );
+    return { components, values };
   }
 
   /**

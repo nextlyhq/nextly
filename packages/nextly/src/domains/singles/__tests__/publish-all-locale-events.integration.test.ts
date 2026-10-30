@@ -11,7 +11,12 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, text } from "../../../config";
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -34,7 +39,7 @@ const ONE = "preferences-one";
 /** Published every language at once. */
 const EVERY = "preferences-every";
 
-function preferences(slug: string) {
+function preferences(slug: string, withBanner = false) {
   return defineSingle({
     slug,
     localized: true,
@@ -44,14 +49,35 @@ function preferences(slug: string) {
       text({ name: "siteName", localized: true }),
       // Shared by every language: kept on the main row.
       text({ name: "tagline", localized: false }),
+      // A component each language keeps its own copy of.
+      ...(withBanner
+        ? [fieldGroup({ name: "banner", component: "banner" })]
+        : []),
     ],
   });
 }
 
-async function boot(dialect: TestDialect): Promise<SingleEntryService> {
+async function boot(
+  dialect: TestDialect,
+  extra: { withBanner?: boolean } = {}
+): Promise<SingleEntryService> {
   current = await createTestNextly({
     dialect,
-    singles: [preferences(ONE), preferences(EVERY)],
+    ...(extra.withBanner
+      ? {
+          fieldGroups: [
+            defineFieldGroup({
+              slug: "banner",
+              localized: true,
+              fields: [text({ name: "heading" })],
+            }),
+          ],
+        }
+      : {}),
+    singles: [
+      preferences(ONE, extra.withBanner),
+      preferences(EVERY, extra.withBanner),
+    ],
     localization: { locales: ["en", "de", "fr"], defaultLocale: "en" },
   });
   return current.getService("singleEntryService");
@@ -279,6 +305,68 @@ describe.each(getConfiguredTestDialects())(
           event => event.locale !== undefined
         )
       ).toEqual(told);
+    });
+
+    it("tells a language whose pending change creates its row what its components were before", async () => {
+      const singles = await boot(dialect, { withBanner: true });
+      for (const slug of [ONE, EVERY]) {
+        for (const [locale, heading] of [
+          ["en", "Live en"],
+          ["de", "Live de"],
+        ] as const) {
+          const live = await singles.update(
+            slug,
+            { siteName: locale, banner: { heading }, status: "published" },
+            { locale, overrideAccess: true }
+          );
+          expect(live.success, JSON.stringify(live)).toBe(true);
+        }
+        // German's pending change edits its own component.
+        const held = await singles.update(
+          slug,
+          { banner: { heading: "Pending de" } },
+          { locale: "de", overrideAccess: true }
+        );
+        expect(held.success, JSON.stringify(held)).toBe(true);
+        // As on an install whose translation row for German was never
+        // written: its component rows stand, its translation row doesn't.
+        await current!.adapter.delete(
+          `single_${slug.replaceAll("-", "_")}_locales`,
+          { and: [{ column: "_locale", op: "=", value: "de" }] }
+        );
+      }
+      const rows = await current!.adapter.select<{ _locale: string }>(
+        "single_preferences_every_locales"
+      );
+      expect(rows.map(row => row._locale)).not.toContain("de");
+      const before = await eventIds();
+
+      const alone = await singles.update(
+        ONE,
+        { status: "published" },
+        { locale: "de", overrideAccess: true }
+      );
+      expect(alone.success, JSON.stringify(alone)).toBe(true);
+      const every = await singles.publishAllLocales(EVERY, {
+        overrideAccess: true,
+      });
+      expect(every.success, JSON.stringify(every)).toBe(true);
+
+      const headingOf = (value: unknown) =>
+        (value as { heading?: unknown } | null | undefined)?.heading ?? null;
+      const tagged = async (slug: string) =>
+        (await eventsSince(before, slug, "banner"))
+          .filter(event => event.locale === "de")
+          .map(event => ({
+            type: event.type,
+            data: headingOf(event.data),
+            previous: headingOf(event.previous),
+          }));
+      const told = await tagged(ONE);
+      expect(told).toContainEqual(
+        expect.objectContaining({ data: "Pending de" })
+      );
+      expect(await tagged(EVERY)).toEqual(told);
     });
 
     it("reports the shared value a pending change put live, in its events and in the published version", async () => {
