@@ -235,6 +235,10 @@
       "types": "./dist/api/email-provider-types.d.mts",
       "import": "./dist/api/email-provider-types.mjs"
     },
+    "./api/dashboard-summary-types": {
+      "types": "./dist/api/dashboard-summary-types.d.mts",
+      "import": "./dist/api/dashboard-summary-types.mjs"
+    },
     "./api/email-template-preview-types": {
       "types": "./dist/api/email-template-preview-types.d.mts",
       "import": "./dist/api/email-template-preview-types.mjs"

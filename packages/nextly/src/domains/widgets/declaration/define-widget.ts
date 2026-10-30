@@ -519,9 +519,8 @@ export interface WidgetDeclarationInput<
    */
   preview?: PreviewFor<DisplayOf<View>, Preview, SettingValues<S>>;
   /**
-   * A label and a count for the dashboard's header. Typed for the release
-   * whose header reads it: until then a declaration using it is refused at
-   * startup, rather than started with a summary nothing shows.
+   * A label and a count for the dashboard's header, counted as the reader for
+   * each card of the widget they are shown, and left out of the line at none.
    *
    * @experimental
    */
