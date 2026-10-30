@@ -10,7 +10,13 @@
  * each state the card's hook can report, against each state of the user read,
  * and count the headings on the composed page rather than on the header alone.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SeedStatus } from "@admin/hooks/queries/useSeedStatus";
@@ -36,7 +42,9 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => userRead,
 }));
 
-let summaryRead: { data: DashboardSummary | undefined } = { data: undefined };
+let summaryRead: { data: DashboardSummary | undefined; isError?: boolean } = {
+  data: undefined,
+};
 vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
   useDashboardSummary: () => summaryRead,
 }));
@@ -45,6 +53,8 @@ let appName = "Acme Site";
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useAppName: () => appName,
 }));
+
+import { CELL_PLACEMENT_ATTRIBUTE } from "../widgets/edit/drag/useCardDrag";
 
 import { SeedDemoContentCard } from "./SeedDemoContentCard";
 import {
@@ -298,7 +308,7 @@ describe("the dashboard header", () => {
         failed: 0,
       },
     };
-    renderHeader({ cards: { "acme/forms": "c1" } });
+    renderHeader({ cards: { "acme/forms": ["c1"] } });
     const line = screen.getByTestId("dashboard-summary");
     expect(line).toHaveTextContent("2 things need you · 3 new submissions");
     expect(within(line).getByRole("link")).toHaveTextContent(
@@ -320,6 +330,28 @@ describe("the dashboard header", () => {
     expect(within(line).queryByRole("link")).toBeNull();
   });
 
+  it("words nothing from an earlier answer once a later read of it failed", () => {
+    // A failed refetch keeps the last answer: its counts, or its "caught up",
+    // are no longer known to be true.
+    summaryRead = { data: { parts: [], failed: 0 }, isError: true };
+    renderHeader();
+    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
+    cleanup();
+    summaryRead = {
+      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
+      isError: true,
+    };
+    renderHeader();
+    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
+    cleanup();
+    // The control: the same answer, its latest read a success.
+    summaryRead = { data: { parts: [], failed: 0 }, isError: false };
+    renderHeader();
+    expect(screen.getByTestId("dashboard-summary")).toHaveTextContent(
+      "You're all caught up"
+    );
+  });
+
   it("says how old the data is only past five minutes, once, with Refresh", () => {
     renderHeader({ oldestAnswerAt: Date.now() - 4 * 60_000 });
     expect(screen.queryByTestId("dashboard-freshness")).toBeNull();
@@ -329,5 +361,85 @@ describe("the dashboard header", () => {
       "Updated 7 min ago · Refresh"
     );
     expect(screen.getAllByTestId("dashboard-freshness")).toHaveLength(1);
+  });
+});
+
+/** A card drawn on the dashboard, as the grid draws one: focusable, by its placement id. */
+function drawnCard(placementId: string): HTMLElement {
+  const card = document.createElement("div");
+  card.setAttribute(CELL_PLACEMENT_ATTRIBUTE, placementId);
+  card.tabIndex = -1;
+  card.scrollIntoView = vi.fn();
+  document.body.append(card);
+  return card;
+}
+
+describe("following a summary part to its card", () => {
+  afterEach(() => {
+    for (const card of document.querySelectorAll(
+      `[${CELL_PLACEMENT_ATTRIBUTE}]`
+    )) {
+      card.remove();
+    }
+  });
+
+  const widgetPart = (card: string): DashboardSummary => ({
+    parts: [
+      {
+        kind: "widget",
+        widget: "acme/forms",
+        card,
+        label: "new submissions",
+        count: 3,
+      },
+    ],
+    failed: 0,
+  });
+
+  it("focuses the very card the part names, not its widget's first", () => {
+    // The widget's first card is not shown to this reader, so it is not drawn;
+    // the server named the one that is.
+    const shown = drawnCard("c2");
+    summaryRead = { data: widgetPart("c2") };
+    renderHeader({ cards: { "acme/forms": ["c1", "c2"] } });
+
+    fireEvent.click(screen.getByTestId("dashboard-summary-widget:acme/forms"));
+
+    expect(document.activeElement).toBe(shown);
+  });
+
+  it("draws a part whose card is not on the dashboard as words", () => {
+    summaryRead = { data: widgetPart("c3") };
+    renderHeader({ cards: { "acme/forms": ["c1", "c2"] } });
+    const line = screen.getByTestId("dashboard-summary");
+    expect(line).toHaveTextContent("3 new submissions");
+    expect(within(line).queryByRole("button")).toBeNull();
+  });
+
+  it("leaves a modified or non-primary click on a link to the browser", () => {
+    const card = drawnCard("a1");
+    summaryRead = {
+      data: {
+        parts: [{ kind: "attention", count: 2, link: "releases" }],
+        failed: 0,
+      },
+    };
+    renderHeader({ cards: { "core/needs-attention": ["a1"] } });
+    const link = screen.getByRole("link", { name: "2 things need you" });
+
+    for (const modified of [
+      { ctrlKey: true },
+      { metaKey: true },
+      { shiftKey: true },
+      { altKey: true },
+      { button: 1 },
+    ]) {
+      // `fireEvent` answers false only when the click's default was prevented.
+      expect(fireEvent.click(link, { button: 0, ...modified })).toBe(true);
+      expect(document.activeElement).not.toBe(card);
+    }
+    // The control: a plain primary click follows to the card instead.
+    expect(fireEvent.click(link, { button: 0 })).toBe(false);
+    expect(document.activeElement).toBe(card);
   });
 });

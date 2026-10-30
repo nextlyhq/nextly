@@ -33,12 +33,14 @@ function oldestAnswerAt(
   return oldest;
 }
 
-/** Each widget's first card on the dashboard, its placement id by widget id. */
-function firstCards(
+/** Each widget's cards on the dashboard, their placement ids in its order, by widget id. */
+function cardsByWidget(
   visible: readonly ArrangedWidget[]
-): Record<string, string> {
-  const cards: Record<string, string> = {};
-  for (const row of visible) cards[row.widget.id] ??= row.placementId;
+): Record<string, string[]> {
+  const cards: Record<string, string[]> = {};
+  for (const row of visible) {
+    (cards[row.widget.id] ??= []).push(row.placementId);
+  }
   return cards;
 }
 
@@ -66,7 +68,7 @@ export function usePublishGridChrome(source: GridChromeSource): void {
       editing: editor.isEditing,
       writing: editor.isWriting,
       oldestAnswerAt: oldestAnswerAt(visible, requested, updatedAtFor),
-      cards: firstCards(visible),
+      cards: cardsByWidget(visible),
     },
     {
       begin: arrangement.begin,

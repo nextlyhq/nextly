@@ -450,7 +450,7 @@ type LoadInput = Parameters<DeclaredWidget["declaration"]["load"]>[0];
  * card's size (`cardSize`). `shows` is handed the same input, so the two read one shape.
  *
  * 🔴 The one judgement: a card answered (`answerCard`) and a card asked whether it is shown at all
- * (`cardIsShownTo`) both read it, so the two cannot come to answer one card differently.
+ * (`cardShownTo`) both read it, so the two cannot come to answer one card differently.
  */
 type CardVerdict =
   | { kind: "refused" }
@@ -580,32 +580,41 @@ async function answerCard(
 }
 
 /**
- * Whether this person is shown this card at all, by the card's own rules (`judgeCard`), without
- * running its `load`: for a dashboard built for them, such as the default they follow, which
- * leaves out the cards they would not be shown.
+ * Whether this person is shown this card, as its batch would draw it:
  *
- * - Refused by its `access`: no.
- * - A setting it needs has no value: YES. The card asks for that setting itself ("No ...
+ * - `"shown"`: the card is drawn for them;
+ * - `"hidden"`: its own rules leave it out for them, by its `access` or its `shows`;
+ * - `"failed"`: it could not be judged, its `shows` having thrown or not settled in time, so the
+ *   batch draws it as a failed card, neither shown nor deliberately left out.
+ */
+export type CardShown = "shown" | "hidden" | "failed";
+
+/**
+ * Whether this person is shown this card at all, by the card's own rules (`judgeCard`), without
+ * running its `load`, and whether that could be judged (`CardShown`):
+ *
+ * - Refused by its `access`: hidden. A predicate that throws refuses, as it does in the batch.
+ * - A setting it needs has no value: SHOWN. The card asks for that setting itself ("No ...
  *   chosen yet", with a button to choose it), and leaving it out would hide the one step that
  *   fixes it.
- * - Its `shows`, as the person: only `true` is yes.
- * - No `shows`: yes.
+ * - Its `shows`, as the person: only `true` is shown, anything else hidden.
+ * - No `shows`: shown.
  *
  * Judged within the card's own budget, under `signal` as the batch's: a `shows` that throws, or
- * that does not settle in time, is no, and is logged as the widget's failure. A permission name as
- * `access` is the caller's to have judged already, as the layout's audience does for every card it
- * hands over (`askableCards`).
+ * a judgement that does not settle in time, has failed, and is logged as the widget's failure.
+ * A permission name as `access` is the caller's to have judged already, as the layout's audience
+ * does for every card it hands over (`askableCards`).
  *
  * @param asked the signal the work is given up on, the instant reads measure from, and the
  * owner's share scope, as a card answered in the batch is handed them. No browser asks, so a
  * `shows` reading its size is handed the placement's own, at the unstated tier (`cardSize`).
  */
-export async function cardIsShownTo(
+export async function cardShownTo(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
   asked: CardInput
-): Promise<boolean> {
+): Promise<CardShown> {
   const stage: JudgingStage = { at: "access" };
   const size = cardSize(declared, { placement, preview: false });
   try {
@@ -622,12 +631,28 @@ export async function cardIsShownTo(
       () => judgingTimedOut(declared, stage),
       asked.signal
     );
-    return verdict.kind === "shown" || verdict.kind === "needs-setting";
+    return verdict.kind === "shown" || verdict.kind === "needs-setting"
+      ? "shown"
+      : "hidden";
   } catch (error) {
     // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
     if (!asked.signal.aborted) logNotJudged(declared, error);
-    return false;
+    return "failed";
   }
+}
+
+/**
+ * Whether this person is shown this card at all: only a card judged shown (`cardShownTo`) is.
+ * One that could not be judged is not, for a dashboard built for them, such as the default they
+ * follow, which leaves out the cards they would not be shown.
+ */
+export async function cardIsShownTo(
+  declared: DeclaredWidget,
+  placement: WidgetPlacement,
+  batch: CardBatch,
+  asked: CardInput
+): Promise<boolean> {
+  return (await cardShownTo(declared, placement, batch, asked)) === "shown";
 }
 
 /**

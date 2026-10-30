@@ -124,6 +124,31 @@ describe("the summary line", () => {
     });
   });
 
+  it("carries the very card a widget's part names, which need not be its first", () => {
+    const line = summaryLine(
+      {
+        parts: [
+          { kind: "attention", count: 2 },
+          {
+            kind: "widget",
+            widget: "acme/forms",
+            card: "c2",
+            label: "new",
+            count: 3,
+          },
+        ],
+        failed: 0,
+      },
+      now
+    );
+    expect(line.kind === "parts" && line.parts[1]).toMatchObject({
+      widget: "acme/forms",
+      card: "c2",
+    });
+    // The attention part names no card of its own: its widget's first.
+    expect(line.kind === "parts" && line.parts[0]).not.toHaveProperty("card");
+  });
+
   it("draws no link for an attention item's link that leaves the admin", () => {
     const line = summaryLine(
       {
