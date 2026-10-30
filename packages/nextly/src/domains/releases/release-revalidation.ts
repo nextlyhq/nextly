@@ -25,13 +25,24 @@
  */
 
 import {
-  collectionTag,
-  entryIdTag,
-  singleTag,
-} from "../../revalidation/compute-tags";
-import type { RevalidationIntent } from "../../revalidation/types";
+  buildEntryRevalidationIntent,
+  buildSingleRevalidationIntent,
+} from "../../revalidation/intent-builders";
+import type {
+  RevalidateConfig,
+  RevalidationIntent,
+} from "../../revalidation/types";
 
 import type { ReleaseMemberRow } from "./releases-repository";
+
+/**
+ * A collection's or Single's `revalidate` config, by the kind of scope a
+ * release member names. A page is a collection entry, so it is asked as one.
+ */
+export type ScopeRevalidateConfig = (
+  scopeKind: "collection" | "single",
+  slug: string
+) => RevalidateConfig | undefined;
 
 /**
  * The intent to flush for a release whose schedule just changed.
@@ -43,18 +54,31 @@ import type { ReleaseMemberRow } from "./releases-repository";
  * cached under the collection tag and a detail page under the entry tag, and a
  * release changes what BOTH return — a scheduled publish adds a row to the
  * listing as surely as it changes the document.
+ *
+ * Each member's tags come from the builders every other write uses, with its
+ * collection's or Single's `revalidate` config: one that opts out is
+ * skipped, and one that names extra tags has them flushed too. A release is
+ * then one more way to write a document, not a second answer to which reads
+ * that write changes.
  */
 export function releaseRevalidationIntent(
-  members: readonly ReleaseMemberRow[]
+  members: readonly ReleaseMemberRow[],
+  configFor: ScopeRevalidateConfig = () => undefined
 ): RevalidationIntent | null {
   const tags = new Set<string>();
   for (const member of members) {
-    if (member.scopeKind === "single") {
-      tags.add(singleTag(member.scopeSlug));
-      continue;
-    }
-    tags.add(collectionTag(member.scopeSlug));
-    tags.add(entryIdTag(member.scopeSlug, member.entryId));
+    const intent =
+      member.scopeKind === "single"
+        ? buildSingleRevalidationIntent(
+            member.scopeSlug,
+            configFor("single", member.scopeSlug)
+          )
+        : buildEntryRevalidationIntent(
+            member.scopeSlug,
+            configFor("collection", member.scopeSlug),
+            { id: member.entryId }
+          );
+    for (const tag of intent?.tags ?? []) tags.add(tag);
   }
 
   // Nothing to flush for a release with no members. Returning `null` rather

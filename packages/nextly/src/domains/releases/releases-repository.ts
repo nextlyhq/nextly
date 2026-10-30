@@ -15,7 +15,12 @@
  */
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
-import type { CacheRevalidator } from "../../revalidation/types";
+import { readRevalidateConfig } from "../../revalidation/intent-builders";
+import type {
+  CacheRevalidator,
+  RevalidateConfig,
+  RevalidationIntent,
+} from "../../revalidation/types";
 import { releasesTables } from "../../schemas/releases";
 import {
   RELEASE_CANCELLABLE_FROM,
@@ -635,6 +640,16 @@ async function markMemberApplied(
   );
 }
 
+/** A release flush that failed: never thrown, since the write it follows is committed. */
+function logReleaseFlushFailure(error: unknown): void {
+  getNextlyLogger().warn({
+    kind: "release-cache-flush-failed",
+    message:
+      "A release changed its documents, but their cached reads could not be expired",
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 /** An instant as an event payload keeps it, whatever the driver returned. */
 function isoOf(value: Date | string | number): string {
   return (value instanceof Date ? value : new Date(value)).toISOString();
@@ -706,6 +721,175 @@ export interface NewReleaseMember extends DocumentRef {
   releaseId: string;
   action: ReleaseMemberAction;
   createdBy?: string | null;
+}
+
+/**
+ * A release as it is first written: a draft, holding nothing, at revision 0.
+ *
+ * The one shape of a new release, so a release made on its own and one made
+ * in the same step as its documents are the same row, and so a caller can
+ * check documents against the release before it is written.
+ *
+ * @experimental
+ */
+export function draftReleaseRow(input: NewRelease): ReleaseRow {
+  const now = new Date();
+  return {
+    // Time-ordered, because the list breaks ties on the id: SQLite stores
+    // instants in whole seconds, so releases made within one second share a
+    // creation time, and only an id that rises in creation order keeps
+    // "newest first" true among them. A random id would order them by chance.
+    id: uuidV7(),
+    title: input.title,
+    description: input.description ?? null,
+    scheduledAt: null,
+    timezone: null,
+    // A new release is always assembled before it is scheduled, so it
+    // starts in the one state the read rule never consults.
+    state: "draft",
+    kind: input.kind ?? "release",
+    publishedAt: null,
+    createdBy: input.createdBy ?? null,
+    createdAt: now,
+    updatedAt: now,
+    revision: 0,
+  };
+}
+
+/**
+ * Write a new release and its `release-created` event, by `by`, on `tx`.
+ *
+ * The id is generated before the insert and the insert asks for nothing
+ * back, because MySQL has no RETURNING: a repository that read the inserted
+ * row from the insert result would work on SQLite and Postgres and hand back
+ * `undefined` on MySQL. `server` is this database's row-lock facts, which
+ * the event needs to read a person's name under lock.
+ */
+async function insertRelease(
+  tx: ReleasesTxApi,
+  row: ReleaseRow,
+  by: ReleaseEventActor,
+  server: RowLockServer
+): Promise<void> {
+  await tx.insert(RELEASES, { ...row }, { returning: [] });
+  await recordReleaseEvent(tx, row.id, { kind: "created", actor: by }, server);
+}
+
+/**
+ * Write one member of a release, and its `release-document-added` event, by
+ * `by`, on `tx`. `kind` is the release's stored kind, read under its lock by
+ * the caller, and `server` the row-lock facts, as for `insertRelease`.
+ *
+ * The one write of a member, for adding one document and for adding several
+ * in one step, so the two cannot come to store a member differently.
+ */
+async function insertMember(
+  tx: ReleasesTxApi,
+  input: NewReleaseMember,
+  kind: ReleaseKind,
+  by: ReleaseEventActor,
+  server: RowLockServer
+): Promise<ReleaseMemberRow> {
+  const member: ReleaseMemberRow = {
+    // Time-ordered, so members added within one second — one stored
+    // instant on SQLite — still list in the order they were added, which
+    // `listMembers` promises by breaking creation-time ties on the id.
+    id: uuidV7(),
+    releaseId: input.releaseId,
+    scopeKind: input.scopeKind,
+    scopeSlug: input.scopeSlug,
+    entryId: input.entryId,
+    locale: input.locale,
+    action: input.action,
+    memberKey: releaseMemberKey(input.releaseId, input),
+    // From the release's stored kind, read under the same lock rather
+    // than taken from the caller, so no path that adds a member can
+    // leave a single release's member without its slot — and so
+    // unprotected.
+    singleSlot: kind === "single" ? 1 : null,
+    createdBy: input.createdBy ?? null,
+    createdAt: new Date(),
+  };
+  // Client-side id and no RETURNING, for the reason `insertRelease` gives.
+  await tx.insert(MEMBERS, { ...member }, { returning: [] });
+  await recordReleaseEvent(
+    tx,
+    input.releaseId,
+    {
+      kind: "documentAdded",
+      actor: by,
+      payload: documentEventPayload(member),
+    },
+    server
+  );
+  return member;
+}
+
+/**
+ * What adding several documents in one step writes, and to which release.
+ *
+ * @experimental
+ */
+export interface MembersWrite {
+  /** The release the documents join. */
+  releaseId: string;
+  /**
+   * A new release to write first, in the same transaction, as
+   * {@link draftReleaseRow} made it: `releaseId` must be its id. Nothing is
+   * left of it when anything after it is refused.
+   */
+  create?: ReleaseRow;
+  /** The documents, written in this order. Each names `releaseId`. */
+  members: readonly NewReleaseMember[];
+  /** The states the release may be in for the documents to land. */
+  allowedStates: readonly ReleaseState[];
+  /**
+   * Asked, under the release-row lock and inside the transaction, how many
+   * documents the release holds and how many of these it does not hold yet;
+   * an error it returns refuses the whole step with nothing written.
+   */
+  refuseWhenHolding?: (held: number, adding: number) => NextlyError | null;
+  /**
+   * Schedule the release once its documents are in, from one of `from`, in
+   * the same transaction: the last step of scheduling a document on its own.
+   */
+  schedule?: { at: Date; timezone: string; from: readonly ReleaseState[] };
+  /** Who did it, recorded with each event. */
+  by?: ReleaseEventActor;
+}
+
+/**
+ * What a {@link MembersWrite} wrote: the release as the transaction left it,
+ * and its new members in the order written.
+ *
+ * @experimental
+ */
+export interface MembersWritten {
+  release: ReleaseRow;
+  members: ReleaseMemberRow[];
+}
+
+/**
+ * Refuse a {@link MembersWrite} whose rows name a release other than the one
+ * it locks, fences and counts: a release to create under another id, or a
+ * document naming another release, would land in a release nobody locked or
+ * counted. Asked over the values in hand, before the transaction opens.
+ */
+function assertNamesOneRelease(write: MembersWrite): void {
+  const others = write.members
+    .map(member => member.releaseId)
+    .filter(releaseId => releaseId !== write.releaseId);
+  if (write.create !== undefined && write.create.id !== write.releaseId) {
+    others.push(write.create.id);
+  }
+  if (others.length === 0) return;
+  throw NextlyError.internal({
+    logContext: {
+      reason: "members-write-names-another-release",
+      releaseId: write.releaseId,
+      others,
+    },
+  });
 }
 
 /**
@@ -929,7 +1113,15 @@ export class ReleasesRepository {
 
   constructor(
     private readonly db: ReleasesDbApi,
-    private readonly revalidator?: CacheRevalidator
+    private readonly revalidator?: CacheRevalidator,
+    // Every collection's and Single's `revalidate` config, read once per
+    // flush, so a release's flush skips what opts out and names its extra
+    // tags, as any other write does. Without it every member is flushed with
+    // its derived tags alone.
+    private readonly revalidateConfigs?: () => Promise<{
+      collections: ReadonlyArray<{ slug: string; revalidate?: unknown }>;
+      singles: ReadonlyArray<{ slug: string; revalidate?: unknown }>;
+    }>
   ) {
     this.lockServer = rowLockServer(db, db.dialect);
     this.notices = new NoticesService({
@@ -973,12 +1165,14 @@ export class ReleasesRepository {
 
     if (this.revalidator === undefined) return;
     try {
-      const intent = releaseRevalidationIntent(
+      const intent = await this.revalidationIntentFor(
         await this.listMembers(releaseId)
       );
       if (intent !== null) await this.revalidator.flush([intent]);
-    } catch {
-      // Deliberately swallowed; see the note above.
+    } catch (error) {
+      // Not thrown, for the reason above; logged, so a release whose pages stay
+      // stale says why.
+      logReleaseFlushFailure(error);
     }
   }
 
@@ -990,35 +1184,10 @@ export class ReleasesRepository {
     input: NewRelease,
     by: ReleaseEventActor = SYSTEM_RELEASE_EVENT_ACTOR
   ): Promise<ReleaseRow> {
-    const now = new Date();
-    const row: ReleaseRow = {
-      // Time-ordered, because the list breaks ties on the id: SQLite stores
-      // instants in whole seconds, so releases made within one second share a
-      // creation time, and only an id that rises in creation order keeps
-      // "newest first" true among them. A random id would order them by chance.
-      id: uuidV7(),
-      title: input.title,
-      description: input.description ?? null,
-      scheduledAt: null,
-      timezone: null,
-      // A new release is always assembled before it is scheduled, so it
-      // starts in the one state the read rule never consults.
-      state: "draft",
-      kind: input.kind ?? "release",
-      publishedAt: null,
-      createdBy: input.createdBy ?? null,
-      createdAt: now,
-      updatedAt: now,
-      revision: 0,
-    };
-    // The id is generated here and the insert asks for nothing back, because
-    // MySQL has no RETURNING: a repository that read the inserted row from
-    // the insert result would work on SQLite and Postgres and hand back
-    // `undefined` on MySQL.
-    await this.db.transaction(async tx => {
-      await tx.insert(RELEASES, { ...row }, { returning: [] });
-      await this.recordEvent(tx, row.id, { kind: "created", actor: by });
-    });
+    const row = draftReleaseRow(input);
+    await this.db.transaction(tx =>
+      insertRelease(tx, row, by, this.lockServer)
+    );
     return row;
   }
 
@@ -1062,30 +1231,50 @@ export class ReleasesRepository {
     by: ReleaseEventActor = SYSTEM_RELEASE_EVENT_ACTOR,
     intent: "schedule" | "publish-now" = "schedule"
   ): Promise<boolean> {
-    const moved = await this.db.transaction(async tx => {
-      // Locked before it is read, so what this move replaces is the row the
-      // fence below compares against.
-      await tx.lockRow(RELEASES, id);
-      const [before] = await tx.select<
-        Pick<ReleaseRow, "state" | "scheduledAt">
-      >(RELEASES, {
-        columns: ["state", "scheduledAt"],
-        where: { and: [{ column: "id", op: "=", value: id }] },
-      });
-      if (before === undefined) return false;
-      if (
-        !(await this.moveSchedule(tx, id, at, timezone, from, expectedRevision))
-      ) {
-        return false;
-      }
-      await this.recordEvent(tx, id, {
-        ...scheduleEvent(before, at, timezone, intent),
-        actor: by,
-      });
-      return true;
-    });
+    const moved = await this.db.transaction(tx =>
+      this.scheduleOn(tx, id, at, timezone, from, expectedRevision, by, intent)
+    );
     if (!moved) return false;
     await this.revalidateMembersOf(id);
+    return true;
+  }
+
+  /**
+   * A schedule's fenced move and its event, on `tx`; whether it matched.
+   * The whole of {@link scheduleRelease} but the commit and the flush after
+   * it, so a step that schedules a release with other writes moves it exactly
+   * as scheduling it alone does.
+   */
+  private async scheduleOn(
+    tx: ReleasesTxApi,
+    id: string,
+    at: Date,
+    timezone: string,
+    from: readonly ReleaseState[],
+    expectedRevision: number,
+    by: ReleaseEventActor,
+    intent: "schedule" | "publish-now"
+  ): Promise<boolean> {
+    // Locked before it is read, so what this move replaces is the row the
+    // fence below compares against.
+    await tx.lockRow(RELEASES, id);
+    const [before] = await tx.select<Pick<ReleaseRow, "state" | "scheduledAt">>(
+      RELEASES,
+      {
+        columns: ["state", "scheduledAt"],
+        where: { and: [{ column: "id", op: "=", value: id }] },
+      }
+    );
+    if (before === undefined) return false;
+    if (
+      !(await this.moveSchedule(tx, id, at, timezone, from, expectedRevision))
+    ) {
+      return false;
+    }
+    await this.recordEvent(tx, id, {
+      ...scheduleEvent(before, at, timezone, intent),
+      actor: by,
+    });
     return true;
   }
 
@@ -1588,11 +1777,45 @@ export class ReleasesRepository {
     invalidateTransitionCacheFor(this.db);
     if (members.length === 0 || this.revalidator === undefined) return;
     try {
-      const intent = releaseRevalidationIntent(members);
+      const intent = await this.revalidationIntentFor(members);
       if (intent !== null) await this.revalidator.flush([intent]);
-    } catch {
-      // Best-effort, as everywhere else this flushes.
+    } catch (error) {
+      // Best-effort, as everywhere else this flushes, and logged.
+      logReleaseFlushFailure(error);
     }
+  }
+
+  /**
+   * The intent a release's members flush, with every scope's `revalidate`
+   * config read in one query per registry, however many collections and
+   * Singles the release spans.
+   */
+  private async revalidationIntentFor(
+    members: readonly ReleaseMemberRow[]
+  ): Promise<RevalidationIntent | null> {
+    if (members.length === 0 || this.revalidateConfigs === undefined) {
+      return releaseRevalidationIntent(members);
+    }
+    let loaded: Awaited<ReturnType<NonNullable<typeof this.revalidateConfigs>>>;
+    try {
+      loaded = await this.revalidateConfigs();
+    } catch (error) {
+      // The settings could not be read: flush the members' own tags anyway,
+      // which over-expires an opted-out scope rather than leaving a page stale.
+      logReleaseFlushFailure(error);
+      return releaseRevalidationIntent(members);
+    }
+    const { collections, singles } = loaded;
+    const configs = new Map<string, RevalidateConfig | undefined>();
+    for (const record of collections) {
+      configs.set(`collection:${record.slug}`, readRevalidateConfig(record));
+    }
+    for (const record of singles) {
+      configs.set(`single:${record.slug}`, readRevalidateConfig(record));
+    }
+    return releaseRevalidationIntent(members, (kind, slug) =>
+      configs.get(`${kind}:${slug}`)
+    );
   }
 
   /**
@@ -2343,35 +2566,7 @@ export class ReleasesRepository {
             if (limit.refused !== null) throw limit.refused;
           }
         }
-        const member: ReleaseMemberRow = {
-          // Time-ordered, so members added within one second — one stored
-          // instant on SQLite — still list in the order they were added, which
-          // `listMembers` promises by breaking creation-time ties on the id.
-          id: uuidV7(),
-          releaseId: input.releaseId,
-          scopeKind: input.scopeKind,
-          scopeSlug: input.scopeSlug,
-          entryId: input.entryId,
-          locale: input.locale,
-          action: input.action,
-          memberKey: releaseMemberKey(input.releaseId, input),
-          // From the release's stored kind, read under the same lock rather
-          // than taken from the caller, so no path that adds a member can
-          // leave a single release's member without its slot — and so
-          // unprotected.
-          singleSlot: release.kind === "single" ? 1 : null,
-          createdBy: input.createdBy ?? null,
-          createdAt: new Date(),
-        };
-        // Client-side id and no RETURNING, for the reason `createRelease`
-        // gives.
-        await tx.insert(MEMBERS, { ...member }, { returning: [] });
-        await this.recordEvent(tx, input.releaseId, {
-          kind: "documentAdded",
-          actor: by,
-          payload: documentEventPayload(member),
-        });
-        return member;
+        return insertMember(tx, input, release.kind, by, this.lockServer);
       });
     } catch (error) {
       if (fenceMissed) {
@@ -2387,6 +2582,108 @@ export class ReleasesRepository {
     // at read time cannot reach into an entry that already exists.
     await this.revalidateMembersOf(input.releaseId);
     return row;
+  }
+
+  /**
+   * Put several documents into a release in ONE transaction, all of them or
+   * none: optionally creating the release first, and optionally scheduling it
+   * last. The step that adds several documents at once, and the one that
+   * schedules a document on its own, with an existing release or in a new one.
+   *
+   * Fenced as one add is (`addMember`): the release is locked and its
+   * revision bumped while it is in `allowedStates`, and the limit is judged
+   * under that lock, over the documents it does not hold yet. A schedule is
+   * then fenced on the revision this step left, so nothing can have moved the
+   * release between its documents landing and its schedule. Any refusal, a
+   * fence missed, or any failure of any write, the last included, rolls back
+   * every write before it: no release, no member, no event and no revision
+   * bump is left.
+   *
+   * @throws NextlyError CONFLICT when the release is not there, not in
+   *   `allowedStates`, or moved before its schedule; the limit's refusal; and
+   *   a unique violation as the driver reported it, for the caller to say
+   *   which index refused.
+   *
+   * @experimental
+   */
+  async addMembers(write: MembersWrite): Promise<MembersWritten> {
+    assertNamesOneRelease(write);
+    const by = write.by ?? SYSTEM_RELEASE_EVENT_ACTOR;
+    // Told apart from a database failure by these, as in `addMember`.
+    let fenceMissed = false;
+    const limit: { refused: NextlyError | null } = { refused: null };
+    let written: MembersWritten;
+    try {
+      written = await this.db.transaction(async tx => {
+        if (write.create !== undefined) {
+          await insertRelease(tx, write.create, by, this.lockServer);
+        }
+        const release = await this.advanceRevision(
+          tx,
+          write.releaseId,
+          write.allowedStates
+        );
+        if (release === null) {
+          fenceMissed = true;
+          throw releaseMovedConflict(write.releaseId, "add-member");
+        }
+        if (write.refuseWhenHolding !== undefined) {
+          const held = await tx.select<{ memberKey: string }>(MEMBERS, {
+            columns: ["memberKey"],
+            where: membersOf([write.releaseId]),
+          });
+          const keys = new Set(held.map(member => member.memberKey));
+          // A document already held is the duplicate it is, however full the
+          // release: the unique index refuses it below, as for one add.
+          const adding = write.members.filter(
+            member => !keys.has(releaseMemberKey(write.releaseId, member))
+          ).length;
+          limit.refused = write.refuseWhenHolding(held.length, adding);
+          if (limit.refused !== null) throw limit.refused;
+        }
+        const members: ReleaseMemberRow[] = [];
+        for (const member of write.members) {
+          members.push(
+            await insertMember(tx, member, release.kind, by, this.lockServer)
+          );
+        }
+        if (write.schedule !== undefined) {
+          const { at, timezone, from } = write.schedule;
+          if (
+            !(await this.scheduleOn(
+              tx,
+              write.releaseId,
+              at,
+              timezone,
+              from,
+              release.revision,
+              by,
+              "schedule"
+            ))
+          ) {
+            fenceMissed = true;
+            throw releaseMovedConflict(write.releaseId, "add-member");
+          }
+        }
+        // The release as this transaction left it, read inside it, so the
+        // answer is this step's and not a later one's.
+        const [row] = await tx.select<ReleaseRow>(RELEASES, {
+          where: { and: [{ column: "id", op: "=", value: write.releaseId }] },
+        });
+        return { release: row, members };
+      });
+    } catch (error) {
+      if (fenceMissed) {
+        throw releaseMovedConflict(write.releaseId, "add-member");
+      }
+      if (limit.refused !== null) throw limit.refused;
+      throw error;
+    }
+    // AFTER THE COMMIT, never inside it, for the reason `blockReleases` gives:
+    // the documents' cached pages, and the transition memo, now answer to a
+    // release that holds them.
+    await this.revalidateMembersOf(write.releaseId);
+    return written;
   }
 
   /**

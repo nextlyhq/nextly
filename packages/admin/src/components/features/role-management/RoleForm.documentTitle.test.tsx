@@ -31,6 +31,7 @@ vi.mock("@admin/hooks/useRoleForm", async () => {
         role: state.role,
         allPermissions: [],
         levelRows: [],
+        pluginGroups: [],
         otherPermissions: [],
         baseGrants: [],
         allRoles: [],

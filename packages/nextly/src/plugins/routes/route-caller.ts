@@ -24,6 +24,7 @@ import { readAccessCaller } from "../../auth/entity-read-access";
 import type { AuthContext } from "../../auth/middleware";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
+import { noteRetiredManageAsked } from "./retired-manage-asked";
 import type { PluginRouteCaller } from "./route-types";
 
 /**
@@ -59,7 +60,10 @@ export function pluginRouteScope(
  * per request rather than once per `can()` so a handler asking about several
  * collections pays for one resolution.
  */
-export function buildPluginRouteCaller(auth: AuthContext): PluginRouteCaller {
+export function buildPluginRouteCaller(
+  auth: AuthContext,
+  plugin: string
+): PluginRouteCaller {
   const scope = pluginRouteScope(auth);
   // ONE resolution of the caller per request, shared by both questions asked
   // of it: what the caller may do, and who they are to an enforced read. A
@@ -77,6 +81,8 @@ export function buildPluginRouteCaller(auth: AuthContext): PluginRouteCaller {
     ...(auth.claims === undefined ? {} : { claims: auth.claims }),
     identity,
     async can(action: string, resource: string): Promise<boolean> {
+      // A plugin asking a retired permission is told once what to ask.
+      noteRetiredManageAsked(plugin, action, resource);
       const caller = readAccessCaller(await identity());
       return callerMayPerform(scope, action, resource, {
         id: caller.userId,

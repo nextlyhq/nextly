@@ -80,6 +80,58 @@ export function storageDiffers(
 }
 
 /**
+ * Whether a field stored as `after` describes holds every value it held as `before` describes:
+ * the same kind, no shorter a length, and as many digits on each side of a decimal point. A bound
+ * that is not stated is no bound.
+ */
+export function storageHolds(
+  after: LocalizedColumnSpec,
+  before: LocalizedColumnSpec
+): boolean {
+  if (after.kind !== before.kind) return false;
+  const length = (spec: LocalizedColumnSpec) => spec.length ?? Infinity;
+  if (length(after) < length(before)) return false;
+  if (after.precision === undefined || before.precision === undefined) {
+    return true;
+  }
+  const scale = (spec: LocalizedColumnSpec) => spec.scale ?? 0;
+  return (
+    scale(after) >= scale(before) &&
+    after.precision - scale(after) >= before.precision - scale(before)
+  );
+}
+
+/**
+ * The refusals for fields joining translation whose values an earlier apply of the change already
+ * moved into the translations table, when the change also narrows how the field is stored. The
+ * values are kept as they are, so some would stand against the field's narrower rules; and the
+ * order the joining refusal gives (shared first) would add an empty shared column while the values
+ * sit in the translations table. So the way on finishes the earlier change first.
+ */
+export function refusalsForMovedJoinsNarrowed(args: {
+  narrowed: readonly string[];
+  surface: Surface;
+}): LeavingTranslationRefusal[] {
+  return args.narrowed.map(name =>
+    refusal(
+      `fields.${name}`,
+      "RESHAPED_FIELD_JOINS_TRANSLATION",
+      `An earlier change that made "${name}" translated did not finish, and its values are ` +
+        "already in the translations table; this change narrows its type, length or precision.",
+      args.surface === "builder"
+        ? [
+            "Save it with its earlier type, length or precision, to finish that change.",
+            "Then narrow it and save.",
+          ]
+        : [
+            `Declare "${name}" with its earlier type, length or precision, and sync.`,
+            "Then narrow it and sync again.",
+          ]
+    )
+  );
+}
+
+/**
  * The settings a field leaving translation has to take on after its values are shared: its own
  * flags, and `unique` when a unique index covers it without the flag.
  */

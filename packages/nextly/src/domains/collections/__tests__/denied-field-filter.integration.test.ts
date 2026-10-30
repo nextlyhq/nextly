@@ -47,6 +47,9 @@ const VAULTS = "vaults";
 
 async function boot(): Promise<TestNextly> {
   const t = await createTestNextly({
+    // The checked reads are a visitor's, judged by the Public role a real
+    // boot makes, which reads the collection by its `true` read rule.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: VAULTS,
@@ -310,6 +313,9 @@ describe("a denied field and the where clause (integration)", () => {
     // was enough to refuse every enforced lookup that addresses rows by that
     // field, which is how content routing finds a page by its slug.
     current = await createTestNextly({
+      // The checked reads are a visitor's, judged by the Public role a real
+      // boot makes, which reads the collection by its `true` read rule.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "pages",
@@ -347,6 +353,9 @@ describe("a denied field and the where clause (integration)", () => {
     // column while looking like different strings. A guard keyed on the raw
     // spelling refuses one and waves the other through.
     current = await createTestNextly({
+      // The checked reads are a visitor's, judged by the Public role a real
+      // boot makes, which reads the collection by its `true` read rule.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "vaultsb",
@@ -381,6 +390,9 @@ describe("a denied field and the where clause (integration)", () => {
     // with no predicate the query returns every otherwise-visible row, which is
     // the opposite of a narrowed search and worse than the leak it closes.
     current = await createTestNextly({
+      // The checked reads are a visitor's, judged by the Public role a real
+      // boot makes, which reads the collection by its `true` read rule.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "vaultsc",

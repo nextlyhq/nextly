@@ -18,6 +18,7 @@ const registered = {
   "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
   "@/plugins/widget-kit-fixture/admin#KitCard": _p2.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
   "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p2.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
+  "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p2.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p3.BlocksField,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p3.PageBuilderView,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
@@ -27,7 +28,9 @@ const blockEditorEntries = {
   "@/plugins/block-fixture/editor#blockFixtureEditor": _p1.blockFixtureEditor,
 };
 
-type Registered = keyof typeof registered | keyof typeof blockEditorEntries;
+type Registered =
+  | keyof typeof registered
+  | keyof typeof blockEditorEntries;
 type Listed = (typeof listed)[number];
 /** `true` only while this map registers exactly the paths its list names. */
 type Agrees = [Registered] extends [Listed]
@@ -40,13 +43,12 @@ export const componentMapAgreesWithList: Agrees = true;
 if (
   JSON.stringify(
     [...Object.keys(registered), ...Object.keys(blockEditorEntries)].sort()
-  ) !== JSON.stringify([...listed].sort())
+  ) !==
+  JSON.stringify([...listed].sort())
 ) {
   throw Object.assign(
-    new Error(
-      "The admin's component map and its list disagree: run npx nextly generate:types."
-    ),
-    { code: "NEXTLY_ADMIN_COMPONENT_MAP_MISMATCH" }
+    new Error("The admin's component map and its list disagree: run npx nextly generate:types."),
+    { code: "NEXTLY_ADMIN_COMPONENT_MAP_MISMATCH" },
   );
 }
 

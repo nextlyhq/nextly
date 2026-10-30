@@ -16,25 +16,33 @@ import type { CacheRevalidator } from "../../revalidation/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { container } from "../container";
 
+/**
+ * Each registry's slugs and `revalidate` settings only: the opt-out and the extra tags are all a
+ * flush reads of a record, and the rest of it (the fields JSON above all) is never needed. One
+ * query per registry. Shared by every flush that needs every scope's settings at once: a language
+ * change and a release.
+ */
+export async function registryRevalidateConfigs(): ReturnType<
+  LanguageChangeContentCache["content"]
+> {
+  const [collections, singles] = await Promise.all([
+    container.has("collectionRegistryService")
+      ? container
+          .get<CollectionRegistryService>("collectionRegistryService")
+          .getAllRevalidateConfigs()
+      : [],
+    container.has("singleRegistryService")
+      ? container
+          .get<SingleRegistryService>("singleRegistryService")
+          .getAllRevalidateConfigs()
+      : [],
+  ]);
+  return { collections, singles };
+}
+
 export function languageChangeContentCache(): LanguageChangeContentCache {
   return {
-    // Each registry's slugs and `revalidate` settings only: the opt-out and the extra tags are all
-    // the flush reads of a record, and the rest of it (the fields JSON above all) is never needed.
-    content: async () => {
-      const [collections, singles] = await Promise.all([
-        container.has("collectionRegistryService")
-          ? container
-              .get<CollectionRegistryService>("collectionRegistryService")
-              .getAllRevalidateConfigs()
-          : [],
-        container.has("singleRegistryService")
-          ? container
-              .get<SingleRegistryService>("singleRegistryService")
-              .getAllRevalidateConfigs()
-          : [],
-      ]);
-      return { collections, singles };
-    },
+    content: registryRevalidateConfigs,
     // None where the registered revalidator is the one that flushes nothing (no Next runtime, the
     // CLI), so a language change there reads no registry at all.
     revalidator: () => {

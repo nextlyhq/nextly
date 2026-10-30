@@ -60,6 +60,11 @@ export type ResolveStatusFilterArgs = {
   /** Explicit caller intent ('all' | 'draft' | 'published'). */
   explicit?: StatusOption;
   /**
+   * True when the read is a visitor's, which sees published content only,
+   * whatever `explicit` asks for.
+   */
+  publishedOnly?: boolean;
+  /**
    * The workflow whose states this collection moves through.
    *
    * Defaults to the only workflow that existed before workflows were
@@ -72,7 +77,8 @@ export type ResolveStatusFilterArgs = {
  * Decide whether to bound this read to a lifecycle, and to which states.
  *
  * Returns `null` when no filter applies: the collection has no status column,
- * the caller asked for everything, or a trusted caller said nothing.
+ * the caller asked for everything, or a trusted caller said nothing. A
+ * visitor's read is never unbounded (`publishedOnly`).
  *
  * The two caller-facing words keep their meanings and gain the workflow's
  * vocabulary. `published` is every state the workflow calls public and `draft`
@@ -84,6 +90,13 @@ export function resolveStatusFilter(
 ): StatusFilter | null {
   const workflow = args.workflow ?? DEFAULT_WORKFLOW;
   if (!args.collectionHasStatus) return null;
+  // A visitor's `all` is bounded to the public states, and its `draft`, which
+  // names none of them, to nothing: what is not published is not shown.
+  if (args.publishedOnly) {
+    return args.explicit === "draft"
+      ? { values: [], isPublicRead: false }
+      : { values: publicStateNames(workflow), isPublicRead: true };
+  }
   if (args.explicit === "all") return null;
   if (args.explicit === "draft") {
     return { values: nonPublicStateNames(workflow), isPublicRead: false };

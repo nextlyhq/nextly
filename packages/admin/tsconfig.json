@@ -51,6 +51,9 @@
       "nextly/card-geometry": [
         "../nextly/src/domains/widgets/card-geometry.ts"
       ],
+      // Same reason: the one humaniser of a field's key, which the server's
+      // `describe` read names fields by too. Internal to core and the admin.
+      "nextly/field-label": ["../nextly/src/collections/fields/field-label.ts"],
       "@admin/*": ["./src/*"]
     }
   },

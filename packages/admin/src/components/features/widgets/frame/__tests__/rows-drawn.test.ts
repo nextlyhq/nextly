@@ -76,6 +76,19 @@ describe("rowsDrawn", () => {
     expect(rowsDrawn({ tier: "large", h: 5 }, 10)).toBe(rows(5));
   });
 
+  it("draws no row in a card two rows high at the default density, one when compact, as a load counts", () => {
+    // 🔴 The frame and a widget's `load` read one number: a 46 px body holds no 52 px row and one
+    // 36 px row. A frame that drew a row the load did not ask for, or the reverse, would draw a
+    // row of nothing or leave out a row it was answered.
+    expect(rowsDrawn({ tier: "medium", h: 2 }, 10, "default")).toBe(0);
+    expect(rowsDrawn({ tier: "medium", h: 2 }, 10, "compact")).toBe(1);
+    for (const density of ["default", "compact"] as const) {
+      expect(rowsDrawn({ tier: "medium", h: 2 }, 10, density), density).toBe(
+        rowsThatFit({ h: 2 }, { density })
+      );
+    }
+  });
+
   it("draws fewer when the setting asks for fewer", () => {
     expect(rowsDrawn("large", 4)).toBe(4);
     expect(rowsDrawn("small", 2)).toBe(2);

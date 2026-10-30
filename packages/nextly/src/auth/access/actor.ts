@@ -20,7 +20,6 @@ import type { AccessOperation } from "../../services/access/types";
 import type { AccessRuleContext } from "../../shared/types/access";
 import type { GrantedPermission } from "../authenticated-scope";
 
-import { manageCounts } from "./manage-bridge";
 import { buildRuleContext } from "./rule-context";
 
 /**
@@ -47,7 +46,7 @@ export interface SystemActor {
 
 /**
  * A caller with no session, no key and no plugin person. Its permissions are
- * the Public role's, which grants nothing until that role exists.
+ * the Public role's, which grants nothing until boot seeding has made it.
  */
 export interface VisitorActor {
   readonly kind: "visitor";
@@ -82,8 +81,13 @@ export interface KeyActor {
   readonly userId: string;
   readonly roles: readonly string[];
   readonly permissions: readonly PermissionGrant[];
-  /** Never true: no key carries super-admin authority, whoever made it. */
-  readonly superAdmin: false;
+  /**
+   * Carries its maker's super-admin authority: true only for a full-access key
+   * whose maker is an active super-admin for this request, as authentication
+   * found it. Never from the role names the key carries, and never for a key
+   * whose scope was narrowed.
+   */
+  readonly superAdmin: boolean;
 }
 
 export type Actor =
@@ -142,14 +146,16 @@ export function userActor(fields: {
 }
 
 /**
- * A key's actor. It takes no super-admin flag at all, so no caller can hand a
- * key that authority, whatever role names the key carries from its maker.
+ * A key's actor. Its super-admin authority is what authentication found for
+ * the key, handed in by the one resolver that reads it; the role names the
+ * key carries from its maker never give it.
  */
 export function keyActor(fields: {
   keyId: string;
   userId: string;
   roles: readonly string[];
   permissions: readonly PermissionGrant[];
+  superAdmin: boolean;
 }): KeyActor {
   return Object.freeze({
     kind: "key",
@@ -157,7 +163,7 @@ export function keyActor(fields: {
     userId: fields.userId,
     roles: Object.freeze([...fields.roles]),
     permissions: freezeAll(fields.permissions),
-    superAdmin: false,
+    superAdmin: fields.superAdmin,
   });
 }
 
@@ -189,31 +195,18 @@ export function holdsPermission(
   );
 }
 
-// Decided in a leaf module of its own, which the admin's copy is held to.
-export { manageCounts } from "./manage-bridge";
-
-/**
- * Whether the actor holds `action` on a system resource through that
- * resource's `manage-` permission alone ({@link manageCounts}).
- */
-export function holdsByManage(
-  actor: Actor,
-  action: string,
-  resource: string
-): boolean {
-  return (
-    manageCounts(action, resource) && holdsPermission(actor, "manage", resource)
-  );
-}
-
 /** The actor's permissions as their rows store them, `read-posts`. */
 export function storedPermissions(actor: Actor): string[] {
   return grantsOf(actor).map(grant => grant.slug);
 }
 
-/** Whether the actor holds super-admin authority. Only a user can. */
+/**
+ * Whether the actor holds super-admin authority: a super-admin person, or a
+ * full-access key whose maker is one. What is kept for a person asks whether
+ * the caller is a person, never this, so no key reaches it.
+ */
 export function isSuperAdmin(actor: Actor): boolean {
-  return actor.kind === "user" && actor.superAdmin;
+  return (actor.kind === "user" || actor.kind === "key") && actor.superAdmin;
 }
 
 /**
@@ -222,10 +215,9 @@ export function isSuperAdmin(actor: Actor): boolean {
  *
  * A key's rule is handed the user who made the key, as it is today. A
  * visitor and a plugin person are handed no user, and only a plugin person is
- * handed a principal. A visitor's rule is handed no permissions either: what
- * the Public role grants decides whether the visitor holds the permission,
- * but a rule written against an anonymous caller is asked with none, as it
- * always has been, so the same rule answers the same way.
+ * handed a principal. A visitor's rule is handed the permissions the visitor
+ * holds, which are the Public role's, so a rule that reads the caller's
+ * permissions answers a visitor by what Public grants.
  */
 export function ruleContext(
   actor: Exclude<Actor, SystemActor>,
@@ -237,7 +229,7 @@ export function ruleContext(
     {
       user: staff ? { id: actor.userId } : null,
       roles: staff ? actor.roles : [],
-      permissions: actor.kind === "visitor" ? [] : grantsOf(actor),
+      permissions: grantsOf(actor),
       principal: actor.kind === "principal" ? actor.principal : null,
     },
     { operation, target: { kind: target.kind, slug: target.slug } }

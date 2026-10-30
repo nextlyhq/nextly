@@ -26,7 +26,12 @@ import {
   holdsGrant,
   singleGateVerdict,
 } from "../../../auth/access/gate-adapters";
+import {
+  ownDatabaseVisitor,
+  visitorWithoutAccessService,
+} from "../../../auth/access/own-database-visitor";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import {
   withRuleLanguage,
   writeLanguagesFor,
@@ -95,6 +100,7 @@ import {
   callerAccessGrants,
   runFieldHooks,
   type ReadAccessRedactions,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -301,6 +307,14 @@ export async function checkSingleAccess(params: {
   // The caller's authenticated scope. A scoped API key is judged on its OWN
   // stamped grants for the publish/unpublish transition, not the owner's RBAC.
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * Without the access-control service, where a visitor's Public grants are
+   * read: the asking service's own database (`fieldRuleVisitor`), so the gate
+   * and that service's field rules judge one Public role. Absent, through the
+   * global container, which such a setup may not have filled, or may have
+   * filled for another instance.
+   */
+  visitor?: VisitorGrantsLoader;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -311,6 +325,7 @@ export async function checkSingleAccess(params: {
     routeAuthorized,
     rbacAccessControlService,
     authenticatedScope,
+    visitor,
     logger,
   } = params;
 
@@ -329,6 +344,7 @@ export async function checkSingleAccess(params: {
       scope: authenticatedScope,
       principal: currentPrincipal(),
       rules: rbacAccessControlService,
+      ...(visitor ? { visitorWithoutService: () => visitor() } : {}),
     });
   const verdict = await ask(operation);
   if (verdict.allowed) return null;
@@ -589,6 +605,27 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * Where this service's Single gate and field rules read a visitor's Public
+   * grants: this service's own database without an access-control service, as
+   * the collection gate reads it, and the process's cached copy with one. The
+   * mutation path reads it from here, so a Single's reads and writes over one
+   * database judge one Public role.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return visitorWithoutAccessService(
+      this.rbacAccessControlService,
+      this.ownDatabaseVisitor
+    );
+  }
+
+  /** The Public role as this service's own database records it. */
+  private readonly ownDatabaseVisitor = ownDatabaseVisitor({
+    adapter: this.adapter,
+    logger: this.logger,
+    db: () => this.db,
+  });
+
+  /**
    * Build the document a caller would receive from a stored row.
    *
    * Covers only the stages that read: the companion translation overlay, JSON
@@ -691,6 +728,7 @@ export class SingleQueryService extends BaseService {
         routeAuthorized: false,
         rbacAccessControlService: this.rbacAccessControlService,
         authenticatedScope: options.authenticatedScope,
+        visitor: this.fieldRuleVisitor,
         logger: this.logger,
       });
     if (!(await denied("update"))) return "editor";
@@ -717,7 +755,8 @@ export class SingleQueryService extends BaseService {
   private relatedRowAccess(
     options: GetSingleOptions,
     enforceRelatedFieldAccess: boolean,
-    readLocale: string | undefined
+    // The languages the read falls back through, the one it resolved to first.
+    readChain: readonly string[] | null | undefined
   ): RelatedRowReadContext {
     return {
       enforceFieldAccess: enforceRelatedFieldAccess,
@@ -734,7 +773,8 @@ export class SingleQueryService extends BaseService {
       // dropping it here would silently restore the full bypass.
       trusted: assumedBound(options.trusted),
       authenticatedScope: options.authenticatedScope,
-      locale: readLocale,
+      locale: readChain?.[0],
+      localeChain: readChain ?? undefined,
       // Only "read everything" propagates, and only when asked for: the
       // admin sends it on every read, a public caller never does.
       status: expansionStatusScope({
@@ -836,7 +876,7 @@ export class SingleQueryService extends BaseService {
           this.localization,
           options.locale,
           options.fallbackLocale
-        )?.[0]
+        )
       ),
       // As the live read does: the caller is threaded, so nested targets can
       // be judged too.
@@ -910,16 +950,17 @@ export class SingleQueryService extends BaseService {
     doc = await this.readUploadFields(doc, singleMeta.fields, options);
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
-    const readLocale = resolveLocaleChain(
+    const readChain = resolveLocaleChain(
       this.localization,
       options.locale,
       options.fallbackLocale
-    )?.[0];
+    );
+    const readLocale = readChain?.[0];
     doc = await this.expandRelationshipFields(
       doc,
       singleMeta.fields,
       options.depth,
-      this.relatedRowAccess(options, enforceRelatedFieldAccess, readLocale),
+      this.relatedRowAccess(options, enforceRelatedFieldAccess, readChain),
       // The read path threads a caller, so the target collection's field rules
       // can be evaluated for the rows this pulls in.
       true
@@ -957,8 +998,10 @@ export class SingleQueryService extends BaseService {
             targetPolicies: new Map(),
             targetCompanions: new Map(),
             targetVerdicts: new Map(),
+            targetRuleMatches: new Map(),
             authenticatedScope: options.authenticatedScope,
             locale: readLocale,
+            localeChain: readChain ?? undefined,
             status: expansionStatusScope({
               status: options.status,
               overrideAccess: options.overrideAccess,
@@ -1020,7 +1063,13 @@ export class SingleQueryService extends BaseService {
       // One grants resolver for both passes, so the caller's roles and
       // permissions are read once and both passes judge with one authority:
       // a scoped API key's own grants, never its owner's.
-      grants: callerAccessGrants(fieldAccessUser, options.authenticatedScope),
+      grants: callerAccessGrants(
+        fieldAccessUser,
+        options.authenticatedScope,
+        undefined,
+        // A visitor's Public grants as this service's gate read them.
+        this.fieldRuleVisitor
+      ),
     };
     // The rules on fields inside field groups, which the Single's own pass
     // does not reach, judged with the same grants resolver. Before
@@ -1107,6 +1156,9 @@ export class SingleQueryService extends BaseService {
         // A scoped API key is judged on its OWN read grant, so a super-admin-owned
         // key does not skip the read gate via the owner's roles.
         authenticatedScope: options.authenticatedScope,
+        // A visitor is judged by the Public role this service's field rules
+        // read below.
+        visitor: this.fieldRuleVisitor,
         logger: this.logger,
       });
       if (accessDenied) {
@@ -1118,6 +1170,7 @@ export class SingleQueryService extends BaseService {
           (singleMeta as { status?: boolean }).status === true,
         overrideAccess: options.overrideAccess === true,
         explicit: options.status,
+        publishedOnly: readsAsVisitor(options),
       });
 
       // 2. Build shared context for hooks (seed with caller-provided context)
@@ -2286,6 +2339,7 @@ export class SingleQueryService extends BaseService {
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
+          localeChain: access.localeChain,
           status: access.status,
         }
       );
