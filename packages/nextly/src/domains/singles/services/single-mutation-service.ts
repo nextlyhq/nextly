@@ -96,6 +96,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { issuesTheReaderMaySee } from "../../../shared/lib/unreadable-field-issues";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
@@ -1418,6 +1419,66 @@ export class SingleMutationService extends BaseService {
     };
   }
 
+  /**
+   * Refuse a save whose values break the Single's declared rules: the same
+   * gate the collection write paths run. Singles updates are PATCH
+   * semantics, so absent keys stay untouched and provided keys must hold. An
+   * issue on a field the caller may not read is told without naming it or
+   * its value.
+   */
+  private async assertSaveValid(args: {
+    slug: string;
+    data: Record<string, unknown>;
+    fieldConfigs: DynamicSingleRecord["fields"];
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+    user: UpdateSingleOptions["user"];
+    overrideAccess: boolean | undefined;
+  }): Promise<void> {
+    const { slug, fieldConfigs } = args;
+    const validationView = relationshipValidationView(args.data, fieldConfigs);
+    const judgedIssues = await validateEntryData(
+      validationView,
+      attachFieldValidators("single", slug, fieldConfigs),
+      {
+        mode: "update",
+        req: args.user ? { user: args.user } : {},
+        // A component inside a group or repeater is judged here, since no
+        // component write reaches it. On the pool, as this is.
+        componentFields: await containedComponentResolver(
+          fieldConfigs,
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug
+            )) ?? null
+        ),
+        localizedFieldNames: args.localizedFieldNames,
+        enforceLocalizedRequired: args.enforceLocalizedRequired,
+        // Before the transaction opens, so on the pool.
+        write: entryWriteContext({
+          kind: "single",
+          slug,
+          connection: {
+            db: this.adapter,
+            executor: undefined,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          },
+        }),
+      }
+    );
+    const validationIssues = await issuesTheReaderMaySee(judgedIssues, {
+      kind: "single",
+      slug,
+      document: validationView,
+      fields: fieldConfigs,
+      fieldGroups: this.fieldGroupDataService,
+      reader: { user: args.user, overrideAccess: args.overrideAccess },
+    });
+    if (validationIssues.length > 0) {
+      throw NextlyError.validation({ errors: validationIssues });
+    }
+  }
+
   async update(
     slug: string,
     data: Record<string, unknown>,
@@ -1845,40 +1906,15 @@ export class SingleMutationService extends BaseService {
       // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
-      {
-        const validationIssues = await validateEntryData(
-          relationshipValidationView(currentData, fieldConfigs),
-          attachFieldValidators("single", slug, fieldConfigs),
-          {
-            mode: "update",
-            req: options.user ? { user: options.user } : {},
-            // A component inside a group or repeater is judged here, since
-            // no component write reaches it. On the pool, as this is.
-            componentFields: await containedComponentResolver(
-              fieldConfigs,
-              async componentSlug =>
-                (await this.fieldGroupDataService?.getComponentFields(
-                  componentSlug
-                )) ?? null
-            ),
-            localizedFieldNames,
-            enforceLocalizedRequired,
-            // Before the transaction opens, so on the pool.
-            write: entryWriteContext({
-              kind: "single",
-              slug,
-              connection: {
-                db: this.adapter,
-                executor: undefined,
-                defaultLocale: this.localization?.defaultLocale ?? null,
-              },
-            }),
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
-      }
+      await this.assertSaveValid({
+        slug,
+        data: currentData,
+        fieldConfigs,
+        localizedFieldNames,
+        enforceLocalizedRequired,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+      });
 
       // 6.3. A publish promotes the held pending change, and that content has
       // been judged only once, when it was SAVED. The gate that judges it

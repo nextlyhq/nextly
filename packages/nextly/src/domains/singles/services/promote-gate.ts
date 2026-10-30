@@ -49,6 +49,7 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import { relationshipValidationView } from "../../../shared/lib/field-transform";
+import { issuesTheReaderMaySee } from "../../../shared/lib/unreadable-field-issues";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { applyFieldGroupWriteAccessToDocument } from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -534,8 +535,9 @@ async function schemaIssues(
   promoted: Record<string, unknown>,
   ctx: PromoteGateContext
 ): Promise<ValidationIssue[]> {
-  return validateEntryData(
-    relationshipValidationView(promoted, ctx.fields),
+  const view = relationshipValidationView(promoted, ctx.fields);
+  const issues = await validateEntryData(
+    view,
     attachFieldValidators("single", ctx.slug, ctx.fields),
     {
       mode: "create",
@@ -550,4 +552,26 @@ async function schemaIssues(
       ...(ctx.write === undefined ? {} : { write: ctx.write }),
     }
   );
+  // The promoted document holds every stored field, those the publisher may
+  // not read included; their issues are told without naming them.
+  return issuesTheReaderMaySee(issues, {
+    kind: "single",
+    slug: ctx.slug,
+    document: view,
+    fields: ctx.fields,
+    ...(ctx.componentFields === undefined
+      ? {}
+      : {
+          fieldGroups: {
+            getComponentFields: componentSlug =>
+              Promise.resolve(ctx.componentFields?.(componentSlug) ?? null),
+          },
+        }),
+    reader: {
+      user: ctx.user,
+      overrideAccess: ctx.overrideAccess,
+      authenticatedScope: ctx.authenticatedScope,
+      grants: ctx.grants,
+    },
+  });
 }
