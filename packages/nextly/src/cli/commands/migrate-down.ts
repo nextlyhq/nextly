@@ -21,9 +21,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import {
+  isPluginLedgerRow,
+  ledgerFilename,
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
+import { standingsByFilename } from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -128,8 +131,10 @@ export function isDestructiveDown(
 
 /**
  * Newest-applied-first filenames, limited to `step`. A file counts as applied
- * only when the NEWEST event for it is `applied` (a later rolled_back retires
- * it). Ordered by that newest event's startedAt, descending.
+ * when its standing says so (`standingsByFilename`): an app migration's latest
+ * outcome is `applied` (a later rolled_back retires it; an attempt that failed
+ * or stopped does not), a plugin module's newest record is. Ordered by that
+ * applied record's startedAt, descending.
  *
  * Migrations recorded in the same millisecond — a run of plugin modules
  * adopted together, say — share a `startedAt`, and the ledger is read with no
@@ -146,9 +151,9 @@ export function selectAppliedTargets(
   plugin?: string
 ): string[] {
   const applied: { filename: string; at: number }[] = [];
-  for (const [filename, newest] of newestEventsByFilename(rows)) {
-    if (newest.status === "applied") {
-      applied.push({ filename, at: newest.startedAt.getTime() });
+  for (const [filename, standing] of standingsByFilename(rows)) {
+    if (standing.state === "applied" && standing.outcome !== undefined) {
+      applied.push({ filename, at: standing.outcome.startedAt.getTime() });
     }
   }
   applied.sort(
@@ -249,6 +254,20 @@ export interface MigrateDownCoreDeps {
     message: string,
     transaction: boolean
   ) => Promise<void>;
+  /**
+   * Records, durably and before the first statement, that a DOWN started:
+   * an attempt with no outcome yet (`downStartRecordedFirst`). Returns its id.
+   * Optional so a caller with no ledger of its own supplies nothing, and the
+   * DOWN is recorded only once it ends, as it was before.
+   */
+  recordDownStarted?: (filename: string) => Promise<string>;
+  /**
+   * Removes a DOWN's started attempt once its ending is recorded, through
+   * `db`: the handle the rolled-back row was written on when it ended in a
+   * rollback, so the two commit together. The ending's own record then says
+   * how the attempt ended.
+   */
+  endDownAttempt?: (id: string, db?: unknown) => Promise<void>;
   /**
    * Table-level owner rows for the drop guard; absent when no registry is
    * reachable, which reads as nothing being claimed.
@@ -478,12 +497,20 @@ export async function rollBackOne(
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordFailed"
+    | "recordDownStarted"
+    | "endDownAttempt"
   >
 ): Promise<void> {
   if (!p.transaction) {
     deps.logger.warn(outsideTransactionNotice(p.filename));
   }
   const partial = failedAttemptMayBePartial(p, deps.dialect);
+  // Before the first statement, where a stop can leave part of the DOWN
+  // committed: the ledger then shows an attempt with no outcome, and the
+  // migration stays recorded applied until the DOWN's last statement ran.
+  const attempt = downStartRecordedFirst(p, deps.dialect)
+    ? await deps.recordDownStarted?.(p.filename)
+    : undefined;
   try {
     await deps.execDown(
       p.statements,
@@ -497,6 +524,13 @@ export async function rollBackOne(
           });
         }
         if (deps.options.plugin) await deps.recordPluginSchemaVersion?.(db);
+        // The rollback is recorded, and it resolves the start row, which is
+        // older: failing to remove that row never fails a DOWN whose
+        // statements ran. A start row is recorded only where a failed write
+        // leaves the transaction usable (MySQL, or no transaction at all).
+        if (attempt !== undefined) {
+          await deps.endDownAttempt?.(attempt, db).catch(() => undefined);
+        }
       }
     );
   } catch (err) {
@@ -507,8 +541,31 @@ export async function rollBackOne(
         p.transaction
       );
     }
+    // Recorded failed above; a lost race rolled back whole left nothing to
+    // record, and the other run's rollback is the migration's outcome. A
+    // start row left behind reads as a stopped DOWN, which is still true, so
+    // failing to remove it never hides the DOWN's own error.
+    if (attempt !== undefined) {
+      await deps.endDownAttempt?.(attempt).catch(() => undefined);
+    }
     throw err;
   }
+}
+
+/**
+ * Whether a DOWN's attempt is recorded before its first statement: an app
+ * migration's DOWN wherever a stop can leave part of it committed
+ * (`failedAttemptMayBePartial`, the predicate an UP's attempt is recorded
+ * by). A plugin module's DOWN keeps its history's record, written once it
+ * ends.
+ */
+function downStartRecordedFirst(
+  p: Pick<PlannedDown, "filename" | "transaction">,
+  dialect: SupportedDialect
+): boolean {
+  return (
+    !isPluginLedgerRow(p.filename) && failedAttemptMayBePartial(p, dialect)
+  );
 }
 
 /**
@@ -801,6 +858,8 @@ export async function downDatabaseDeps(args: {
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordFailed"
+    | "recordDownStarted"
+    | "endDownAttempt"
   >
 > {
   const { adapter, dialect, plugin } = args;
@@ -862,6 +921,14 @@ export async function downDatabaseDeps(args: {
         owners: new OwnersRepo(handle, dialect),
       });
     },
+    recordDownStarted: filename =>
+      repo.recordStart({
+        eventType: "file_rollback",
+        source: "cli-migrate",
+        filename: ledgerFilename(filename),
+      }),
+    endDownAttempt: (id, handle) =>
+      (handle === undefined ? repo : repo.boundTo(handle)).discardAttempt(id),
     recordFailed: (filename, message, transaction) =>
       recordRollbackFailed({
         repo,

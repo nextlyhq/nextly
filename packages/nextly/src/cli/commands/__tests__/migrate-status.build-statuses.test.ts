@@ -197,7 +197,10 @@ describe("ledgerRecords", () => {
       durationMs: null,
       note: null,
       statementsExecuted: null,
-      supersededEventIds: null,
+      // A rollback retires the applied row it undoes, as every command that
+      // records one writes it; a `rolled_back` row retiring nothing is an
+      // attempt `--failed-cleanup` cleared.
+      supersededEventIds: status === "rolled_back" ? ["the-applied-row"] : null,
       supersededBy: null,
     };
   }
@@ -245,6 +248,33 @@ describe("ledgerRecords", () => {
       ["0001_a.sql", false],
       ["0002_b.sql", true],
     ]);
+  });
+
+  it("lists an applied app migration as applied when a later attempt failed or stopped", () => {
+    // Its state is its latest outcome, as `nextly migrate` reads it.
+    const records = ledgerRecords([
+      event("0001_a.sql", "applied", 1000),
+      event("0001_a.sql", "failed", 2000),
+      event("0002_b.sql", "applied", 3000),
+      event("0002_b.sql", "in_progress", 4000),
+    ]);
+    expect(records.map(r => [r.filename, r.status])).toEqual([
+      ["0001_a.sql", "applied"],
+      ["0002_b.sql", "applied"],
+    ]);
+  });
+
+  it("lists a rollback that recorded no outcome as stopped and possibly partial", () => {
+    const applied = ledgerRecords([event("0001_a.sql", "applied", 1000)]);
+    const failures = failedRollbacksSinceApply(applied, [
+      {
+        ...event("0001_a.sql", "in_progress", 2000),
+        eventType: "file_rollback" as const,
+      },
+    ]);
+    expect(
+      failures.map(f => [f.filename, f.stopped, f.possiblyPartial])
+    ).toEqual([["0001_a.sql", true, true]]);
   });
 
   it("flags a rollback that failed outside a transaction as partial", () => {

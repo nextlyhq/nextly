@@ -27,15 +27,17 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors";
 import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";
-import { newestEvent, newestFirst } from "../events/newest-event";
+import {
+  attemptCleared,
+  standingOf,
+  unresolvedAttempts,
+} from "../events/migration-state";
+import { newestEvent } from "../events/newest-event";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
-import {
-  attemptUnfinished,
-  failedAttemptMayBePartial,
-} from "./drift-reconcile";
+import { failedAttemptMayBePartial } from "./drift-reconcile";
 
 export type ResolveMode = "applied" | "rolled-back" | "failed-cleanup";
 
@@ -158,7 +160,7 @@ async function resolveApplied(
   }
 
   const rows = await args.repo.findFileApplies(filename);
-  if (rows.some(r => r.status === "applied")) {
+  if (standingOf(filename, rows).state === "applied") {
     return { kind: "noop", reason: `${filename} is already marked applied.` };
   }
 
@@ -167,7 +169,7 @@ async function resolveApplied(
     : await verifyTarget(args, filename, rows);
 
   // The applied row and the failures it supersedes, written together.
-  const failed = unclearedFailures(rows);
+  const failed = unresolvedAttempts(filename, rows);
   const eventId = await writeLedger(args, async repo => {
     const id = await repo.insertEvent({
       eventType: "file_apply",
@@ -193,23 +195,6 @@ async function resolveApplied(
     supersededFailedId: failed[0]?.id ?? null,
     verified,
   };
-}
-
-/**
- * The attempts that did not finish (`attemptUnfinished`: failed, or stopped
- * while `in_progress`) and no later event accounts for: the unbroken run of
- * them at the newest end of a file's history, newest first.
- *
- * What `--failed-cleanup` clears and `--applied` supersedes. Every one of
- * them is an attempt that may have left work behind, so clearing only one
- * would leave the next newest still unfinished, and `nextly migrate` refusing
- * the file again. One older than a later applied or rolled-back event is
- * history the file has already moved past, and is left as recorded.
- */
-function unclearedFailures(rows: readonly SchemaEventRow[]): SchemaEventRow[] {
-  const ordered = newestFirst(rows);
-  const firstOther = ordered.findIndex(row => !attemptUnfinished(row));
-  return firstOther === -1 ? ordered : ordered.slice(0, firstOther);
 }
 
 /**
@@ -254,7 +239,7 @@ async function verifyTarget(
  * no snapshot; a generated file is never marked, because the marker would
  * change the text its snapshot was taken over. On MySQL, whose DDL commits
  * as it runs, an unmarked blank file run in a transaction can also stop
- * part way: its newest attempt did not finish (`attemptUnfinished`), and
+ * part way: it has an unresolved attempt (`standingOf`), and
  * the partially-applied refusal tells the operator to mark it applied once
  * its statements are finished by hand. Neither has anything to compare
  * against, and refusing either would make the recovery the refusal names
@@ -271,7 +256,8 @@ async function hasNoSnapshotToCompare(
   if (await args.marksNoTransaction()) return true;
   return (
     failedAttemptMayBePartial({ transaction: true }, args.dialect) &&
-    attemptUnfinished(newestEvent(rows))
+    standingOf(ledgerFilename(args.filename), rows).unresolvedAttempt !==
+      undefined
   );
 }
 
@@ -287,8 +273,7 @@ async function resolveRolledBack(
   }
 
   const rows = await args.repo.findFileApplies(filename);
-  const latest = newestEvent(rows);
-  if (latest?.status === "rolled_back") {
+  if (standingOf(filename, rows).state === "rolled_back") {
     return { kind: "noop", reason: `${filename} is already rolled back.` };
   }
   const appliedRows = rows.filter(r => r.status === "applied");
@@ -326,10 +311,19 @@ async function resolveFailedCleanup(
   filename: string
 ): Promise<ResolveResult> {
   const rows = await args.repo.findFileApplies(filename);
-  const failed = unclearedFailures(rows);
+  // Every unresolved attempt, since clearing only the newest would leave the
+  // next one unresolved and `nextly migrate` refusing the file again; one an
+  // outcome already resolved is history the file has moved past.
+  const failed = unresolvedAttempts(filename, rows);
   if (failed.length === 0) {
-    if (newestEvent(rows)?.status === "rolled_back") {
+    if (standingOf(filename, rows).state === "rolled_back") {
       return { kind: "noop", reason: `${filename} is already rolled back.` };
+    }
+    if (attemptCleared(newestEvent(rows))) {
+      return {
+        kind: "noop",
+        reason: `${filename}'s attempts are already cleaned up.`,
+      };
     }
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
@@ -338,7 +332,8 @@ async function resolveFailedCleanup(
   }
   // Flipped in place rather than answered with a new row, so each attempt
   // keeps its own start and end times and its error, and the history still
-  // reads in order.
+  // reads in order. A cleared attempt retires nothing, so it is not an
+  // outcome (`isOutcome`): an applied migration stays applied.
   await writeLedger(args, async repo => {
     for (const row of failed) {
       await repo.markRolledBack(row.id, { note: NOTE });

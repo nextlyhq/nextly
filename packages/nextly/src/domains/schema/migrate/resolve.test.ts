@@ -482,6 +482,72 @@ describe("resolveMigration", () => {
       expect(await repo.findFileApplies(file)).toHaveLength(5);
     });
 
+    it("clears an attempt after an applied outcome without changing the migration's state", async () => {
+      // The attempt is newer than the outcome. Flipped to rolled_back, it
+      // would be the newest outcome, and the next run would apply an applied
+      // file again.
+      const { repo, base } = makeDeps(testDb);
+      const file = "001_add_posts.sql";
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(1),
+      });
+      const failed = await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(2),
+      });
+      const r = await resolveMigration({
+        mode: "failed-cleanup",
+        filename: file,
+        ...base,
+      });
+      expect(r).toEqual({ kind: "failed-cleanup", updatedIds: [failed] });
+      // Cleared in place; retiring nothing, it is not a rollback.
+      expect((await repo.findById(failed))?.status).toBe("rolled_back");
+      expect(await repo.isFileApplied(file)).toBe(true);
+      // Cleared: nothing is left to clean up.
+      expect(
+        await resolveMigration({
+          mode: "failed-cleanup",
+          filename: file,
+          ...base,
+        })
+      ).toMatchObject({ kind: "noop" });
+    });
+
+    it("clears a failed attempt behind a newer record that is not an outcome", async () => {
+      // A superseded row neither is an attempt nor resolves one, so the failed
+      // attempt before it is still unresolved, and still what to clear.
+      const { repo, base } = makeDeps(testDb);
+      const file = "001_add_posts.sql";
+      const failed = await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(1),
+      });
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "superseded",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(2),
+      });
+      const r = await resolveMigration({
+        mode: "failed-cleanup",
+        filename: file,
+        ...base,
+      });
+      expect(r).toEqual({ kind: "failed-cleanup", updatedIds: [failed] });
+    });
+
     it("clears an attempt that recorded no outcome, giving it an end", async () => {
       const { repo, base } = makeDeps(testDb);
       const id = await repo.insertEvent({
