@@ -467,8 +467,9 @@ So keep `beforeOperation` and `beforeDelete` to checks, and throw to refuse the
 delete. Put effects outside Nextly, such as an email, a webhook call or a write
 to another service, in `afterDelete`, which runs only after the delete commits.
 
-Both hooks are handed the entry as it was read before the hooks ran, not as the
-locked row it removes. A concurrent change that leaves the entry inside the
+`beforeDelete` and `afterDelete` are handed the entry as it was read before the
+hooks ran, not as the locked row the delete removes (`beforeOperation` is given
+only the entry's id, in `args`). A concurrent change that leaves the entry inside the
 filter still lets the delete go ahead, and `data` then shows the values from
 before that change. An effect that must describe the row exactly as deleted
 can take it from the delete's webhook event, which is written from the locked

@@ -211,12 +211,8 @@ export const Posts = defineCollection({
   entries its filter matches, and each is judged again as it is written.
 - A release admits a document as a member only where its author's filter matches it, and
   the release's run judges each member again as it writes it.
-- A delete's `beforeOperation` and `beforeDelete` hooks run after the first match and
-  before the match on the locked row, so they can run for a delete that a concurrent change
-  then refuses. Put effects outside Nextly, such as an email, in `afterDelete`, which runs
-  only after the delete commits. A delete inside a plugin's `collections.withTransaction`
-  differs: there `afterDelete` runs before that transaction commits (see
-  [A delete's hooks and outside effects](/docs/configuration/collections#a-deletes-hooks-and-outside-effects)).
+- A delete's hooks can run for a delete that a concurrent change then refuses: see
+  [A delete's hooks and outside effects](/docs/configuration/collections#a-deletes-hooks-and-outside-effects).
 
 ### What `status` means in a filter
 
