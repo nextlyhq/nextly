@@ -19,6 +19,7 @@
  */
 
 import { LIFECYCLE_FIELDS } from "../../domains/audit/lifecycle-fields";
+import type { ActivityEvent } from "../../domains/widgets/result";
 
 /**
  * A row's metadata as an object, from either form a driver hands back: the
@@ -120,4 +121,39 @@ export function isContentSave(action: unknown, metadata: unknown): boolean {
   const changed = changedFieldsOf(metadata);
   if (changed === undefined) return true;
   return changed.some(name => !LIFECYCLE_FIELDS.has(name));
+}
+
+/**
+ * What a feed row says happened, as a reader is told it: the published wire
+ * type (`nextly/widget-result`), which every event named here is checked
+ * against, so the producer cannot name one a consumer's switch does not cover.
+ */
+export type { ActivityEvent };
+
+/**
+ * The event a trail row records, read from its action and the same marks the
+ * questions above read, so a row the feed calls a publish is the row
+ * Recently edited declines to call a save.
+ *
+ * - A create and a delete say so by their action.
+ * - An update marked as a publish published, whether or not it also carried
+ *   edits: putting the document live is what a reader needs to hear.
+ * - An update that changed the status without that mark took the document out
+ *   of live, because every path that publishes writes the mark.
+ * - Any other update is a save, including one that does not say what it
+ *   changed.
+ *
+ * `undefined` for an action the trail does not write, so a caller never names
+ * an event for a row it cannot read.
+ */
+export function activityEventOf(
+  action: unknown,
+  metadata: unknown
+): ActivityEvent | undefined {
+  if (action === "create") return "created";
+  if (action === "delete") return "deleted";
+  if (action !== "update") return undefined;
+  if (publishes(metadata)) return "published";
+  if (changesStatus(metadata)) return "unpublished";
+  return "saved";
 }

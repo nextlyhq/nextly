@@ -16,8 +16,8 @@ const rules = (
 });
 
 const widget = {
-  id: "core/recent-activity",
-  title: "Recent activity",
+  id: "core/team-activity",
+  title: "Team activity",
   description: "What changed",
   size: {
     default: { w: 6, h: 5 },
@@ -34,7 +34,7 @@ describe("a site override", () => {
   const overridden = rules(
     new Map([
       [
-        "core/recent-activity",
+        "core/team-activity",
         {
           title: "Latest changes",
           size: { max: { w: 6, h: 6 } },
@@ -62,7 +62,7 @@ describe("a site override", () => {
 
   it("starts a declared widget's settings, keyed by name, the same way", () => {
     const declared = {
-      id: "core/recent-activity",
+      id: "core/team-activity",
       settings: { limit: { type: "number", defaultValue: 10 } },
     };
     expect(withSiteOverride(declared, overridden).settings).toEqual({

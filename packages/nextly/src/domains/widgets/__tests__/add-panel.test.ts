@@ -30,7 +30,7 @@ describe("the group each widget is listed in", () => {
       "core/needs-attention": "overview",
       "core/recently-edited": "overview",
       "core/upcoming-releases": "overview",
-      "core/recent-activity": "team",
+      "core/team-activity": "team",
       // Offered per collection, inside each collection's part of Content.
       "core/count": "content",
       "core/breakdown": "content",
