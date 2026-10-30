@@ -739,7 +739,8 @@ export interface MigrateCoreDeps {
    * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
    * rather than apply it as written.
    *
-   * `nextly migrate` passes it. Off by default because the development boot
+   * `nextly migrate` and the production boot (`db.runMigrationsOnBoot`) pass
+   * it. Off by default because the development boot
    * runs this core too, over the files the Builder writes into the project as
    * it saves: there the Builder has already applied the change, and refusing
    * would stop every later migration of a development server.
