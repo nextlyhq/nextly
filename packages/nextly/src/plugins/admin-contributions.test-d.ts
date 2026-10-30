@@ -3,6 +3,7 @@ import { expectTypeOf } from "vitest";
 import type {
   ComponentPath,
   PluginAdminContributions,
+  PluginAdminWidget,
   PluginMenuItem,
 } from "./admin-contributions";
 import type { PluginContributions } from "./contributions";
@@ -12,6 +13,17 @@ import { definePlugin } from "./plugin-context";
 expectTypeOf<PluginContributions["admin"]>().toEqualTypeOf<
   PluginAdminContributions | undefined
 >();
+
+// 🔴 A plugin adds widgets only under `contributes.dashboard`: neither older key
+// is a field. `not.toHaveProperty` is evaluated by the checker, so either key
+// coming back fails on its own line, by name, whatever else the file holds.
+expectTypeOf<PluginAdminContributions>().not.toHaveProperty("widgets");
+expectTypeOf<PluginContributions>().not.toHaveProperty("widgetSources");
+// The controls: the same assertion form reads these types, which do have the
+// replacement and the admin keys that stay.
+expectTypeOf<PluginContributions>().toHaveProperty("dashboard");
+expectTypeOf<PluginContributions>().toHaveProperty("admin");
+expectTypeOf<PluginAdminContributions>().toHaveProperty("pages");
 
 // ComponentPath is the string-path registry key.
 expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
@@ -60,9 +72,7 @@ expectTypeOf<
 // "`component` is required" assertion read, and it would now fail for the
 // declarative member for a reason that has nothing to do with the property
 // being tested.
-type ContributedWidget = NonNullable<
-  PluginAdminContributions["widgets"]
->[number];
+type ContributedWidget = PluginAdminWidget;
 
 // Tier 2: a plugin ships a component and draws its own card, sized in grid
 // units like any registered widget.
