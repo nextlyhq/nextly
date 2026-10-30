@@ -52,7 +52,7 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
   current = await createTestNextly({
     dialect,
     singles: [preferences(ONE), preferences(EVERY)],
-    localization: { locales: ["en", "de"], defaultLocale: "en" },
+    localization: { locales: ["en", "de", "fr"], defaultLocale: "en" },
   });
   return current.getService("singleEntryService");
 }
@@ -181,6 +181,49 @@ describe.each(getConfiguredTestDialects())(
           previous: "Hello",
         },
       ]);
+    });
+
+    it("tells a language going live for the first time what a publish of that language alone tells it", async () => {
+      const singles = await boot(dialect);
+      for (const slug of [ONE, EVERY]) {
+        const live = await singles.update(
+          slug,
+          { siteName: "Hello", status: "published" },
+          { locale: "en", overrideAccess: true }
+        );
+        expect(live.success, JSON.stringify(live)).toBe(true);
+        // French: saved, never published.
+        const saved = await singles.update(
+          slug,
+          { siteName: "Bonjour" },
+          { locale: "fr", overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      const before = await eventIds();
+
+      const alone = await singles.update(
+        ONE,
+        { status: "published" },
+        { locale: "fr", overrideAccess: true }
+      );
+      expect(alone.success, JSON.stringify(alone)).toBe(true);
+      const every = await singles.publishAllLocales(EVERY, {
+        overrideAccess: true,
+      });
+      expect(every.success, JSON.stringify(every)).toBe(true);
+
+      const told = (await eventsSince(before, ONE)).filter(
+        event => event.locale !== undefined
+      );
+      expect(told).toContainEqual(
+        expect.objectContaining({ locale: "fr", data: "Bonjour" })
+      );
+      expect(
+        (await eventsSince(before, EVERY)).filter(
+          event => event.locale !== undefined
+        )
+      ).toEqual(told);
     });
 
     it("reports the shared value a pending change put live, in its events and in the published version", async () => {

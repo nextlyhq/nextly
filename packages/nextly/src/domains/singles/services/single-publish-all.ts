@@ -135,6 +135,7 @@ import type { SingleRegistryService } from "./single-registry-service";
 import {
   buildSingleWebhookDoc,
   readCompanionLocaleValues,
+  readCompanionValuesByLocale,
 } from "./single-webhook-doc";
 
 /**
@@ -1275,26 +1276,24 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     pending: readonly PendingChange[]
   ): Promise<Map<string, Record<string, unknown>>> {
-    const prior = new Map<string, Record<string, unknown>>();
     const { companion } = plan;
-    if (!plan.recordingEnabled || pending.length === 0) return prior;
-    if (!companion || !plan.companionPublishable) return prior;
-    const locales = new Set(
-      pending.flatMap(draft => (draft.locale === null ? [] : [draft.locale]))
+    if (!plan.recordingEnabled || pending.length === 0) return new Map();
+    if (!companion || !plan.companionPublishable) return new Map();
+    // One read for every promoted language, however many there are: it runs
+    // while this publish holds the row's lock.
+    return readCompanionValuesByLocale(
+      this.adapter,
+      tx,
+      companion,
+      plan.existingDoc.id,
+      [
+        ...new Set(
+          pending.flatMap(draft =>
+            draft.locale === null ? [] : [draft.locale]
+          )
+        ),
+      ]
     );
-    for (const locale of locales) {
-      prior.set(
-        locale,
-        await readCompanionLocaleValues(
-          this.adapter,
-          tx,
-          companion,
-          plan.existingDoc.id,
-          locale
-        )
-      );
-    }
-    return prior;
   }
 
   /**
@@ -1561,12 +1560,11 @@ export class SinglePublishAllService extends BaseService {
    * Matching what a consumer of the ordinary write path already expects: one
    * untagged `single.updated` for the write itself; one untagged
    * `single.published` when the main row transitioned and no default-locale
-   * companion event already encodes it; one locale-tagged `single.published`
-   * per translation that went live; and one locale-tagged `single.updated` per
-   * translation already live whose pending change went live. The default
-   * language's pending change is then described by both an untagged and a
-   * tagged `single.updated`, as a first publish of it is by an untagged
-   * `single.updated` and a tagged `single.published`.
+   * companion event already encodes it; and, for each translation whose live
+   * content changed, the locale-tagged events a publish of that one language
+   * records (`single.updated`, with `single.published` where it went live).
+   * The default language's write is then described by both an untagged and a
+   * tagged `single.updated`.
    *
    * The untagged main event is SUPPRESSED when the default locale's own
    * companion row transitions here, because that locale-tagged event stands in
@@ -1768,10 +1766,11 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * One locale-tagged event per translation whose live content this publish
-   * changed, as a publish of that one language tells its subscribers:
-   * `single.published` for a translation that went live, and
-   * `single.updated` for one already live whose pending change went live.
+   * The locale-tagged events of each translation whose live content this
+   * publish changed, as a publish of that one language records them: a
+   * `single.updated` and a `single.published` for a translation that went
+   * live, and a `single.updated` for one already live whose pending change
+   * went live.
    *
    * The bulk flip moved every companion locale in one statement, but a
    * subscriber watching a single language needs its own event, carrying that
@@ -1809,48 +1808,63 @@ export class SinglePublishAllService extends BaseService {
     );
     let recorded = false;
 
-    for (const [locale, priorStatus] of priorCompanionStatuses) {
-      if (configuredLocales.size > 0 && !configuredLocales.has(locale))
-        continue;
-      const wentLive = priorStatus !== "published";
-      if (!wentLive && !args.promotedLocales.has(locale)) continue;
+    // The languages this publish tells: those that went live, and those
+    // already live whose pending change went live.
+    const told = [...priorCompanionStatuses].filter(
+      ([locale, priorStatus]) =>
+        (configuredLocales.size === 0 || configuredLocales.has(locale)) &&
+        (priorStatus !== "published" || args.promotedLocales.has(locale))
+    );
+    // Each language's translated values as the publish left them, in one read
+    // for all of them: it runs while this publish holds the row's lock. As
+    // they stood before it, the promotion rewrote them where a pending change
+    // was promoted, and left them alone where none was.
+    const after = plan.companion
+      ? await readCompanionValuesByLocale(
+          this.adapter,
+          tx,
+          plan.companion,
+          plan.existingDoc.id,
+          told.map(([locale]) => locale)
+        )
+      : new Map<string, Record<string, unknown>>();
 
-      // This language's translated values as the publish left them, and as
-      // they stood before it: the promotion rewrote them where a pending
-      // change was promoted, and left them alone where none was.
-      const localeValues = plan.companion
-        ? await readCompanionLocaleValues(
-            this.adapter,
-            tx,
-            plan.companion,
-            plan.existingDoc.id,
-            locale
-          )
-        : {};
-      const localeRecorded = await recordMutationEvent(tx, {
-        type: wentLive ? "single.published" : "single.updated",
-        resource: { ...resource, locale },
-        data: await this.buildEventDocument(
-          tx,
-          plan,
-          publishedRow,
-          localeValues,
-          locale,
-          "published"
-        ),
-        previous: await this.buildEventDocument(
-          tx,
-          plan,
-          lockedRow,
-          args.priorCompanionValues.get(locale) ?? localeValues,
-          locale,
-          priorStatus ?? undefined,
-          args.priorComponents.get(locale)
-        ),
-        fields: webhookFields,
-        actor: plan.actor,
-      });
-      recorded = localeRecorded || recorded;
+    for (const [locale, priorStatus] of told) {
+      const localeValues = after.get(locale) ?? {};
+      const data = await this.buildEventDocument(
+        tx,
+        plan,
+        publishedRow,
+        localeValues,
+        locale,
+        "published"
+      );
+      const previous = await this.buildEventDocument(
+        tx,
+        plan,
+        lockedRow,
+        args.priorCompanionValues.get(locale) ?? localeValues,
+        locale,
+        priorStatus ?? undefined,
+        args.priorComponents.get(locale)
+      );
+      // What a publish of this one language records: the write, and, where
+      // the language went live, its move to published.
+      const types =
+        priorStatus === "published"
+          ? (["single.updated"] as const)
+          : (["single.updated", "single.published"] as const);
+      for (const type of types) {
+        const localeRecorded = await recordMutationEvent(tx, {
+          type,
+          resource: { ...resource, locale },
+          data,
+          previous,
+          fields: webhookFields,
+          actor: plan.actor,
+        });
+        recorded = localeRecorded || recorded;
+      }
     }
     return recorded;
   }

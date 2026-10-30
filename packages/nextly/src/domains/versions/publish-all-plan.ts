@@ -136,22 +136,98 @@ export interface LiveSharedDocument {
 }
 
 /**
+ * What a publish of every language finds over the shared fields, before it
+ * writes or refuses anything. One verdict, read by the publish (which refuses
+ * on it) and by its preview (which reports it), so what the preview says the
+ * publish does is what the publish does.
+ */
+export interface SharedVerdict {
+  /**
+   * Each pending change behind live, keyed by its language, with the shared
+   * fields someone else published after it began: the out-of-date change a
+   * single publish refuses too, and nothing is merged on its behalf.
+   */
+  outOfDate: ReadonlyMap<string | null, readonly string[]>;
+  /**
+   * Shared parts of a component kept per language that a change edited, when
+   * more than one language publishes. Each language's promotion writes its
+   * own copy of the component, so whichever went last would undo the others'
+   * edit, and the edit can't be merged into another language's instances
+   * safely. Published one language at a time, the later one is out of date
+   * and its editor copies the shared parts by hand.
+   */
+  unmergeable: readonly string[];
+  /** Shared fields two changes edited whose order history can't prove. */
+  unordered: readonly string[];
+  /** The fields the publish merges: every shared one but those kept by hand. */
+  merged: readonly string[];
+  /**
+   * The live shared values, each overlaid by the change that edited it last:
+   * where two changes edited one field, the one whose edit of THAT field is
+   * the later, from its language's version history, whichever language saved
+   * anything last.
+   */
+  state: Record<string, unknown>;
+}
+
+/**
+ * Judge the pending changes of a publish of every language over the shared
+ * fields. Every change that is current began from the live shared values, and
+ * each brings only the shared fields it edited itself, measured against its
+ * own base. Combining the edits of changes that are all current is not the
+ * field-by-field merge an out-of-date change is refused to avoid: no change is
+ * behind live, so none of its values reverts another's.
+ */
+export async function judgeSharedValues(
+  tx: TransactionContext,
+  ref: VersionRef,
+  pending: readonly PendingChange[],
+  document: LiveSharedDocument
+): Promise<SharedVerdict> {
+  const { live, shared, views, byHand } = document;
+  const outOfDate = new Map<string | null, readonly string[]>();
+  for (const draft of pending) {
+    const fields = await outOfDateSharedFields(tx, {
+      ref,
+      locale: draft.locale,
+      shared,
+      live,
+      pending: snapshotRecord(draft.snapshot),
+      views,
+    });
+    if (fields.length > 0) outOfDate.set(draft.locale, fields);
+  }
+  const unmergeable =
+    pending.length < 2
+      ? []
+      : [...byHand].filter(name =>
+          pending.some(draft => {
+            const values = snapshotRecord(draft.snapshot);
+            return (
+              name in values &&
+              differingFields([name], values, live, views).length > 0
+            );
+          })
+        );
+  // A translated component's shared parts are judged above but not merged:
+  // each language's component also holds its own translated values, so it
+  // goes live as that language saved it.
+  const merged = shared.filter(name => !byHand.has(name));
+  const { state, unordered } = await mergedSharedState(tx, ref, pending, {
+    live,
+    shared: merged,
+  });
+  return { outOfDate, unmergeable, unordered, merged, state };
+}
+
+/**
  * The pending changes as a publish of every language writes them, each
- * carrying the one shared state the publish leaves.
- *
- * Refused first, naming every field, when any change holds a shared value
- * someone else published after it began: that is the out-of-date change a
- * single publish refuses too, and nothing is merged on its behalf.
- *
- * Otherwise every change began from the live shared values, and each brings
- * only the shared fields it edited itself, measured against its own base.
- * Where two edited one field, the later edit's value is kept, and the
- * publish is refused, naming the field, when history can no longer show
- * which edit was later. Combining the edits of changes that are all current
- * is not the field-by-field merge an out-of-date change was refused to avoid:
- * no change here is behind live, so none of its values reverts another's.
- * Every change is then written with the same shared state, so the order the
- * rows are applied in no longer decides it.
+ * carrying the one shared state the publish leaves, or the refusal its verdict
+ * calls for. Refused first, naming every field, when any change is out of
+ * date; then over shared parts that can't be merged; then over edits whose
+ * order history can't prove, which is never decided by a guess. Every change
+ * is written with the same shared state, so the order the rows are applied in
+ * no longer decides it.
  */
 export async function sharedStateForPublish(
   tx: TransactionContext,
@@ -161,89 +237,125 @@ export async function sharedStateForPublish(
   refuse: RefuseSharedFields
 ): Promise<PendingChange[]> {
   if (pending.length === 0) return [];
-  const { live, shared, views, byHand } = document;
-  await assertNoneOutOfDate(tx, ref, pending, { live, shared, views }, refuse);
-  await assertTranslatedComponentsUnedited(
-    pending,
-    { live, views, byHand },
-    refuse
+  const verdict = await judgeSharedValues(tx, ref, pending, document);
+  const { live } = document;
+  const stale = new Set([...verdict.outOfDate.values()].flat());
+  if (stale.size > 0) throw await refuse({ fields: [...stale], live });
+  if (verdict.unmergeable.length > 0) {
+    throw await refuse({
+      fields: [...verdict.unmergeable],
+      live,
+      reason: "shared-edits-unmergeable",
+    });
+  }
+  if (verdict.unordered.length > 0) {
+    throw await refuse({
+      fields: [...verdict.unordered],
+      live,
+      reason: "shared-edits-unordered",
+    });
+  }
+  return pending.map(draft =>
+    withSharedState(draft, verdict.merged, verdict.state)
   );
-  // A translated component's shared parts are judged above but not merged:
-  // each language's component also holds its own translated values, so it
-  // goes live as that language saved it.
-  const merged = shared.filter(name => !byHand.has(name));
-  const state = await mergedSharedState(
-    tx,
-    ref,
-    pending,
-    { live, shared: merged },
-    refuse
-  );
-  return pending.map(draft => withSharedState(draft, merged, state));
 }
 
-/** Refuse, naming every field, when any change is behind live. */
-async function assertNoneOutOfDate(
-  tx: TransactionContext,
-  ref: VersionRef,
-  pending: readonly PendingChange[],
-  document: {
-    live: Record<string, unknown>;
-    shared: readonly string[];
-    views: SharedViews;
-  },
-  refuse: RefuseSharedFields
-): Promise<void> {
-  const stale = new Set<string>();
-  for (const draft of pending) {
-    const fields = await outOfDateSharedFields(tx, {
-      ref,
-      locale: draft.locale,
-      shared: document.shared,
-      live: document.live,
-      pending: snapshotRecord(draft.snapshot),
-      views: document.views,
-    });
-    for (const name of fields) stale.add(name);
-  }
-  if (stale.size === 0) return;
-  throw await refuse({ fields: [...stale], live: document.live });
+/** Shared fields as the caller may read them: the others are counted, never named. */
+export interface NamedFields {
+  fields: string[];
+  hiddenCount?: number;
 }
 
 /**
- * Refuse, naming each, a component kept per language whose shared parts
- * (its instances, and the sub-fields it marks shared) a change edited, when
- * more than one language publishes. Each language's promotion writes its
- * own copy of the component, so whichever went last would undo the others'
- * edit, and the edit can't be merged into another language's instances
- * safely. Published one language at a time, the later one is out of date
- * and its editor copies the shared parts by hand.
+ * What a publish of every language does to one configured language. Exactly
+ * one, the first that applies in this order: a pending change behind live
+ * refuses the publish; a pending change goes live; a language already live
+ * stays as it is; a language with content of its own goes live; and a
+ * language with none goes live showing the first language it falls back to
+ * that has content, or nothing where fallback is off.
  */
-async function assertTranslatedComponentsUnedited(
-  pending: readonly PendingChange[],
-  document: {
-    live: Record<string, unknown>;
-    views: SharedViews;
-    byHand: ReadonlySet<string>;
-  },
-  refuse: RefuseSharedFields
-): Promise<void> {
-  if (pending.length < 2) return;
-  const { live, views } = document;
-  const edited = [...document.byHand].filter(name =>
-    pending.some(draft => {
-      const values = snapshotRecord(draft.snapshot);
-      return (
-        name in values &&
-        differingFields([name], values, live, views).length > 0
-      );
-    })
-  );
-  if (edited.length === 0) return;
-  throw await refuse({
-    fields: edited,
-    live,
-    reason: "shared-edits-unmergeable",
+export type LanguageOutcome =
+  | ({ locale: string; outcome: "out-of-date" } & NamedFields)
+  | { locale: string; outcome: "goes-live-with-pending-change" }
+  | { locale: string; outcome: "stays-published" }
+  | { locale: string; outcome: "goes-live" }
+  | { locale: string; outcome: "shows-fallback"; fallback: string | null };
+
+/** What refuses a publish of every language as a whole, whichever languages it reaches. */
+export type PublishAllBlocker = {
+  reason: "shared-edits-unmergeable" | "shared-edits-unordered";
+} & NamedFields;
+
+/** A verdict's fields named as the caller may read them. */
+export interface NamedVerdict {
+  outOfDate: ReadonlyMap<string | null, NamedFields>;
+  blockers: PublishAllBlocker[];
+}
+
+/**
+ * Name a verdict's fields through the caller's field read rules, as a refusal
+ * of the publish names them.
+ */
+export async function nameVerdict(
+  verdict: SharedVerdict,
+  name: (
+    fields: readonly string[]
+  ) => Promise<{ named: string[]; hidden: number }>
+): Promise<NamedVerdict> {
+  const named = async (fields: readonly string[]): Promise<NamedFields> => {
+    const { named: readable, hidden } = await name(fields);
+    return { fields: readable, ...(hidden > 0 ? { hiddenCount: hidden } : {}) };
+  };
+  const outOfDate = new Map<string | null, NamedFields>();
+  for (const [locale, fields] of verdict.outOfDate) {
+    outOfDate.set(locale, await named(fields));
+  }
+  const blockers: PublishAllBlocker[] = [];
+  if (verdict.unmergeable.length > 0) {
+    blockers.push({
+      reason: "shared-edits-unmergeable",
+      ...(await named(verdict.unmergeable)),
+    });
+  }
+  if (verdict.unordered.length > 0) {
+    blockers.push({
+      reason: "shared-edits-unordered",
+      ...(await named(verdict.unordered)),
+    });
+  }
+  return { outOfDate, blockers };
+}
+
+/** Each configured language's outcome, in the order the app configures them. */
+export function languageOutcomes(args: {
+  configured: readonly string[];
+  /** The languages holding a pending change. */
+  pending: ReadonlySet<string | null>;
+  outOfDate: NamedVerdict["outOfDate"];
+  /** Each stored translation's status before the publish. */
+  prior: ReadonlyMap<string, string | null>;
+  /** Whether a language has content of its own, as reads judge it. */
+  hasOwnContent: (locale: string) => boolean;
+  /**
+   * The languages a language without content falls back through, itself
+   * first; null when fallback is off.
+   */
+  fallbackChain: (locale: string) => readonly string[] | null;
+}): LanguageOutcome[] {
+  return args.configured.map((locale): LanguageOutcome => {
+    const stale = args.outOfDate.get(locale);
+    if (stale) return { locale, outcome: "out-of-date", ...stale };
+    if (args.pending.has(locale)) {
+      return { locale, outcome: "goes-live-with-pending-change" };
+    }
+    if (args.prior.get(locale) === "published") {
+      return { locale, outcome: "stays-published" };
+    }
+    if (args.hasOwnContent(locale)) return { locale, outcome: "goes-live" };
+    const chain = args.fallbackChain(locale);
+    const fallback =
+      chain?.find(code => code !== locale && args.hasOwnContent(code)) ?? null;
+    return { locale, outcome: "shows-fallback", fallback };
   });
 }
 
@@ -253,19 +365,15 @@ interface SharedEdit extends SharedEditTime {
 }
 
 /**
- * The live shared values, each overlaid by the change that edited it last:
- * where two changes edited one field, the one whose edit of THAT field is
- * the later, from its language's version history, whichever language saved
- * anything last. Later only where history proves it: a field whose edits it
- * can no longer order is refused, naming it, and never decided by a guess.
+ * The live shared values, each overlaid by the change that edited it last,
+ * and the fields whose edits history can no longer order.
  */
 async function mergedSharedState(
   tx: TransactionContext,
   ref: VersionRef,
   pending: readonly PendingChange[],
-  document: { live: Record<string, unknown>; shared: readonly string[] },
-  refuse: RefuseSharedFields
-): Promise<Record<string, unknown>> {
+  document: { live: Record<string, unknown>; shared: readonly string[] }
+): Promise<{ state: Record<string, unknown>; unordered: string[] }> {
   const { live, shared } = document;
   const edits = new Map<string, SharedEdit[]>();
   for (const draft of pending) {
@@ -299,14 +407,7 @@ async function mergedSharedState(
     if (winner) state[name] = winner.value;
     else unordered.push(name);
   }
-  if (unordered.length > 0) {
-    throw await refuse({
-      fields: unordered,
-      live,
-      reason: "shared-edits-unordered",
-    });
-  }
-  return state;
+  return { state, unordered };
 }
 
 /**
