@@ -13,16 +13,8 @@
 # off.
 #
 # At `population`, a visitor's cell also names the deviations of the read that
-# reaches the relationship: the visitor's read of `refs` itself, which the
-# collection gate admits by the public default, and the media it populates on
-# the way, which a read with no caller keeps.
+# reaches the relationship: without the service, a visitor is admitted unread.
 
-service visitor read collection none at direct  # visitor-public-default
-service visitor read collection none at website  # visitor-public-default
-service visitor read collection none at service  # visitor-public-default
-service visitor read collection true at direct  # visitor-public-default
-service visitor read collection true at website  # visitor-public-default
-service visitor read collection true at service  # visitor-public-default
 service user-with read collection false at schema  # schema-list-ignores-rules
 service custom-role read collection false at schema  # schema-list-ignores-rules
 service key-read-only read collection false at schema  # schema-list-ignores-rules
@@ -35,9 +27,6 @@ service key-role-based-super-admin read collection user-is-key-maker at schema  
 service key-role-based-super-admin read collection false at schema  # schema-list-ignores-rules
 service user-partial read collection false at schema  # schema-list-ignores-rules
 service key-partial read collection false at schema  # schema-list-ignores-rules
-service visitor read collection returns-true at direct  # visitor-public-default
-service visitor read collection returns-true at website  # visitor-public-default
-service visitor read collection returns-true at service  # visitor-public-default
 service user-with read collection returns-false at schema  # schema-list-ignores-rules
 service user-with read collection permission-spelling at schema  # schema-list-ignores-rules
 service custom-role read collection returns-false at schema  # schema-list-ignores-rules
@@ -92,9 +81,6 @@ service key-role-based read collection throws at schema  # schema-list-ignores-r
 service key-role-based-super-admin read collection throws at schema  # schema-list-ignores-rules
 service user-partial read collection throws at schema  # schema-list-ignores-rules
 service key-partial read collection throws at schema  # schema-list-ignores-rules
-service visitor read collection async-true at direct  # visitor-public-default
-service visitor read collection async-true at website  # visitor-public-default
-service visitor read collection async-true at service  # visitor-public-default
 service user-with read collection async-false at schema  # schema-list-ignores-rules
 service custom-role read collection async-false at schema  # schema-list-ignores-rules
 service key-read-only read collection async-false at schema  # schema-list-ignores-rules
@@ -104,9 +90,6 @@ service key-role-based read collection async-false at schema  # schema-list-igno
 service key-role-based-super-admin read collection async-false at schema  # schema-list-ignores-rules
 service user-partial read collection async-false at schema  # schema-list-ignores-rules
 service key-partial read collection async-false at schema  # schema-list-ignores-rules
-service visitor read collection other-operation at direct  # visitor-public-default
-service visitor read collection other-operation at website  # visitor-public-default
-service visitor read collection other-operation at service  # visitor-public-default
 service custom-role read collection role-name at schema  # schema-list-ignores-rules
 service key-role-based read collection role-name at schema  # schema-list-ignores-rules
 service key-role-based-super-admin read collection role-name at schema  # schema-list-ignores-rules
@@ -121,54 +104,32 @@ service key-role-based read collection principal-kind at schema  # schema-list-i
 service key-role-based-super-admin read collection principal-kind at schema  # schema-list-ignores-rules
 service user-partial read collection principal-kind at schema  # schema-list-ignores-rules
 service key-partial read collection principal-kind at schema  # schema-list-ignores-rules
-service visitor read single none at direct  # visitor-public-default
-service visitor read single true at direct  # visitor-public-default
-service visitor read single returns-true at direct  # visitor-public-default
-service visitor read single async-true at direct  # visitor-public-default
-service visitor read single other-operation at direct  # visitor-public-default
-service visitor read related none at population  # visitor-public-default, visitor-keeps-media
-service visitor read related true at population  # visitor-public-default, visitor-keeps-media
-service visitor read related returns-true at population  # visitor-public-default, visitor-keeps-media
-service visitor read related async-true at population  # visitor-public-default, visitor-keeps-media
-service visitor read related other-operation at population  # visitor-public-default, visitor-keeps-media
-service visitor read related returns-filter at population  # visitor-public-default, visitor-keeps-media
-service visitor read related async-filter at population  # visitor-public-default, visitor-keeps-media
-service visitor read media none at population  # visitor-public-default, visitor-keeps-media
-service principal read media none at population  # visitor-keeps-media
-service principal-other read media none at population  # visitor-keeps-media
-no-service visitor read collection none at direct  # visitor-public-default
 no-service user-with read collection none at can  # can-no-service-refuses-people
 no-service user-with read collection none at entity  # no-service
 no-service user-with read collection none at capabilities  # no-service
-no-service visitor read collection returns-true at direct  # visitor-public-default
 no-service user-with read collection returns-true at can  # can-no-service-refuses-people
 no-service user-with read collection returns-true at entity  # no-service
 no-service user-with read collection returns-true at capabilities  # no-service
-no-service visitor read collection returns-false at direct  # visitor-public-default
 no-service user-with read collection returns-false at rest
 no-service user-with read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at rest
 no-service key-role-based read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at can  # no-service
 no-service key-role-based read collection returns-false at entity  # no-service
-no-service visitor read collection returns-null at direct  # visitor-public-default
 no-service user-with read collection returns-null at rest
 no-service user-with read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at rest
 no-service key-role-based read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at can  # no-service
 no-service key-role-based read collection returns-null at entity  # no-service
-no-service visitor read single none at direct  # visitor-public-default
 no-service user-with read single none at can  # can-no-service-refuses-people
 no-service user-with read single none at entity  # no-service
 no-service user-with read single none at capabilities  # no-service
 no-service user-without read single none at direct  # no-service
-no-service visitor read single returns-true at direct  # visitor-public-default
 no-service user-with read single returns-true at can  # can-no-service-refuses-people
 no-service user-with read single returns-true at entity  # no-service
 no-service user-with read single returns-true at capabilities  # no-service
 no-service user-without read single returns-true at direct  # no-service
-no-service visitor read single returns-false at direct  # visitor-public-default
 no-service user-with read single returns-false at rest
 no-service user-with read single returns-false at direct  # no-service
 no-service user-without read single returns-false at direct  # no-service
@@ -176,7 +137,6 @@ no-service key-role-based read single returns-false at rest
 no-service key-role-based read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at can  # no-service
 no-service key-role-based read single returns-false at entity  # no-service
-no-service visitor read single returns-null at direct  # visitor-public-default
 no-service user-with read single returns-null at rest
 no-service user-with read single returns-null at direct  # no-service
 no-service user-without read single returns-null at direct  # no-service
@@ -184,12 +144,8 @@ no-service key-role-based read single returns-null at rest
 no-service key-role-based read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at can  # no-service
 no-service key-role-based read single returns-null at entity  # no-service
-no-service visitor read related none at population  # visitor-public-default, no-service, visitor-keeps-media
-no-service visitor read related returns-true at population  # visitor-public-default, no-service, visitor-keeps-media
-no-service visitor read related returns-false at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service user-with read related returns-false at population  # no-service
 no-service key-role-based read related returns-false at population  # no-service
-no-service visitor read related returns-null at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service user-with read related returns-null at population  # no-service
 no-service key-role-based read related returns-null at population  # no-service
 service user-with read collection async-throws at schema  # schema-list-ignores-rules
@@ -201,52 +157,14 @@ service key-role-based read collection async-throws at schema  # schema-list-ign
 service key-role-based-super-admin read collection async-throws at schema  # schema-list-ignores-rules
 service user-partial read collection async-throws at schema  # schema-list-ignores-rules
 service key-partial read collection async-throws at schema  # schema-list-ignores-rules
-service visitor list collection none at direct  # visitor-public-default
-service visitor list collection none at service  # visitor-public-default
-service visitor count collection none at direct  # visitor-public-default
-service visitor count collection none at service  # visitor-public-default
-service visitor list collection true at direct  # visitor-public-default
-service visitor list collection true at service  # visitor-public-default
-service visitor count collection true at direct  # visitor-public-default
-service visitor count collection true at service  # visitor-public-default
-service visitor list collection returns-true at direct  # visitor-public-default
-service visitor list collection returns-true at service  # visitor-public-default
-service visitor count collection returns-true at direct  # visitor-public-default
-service visitor count collection returns-true at service  # visitor-public-default
-service visitor list collection async-true at direct  # visitor-public-default
-service visitor list collection async-true at service  # visitor-public-default
-service visitor count collection async-true at direct  # visitor-public-default
-service visitor count collection async-true at service  # visitor-public-default
-service visitor list collection other-operation at direct  # visitor-public-default
-service visitor list collection other-operation at service  # visitor-public-default
-service visitor count collection other-operation at direct  # visitor-public-default
-service visitor count collection other-operation at service  # visitor-public-default
 service custom-role read collection user-is-key-maker at schema  # schema-list-ignores-rules
 service user-partial read collection user-is-key-maker at schema  # schema-list-ignores-rules
-service visitor read collection publish-false at direct  # visitor-public-default
-service visitor read collection publish-false at website  # visitor-public-default
-service visitor read collection publish-false at service  # visitor-public-default
-service visitor list collection publish-false at direct  # visitor-public-default
-service visitor list collection publish-false at service  # visitor-public-default
-service visitor count collection publish-false at direct  # visitor-public-default
-service visitor count collection publish-false at service  # visitor-public-default
-service visitor read single publish-false at direct  # visitor-public-default
-service visitor read related publish-false at population  # visitor-public-default, visitor-keeps-media
 
 # Readers handed a caller: a scope without its permission rows, a Direct API
 # user naming a role it does not hold, reads without the service of media
 # and users, and a trusted read bounded to its own collection.
 no-service user-with read media none at population  # no-service
 no-service user-with read media none at system  # no-service
-no-service visitor read media none at population  # visitor-public-default, no-service, visitor-keeps-media
-bound visitor read related async-true at population  # visitor-public-default
-bound visitor read related none at population  # visitor-public-default
-bound visitor read related other-operation at population  # visitor-public-default
-bound visitor read related publish-false at population  # visitor-public-default
-bound visitor read related returns-true at population  # visitor-public-default
-bound visitor read related returns-filter at population  # visitor-public-default
-bound visitor read related async-filter at population  # visitor-public-default
-bound visitor read related true at population  # visitor-public-default
 service key-read-only read collection false at widget  # holds-permission-key-skips-rules
 service key-read-only-super-admin read collection user-is-key-maker at widget  # holds-permission-key-skips-rules
 service key-read-only-super-admin read collection role-name at widget  # holds-permission-key-skips-rules
@@ -725,27 +643,6 @@ no-service key-role-based read single returns-null at capabilities  # no-service
 # A visitor's write, allowed only by a rule that answers `true`: with no
 # rule naming the write, the visitor is refused, as the one decision refuses
 # it, so only the rules that say `true` remain here.
-service visitor create collection true at direct  # visitor-write-by-rule
-service visitor create collection true at service  # visitor-write-by-rule
-service visitor update collection true at direct  # visitor-write-by-rule
-service visitor update collection true at service  # visitor-write-by-rule
-service visitor delete collection true at direct  # visitor-write-by-rule
-service visitor delete collection true at service  # visitor-write-by-rule
-service visitor update single true at direct  # visitor-write-by-rule
-service visitor create collection returns-true at direct  # visitor-write-by-rule
-service visitor create collection returns-true at service  # visitor-write-by-rule
-service visitor update collection returns-true at direct  # visitor-write-by-rule
-service visitor update collection returns-true at service  # visitor-write-by-rule
-service visitor delete collection returns-true at direct  # visitor-write-by-rule
-service visitor delete collection returns-true at service  # visitor-write-by-rule
-service visitor update single returns-true at direct  # visitor-write-by-rule
-service visitor create collection async-true at direct  # visitor-write-by-rule
-service visitor create collection async-true at service  # visitor-write-by-rule
-service visitor update collection async-true at direct  # visitor-write-by-rule
-service visitor update collection async-true at service  # visitor-write-by-rule
-service visitor delete collection async-true at direct  # visitor-write-by-rule
-service visitor delete collection async-true at service  # visitor-write-by-rule
-service visitor update single async-true at direct  # visitor-write-by-rule
 
 # A rule that answers with a filter, where its one answer is a refusal as
 # `returns-string`'s is (any write, and any filter that is not well formed),
@@ -754,20 +651,6 @@ service visitor update single async-true at direct  # visitor-write-by-rule
 service key-full-access create collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-role-based create collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-role-based-super-admin create collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-full-access update collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based update collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin update collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-partial update collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-full-access delete collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based delete collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin delete collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-full-access publish collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based publish collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin publish collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-partial publish collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-full-access unpublish collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based unpublish collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin unpublish collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-read-only read single returns-filter at widget  # holds-permission-key-skips-rules
 service key-read-only-super-admin read single returns-filter at widget  # holds-permission-key-skips-rules
 service key-full-access read single returns-filter at widget  # holds-permission-key-skips-rules
@@ -788,20 +671,6 @@ service key-role-based-super-admin unpublish single-pub returns-filter at widget
 service key-full-access create collection async-filter at widget  # holds-permission-key-skips-rules
 service key-role-based create collection async-filter at widget  # holds-permission-key-skips-rules
 service key-role-based-super-admin create collection async-filter at widget  # holds-permission-key-skips-rules
-service key-full-access update collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based update collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin update collection async-filter at widget  # holds-permission-key-skips-rules
-service key-partial update collection async-filter at widget  # holds-permission-key-skips-rules
-service key-full-access delete collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based delete collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin delete collection async-filter at widget  # holds-permission-key-skips-rules
-service key-full-access publish collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based publish collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin publish collection async-filter at widget  # holds-permission-key-skips-rules
-service key-partial publish collection async-filter at widget  # holds-permission-key-skips-rules
-service key-full-access unpublish collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based unpublish collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin unpublish collection async-filter at widget  # holds-permission-key-skips-rules
 service key-read-only read single async-filter at widget  # holds-permission-key-skips-rules
 service key-read-only-super-admin read single async-filter at widget  # holds-permission-key-skips-rules
 service key-full-access read single async-filter at widget  # holds-permission-key-skips-rules
@@ -920,8 +789,6 @@ service key-role-based-super-admin unpublish single-pub malformed-filter at widg
 
 # With no access-control service, a filter's cells are the same as
 # `returns-false`'s: the fallbacks that read no rule disagree there.
-no-service visitor read collection returns-filter at direct  # visitor-public-default
-no-service visitor read single returns-filter at direct  # visitor-public-default
 no-service user-with read single returns-filter at rest
 no-service user-with read single returns-filter at direct  # no-service
 no-service user-without read single returns-filter at direct  # no-service
@@ -929,11 +796,8 @@ no-service key-role-based read single returns-filter at rest
 no-service key-role-based read single returns-filter at direct  # no-service
 no-service key-role-based read single returns-filter at can  # no-service
 no-service key-role-based read single returns-filter at entity  # no-service
-no-service visitor read related returns-filter at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service key-role-based read single returns-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single returns-filter at capabilities  # no-service
-no-service visitor read collection async-filter at direct  # visitor-public-default
-no-service visitor read single async-filter at direct  # visitor-public-default
 no-service user-with read single async-filter at rest
 no-service user-with read single async-filter at direct  # no-service
 no-service user-without read single async-filter at direct  # no-service
@@ -941,17 +805,14 @@ no-service key-role-based read single async-filter at rest
 no-service key-role-based read single async-filter at direct  # no-service
 no-service key-role-based read single async-filter at can  # no-service
 no-service key-role-based read single async-filter at entity  # no-service
-no-service visitor read related async-filter at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service key-role-based read single async-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single async-filter at capabilities  # no-service
-no-service visitor read collection returns-empty-in at direct  # visitor-public-default
 no-service user-with read collection returns-empty-in at rest
 no-service user-with read collection returns-empty-in at direct  # no-service
 no-service key-role-based read collection returns-empty-in at rest
 no-service key-role-based read collection returns-empty-in at direct  # no-service
 no-service key-role-based read collection returns-empty-in at can  # no-service
 no-service key-role-based read collection returns-empty-in at entity  # no-service
-no-service visitor read single returns-empty-in at direct  # visitor-public-default
 no-service user-with read single returns-empty-in at rest
 no-service user-with read single returns-empty-in at direct  # no-service
 no-service user-without read single returns-empty-in at direct  # no-service
@@ -959,21 +820,18 @@ no-service key-role-based read single returns-empty-in at rest
 no-service key-role-based read single returns-empty-in at direct  # no-service
 no-service key-role-based read single returns-empty-in at can  # no-service
 no-service key-role-based read single returns-empty-in at entity  # no-service
-no-service visitor read related returns-empty-in at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service user-with read related returns-empty-in at population  # no-service
 no-service key-role-based read related returns-empty-in at population  # no-service
 no-service key-role-based read collection returns-empty-in at widget  # holds-permission-key-skips-rules
 no-service key-role-based read collection returns-empty-in at capabilities  # no-service
 no-service key-role-based read single returns-empty-in at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single returns-empty-in at capabilities  # no-service
-no-service visitor read collection malformed-filter at direct  # visitor-public-default
 no-service user-with read collection malformed-filter at rest
 no-service user-with read collection malformed-filter at direct  # no-service
 no-service key-role-based read collection malformed-filter at rest
 no-service key-role-based read collection malformed-filter at direct  # no-service
 no-service key-role-based read collection malformed-filter at can  # no-service
 no-service key-role-based read collection malformed-filter at entity  # no-service
-no-service visitor read single malformed-filter at direct  # visitor-public-default
 no-service user-with read single malformed-filter at rest
 no-service user-with read single malformed-filter at direct  # no-service
 no-service user-without read single malformed-filter at direct  # no-service
@@ -981,7 +839,6 @@ no-service key-role-based read single malformed-filter at rest
 no-service key-role-based read single malformed-filter at direct  # no-service
 no-service key-role-based read single malformed-filter at can  # no-service
 no-service key-role-based read single malformed-filter at entity  # no-service
-no-service visitor read related malformed-filter at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service user-with read related malformed-filter at population  # no-service
 no-service key-role-based read related malformed-filter at population  # no-service
 no-service key-role-based read collection malformed-filter at widget  # holds-permission-key-skips-rules
@@ -989,6 +846,9 @@ no-service key-role-based read collection malformed-filter at capabilities  # no
 no-service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single malformed-filter at capabilities  # no-service
 
+# rest-refuses-visitors: REST's media routes refuse a visitor before they ask the Public role's read-media.
+service visitor read media none at rest
+public visitor read media none at rest
 # A collection's read rule that answers a well-formed filter allows the
 # entries it matches. Each door below refuses it still, as no read there
 # applies a rule's filter yet.
@@ -1028,17 +888,65 @@ service user-with read collection returns-filter at route  # filter-not-applied
 # A visitor whose collection read rule answers a well-formed filter is shown
 # the entries it matches, as the public default shows every entry to a rule
 # answering `true`.
-service visitor count collection async-filter at direct  # visitor-public-default
-service visitor count collection async-filter at service  # visitor-public-default
-service visitor count collection returns-filter at direct  # visitor-public-default
-service visitor count collection returns-filter at service  # visitor-public-default
-service visitor list collection async-filter at direct  # visitor-public-default
-service visitor list collection async-filter at service  # visitor-public-default
-service visitor list collection returns-filter at direct  # visitor-public-default
-service visitor list collection returns-filter at service  # visitor-public-default
-service visitor read collection async-filter at website  # visitor-public-default
-service visitor read collection returns-filter at website  # visitor-public-default
-service visitor read collection async-filter at direct  # visitor-public-default
-service visitor read collection async-filter at service  # visitor-public-default
-service visitor read collection returns-filter at direct  # visitor-public-default
-service visitor read collection returns-filter at service  # visitor-public-default
+service custom-role delete collection async-filter at route  # filter-not-applied
+service custom-role delete collection returns-filter at route  # filter-not-applied
+service key-full-access delete collection async-filter at route  # filter-not-applied
+service key-full-access delete collection returns-filter at route  # filter-not-applied
+service key-role-based delete collection async-filter at route  # filter-not-applied
+service key-role-based delete collection returns-filter at route  # filter-not-applied
+service key-role-based-super-admin delete collection async-filter at route  # filter-not-applied
+service key-role-based-super-admin delete collection returns-filter at route  # filter-not-applied
+service user-with delete collection async-filter at route  # filter-not-applied
+service user-with delete collection returns-filter at route  # filter-not-applied
+service custom-role update collection async-filter at lock  # filter-not-applied
+service custom-role update collection async-filter at route  # filter-not-applied
+service custom-role update collection returns-filter at lock  # filter-not-applied
+service custom-role update collection returns-filter at route  # filter-not-applied
+service custom-role publish collection async-filter at route  # filter-not-applied
+service custom-role publish collection returns-filter at route  # filter-not-applied
+service custom-role unpublish collection async-filter at route  # filter-not-applied
+service custom-role unpublish collection returns-filter at route  # filter-not-applied
+service key-full-access update collection async-filter at lock  # filter-not-applied
+service key-full-access update collection async-filter at route  # filter-not-applied
+service key-full-access update collection returns-filter at lock  # filter-not-applied
+service key-full-access update collection returns-filter at route  # filter-not-applied
+service key-full-access publish collection async-filter at route  # filter-not-applied
+service key-full-access publish collection returns-filter at route  # filter-not-applied
+service key-full-access unpublish collection async-filter at route  # filter-not-applied
+service key-full-access unpublish collection returns-filter at route  # filter-not-applied
+service key-partial update collection async-filter at lock  # filter-not-applied
+service key-partial update collection async-filter at route  # filter-not-applied
+service key-partial update collection returns-filter at lock  # filter-not-applied
+service key-partial update collection returns-filter at route  # filter-not-applied
+service key-partial publish collection async-filter at route  # filter-not-applied
+service key-partial publish collection returns-filter at route  # filter-not-applied
+service key-role-based update collection async-filter at lock  # filter-not-applied
+service key-role-based update collection async-filter at route  # filter-not-applied
+service key-role-based update collection returns-filter at lock  # filter-not-applied
+service key-role-based update collection returns-filter at route  # filter-not-applied
+service key-role-based publish collection async-filter at route  # filter-not-applied
+service key-role-based publish collection returns-filter at route  # filter-not-applied
+service key-role-based unpublish collection async-filter at route  # filter-not-applied
+service key-role-based unpublish collection returns-filter at route  # filter-not-applied
+service key-role-based-super-admin update collection async-filter at lock  # filter-not-applied
+service key-role-based-super-admin update collection async-filter at route  # filter-not-applied
+service key-role-based-super-admin update collection returns-filter at lock  # filter-not-applied
+service key-role-based-super-admin update collection returns-filter at route  # filter-not-applied
+service key-role-based-super-admin publish collection async-filter at route  # filter-not-applied
+service key-role-based-super-admin publish collection returns-filter at route  # filter-not-applied
+service key-role-based-super-admin unpublish collection async-filter at route  # filter-not-applied
+service key-role-based-super-admin unpublish collection returns-filter at route  # filter-not-applied
+service user-partial update collection async-filter at lock  # filter-not-applied
+service user-partial update collection async-filter at route  # filter-not-applied
+service user-partial update collection returns-filter at lock  # filter-not-applied
+service user-partial update collection returns-filter at route  # filter-not-applied
+service user-partial publish collection async-filter at route  # filter-not-applied
+service user-partial publish collection returns-filter at route  # filter-not-applied
+service user-with update collection async-filter at lock  # filter-not-applied
+service user-with update collection async-filter at route  # filter-not-applied
+service user-with update collection returns-filter at lock  # filter-not-applied
+service user-with update collection returns-filter at route  # filter-not-applied
+service user-with publish collection async-filter at route  # filter-not-applied
+service user-with publish collection returns-filter at route  # filter-not-applied
+service user-with unpublish collection async-filter at route  # filter-not-applied
+service user-with unpublish collection returns-filter at route  # filter-not-applied

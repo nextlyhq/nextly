@@ -13,7 +13,14 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useMemo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -39,6 +46,8 @@ import {
   type DeleteOutcome,
   type SubmitOutcome,
 } from "./submit-outcome";
+import type { DocumentActionOutcome } from "./useDocumentActionBindings";
+import { useRefusedForm } from "./useRefusedForm";
 
 // ============================================================================
 // Types
@@ -168,6 +177,26 @@ export interface UseEntryFormOptions {
    * collection's split when unset — the full-page editor's read mode.
    */
   readDraft?: boolean;
+  /**
+   * Whether the host holds the document's writes now (it is someone else's,
+   * or a past version is on screen). Asked immediately before every write:
+   * a save's, after its validation, and a refused publish's recovery's.
+   * Absent, writes are never held.
+   */
+  writesHeld?: () => boolean;
+  /**
+   * The host's Save of the pending change that never publishes, as its Save
+   * control runs it, for a refused publish's recovery to store the form with.
+   */
+  saveWithoutPublishing?: RefObject<
+    (() => Promise<DocumentActionOutcome>) | undefined
+  >;
+  /**
+   * Hears a refused publish's recovery start the form afresh, its take
+   * written: a write to the pending change, as a save is, after the save it
+   * ran first.
+   */
+  onRecovered?: () => void;
 }
 
 /**
@@ -311,6 +340,11 @@ export interface UseEntryFormReturn {
   handleCancel: () => void;
   /** Whether form is currently submitting */
   isSubmitting: boolean;
+  /**
+   * Whether a refused publish's recovery is running, through to its reloaded
+   * entry: the fields are read-only meanwhile.
+   */
+  recovering: boolean;
   /** Whether entry is being deleted */
   isDeleting: boolean;
   /** Whether form has unsaved changes */
@@ -458,6 +492,63 @@ function storedAfterSave(
   return holdsPlaceholders(fields, sent) ? sent : getDefaultValues(fields, row);
 }
 
+/** A host that holds nothing: writes are never held. */
+const writesNeverHeld = () => false;
+/** A host with no Save to offer a recovery. */
+const noSaveWithoutPublishing: RefObject<undefined> = { current: undefined };
+
+/**
+ * The entry form's write gate, declared once with its refused publish's way
+ * out: the latch every submission takes, and the recovery that takes it too.
+ *
+ * The latch is the synchronous half of the submit guard. `isSubmitting` is
+ * render state: it publishes one render behind the mutation, so two
+ * submissions in the same turn both read false and both write — two identical
+ * creates. The latch is set the moment the first submission enters and
+ * released when it settles, closing that gap.
+ *
+ * The recovery reads its gate when it runs, so it starts the form afresh from
+ * the defaults of the render then on screen, which carry the reloaded entry.
+ *
+ * Which entry, in which language, is on screen, as a submission asks once it
+ * is about to write: it started in one, and the form may hold another's
+ * values by then.
+ */
+function useEntryWriteGate(gate: {
+  form: UseFormReturn<Record<string, unknown>>;
+  defaultValues: Record<string, unknown>;
+  collection: string;
+  entry: EntryData | null;
+  locale: string | undefined;
+  writesHeld: () => boolean;
+  saveWithoutPublishing: RefObject<
+    (() => Promise<DocumentActionOutcome>) | undefined
+  >;
+  onRecovered: (() => void) | undefined;
+}) {
+  const submissionLatch = useRef(false);
+  const scope = JSON.stringify([
+    gate.collection,
+    gate.entry?.id ?? null,
+    gate.locale ?? null,
+  ]);
+  // A new visit each time the scope changes, so going away and coming back
+  // is a move too: the form started afresh from cached values in between.
+  const scopeNow = useRef({ scope });
+  if (scopeNow.current.scope !== scope) scopeNow.current = { scope };
+  const { refusedForm, recovering } = useRefusedForm({
+    scope,
+    writesHeld: gate.writesHeld,
+    latch: submissionLatch,
+    saveWithoutPublishing: gate.saveWithoutPublishing,
+    resetToDocument: () => {
+      gate.form.reset(gate.defaultValues);
+      gate.onRecovered?.();
+    },
+  });
+  return { submissionLatch, scopeNow, refusedForm, recovering };
+}
+
 export function useEntryForm({
   collection,
   entry = null,
@@ -468,6 +559,9 @@ export function useEntryForm({
   onCancel,
   locale,
   readDraft,
+  writesHeld = writesNeverHeld,
+  saveWithoutPublishing = noSaveWithoutPublishing,
+  onRecovered,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -536,6 +630,21 @@ export function useEntryForm({
   const ownSave = useRef<{ inFlight: boolean; storedVersion?: string }>({
     inFlight: false,
   });
+
+  // The submit guard's synchronous half, and the form as a refused publish's
+  // way out reaches it, which takes the same latch.
+  const { submissionLatch, scopeNow, refusedForm, recovering } =
+    useEntryWriteGate({
+      form,
+      defaultValues,
+      collection: collection.name,
+      entry,
+      locale,
+      writesHeld,
+      saveWithoutPublishing,
+      onRecovered,
+    });
+
   useEffect(() => {
     if (!entry || mode !== "edit") return;
     const next = entryIdentity(entry, locale, readDraft);
@@ -573,6 +682,7 @@ export function useEntryForm({
     // editor's mode (the working-draft overlay for a drafts collection).
     draft: readDraft ?? collection.draftsEnabled === true,
     translationStatus: asksTranslationStatus,
+    refusedForm,
   });
 
   // Password fields submit "" to mean "keep the stored hash", so they are
@@ -609,14 +719,8 @@ export function useEntryForm({
     discardMutation.isPending ||
     awaitingEntry;
 
-  //
-  // The synchronous half of the same guard. `isSubmitting` is render state:
-  // it publishes one render behind the mutation, so two submissions in the
-  // same turn both read false and both write — two identical creates. The
-  // latch is set the moment the first submission enters and released when it
-  // settles, closing that gap.
-  //
-  const submissionLatch = useRef(false);
+  // The synchronous half of the same guard: `submissionLatch`, declared above
+  // because a refused publish's recovery takes it too.
 
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape (see EntryFormIntent). Without an intent,
@@ -637,10 +741,17 @@ export function useEntryForm({
       submissionLatch.current = true;
       // The saved row, for `onSuccess` once the form has taken it in.
       let savedRow: EntryData | undefined;
+      // The entry and language this submission is for.
+      const startedIn = scopeNow.current;
       try {
         const outcome = await submitDocument({
           form,
           event: e,
+          // Asked again once validation is done, immediately before the
+          // write: the document can change hands while it runs.
+          mayWrite: () => !writesHeld(),
+          // And the editor can move to another entry or language.
+          stillShown: () => scopeNow.current === startedIn,
           // Why: intent → payload mapping is the core PR-3 bug fix —
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
@@ -706,6 +817,9 @@ export function useEntryForm({
       onError,
       blankPasswordFields,
       fields,
+      writesHeld,
+      submissionLatch,
+      scopeNow,
     ]
   );
 
@@ -736,7 +850,15 @@ export function useEntryForm({
         submissionLatch.current = false;
       }
     },
-    [mode, entry?.id, updateMutation, isSubmitting, onSuccess, onError]
+    [
+      mode,
+      entry?.id,
+      updateMutation,
+      isSubmitting,
+      onSuccess,
+      onError,
+      submissionLatch,
+    ]
   );
 
   // Delete handler. Resolves once the delete has been answered, with what it
@@ -802,7 +924,16 @@ export function useEntryForm({
     } finally {
       submissionLatch.current = false;
     }
-  }, [isSubmitting, mode, entry?.id, discardMutation, form, fields, onError]);
+  }, [
+    isSubmitting,
+    mode,
+    entry?.id,
+    discardMutation,
+    form,
+    fields,
+    onError,
+    submissionLatch,
+  ]);
 
   // Cancel handler
   const handleCancel = useCallback(() => {
@@ -819,6 +950,7 @@ export function useEntryForm({
     handleDiscardWorkingDraft: () => handleDiscardWorkingDraft(),
     handleCancel,
     isSubmitting,
+    recovering,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
     mode,

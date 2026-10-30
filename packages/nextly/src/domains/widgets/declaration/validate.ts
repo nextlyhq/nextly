@@ -38,6 +38,7 @@ import {
 } from "./displays";
 import { isPermissionName } from "./permission-name";
 import { quote } from "./quote";
+import { isWidgetSkeleton, WIDGET_SKELETON_SKETCH } from "./skeleton";
 import { transportableProblem } from "./transportable";
 
 /** One thing wrong with one declaration, said where an author reads it. */
@@ -87,6 +88,7 @@ const FIELDS = new Set([
   "shows",
   "several",
   "hidesWhenEmpty",
+  "skeleton",
   "settings",
   "load",
   "view",
@@ -190,6 +192,10 @@ const CHECKS: readonly ((
     d.hidesWhenEmpty === undefined || typeof d.hidesWhenEmpty === "boolean"
       ? undefined
       : "hidesWhenEmpty must be true or false",
+  d =>
+    d.skeleton === undefined || isWidgetSkeleton(d.skeleton)
+      ? undefined
+      : `skeleton must be one of ${Object.keys(WIDGET_SKELETON_SKETCH).join(", ")}, got ${quote(d.skeleton)}`,
   d => settingsProblems(d.settings),
   d => loadProblem(d.load),
   d => viewProblem(d.view),

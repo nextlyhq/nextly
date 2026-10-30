@@ -35,7 +35,7 @@ async function getSingleRegistry(): Promise<SingleRegistryService> {
 /**
  * GET handler for listing Singles with pagination and filters.
  *
- * Requires `read-settings` (`manage-settings` counts as it) — this lists
+ * Requires `read-settings` — this lists
  * Single definitions (builder surface), not their published content.
  *
  * Query Parameters:

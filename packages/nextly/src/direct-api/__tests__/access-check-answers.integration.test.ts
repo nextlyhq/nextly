@@ -158,7 +158,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("a write whose rule answers a filter is refused", async () => {
-      // A write applies no rule's filter, so a filter does not allow it.
+      // A yes or no names no entry and applies no filter, so a write rule's
+      // filter does not allow it.
       expect(await check("acchk-ruled-writer", "update", RULE_FILTER)).toBe(
         false
       );
@@ -191,14 +192,14 @@ describe.each(getConfiguredTestDialects())(
       expect(await check("acchk-reader", "read", "settings")).toBe(true);
     });
 
-    it("manage-settings alone may update settings, while the bridge stands", async () => {
-      // `manage-settings` counts as the plain four on settings, as every route
-      // gate counts it until the bridge is retired.
+    it("manage-settings alone gives neither update nor read on settings", async () => {
+      // `manage-settings` is retired and counts as no plain permission, as at
+      // every route gate: `nextly upgrade` converts a role still holding it.
       expect(await check("acchk-settings-manager", "update", "settings")).toBe(
-        true
+        false
       );
       expect(await check("acchk-settings-manager", "read", "settings")).toBe(
-        true
+        false
       );
     });
   }
