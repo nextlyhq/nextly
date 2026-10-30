@@ -27,7 +27,13 @@ import {
 import { codeAccessAllows } from "../code-access";
 import { readAccessCaller } from "../entity-read-access";
 
-import { holdsPermission, isSuperAdmin, type Actor } from "./actor";
+import {
+  holdsPermission,
+  isSuperAdmin,
+  visitorActor,
+  type Actor,
+  type VisitorActor,
+} from "./actor";
 import { declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
@@ -37,7 +43,7 @@ import {
   actorForPrincipal,
   actorForScope,
   actorForUserFailingClosed,
-  actorForVisitor,
+  actorForVisitorFailingClosed,
   userHoldsPermission,
 } from "./resolve-actor";
 import { readOf, type FilteredRead } from "./rule-answer";
@@ -50,6 +56,12 @@ export interface RelatedRowCaller {
   readonly scope?: AuthenticatedScope;
   /** A plugin's signed-in person, when the read is made as one. */
   readonly principal: Principal | null;
+  /**
+   * Without the access-control service, the visitor as the reading service's
+   * own database records the Public role, as its direct gate reads it;
+   * absent, the process's.
+   */
+  readonly visitorWithoutService?: () => Promise<VisitorActor>;
 }
 
 /**
@@ -74,29 +86,19 @@ function keyActorOf(
 /** Population's answer for a visitor. */
 async function visitorReads(
   target: AccessTarget,
-  rbac: RBACAccessControlService | undefined
+  own: RelatedRowCaller["visitorWithoutService"]
 ): Promise<FilteredRead> {
-  const visitor = actorForVisitor();
-  // A visitor is judged by the target's read rule alone: no rule, or one
-  // answering `true`, admits them, a filter admits them to the rows it
-  // matches, and a rule that throws refuses. Without the service nothing is
-  // asked, and the visitor is admitted.
-  if (!rbac) {
-    return readOf(
-      await deviate("no-service", true, () => decided(visitor, target))
-    );
-  }
-  const read = await rbac.checkAnonymousCodeAccessApplyingFilter({
-    operation: "read",
-    resource: target.slug,
-  });
-  // Any answer but a refusal shows the visitor some rows, by the public
-  // default, where the decision reads the Public role's permissions.
-  const today = read === undefined || read.allowed || read.filter !== undefined;
-  const kept = await deviate("visitor-public-default", today, () =>
-    decided(visitor, target)
-  );
-  return read?.filter !== undefined ? read : readOf(kept);
+  // A failed read of Public's grants withholds the row rather than failing
+  // the read, as a user's failed lookup does here.
+  const visitor = own
+    ? await own().catch(() => visitorActor())
+    : await actorForVisitorFailingClosed();
+  // The decision, with or without the service: the Public role's read, then
+  // the read rule. Without the service no rule is registered, so Public's
+  // read decides, as it does for the visitor's direct read. A rule answering
+  // a filter hands it back, and population reads only the rows it matches,
+  // as for a user or a key.
+  return filteredRead(visitor, target);
 }
 
 /** Population's answer for an API key. */
@@ -185,9 +187,10 @@ export async function relatedRowReads(
 ): Promise<FilteredRead> {
   // What the service registers now; without one, the rules the app declared
   // stand in, which no answer kept without the service reads.
+  const undeclared: AccessTarget = { kind: "collection", slug };
   const target = rbac
-    ? (rbac.getRegisteredTarget(slug) ?? { kind: "collection" as const, slug })
-    : targetAsDeclared({ kind: "collection", slug });
+    ? (rbac.getRegisteredTarget(slug) ?? undeclared)
+    : targetAsDeclared(undeclared);
   const scope = caller.scope?.actorType === "apiKey" ? caller.scope : undefined;
   // A plugin's person is judged first, as the person, whatever user the read
   // also names; a user is judged by the roles their lookup finds, never by
@@ -205,7 +208,15 @@ export async function relatedRowReads(
   }
   // A read with no user is a visitor's, a key scope included, as it was
   // before: no door populates for a key without naming the user it acts for.
-  if (!caller.user) return visitorReads(target, rbac);
+  // Without the service a visitor is judged as its direct read is, by the
+  // Public role's read alone: that gate has no rule registered, so a rule the
+  // process declared for the slug, perhaps for another instance, is neither
+  // asked nor run here.
+  if (!caller.user) {
+    return rbac
+      ? visitorReads(target, undefined)
+      : visitorReads(undeclared, caller.visitorWithoutService);
+  }
   if (scope) return keyReads(target, scope, caller.user, rbac);
   return userReads(target, caller.user.id, rbac);
 }

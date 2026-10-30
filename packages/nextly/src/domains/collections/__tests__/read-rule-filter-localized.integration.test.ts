@@ -20,6 +20,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import {
   date,
   defineCollection,
@@ -56,6 +57,9 @@ afterEach(async () => {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    // The cases read as a visitor, judged by the Public role a real boot
+    // makes, which reads each target whose rule answers `true`.
+    seedPublic: true,
     localization: { locales: ["en", "fr"], defaultLocale: "en" },
     collections: [
       defineCollection({
@@ -101,6 +105,9 @@ async function boot(): Promise<TestNextly> {
       }),
     ],
   });
+  // Granted as a site admin would: these rules answer a filter, so boot
+  // grants Public no read of them, and the filter decides what is shown.
+  await grantPublic(current, [`read-${EVENTS}`, `read-${NOTES}`]);
   return current;
 }
 
