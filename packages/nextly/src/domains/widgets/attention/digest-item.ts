@@ -12,8 +12,11 @@
 /** How urgent an item is: critical items rank before every warning. */
 export type AttentionSeverity = "critical" | "warning";
 
-/** What an item counts: a core release kind, or a plugin's item. */
-export type AttentionDigestKind = "stopped" | "overdue" | "plugin";
+/**
+ * What an item counts: a core release kind, a system problem System health
+ * reports, or a plugin's item.
+ */
+export type AttentionDigestKind = "stopped" | "overdue" | "system" | "plugin";
 
 /** One item of the digest, as the card, the header and any inbox read it. */
 export interface AttentionDigestItem {
