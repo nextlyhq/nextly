@@ -72,6 +72,8 @@ beforeEach(() => {
   } as unknown as ReturnType<typeof getCollectionRegistryFromDI>);
   vi.mocked(getComponentRegistryFromDI).mockReturnValue({
     getComponent: vi.fn().mockResolvedValue(lockedComponent),
+    // A schema save reads the component as stored, past the registry row cache.
+    getComponentForWrite: vi.fn().mockResolvedValue(lockedComponent),
   } as unknown as ReturnType<typeof getComponentRegistryFromDI>);
 });
 

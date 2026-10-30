@@ -1230,39 +1230,9 @@ export class SingleQueryService extends BaseService {
       // reusing the row an access decision loaded before them: a `beforeRead`
       // hook may write, and a response built from the earlier snapshot would
       // report values the read no longer finds.
-      // A translated Single takes its translations in the same query as its document, once its
-      // translations table is there to join to: one round trip where reading them after it took
-      // two. Read through the Single's own registered table, as the adapter reads its document.
-      const joinable = await this.joinableTranslations(
-        slug,
-        singleMeta,
-        options.locale,
-        options.fallbackLocale
-      );
-      let translations: JoinedTranslations | undefined;
-      let doc: SingleDocument | null;
-      if (joinable) {
-        // As the translations read it stands for fails: the database's own message, which names
-        // the translations table and its columns, never reaches the answer.
-        const joined = await selectEntryWithCompanion({
-          db: this.adapter.getDrizzle(),
-          mainTable: joinable.mainTable,
-          where: undefined,
-          companionTable: joinable.companion.table,
-          localeChain: joinable.localeChain,
-        }).catch((error: unknown) => {
-          throw translationLoadFailure(slug, error);
-        });
-        doc = (joined.entry as SingleDocument | undefined) ?? null;
-        if (doc) {
-          translations = { ...joinable, companionRows: joined.companionRows };
-        }
-      } else {
-        doc = await this.adapter.selectOne<SingleDocument>(
-          singleMeta.tableName,
-          {}
-        );
-      }
+      const read = await this.readDocument(slug, singleMeta, options);
+      const { translations } = read;
+      let { doc } = read;
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -1413,6 +1383,53 @@ export class SingleQueryService extends BaseService {
       dialect: this.adapter.dialect,
       status: (singleMeta as { status?: boolean }).status === true,
     });
+  }
+
+  /**
+   * The Single's stored document, or null when it has none yet. A translated Single takes its
+   * translations in the same query as its document, once its translations table is there to join
+   * to: one round trip where reading them after it took two. Read through the Single's own
+   * registered table, as the adapter reads its document.
+   */
+  private async readDocument(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<{
+    doc: SingleDocument | null;
+    translations: JoinedTranslations | undefined;
+  }> {
+    const joinable = await this.joinableTranslations(
+      slug,
+      singleMeta,
+      options.locale,
+      options.fallbackLocale
+    );
+    if (!joinable) {
+      const doc = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+      return { doc, translations: undefined };
+    }
+    // As the translations read it stands for fails: the database's own message, which names the
+    // translations table and its columns, never reaches the answer.
+    const joined = await selectEntryWithCompanion({
+      db: this.adapter.getDrizzle(),
+      mainTable: joinable.mainTable,
+      where: undefined,
+      companionTable: joinable.companion.table,
+      localeChain: joinable.localeChain,
+    }).catch((error: unknown) => {
+      throw translationLoadFailure(slug, error);
+    });
+    const doc = (joined.entry as SingleDocument | undefined) ?? null;
+    return {
+      doc,
+      translations: doc
+        ? { ...joinable, companionRows: joined.companionRows }
+        : undefined,
+    };
   }
 
   /**

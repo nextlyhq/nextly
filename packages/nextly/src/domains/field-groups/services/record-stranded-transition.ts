@@ -113,7 +113,8 @@ export async function recordStrandedTransition<R>(
       // Marked at the version just READ rather than at this edit's, because the row is past that
       // one by definition. Attempted ONCE: a writer racing this second attempt has itself just
       // written the row, so retrying in a loop trades a bounded failure for an unbounded one.
-      const current = await registry.getComponent(slug);
+      // As stored, past the registry row cache: the re-mark is conditioned on this version.
+      const current = await registry.getComponentForWrite(slug);
       const remark = await registry.updateComponentIfVersion(
         slug,
         { migrationStatus: "diverged" },

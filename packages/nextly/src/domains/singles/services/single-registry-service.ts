@@ -318,7 +318,7 @@ export class SingleRegistryService extends BaseRegistryService<
    * a schema save, which checks the stored schema version and advances it.
    */
   async getSingleForWrite(slug: string): Promise<DynamicSingleRecord | null> {
-    return this.getRecordBySlug(slug, this.adapter.getDrizzle());
+    return this.findRecordForWrite(slug);
   }
 
   /**
@@ -395,7 +395,7 @@ export class SingleRegistryService extends BaseRegistryService<
 
     await assertGlobalResourceSlugAvailable(this.adapter, data.slug);
 
-    const existing = await this.getSingleBySlug(data.slug);
+    const existing = await this.findRecordForWrite(data.slug);
     if (existing) {
       // §13.8: generic "Resource already exists." — slug stays in logContext
       // for operator visibility but never on the wire.
@@ -815,7 +815,7 @@ export class SingleRegistryService extends BaseRegistryService<
   ): Promise<void> {
     this.logger.debug("Deleting Single", { slug, force: options?.force });
 
-    const existing = await this.getSingle(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     if (!options?.force) {
       // Refused in words that say a Single is not deleted from here, a fact
@@ -935,7 +935,7 @@ export class SingleRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.getSingleBySlug(config.slug);
+        const existing = await this.findRecordForWrite(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
 
         if (!existing) {
@@ -1269,7 +1269,9 @@ export class SingleRegistryService extends BaseRegistryService<
       return { status: "error", error: message };
     }
 
-    const refetched = await this.getSingleBySlug(config.slug).catch(() => null);
+    const refetched = await this.findRecordForWrite(config.slug).catch(
+      () => null
+    );
     if (refetched) {
       this.logger.warn(
         `Code-first sync: "${config.slug}" already in DB — treating as unchanged`,

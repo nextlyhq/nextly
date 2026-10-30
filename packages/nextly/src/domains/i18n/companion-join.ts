@@ -163,10 +163,7 @@ export async function populateCompanionFields(
  * The companion rows of `localeChain`'s languages: `_locale = <code>` for a chain of one, as a
  * single-language site's always is, and `_locale IN (…)` for a longer one.
  */
-export function inLocaleChain(
-  companionTable: unknown,
-  localeChain: string[]
-): SQL {
+function inLocaleChain(companionTable: unknown, localeChain: string[]): SQL {
   const localeCol = (companionTable as CompanionTable)._locale as never;
   return localeChain.length === 1
     ? eq(localeCol, localeChain[0])

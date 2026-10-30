@@ -840,7 +840,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
 
       // Code-first Singles are locked and cannot be deleted via API.
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const single = await svc.registry.getSingleForWrite(slug);
       consoleLogger.info(`[deleteSingle] getSingleBySlug returned`, {
         detail: single ? `found (tableName: ${single.tableName})` : "null",
       });
@@ -970,7 +971,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!b) throw new Error("Update data is required");
 
-      const existing = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const existing = await svc.registry.getSingleForWrite(slug);
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }

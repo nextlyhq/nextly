@@ -451,7 +451,8 @@ export class DynamicCollectionService extends BaseService {
     ));
     await Promise.all(
       [...slugs].map(async slug => {
-        const record = await registry.getComponentBySlug(slug);
+        // As stored, past the registry row cache: the DDL is planned against this table.
+        const record = await registry.findComponentForWrite(slug);
         if (record) resolved.set(slug, record.tableName);
       })
     );

@@ -293,6 +293,16 @@ export abstract class BaseRegistryService<
   }
 
   /**
+   * The record as stored, read past the registry row cache, or null if missing: for a write or
+   * delete that decides from the stored row, such as a register's duplicate check or a sync's
+   * comparison. Every write path reads through this or `getRecordForWrite`, so none acts on a row
+   * another instance changed a moment ago.
+   */
+  protected async findRecordForWrite(slug: string): Promise<TRecord | null> {
+    return this.getRecordBySlug(slug, this.adapter.getDrizzle());
+  }
+
+  /**
    * Get all records, optionally filtered by source, migration status, and locked.
    */
   protected async getAllRecords(options?: BaseListOptions): Promise<TRecord[]> {
@@ -434,7 +444,8 @@ export abstract class BaseRegistryService<
    * Check if a record is locked (code-first resources are locked).
    */
   protected async checkIsLocked(slug: string): Promise<boolean> {
-    const record = await this.getRecordBySlug(slug);
+    // A precondition of the write that asks it, so read as stored.
+    const record = await this.findRecordForWrite(slug);
     return record?.locked ?? false;
   }
 

@@ -21,7 +21,7 @@ const twoStep = vi.hoisted(() => ({ on: false }));
 const failJoin = vi.hoisted(() => ({ on: false }));
 vi.mock("../companion-join", async importOriginal => {
   const actual = await importOriginal<typeof import("../companion-join")>();
-  const { and, eq } = await import("drizzle-orm");
+  const { and, eq, inArray } = await import("drizzle-orm");
   interface TwoStepDb {
     select(): {
       from(table: unknown): {
@@ -56,7 +56,8 @@ vi.mock("../companion-join", async importOriginal => {
         .where(
           and(
             eq(companion._parent as never, entry.id as never),
-            actual.inLocaleChain(args.companionTable, args.localeChain)
+            // Every language of the chain, as the batched read asks; the rows are the same.
+            inArray(companion._locale as never, args.localeChain)
           )
         );
       return { entry, companionRows };
@@ -73,6 +74,7 @@ import {
   text,
 } from "../../../config";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -354,6 +356,54 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    // The Builder's component save writes its registry row past the registry services, so it
+    // clears the cache itself: the row this process read just before the save is not served after.
+    it("sees a Builder component save's own registry write at once", async () => {
+      const { t } = await bootSite(dialect);
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "promo",
+          label: "Promo",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      const groups = t.getService("fieldGroupRegistryService") as {
+        getComponentBySlug(slug: string): Promise<{
+          fields?: Array<{ name: string }> | string;
+          schemaVersion?: number;
+        } | null>;
+      };
+      const fieldNames = async () => {
+        const fields = (await groups.getComponentBySlug("promo"))?.fields;
+        const list =
+          typeof fields === "string"
+            ? (JSON.parse(fields) as Array<{ name: string }>)
+            : (fields ?? []);
+        return list.map(field => field.name);
+      };
+      // Cached as it was before the save.
+      expect(await fieldNames()).toEqual(["note"]);
+      const { schemaVersion } =
+        (await groups.getComponentBySlug("promo")) ?? {};
+
+      await dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "promo" },
+        {
+          fields: [
+            { name: "note", type: "text" },
+            { name: "extra", type: "text" },
+          ],
+          confirmed: true,
+          schemaVersion: schemaVersion ?? 1,
+        }
+      );
+
+      expect(await fieldNames()).toEqual(["note", "extra"]);
+    });
+
     it("sees a Single changed elsewhere once the cached row's second is up, and not before", async () => {
       const { t } = await bootSite(dialect);
       const singles = t.getService("singleRegistryService") as {
@@ -427,6 +477,72 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(updated.schemaVersion).toBe(elsewhere + 1);
+    });
+
+    // A destructive write decides from the stored row: a component another instance locked a
+    // moment after this process read it unlocked is refused, not deleted.
+    it("refuses to delete a component locked elsewhere a moment after it was read", async () => {
+      const { t } = await bootSite(dialect);
+      const groups = t.getService("fieldGroupRegistryService") as {
+        registerComponent(data: object): Promise<unknown>;
+        getComponentBySlug(slug: string): Promise<{ locked?: boolean } | null>;
+        deleteComponent(slug: string): Promise<void>;
+      };
+      await groups.registerComponent({
+        slug: "promo",
+        label: "Promo",
+        tableName: "comp_promo",
+        fields: [{ name: "note", type: "text" }],
+        source: "ui",
+        locked: false,
+        schemaHash: "promo",
+      });
+      expect((await groups.getComponentBySlug("promo"))?.locked).toBe(false);
+      // Locked past the registry services, as another instance's code sync locks it.
+      await t.adapter.update(
+        STORAGE_FORMAT.registryTable,
+        { locked: true },
+        { and: [{ column: "slug", op: "=", value: "promo" }] }
+      );
+
+      await expect(groups.deleteComponent("promo")).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+      expect(await groups.getComponentBySlug("promo")).not.toBeNull();
+    });
+
+    // The same for a Single, on the path the delete route takes: the re-read inside the exclusion
+    // decides whether the table is dropped.
+    it("refuses to delete a Single locked elsewhere a moment after it was read", async () => {
+      const { t } = await bootSite(dialect);
+      const singles = t.getService("singleRegistryService") as {
+        registerSingle(data: object): Promise<unknown>;
+        getSingleBySlug(slug: string): Promise<{ locked?: boolean } | null>;
+      };
+      const metadata = t.getService("singleMetadataService") as {
+        deleteSingle(slug: string, tableName: string): Promise<void>;
+      };
+      await singles.registerSingle({
+        slug: "notice",
+        label: "Notice",
+        tableName: "single_notice",
+        fields: [{ name: "note", type: "text" }],
+        source: "ui",
+        locked: false,
+        schemaHash: "notice",
+      });
+      expect((await singles.getSingleBySlug("notice"))?.locked).toBe(false);
+      // Locked past the registry services, as another instance's code sync locks it.
+      await t.adapter.update(
+        "dynamic_singles",
+        { locked: true },
+        { and: [{ column: "slug", op: "=", value: "notice" }] }
+      );
+
+      await expect(
+        metadata.deleteSingle("notice", "single_notice")
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(await singles.getSingleBySlug("notice")).not.toBeNull();
     });
 
     it("keeps a failed joined read's SQL out of the answer", async () => {
