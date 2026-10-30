@@ -41,6 +41,7 @@ import {
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   companionColumnNames,
   companionHasColumn,
@@ -578,7 +579,7 @@ export class DynamicCollectionService extends BaseService {
       userDefinedFields,
       // i18n: omit translatable columns from the main table when localized — they
       // live in the companion `_locales` table created below.
-      { hasStatus: data.status === true, localized: data.localized === true }
+      { hasStatus: data.status === true, localized: storesPerLanguage(data) }
     );
 
     // i18n: for a localized collection, append the companion `<table>_locales`
@@ -586,7 +587,8 @@ export class DynamicCollectionService extends BaseService {
     // fresh collection, no data to seed, no main-table columns to drop). Without
     // this, a UI-created localized collection has nowhere to store per-language
     // values and every language shares the main columns.
-    const withCompanion = data.localized
+    // Whenever its translatable values live in a companion (`storesPerLanguage`).
+    const withCompanion = storesPerLanguage(data)
       ? this.appendCompanionCreateSQL(migrationSQL, normalizedName, tableName, {
           fields: userDefinedFields,
           status: data.status === true,

@@ -6,7 +6,7 @@
  * a component's. The Direct API writes and reads them there. With the setting off, the same site
  * stores as it always has.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -23,12 +23,15 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { perLanguageStorageEnabled } from "../per-language-storage";
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await current?.destroy();
   current = undefined;
 });
@@ -216,6 +219,79 @@ describe.each(getConfiguredTestDialects())(
       expect(list.items).toEqual([
         expect.objectContaining({ id, headline: "Published" }),
       ]);
+    });
+
+    // The Schema Builder lays an entity it creates out as the site does: a collection, a Single and
+    // a component made there, none marked translatable, keep their translatable fields per language.
+    it("keeps the translatable fields of a collection, a Single and a component made in the Schema Builder per language", async () => {
+      const t = await boot(dialect, true);
+      // The Schema Builder applies what it creates in development.
+      vi.stubEnv("NODE_ENV", "development");
+      const handler = t.getService("collectionsHandler") as unknown as {
+        createCollection(
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const made = await handler.createCollection({
+        name: "posts",
+        label: "Post",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "count", type: "number" },
+        ],
+      });
+      expect(made.success, JSON.stringify(made)).toBe(true);
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "footer",
+          label: "Footer",
+          fields: [
+            { name: "note", type: "text" },
+            { name: "year", type: "number" },
+          ],
+        }
+      );
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "badge",
+          label: "Badge",
+          fields: [
+            { name: "caption", type: "text" },
+            { name: "size", type: "number" },
+          ],
+        }
+      );
+
+      const columns = await columnsOf(t, [
+        "dc_posts",
+        "dc_posts_locales",
+        "single_footer",
+        "single_footer_locales",
+        "comp_badge",
+        "comp_badge_locales",
+      ]);
+      expect(columns.dc_posts).toContain("count");
+      expect(columns.dc_posts).not.toContain("heading");
+      expect(columns.dc_posts_locales).toContain("heading");
+      expect(columns.single_footer).toContain("year");
+      expect(columns.single_footer).not.toContain("note");
+      expect(columns.single_footer_locales).toContain("note");
+      expect(columns.comp_badge).toContain("size");
+      expect(columns.comp_badge).not.toContain("caption");
+      expect(columns.comp_badge_locales).toContain("caption");
+
+      const created = await t.nextly.create({
+        collection: "posts",
+        data: { heading: "Made in the Builder", count: 4 },
+      });
+      const id = (created.item as { id: string }).id;
+      expect(
+        await t.nextly.findByID({ collection: "posts", id })
+      ).toMatchObject({ heading: "Made in the Builder", count: 4 });
     });
 
     it("stores as it always has with the setting off", async () => {

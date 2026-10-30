@@ -70,6 +70,7 @@ import {
   withoutLeavingConstraints,
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -2101,7 +2102,8 @@ export class SingleMetadataService {
   }
 
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
-    const isLocalized = input.localized === true;
+    // Whether its translatable columns live in its companion (`storesPerLanguage`), for the DDL.
+    const isLocalized = storesPerLanguage(input);
     const hasStatus = input.status === true;
     const fields = input.fields as unknown as FieldDefinition[];
     const { DynamicCollectionSchemaService } = await import(

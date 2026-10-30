@@ -21,6 +21,7 @@ import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -449,7 +450,7 @@ export class CollectionMetadataService extends BaseService {
                 hasStatus: data.status === true,
                 // i18n: register the main table without translatable columns and register
                 // the companion, so reads/writes route localized fields correctly.
-                localized: data.localized === true,
+                localized: storesPerLanguage(data),
               }
             );
           } else {
