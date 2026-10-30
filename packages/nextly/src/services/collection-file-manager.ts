@@ -162,6 +162,17 @@ export class CollectionFileManager {
   }
 
   /**
+   * Remove a drop migration `saveDropMigration` wrote, for a delete that then
+   * failed: left behind, the next `nextly migrate` would drop the tables of
+   * collections that are still registered. Gone already is the same as removed.
+   */
+  async removeDropMigration(migrationFileName: string): Promise<void> {
+    await fs.rm(path.join(this.migrationsDir, migrationFileName), {
+      force: true,
+    });
+  }
+
+  /**
    * Runs a collection's migration against this database, whole or not at all where the dialect
    * allows it.
    *
