@@ -1,0 +1,24 @@
+---
+title: MEDIA_THUMBNAILS_NOT_REMOVED
+description: "Some left-behind thumbnails could not be removed, or could not be checked just before their removal."
+---
+
+## Cause
+
+Some left-behind thumbnails could not be removed, or could not be checked just before their removal.
+
+With `--apply`, each listed thumbnail is checked against the media table again just before it is removed. Some were left: the storage refused to remove them, or the check before removal could not be made. The Why line names each.
+
+## Fix
+
+- Read the reason the Why line gives for each file: a storage permission is the usual cause.
+- Run `nextly media orphans --apply` again to list and remove what is left.
+
+## Example
+
+```text
+✗ 1 left-behind thumbnail(s) were not removed.
+  Why:  Could not remove media/2026/10/0b7f0b0e-thumb_x.png: AccessDenied: Access Denied
+  Next: Run `nextly media orphans --apply` again to list and remove what is left.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-thumbnails-not-removed  (MEDIA_THUMBNAILS_NOT_REMOVED)
+```

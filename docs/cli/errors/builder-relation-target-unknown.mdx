@@ -1,0 +1,25 @@
+---
+title: BUILDER_RELATION_TARGET_UNKNOWN
+description: "A relationship field in `ui-schema.json` names a collection that neither file declares."
+---
+
+## Cause
+
+A relationship field in `ui-schema.json` names a collection that neither file declares.
+
+A relationship or upload field the Schema Builder saved in `ui-schema.json` relates to a collection that neither `ui-schema.json` nor `nextly.config.ts` declares, and that is not `users` or `media`. The Why line lists each field and its target.
+
+## Fix
+
+- Point each field listed at an existing collection, in the Schema Builder or in `ui-schema.json`.
+- Or create the collection it names.
+- Run `nextly migrate:check` again.
+
+## Example
+
+```text
+✗ A field in `ui-schema.json` relates to a collection that does not exist.
+  Why:  articles.author relates to unknown target 'authors'
+  Next: Point each field listed at a collection in `nextly.config.ts` or `ui-schema.json`, or create the collection it names, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)
+```
