@@ -1259,8 +1259,8 @@ describe.each(getConfiguredTestDialects())(
       const { id } = created.item;
       if (typeof id !== "string")
         throw new TypeError("a created entry has an id");
-      // Dropped once the boot has resolved the table as ready, as a migration
-      // reset run beside a live server drops it.
+      // Dropped once the boot has resolved the table as ready, as a tool
+      // outside the app drops it while the app runs.
       await t.adapter.executeQuery(
         `DROP TABLE IF EXISTS dc_${ARTICLES}_locales`
       );

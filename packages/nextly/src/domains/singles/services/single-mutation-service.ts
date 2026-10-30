@@ -1466,6 +1466,10 @@ export class SingleMutationService extends BaseService {
     // revalidation opt-outs — the durable-write signal the retention pass keys
     // off, so a Single that opts out of BOTH still triggers write-path cleanup.
     let committedWrite = false;
+    // This Single's translation table and the language written, once known,
+    // for the catch: a table dropped after its `ready` verdict was remembered
+    // fails any read or write of it, before the transaction or inside it.
+    let translations: { table: string; locale?: string } | undefined;
     // Whether the outbox event was actually appended: false when the Single
     // opted out of recording (`webhooks: false`), so the post-commit drain is
     // scheduled only for a write that recorded something. The three single.*
@@ -1796,6 +1800,12 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      if (companion) {
+        translations = {
+          table: companion.companionTableName,
+          locale: writeLocale,
+        };
+      }
       // The locale this write's content belongs to. `writeLocale` covers the
       // Single's own translations; when it has none, embedded components may
       // still be localized. Those were written at the requested locale, or at
@@ -4474,32 +4484,6 @@ export class SingleMutationService extends BaseService {
         if (cause instanceof NextlyError) {
           throw cause;
         }
-        // A translation table dropped after its `ready` verdict was remembered
-        // fails the write at its first statement on it. Answered, after the
-        // rollback, as the check above answers a table that is not there, and
-        // its verdict forgotten so the next write resolves it again.
-        if (
-          companion &&
-          this.localization &&
-          companionFoundMissing(
-            this.adapter,
-            this.adapter.dialect,
-            companion.companionTableName,
-            error
-          )
-        ) {
-          throw NextlyError.conflict({
-            reason: "state",
-            message: companionNotReadyMessage("single"),
-            logContext: {
-              cause: "localized-write-without-companion",
-              single: singleMeta.slug,
-              locale: writeLocale,
-              defaultLocale: this.localization.defaultLocale,
-              companionTable: companion.companionTableName,
-            },
-          });
-        }
         throw error;
       }
 
@@ -4702,6 +4686,19 @@ export class SingleMutationService extends BaseService {
       if (transitionDeniedResult) {
         return transitionDeniedResult;
       }
+      // A translation table dropped after its `ready` verdict was remembered,
+      // met before the transaction or inside it: answered, for a write that
+      // did not commit, as the check before the write answers a table that is
+      // not there. A later step's failure keeps its own answer below.
+      const translationsGone = committedWrite
+        ? undefined
+        : this.translationsGoneRefusal(slug, translations, error);
+      if (translationsGone) {
+        return buildSingleErrorResult(
+          translationsGone,
+          "Failed to update Single document"
+        );
+      }
       this.logger.error("Failed to update Single document", { slug, error });
       // A post-commit step (afterChange/afterUpdate hook, response expansion)
       // can throw after the event is already durable; carry `eventRecorded` so
@@ -4713,6 +4710,42 @@ export class SingleMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The refusal for a write that `error` failed because this Single's translation table is
+   * missing (`companionFoundMissing`, which forgets the table's `ready` verdict), or `undefined`
+   * for any other failure. The same 409, with the same remedy, as the check before a write gives
+   * a table it finds is not there. The table's name comes from the Single's own metadata, read
+   * before the write, so nothing is read again here.
+   */
+  private translationsGoneRefusal(
+    slug: string,
+    translations: { table: string; locale?: string } | undefined,
+    error: unknown
+  ): NextlyError | undefined {
+    if (!translations || !this.localization) return undefined;
+    if (
+      !companionFoundMissing(
+        this.adapter,
+        this.adapter.dialect,
+        translations.table,
+        error
+      )
+    ) {
+      return undefined;
+    }
+    return NextlyError.conflict({
+      reason: "state",
+      message: companionNotReadyMessage("single"),
+      logContext: {
+        cause: "localized-write-without-companion",
+        single: slug,
+        locale: translations.locale,
+        defaultLocale: this.localization.defaultLocale,
+        companionTable: translations.table,
+      },
+    });
   }
 
   /**

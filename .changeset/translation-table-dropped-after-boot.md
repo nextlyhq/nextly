@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A translation table dropped while the app is running, as a migration reset run beside a live server drops it, no longer fails the next localized write with a server error. The write is refused with the same "translations are not ready" conflict, naming the command to run, that a table missing at the start gets, and the next write checks the table again.
+A translation table dropped while the app is running, by hand or by a tool outside the app, no longer fails the next localized write with a server error. The write is refused with the same "translations are not ready" conflict, naming the command to run, that a table missing at the start gets, and the next write checks the table again.
