@@ -21,12 +21,14 @@ vi.mock("../../../direct-api/nextly", () => ({
 const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
 vi.mock("../../../di/container", () => ({ container: { get: containerGet } }));
 
-const { verdict, createDisabledSlugs } = vi.hoisted(() => ({
+const { verdict, mayUpdate, createDisabledSlugs } = vi.hoisted(() => ({
   verdict: vi.fn<(slug: string) => Promise<boolean>>(),
+  mayUpdate: vi.fn<(slug: string) => Promise<boolean>>(),
   createDisabledSlugs: vi.fn<() => Promise<ReadonlySet<string>>>(),
 }));
 vi.mock("../../../domains/widgets/reader-content", () => ({
   createVerdict: () => verdict,
+  updateVerdict: () => mayUpdate,
   createDisabledSlugs: () => createDisabledSlugs(),
 }));
 
@@ -41,7 +43,18 @@ import { someResources, type ReadCaller } from "../readable-resources";
 const CALLER: ReadCaller = { user: { id: "alice", roles: ["editor"] } };
 
 /** A collection as the registry holds it; `status: true` is the Draft/Published lifecycle. */
-function collection(slug: string, label: string, status = false) {
+interface RegisteredCollection {
+  slug: string;
+  tableName: string;
+  labels: { plural: string; singular?: string };
+  status: boolean;
+}
+
+function collection(
+  slug: string,
+  label: string,
+  status = false
+): RegisteredCollection {
   return { slug, tableName: slug, labels: { plural: label }, status };
 }
 
@@ -79,7 +92,7 @@ let entries: Record<string, { all: number; draft: number }> = {};
 let newest: Record<string, { id: string; updatedAt: string }> = {};
 /** Each Single's stored document, by its table. */
 let stored: Record<string, { id: string; updated_at: unknown }> = {};
-let collections: ReturnType<typeof collection>[] = [];
+let collections: RegisteredCollection[] = [];
 let singles: Array<{ slug: string; label?: string; tableName?: string }> = [];
 /**
  * The trail's answer to the window read, to a read narrowed to one
@@ -194,6 +207,7 @@ beforeEach(() => {
     return Promise.resolve({ items: entry === undefined ? [] : [entry] });
   });
   verdict.mockResolvedValue(true);
+  mayUpdate.mockResolvedValue(true);
   createDisabledSlugs.mockResolvedValue(new Set());
 });
 
@@ -274,6 +288,27 @@ describe("the Content table's bounded read", () => {
     expect(most).toBe(4);
   });
 
+  it("builds at most four drawn rows at once", async () => {
+    let running = 0;
+    let most = 0;
+    // A drawn row's own reads: its create decision is asked once per row, so
+    // the decisions in flight are the rows in flight.
+    verdict.mockImplementation(async () => {
+      running += 1;
+      most = Math.max(most, running);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      running -= 1;
+      return true;
+    });
+
+    const answer = await table(MAX_WIDGET_LIMIT);
+
+    expect(answer.rows).toHaveLength(MAX_WIDGET_LIMIT);
+    // 🔴 Four, not fifty: `Promise.all` over the page draws the same rows,
+    // and only how many overlap tells the two apart.
+    expect(most).toBe(4);
+  });
+
   it("reads the trail once when its window reached the trail's end", async () => {
     // A drawn collection with an entry and no save of it in the window: who
     // saved it would be asked past the window, if the window had not reached
@@ -344,18 +379,103 @@ describe("which rows make the page", () => {
   });
 });
 
+describe("ranked by what each row shows", () => {
+  /** Posts, saved at 10:00, and News, whose live entry was last stamped at 09:00. */
+  function postsAndNews(newsSavedAt?: string) {
+    collections = [collection("posts", "Posts"), collection("news", "News")];
+    newest = {
+      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
+      news: { id: "doc-news", updatedAt: "2026-10-29T09:00:00.000Z" },
+    };
+    windowAnswer = {
+      edits: [
+        ...(newsSavedAt === undefined
+          ? []
+          : [save("news", newsSavedAt, { userName: "Ben" })]),
+        save("posts", "2026-10-29T10:00:00.000Z"),
+      ],
+      hasMore: false,
+    };
+  }
+
+  it("ranks a row by a change newer than its own date, as it shows it", async () => {
+    // A save of the published entry kept as its working draft: the trail has
+    // it at 11:00, and the live entry's own stamp stays at 09:00.
+    postsAndNews("2026-10-29T11:00:00.000Z");
+
+    // 🔴 A card with room for one row draws News, showing 11:00: ranked by
+    // its own 09:00, Posts would take the row though it shows an older time.
+    const one = await table(1);
+    expect(one.rows.map(row => row.slug)).toEqual(["news"]);
+    expect(one.rows[0]).toMatchObject({
+      updatedAt: "2026-10-29T11:00:00.000Z",
+      userName: "Ben",
+    });
+    expect((await table(10)).rows.map(row => row.slug)).toEqual([
+      "news",
+      "posts",
+    ]);
+  });
+
+  it("ranks a row by its own date where the trail holds nothing newer of it", async () => {
+    // The control: without the save, News's own 09:00 is what it shows.
+    postsAndNews();
+
+    expect((await table(1)).rows.map(row => row.slug)).toEqual(["posts"]);
+    const answer = await table(10);
+    expect(answer.rows.map(row => row.slug)).toEqual(["posts", "news"]);
+    expect(answer.rows[1]).toMatchObject({
+      updatedAt: "2026-10-29T09:00:00.000Z",
+    });
+  });
+
+  it("orders the drawn rows by what they show when a change past the window dates one", async () => {
+    collections = [collection("busy", "Busy"), collection("news", "News")];
+    // The window is busy's alone and stops short of the trail's end.
+    windowAnswer = {
+      edits: Array.from({ length: MAX_WIDGET_LIMIT }, (_, i) =>
+        save("busy", "2026-10-29T10:00:00.000Z", { entryId: `doc-busy-${i}` })
+      ),
+      hasMore: true,
+    };
+    newest = {
+      busy: { id: "doc-busy-0", updatedAt: "2026-10-29T10:00:00.000Z" },
+      news: { id: "doc-news", updatedAt: "2026-10-29T08:00:00.000Z" },
+    };
+    // News's latest change lies past the window, and is newer than busy's.
+    narrowed = {
+      news: [save("news", "2026-10-29T12:00:00.000Z", { userName: "Ben" })],
+    };
+
+    const answer = await table(10);
+
+    // 🔴 Placed by the 12:00 it shows, not the 08:00 it was ranked by.
+    expect(answer.rows.map(row => row.slug)).toEqual(["news", "busy"]);
+    expect(answer.rows[0]).toMatchObject({
+      updatedAt: "2026-10-29T12:00:00.000Z",
+    });
+  });
+});
+
 describe("the Content table's rows", () => {
-  it("takes each row's Updated from its own data, never from the trail", async () => {
+  it("takes Updated and who made it from the trail's latest change where it holds one, and the row's own date, naming nobody, where it holds none", async () => {
     collections = [collection("posts", "Posts")];
     singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
-    // The trail's save of posts is older than its newest entry, and the trail
-    // holds no save of Home at all.
+    // The trail's latest change of posts is Ben's publish, a status change on
+    // its own, which moved the entry's own date too; the trail holds nothing
+    // of Home at all.
     windowAnswer = {
-      edits: [save("posts", "2026-10-20T10:00:00.000Z")],
+      edits: [
+        save("posts", "2026-10-29T10:00:00.000Z", {
+          userId: "ben",
+          userName: "Ben",
+          event: "published",
+        }),
+      ],
       hasMore: false,
     };
     newest = {
-      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
+      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.004Z" },
     };
     // Saved long before any trail window.
     stored = {
@@ -368,18 +488,40 @@ describe("the Content table's rows", () => {
     const answer = await table(10);
     const bySlug = new Map(answer.rows.map(row => [row.slug, row]));
 
+    // 🔴 The instant, the name and what they did, all from the one change.
     expect(bySlug.get("posts")).toMatchObject({
       updatedAt: "2026-10-29T10:00:00.000Z",
+      userId: "ben",
+      userName: "Ben",
+      event: "published",
     });
-    // 🔴 A real date never reads as unknown for want of a trail row.
+    // 🔴 A real date never reads as unknown for want of a trail row, and
+    // names nobody, since nothing says who made it.
     expect(bySlug.get("home")).toMatchObject({
       updatedAt: "2024-01-05T08:00:00.000Z",
     });
     expect(bySlug.get("home")).not.toHaveProperty("userName");
+    expect(bySlug.get("home")).not.toHaveProperty("userId");
     // Read from the Single's table, never through a read that would create it.
     expect(selectOne).toHaveBeenCalledWith("single_home", {
       columns: ["id", "updated_at"],
     });
+  });
+
+  it("asks the trail for every change, a publish or an unpublish on its own among them", async () => {
+    collections = [collection("posts", "Posts")];
+    windowAnswer = { ...windowAnswer, hasMore: true };
+    newest = {
+      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
+    };
+
+    await table(10);
+
+    // The window and the read past it for the drawn collection alike.
+    expect(getRecentEdits).toHaveBeenCalledTimes(2);
+    for (const [options] of getRecentEdits.mock.calls) {
+      expect(options).toMatchObject({ statusChanges: true });
+    }
   });
 
   it("names who saved a Single only when the trail's save is of its document", async () => {
@@ -502,33 +644,93 @@ describe("the Content table's rows", () => {
     for (const row of answer.rows) expect(row).not.toHaveProperty("updatedAt");
   });
 
-  it("names who saved a collection only when the trail's save is of its newest entry", async () => {
-    collections = [collection("posts", "Posts"), collection("tags", "Tags")];
+  it("takes a collection's Updated and its name together from its latest change of any entry, when that is its latest write", async () => {
+    collections = [
+      collection("posts", "Posts"),
+      collection("pages", "Pages"),
+      collection("news", "News"),
+    ];
     windowAnswer = {
       edits: [
+        // The change that made the newest entry, filed at its instant.
         save("posts", "2026-10-29T10:00:00.000Z"),
-        // A save of another tag than the newest one.
-        save("tags", "2026-10-28T10:00:00.000Z", { entryId: "doc-older-tag" }),
+        // Filed just before the entry's own stamp, as one write's two
+        // instants may be stored: the same write.
+        save("pages", "2026-10-29T09:00:00.000Z", { userName: "Cara" }),
+        // A change of another entry than the newest, and newer than it: the
+        // collection's latest write.
+        save("news", "2026-10-29T08:00:00.000Z", {
+          entryId: "doc-older-news",
+          userName: "Ben",
+        }),
       ],
       hasMore: false,
     };
     newest = {
       posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
-      tags: { id: "doc-tags", updatedAt: "2026-10-29T11:00:00.000Z" },
+      pages: { id: "doc-pages", updatedAt: "2026-10-29T09:00:00.900Z" },
+      news: { id: "doc-news", updatedAt: "2026-10-29T07:00:00.000Z" },
     };
 
     const answer = await table(10);
     const bySlug = new Map(answer.rows.map(row => [row.slug, row]));
 
     expect(bySlug.get("posts")).toMatchObject({
+      updatedAt: "2026-10-29T10:00:00.000Z",
       userId: "ana",
       userName: "Ana",
       actorType: "user",
     });
-    expect(bySlug.get("tags")).toMatchObject({
-      updatedAt: "2026-10-29T11:00:00.000Z",
+    // The control for the stale case below: older by under a second is one
+    // write, shown as the change, with its name.
+    expect(bySlug.get("pages")).toMatchObject({
+      updatedAt: "2026-10-29T09:00:00.000Z",
+      userName: "Cara",
     });
-    expect(bySlug.get("tags")).not.toHaveProperty("userName");
+    // 🔴 The date and the name describe the same change, whichever entry it
+    // was of.
+    expect(bySlug.get("news")).toMatchObject({
+      updatedAt: "2026-10-29T08:00:00.000Z",
+      userName: "Ben",
+    });
+  });
+
+  it("shows a row's own date and no name where its latest trail change is older than it", async () => {
+    collections = [collection("tags", "Tags")];
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    windowAnswer = {
+      edits: [
+        // Saves older than each row's own last update by a second or more:
+        // the rows were written since, by something the trail did not record.
+        save("tags", "2026-10-28T10:00:00.000Z", { userName: "Ben" }),
+        save("home", "2026-10-29T10:59:59.000Z", {
+          subjectKind: "single",
+          entryId: "doc-home",
+          userName: "Ben",
+        }),
+      ],
+      hasMore: false,
+    };
+    newest = {
+      tags: { id: "doc-tags", updatedAt: "2026-10-29T11:00:00.000Z" },
+    };
+    stored = {
+      single_home: { id: "doc-home", updated_at: "2026-10-29T11:00:00.000Z" },
+    };
+
+    const answer = await table(10);
+    const bySlug = new Map(answer.rows.map(row => [row.slug, row]));
+
+    // 🔴 The row's own, newer date, which it is ranked by, and nobody named
+    // for a write the trail does not say who made.
+    for (const slug of ["tags", "home"]) {
+      expect(bySlug.get(slug)).toMatchObject({
+        updatedAt: "2026-10-29T11:00:00.000Z",
+      });
+      expect(bySlug.get(slug)).not.toHaveProperty("userId");
+      expect(bySlug.get(slug)).not.toHaveProperty("userName");
+      expect(bySlug.get(slug)).not.toHaveProperty("event");
+    }
   });
 
   it("orders the page by each row's own last update, newest first, a Single among them, and the empty collections last", async () => {
@@ -565,6 +767,8 @@ describe("the Content table's rows", () => {
     // 🔴 Every row the table could show, the Single's included: the list
     // answer's total is the rows it matched, as every list answer's is.
     expect(answer.total).toBe(5);
+    // And how it divides, for the card's subtitle.
+    expect(answer.byKind).toEqual({ collection: 4, single: 1 });
   });
 
   it("counts drafts by the collection list's Draft filter, and none for a collection without the lifecycle", async () => {
@@ -616,6 +820,54 @@ describe("the Content table's rows", () => {
     );
 
     expect(canCreate).toEqual({ posts: true, tags: false, forms: false });
+  });
+
+  it("says whether the reader may update each Single, by the reader's update decision", async () => {
+    singles = [
+      { slug: "home", label: "Home", tableName: "single_home" },
+      { slug: "about", label: "About", tableName: "single_about" },
+    ];
+    // A reader who may read both and update only Home.
+    mayUpdate.mockImplementation(slug => Promise.resolve(slug === "home"));
+
+    const answer = await table(10);
+    const canUpdate = Object.fromEntries(
+      answer.rows.map(row => [row.slug, row.canUpdate])
+    );
+
+    // 🔴 About is readable and not updatable: it opens read-only, so its row
+    // must not offer Edit.
+    expect(canUpdate).toEqual({ home: true, about: false });
+    expect(new Set(mayUpdate.mock.calls.map(([slug]) => slug))).toEqual(
+      new Set(["home", "about"])
+    );
+  });
+
+  it("says a Single may not be updated when the update decision fails", async () => {
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    mayUpdate.mockRejectedValue(new Error("rules not read"));
+
+    const answer = await table(10);
+
+    expect(answer.rows[0]?.canUpdate).toBe(false);
+  });
+
+  it("names what one entry of a collection is called, for the + that creates one", async () => {
+    collections = [
+      {
+        ...collection("posts", "Posts"),
+        labels: { singular: "Post", plural: "Posts" },
+      },
+      // A collection naming no singular is called by its label.
+      collection("news", "News"),
+    ];
+
+    const answer = await table(10);
+    const singular = Object.fromEntries(
+      answer.rows.map(row => [row.slug, row.singularLabel])
+    );
+
+    expect(singular).toEqual({ posts: "Post", news: "News" });
   });
 
   it("offers create nowhere while which collections turn it off is unknown", async () => {

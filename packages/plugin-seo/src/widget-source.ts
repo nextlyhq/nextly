@@ -220,10 +220,21 @@ export interface IssueTally {
 
 /** What one collection's scan contributed. */
 interface CollectionTally {
-  /** Pages FETCHED, which is the work this scan caused. */
-  pagesUsed: number;
   /** Whether rows were left unread because the budget ran out. */
   bounded: boolean;
+}
+
+/**
+ * The pages a scan may still fetch, shared by every scan handed the same one:
+ * the bound on the work one answer causes, whichever scan spends it.
+ */
+export interface ScanBudget {
+  pagesLeft: number;
+}
+
+/** A budget of {@link ISSUE_SCAN_ROW_BUDGET} rows' worth of pages. */
+export function scanBudget(): ScanBudget {
+  return { pagesLeft: PAGE_BUDGET };
 }
 
 /** Adds one to `issue`'s tally in `byIssue`. */
@@ -238,7 +249,7 @@ function cursorOf(row: unknown): string | number | undefined {
 }
 
 /**
- * Page through one collection, fetching at most `pagesAllowed` pages.
+ * Page through one collection, fetching pages while `budget` has any left.
  *
  * Paged by the id, ascending: each page asks for the rows after the last one
  * the previous page answered. A read takes no offset, and an id is unique and
@@ -268,29 +279,30 @@ async function scanCollection(
   services: IssueReads,
   slug: string,
   checks: IssueChecks,
-  pagesAllowed: number,
+  budget: ScanBudget,
   byIssue: Map<string, number>
 ): Promise<CollectionTally> {
-  let pagesUsed = 0;
   let cursor: string | number | undefined;
   let previous: ScanPage | undefined;
   const counted = new Set<string | number>();
 
-  while (pagesUsed < pagesAllowed) {
+  while (budget.pagesLeft > 0) {
+    // Taken before the read, so scans sharing the budget never fetch more
+    // pages between them than it holds, however their reads interleave.
+    budget.pagesLeft -= 1;
     const page = await readPage(services, slug, cursor);
-    pagesUsed += 1;
     if (previous !== undefined && !followsOn(previous, page, counted)) {
-      return { pagesUsed, bounded: true };
+      return { bounded: true };
     }
     tallyRows(page.items, checks, byIssue);
     rememberRows(page.items, counted);
 
     const step = nextStep(page);
-    if (step.done) return { pagesUsed, bounded: step.bounded };
+    if (step.done) return { bounded: step.bounded };
     cursor = step.cursor;
     previous = page;
   }
-  return { pagesUsed, bounded: true };
+  return { bounded: true };
 }
 
 /**
@@ -425,7 +437,8 @@ function matchedBy(page: ScanPage): number {
 
 /**
  * Tally the issues across `collections`, by kind, for the person the services
- * are bound to, within the budget.
+ * are bound to, within `budget`: a budget of its own unless the caller hands
+ * one several tallies share, as the Needs attention lines do.
  *
  * 🔴 Nothing here decides access. Each read runs as that person, through
  * core's one access path, so a collection or a row they may not read is not
@@ -440,25 +453,18 @@ function matchedBy(page: ScanPage): number {
 export async function tallyIssues(
   services: IssueReads,
   collections: readonly string[],
-  checks: IssueChecks
+  checks: IssueChecks,
+  budget: ScanBudget = scanBudget()
 ): Promise<IssueTally> {
   const byIssue = new Map<string, number>();
-  let pagesUsed = 0;
   let bounded = false;
 
   for (const slug of collections) {
-    if (pagesUsed >= PAGE_BUDGET) {
+    if (budget.pagesLeft <= 0) {
       bounded = true;
       break;
     }
-    const tally = await scanCollection(
-      services,
-      slug,
-      checks,
-      PAGE_BUDGET - pagesUsed,
-      byIssue
-    );
-    pagesUsed += tally.pagesUsed;
+    const tally = await scanCollection(services, slug, checks, budget, byIssue);
     if (tally.bounded) bounded = true;
   }
 

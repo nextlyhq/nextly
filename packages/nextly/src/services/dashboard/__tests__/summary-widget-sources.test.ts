@@ -139,7 +139,11 @@ describe("the content source", () => {
     );
 
   it("asks the service within the scope the access layer gives this reader, and answers its rows and the total of every row it could show", async () => {
-    getContentTable.mockResolvedValue({ rows: [POSTS, HOME], total: 14 });
+    getContentTable.mockResolvedValue({
+      rows: [POSTS, HOME],
+      total: 14,
+      byKind: { collection: 9, single: 5 },
+    });
     const answer = await askContent();
     expect(resolveReadableResources).toHaveBeenCalledWith(caller);
     expect(getContentTable).toHaveBeenCalledWith(
@@ -152,6 +156,10 @@ describe("the content source", () => {
     // 🔴 The service's total, every collection and Single the reader may see,
     // not the rows answered: the list answer's total is the rows matched.
     expect((answer as { total?: number }).total).toBe(14);
+    // How it divides, from the service's own counts.
+    expect(
+      (answer as { totalByKind?: Record<string, number> }).totalByKind
+    ).toEqual({ collection: 9, single: 5 });
   });
 
   it("hands the query's limit to the service, which counts only that page", async () => {

@@ -79,6 +79,7 @@ import {
   type CardFooterClaims,
   type FooterClaimRank,
 } from "./frame/footer-slot";
+import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
 import type { RowsSize } from "./frame/list-rows";
@@ -277,12 +278,14 @@ function presentWhile(holds: boolean): "" | undefined {
 
 /**
  * What the body is handed while it is drawn: where it reports its state, its count beside the
- * title and what it has for the footer. Nothing while the frame draws a state of its own.
+ * title, its line beneath it and what it has for the footer. Nothing while the frame draws a
+ * state of its own.
  */
 function BodyProviders({
   drawn,
   report,
   setTitleCount,
+  setSubtitle,
   footerSlot,
   claims,
   children,
@@ -290,6 +293,7 @@ function BodyProviders({
   drawn: boolean;
   report: (next: CardState | null) => void;
   setTitleCount: (count: TitleCount | undefined) => void;
+  setSubtitle: (subtitle: string | undefined) => void;
   footerSlot: HTMLElement | null;
   claims: CardFooterClaims;
   children: ReactNode;
@@ -298,15 +302,17 @@ function BodyProviders({
   return (
     <CardStateReportProvider value={report}>
       <CardTitleCountContext.Provider value={setTitleCount}>
-        <CardFooterSlotProvider value={footerSlot}>
-          <CardFooterClaimProvider value={claims}>
-            {/* A card drawn inside this one is not the cell's card: it reports
-                nothing in its place. */}
-            <CardHiddenReportContext.Provider value={undefined}>
-              {children}
-            </CardHiddenReportContext.Provider>
-          </CardFooterClaimProvider>
-        </CardFooterSlotProvider>
+        <CardSubtitleContext.Provider value={setSubtitle}>
+          <CardFooterSlotProvider value={footerSlot}>
+            <CardFooterClaimProvider value={claims}>
+              {/* A card drawn inside this one is not the cell's card: it reports
+                  nothing in its place. */}
+              <CardHiddenReportContext.Provider value={undefined}>
+                {children}
+              </CardHiddenReportContext.Provider>
+            </CardFooterClaimProvider>
+          </CardFooterSlotProvider>
+        </CardSubtitleContext.Provider>
       </CardTitleCountContext.Provider>
     </CardStateReportProvider>
   );
@@ -396,6 +402,10 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [titleCount, setTitleCount] = useState<TitleCount | undefined>(
     undefined
   );
+  // A line the body shows beneath the title (`useCardSubtitle`), withdrawn the same way.
+  const [bodySubtitle, setBodySubtitle] = useState<string | undefined>(
+    undefined
+  );
   const given = props.state ?? READY;
   const state = shownState(given, reported);
   const drawsBody = showsBody(given);
@@ -441,6 +451,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 title={title}
                 titleCount={titleCount}
                 subtitle={props.subtitle}
+                bodySubtitle={bodySubtitle}
                 leading={props.leading}
                 quick={props.quick}
                 quickInert={flags.quickInert}
@@ -471,6 +482,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                   drawn={drawsBody}
                   report={report}
                   setTitleCount={setTitleCount}
+                  setSubtitle={setBodySubtitle}
                   footerSlot={footerSlot}
                   claims={footer.claims}
                 >
@@ -648,7 +660,7 @@ function heldLayout(
  *
  * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
  * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
- * widget's own name. The quick control and the menu sit at the right end, always in that order,
+ * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`). The quick control and the menu sit at the right end, always in that order,
  * so the menu is in the same place on every card.
  */
 function WidgetCardHeader({
@@ -656,7 +668,8 @@ function WidgetCardHeader({
   subtitleId,
   title,
   titleCount,
-  subtitle,
+  subtitle: givenSubtitle,
+  bodySubtitle,
   leading,
   quick,
   quickInert,
@@ -669,6 +682,8 @@ function WidgetCardHeader({
   /** A count the body shows beside the title, muted; read after it as ", N items". */
   titleCount?: TitleCount | undefined;
   subtitle?: string | undefined;
+  /** What the body reports beneath the title; drawn only where the card is given no subtitle. */
+  bodySubtitle?: string | undefined;
   leading?: ReactNode;
   quick?: ReactNode;
   quickInert: boolean;
@@ -676,6 +691,7 @@ function WidgetCardHeader({
   /** Kept for assistive technology only: the body's one line names the card on screen. */
   collapsed: boolean;
 }) {
+  const subtitle = givenSubtitle || bodySubtitle;
   return (
     <CardHeader
       // No rule under the header: a divider is the difference between a card and a panel.

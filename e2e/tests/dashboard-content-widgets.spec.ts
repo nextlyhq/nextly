@@ -123,8 +123,9 @@ test("the Content table draws its columns, and a row's + and Drafts open the pos
 
   const card = page.getByTestId("widget-cell-core/content-table");
   const table = card.getByTestId("content-table");
+  // Placed at its widest, the card is large and draws its rows as a table.
   await expect(table.getByRole("columnheader")).toHaveText([
-    "Collection",
+    "Name",
     "Entries",
     "Drafts",
     "Updated",

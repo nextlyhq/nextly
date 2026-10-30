@@ -33,6 +33,7 @@ export {
 } from "./define-widget";
 export {
   defineAttentionItem,
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
   type AdminDashboardConfig,
   type AttentionCount,
   type AttentionItem,

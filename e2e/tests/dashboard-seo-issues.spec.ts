@@ -33,6 +33,8 @@ test.describe.configure({ lock: [LOCK.dashboard], mode: "serial" });
 
 const API = "/admin/api";
 const CARD = "seo/issues";
+/** Core's Needs your attention card, which draws the plugin's lines. */
+const ATTENTION_CARD = "core/needs-attention";
 const PAGES = "seo-pages";
 /** The Needs attention line of the one collection the plugin checks here. */
 const PAGES_LINE = "seo/issues-seo-pages";
@@ -225,13 +227,45 @@ test("its issue count is a Needs attention line naming the pages it checks", asy
     page.getByTestId(`widget-cell-${CARD}`).filter({ visible: true })
   );
 
-  const line = await seoLineFor(page.request);
-  // The same issues the card draws, as one count, linked to the list they are
-  // fixed in: the card reads this one collection, which has this one line.
-  expect(line).toEqual(
+  // The same issues the card draws, as one count: the card reads this one
+  // collection, which has this one line. The attention card caps what it shows
+  // at 99, as "99+".
+  const issues = Object.values(bars).reduce((sum, n) => sum + n, 0);
+  const shown = issues > 99 ? "99+" : String(issues);
+
+  // The line as Needs your attention draws it, found by its label among the
+  // card's rows: other specs' items share the card, and a row past the card's
+  // height waits behind "Show N more".
+  const attention = page
+    .getByTestId(`widget-cell-${ATTENTION_CARD}`)
+    .filter({ visible: true });
+  await expect(attention).toBeVisible();
+  const line = attention
+    .getByTestId("needs-attention-item")
+    .filter({ hasText: `SEO issues in ${PAGES}` });
+  const more = attention.getByRole("button", { name: /^Show \d+ more$/ });
+  if (!(await line.isVisible()) && (await more.isVisible())) {
+    await more.click();
+  }
+  await expect(line).toBeVisible();
+  await expect(line).toContainText(`SEO issues in ${PAGES} · ${shown}`);
+
+  // Its one Review opens the list the issues are fixed in.
+  const review = line.getByRole("link", { name: /^Review /i });
+  await expect(review).toHaveAttribute(
+    "href",
+    new RegExp(`/admin/collections/${PAGES}$`)
+  );
+  await review.click();
+  await expect(page).toHaveURL(
+    new RegExp(`/admin/collections/${PAGES}(\\?|$)`)
+  );
+
+  // The digest the card draws answers the same line, as the route answers it.
+  expect(await seoLineFor(page.request)).toEqual(
     expect.objectContaining({
       label: `SEO issues in ${PAGES}`,
-      count: Object.values(bars).reduce((sum, n) => sum + n, 0),
+      count: issues,
       link: `collections/${PAGES}`,
     })
   );
