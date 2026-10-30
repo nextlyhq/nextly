@@ -63,7 +63,6 @@ import {
   SITE_CONFIG,
   siteDashboardContext,
   siteDashboardFaults,
-  siteDashboardKeysNotApplied,
   siteDashboardRulesOf,
   siteDashboardSnapshot,
   siteDefaultLayoutPlan,
@@ -135,8 +134,9 @@ export function resetWidgetRegistries(
   // above: a hot reload must not accumulate the previous boot's plugins.
   setContributedWidgets(contributedWidgetSummaries(plugins));
   // The resolved list the admin's component-map check reads, so it judges
-  // the generated map against the plugins this boot runs.
-  setAdminComponentPlugins(plugins);
+  // the generated map against the plugins this boot runs, and the dashboard
+  // as registered here, a widget a plugin's setup() adds included.
+  setAdminComponentPlugins(plugins, dashboard);
 
   // The domains that answer a source of their own publish it here, after the
   // stores are empty and BEFORE core's widgets: a widget's settings are
@@ -175,6 +175,8 @@ export function resetWidgetRegistries(
     groups: [
       { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
       ...pluginWidgetDeclarationGroups(dashboards),
+      // The site's own widgets last, kept and published as a plugin's are.
+      ...siteWidgetGroup(site),
     ],
     legacy: pluginLegacyWidgetIds(plugins),
     references: (declared, groups) => [
@@ -185,7 +187,6 @@ export function resetWidgetRegistries(
         siteDashboardContext(declared, pluginAlternatives(dashboards), coreIds)
       ),
     ],
-    checkedOnly: siteWidgetGroup(site),
     logger,
   });
   // Only once the check above found no fault, so every item kept is whole.
@@ -200,7 +201,6 @@ export function resetWidgetRegistries(
   setSiteDashboardRules(
     siteDashboardRulesOf(site, pluginAlternatives(dashboards))
   );
-  warnSiteDashboardKeysNotApplied(site, logger);
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin
@@ -217,9 +217,9 @@ export function resetWidgetRegistries(
 }
 
 /**
- * The site config's own widgets, as one more owner's declarations: checked
- * with the plugins', and not registered until the admin's component map also
- * reads them.
+ * The site config's own widgets, as one more owner's declarations: checked,
+ * kept and published as a plugin's are, and listed in the admin's component
+ * map beside them.
  */
 function siteWidgetGroup(dashboard: unknown): DeclaredWidgetGroup[] {
   const widgets =
@@ -229,21 +229,4 @@ function siteWidgetGroup(dashboard: unknown): DeclaredWidgetGroup[] {
   return widgets === undefined
     ? []
     : [{ owner: SITE_CONFIG, declarations: widgets }];
-}
-
-/**
- * One startup warning naming the `admin.dashboard` keys the site sets that
- * this version checks but does not apply yet, so a setting never appears to do
- * nothing in silence.
- */
-function warnSiteDashboardKeysNotApplied(
-  dashboard: unknown,
-  logger: StartupLogger
-): void {
-  const keys = siteDashboardKeysNotApplied(dashboard);
-  if (keys.length === 0) return;
-  logger.warn(
-    `${keys.map(key => `admin.dashboard.${key}`).join(", ")} ${keys.length === 1 ? "is" : "are"} accepted but not applied yet in this version.`,
-    { kind: "site-dashboard-keys-not-applied", keys }
-  );
 }

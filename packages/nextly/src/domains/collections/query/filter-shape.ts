@@ -187,7 +187,7 @@ const TEXT = accepting(isMatchable, "a string");
  * operand, and {@link FILTER_OPERATORS} is read from it rather than kept
  * beside it.
  */
-const OPERAND_RULES: Readonly<Record<string, OperandRule>> = {
+const OPERAND_RULES = {
   equals: EQUALITY,
   not_equals: EQUALITY,
   greater_than: ORDERED,
@@ -213,12 +213,23 @@ const OPERAND_RULES: Readonly<Record<string, OperandRule>> = {
   ),
   // A circle is the one region the parser reads.
   within: geo(parseWithinQuery, '"longitude,latitude,radius[,unit]"'),
-};
+} satisfies Readonly<Record<string, OperandRule>>;
+
+/**
+ * An operator a filter may use, by name. Read from the table above, so a
+ * typed filter offers exactly the operators the runtime accepts.
+ */
+export type FilterOperator = keyof typeof OPERAND_RULES;
 
 /** Every operator a filter may use, SQL and geo alike. */
 export const FILTER_OPERATORS: ReadonlySet<string> = new Set(
   Object.keys(OPERAND_RULES)
 );
+
+/** Whether `operator` names one of {@link FILTER_OPERATORS}. */
+function isFilterOperator(operator: string): operator is FilterOperator {
+  return FILTER_OPERATORS.has(operator);
+}
 
 /**
  * What is wrong with a known operator's operand, or `undefined` when usable.
@@ -228,7 +239,7 @@ export const FILTER_OPERATORS: ReadonlySet<string> = new Set(
  * false` and would otherwise get an empty answer with no reason given.
  */
 function operandIssue(
-  operator: string,
+  operator: FilterOperator,
   operand: unknown
 ): OperandIssue | undefined {
   if (operand === undefined) {
@@ -282,7 +293,7 @@ function operatorProblems(
     return;
   }
   for (const [operator, operand] of operators) {
-    const issue = FILTER_OPERATORS.has(operator)
+    const issue = isFilterOperator(operator)
       ? operandIssue(operator, operand)
       : {
           code: "FILTER_UNKNOWN_OPERATOR",

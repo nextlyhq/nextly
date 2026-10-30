@@ -3,11 +3,4 @@
  * plain strings, so server code can read what the admin's map holds
  * without importing the components. Regenerated with it. */
 
-export const registeredComponentPaths = [
-  "@/plugins/block-fixture/editor#blockFixtureEditor",
-  "@/plugins/block-fixture/editor#FixtureInspector",
-  "@/plugins/widget-kit-fixture/admin#KitCard",
-  "@/plugins/widget-kit-fixture/admin#ThrowingCard",
-  "@nextlyhq/plugin-page-builder/admin#BlocksField",
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderView",
-] as const;
+export const registeredComponentPaths = ["./src/dashboard/site-notes#SiteNotesCard","@/plugins/block-fixture/editor#blockFixtureEditor","@/plugins/block-fixture/editor#FixtureInspector","@/plugins/widget-kit-fixture/admin#KitCard","@/plugins/widget-kit-fixture/admin#ThrowingCard","@/plugins/widget-kit-fixture/admin#UnlabelledControlCard","@nextlyhq/plugin-page-builder/admin#BlocksField","@nextlyhq/plugin-page-builder/admin#PageBuilderView"] as const;

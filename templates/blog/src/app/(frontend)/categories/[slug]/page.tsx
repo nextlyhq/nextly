@@ -19,7 +19,7 @@ import {
   getPostsByCategory,
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
-import { archiveStaticParams, isArchivePlaceholder } from "@/lib/static-params";
+import { detailStaticParams, isBuildPlaceholder } from "@/lib/static-params";
 
 // Pre-render known category pages at build time. Freshness afterward is
 // tag-based: the query helpers tag their reads (src/lib/queries), so a
@@ -27,8 +27,8 @@ import { archiveStaticParams, isArchivePlaceholder } from "@/lib/static-params";
 // next request — no time-based `revalidate`. New categories render on demand.
 export async function generateStaticParams() {
   // Never empty, so the build learns this page reads the request: see
-  // archiveStaticParams.
-  return archiveStaticParams(await getAllCategorySlugs());
+  // detailStaticParams.
+  return detailStaticParams(await getAllCategorySlugs());
 }
 
 export async function generateMetadata({
@@ -38,7 +38,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug } = await params;
   // The build-time placeholder has no metadata of its own.
-  if (isArchivePlaceholder(slug)) return {};
+  if (isBuildPlaceholder(slug)) return {};
   const category = await getCategoryBySlug(slug);
   if (!category) return { title: "Category Not Found" };
 
@@ -63,14 +63,22 @@ export default async function CategoryPage({
   searchParams: Promise<{ page?: string }>;
 }) {
   const { slug } = await params;
-  const { page: pageParam } = await searchParams;
-  // Read before this, so the build learns the page reads the request; the
-  // placeholder stops here, before any database read.
-  if (isArchivePlaceholder(slug)) notFound();
-  const currentPage = Math.max(1, Number(pageParam) || 1);
+  if (isBuildPlaceholder(slug)) {
+    // The request is read first, so the build learns the page reads it; the
+    // placeholder stops here, before any database read.
+    await searchParams;
+    notFound();
+  }
 
+  // Decided before the request is read: an unknown archive's render then
+  // reads nothing per request, so Next.js can store it and answer 404 (to a
+  // crawler at once, to a browser from its second request) instead of a
+  // streamed not-found page.
   const category = await getCategoryBySlug(slug);
   if (!category) notFound();
+
+  const { page: pageParam } = await searchParams;
+  const currentPage = Math.max(1, Number(pageParam) || 1);
 
   const posts = await getPostsByCategory(slug, {
     page: currentPage,

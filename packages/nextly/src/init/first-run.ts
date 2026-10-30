@@ -19,6 +19,7 @@
 // first query will surface real DB errors loudly, and `nextly db:sync`
 // remains the canonical recovery path.
 
+
 import {
   type ExtensionSchema,
   getActiveExtensionSchema,

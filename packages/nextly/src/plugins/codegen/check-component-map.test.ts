@@ -129,6 +129,25 @@ describe("a committed map that does not", () => {
     ]);
   });
 
+  it("names a site widget's missing component as the site config's", async () => {
+    await commit(["@acme/shop/admin#Reports", "@acme/shop/admin#Revenue"]);
+    const found = await checkComponentMapFiles([shop], TYPES, root, undefined, {
+      widgets: [
+        { id: "site/notes", view: { component: "./dashboard/notes#Notes" } },
+      ],
+    });
+    expect(componentMapAgrees(found)).toBe(false);
+    expect(found.missing).toEqual([
+      {
+        path: "./dashboard/notes#Notes",
+        owner: "the site config",
+        use: "widget",
+        widget: "site/notes",
+        fromConfig: true,
+      },
+    ]);
+  });
+
   it("names a missing page component by its use", async () => {
     await commit(["@acme/shop/admin#Revenue"]);
     const found = await check();

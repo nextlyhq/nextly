@@ -297,6 +297,14 @@ export interface AdminBranding {
   devReload?: boolean;
 
   /**
+   * Whether the RUNNING server serves the widget preview page's read, from the
+   * session-gated half alone: the same development check that gates the read.
+   * Only an explicit `true` registers the page; `undefined` means the answer
+   * has not arrived, which holds the page's address rather than showing it.
+   */
+  widgetPreviews?: boolean;
+
+  /**
    * INSTALLED plugin metadata, for sidebar rendering and plugin settings pages.
    *
    * Comes from the session-gated half alone, so its absence means the list has

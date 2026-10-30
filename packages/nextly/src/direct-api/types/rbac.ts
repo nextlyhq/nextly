@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type {
   ApiKeyMeta,
   ApiKeyTokenType,
@@ -45,6 +46,12 @@ export interface Role {
    * API returns carries it; optional so a Role built by hand still compiles.
    */
   assignable?: boolean;
+  /**
+   * Which built-in role this is: `"public"` for the role whose permissions
+   * are what visitors who aren't signed in may do, `"super-admin"` for the
+   * role holding every permission. Absent for every other role.
+   */
+  builtIn?: "public" | "super-admin";
 }
 
 /**
@@ -528,4 +535,18 @@ export interface CheckApiKeyResult {
   roles?: string[];
   /** ISO 8601 expiry date, or `null` for unlimited keys. Present when `valid` is `true`. */
   expiresAt?: string | null;
+  /**
+   * The key's own scope, as REST authentication makes it for a request on the
+   * key. Present when `valid` is `true`.
+   *
+   * Pass it as the Direct API `actor`; it carries the key's own authority,
+   * including super-admin only for a super-admin's unnarrowed full-access key
+   * while its maker is one. A scope built by hand from `permissions` and
+   * `roles` carries no super-admin authority, and this one holds it no longer
+   * than a session holds a standing that changed, so ask again rather than
+   * keep it.
+   *
+   * @experimental The shape may change until the access screens settle.
+   */
+  actor?: AuthenticatedScope;
 }

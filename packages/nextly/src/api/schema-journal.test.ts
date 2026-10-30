@@ -153,6 +153,38 @@ describe("getSchemaJournal", () => {
       expect(readJournal).toHaveBeenCalledTimes(1);
     });
 
+    it("admits a key carrying its maker's super-admin authority, within its bound", async () => {
+      (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...key,
+        keyHoldsSuperAdmin: true,
+        keyStandingAskedAt: performance.now(),
+      });
+
+      const res = await getSchemaJournal(
+        makeReq("http://x/api/schema/journal")
+      );
+
+      expect(res.status).toBe(200);
+    });
+
+    it("refuses a key whose authority's bound passed while it was authenticated", async () => {
+      // The standing that admitted it was asked longer ago than the bound
+      // allows: a scope made from it would carry no authority, and neither
+      // may this door.
+      (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...key,
+        keyHoldsSuperAdmin: true,
+        keyStandingAskedAt: performance.now() - 60_000,
+      });
+
+      const res = await getSchemaJournal(
+        makeReq("http://x/api/schema/journal")
+      );
+
+      expect(res.status).toBe(403);
+      expect(readJournal).not.toHaveBeenCalled();
+    });
+
     it("refuses the key, whatever role its maker holds", async () => {
       (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue(
         key

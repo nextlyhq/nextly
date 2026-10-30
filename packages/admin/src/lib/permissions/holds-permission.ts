@@ -1,25 +1,37 @@
 /**
  * Whether a permission list holds a permission, as the server counts it.
  *
- * A permission is held where the list names it, or, on media, settings and
- * the Email hub, where the list names that resource's `manage-` permission,
- * which the server still counts as its read, create, update and delete
- * ({@link manageCountsFor}). Every permission check in the admin asks this, so
- * a role given the plain permissions and a role still holding `manage-` are
- * shown what the server lets each do.
+ * A permission is held where the list names it. A retired `manage-`
+ * permission on media, settings or the Email hub is asked as the server asks
+ * it: held only by holding all four plain permissions it stood for, so a role
+ * `nextly upgrade` has not converted, holding the retired row alone, is shown
+ * none of what it once opened, and a converted role is shown all of it. Every
+ * permission check in the admin asks this.
+ *
+ * The rule is core's own (`auth/access/retired-manage-permissions`), imported
+ * from its source: its imports are types alone, so it bundles into the client
+ * as plain code.
  *
  * @module lib/permissions/holds-permission
  */
-import { manageCountsFor } from "./levels";
+import {
+  RETIRED_MANAGE_PLAIN_ACTIONS,
+  isRetiredManage,
+} from "../../../../nextly/src/auth/access/retired-manage-permissions";
 
 export function holdsPermission(
   held: ReadonlySet<string>,
   permission: string
 ): boolean {
-  if (held.has(permission)) return true;
   const dash = permission.indexOf("-");
-  if (dash === -1) return false;
-  const action = permission.slice(0, dash);
-  const resource = permission.slice(dash + 1);
-  return manageCountsFor(action, resource) && held.has(`manage-${resource}`);
+  if (dash > 0) {
+    const action = permission.slice(0, dash);
+    const resource = permission.slice(dash + 1);
+    if (isRetiredManage(action, resource)) {
+      return RETIRED_MANAGE_PLAIN_ACTIONS.every(plain =>
+        held.has(`${plain}-${resource}`)
+      );
+    }
+  }
+  return held.has(permission);
 }
