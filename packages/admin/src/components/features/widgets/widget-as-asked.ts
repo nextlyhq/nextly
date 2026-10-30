@@ -157,17 +157,52 @@ export function widgetAsAsked(
 }
 
 /**
+ * Whether a card core answers on the server, set as `config` says, reads anything: judged by
+ * the settings whose reading core's knobs decide, as its `load` applies them. A titled
+ * Collection setting reads a collection only where it can title the rows (its list keeps a
+ * source); a Group by that falls back to the collection reads one only where the collection has
+ * something to divide by. A card with neither, such as a note, always reads.
+ */
+function serverCardReads(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined,
+  sources: readonly PublishedContentSource[] | undefined
+): boolean {
+  const settings = widget.settings ?? [];
+  const ctx = readerContext(sources);
+  const probes = [
+    ...(settings.some(
+      setting => setting.type === "collection" && setting.rows === "titled"
+    )
+      ? [{ op: "list" }]
+      : []),
+    ...(settings.some(
+      setting =>
+        setting.type === "groupBy" && setting.defaultFrom === "collection"
+    )
+      ? [{ op: "groupBy" }]
+      : []),
+  ];
+  return probes.every(probe =>
+    askableQuery(applyWidgetSettings(probe, settings, config, ctx))
+  );
+}
+
+/**
  * Whether a card of `widget` with `config` can be asked anything, as `widgetAsAsked` builds it:
- * its query can be asked, or, for a card drawn from cells, at least one of them can. A widget
- * that asks nothing of the dashboard's batch, a card core answers on the server, always can.
- * What the add panel and the Collection picker ask of a widget set to each collection, so it
- * is offered only where its card would draw.
+ * its query can be asked, or, for a card drawn from cells, at least one of them can. A card core
+ * answers on the server asks nothing of the dashboard's batch, and is judged by what its own
+ * load would read (`serverCardReads`). What the add panel and the Collection picker ask of a
+ * widget set to each collection, so it is offered only where its card would draw.
  */
 export function askableWith(
   widget: DashboardWidget,
   config: Record<string, unknown> | undefined,
   sources?: readonly PublishedContentSource[]
 ): boolean {
+  if (widget.serverData === true) {
+    return serverCardReads(widget, config, sources);
+  }
   const asked = widgetAsAsked(widget, config, sources);
   // Judged by what the widget DECLARES: a cells card whose conditional cells
   // all fall away on this collection asks nothing, and would be offered empty.
