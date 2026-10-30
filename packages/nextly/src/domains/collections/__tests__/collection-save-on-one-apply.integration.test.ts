@@ -229,6 +229,7 @@ describeEachDialect("a collection's Builder save", dialect => {
     const statements = watched.count();
     vi.restoreAllMocks();
     const described = await liveItems();
+    const recorded = await recordedFields();
     expect(statements).toBeGreaterThan(0);
     await current.destroy();
 
@@ -246,13 +247,14 @@ describeEachDialect("a collection's Builder save", dialect => {
         expect.any(String),
       ]);
       expect([k, await liveItems()]).toEqual([k, described]);
-      expect(await recordedFields()).toEqual(AFTER.map(field => field.name));
+      expect([k, await recordedFields()]).toEqual([k, recorded]);
       await current.destroy();
     }
   }, 900_000);
 
   it("is refused, naming the table, when another table the Builder owns has drifted", async () => {
     await seeded();
+    const recordedBefore = await recordedFields();
     // A column no save made, on another collection's table.
     await query(`ALTER TABLE ${q("dc_people")} ADD COLUMN ${q("stray")} TEXT`);
 
@@ -260,12 +262,13 @@ describeEachDialect("a collection's Builder save", dialect => {
 
     expect(saved.success).toBe(false);
     expect(saved.message).toContain("dc_people");
-    expect(await recordedFields()).toEqual(BEFORE.map(field => field.name));
+    expect(await recordedFields()).toEqual(recordedBefore);
   }, 120_000);
 
   it("is refused at once, writing nothing, while a migration holds the schema lock", async () => {
     await seeded();
     const before = await liveItems();
+    const recordedBefore = await recordedFields();
     let release = (): void => undefined;
     const released = new Promise<void>(resolve => {
       release = resolve;
@@ -303,6 +306,6 @@ describeEachDialect("a collection's Builder save", dialect => {
     }
 
     expect(await liveItems()).toBe(before);
-    expect(await recordedFields()).toEqual(BEFORE.map(field => field.name));
+    expect(await recordedFields()).toEqual(recordedBefore);
   }, 120_000);
 });

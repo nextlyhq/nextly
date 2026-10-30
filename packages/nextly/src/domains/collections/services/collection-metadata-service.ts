@@ -19,6 +19,7 @@ import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -769,6 +770,38 @@ export class CollectionMetadataService extends BaseService {
        */
       hooks?: StoredHookConfig[];
     }
+  ): Promise<MetadataServiceResult> {
+    try {
+      // Under the schema lock, as every other schema change is, so the save never runs beside a
+      // migration, a sync, a rename or another save, and the collection it plans from is read
+      // inside the lock. Asked conservatively, of the request: a save that changes only labels or
+      // admin options writes a registry row and no DDL, and claiming DDL rights for it would
+      // refuse metadata edits on a deployment whose role may not create the lock table.
+      return await withSchemaChangeExcluded(
+        {
+          adapter: this.adapter,
+          logger: this.logger,
+          label: `update collection "${params.collectionName}"`,
+          issuesDdl:
+            body.fields !== undefined ||
+            body.localized !== undefined ||
+            body.status !== undefined,
+        },
+        () => this.updateCollectionExcluded(params, body)
+      );
+    } catch (error: unknown) {
+      return errorToMetadataResult(
+        error,
+        { statusCode: 400, defaultMessage: "Failed to update collection" },
+        this.dialect
+      );
+    }
+  }
+
+  /** The save, once the schema lock is held. */
+  private async updateCollectionExcluded(
+    params: { collectionName: string },
+    body: Parameters<CollectionMetadataService["updateCollection"]>[1]
   ): Promise<MetadataServiceResult> {
     try {
       const updateArtifacts =
