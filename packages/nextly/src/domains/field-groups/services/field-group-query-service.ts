@@ -27,6 +27,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -288,7 +289,7 @@ export class FieldGroupQueryService extends BaseService {
   ): Promise<void> {
     if (
       !this.localization ||
-      meta.localized !== true ||
+      !storesPerLanguage(meta) ||
       dataArray.length === 0
     ) {
       return;

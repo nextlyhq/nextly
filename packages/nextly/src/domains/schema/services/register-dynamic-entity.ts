@@ -26,6 +26,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { SchemaRegistry } from "../../../database/schema-registry";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { builtByFor } from "../pipeline/registered-collections";
 
 export interface RegisterDynamicEntityArgs {
@@ -50,8 +51,17 @@ export interface RegisterDynamicEntityArgs {
 export async function registerDynamicEntitySchema(
   args: RegisterDynamicEntityArgs
 ): Promise<void> {
-  const { adapter, registry, dialect, tableName, fields, status, localized } =
-    args;
+  const {
+    adapter,
+    registry,
+    dialect,
+    tableName,
+    fields,
+    status,
+    localized: entityLocalized,
+  } = args;
+  // Where its translatable columns live, for its table and its companion alike.
+  const localized = storesPerLanguage({ localized: entityLocalized });
 
   const { generateRuntimeSchema } = await import("./runtime-schema-generator");
   // A localized entity omits its translatable columns from the main runtime

@@ -138,6 +138,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -1475,7 +1476,7 @@ export class SingleQueryService extends BaseService {
       locale,
       fallbackLocale
     );
-    if (!localeChain || singleMeta.localized !== true) return null;
+    if (!localeChain || !storesPerLanguage(singleMeta)) return null;
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return null;
     if (
@@ -1530,7 +1531,7 @@ export class SingleQueryService extends BaseService {
     // Gate on THIS single's flag: a non-localized single has no companion table, and
     // buildCompanionSchema would otherwise classify its text fields as translatable and query a
     // `single_<slug>_locales` table that doesn't exist. (The read swallows that, but skip it.)
-    if (singleMeta.localized !== true) return;
+    if (!storesPerLanguage(singleMeta)) return;
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return;
     await populateCompanionFields({
@@ -1723,7 +1724,7 @@ export class SingleQueryService extends BaseService {
     // in-memory `document` and the returned `localizedDefaults`) but are kept OFF the main
     // insert below — inserting one would target a column that only exists on the companion.
     const localizedNames = new Set(
-      singleMeta.localized === true
+      storesPerLanguage(singleMeta)
         ? resolveLocalizedFieldNames(
             singleMeta.fields as { name: string; type: string }[],
             true
@@ -2050,7 +2051,7 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord,
     localizedDefaults: Record<string, unknown>
   ) {
-    if (!this.localization || singleMeta.localized !== true) return null;
+    if (!this.localization || !storesPerLanguage(singleMeta)) return null;
     if (Object.keys(localizedDefaults).length === 0) return null;
     return buildCompanionSchema({
       slug: singleMeta.slug,
@@ -2190,7 +2191,7 @@ export class SingleQueryService extends BaseService {
     // insert — so this forces the transactional path even when versioning is off.
     const needsCompanionSeed =
       !!this.localization &&
-      singleMeta.localized === true &&
+      storesPerLanguage(singleMeta) &&
       Object.keys(localizedDefaults).length > 0;
     // Probe companion existence BEFORE opening the transaction (a probe issued
     // while the tx holds a max:1-pool connection would deadlock); the seed calls

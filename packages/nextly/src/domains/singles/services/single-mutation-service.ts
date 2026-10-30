@@ -145,6 +145,7 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -478,7 +479,7 @@ export class SingleMutationService extends BaseService {
   private translationsOf(
     singleMeta: DynamicSingleRecord
   ): CompanionSchema | null {
-    if (!this.localization || singleMeta.localized !== true) return null;
+    if (!this.localization || !storesPerLanguage(singleMeta)) return null;
     return buildCompanionSchema({
       slug: singleMeta.slug,
       tableName: singleMeta.tableName,
@@ -1333,7 +1334,7 @@ export class SingleMutationService extends BaseService {
     const meta = singleMeta;
     const fieldConfigs = meta.fields ?? [];
     const companion =
-      this.localization && meta.localized === true
+      this.localization && storesPerLanguage(meta)
         ? buildCompanionSchema({
             slug,
             tableName: meta.tableName,
@@ -1807,7 +1808,7 @@ export class SingleMutationService extends BaseService {
       // isn't localized (unchanged path) — gate on THIS single's `localized` flag so a
       // non-localized single in a localized app doesn't route to a companion never created.
       const companion =
-        this.localization && singleMeta.localized === true
+        this.localization && storesPerLanguage(singleMeta)
           ? buildCompanionSchema({
               slug,
               tableName: singleMeta.tableName,

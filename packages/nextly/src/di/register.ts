@@ -3793,8 +3793,9 @@ async function syncCodeFirstComponents(
 
     // i18n: a localized component omits its translatable columns from the main comp_
     // table and gets a companion `comp_<slug>_locales` (created below).
-    const compLocalized =
-      (compConfig as { localized?: boolean }).localized === true;
+    // Where its translatable columns live: its companion, for a translatable component or for every
+    // component on a site that keeps every translatable field per language.
+    const compLocalized = storesPerLanguage(compConfig);
 
     // A missing table is created by the pipeline, in the one boot apply shared
     // with collections and singles, so it carries every column the desired
@@ -4072,8 +4073,10 @@ async function reconcileSingleTablesForBoot(
       single: { slug: string; tableName: string },
       fields: FieldDefinition[],
       hasStatus: boolean,
-      localized: boolean
+      entityLocalized: boolean
     ): Promise<void> => {
+      // Where the Single's translatable columns live, for its table and its companion alike.
+      const localized = storesPerLanguage({ localized: entityLocalized });
       try {
         const { generateRuntimeSchema: genRt } = await import(
           "../domains/schema/services/runtime-schema-generator"

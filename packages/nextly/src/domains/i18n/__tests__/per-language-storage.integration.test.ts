@@ -2,12 +2,21 @@
  * A site keeping every translatable field per language from the start
  * (`experimental.perLanguageStorage`): on a site that declares no languages and marks nothing
  * translatable, a collection's translatable fields live in its per-language table, under the
- * site's one implicit language, and its shared fields stay on the main table. The Direct API writes
- * and reads them there. With the setting off, the same site stores as it always has.
+ * site's one implicit language, and its shared fields stay on the main table; so do a Single's and
+ * a component's. The Direct API writes and reads them there. With the setting off, the same site
+ * stores as it always has.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, number, text, textarea } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  number,
+  text,
+  textarea,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -24,11 +33,26 @@ afterEach(async () => {
   current = undefined;
 });
 
-/** A site with one collection holding translatable and shared fields, and no languages declared. */
+/**
+ * A site with a collection, a Single and a component, each holding translatable and shared fields,
+ * and no languages declared.
+ */
 async function boot(dialect: TestDialect, perLanguageStorage: boolean) {
   current = await createTestNextly({
     dialect,
     perLanguageStorage,
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "card",
+        fields: [text({ name: "heading" }), number({ name: "rank" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: "site",
+        fields: [text({ name: "tagline" }), number({ name: "visits" })],
+      }),
+    ],
     collections: [
       defineCollection({
         slug: "articles",
@@ -36,6 +60,7 @@ async function boot(dialect: TestDialect, perLanguageStorage: boolean) {
           text({ name: "headline" }),
           textarea({ name: "excerpt" }),
           number({ name: "views" }),
+          fieldGroup({ name: "card", component: "card" }),
         ],
       }),
     ],
@@ -82,6 +107,47 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("keeps a Single's and a component's translatable fields in their per-language tables", async () => {
+      const t = await boot(dialect, true);
+      const columns = await columnsOf(t, [
+        "single_site",
+        "single_site_locales",
+        "comp_card",
+        "comp_card_locales",
+      ]);
+      expect(columns.single_site).toContain("visits");
+      expect(columns.single_site).not.toContain("tagline");
+      expect(columns.single_site_locales).toEqual(
+        expect.arrayContaining(["_parent", "_locale", "tagline"])
+      );
+      expect(columns.comp_card).toContain("rank");
+      expect(columns.comp_card).not.toContain("heading");
+      expect(columns.comp_card_locales).toEqual(
+        expect.arrayContaining(["_parent", "_locale", "heading"])
+      );
+    });
+
+    it("writes and reads a Single's and a component's translatable fields through their per-language tables", async () => {
+      const t = await boot(dialect, true);
+      await t.nextly.updateSingle({
+        slug: "site",
+        data: { tagline: "Welcome", visits: 2 },
+      });
+      expect(await t.nextly.findSingle({ slug: "site" })).toMatchObject({
+        tagline: "Welcome",
+        visits: 2,
+      });
+
+      const created = await t.nextly.create({
+        collection: "articles",
+        data: { headline: "Carded", card: { heading: "On the card", rank: 1 } },
+      });
+      const id = (created.item as { id: string }).id;
+      expect(
+        await t.nextly.findByID({ collection: "articles", id })
+      ).toMatchObject({ card: { heading: "On the card", rank: 1 } });
+    });
+
     it("writes and reads a collection's translatable fields through its per-language table", async () => {
       const t = await boot(dialect, true);
       const created = await t.nextly.create({
@@ -118,11 +184,23 @@ describe.each(getConfiguredTestDialects())(
       const columns = await columnsOf(t, [
         "dc_articles",
         "dc_articles_locales",
+        "single_site",
+        "single_site_locales",
+        "comp_card",
+        "comp_card_locales",
       ]);
       expect(columns.dc_articles).toEqual(
         expect.arrayContaining(["headline", "excerpt", "views"])
       );
+      expect(columns.single_site).toEqual(
+        expect.arrayContaining(["tagline", "visits"])
+      );
+      expect(columns.comp_card).toEqual(
+        expect.arrayContaining(["heading", "rank"])
+      );
       expect(columns.dc_articles_locales).toEqual([]);
+      expect(columns.single_site_locales).toEqual([]);
+      expect(columns.comp_card_locales).toEqual([]);
     });
   }
 );

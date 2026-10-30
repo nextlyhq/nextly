@@ -55,6 +55,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -398,7 +399,7 @@ export class FieldGroupMutationService extends BaseService {
     /** Whether the companion physically exists, so callers can reuse it without re-probing. */
     companionExists: boolean;
   }> {
-    if (!this.localization || meta.localized !== true) {
+    if (!this.localization || !storesPerLanguage(meta)) {
       return {
         schema: null,
         main: data,
@@ -747,7 +748,7 @@ export class FieldGroupMutationService extends BaseService {
         if (resolved.has(slug)) continue;
         resolved.add(slug);
         const meta = await this.registryService.getComponentBySlug(slug);
-        if (!meta || meta.localized !== true) continue;
+        if (!meta || !storesPerLanguage(meta)) continue;
         // Reuse the same split the write performs: it raises the 409 when the
         // companion is missing and the fallback is unavailable, which is exactly the
         // decision needed here — and on the pooled adapter, outside any transaction.
@@ -767,7 +768,7 @@ export class FieldGroupMutationService extends BaseService {
    */
   private async resolveComponentReadiness(slug: string): Promise<void> {
     const meta = await this.registryService.getComponentBySlug(slug);
-    if (!meta || meta.localized !== true) return;
+    if (!meta || !storesPerLanguage(meta)) return;
     const schema = buildCompanionSchema({
       slug: meta.slug,
       tableName: meta.tableName,
@@ -2185,7 +2186,7 @@ export class FieldGroupMutationService extends BaseService {
       return undefined;
     }
     const meta = await this.registryService.getComponent(slug, scope.executor);
-    if (meta.localized !== true) return undefined;
+    if (!storesPerLanguage(meta)) return undefined;
     const schema = buildCompanionSchema({
       slug: meta.slug,
       tableName: meta.tableName,
