@@ -7,6 +7,7 @@ import path from "path";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
+import { nextlyForTemplates } from "./src/__tests__/template-imports";
 import {
   integrationProjects,
   integrationWorkers,
@@ -17,7 +18,9 @@ import {
 const workers = integrationWorkers(process.env);
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  // A template's `nextly` imports resolve to this package's source, as in
+  // the unit run, so a test can boot a template's own collections.
+  plugins: [tsconfigPaths(), nextlyForTemplates()],
   resolve: {
     alias: {
       "@nextly/storage": path.resolve(__dirname, "./src/storage/index.ts"),
