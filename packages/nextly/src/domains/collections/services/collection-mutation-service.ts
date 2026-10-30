@@ -11815,6 +11815,8 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryIds: readonly string[];
     fields: readonly { type: string; name?: string }[];
+    /** The collection, for whether it keeps working drafts. */
+    collection: unknown;
     tx?: TransactionContext;
   }): Promise<Map<string, string[]> | undefined> {
     const held = await this.languagesWithRows(
@@ -11825,6 +11827,16 @@ export class CollectionMutationService extends BaseService {
     if (held === undefined) return undefined;
     const configured =
       this.localization?.locales.map(locale => locale.code) ?? [];
+    // A delete removes each language's held edit too, and a language may
+    // hold one with no row of its own yet, so those languages are asked.
+    if (this.keepsWorkingDrafts(args.collection)) {
+      await this.addWorkingDraftLanguages(held, {
+        collectionName: args.collectionName,
+        entryIds: args.entryIds,
+        configured,
+        tx: args.tx,
+      });
+    }
     const reachesLocalizedFieldGroup = await this.reachesLocalizedFieldGroup(
       args.fields,
       args.tx
@@ -11840,11 +11852,48 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * Add to `held` each language of `configured` an entry holds a working
+   * draft in: one query per language for every entry, in slices the
+   * database binds in one statement.
+   */
+  private async addWorkingDraftLanguages(
+    held: Map<string, string[]>,
+    args: {
+      collectionName: string;
+      entryIds: readonly string[];
+      configured: readonly string[];
+      tx?: TransactionContext;
+    }
+  ): Promise<void> {
+    const drafts = new VersionsRepository(args.tx ?? this.adapter);
+    const scope = {
+      scopeKind: "collection" as const,
+      scopeSlug: args.collectionName,
+    };
+    const slice = Math.max(1, this.adapter.getCapabilities().maxParamsPerQuery);
+    for (const locale of args.configured) {
+      for (let at = 0; at < args.entryIds.length; at += slice) {
+        const found = await drafts.findWorkingDraftsOf(
+          scope,
+          args.entryIds.slice(at, at + slice),
+          locale
+        );
+        for (const id of found.keys()) {
+          const languages = held.get(id) ?? [];
+          if (!languages.includes(locale)) languages.push(locale);
+          held.set(id, languages);
+        }
+      }
+    }
+  }
+
   /** {@link languagesToDeleteEach} for one entry. */
   private async languagesToDelete(args: {
     collectionName: string;
     entryId: string;
     fields: readonly { type: string; name?: string }[];
+    collection: unknown;
     tx?: TransactionContext;
   }): Promise<string[] | undefined> {
     const each = await this.languagesToDeleteEach({
@@ -11912,10 +11961,20 @@ export class CollectionMutationService extends BaseService {
     const db = (tx?.getDrizzle() ?? this.db) as Parameters<
       typeof readCompanionLocaleStatusAll
     >[0];
-    const rows = await db
-      .select({ parent: table._parent, locale: table._locale })
-      .from(companion.table)
-      .where(inArray(table._parent as never, [...entryIds]));
+    // In slices the database binds in one statement, however many entries a
+    // batch names.
+    const slice = Math.max(1, this.adapter.getCapabilities().maxParamsPerQuery);
+    const rows: Record<string, unknown>[] = [];
+    for (let at = 0; at < entryIds.length; at += slice) {
+      rows.push(
+        ...(await db
+          .select({ parent: table._parent, locale: table._locale })
+          .from(companion.table)
+          .where(
+            inArray(table._parent as never, entryIds.slice(at, at + slice))
+          ))
+      );
+    }
     for (const row of rows) {
       if (typeof row.locale !== "string") continue;
       const id = String(row.parent);
@@ -11992,6 +12051,7 @@ export class CollectionMutationService extends BaseService {
       collectionName: gate.collectionName,
       entryIds: ids,
       fields,
+      collection,
       tx,
     });
     if (each === undefined) {
@@ -12035,6 +12095,8 @@ export class CollectionMutationService extends BaseService {
       tableName: string;
       entryId: string;
       fields: readonly { type: string; name?: string }[];
+      /** The collection, for whether it keeps working drafts. */
+      collection: unknown;
       accessParams: Parameters<
         CollectionAccessService["checkCollectionWrite"]
       >[0] & { operation: "delete"; entryId: string };
@@ -12050,6 +12112,7 @@ export class CollectionMutationService extends BaseService {
       collectionName: args.accessParams.collectionName,
       entryId: args.entryId,
       fields: args.fields,
+      collection: args.collection,
       tx,
     });
     if (held === undefined) {
@@ -12079,11 +12142,16 @@ export class CollectionMutationService extends BaseService {
       );
     }
     for (const locale of held) {
-      const access =
-        asked?.get(locale) ??
-        (await withRuleLanguage({ locale, locales: [...held] }, () =>
+      const askNow = () =>
+        withRuleLanguage({ locale, locales: [...held] }, () =>
           this.accessService.checkCollectionWrite(args.accessParams)
-        ));
+        );
+      const known = asked?.get(locale);
+      // A refusal the batch asked before its rows names no entry, so it is
+      // asked again for this one: a caller who may not read the entry is
+      // told it is missing, as for an id that names nothing.
+      const access =
+        known === undefined || known.denied ? await askNow() : known;
       const refused = await this.deleteRowRefusalIn(tx, args, access, locale);
       if (refused) return refused;
     }
@@ -12980,6 +13048,7 @@ export class CollectionMutationService extends BaseService {
         fields: (collection.schemaDefinition?.fields ||
           collection.fields ||
           []) as FieldConfig[],
+        collection,
       };
       // The companion is read for the entry's languages, so it is ready first.
       await this.warmLocalizedReadiness(params.collectionName);
@@ -15371,6 +15440,7 @@ export class CollectionMutationService extends BaseService {
           fields: (collection.schemaDefinition?.fields ||
             collection.fields ||
             []) as FieldConfig[],
+          collection,
           accessParams,
           rowGate: options.rowGate,
         });

@@ -221,8 +221,9 @@ language it changes, told that one as `locale`, and goes ahead only where every 
 allows it: a delete is asked in each language its entry holds, and a delete or a bulk
 delete of several entries judges each entry by its own languages. Where the rule answers
 a filter in each language, the entry must match each language's filter. An update by query
-writes the default language, so it is asked in that language. A collection that keeps no
-languages is asked once. In a collection with localized field groups, a delete asks every
+writes the default language, so it is asked in that language. An unpublish of every
+language is asked once, told every language, and matched in the default language. A
+collection that keeps no languages is asked once. In a collection with localized field groups, a delete asks every
 configured language.
 
 ```ts
