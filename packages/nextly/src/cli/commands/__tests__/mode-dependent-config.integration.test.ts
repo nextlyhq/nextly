@@ -18,13 +18,10 @@
  * evaluated, and the configuration is bundled and imported as only a real
  * process can.
  */
-import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -36,19 +33,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../shared/lib/env";
-
-const ENTRY = fileURLToPath(new URL("../../nextly.ts", import.meta.url));
-const TSCONFIG = fileURLToPath(
-  new URL("../../../../tsconfig.json", import.meta.url)
-);
-// The TypeScript loader, by its location here: the commands run in the
-// project folder, which has no `node_modules` of its own to find it in.
-const TSX = pathToFileURL(
-  join(
-    dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
-    "dist/loader.mjs"
-  )
-).href;
+import {
+  NEXTLY_RUN_TIMEOUT,
+  runNextly,
+} from "../../__tests__/helpers/run-nextly";
 
 /** Collection slugs of this file's own, so its tables are its own. */
 const ALWAYS = "mdc_always";
@@ -66,9 +54,6 @@ export default {
   db: { migrationsDir: "./migrations" },
 };
 `;
-
-/** A command's run: each spawn compiles the CLI from source. */
-const COMMAND_TIMEOUT = 120_000;
 
 describe.each(getConfiguredTestDialects())(
   "a configuration that branches on NODE_ENV (%s)",
@@ -116,27 +101,17 @@ describe.each(getConfiguredTestDialects())(
      * this test booted. A production run's environment check needs a secret
      * and the app's URL, as a production build has them.
      */
-    function nextly(args: string[]) {
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        NEXTLY_TELEMETRY_DISABLED: "1",
+    const nextly = (args: string[]) =>
+      runNextly(args, project, {
+        NODE_ENV: undefined,
         NEXTLY_SECRET: randomBytes(32).toString("hex"),
         NEXT_PUBLIC_APP_URL: "http://localhost:3000",
-        TSX_TSCONFIG_PATH: TSCONFIG,
-      };
-      delete env.NODE_ENV;
-      const run = spawnSync(
-        process.execPath,
-        ["--import", TSX, ENTRY, ...args],
-        { cwd: project, env, encoding: "utf8", timeout: COMMAND_TIMEOUT }
-      );
-      return { status: run.status, stdout: run.stdout, stderr: run.stderr };
-    }
+      });
 
     /** `nextly migrate:create` and `nextly migrate`, with `flags`. */
-    function createAndMigrate(flags: string[]): void {
+    async function createAndMigrate(flags: string[]): Promise<void> {
       for (const command of [["migrate:create", "init"], ["migrate"]]) {
-        const run = nextly([...command, "--quiet", ...flags]);
+        const run = await nextly([...command, "--quiet", ...flags]);
         expect(run.status, run.stderr).toBe(0);
       }
     }
@@ -147,27 +122,27 @@ describe.each(getConfiguredTestDialects())(
     it(
       "--mode production migrates the collection a production-only configuration declares",
       async () => {
-        createAndMigrate(["--mode", "production"]);
+        await createAndMigrate(["--mode", "production"]);
         expect(await exists(ALWAYS)).toBe(true);
         expect(await exists(PRODUCTION_ONLY)).toBe(true);
       },
-      3 * COMMAND_TIMEOUT
+      2 * NEXTLY_RUN_TIMEOUT
     );
 
     it(
       "development mode does not",
       async () => {
-        createAndMigrate([]);
+        await createAndMigrate([]);
         expect(await exists(ALWAYS)).toBe(true);
         expect(await exists(PRODUCTION_ONLY)).toBe(false);
       },
-      3 * COMMAND_TIMEOUT
+      2 * NEXTLY_RUN_TIMEOUT
     );
 
     it(
       "keeps migrate:status --json one JSON document, with the mode line on stderr",
-      () => {
-        const run = nextly([
+      async () => {
+        const run = await nextly([
           "migrate:status",
           "--json",
           "--mode",
@@ -180,7 +155,7 @@ describe.each(getConfiguredTestDialects())(
           "Mode: production (DATABASE_URL from the process environment)\n"
         );
       },
-      2 * COMMAND_TIMEOUT
+      NEXTLY_RUN_TIMEOUT
     );
   }
 );
