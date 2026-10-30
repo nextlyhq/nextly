@@ -130,6 +130,10 @@ export function SchemaChangeDialog({
     leavingTranslation.filter(field => field.refusal).map(field => field.column)
   );
   const refused = refusedColumns.size > 0;
+  // Whether saving deletes stored values, answered once from the preview's
+  // rows and read by both the confirm's colour and the data-loss notice, so the
+  // two cannot disagree. A refused save applies nothing, so it deletes nothing.
+  const deletesData = reviewDeletesData(changes) && !refused;
   const promptedFields = interactiveFields.filter(
     f => !refusedColumns.has(f.name)
   );
@@ -439,11 +443,31 @@ export function SchemaChangeDialog({
           </div>
         )}
 
-        {/* Destructive warning */}
-        {hasDestructiveChanges && warnings.length > 0 && (
+        {/* The data-loss notice shows exactly when the save deletes values; the
+            server's other warnings (a field made required over empty
+            entries, say) still show, as a caution rather than a loss. */}
+        {deletesData ? (
           <Alert variant="destructive">
             <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Data loss warning</AlertTitle>
+            <AlertDescription>
+              {warnings.length > 0 ? (
+                warnings.map((w, i) => (
+                  <span key={i} className="block">
+                    {w}
+                  </span>
+                ))
+              ) : (
+                <span className="block">
+                  Saving deletes the values stored in the fields removed above.
+                </span>
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : warnings.length > 0 ? (
+          <Alert variant="warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Before you save</AlertTitle>
             <AlertDescription>
               {warnings.map((w, i) => (
                 <span key={i} className="block">
@@ -452,15 +476,14 @@ export function SchemaChangeDialog({
               ))}
             </AlertDescription>
           </Alert>
-        )}
+        ) : null}
 
         <SchemaChangeDialogFooter
           nothingSaveable={nothingSaveable}
           refusedCount={refusedColumns.size}
-          // Red only when saving deletes stored values, read from the
-          // preview's rows; the overall flag also covers changes that only
-          // need an answer.
-          emphasisDestructive={reviewDeletesData(changes) && !refused}
+          // Red only when saving deletes stored values (see `deletesData`); the
+          // overall flag also covers changes that only need an answer.
+          emphasisDestructive={deletesData}
           isApplying={isApplying}
           canApply={canApply}
           onClose={() => onOpenChange(false)}

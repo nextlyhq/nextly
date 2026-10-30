@@ -69,6 +69,8 @@ interface ReviewCase {
   classification?: "safe" | "destructive" | "interactive";
   /** The preview's overall flag, set apart from the rows on purpose. */
   hasDestructiveChanges: boolean;
+  /** What the server wrote beside the rows; present in every case by default. */
+  warnings?: string[];
 }
 
 function reviewColour(review: ReviewCase): Colour | "neither" {
@@ -82,14 +84,21 @@ function reviewColour(review: ReviewCase): Colour | "neither" {
       classification={review.classification ?? "safe"}
       changes={{ ...none(), ...review.changes }}
       renamed={review.renamed ?? []}
-      warnings={[]}
+      warnings={review.warnings ?? ["A warning the server wrote."]}
       interactiveFields={review.interactiveFields ?? []}
       leavingTranslation={review.leavingTranslation}
       onConfirm={() => {}}
       isApplying={false}
     />
   );
-  return colourOf(confirmingButton());
+  const colour = colourOf(confirmingButton());
+  // The dialog answers "does this delete data" once: its data-loss notice
+  // shows exactly when its confirm is red, whatever the server wrote.
+  const notice = screen.queryByText("Data loss warning") !== null;
+  expect(notice, "data-loss notice agrees with the confirm").toBe(
+    colour === "destructive"
+  );
+  return colour;
 }
 
 const removedWithValues = {
