@@ -30,6 +30,10 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -96,6 +100,7 @@ import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
@@ -731,7 +736,16 @@ export class SingleMutationService extends BaseService {
       return { success: true, statusCode: 200, data };
     } catch (error) {
       return {
-        ...buildSingleErrorResult(error, "Failed to take the live values"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, params.slug, {
+              trusted: fieldTrustOf(params),
+            })
+          ),
+          "Failed to take the live values"
+        ),
         data: undefined,
       };
     }
@@ -793,50 +807,61 @@ export class SingleMutationService extends BaseService {
     }
 
     // The drafts it removed, counted by the delete made under the lock.
-    return this.adapter.transaction(async tx => {
-      // No row means the document has never been written, which cannot have a
-      // pending change against it. The lock serializes this with the
-      // draft-save upserts that lock this row before writing the sidecar.
-      const entryId = await this.lockedSingleRowId(
-        tx,
-        singleMeta.tableName,
-        params.slug,
-        params.entryId,
-        "discard-working-draft-single-replaced"
-      );
-      if (entryId === undefined) return 0;
-
-      const draftLocale = workingDraftLocale({
-        documentLocalized: singleMeta.localized === true,
-        requestLocale: params.locale ?? null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      });
-      const discardedRef = {
-        scopeKind: "single" as const,
-        scopeSlug: params.slug,
-        entryId,
-      };
-      const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-        discardedRef,
-        draftLocale
-      );
-      await releaseSharedBase(tx, discardedRef, draftLocale);
-      // In the Single's history only when there was a draft to discard.
-      if (removed > 0) {
-        await recordWriteEvent(
+    return this.adapter
+      .transaction(async tx => {
+        // No row means the document has never been written, which cannot have a
+        // pending change against it. The lock serializes this with the
+        // draft-save upserts that lock this row before writing the sidecar.
+        const entryId = await this.lockedSingleRowId(
           tx,
-          { adapter: this.adapter },
-          {
-            subject: { kind: "single", slug: params.slug, id: entryId },
-            kind: "draftDiscarded",
-            actor: actorForWrite(params.actor ?? null, params.user),
-            personName: params.user?.name ?? null,
-            ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
-          }
+          singleMeta.tableName,
+          params.slug,
+          params.entryId,
+          "discard-working-draft-single-replaced"
         );
-      }
-      return removed;
-    });
+        if (entryId === undefined) return 0;
+
+        const draftLocale = workingDraftLocale({
+          documentLocalized: singleMeta.localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
+        const discardedRef = {
+          scopeKind: "single" as const,
+          scopeSlug: params.slug,
+          entryId,
+        };
+        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
+          discardedRef,
+          draftLocale
+        );
+        await releaseSharedBase(tx, discardedRef, draftLocale);
+        // In the Single's history only when there was a draft to discard.
+        if (removed > 0) {
+          await recordWriteEvent(
+            tx,
+            { adapter: this.adapter },
+            {
+              subject: { kind: "single", slug: params.slug, id: entryId },
+              kind: "draftDiscarded",
+              actor: actorForWrite(params.actor ?? null, params.user),
+              personName: params.user?.name ?? null,
+              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+            }
+          );
+        }
+        return removed;
+      })
+      .catch(async (error: unknown) => {
+        // A discard the database is not migrated for answers as such. Its
+        // transaction rolls back whole, so a failure never follows a kept write.
+        throw await asNotMigrated(
+          error,
+          // No caller trust to judge: a discard takes no `overrideAccess`, so
+          // it is told the Single alone.
+          singleNotMigrated(this.singleRegistryService, params.slug)
+        );
+      });
   }
 
   /**
@@ -4704,7 +4729,17 @@ export class SingleMutationService extends BaseService {
       // can throw after the event is already durable; carry `eventRecorded` so
       // the fast-drain still fires for a committed-but-hook-failed write.
       return {
-        ...buildSingleErrorResult(error, "Failed to update Single document"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, slug, {
+              trusted: fieldTrustOf(options),
+            }),
+            { written: committedWrite }
+          ),
+          "Failed to update Single document"
+        ),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,

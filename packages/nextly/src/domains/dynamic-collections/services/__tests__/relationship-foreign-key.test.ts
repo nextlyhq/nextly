@@ -90,3 +90,66 @@ describe("relationshipForeignKey", () => {
     ).toBeNull();
   });
 });
+
+/**
+ * A relationship's target table is the one the target collection was created under: a hyphen in
+ * its address is written as an underscore, as every create names the table. Before hyphenated
+ * addresses were accepted in the Builder, the target was spliced in as written, so a relationship
+ * to `team-updates` referenced a `dc_team-updates` that no create makes. A junction table's NAME is
+ * a stored spelling and stays as it was.
+ */
+describe("a relationship's target table", () => {
+  const toTeamUpdates = (relationType: string, options = {}) =>
+    relationship("update", {
+      target: "team-updates",
+      relationType,
+      ...options,
+    });
+
+  it("is the table the target was created under, for each target address", () => {
+    for (const [target, table] of [
+      ["team-updates", "dc_team_updates"],
+      ["dc_posts", "dc_dc_posts"],
+      ["authors", "dc_authors"],
+    ] as const) {
+      expect(
+        builder().relationshipForeignKey(
+          "dc_notes",
+          relationship("update", { target })
+        )?.referencesTable,
+        target
+      ).toBe(table);
+    }
+  });
+
+  it.each(["postgresql", "mysql"] as const)(
+    "references it when a relationship is added or its actions change (%s)",
+    dialect => {
+      const added = builder(dialect).generateAlterTableMigration(
+        "dc_notes",
+        [],
+        [toTeamUpdates("manyToOne")]
+      );
+      const changed = builder(dialect).generateAlterTableMigration(
+        "dc_notes",
+        [toTeamUpdates("manyToOne", { onDelete: "cascade" })],
+        [toTeamUpdates("manyToOne", { onDelete: "restrict" })]
+      );
+      for (const sql of [added, changed]) {
+        expect(sql).toContain("dc_team_updates");
+        expect(sql).not.toContain("dc_team-updates");
+      }
+    }
+  );
+
+  it("points a junction at it, and keeps the junction's own name", () => {
+    const service = builder("postgresql");
+    const field = toTeamUpdates("manyToMany");
+    const shape = service.junctionShape("dc_notes", field);
+
+    expect(shape.targetTable).toBe("dc_team_updates");
+    expect(shape.table).toBe(
+      service.generateJunctionTableName("dc_notes", "dc_team-updates", "update")
+    );
+  });
+});
