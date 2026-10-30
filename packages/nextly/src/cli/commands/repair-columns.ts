@@ -22,10 +22,12 @@ import type {
   ColumnState,
   DifferenceCause,
 } from "../../domains/schema/repair-columns/types";
-import { describeError } from "../../errors/index";
 import type { CommandContext, GlobalOptions } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
-import { loadConfig } from "../utils/config-loader";
+import { createCliAdapter } from "../utils/adapter";
+import {
+  loadConfigOrExit,
+  requireDatabaseEnv,
+} from "../utils/command-prerequisites";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 const REPAIR_COLUMNS_COMMAND = "repair-columns";
@@ -96,26 +98,22 @@ interface RepairColumnsOptions {
 }
 
 /**
- * Compare and print. Returns the findings, or null when the database settings are unusable, which
- * it names; anything else that stops the run is thrown, and the caller exits 1 for either.
+ * Compare and print, returning the findings. Unusable database settings and a configuration that
+ * does not load end the run in the CLI's error shape here; anything else that stops it is thrown,
+ * and the entry point prints it in that shape.
  */
 async function runRepairColumns(
   options: RepairColumnsOptions,
   context: CommandContext
-): Promise<ColumnFinding[] | null> {
+): Promise<ColumnFinding[]> {
   const { logger } = context;
-  const env = validateDatabaseEnv();
-  if (!env.valid || env.dialect === undefined) {
-    for (const problem of env.errors) logger.error(problem);
-    return null;
-  }
+  const env = requireDatabaseEnv(logger);
   const dialect = env.dialect;
   const cwd = options.cwd ?? context.cwd;
-  const { config, projectRoot, deferredExtends } = await loadConfig({
-    configPath: options.config,
-    cwd,
-    debug: options.verbose,
-  });
+  const { config, projectRoot, deferredExtends } = await loadConfigOrExit(
+    { configPath: options.config, cwd, debug: options.verbose },
+    logger
+  );
 
   const [{ readRepairEntities }, { findColumnDifferences }] = await Promise.all(
     [
@@ -180,14 +178,9 @@ export function registerRepairColumnsCommand(
     .action(async (_options: Record<string, never>, cmd: Command) => {
       const globals = cmd.optsWithGlobals<GlobalOptions>();
       const context = createContext(globals);
-      const findings = await runRepairColumns(
+      await runRepairColumns(
         { config: globals.config, cwd: globals.cwd, verbose: globals.verbose },
         context
-      ).catch((error: unknown) => {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      });
-      // Settings it could not use were named above; the run could not compare anything.
-      if (findings === null) process.exit(1);
+      );
     });
 }

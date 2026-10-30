@@ -29,4 +29,6 @@
 "nextly": patch
 ---
 
-`nextly migrate:create` and `nextly migrate:check` work again in a project nothing else has loaded. Both settle the database dialect from `DATABASE_URL` without connecting, and they stopped on an unexpected error ("the tables were read before that dialect was loaded"). Each now loads its dialect's table definitions itself before compiling the schema.
+`nextly migrate:create` and `nextly migrate:check` work again in a project nothing else has loaded. Neither connects to the database, and both stopped on an unexpected error ("the tables were read before that dialect was loaded"). The schema they compile now loads its dialect's tables itself.
+
+`nextly repair-columns` ends a failed run in the CLI's error shape, with its code and what to do next, like every other command.

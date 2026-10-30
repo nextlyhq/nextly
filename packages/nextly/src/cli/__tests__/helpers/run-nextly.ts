@@ -49,6 +49,18 @@ export function runNextly(
     env: merged,
     encoding: "utf8",
     timeout: NEXTLY_RUN_TIMEOUT,
+    // `--verbose` output with stacks runs past the default 1 MB.
+    maxBuffer: 16 * 1024 * 1024,
   });
-  return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+  // A run that never started, timed out or was killed has no status of its
+  // own; the reason goes with its output, which a failing assertion prints.
+  const stopped = [
+    run.error ? `[runNextly] ${run.error.message}` : "",
+    run.signal ? `[runNextly] stopped by ${run.signal}` : "",
+  ].filter(Boolean);
+  return {
+    status: run.status,
+    stdout: run.stdout ?? "",
+    stderr: [run.stderr ?? "", ...stopped].join("\n"),
+  };
 }

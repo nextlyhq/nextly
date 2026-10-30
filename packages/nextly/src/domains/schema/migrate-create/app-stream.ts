@@ -31,6 +31,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { getCoreSchema } from "../../../schemas/core-schema";
 import type { ExtensionSchema } from "../extension/build-extension-schema";
@@ -256,6 +257,11 @@ export async function compileAppStreamTables(input: {
   dialect: SupportedDialect;
   logger: WarnLogger;
 }): Promise<AppStreamTables> {
+  // Every path below reads the core schema, which is only the running
+  // dialect's once its tables are loaded. Opening a connection loads them, and
+  // the commands that compile here never connect; the contributed path loaded
+  // them only as a side effect of building the extension schema.
+  await loadDialectTables(input.dialect);
   const { compileExtensionSchema } = await import("../extension/publish");
   const schema = await compileExtensionSchema({
     dialect: input.dialect,
