@@ -47,12 +47,13 @@ const QUIET_SCROLL =
   "overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]";
 
 /**
- * The floating panel's height: down to the bottom of the scroll area from
- * under the bar, and never past the editor's own row, so a short document's
- * panel ends where the document does and scrolls inside itself.
+ * The floating panel's height: as tall as what it says, and never taller than
+ * the scroll area under the bar, where it scrolls inside itself. Not capped by
+ * the editor's row: a short document's row ends well above the screen's foot,
+ * and a panel held to it would cut its own sections off.
  */
 const FLOATING_HEIGHT =
-  "h-[calc(var(--editor-scrollport,calc(100vh-4rem))-var(--document-bar-height,3.25rem))] max-h-full";
+  "max-h-[calc(var(--editor-scrollport,calc(100vh-4rem))-var(--document-bar-height,3.25rem))]";
 
 export interface DocumentSidePanelProps {
   mode: DocumentPanelMode;
@@ -170,7 +171,9 @@ function FloatingPanel({
         data-document-panel="floating"
         onKeyDown={onKeyDown}
         className={cn(
-          "pointer-events-auto sticky top-[var(--document-bar-height,3.25rem)] flex flex-col border-l border-border bg-background shadow-lg outline-none",
+          // A sheet hung from under the bar at the editor's right edge: its
+          // open sides are drawn, and its free corner rounded.
+          "pointer-events-auto sticky top-[var(--document-bar-height,3.25rem)] flex flex-col rounded-bl-lg border-b border-l border-border bg-background shadow-lg outline-none",
           FLOATING_HEIGHT
         )}
       >
