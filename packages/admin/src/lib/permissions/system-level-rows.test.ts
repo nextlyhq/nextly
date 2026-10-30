@@ -2,9 +2,9 @@
  * The roles screen's rows for the built-in resources: media, settings and the
  * Email hub's providers and templates. Each is read and set at a level as a
  * collection is, without Can publish. A role still holding a retired
- * `manage-<resource>` permission reads Can edit there and keeps it until the
- * row is changed, which then saves the plain permissions; Settings says what
- * changing the schema needs.
+ * `manage-<resource>` permission reads No access there, as the server counts
+ * it, and keeps the row until it is changed, which then saves the plain
+ * permissions; Settings says what changing the schema needs.
  */
 import { describe, expect, it } from "vitest";
 
@@ -97,14 +97,14 @@ describe("a built-in resource's level", () => {
 describe("a role still holding a retired manage permission", () => {
   const legacy = ["manage-settings"];
 
-  it("reads Can edit on that row", () => {
-    expect(rowLevel(row("settings"), legacy)).toBe("edit");
+  it("reads No access on that row", () => {
+    expect(rowLevel(row("settings"), legacy)).toBe("none");
   });
 
-  it("keeps the grant when the row is not changed", () => {
+  it("keeps the retired row when the row is not changed", () => {
     const next = withLevel(legacy, row("media"), "view");
     expect(next).toContain("manage-settings");
-    expect(rowLevel(row("settings"), next)).toBe("edit");
+    expect(rowLevel(row("settings"), next)).toBe("none");
   });
 
   it("saves the plain permissions once the row is changed", () => {
@@ -129,13 +129,15 @@ describe("rowNotes", () => {
       ["manage-settings"]
     );
     expect(notes[0]).toContain("manage-settings");
-    expect(notes[0]).toContain("nextly upgrade");
+    expect(notes[0]).toContain("gives no access until it is converted");
+    expect(notes[0]).toContain("Run nextly upgrade to convert this role");
     expect(notes[0]).toContain("saving this role converts it");
   });
 
   it("does not promise that saving converts a retired manage permission a base role gives", () => {
     const notes = rowNotes(row("settings"), ["manage-settings"], []);
     expect(notes[0]).toContain("from a base role");
+    expect(notes[0]).toContain("gives no access until it is converted");
     expect(notes[0]).toContain("nextly upgrade");
     expect(notes[0]).not.toContain("saving this role converts it");
   });

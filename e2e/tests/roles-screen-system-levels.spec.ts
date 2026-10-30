@@ -4,10 +4,10 @@
  * permissions.
  *
  * A role still holding a retired `manage-settings` permission, as one an
- * install has not yet converted with `nextly upgrade`, reads Can edit on
- * Settings with a note naming the command. Saving the role keeps that access,
- * stored as the plain permissions; a changed row saves the plain permissions
- * it then shows. Read back through the API, as the levels spec reads them: only
+ * install has not yet converted with `nextly upgrade`, reads No access on
+ * Settings, as the server counts it, with a note naming the command. Saving
+ * the role converts it into the plain permissions, as the command does; a
+ * changed row saves the plain permissions it then shows. Read back through the API, as the levels spec reads them: only
  * the stored role shows what a save did.
  */
 import { randomUUID } from "node:crypto";
@@ -71,19 +71,29 @@ const E2E_DB = path.resolve(
 /**
  * A role still holding the retired `manage-settings` permission, as an
  * install not yet converted holds one. Written to the database directly,
- * since the roles route now stores the plain permissions in its place.
+ * since the roles route now stores the plain permissions in its place, and
+ * the permission itself is no longer seeded: an install from an earlier
+ * release keeps its row, so one is written here where the suite lacks it.
  */
 async function unconvertedRole(): Promise<string> {
   const roleId = await roleHolding(["read-tags"]);
-  const permissionId = permissionIds.get("manage-settings");
-  if (permissionId === undefined) {
-    throw new Error('[e2e] No permission "manage-settings".');
-  }
   // The dev server holds the same file: wait for its lock rather than fail.
   const db = new DatabaseSync(E2E_DB);
   db.exec("PRAGMA busy_timeout = 5000");
   try {
-    // created_at is stored as Unix seconds.
+    // Timestamps are stored as Unix seconds. Another test may have written
+    // the row already; the slug is unique, so this one is then left out.
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      "INSERT OR IGNORE INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES (?, 'Manage settings', 'manage-settings', 'manage', 'settings', ?, ?)"
+    ).run(randomUUID(), now, now);
+    const row = db
+      .prepare("SELECT id FROM permissions WHERE slug = 'manage-settings'")
+      .get() as { id: string } | undefined;
+    if (row === undefined) {
+      throw new Error('[e2e] No permission "manage-settings".');
+    }
+    const permissionId = row.id;
     db.prepare(
       "INSERT INTO role_permissions (id, role_id, permission_id, created_at) VALUES (?, ?, ?, ?)"
     ).run(randomUUID(), roleId, permissionId, Math.floor(Date.now() / 1000));
@@ -172,19 +182,23 @@ test("keeps read and update on Settings as Custom when another row is saved", as
   expect(await storedActions(roleId, "media")).toEqual(["read"]);
 });
 
-test("shows a role still holding manage-settings at Can edit, with a note naming nextly upgrade", async ({
+test("shows a role still holding manage-settings at No access, with a note to run nextly upgrade", async ({
   page,
 }) => {
   const roleId = await unconvertedRole();
 
   await gotoAdmin(page, `/security/roles/edit/${roleId}`);
   await expect(
-    level(page, "Settings", "settings").getByRole("radio", { name: "Can edit" })
+    level(page, "Settings", "settings").getByRole("radio", {
+      name: "No access",
+    })
   ).toBeChecked();
   const settings = page
     .locator('[data-slot="permission-level-row"]')
     .filter({ has: level(page, "Settings", "settings") });
-  await expect(settings.getByText(/nextly upgrade/)).toBeVisible();
+  await expect(
+    settings.getByText(/run nextly upgrade to convert this role/i)
+  ).toBeVisible();
   // POPULATION CONTROL: a row with no retired permission has no such note.
   await expect(
     page
@@ -194,7 +208,7 @@ test("shows a role still holding manage-settings at Can edit, with a note naming
   ).toHaveCount(0);
 });
 
-test("keeps manage-settings' access when the role is saved without changing Settings", async ({
+test("converts manage-settings into the plain permissions when the role is saved without changing Settings", async ({
   page,
 }) => {
   const roleId = await unconvertedRole();
@@ -205,7 +219,7 @@ test("keeps manage-settings' access when the role is saved without changing Sett
       .click()
   );
 
-  // The access is kept, stored as the plain permissions it stood for.
+  // Saving converts it, as `nextly upgrade` does: the plain four it stood for.
   expect(await storedActions(roleId, "settings")).toEqual([
     "create",
     "delete",

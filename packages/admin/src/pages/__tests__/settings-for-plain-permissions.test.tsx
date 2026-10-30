@@ -3,8 +3,8 @@
  * and used on the permission its action names. A role holding read and update
  * on settings, and no `manage-` permission, sees the settings pages and edits
  * on them, and is not offered creating what it may not create. A role still
- * holding `manage-settings` keeps everything, since it counts as the plain
- * four on settings, as the server counts it.
+ * holding only `manage-settings`, not yet converted by `nextly upgrade`, is
+ * shown none of them, as the server refuses it every one.
  *
  * Asked through the real permission hook, answered by a mocked
  * `/me/permissions`, so the check under test is the one the guards and the
@@ -133,15 +133,15 @@ describe("the settings pages, by plain permission", () => {
     }
   });
 
-  it("keeps every settings page for a role still holding manage-settings", async () => {
+  it("shows a role still holding only manage-settings none of them, as the server refuses them", async () => {
     const access = await accessFor(["manage-settings"]);
 
-    expect(access.capabilities.canViewSettings).toBe(true);
+    expect(access.capabilities.canViewSettings).toBe(false);
     for (const route of [...SEEN, ...EDITED, ...CREATED]) {
-      expect(guardAdmits(route, access), route).toBe(true);
+      expect(guardAdmits(route, access), route).toBe(false);
     }
-    expect(navIds(access)).toEqual(expect.arrayContaining(NAV));
-    expect(access.hasPermission(settingsPermissionAt([], "seo"))).toBe(true);
+    expect(navIds(access)).not.toEqual(expect.arrayContaining(["general"]));
+    expect(access.hasPermission(settingsPermissionAt([], "seo"))).toBe(false);
   });
 
   it("shows a role holding no settings permission none of them", async () => {
