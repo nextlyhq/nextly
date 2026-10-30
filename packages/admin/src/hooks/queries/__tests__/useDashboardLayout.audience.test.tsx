@@ -50,6 +50,7 @@ function layout(audience: string) {
     defaultPlacements: [],
     version: 1,
     source: "default",
+    arranged: false,
     scope: "scope",
     audience,
   };
