@@ -1,8 +1,9 @@
 /**
- * The dashboard's Recent activity card, drawn from its `system:activity`
+ * The dashboard's Team activity card, drawn from its `system:activity`
  * answer: the frame's own states, the rows its tier and its "Number of items"
- * allow, each leading to what it is about, and "N+ more" from the one row more
- * the batch asked for.
+ * allow, each saying who did what to which entry in the event's own verb and
+ * leading to what it is about, and "N+ more" from the one row more the batch
+ * asked for.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
@@ -12,7 +13,7 @@ import { render, screen, within } from "@admin/__tests__/utils";
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
 
-import { RecentActivityCard } from "./RecentActivity";
+import { TeamActivityCard } from "./TeamActivity";
 
 /** The collections the workspace payload publishes to the reader, as a test sets them. */
 let mockBranding: { widgetSources?: unknown[] } = {};
@@ -33,6 +34,7 @@ function row(n: number, overrides: Record<string, unknown> = {}) {
     userName: "Ana",
     userEmail: "ana@example.test",
     action: "update",
+    event: "saved",
     collection: "posts",
     entryId: `p${n}`,
     entryTitle: `Doc ${n}`,
@@ -49,7 +51,7 @@ const LIST_QUERY = { source: "system:activity", op: "list" as const };
 
 function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
   const full: WidgetComponentProps = {
-    widgetId: "core/recent-activity",
+    widgetId: "core/team-activity",
     placementId: "card-1",
     settings: {},
     slot: undefined,
@@ -58,7 +60,7 @@ function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
   };
   return render(
     <CardTierContext.Provider value={tier}>
-      {inFrame(<RecentActivityCard {...full} />, "Recent activity")}
+      {inFrame(<TeamActivityCard {...full} />, "Team activity")}
     </CardTierContext.Provider>
   );
 }
@@ -69,7 +71,7 @@ const titles = () =>
     .queryAllByTestId("entity-row-title")
     .map(n => /Doc \d+/.exec(n.textContent ?? "")?.[0]);
 
-describe("the Recent activity card", () => {
+describe("the Team activity card", () => {
   it("holds its rows' place while its first answer is on the way, and is not available with no request", () => {
     const { unmount } = draw({
       isFetching: true,
@@ -169,6 +171,61 @@ describe("the Recent activity card", () => {
     ]);
   });
 
+  it("says what happened in the event's own verb, and a deletion leads nowhere", () => {
+    draw({
+      slot: {
+        ok: true,
+        result: {
+          op: "list",
+          items: [
+            row(1, { action: "create", event: "created" }),
+            row(2, { event: "saved" }),
+            row(3, { event: "published" }),
+            row(4, { event: "unpublished" }),
+            row(5, { action: "delete", event: "deleted" }),
+          ],
+        },
+      },
+      query: { ...LIST_QUERY, limit: 10 },
+    });
+    const drawn = screen.getAllByTestId("entity-row-title");
+    expect(drawn.map(title => title.textContent)).toEqual([
+      "Ana created Doc 1",
+      "Ana saved Doc 2",
+      "Ana published Doc 3",
+      "Ana unpublished Doc 4",
+      "Ana deleted Doc 5",
+    ]);
+    // Every row but the deletion opens its entry.
+    expect(drawn.map(title => title.closest("a") !== null)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it("says what an older server's row did by its action, when the row names no event", () => {
+    draw({
+      slot: {
+        ok: true,
+        result: {
+          op: "list",
+          items: [
+            row(1, { event: undefined }),
+            // An event outside the server's closed set is read as none, never drawn as a verb.
+            row(2, { event: "archived" }),
+          ],
+        },
+      },
+      query: LIST_QUERY,
+    });
+    expect(
+      screen.getAllByTestId("entity-row-title").map(title => title.textContent)
+    ).toEqual(["Ana updated Doc 1", "Ana updated Doc 2"]);
+  });
+
   it("draws no more rows than a small card has room for", () => {
     draw(
       {
@@ -202,9 +259,9 @@ describe("the Recent activity card", () => {
     // The count's own words: a bare /12/ also matches a relative time such as "12h ago".
     // Seen with its dot in the row's title, and heard with a comma in its spoken form.
     expect(screen.getByTestId("entity-row-title")).toHaveTextContent(
-      "Ana updated Doc 1 · 12 times"
+      "Ana saved Doc 1 · 12 times"
     );
-    expect(screen.getByText("Ana updated Doc 1, 12 times")).toHaveClass(
+    expect(screen.getByText("Ana saved Doc 1, 12 times")).toHaveClass(
       "sr-only"
     );
   });
@@ -240,7 +297,7 @@ describe("the Recent activity card", () => {
   });
 
   it("names an untitled entry's collection by the label it shows, in the title and the meta alike", () => {
-    // 🔴 Relabelled on the meta line alone, one row would say "Ana updated blog_posts" over
+    // 🔴 Relabelled on the meta line alone, one row would say "Ana saved blog_posts" over
     // "Blog Posts".
     mockBranding = {
       widgetSources: [
