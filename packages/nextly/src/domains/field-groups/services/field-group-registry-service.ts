@@ -21,6 +21,7 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
   calculateSchemaHash,
@@ -123,6 +124,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   DynamicFieldGroupRecord,
   FieldGroupMigrationStatus
 > {
+  // Every read of one looks its registry row up, so it comes from the registry row cache.
+  protected override readonly readsRowsFromCache = true;
+
   protected readonly registryTableName = STORAGE_FORMAT.registryTable;
   protected readonly resourceType = "Component";
   protected readonly tableNamePrefix = STORAGE_FORMAT.tablePrefix;
@@ -160,6 +164,25 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     executor?: unknown
   ): Promise<DynamicFieldGroupRecord> {
     return this.getRecordOrThrow(slug, executor);
+  }
+
+  /**
+   * The component's registry row as stored, past the registry row cache: for a schema save, which
+   * decides from the stored row and re-reads it to learn whether its own write landed.
+   */
+  async getComponentForWrite(slug: string): Promise<DynamicFieldGroupRecord> {
+    return this.getRecordForWrite(slug);
+  }
+
+  /**
+   * The component's registry row as stored, or null if missing, past the registry row cache: for a
+   * schema save of something that uses the component, which plans its DDL from the component's
+   * stored table.
+   */
+  async findComponentForWrite(
+    slug: string
+  ): Promise<DynamicFieldGroupRecord | null> {
+    return this.findRecordForWrite(slug);
   }
 
   async getAllComponents(
@@ -208,7 +231,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Registering Component", { slug: data.slug });
 
-    const existing = await this.getComponentBySlug(data.slug);
+    const existing = await this.findRecordForWrite(data.slug);
     if (existing) {
       // Generic public message; the conflicting slug stays out of the
       // wire and lives in logContext for operator visibility.
@@ -251,6 +274,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         record,
         { returning: "*" }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.logger.info("Component registered", {
         slug: data.slug,
@@ -316,6 +341,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
 
     return this.deserializeRecord(result);
   }
@@ -333,7 +360,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     refuseChangeOutsideCode(existing, slug, options?.source);
 
@@ -372,6 +399,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         this.whereEq("slug", slug),
         { returning: "*" }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (results.length === 0) {
         // Generic "Not found."; slug in logContext.
@@ -500,7 +529,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       expectedSchemaVersion,
     });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     refuseChangeOutsideCode(existing, slug, options?.source);
 
@@ -542,6 +571,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           ],
         }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (matched === 0) {
         this.logger.info("Component conditional update did not match", {
@@ -568,7 +599,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   async deleteComponent(slug: string): Promise<void> {
     this.logger.debug("Deleting Component", { slug });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     if (existing.locked) {
       // Defined in code, as the caller is told; the slug goes to the log.
@@ -625,6 +656,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         await this.resolveRegistryTableName(),
         this.whereEq("slug", slug)
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.logger.info("Component deleted", { slug });
     } catch (error) {
@@ -672,7 +705,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.getComponentBySlug(config.slug);
+        const existing = await this.findRecordForWrite(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
         // Canonical resolution: comp_ + normalized slug, matching what the
         // runtime schema layer and migrate:create derive for the same
@@ -793,7 +826,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           // divergence this sync exists to close.
           const settled =
             existing.migrationStatus === "diverged"
-              ? await this.getComponent(config.slug)
+              ? await this.getRecordForWrite(config.slug)
               : existing;
 
           await this.syncExistingCodeFirstComponent({

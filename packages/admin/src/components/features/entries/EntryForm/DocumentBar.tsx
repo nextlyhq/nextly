@@ -48,12 +48,14 @@ import { translationCounts } from "../translation-meta";
 
 import { actionsAt } from "./document-actions";
 import { useDocumentBarHeight } from "./document-bar-height";
+import type { DocumentPanelMode } from "./document-panel-mode";
 import {
   DocumentActionBar,
   WIDE_ONLY,
   type NarrowMenuItem,
 } from "./DocumentActionBar";
 import { useHostedDocumentActions } from "./DocumentActionsContext";
+import { DOCUMENT_PANEL_TOGGLE_ATTRIBUTE } from "./DocumentSidePanel";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import {
@@ -170,10 +172,18 @@ export interface DocumentBarProps {
    */
   writesRefused?: boolean;
 
-  /** Rail collapsed state. */
+  /** Whether the document panel is out of the way (folded, or not opened). */
   isRailCollapsed?: boolean;
-  /** Rail toggle handler. */
+  /** Shows or hides the document panel. Absent, no toggle is drawn. */
   onToggleRail?: () => void;
+  /**
+   * How the document panel sits at the editor's width (`document-panel-mode`).
+   * As a sheet, on a phone, History, the preview and the panel toggle fold
+   * into the document's menu as rows, so the bar keeps to one row.
+   *
+   * @default "docked"
+   */
+  panelMode?: DocumentPanelMode;
   /**
    * Plugin-contributed toolbar controls, rendered first in the bar's action
    * group. Kept as an opaque node so the bar stays plugin-agnostic — the
@@ -284,9 +294,9 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
           controls, History, Preview, the document's own verbs, then the panel
           toggle at the far end.
 
-          On a narrow screen History and the preview fold into the document's
-          menu and the panel toggle goes (the panel is a page there), so the
-          actions stay one row. The group also wraps inside itself, never past
+          On a phone (the panel's sheet mode) History, the preview and the
+          panel toggle fold into the document's menu as rows, so the actions
+          stay one row. The group also wraps inside itself, never past
           the editor's edge: a preview pane can narrow the editor on a wide
           screen, and a feature's contributed controls, which this cannot size,
           must never push the bar's own off it. */}
@@ -352,6 +362,9 @@ function DocumentBarActions({
   onShareOpenChange: (open: boolean) => void;
 }) {
   const pending = props.isSubmitting === true;
+  // On a phone, History, the preview and the panel toggle are menu rows.
+  const folded = props.panelMode === "sheet";
+  const panel = panelToggleFor(props, historyOpen);
   // What the version on screen offers in place of the document's own verbs.
   // A colleague's claim or a submit in flight withholds restoring, as it
   // withholds every other write.
@@ -363,7 +376,7 @@ function DocumentBarActions({
   const previewProps = previewPropsFor(props, () => onShareOpenChange(true));
   return (
     <>
-      {historyOffered ? (
+      {historyOffered && !folded ? (
         <HistoryButton open={historyOpen} onOpen={onOpenHistory} />
       ) : null}
       {versionActions ? (
@@ -377,32 +390,68 @@ function DocumentBarActions({
           previewProps={previewProps}
           documentActions={documentActions}
           pending={pending}
-          narrowItems={narrowItemsFor(
-            historyOffered ? onOpenHistory : undefined,
-            previewProps
-          )}
+          folded={folded}
+          narrowItems={
+            folded
+              ? narrowItemsFor(
+                  historyOffered ? onOpenHistory : undefined,
+                  previewProps,
+                  panel
+                )
+              : []
+          }
         />
       )}
-      {/* Not while history is open, which takes the panel's place. */}
-      {props.onToggleRail && !historyOpen ? (
-        <PanelToggle
-          collapsed={props.isRailCollapsed === true}
-          onToggle={props.onToggleRail}
-        />
+      {panel && !folded ? (
+        <PanelToggle collapsed={panel.collapsed} onToggle={panel.toggle} />
       ) : null}
-      {/* What the share popover hangs from: the end of this row, which
-            stays on screen at every width, unlike the preview control that
-            folds into the document menu on a narrow one. */}
-      {props.shareDocument === undefined ? null : (
-        <SharePreviewPopover
-          document={props.shareDocument}
-          open={shareOpen}
-          onOpenChange={onShareOpenChange}
-        >
-          <span className="h-0 w-0 self-end" aria-hidden="true" />
-        </SharePreviewPopover>
-      )}
+      <ShareAnchor
+        document={props.shareDocument}
+        open={shareOpen}
+        onOpenChange={onShareOpenChange}
+      />
     </>
+  );
+}
+
+/**
+ * The panel toggle the bar offers: outside create mode (no handler is given
+ * there), and not while history is open, which takes the panel's place.
+ */
+function panelToggleFor(
+  props: DocumentBarProps,
+  historyOpen: boolean
+): { collapsed: boolean; toggle: () => void } | undefined {
+  if (!props.onToggleRail || historyOpen) return undefined;
+  return {
+    collapsed: props.isRailCollapsed === true,
+    toggle: props.onToggleRail,
+  };
+}
+
+/**
+ * What the share popover hangs from: the end of the bar's row, which stays on
+ * screen at every width, unlike the preview control that folds into the
+ * document menu on a phone.
+ */
+function ShareAnchor({
+  document,
+  open,
+  onOpenChange,
+}: {
+  document: PreviewLinkDocument | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  if (document === undefined) return null;
+  return (
+    <SharePreviewPopover
+      document={document}
+      open={open}
+      onOpenChange={onOpenChange}
+    >
+      <span className="h-0 w-0 self-end" aria-hidden="true" />
+    </SharePreviewPopover>
   );
 }
 
@@ -444,13 +493,14 @@ function previewPropsFor(
 }
 
 /**
- * The bar's own controls as menu rows, for a screen too narrow to keep them
+ * The bar's own controls as menu rows, for an editor too narrow to keep them
  * beside the document's verbs: History when it is offered, then the preview's
- * choices.
+ * choices, then the panel toggle.
  */
 function narrowItemsFor(
   openHistory: (() => void) | undefined,
-  previewProps: PreviewActionsProps
+  previewProps: PreviewActionsProps,
+  panel: { collapsed: boolean; toggle: () => void } | undefined
 ): NarrowMenuItem[] {
   return [
     ...(openHistory
@@ -462,7 +512,21 @@ function narrowItemsFor(
       onSelect: choice.run,
       disabled: choice.disabled,
     })),
+    ...(panel
+      ? [
+          {
+            id: "panel",
+            label: panelToggleLabel(panel.collapsed),
+            onSelect: panel.toggle,
+          },
+        ]
+      : []),
   ];
+}
+
+/** What the panel toggle is called, as a button and as a menu row. */
+function panelToggleLabel(collapsed: boolean): string {
+  return collapsed ? "Show document panel" : "Hide document panel";
 }
 
 function HistoryButton({
@@ -477,7 +541,7 @@ function HistoryButton({
       type="button"
       variant={open ? "secondary" : "outline"}
       size="sm"
-      className={cn("gap-1.5", WIDE_ONLY)}
+      className="gap-1.5"
       // Pressed while history is open, so the control says which state the
       // document is in as well as offering to change it.
       aria-pressed={open}
@@ -558,11 +622,14 @@ function DocumentVerbs({
   previewProps,
   documentActions,
   pending,
+  folded,
   narrowItems,
 }: {
   previewProps: PreviewActionsProps;
   documentActions: HostedActions;
   pending: boolean;
+  /** Whether the preview is a menu row instead, on a phone. */
+  folded: boolean;
   narrowItems: NarrowMenuItem[];
 }) {
   return (
@@ -573,9 +640,7 @@ function DocumentVerbs({
         `disabled` follows the submit buttons: minting a link and opening a
         preview both act on what is already saved, so a submit in flight is a
         race with them. */}
-      <div className={cn("contents", WIDE_ONLY)}>
-        <PreviewActions size="sm" {...previewProps} />
-      </div>
+      {folded ? null : <PreviewActions size="sm" {...previewProps} />}
       <DocumentActionBar
         actions={documentActions.actions}
         bindings={documentActions.bindings}
@@ -587,8 +652,11 @@ function DocumentVerbs({
 }
 
 /**
- * The panel toggle, at the far end after a thin divider. Not on a narrow
- * screen, where the panel is a page rather than beside.
+ * The panel toggle, at the far end after a thin divider. On a phone it is a
+ * row of the document's menu instead.
+ *
+ * Named for what it will do, and `aria-expanded` for whether the panel is
+ * open, which a screen reader says beside the name.
  */
 function PanelToggle({
   collapsed,
@@ -597,22 +665,20 @@ function PanelToggle({
   collapsed: boolean;
   onToggle: () => void;
 }) {
-  const label = collapsed ? "Show rail" : "Hide rail";
+  const label = panelToggleLabel(collapsed);
   return (
     <>
-      <span
-        className={cn("mx-1 h-5 w-px bg-border", WIDE_ONLY)}
-        aria-hidden="true"
-      />
+      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
       <Button
         type="button"
         variant="outline"
         size="sm"
-        className={cn("px-2", WIDE_ONLY)}
+        className="px-2"
         onClick={onToggle}
         aria-label={label}
         title={label}
-        aria-pressed={collapsed}
+        aria-expanded={!collapsed}
+        {...{ [DOCUMENT_PANEL_TOGGLE_ATTRIBUTE]: "" }}
       >
         {collapsed ? (
           <PanelRightClose className="h-4 w-4" />

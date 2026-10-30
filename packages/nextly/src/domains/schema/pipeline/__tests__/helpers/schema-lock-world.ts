@@ -114,6 +114,8 @@ export async function lockWorld(
 export interface Holder {
   /** Resolves once the process has printed `line`. */
   printed(line: string): Promise<void>;
+  /** Every line the process has printed so far, in order. */
+  lines(): readonly string[];
   send(line: string): void;
   /** Resolves with the exit code (or signal) once the process has ended. */
   readonly exited: Promise<number | string>;
@@ -124,21 +126,27 @@ export function startHolder(
   world: LockWorld,
   args: { command: string; leaseSeconds: number; prefix: string }
 ): Holder {
+  return startScript(HOLDER, [
+    world.dialect,
+    world.url,
+    args.command,
+    String(args.leaseSeconds),
+    args.prefix,
+  ]);
+}
+
+/**
+ * A second process running `script` (a TypeScript file, through `tsx`, so the code it runs is
+ * this source) with `args`, driven line by line as a holder is.
+ */
+export function startScript(script: string, args: readonly string[]): Holder {
   const child: ChildProcessWithoutNullStreams = spawn(
     process.execPath,
-    [
-      "--import",
-      "tsx",
-      HOLDER,
-      world.dialect,
-      world.url,
-      args.command,
-      String(args.leaseSeconds),
-      args.prefix,
-    ],
+    ["--import", "tsx", script, ...args],
     { cwd: PACKAGE_ROOT, env: process.env }
   );
   const seen = new Set<string>();
+  const printedLines: string[] = [];
   const waiting = new Map<string, Array<() => void>>();
   let stderr = "";
   child.stderr.on("data", chunk => {
@@ -147,6 +155,7 @@ export function startHolder(
   createInterface({ input: child.stdout }).on("line", raw => {
     const line = raw.trim();
     seen.add(line);
+    printedLines.push(line);
     for (const resolve of waiting.get(line) ?? []) resolve();
     waiting.delete(line);
   });
@@ -154,6 +163,7 @@ export function startHolder(
     child.on("exit", (code, signal) => resolve(code ?? signal ?? "unknown"));
   });
   return {
+    lines: () => printedLines,
     printed(line) {
       if (seen.has(line)) return Promise.resolve();
       return new Promise((resolve, reject) => {

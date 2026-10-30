@@ -12,7 +12,7 @@
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -105,12 +105,28 @@ function pages(removed: boolean) {
 const published = { id: "p1", title: "About", status: "published" } as never;
 
 /** The text of every item in the editor's "More actions" menu. */
+/**
+ * Everything the document bar offers: its own buttons, then the items of its
+ * "More actions" menu where it draws one. Which of them sit in the bar and
+ * which in the menu follows the editor's width, and the bar draws no menu with
+ * nothing in it, so both are read.
+ */
 async function menuItems(): Promise<string[]> {
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "More actions" }));
+  const bar = await screen.findByTestId("document-bar");
+  const buttons = within(bar)
+    .queryAllByRole("button")
+    .map(
+      button =>
+        button.getAttribute("aria-label") ??
+        button.getAttribute("title") ??
+        button.textContent ??
+        ""
+    );
+  const trigger = within(bar).queryByRole("button", { name: "More actions" });
+  if (trigger === null) return buttons;
+  await userEvent.setup().click(trigger);
   const items = await screen.findAllByRole("menuitem");
-  return items.map(item => item.textContent ?? "");
+  return [...buttons, ...items.map(item => item.textContent ?? "")];
 }
 
 /** Every verb in the menu that writes the document or something about it. */

@@ -236,10 +236,15 @@ set -e
 # predate the tree, and runs the root scripts tests when any root file or a
 # Vitest config changed.
 # NEXTLY_PREPUSH_ALL_TESTS=1 runs every test of the touched packages instead.
+#
+# The root scripts tests run FIRST, on every branch below, and a failure there
+# stops the hook before the package tests start. They take a few minutes where
+# the package suites take a quarter of an hour, and a push that fails them used
+# to learn it only after both. A passing run still runs everything it did.
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
-  pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
   node scripts/test-changed.mjs --scripts-only
+  pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
 elif [ "$GATE_STATUS" -ne 0 ]; then
   echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
   exit "$GATE_STATUS"
