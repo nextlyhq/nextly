@@ -48,7 +48,7 @@ describe("resolveItemHref", () => {
     ).toBe(ROUTES.PLUGINS);
   });
 
-  it("keeps the plugins icon a sub-sidebar opener without manage-settings", () => {
+  it("keeps the plugins icon a sub-sidebar opener without the settings permissions", () => {
     // The icon is shown to users who can read a plugin-owned collection, which
     // is a wider set than the page's own guard admits. Navigating them would
     // bounce them to the dashboard and remove their only route to that
@@ -78,7 +78,7 @@ describe("resolveItemHref", () => {
       label: "Settings",
       href: ROUTES.SETTINGS,
     });
-    // Webhook-only role: General is manage-settings-guarded, so land on Webhooks.
+    // Webhook-only role: General is read-settings-guarded, so land on Webhooks.
     expect(resolveItemHref(settings, [], ROUTES.SETTINGS_WEBHOOKS)).toBe(
       ROUTES.SETTINGS_WEBHOOKS
     );

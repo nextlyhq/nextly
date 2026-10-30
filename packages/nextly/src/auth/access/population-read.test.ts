@@ -49,7 +49,6 @@ const service = (access?: Record<string, unknown>): RBACAccessControlService =>
         ? { kind: "collection", slug, access }
         : undefined,
     checkAccessApplyingFilter,
-    checkAnonymousCodeAccessApplyingFilter: vi.fn(),
   }) as unknown as RBACAccessControlService;
 
 const owner = { id: "owner-1", roles: ["editor"] };

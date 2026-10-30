@@ -3,10 +3,10 @@
  * one decision and answered as the system-resource readers answer today.
  *
  * A system resource is not an entry and declares no code rule, so the
- * decision about it is `decidePermission`'s: the permission alone, or the
- * resource's `manage-` permission where that still counts, a super-admin past
- * it, and a key only by its own grant, never its maker's authority. That is
- * what these readers answer, but for the deviations kept below.
+ * decision about it is `decidePermission`'s: the permission alone, a
+ * super-admin past it, and a key only by its own grant, never its maker's
+ * authority. That is what these readers answer, but for the deviations kept
+ * below.
  *
  * @module auth/access/system-resource-read
  */
@@ -46,7 +46,5 @@ export async function readsSystemResource(
   if (actor.kind === "visitor" && resource !== "media") {
     return deviate("visitor-keeps-media", false, () => decided);
   }
-  // A `manage-` permission on the resource counts as its read, as the
-  // decision counts it.
   return decided;
 }
