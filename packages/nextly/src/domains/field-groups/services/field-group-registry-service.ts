@@ -341,7 +341,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     refuseChangeOutsideCode(existing, slug, options?.source);
 
@@ -510,7 +510,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       expectedSchemaVersion,
     });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     refuseChangeOutsideCode(existing, slug, options?.source);
 

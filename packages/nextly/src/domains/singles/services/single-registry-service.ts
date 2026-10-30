@@ -314,6 +314,14 @@ export class SingleRegistryService extends BaseRegistryService<
   }
 
   /**
+   * The Single's registry row as stored, past the registry row cache; null if it is missing. For
+   * a schema save, which checks the stored schema version and advances it.
+   */
+  async getSingleForWrite(slug: string): Promise<DynamicSingleRecord | null> {
+    return this.getRecordBySlug(slug, this.adapter.getDrizzle());
+  }
+
+  /**
    * Every Single's slug and label, read without the rest of its record: what
    * a screen naming every Single needs.
    */
@@ -514,7 +522,7 @@ export class SingleRegistryService extends BaseRegistryService<
   ): Promise<DynamicSingleRecord> {
     this.logger.debug("Updating Single", { slug });
 
-    const existing = await this.getSingle(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     const targetSlug = data.slug ?? slug;
     await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {

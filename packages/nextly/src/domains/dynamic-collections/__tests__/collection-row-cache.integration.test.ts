@@ -2,7 +2,7 @@
  * The collection row cache on every dialect, on the read benchmark's site:
  *
  * - reads are the same with the cache warm as with it cold;
- * - a warm read sends the database 4 statements for an entry and 5 for a page,
+ * - a warm read sends the database 3 statements for an entry and 4 for a page,
  *   where the same read without the cache sends 11 and 13;
  * - every registry write a registry service makes is seen at once, and so is
  *   a Builder schema save's own write, past a read made during the save;
@@ -202,7 +202,8 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("sends a warm read 4 statements for an entry and 5 for a page, where without the cache it sends 11 and 13", async () => {
+    // The card component's registry row comes from the cache as well, a statement off each read.
+    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 11 and 13", async () => {
       const { t, articleId } = await bootSite(dialect);
       const reads = readsOf(t, articleId);
       const counted = async (read: () => Promise<unknown>) => {
@@ -210,11 +211,19 @@ describe.each(getConfiguredTestDialects())(
         return (await statementsOf(dialect, read)).length;
       };
 
-      expect(await counted(reads.detail)).toBe(4);
-      expect(await counted(reads.list)).toBe(5);
+      const warm = {
+        detail: await counted(reads.detail),
+        list: await counted(reads.list),
+      };
       bypass.on = true;
-      expect(await counted(reads.detail)).toBe(11);
-      expect(await counted(reads.list)).toBe(13);
+      const cold = {
+        detail: await counted(reads.detail),
+        list: await counted(reads.list),
+      };
+      expect({ warm, cold }).toEqual({
+        warm: { detail: 3, list: 4 },
+        cold: { detail: 11, list: 13 },
+      });
     });
 
     it("sees every registry write a registry service makes at once", async () => {

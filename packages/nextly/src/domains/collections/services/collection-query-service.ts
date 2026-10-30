@@ -1071,13 +1071,13 @@ export class CollectionQueryService extends BaseService {
    * status — a refusal is a 403 — and flattening it would report an
    * authorization decision as a server fault.
    */
-  private async overlayLocalized(
+  private async overlayLocalized<T>(
     collectionName: string,
     reason: string,
-    run: () => Promise<void>
-  ): Promise<void> {
+    run: () => Promise<T>
+  ): Promise<T> {
     try {
-      await run();
+      return await run();
     } catch (error) {
       if (NextlyError.is(error)) throw error;
       throw NextlyError.internal({
@@ -4608,13 +4608,21 @@ export class CollectionQueryService extends BaseService {
           : null;
       let entry: Record<string, unknown> | undefined;
       if (joinedLocaleChain && companion) {
-        const joined = await selectEntryWithCompanion({
-          db: this.db,
-          mainTable: schema,
-          where: whereCondition,
-          companionTable: companion.table,
-          localeChain: joinedLocaleChain,
-        });
+        const table = companion.table;
+        // As the translations read it stands for fails: the database's own message, which names
+        // the translations table and its columns, never reaches the answer.
+        const joined = await this.overlayLocalized(
+          params.collectionName,
+          "translation-load-failed",
+          () =>
+            selectEntryWithCompanion({
+              db: this.db,
+              mainTable: schema,
+              where: whereCondition,
+              companionTable: table,
+              localeChain: joinedLocaleChain,
+            })
+        );
         entry = joined.entry;
         if (entry) {
           fillCompanionFields({

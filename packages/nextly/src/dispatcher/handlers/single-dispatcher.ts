@@ -1159,7 +1159,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   applySingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: its schema version is checked and advanced below.
+      const single = await svc.registry.getSingleForWrite(slug);
       if (!single) throw new Error("Single not found");
       refuseChangeDefinedInCode(single, "Single", slug);
 

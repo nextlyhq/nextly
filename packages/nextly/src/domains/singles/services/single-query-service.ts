@@ -479,6 +479,20 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * A Single's translations read that failed, as the read answers it. A companion read failure
+ * propagates, and the result builder puts a bare Error's own message on the wire — the failed
+ * query, with companion table and column names in it — so one is answered as an internal error.
+ */
+function translationLoadFailure(slug: string, error: unknown): NextlyError {
+  return NextlyError.is(error)
+    ? error
+    : NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { single: slug, reason: "translation-load-failed" },
+      });
+}
+
 /** A Single's translations, read in the same query as its document. */
 interface JoinedTranslations {
   /** The Single's registered Drizzle table, which its document was read through. */
@@ -909,18 +923,7 @@ export class SingleQueryService extends BaseService {
         params.translations
       );
     } catch (error) {
-      // A companion read failure propagates, and the result builder puts a bare
-      // Error's own message on the wire — the failed query, with companion table
-      // and column names in it.
-      throw NextlyError.is(error)
-        ? error
-        : NextlyError.internal({
-            cause: error instanceof Error ? error : undefined,
-            logContext: {
-              single: slug,
-              reason: "translation-load-failed",
-            },
-          });
+      throw translationLoadFailure(slug, error);
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
@@ -1191,12 +1194,16 @@ export class SingleQueryService extends BaseService {
       let translations: JoinedTranslations | undefined;
       let doc: SingleDocument | null;
       if (joinable) {
+        // As the translations read it stands for fails: the database's own message, which names
+        // the translations table and its columns, never reaches the answer.
         const joined = await selectEntryWithCompanion({
           db: this.adapter.getDrizzle(),
           mainTable: joinable.mainTable,
           where: undefined,
           companionTable: joinable.companion.table,
           localeChain: joinable.localeChain,
+        }).catch((error: unknown) => {
+          throw translationLoadFailure(slug, error);
         });
         doc = (joined.entry as SingleDocument | undefined) ?? null;
         if (doc) {

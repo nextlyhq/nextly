@@ -17,6 +17,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // The detail read as it was before the join, with a switch: the entry, then its translations in
 // a second statement, for the joined read to be compared with.
 const twoStep = vi.hoisted(() => ({ on: false }));
+// A joined read that fails as a driver fails, its message naming the translations table.
+const failJoin = vi.hoisted(() => ({ on: false }));
 vi.mock("../companion-join", async importOriginal => {
   const actual = await importOriginal<typeof import("../companion-join")>();
   const { and, eq } = await import("drizzle-orm");
@@ -34,6 +36,11 @@ vi.mock("../companion-join", async importOriginal => {
     selectEntryWithCompanion: async (
       args: Parameters<typeof actual.selectEntryWithCompanion>[0]
     ) => {
+      if (failJoin.on) {
+        throw new Error(
+          'select "dc_pages_locales"."heading", "single_site_locales"."tagline" failed'
+        );
+      }
       if (!twoStep.on) return actual.selectEntryWithCompanion(args);
       const db = args.db as TwoStepDb;
       const [entry] = await db
@@ -72,6 +79,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   clearRegistryRowCache,
   COLLECTION_ROW_LIFETIME_MS,
@@ -81,6 +89,7 @@ let current: TestNextly | undefined;
 
 afterEach(async () => {
   twoStep.on = false;
+  failJoin.on = false;
   vi.useRealTimers();
   await current?.destroy();
   current = undefined;
@@ -308,17 +317,34 @@ describe.each(getConfiguredTestDialects())(
       const { t } = await bootSite(dialect);
       const singles = t.getService("singleRegistryService") as {
         getSingleBySlug(slug: string): Promise<{ label?: string } | null>;
-        updateSingle(slug: string, data: object): Promise<unknown>;
+        updateSingle(
+          slug: string,
+          data: object,
+          options: { source: string }
+        ): Promise<unknown>;
       };
       const groups = t.getService("fieldGroupRegistryService") as {
         getComponentBySlug(slug: string): Promise<{ label?: string } | null>;
-        updateComponent(slug: string, data: object): Promise<unknown>;
+        updateComponent(
+          slug: string,
+          data: object,
+          options: { source: string }
+        ): Promise<unknown>;
       };
       await singles.getSingleBySlug("site");
       await groups.getComponentBySlug("card");
 
-      await singles.updateSingle("site", { label: "Site settings" });
-      await groups.updateComponent("card", { label: "Teaser card" });
+      // Both are defined in code, which is the only source allowed to change them.
+      await singles.updateSingle(
+        "site",
+        { label: "Site settings" },
+        { source: "code" }
+      );
+      await groups.updateComponent(
+        "card",
+        { label: "Teaser card" },
+        { source: "code" }
+      );
 
       expect((await singles.getSingleBySlug("site"))?.label).toBe(
         "Site settings"
@@ -369,6 +395,62 @@ describe.each(getConfiguredTestDialects())(
         inside = (await singles.getSingleBySlug("site"))?.label;
       });
       expect(inside).toBe("Inside");
+    });
+
+    // A row read a moment ago from the cache would advance a version another instance already
+    // advanced, and two schema changes would share one version.
+    it("advances a component's schema version from the stored row, not the cached one", async () => {
+      const { t } = await bootSite(dialect);
+      const groups = t.getService("fieldGroupRegistryService") as {
+        getComponentBySlug(
+          slug: string
+        ): Promise<{ schemaVersion?: number } | null>;
+        updateComponent(
+          slug: string,
+          data: object,
+          options: { source: string; invalidateSchemaVersion: boolean }
+        ): Promise<{ schemaVersion?: number }>;
+      };
+      const cached = (await groups.getComponentBySlug("card"))?.schemaVersion;
+      // Advanced past the registry services, as another instance's save advances it.
+      const elsewhere = (cached ?? 1) + 5;
+      await t.adapter.update(
+        STORAGE_FORMAT.registryTable,
+        { schema_version: elsewhere },
+        { and: [{ column: "slug", op: "=", value: "card" }] }
+      );
+
+      const updated = await groups.updateComponent(
+        "card",
+        {},
+        { source: "code", invalidateSchemaVersion: true }
+      );
+
+      expect(updated.schemaVersion).toBe(elsewhere + 1);
+    });
+
+    it("keeps a failed joined read's SQL out of the answer", async () => {
+      const { t, bothId } = await bootSite(dialect);
+      failJoin.on = true;
+
+      const entry = await handlerOf(t).getEntry({
+        collectionName: "pages",
+        entryId: bothId,
+        locale: "de",
+        overrideAccess: true,
+        depth: 0,
+      });
+      const single = await t.nextly
+        .findSingle({ slug: "site", locale: "de" })
+        .then(
+          answer => answer,
+          (error: unknown) => error
+        );
+
+      // What the caller is handed: the entry read's answer, and the Single read's error.
+      expect(JSON.stringify(entry)).not.toMatch(/_locales/);
+      expect(single).toBeInstanceOf(Error);
+      expect((single as Error).message).not.toMatch(/_locales/);
     });
   }
 );

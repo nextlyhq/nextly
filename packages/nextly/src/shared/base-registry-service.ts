@@ -283,6 +283,16 @@ export abstract class BaseRegistryService<
   }
 
   /**
+   * The record as stored, read past the registry row cache, throwing NOT_FOUND if missing: for a
+   * write that bases itself on the stored row, such as one that checks or advances its schema
+   * version. A row up to a second old would let two changes made a moment apart, on two
+   * instances, advance the version once between them.
+   */
+  protected async getRecordForWrite(slug: string): Promise<TRecord> {
+    return this.getRecordOrThrow(slug, this.adapter.getDrizzle());
+  }
+
+  /**
    * Get all records, optionally filtered by source, migration status, and locked.
    */
   protected async getAllRecords(options?: BaseListOptions): Promise<TRecord[]> {

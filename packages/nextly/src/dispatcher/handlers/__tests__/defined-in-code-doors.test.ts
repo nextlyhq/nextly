@@ -58,6 +58,8 @@ const lockedComponent = { slug: "seo", locked: true };
 beforeEach(() => {
   vi.mocked(getSingleRegistryFromDI).mockReturnValue({
     getSingleBySlug: vi.fn().mockResolvedValue(lockedSingle),
+    // A schema save reads the Single as stored, past the registry row cache.
+    getSingleForWrite: vi.fn().mockResolvedValue(lockedSingle),
   } as unknown as ReturnType<typeof getSingleRegistryFromDI>);
   vi.mocked(getSingleEntryServiceFromDI).mockReturnValue(
     {} as unknown as ReturnType<typeof getSingleEntryServiceFromDI>

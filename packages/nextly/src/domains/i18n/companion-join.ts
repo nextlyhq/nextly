@@ -182,7 +182,7 @@ interface JoinableDb {
         on: SQL
       ) => {
         where: (
-          where: SQL | undefined
+          where: SQL | SQLWrapper | undefined
         ) => Promise<Record<string, Record<string, unknown> | null>[]>;
       };
     };
@@ -198,7 +198,7 @@ interface JoinableDb {
 export async function selectEntryWithCompanion(args: {
   db: unknown;
   mainTable: unknown;
-  where: SQL | undefined;
+  where: SQL | SQLWrapper | undefined;
   companionTable: unknown;
   localeChain: string[];
   idKey?: string;

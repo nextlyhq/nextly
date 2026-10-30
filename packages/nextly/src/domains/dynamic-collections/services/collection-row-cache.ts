@@ -26,8 +26,7 @@ import { isWithinLifetime, monotonicNow } from "../../../shared/lib/lifetime";
 export const COLLECTION_ROW_LIFETIME_MS = 1000;
 
 interface CachedRow {
-  /** `null` for a slug the registry does not hold: missing is an answer too. */
-  row: Record<string, unknown> | null;
+  row: Record<string, unknown>;
   readAt: number;
   /** The cache's generation when the read began: served only while current. */
   generation: number;
@@ -100,6 +99,9 @@ export async function cachedRegistryRow<
   // database answered.
   const readAt = monotonicNow();
   const row = await read();
+  // A missing row is never kept: a register committing a moment later must be seen at once,
+  // however its clear and its commit fall around this read.
+  if (row === null) return row;
   if (rows === undefined) {
     rows = new Map();
     cache.byDatabase.set(database, rows);

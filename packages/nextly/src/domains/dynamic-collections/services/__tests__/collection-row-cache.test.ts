@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   cachedCollectionRow,
+  cachedRegistryRow,
   clearRegistryRowCache,
   COLLECTION_ROW_LIFETIME_MS,
 } from "../collection-row-cache";
@@ -90,6 +91,37 @@ describe("the collection row cache", () => {
       { slug: "posts", fields: [{ name: "title" }] }
     );
     expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  // A register committing a moment after a read that found nothing must be seen at once, however
+  // its clear and its commit fall around that read.
+  it("keeps no missing row: a slug the registry does not hold is read again", async () => {
+    const database = {};
+    const stored: { value: Record<string, unknown> | null } = { value: null };
+    const read = vi.fn(async () => structuredClone(stored.value));
+
+    await expect(
+      cachedRegistryRow(database, "dynamic_singles", "promo", read)
+    ).resolves.toBeNull();
+    stored.value = { slug: "promo" };
+
+    await expect(
+      cachedRegistryRow(database, "dynamic_singles", "promo", read)
+    ).resolves.toEqual({ slug: "promo" });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a table's rows apart from another table's of the same slug", async () => {
+    const database = {};
+    await cachedRegistryRow(database, "dynamic_singles", "promo", async () => ({
+      kind: "single",
+    }));
+
+    await expect(
+      cachedRegistryRow(database, "dynamic_components", "promo", async () => ({
+        kind: "component",
+      }))
+    ).resolves.toEqual({ kind: "component" });
   });
 
   it("keeps each database's rows apart", async () => {

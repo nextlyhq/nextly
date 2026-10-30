@@ -21,10 +21,9 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
-import { DynamicCollectionRegistryService } from "../../domains/dynamic-collections/services/dynamic-collection-registry-service";
+import { collectionMetadataFetcher } from "../../domains/dynamic-collections/services/collection-metadata-fetcher";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import { retentionPoliciesFrom } from "../../domains/retention/passes";
-import { NextlyError } from "../../errors/nextly-error";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";
@@ -33,7 +32,6 @@ import { CollectionRelationshipService } from "../../services/collections/collec
 import { CollectionService } from "../../services/collections/collection-service";
 import { CollectionsHandler } from "../../services/collections-handler";
 import type { FieldGroupDataService } from "../../services/field-groups";
-import { consoleLogger } from "../../shared/types";
 import { container } from "../container";
 
 import { contentWriteSeams } from "./content-write-seams";
@@ -65,49 +63,8 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     // Runtime schema generation: UI-created collections work without
     // pre-compiled TypeScript schemas.
     fileManager.setAdapter(adapter);
-    // The collection's registry row as `getCollection` reads it: from the row cache outside a
-    // transaction, so a read that loads its companion pays no registry round trip of its own,
-    // and on the caller's transaction connection inside one, uncached, so it sees its own writes.
-    const collectionRows = new DynamicCollectionRegistryService(
-      adapter,
-      logger
-    );
-    fileManager.setMetadataFetcher(
-      async (collectionName: string, executor?: unknown) => {
-        try {
-          const result = (await collectionRows.getCollection(
-            collectionName,
-            executor
-          )) as {
-            fields: unknown;
-            tableName: string;
-            status: boolean;
-            localized: boolean;
-          };
-          return {
-            fields:
-              typeof result.fields === "string"
-                ? JSON.parse(result.fields)
-                : result.fields,
-            tableName: result.tableName,
-            // Normalized to booleans by `getCollection` on every dialect.
-            status: result.status === true,
-            // i18n M4: forward the localized flag so loadCompanionSchema can
-            // build the companion table for localized reads.
-            localized: result.localized === true,
-          };
-        } catch (error) {
-          // A collection the registry does not hold has no metadata: not a failure.
-          if (!NextlyError.isNotFound(error)) {
-            consoleLogger.error(
-              "[registerCollectionServices] Failed to fetch collection metadata",
-              { error: error }
-            );
-          }
-        }
-        return null;
-      }
-    );
+    // Read through the registry row cache outside a transaction (`collectionMetadataFetcher`).
+    fileManager.setMetadataFetcher(collectionMetadataFetcher(adapter, logger));
 
     const dynamicCollectionService = new DynamicCollectionService(
       adapter,

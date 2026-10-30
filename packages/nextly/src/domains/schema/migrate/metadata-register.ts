@@ -416,9 +416,10 @@ export async function registerFromMigrations(
   const singles = mergeSingles(snapshots, logger);
 
   // Step 3: Register each entity, by kind. The rows are written directly, so
-  // the cached collection rows are cleared once the writes have run, landed or
-  // not (`collection-row-cache`).
-  let collectionsRegistered: number;
+  // the cached registry rows, collections' and Singles' alike, are cleared once
+  // the writes have run, landed or not (`collection-row-cache`).
+  let collectionsRegistered = 0;
+  let singlesRegistered = 0;
   try {
     collectionsRegistered = await registerEach(
       collections,
@@ -426,15 +427,15 @@ export async function registerFromMigrations(
       entry => registerCollection(typedAdapter, dialect, entry),
       logger
     );
+    singlesRegistered = await registerEach(
+      singles,
+      "single",
+      entry => registerSingle(typedAdapter, dialect, entry),
+      logger
+    );
   } finally {
     clearRegistryRowCache();
   }
-  const singlesRegistered = await registerEach(
-    singles,
-    "single",
-    entry => registerSingle(typedAdapter, dialect, entry),
-    logger
-  );
 
   if (collectionsRegistered > 0 || singlesRegistered > 0) {
     logger.info?.(
