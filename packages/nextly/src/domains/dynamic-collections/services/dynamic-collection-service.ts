@@ -6,6 +6,7 @@
 import { randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
@@ -1976,8 +1977,17 @@ export class DynamicCollectionService extends BaseService {
     return this.registryService.getCollection(name, executor);
   }
 
-  async unregisterCollection(name: string): Promise<unknown> {
-    return this.registryService.unregisterCollection(name);
+  /** Remove a collection's registry row inside `tx`; forget it once `tx` commits. */
+  async unregisterCollectionIn(
+    tx: TransactionContext,
+    name: string
+  ): Promise<void> {
+    await this.registryService.unregisterCollectionIn(tx, name);
+  }
+
+  /** Forget, in this process, a collection whose registry row has gone. */
+  forgetUnregisteredCollection(name: string): void {
+    this.registryService.forgetUnregisteredCollection(name);
   }
 
   /**

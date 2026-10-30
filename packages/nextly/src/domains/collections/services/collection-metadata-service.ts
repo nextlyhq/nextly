@@ -17,9 +17,12 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+
+import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
 
 /** The parts of a collection's registry row its delete reads. */
 interface DeletedCollectionRow {
@@ -1054,13 +1057,7 @@ export class CollectionMetadataService extends BaseService {
         slug: slugs[index],
         collection: collections[index],
       }));
-      for (const { slug, collection } of ordered) {
-        await this.tearDownStoredWithIt(slug, collection);
-      }
-      await this.dropTables(ordered);
-      for (const { slug } of ordered) {
-        await this.unregister(slug);
-      }
+      await this.removeTogether(ordered);
 
       return {
         success: true,
@@ -1089,18 +1086,19 @@ export class CollectionMetadataService extends BaseService {
   /**
    * Remove what other tables hold for a collection that nothing outside its
    * operation depends on, before its tables go: its field-group values and
-   * its translations.
+   * its translations. Through `adapter`, which is the delete's transaction.
    */
   private async tearDownStoredWithIt(
     slug: string,
-    collection: DeletedCollectionRow
+    collection: DeletedCollectionRow,
+    adapter: TeardownAdapter
   ): Promise<void> {
     // Embedded component instances live in `comp_<slug>` tables keyed by a plain
     // `_parent_table` string with no FK, so dropping this collection's table cascades
     // nothing and would strand every instance. Sweep them (and any nested instances)
     // before the drop.
     await teardownEntityComponentData({
-      adapter: this.adapter,
+      adapter,
       parentTable: collection.tableName,
     });
 
@@ -1111,56 +1109,160 @@ export class CollectionMetadataService extends BaseService {
     // carry (the archive table is created lazily and may not exist).
     await teardownEntityI18n({
       kind: "collection",
-      adapter: this.adapter,
+      adapter,
       slug,
       tableName: collection.tableName,
     });
   }
 
   /**
-   * Drop the tables of the collections deleted together, in drop order, as
-   * ONE migration: the file is the durable record `nextly migrate` applies
-   * in non-dev/deploy flows, and one file is applied in exactly the order
-   * development runs it here.
+   * Remove the collections deleted together, in drop order: all of them or,
+   * where the database can undo a table drop, none.
+   *
+   * What can fail without removing anything runs first: the drop migration is
+   * written before anything is torn down. One transaction then removes every
+   * collection's field-group values and translations, runs the drop in
+   * development, and removes the registry rows, so a failure part-way leaves
+   * the earlier collections as they were, and the migration written for the
+   * delete is withdrawn. PostgreSQL and SQLite undo the table drops with the
+   * rest. MySQL commits each table drop as it runs, and what ran before it:
+   * there the registry rows, removed last, keep every collection the delete
+   * had not finished registered, and deleting again finishes it, the
+   * teardowns finding nothing left where they had run. What this process
+   * remembers about each collection is forgotten only once the delete has
+   * committed.
    */
-  private async dropTables(
+  private async removeTogether(
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
   ): Promise<void> {
-    // With the fields, so the collections' own many-to-many junctions go too.
-    // A single collection's file is the one its delete has always written.
-    const [only] = ordered;
-    const dropArtifacts =
-      ordered.length === 1
-        ? this.collectionService.generateDropTableMigration(
-            only.slug,
-            only.collection.tableName,
-            only.collection.fields ?? []
-          )
-        : this.collectionService.generateDropTablesMigration(
-            ordered.map(({ slug, collection }) => ({
-              collectionName: slug,
-              tableName: collection.tableName,
-              fields: collection.fields ?? [],
-            }))
-          );
-
+    const [{ teardownAdapterIn }, { splitStatements }] = await Promise.all([
+      import("./teardown-adapter-in-transaction"),
+      import("../../schema/pipeline/sql-statement-utils"),
+    ]);
+    const drop = this.dropMigrationFor(ordered);
     await this.fileManager.saveDropMigration(
-      dropArtifacts.migrationSQL,
-      dropArtifacts.migrationFileName
+      drop.migrationSQL,
+      drop.migrationFileName
     );
-
-    // Run drop migration in development
-    if (this.isDevelopment()) {
-      await this.fileManager.runMigration(dropArtifacts.migrationSQL);
+    try {
+      await this.adapter.transaction(async tx => {
+        const teardownAdapter = teardownAdapterIn(this.adapter, tx);
+        for (const { slug, collection } of ordered) {
+          await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
+        }
+        // Development drops the tables now, in this transaction; elsewhere
+        // `nextly migrate` applies the file.
+        if (this.isDevelopment()) {
+          for (const statement of splitStatements([drop.migrationSQL])) {
+            await tx.execute(statement);
+          }
+        }
+        for (const { slug } of ordered) {
+          await this.collectionService.unregisterCollectionIn(tx, slug);
+        }
+      });
+    } catch (error) {
+      // On MySQL a registry row can have gone before the failure, so the
+      // cached rows are not trusted either way.
+      clearCollectionRowCache();
+      await this.withdrawDropMigration(drop.migrationFileName);
+      throw this.deleteFailed(error, ordered);
+    }
+    for (const { slug, collection } of ordered) {
+      await this.forgetDeleted(slug, collection);
     }
   }
 
-  /** Remove a dropped collection's registry row and its permissions. */
-  private async unregister(slug: string): Promise<void> {
-    await this.collectionService.unregisterCollection(slug);
-    const { deleteResourcePermissions } = await import(
-      "./delete-resource-permissions"
-    );
+  /**
+   * The drop migration of the collections deleted together, in drop order, as
+   * ONE file: the durable record `nextly migrate` applies in non-dev/deploy
+   * flows, and one file is applied in exactly the order development runs it.
+   */
+  private dropMigrationFor(
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
+  ): { migrationSQL: string; migrationFileName: string } {
+    // With the fields, so the collections' own many-to-many junctions go too.
+    // A single collection's file is the one its delete has always written.
+    const [only] = ordered;
+    return ordered.length === 1
+      ? this.collectionService.generateDropTableMigration(
+          only.slug,
+          only.collection.tableName,
+          only.collection.fields ?? []
+        )
+      : this.collectionService.generateDropTablesMigration(
+          ordered.map(({ slug, collection }) => ({
+            collectionName: slug,
+            tableName: collection.tableName,
+            fields: collection.fields ?? [],
+          }))
+        );
+  }
+
+  /**
+   * Withdraw the drop migration of a delete that failed. A file that cannot
+   * be removed is logged rather than thrown, so the delete's own failure is
+   * what the caller sees: left in place, the next `nextly migrate` would drop
+   * the tables of collections that are still registered.
+   */
+  private async withdrawDropMigration(
+    migrationFileName: string
+  ): Promise<void> {
+    try {
+      await this.fileManager.removeDropMigration(migrationFileName);
+    } catch (error) {
+      this.logger.error(
+        `A failed collection delete could not remove its drop migration ${migrationFileName}. Remove it before the next \`nextly migrate\`, which would otherwise drop tables of collections that are still registered: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * What a failed delete says. On PostgreSQL and SQLite the transaction undid
+   * everything, so a refusal raised inside it keeps its own words and anything
+   * else says nothing was removed. On MySQL a table drop commits as it runs, so
+   * the delete says what may already be gone and how to finish it.
+   */
+  private deleteFailed(
+    error: unknown,
+    ordered: ReadonlyArray<{ slug: string }>
+  ): NextlyError {
+    const partial = this.dialect === "mysql";
+    if (!partial && NextlyError.is(error)) return error;
+    const one = ordered.length === 1;
+    const subject = one ? "this collection" : "these collections";
+    return new NextlyError({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage: partial
+        ? `Deleting ${subject} failed part-way. MySQL keeps each table drop as it runs, so some of what ${one ? "it" : "they"} stored, such as field-group values and translations, may already be removed. ${one ? "Delete it again to finish." : "Delete those still listed again to finish."}`
+        : `Deleting ${subject} failed, so nothing was removed.`,
+      logMessage: `Collection delete failed: ${error instanceof Error ? error.message : String(error)}`,
+      logContext: {
+        collections: ordered.map(({ slug }) => slug),
+        partial,
+      },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  /**
+   * Once the delete has committed: forget, in this process, what it removed
+   * (the registry row's caches, the translations table's readiness, which the
+   * teardown recorded against the transaction rather than this adapter), and
+   * remove the collection's permissions, a cleanup that warns rather than
+   * fails.
+   */
+  private async forgetDeleted(
+    slug: string,
+    collection: DeletedCollectionRow
+  ): Promise<void> {
+    this.collectionService.forgetUnregisteredCollection(slug);
+    const [{ forgetCompanionReadiness }, { deleteResourcePermissions }] =
+      await Promise.all([
+        import("../../i18n/runtime/companion-readiness"),
+        import("./delete-resource-permissions"),
+      ]);
+    forgetCompanionReadiness(this.adapter, `${collection.tableName}_locales`);
     await deleteResourcePermissions({
       service: this.permissionSeedService,
       slug,

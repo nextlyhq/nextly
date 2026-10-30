@@ -572,7 +572,9 @@ async function mirrorDeletes(ids: readonly string[]): Promise<void> {
 
 /**
  * Delete `ids` together, as one result for every collection: the server
- * removed all of them or none.
+ * deleted all of them, or none of them is reported deleted (on MySQL a
+ * failure part-way can have removed some of what they stored; the server's
+ * message says so).
  */
 async function deleteAllOrNone(
   ids: readonly string[]
@@ -620,8 +622,12 @@ function reportBulkResult(
  * delete, and collections that point only at one another go together, where
  * deleting each on its own would be refused. So the result is all or
  * nothing: every collection succeeded, or every one failed with the same
- * error, and none was removed. Once deleted, each is removed from
- * `ui-schema.json` too, as the single delete removes it.
+ * error. A refusal removes nothing, and so does a failure part-way on
+ * PostgreSQL and SQLite, where the server deletes the set in one
+ * transaction; on MySQL, which keeps each table drop as it runs, the
+ * server's message says what may already be gone and every collection not
+ * yet deleted is still listed, so deleting again finishes. Once deleted,
+ * each is removed from `ui-schema.json` too, as the single delete removes it.
  *
  * Returns the same shape as the other bulk hooks, so callers read
  * `succeeded`, `failed` and the per-collection results as before.

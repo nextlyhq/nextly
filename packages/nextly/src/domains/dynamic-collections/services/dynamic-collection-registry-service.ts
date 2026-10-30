@@ -1,4 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
@@ -642,19 +643,54 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
-    // Cleared once the delete has run, as after an insert.
     try {
-      await this.db
-        .delete(this.dynamicCollections)
-        .where(eq(this.dynamicCollections.slug, slug));
-    } finally {
+      await this.deleteRegistryRow(this.db, slug);
+    } catch (error) {
+      // Cleared whether or not the delete ran, as after an insert.
       clearCollectionRowCache();
+      throw error;
     }
+    this.forgetUnregisteredCollection(slug);
+  }
 
-    // Drop the in-process recording decision with the row: this is the path the
-    // Builder's delete takes, and a later collection created under the same slug
-    // must start from the recording default rather than inherit a suppression
-    // whose row no longer exists.
+  /**
+   * Remove a collection's registry row inside `tx`, so it goes with whatever
+   * else that transaction removes or not at all. What the process remembers
+   * about the collection is the caller's to forget once `tx` has committed
+   * (`forgetUnregisteredCollection`): forgotten earlier, a rollback would
+   * leave the row and lose what was known about it.
+   */
+  async unregisterCollectionIn(
+    tx: TransactionContext,
+    slug: string
+  ): Promise<void> {
+    await this.deleteRegistryRow(
+      tx.drizzleWithRelations<DatabaseAdapter["db"]>(
+        resolveRelations(this.dialect)
+      ),
+      slug
+    );
+  }
+
+  /** The one statement that removes a collection's registry row, on the handle it is given. */
+  private async deleteRegistryRow(
+    db: DatabaseAdapter["db"],
+    slug: string
+  ): Promise<void> {
+    await db
+      .delete(this.dynamicCollections)
+      .where(eq(this.dynamicCollections.slug, slug));
+  }
+
+  /**
+   * Forget, in this process, a collection whose registry row is gone: its
+   * cached rows, cleared as after any registry write, and its recording
+   * decision, since a later collection created under the same slug must start
+   * from the recording default rather than inherit a suppression whose row no
+   * longer exists.
+   */
+  forgetUnregisteredCollection(slug: string): void {
+    clearCollectionRowCache();
     clearWebhookRecording("collection", slug);
   }
 }

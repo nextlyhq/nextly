@@ -2576,6 +2576,28 @@ export abstract class DrizzleAdapter {
    * @throws {DatabaseError} If query fails
    */
   async listTables(schema?: string): Promise<string[]> {
+    return this.listTablesThrough(
+      {
+        execute: <T = unknown>(sql: string, params?: SqlParam[]) =>
+          this.executeQuery<T>(sql, params),
+      },
+      schema
+    );
+  }
+
+  /**
+   * {@link listTables}, asked through `executor`: the same catalogue listing,
+   * run on a transaction's own connection when the caller holds one, as
+   * {@link tableExistsThrough} asks for one table. Asking the pool from inside
+   * a transaction would wait, on a pool of one, for the connection that
+   * transaction holds, and would not see the tables it has dropped.
+   *
+   * @internal For Nextly's own packages; not part of the adapter's public API.
+   */
+  async listTablesThrough(
+    executor: CatalogExecutor,
+    schema?: string
+  ): Promise<string[]> {
     try {
       let sql: string;
       const params: SqlParam[] = [];
@@ -2623,7 +2645,7 @@ export abstract class DrizzleAdapter {
           );
       }
 
-      const results = await this.executeQuery<{ table_name: string }>(
+      const results = await executor.execute<{ table_name: string }>(
         sql,
         params
       );
