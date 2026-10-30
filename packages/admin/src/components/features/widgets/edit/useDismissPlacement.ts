@@ -28,6 +28,14 @@
  * from reaching this reader. The server keeps a row that was already arranged
  * arranged, so this cannot undo a reader's own layout.
  *
+ * ## Why an arranged reader's card is taken out instead
+ *
+ * A reader who has arranged their dashboard owns the list, so the card leaves
+ * it, through the same write with `arranged: true`, the kind any write that
+ * drops a placement must be. Hidden instead, it would stay in their list as a
+ * copy that adding the widget again from the gallery clashes with. Undo puts it
+ * back where it was, with its size and settings.
+ *
  * @module components/features/widgets/edit/useDismissPlacement
  */
 
@@ -35,6 +43,10 @@ import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
+import type {
+  DashboardLayoutResponse,
+  WidgetPlacement,
+} from "@admin/types/dashboard/widgets";
 
 import { removePlacement, restorePlacement } from "../layout-editor";
 
@@ -48,6 +60,85 @@ export interface RemovalNotice {
   title: string;
   /** Removed by the card's own control, outside customise mode. */
   standing: boolean;
+  /**
+   * The card as it was and where, when it was taken out of an arranged reader's list rather
+   * than hidden: what Undo puts back, at that index.
+   */
+  taken?: { placement: WidgetPlacement; index: number } | undefined;
+}
+
+/** A standing write: the list to send, whether it arranges, and how the card shows it landed. */
+interface StandingWrite {
+  placements: WidgetPlacement[];
+  arranged: boolean;
+  /** Whether the list the client holds once the write has landed shows it. */
+  shows: (layout: UseDashboardLayoutResult) => boolean;
+  taken?: NoticeTaken;
+}
+
+type NoticeTaken = NonNullable<RemovalNotice["taken"]>;
+
+/**
+ * What removing one card at rest writes: the card taken out of an arranged reader's list, or
+ * hidden in the list of a reader still following the default.
+ */
+function removalOf(
+  stored: DashboardLayoutResponse,
+  placementId: string,
+  arranged: boolean
+): StandingWrite | undefined {
+  const index = stored.placements.findIndex(p => p.id === placementId);
+  const placement = stored.placements[index];
+  if (placement === undefined) return undefined;
+  if (!arranged) {
+    return {
+      placements: removePlacement(stored.placements, placementId),
+      arranged: false,
+      shows: layout => landed(layout, placementId, p => p.removed),
+    };
+  }
+  return {
+    placements: stored.placements.filter(p => p.id !== placementId),
+    arranged: true,
+    shows: layout =>
+      layout.cached()?.placements.some(p => p.id === placementId) === false,
+    taken: { placement, index },
+  };
+}
+
+/** What Undo writes: the card put back where it was taken from, or shown again. */
+function restorationOf(
+  stored: DashboardLayoutResponse,
+  notice: RemovalNotice
+): StandingWrite {
+  const { placementId, taken } = notice;
+  if (taken === undefined) {
+    return {
+      placements: restorePlacement(stored.placements, placementId),
+      arranged: false,
+      shows: layout => landed(layout, placementId, p => !p.removed),
+    };
+  }
+  // At its index in the list as it is now, held to the list's end.
+  const placements = stored.placements.filter(p => p.id !== placementId);
+  placements.splice(
+    Math.min(taken.index, placements.length),
+    0,
+    taken.placement
+  );
+  return {
+    placements,
+    arranged: true,
+    shows: layout => landed(layout, placementId, p => !p.removed),
+  };
+}
+
+/** The write `change` makes, under the read's own version and scope. */
+function standingInput(stored: DashboardLayoutResponse, change: StandingWrite) {
+  return {
+    ...singleCardWrite(stored, change.placements),
+    arranged: change.arranged,
+  };
 }
 
 export interface DismissPlacement {
@@ -78,34 +169,34 @@ export function useDismissPlacement(
       // Refused while the stored row is unreadable: the server refuses any
       // single-card write to it, and the control says why it is unavailable.
       if (!stored || layout.isUnreadable) return;
-      if (!stored.placements.some(p => p.id === placementId)) return;
+      const removal = removalOf(stored, placementId, layout.isArranged);
+      if (removal === undefined) return;
       // Cleared before the attempt, so a retry that succeeds does not leave an
       // earlier failure reported.
       layout.dismiss.reset();
-      layout.dismiss.mutate(
-        singleCardWrite(
-          stored,
-          removePlacement(stored.placements, placementId)
-        ),
-        {
-          onSuccess: () => {
-            if (!landed(layout, placementId, p => p.removed)) {
-              toast.error(REFRESH_FAILED(title));
-              return;
-            }
-            // Spoken only once the card has actually gone.
-            announce.removed(title);
-            setNotice({ placementId, title, standing: true });
-            // The control that had focus went with its card; Undo is the one
-            // thing the reader is most likely to want next.
-            focus.request({ kind: "undo" });
-          },
-          // A toast rather than the customise chrome's own error, which a
-          // reader who never opened customise mode is not looking at.
-          onError: error =>
-            toast.error(`Could not dismiss ${title}: ${error.message}`),
-        }
-      );
+      layout.dismiss.mutate(standingInput(stored, removal), {
+        onSuccess: () => {
+          if (!removal.shows(layout)) {
+            toast.error(REFRESH_FAILED(title));
+            return;
+          }
+          // Spoken only once the card has actually gone.
+          announce.removed(title);
+          setNotice({
+            placementId,
+            title,
+            standing: true,
+            ...(removal.taken ? { taken: removal.taken } : {}),
+          });
+          // The control that had focus went with its card; Undo is the one
+          // thing the reader is most likely to want next.
+          focus.request({ kind: "undo" });
+        },
+        // A toast rather than the customise chrome's own error, which a
+        // reader who never opened customise mode is not looking at.
+        onError: error =>
+          toast.error(`Could not dismiss ${title}: ${error.message}`),
+      });
     },
     [layout, announce, focus, setNotice]
   );
@@ -117,28 +208,23 @@ export function useDismissPlacement(
       const stored = layout.cached() ?? layout.layout;
       if (!stored) return;
       const { placementId, title } = notice;
+      const restoration = restorationOf(stored, notice);
       layout.dismiss.reset();
-      layout.dismiss.mutate(
-        singleCardWrite(
-          stored,
-          restorePlacement(stored.placements, placementId)
-        ),
-        {
-          onSuccess: () => {
-            if (!landed(layout, placementId, p => !p.removed)) {
-              toast.error(REFRESH_FAILED(title));
-              return;
-            }
-            announce.restored(title);
-            setNotice(null);
-            // Back to the control the reader pressed to remove it, on the card
-            // that is now back.
-            focus.request({ kind: "dismiss", placementId });
-          },
-          onError: error =>
-            toast.error(`Could not undo removing ${title}: ${error.message}`),
-        }
-      );
+      layout.dismiss.mutate(standingInput(stored, restoration), {
+        onSuccess: () => {
+          if (!restoration.shows(layout)) {
+            toast.error(REFRESH_FAILED(title));
+            return;
+          }
+          announce.restored(title);
+          setNotice(null);
+          // Back to the control the reader pressed to remove it, on the card
+          // that is now back.
+          focus.request({ kind: "dismiss", placementId });
+        },
+        onError: error =>
+          toast.error(`Could not undo removing ${title}: ${error.message}`),
+      });
     },
     [layout, announce, focus, setNotice]
   );

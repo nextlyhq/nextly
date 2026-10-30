@@ -128,6 +128,8 @@ function layout(
     defaultPlacements: [],
     version: 3,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...patch,
@@ -1436,6 +1438,7 @@ describe("resetting to the default dashboard", () => {
   it("is not offered when there is no stored row at all", async () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
       source: "default",
+      arranged: false,
       version: 0,
     });
     renderGrid();

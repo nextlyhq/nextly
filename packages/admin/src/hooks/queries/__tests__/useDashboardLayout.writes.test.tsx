@@ -29,6 +29,8 @@ function read(patch: Partial<DashboardLayoutResponse> = {}) {
     defaultPlacements: [],
     version: 4,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "scope token/with+symbols",
     audience: "aud",
     ...patch,

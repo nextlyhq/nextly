@@ -289,7 +289,8 @@ function useStandingCardWrites(
 }
 
 /**
- * A card's settings saved at once, outside customise mode: its quick setting and its sheet.
+ * A card's settings and size saved at once, outside customise mode: its quick setting, its quick
+ * popover, its menu's Size and its sheet.
  * Offered only at rest, where there is no draft to hold a change, and once an arrangement has
  * been read, for the reason the standing dismiss waits for one.
  */
@@ -302,7 +303,16 @@ function useSettingsWriteAtRest(
   if (!layout.layout || editor.isEditing) return undefined;
   return {
     write: (placementId, title, config, callbacks) =>
-      cardSettingsWrite.write({ placementId, title, config }, callbacks),
+      cardSettingsWrite.write(
+        { placementId, title, change: { kind: "settings", config } },
+        callbacks
+      ),
+    // The same write, of the card's size: the request customise mode's Save sends for it.
+    resize: (placementId, title, size, bounds, callbacks) =>
+      cardSettingsWrite.write(
+        { placementId, title, change: { kind: "size", size, bounds } },
+        callbacks
+      ),
     isWriting: editor.isWriting,
     ...(cardSettingsWrite.unavailable === undefined
       ? {}

@@ -126,6 +126,14 @@ export interface WidgetCardProps {
   /** The card's one quick control, just before `headerAction`. */
   quick?: ReactNode;
   /**
+   * Draws the title as a control, handed the title: the dashboard's cards make it open their
+   * quick popover. The heading around it, and the name it gives the card's region, stay as
+   * they are. Absent, the title is text.
+   *
+   * @internal Set by the dashboard grid only, never part of the widget kit.
+   */
+  titleTrigger?: ((title: string) => ReactNode) | undefined;
+  /**
    * Customise mode: the body, footer and quick control become inert and dim, so their links and
    * controls are out of reach, while the title stays where it is.
    */
@@ -343,6 +351,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 quick={props.quick}
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
+                titleTrigger={props.titleTrigger}
               />
 
               <CardContent
@@ -519,6 +528,17 @@ function heldLayout(
   return fields === undefined ? undefined : rowsLayout(tier, fields);
 }
 
+/** The card's title inside its heading: as text, or as the control `trigger` draws it as. */
+function CardTitle({
+  title,
+  trigger,
+}: {
+  title: string;
+  trigger: WidgetCardProps["titleTrigger"];
+}): ReactNode {
+  return trigger ? trigger(title) : title;
+}
+
 /**
  * The card's header, one fixed height in every state, tier and mode.
  *
@@ -536,6 +556,7 @@ function WidgetCardHeader({
   quick,
   quickInert,
   headerAction,
+  titleTrigger,
 }: {
   titleId: string;
   subtitleId: string;
@@ -545,6 +566,7 @@ function WidgetCardHeader({
   quick?: ReactNode;
   quickInert: boolean;
   headerAction?: ReactNode;
+  titleTrigger?: WidgetCardProps["titleTrigger"];
 }) {
   return (
     <CardHeader
@@ -565,7 +587,7 @@ function WidgetCardHeader({
           title={title}
           className="truncate text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
-          {title}
+          <CardTitle title={title} trigger={titleTrigger} />
         </h2>
         {subtitle && (
           <p
