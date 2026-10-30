@@ -31,6 +31,7 @@ import {
 import { env } from "../../../shared/lib/env";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { consoleLogger } from "../../../shared/types";
+import { getTableName } from "../../collections/services/collection-utils";
 import {
   fieldGroupSlugList,
   isFieldGroupFieldType,
@@ -739,7 +740,8 @@ export class DynamicCollectionSchemaService {
     return {
       name: this.relationshipKeyName(tableName, column),
       columns: [column],
-      referencesTable: `dc_${field.options.target}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      referencesTable: getTableName(field.options.target),
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
@@ -1656,7 +1658,8 @@ ${allColumnDefs.join(",\n")}
         if (this.dialect !== "sqlite") {
           // Add foreign key for non-manyToMany relations
           if (field.type === "relationship" && field.options?.target) {
-            const targetTable = `dc_${field.options.target}`;
+            // The table the target was created under: a hyphen in its address is an underscore in the table.
+            const targetTable = getTableName(field.options.target);
             const onDelete = this.relationOnDelete(field);
             const onUpdate = this.relationOnUpdate(field);
             statements.push(
@@ -2232,7 +2235,8 @@ ${allColumnDefs.join(",\n")}
       tableName,
       constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
-      referencesTable: `dc_${target}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      referencesTable: getTableName(target),
       referencesColumn: "id",
       fromOnDelete: from.onDelete,
       fromOnUpdate: from.onUpdate,
@@ -2805,7 +2809,8 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
       sourceCollection,
       targetCollection,
       sourceTable: sourceTableName,
-      targetTable: `dc_${targetCollection}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      targetTable: getTableName(targetCollection),
       sourceColumn: `${sourceCollection}_id`,
       targetColumn: `${targetCollection}_id`,
       fkSource: `fk_${table}_${sourceCollection}`,
