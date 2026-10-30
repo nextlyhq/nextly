@@ -290,21 +290,22 @@ export class FieldGroupSchemaService {
     // every other column a field asks to index — one per column either way.
     // Localized fields live in the companion, not the main comp_ table, so
     // they get no main index.
+    // Either kind of index only where the dialect can index the column: MySQL cannot index a JSON
+    // column, so an index on one would fail after the table was already created. That includes a
+    // reference column, because a many-to-many naming one collection reads as a reference here
+    // while its ids live on the row as a JSON list. The desired schema asks the same rule for
+    // both, so neither side declares an index the other lacks.
     const mainColumns = this.columnFields(fields).filter(
-      field => !localizedNames.has(field.name)
+      field =>
+        !localizedNames.has(field.name) &&
+        columnTypeIsIndexable(this.columnTypeFor(field) ?? "", this.dialect)
     );
     const referencing = mainColumns.filter(field =>
       this.fieldHasForeignKey(field)
     );
-    // An index a field asks for only where the dialect can index its column: MySQL cannot index a
-    // JSON column, so a declared index on one would fail after the table was already created. The
-    // desired schema asks the same rule, so neither side declares an index the other lacks.
     const declaredIndexed = mainColumns.filter(
       field =>
-        !this.fieldHasForeignKey(field) &&
-        "index" in field &&
-        field.index &&
-        columnTypeIsIndexable(this.columnTypeFor(field) ?? "", this.dialect)
+        !this.fieldHasForeignKey(field) && "index" in field && field.index
     );
     for (const field of [...referencing, ...declaredIndexed]) {
       const columnName = this.toSnakeCase(field.name);
