@@ -44,7 +44,7 @@ describe("givesVisitorsAWrite", () => {
     action,
   });
 
-  it("counts a retired manage grant as a write, since saving it stores the four", () => {
+  it("counts a retired manage grant as a write, since saving the role converts it into the four", () => {
     const manage = permission("manage");
     expect(givesVisitorsAWrite([manage], new Set([manage.id]))).toBe(true);
     // CONTROL: a read alone gives visitors no write.

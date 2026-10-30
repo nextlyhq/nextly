@@ -57,9 +57,11 @@ export const VISITOR_LEVELS: readonly AccessLevel[] = ["none", "view"];
 const NEVER_FOR_VISITORS = new Set(["publish", "unpublish"]);
 
 /**
- * The actions that change entries, warned about when visitors hold one. A
- * retired `manage` grant is one too: saving the role stores it as the plain
- * read, create, update and delete.
+ * The actions that change entries, warned about when visitors hold one.
+ * `manage` is one too: a plugin's or background jobs' `manage` is a write of
+ * its own, and a retired `manage-` grant, which gives nothing until it is
+ * converted, is converted into the plain read, create, update and delete
+ * when the role is saved.
  */
 const VISITOR_WRITES = new Set(["create", "update", "delete", "manage"]);
 
