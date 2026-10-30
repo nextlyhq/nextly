@@ -13,9 +13,10 @@
  *
  * How much the card draws follows its width:
  * - from a medium card up, the table, every column;
- * - a narrow medium card (`NARROW_TABLE_BELOW_PX`) keeps the table but draws Updated short ("5m")
- *   and leaves the action column out, so the name keeps its room; creating stays one click away
- *   through the header's New button, and each name still opens its list or Single;
+ * - a narrow medium card (`NARROW_TABLE_BELOW_PX`) keeps the table, every column, but draws
+ *   Updated short ("5m") and each row's action smaller (+ as a smaller icon button named
+ *   "Create Post", Edit or View in smaller type), so the name keeps its room and creating stays
+ *   one click away on the row;
  * - a small card stacks each row, the name on its own line and the counts and Updated under it.
  *
  * The header's subtitle says how many collections and Singles the reader may see in all ("8
@@ -65,13 +66,14 @@ import {
 import { cn } from "@admin/lib/utils";
 
 /**
- * Below this outer width a medium card's table is narrow: Updated is drawn short and the action
- * column is left out.
+ * Below this outer width a medium card's table is narrow: Updated is drawn short and each row's
+ * action smaller.
  *
  * The columns beside the name take about 250 px at full width (Entries and Drafts with their
  * headings, Updated as "Mar 12, 2026", and the Edit button, each with its gap), and the card's
  * frame takes 34 px; under 450 px that leaves the name less than about 150 px, some 20
- * characters, which a collection's name often runs past. So a card on a phone (about 342 px) is
+ * characters, which a collection's name often runs past. Narrow, Updated and the action give
+ * back about 60 px of that. So a card on a phone (about 342 px) is
  * narrow, and the default half-width card on a desktop (516 px at 1440, 632 px at 1024) is not.
  * In the frame's own unit, the card's outer width, as its size tier (`tierForWidth`) is read.
  */
@@ -108,6 +110,8 @@ type ContentRow =
       /** The drafts, or `null` for a collection without the Draft / Published lifecycle. */
       draft: number | null;
       canCreate: boolean;
+      /** What one entry is called ("Post"); the label where the answer does not say. */
+      singular: string;
       save?: ContentSave;
     }
   | {
@@ -190,6 +194,7 @@ function contentRowOf(row: Record<string, unknown>): ContentRow | undefined {
     kind: "collection",
     slug,
     label,
+    singular: text(row.singularLabel) ?? label,
     count: row.count,
     draft: typeof row.draft === "number" ? row.draft : null,
     canCreate: row.canCreate === true,
@@ -337,13 +342,25 @@ function UpdatedTime({
 /**
  * A row's one action: + to a new entry where the reader may create, or a Single's Edit where
  * they may update it and View where they may only read it. Edit and View open the same page,
- * which is read-only for a reader who may not update.
+ * which is read-only for a reader who may not update. In a narrow table each is drawn smaller,
+ * the + an icon named for the entry it creates ("Create Post"), so the name keeps its room.
  */
-function RowAction({ row }: { row: ContentRow }): JSX.Element | null {
+function RowAction({
+  row,
+  narrow = false,
+}: {
+  row: ContentRow;
+  narrow?: boolean;
+}): JSX.Element | null {
   if (row.kind === "single") {
     const verb = row.canUpdate ? "Edit" : "View";
     return (
-      <Button asChild size="sm" variant="outline" className="h-7">
+      <Button
+        asChild
+        size="sm"
+        variant="outline"
+        className={narrow ? "h-6 px-2 text-xs" : "h-7"}
+      >
         <Link
           href={buildRoute(ROUTES.SINGLE_EDIT, { slug: row.slug })}
           aria-label={`${verb} ${row.label}`}
@@ -355,12 +372,19 @@ function RowAction({ row }: { row: ContentRow }): JSX.Element | null {
   }
   if (!row.canCreate) return null;
   return (
-    <Button asChild size="icon" variant="outline" className="size-7">
+    <Button
+      asChild
+      size="icon"
+      variant="outline"
+      className={narrow ? "size-6" : "size-7"}
+    >
       <Link
         href={buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: row.slug })}
-        aria-label={`New entry in ${row.label}`}
+        aria-label={
+          narrow ? `Create ${row.singular}` : `New entry in ${row.label}`
+        }
       >
-        <Plus className="size-4" aria-hidden="true" />
+        <Plus className={narrow ? "size-3.5" : "size-4"} aria-hidden="true" />
       </Link>
     </Button>
   );
@@ -390,8 +414,8 @@ function RowName({
   );
 }
 
-/** The table's heading row: Name, Entries, Drafts, Updated, and the actions where drawn. */
-function ContentHeadings({ actions }: { actions: boolean }): JSX.Element {
+/** The table's heading row: Name, Entries, Drafts, Updated, and the actions. */
+function ContentHeadings(): JSX.Element {
   return (
     <thead>
       <tr className={TABLE_HEAD_ROW_CLASS}>
@@ -422,11 +446,9 @@ function ContentHeadings({ actions }: { actions: boolean }): JSX.Element {
         >
           Updated
         </th>
-        {actions && (
-          <th scope="col" className="w-px pb-0.5">
-            <span className="sr-only">Actions</span>
-          </th>
-        )}
+        <th scope="col" className="w-px pb-0.5">
+          <span className="sr-only">Actions</span>
+        </th>
       </tr>
     </thead>
   );
@@ -458,8 +480,8 @@ function CountCells({ row }: { row: ContentRow }): JSX.Element {
 }
 
 /**
- * The table: Name, Entries, Drafts, Updated and the action, or, narrow, Updated short and no
- * action column. Each row is the frame's list row height.
+ * The table: Name, Entries, Drafts, Updated and the action, narrow with Updated short and the
+ * action smaller. Each row is the frame's list row height.
  */
 function ContentTableForm({
   rows,
@@ -478,7 +500,7 @@ function ContentTableForm({
       data-narrow={narrow ? "true" : undefined}
       className={TABLE_CLASS}
     >
-      <ContentHeadings actions={!narrow} />
+      <ContentHeadings />
       <tbody>
         {rows.map(row => (
           // A collection and a Single may share a slug, so the kind is part of the key.
@@ -493,20 +515,18 @@ function ContentTableForm({
               <RowName row={row} />
             </td>
             <CountCells row={row} />
-            <td className="w-px whitespace-nowrap pr-4 align-middle last:pr-0">
+            <td className="w-px whitespace-nowrap pr-4 align-middle">
               {row.save === undefined ? (
                 <span className="text-muted-foreground">—</span>
               ) : (
                 <UpdatedTime save={row.save} now={now} short={narrow} />
               )}
             </td>
-            {!narrow && (
-              <td className="w-px whitespace-nowrap align-middle">
-                <div className="flex justify-end">
-                  <RowAction row={row} />
-                </div>
-              </td>
-            )}
+            <td className="w-px whitespace-nowrap align-middle">
+              <div className="flex justify-end">
+                <RowAction row={row} narrow={narrow} />
+              </div>
+            </td>
           </tr>
         ))}
       </tbody>

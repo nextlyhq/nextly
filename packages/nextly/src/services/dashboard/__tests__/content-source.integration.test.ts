@@ -507,6 +507,41 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("ranks a row by a save newer than its live entry, as it shows it", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: [NEWS, ARCHIVE].map(slug =>
+          defineCollection({
+            slug,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          })
+        ),
+      });
+      current = t;
+      for (const person of [ANA, BEN]) {
+        await t.adapter.insert("users", { ...person, is_active: true });
+      }
+      await grantTo(t, ANA.id, "read", [NEWS, ARCHIVE]);
+      const old = await entry(t, ARCHIVE, { title: "old" }, at(10));
+      await saved(t, ANA, ARCHIVE, old, at(10));
+      // A save of the published story kept as its working draft: the trail
+      // files it now, and the live entry keeps its earlier stamp.
+      const story = await entry(t, NEWS, { title: "story" }, at(30));
+      await saved(t, BEN, NEWS, story, at(5));
+
+      // A card with room for one row.
+      const answer = await contentTable(as(ANA), 1);
+
+      // 🔴 The story, showing Ben's save: ranked by its live stamp, the
+      // archive would take the row though it shows an older time.
+      expect(answer.items.map(row => row.slug)).toEqual([NEWS]);
+      expect(answer.items[0]).toMatchObject({
+        updatedAt: at(5).toISOString(),
+        userName: BEN.name,
+      });
+    });
+
     it("shows a row's own date and no name where the trail's latest change is older than it", async () => {
       const t = await createTestNextly({
         dialect,

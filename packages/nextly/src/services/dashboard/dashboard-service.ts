@@ -146,6 +146,8 @@ export interface ContentTableRow {
   draft?: number | null;
   /** Whether this caller may create an entry here; a collection's only. */
   canCreate?: boolean;
+  /** What one entry is called ("Post"), to name the entry a create makes; a collection's only. */
+  singularLabel?: string;
   /**
    * Whether this caller may update the Single, by the decision a real write
    * makes; a Single's only. A reader who may read it and not update it opens
@@ -365,6 +367,25 @@ function singleRow(
 }
 
 /**
+ * `change`, the trail's latest change of `subject`, when it is one of the row
+ * it dates: nothing for a row with no entry or document, and for a Single,
+ * only a change of the document it holds now, since the trail keeps the
+ * changes of the document a Single had before it was deleted and created
+ * again under its slug. A collection's is its latest change of any entry.
+ */
+function changeOf(
+  subject: DatedSubject,
+  change: RecentEdit | undefined
+): RecentEdit | undefined {
+  const own = subject.own;
+  if (own === undefined) return undefined;
+  if (subject.kind === "single" && change?.entryId !== own.id) {
+    return undefined;
+  }
+  return change;
+}
+
+/**
  * How much older than a row's own last update the trail's latest change of it
  * may be and still be the change that made it: under one second.
  *
@@ -527,16 +548,19 @@ function byLastUpdate<T extends { slug: string; label: string }>(
 }
 
 /**
- * The subjects in the table's order, each ranked by its OWN last update: the
- * newest first, then those with nothing to date them by label, and the
- * collections holding no entries this caller may read after all of them, since
- * an empty collection is the one row with nothing to open. A collection whose
- * newest entry the reader may read holds at least that entry, so having no
- * newest entry is having none to read.
+ * The subjects in the table's order, each ranked by `shownAt`, the instant its
+ * row's Updated shows: the newest first, then those with nothing to date them
+ * by label, and the collections holding no entries this caller may read after
+ * all of them, since an empty collection is the one row with nothing to open.
+ * A collection whose newest entry the reader may read holds at least that
+ * entry, so having no newest entry is having none to read.
  */
-function inTableOrder(subjects: readonly DatedSubject[]): DatedSubject[] {
-  const ordered = byLastUpdate(subjects, subject => subject.own?.updatedAt);
-  const empty = (subject: DatedSubject) =>
+function inTableOrder<T extends DatedSubject>(
+  subjects: readonly T[],
+  shownAt: (subject: T) => string | undefined
+): T[] {
+  const ordered = byLastUpdate(subjects, shownAt);
+  const empty = (subject: T) =>
     subject.kind === "collection" && subject.own === undefined;
   return [
     ...ordered.filter(subject => !empty(subject)),
@@ -896,6 +920,7 @@ export class DashboardService extends BaseService {
         slug: c.slug,
         tableName: c.tableName,
         label: c.labels?.plural ?? c.labels?.singular ?? c.slug,
+        singularLabel: c.labels?.singular ?? c.labels?.plural ?? c.slug,
         group: c.admin?.group ?? null,
         useAsTitle: c.admin?.useAsTitle ?? null,
         hasStatus: c.status === true,
@@ -1245,14 +1270,16 @@ export class DashboardService extends BaseService {
    * dashboard is absent here as it is there), at most `limit` of them, and
    * `total` counts all of them.
    *
-   * Which rows make the page comes from each one's OWN last update: a
-   * collection's newest entry this caller may read (`getRecentFromCollection`,
-   * one entry, the access-enforced read), and a Single's document as stored.
-   * A write the trail records both moves that date and files the change the
-   * Updated column then shows, and a row whose latest write the trail missed
-   * shows that date itself (`updateFields`), so the column never shows a row
-   * older than the order ranks it. Ranked newest first, then the rest by label, the
-   * collections holding no entries this caller may read last (`inTableOrder`).
+   * Which rows make the page comes from the instant each row's Updated shows
+   * (`updateFields`): its latest change in the trail's window where that is its
+   * latest write, else its OWN last update, a collection's newest entry this
+   * caller may read (`getRecentFromCollection`, one entry, the access-enforced
+   * read) or a Single's document as stored. So a change that left the row's own
+   * date where it was, a save of a published entry kept as its working draft,
+   * ranks it as it dates it, and the order and the column cannot disagree; the
+   * drawn rows are put in the order of what they show once built. Ranked newest
+   * first, then the rest by label, the collections holding no entries this
+   * caller may read last (`inTableOrder`).
    * A ranking drawn from a window of the activity trail alone would not do:
    * one collection saved often fills any window, and every other subject's
    * latest save then falls outside it.
@@ -1339,7 +1366,14 @@ export class DashboardService extends BaseService {
       READ_CONCURRENCY,
       subject => this.withOwnUpdate(subject, options.caller)
     );
-    const page = inTableOrder(dated).slice(
+    // Ranked by the instant each row will show (`updateFields`), from the
+    // window's latest change of it, so the order is the Updated column's.
+    const shownAt = (subject: DatedSubject) =>
+      updateFields(
+        subject.own,
+        changeOf(subject, saved.get(subjectKey(subject.kind, subject.slug)))
+      ).updatedAt;
+    const page = inTableOrder(dated, shownAt).slice(
       0,
       effectiveWidgetLimit(options.limit)
     );
@@ -1351,13 +1385,19 @@ export class DashboardService extends BaseService {
       mayCreate: await this.createDecision(options.caller),
       mayUpdate: updateDecision(options.caller),
     };
-    // In the page's order, which is already the table's; bounded as the
-    // ranking's reads are, since each collection's row is four reads more.
-    const rows = await mapBounded(page, READ_CONCURRENCY, subject =>
-      this.contentRow(subject, context)
-    );
+    // Bounded as the ranking's reads are, since each collection's row is four
+    // reads more.
+    const built = await mapBounded(page, READ_CONCURRENCY, async subject => ({
+      ...subject,
+      row: await this.contentRow(subject, context),
+    }));
     return {
-      rows,
+      // In the order of the instants the rows show: a drawn row dated by a
+      // change past the window shows an instant the window could not rank it
+      // by, and is placed by what it shows.
+      rows: inTableOrder(built, item => item.row.updatedAt).map(
+        item => item.row
+      ),
       total: subjects.length,
       byKind: { collection: collections.length, single: singles.length },
     };
@@ -1396,6 +1436,7 @@ export class DashboardService extends BaseService {
       count,
       draft,
       canCreate,
+      singularLabel: subject.info.singularLabel,
       ...updateFields(subject.own, change),
     };
   }
@@ -1461,28 +1502,21 @@ export class DashboardService extends BaseService {
    * its name are then both taken from: the subject's latest change in the
    * window, or, when the window did not reach the trail's end and holds none
    * of it, its latest change past the window, read for that collection or that
-   * Single alone and authorized as the caller by the same walk. A collection's
-   * is its latest change of any entry. A Single's is only one of the document
-   * it holds now: the trail keeps the changes of the document a Single had
-   * before it was deleted and created again under its slug, and those are not
-   * of this one. Nothing for a row with no entry or document.
+   * Single alone and authorized as the caller by the same walk; kept only where
+   * it is one of the row it dates (`changeOf`).
    */
   private async latestChangeOf(
     subject: DatedSubject,
     context: RowContext
   ): Promise<RecentEdit | undefined> {
-    const own = subject.own;
-    if (own === undefined) return undefined;
+    if (subject.own === undefined) return undefined;
     const change =
       context.saved.get(subjectKey(subject.kind, subject.slug)) ??
       (context.complete
         ? undefined
         : (await this.latestSaves(narrowedTo(context.trail, subject), 1))
             .saves[0]);
-    if (subject.kind === "single" && change?.entryId !== own.id) {
-      return undefined;
-    }
-    return change;
+    return changeOf(subject, change);
   }
 
   /**
@@ -1677,6 +1711,8 @@ interface CollectionInfo {
   slug: string;
   tableName: string;
   label: string;
+  /** What one of its entries is called ("Post"), for naming the entry a create makes. */
+  singularLabel: string;
   group: string | null;
   useAsTitle: string | null;
   hasStatus: boolean;

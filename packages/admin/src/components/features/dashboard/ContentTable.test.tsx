@@ -370,24 +370,39 @@ describe("the Content table", () => {
       ).toEqual(["Name", "Entries", "Drafts", "Updated", "Actions"]);
     });
 
-    it("on a narrow medium card leaves the action column out and draws Updated short", () => {
+    it("on a narrow medium card keeps every column, the + as a smaller icon, and draws Updated short", () => {
       // A card on a 390 px phone: 342 px, its body 308.
       bodyWidth(308);
-      draw([collectionRow("posts"), HOME], { tier: "medium" });
+      draw(
+        [
+          collectionRow("posts", { singularLabel: "Post" }),
+          // An answer that names no singular: the label stands in.
+          collectionRow("tags"),
+          HOME,
+        ],
+        { tier: "medium" }
+      );
       const table = screen.getByTestId("content-table");
       expect(table).toHaveAttribute("data-narrow", "true");
-      // 🔴 The name keeps the room the action column took.
       expect(
         within(table)
           .getAllByRole("columnheader")
           .map(h => h.textContent)
-      ).toEqual(["Name", "Entries", "Drafts", "Updated"]);
+      ).toEqual(["Name", "Entries", "Drafts", "Updated", "Actions"]);
+      // 🔴 Creating stays on the row: the dashboard has nowhere else to start
+      // a new entry, so a narrow card must not drop it.
+      const create = within(rowOf("Posts")).getByRole("link", {
+        name: "Create Post",
+      });
+      expect(create).toHaveAttribute("href", "/admin/collections/posts/create");
+      expect(create).toHaveClass("size-6");
+      // An icon alone: no words take the name's room.
+      expect(create.textContent).toBe("");
       expect(
-        screen.queryByRole("link", { name: /^New entry in|^Edit / })
-      ).not.toBeInTheDocument();
-      // Each name still opens its list or Single.
+        within(rowOf("Tags")).getByRole("link", { name: "Create Tags" })
+      ).toHaveAttribute("href", "/admin/collections/tags/create");
       expect(
-        within(rowOf("Home")).getByRole("link", { name: "Home" })
+        within(rowOf("Home")).getByRole("link", { name: "Edit Home" })
       ).toHaveAttribute("href", "/admin/singles/home");
       // "5m"-style, never "5m ago".
       const time = rowOf("Posts").querySelector("time");

@@ -43,7 +43,18 @@ import { someResources, type ReadCaller } from "../readable-resources";
 const CALLER: ReadCaller = { user: { id: "alice", roles: ["editor"] } };
 
 /** A collection as the registry holds it; `status: true` is the Draft/Published lifecycle. */
-function collection(slug: string, label: string, status = false) {
+interface RegisteredCollection {
+  slug: string;
+  tableName: string;
+  labels: { plural: string; singular?: string };
+  status: boolean;
+}
+
+function collection(
+  slug: string,
+  label: string,
+  status = false
+): RegisteredCollection {
   return { slug, tableName: slug, labels: { plural: label }, status };
 }
 
@@ -81,7 +92,7 @@ let entries: Record<string, { all: number; draft: number }> = {};
 let newest: Record<string, { id: string; updatedAt: string }> = {};
 /** Each Single's stored document, by its table. */
 let stored: Record<string, { id: string; updated_at: unknown }> = {};
-let collections: ReturnType<typeof collection>[] = [];
+let collections: RegisteredCollection[] = [];
 let singles: Array<{ slug: string; label?: string; tableName?: string }> = [];
 /**
  * The trail's answer to the window read, to a read narrowed to one
@@ -364,6 +375,84 @@ describe("which rows make the page", () => {
     expect(answer.rows[1]).toMatchObject({
       updatedAt: "2026-10-29T09:00:00.000Z",
       userName: "Ben",
+    });
+  });
+});
+
+describe("ranked by what each row shows", () => {
+  /** Posts, saved at 10:00, and News, whose live entry was last stamped at 09:00. */
+  function postsAndNews(newsSavedAt?: string) {
+    collections = [collection("posts", "Posts"), collection("news", "News")];
+    newest = {
+      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
+      news: { id: "doc-news", updatedAt: "2026-10-29T09:00:00.000Z" },
+    };
+    windowAnswer = {
+      edits: [
+        ...(newsSavedAt === undefined
+          ? []
+          : [save("news", newsSavedAt, { userName: "Ben" })]),
+        save("posts", "2026-10-29T10:00:00.000Z"),
+      ],
+      hasMore: false,
+    };
+  }
+
+  it("ranks a row by a change newer than its own date, as it shows it", async () => {
+    // A save of the published entry kept as its working draft: the trail has
+    // it at 11:00, and the live entry's own stamp stays at 09:00.
+    postsAndNews("2026-10-29T11:00:00.000Z");
+
+    // 🔴 A card with room for one row draws News, showing 11:00: ranked by
+    // its own 09:00, Posts would take the row though it shows an older time.
+    const one = await table(1);
+    expect(one.rows.map(row => row.slug)).toEqual(["news"]);
+    expect(one.rows[0]).toMatchObject({
+      updatedAt: "2026-10-29T11:00:00.000Z",
+      userName: "Ben",
+    });
+    expect((await table(10)).rows.map(row => row.slug)).toEqual([
+      "news",
+      "posts",
+    ]);
+  });
+
+  it("ranks a row by its own date where the trail holds nothing newer of it", async () => {
+    // The control: without the save, News's own 09:00 is what it shows.
+    postsAndNews();
+
+    expect((await table(1)).rows.map(row => row.slug)).toEqual(["posts"]);
+    const answer = await table(10);
+    expect(answer.rows.map(row => row.slug)).toEqual(["posts", "news"]);
+    expect(answer.rows[1]).toMatchObject({
+      updatedAt: "2026-10-29T09:00:00.000Z",
+    });
+  });
+
+  it("orders the drawn rows by what they show when a change past the window dates one", async () => {
+    collections = [collection("busy", "Busy"), collection("news", "News")];
+    // The window is busy's alone and stops short of the trail's end.
+    windowAnswer = {
+      edits: Array.from({ length: MAX_WIDGET_LIMIT }, (_, i) =>
+        save("busy", "2026-10-29T10:00:00.000Z", { entryId: `doc-busy-${i}` })
+      ),
+      hasMore: true,
+    };
+    newest = {
+      busy: { id: "doc-busy-0", updatedAt: "2026-10-29T10:00:00.000Z" },
+      news: { id: "doc-news", updatedAt: "2026-10-29T08:00:00.000Z" },
+    };
+    // News's latest change lies past the window, and is newer than busy's.
+    narrowed = {
+      news: [save("news", "2026-10-29T12:00:00.000Z", { userName: "Ben" })],
+    };
+
+    const answer = await table(10);
+
+    // 🔴 Placed by the 12:00 it shows, not the 08:00 it was ranked by.
+    expect(answer.rows.map(row => row.slug)).toEqual(["news", "busy"]);
+    expect(answer.rows[0]).toMatchObject({
+      updatedAt: "2026-10-29T12:00:00.000Z",
     });
   });
 });
@@ -761,6 +850,24 @@ describe("the Content table's rows", () => {
     const answer = await table(10);
 
     expect(answer.rows[0]?.canUpdate).toBe(false);
+  });
+
+  it("names what one entry of a collection is called, for the + that creates one", async () => {
+    collections = [
+      {
+        ...collection("posts", "Posts"),
+        labels: { singular: "Post", plural: "Posts" },
+      },
+      // A collection naming no singular is called by its label.
+      collection("news", "News"),
+    ];
+
+    const answer = await table(10);
+    const singular = Object.fromEntries(
+      answer.rows.map(row => [row.slug, row.singularLabel])
+    );
+
+    expect(singular).toEqual({ posts: "Post", news: "News" });
   });
 
   it("offers create nowhere while which collections turn it off is unknown", async () => {

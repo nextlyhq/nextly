@@ -885,7 +885,9 @@ function isCount(value: unknown): value is number {
 /**
  * A list's `totalByKind` when it is a plain object of counts ({@link isCount}), each kind to
  * its count; `undefined` for anything else, a single part that is not a count included, so a
- * card never draws a part of a breakdown the server did not send.
+ * card never draws a part of a breakdown the server did not send. The rule core's display
+ * schema checks a declared widget's answer by (`LIST_DATA` in nextly's
+ * `domains/widgets/declaration/displays.ts`).
  */
 function asCountsByKind(
   value: unknown

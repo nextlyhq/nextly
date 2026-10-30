@@ -83,6 +83,11 @@ const CONTENT_FIELDS = [
   { name: "count", type: "number" as const, label: "Entries" },
   { name: "draft", type: "number" as const, label: "Drafts" },
   { name: "canCreate", type: "boolean" as const, label: "May create" },
+  {
+    name: "singularLabel",
+    type: "string" as const,
+    label: "One entry is called",
+  },
   { name: "canUpdate", type: "boolean" as const, label: "May update" },
   { name: "updatedAt", type: "date" as const, label: "Updated" },
   { name: "userId", type: "string" as const, label: "Saved by" },
