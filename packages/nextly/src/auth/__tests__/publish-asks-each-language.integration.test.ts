@@ -1277,7 +1277,9 @@ describe.each(getConfiguredTestDialects())(
       const first = await publishEvery();
       expect(first.success).toBe(false);
       expect(first.statusCode).toBe(409);
-      // Asked again, the table is resolved afresh and refused before the write.
+      // Asked again, it is still refused as not ready, never as a server
+      // error. That the verdict itself is forgotten is pinned by the readiness
+      // unit tests (`companionFoundMissing`).
       expect((await publishEvery()).statusCode).toBe(409);
     });
 
