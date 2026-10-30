@@ -3,15 +3,21 @@
  * connection, run as a shell runs them in a fresh project, on every
  * configured dialect.
  *
- * Only the running dialect's table definitions are loaded, and opening a
- * connection is what loads them everywhere else. `migrate:create` and
+ * Only the running dialect's table definitions are loaded, and creating an
+ * adapter is what loads them everywhere else. `migrate:create` and
  * `migrate:check` never connect: each settles its dialect from `DATABASE_URL`
  * alone, so the dialect's tables have to be loaded on their way to the core
  * schema. A test that booted an instance first would load them for the
  * command and hide the gap, which is why the commands run here in a process
  * of their own, against a project nothing else has touched.
  */
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -60,19 +66,18 @@ describe.each(getConfiguredTestDialects())(
     // The dialect comes from the URL alone, as it does for a shell that sets
     // only DATABASE_URL; `--verbose`, so a failure's message carries what the
     // command stopped on.
+    const sqliteFile = () => join(project, "test.db");
     const nextly = (args: string[]) =>
       runNextly([...args, "--verbose"], project, {
         DATABASE_URL:
-          dialect === "sqlite"
-            ? `file:${join(project, "test.db")}`
-            : UNREACHABLE[dialect],
+          dialect === "sqlite" ? `file:${sqliteFile()}` : UNREACHABLE[dialect],
         DB_DIALECT: undefined,
       });
 
     it(
       "migrate:create writes a fresh project's migration, and migrate:check passes it",
-      () => {
-        const created = nextly(["migrate:create", "init"]);
+      async () => {
+        const created = await nextly(["migrate:create", "init"]);
         expect(created.status, `${created.stdout}\n${created.stderr}`).toBe(0);
         expect(
           readdirSync(join(project, "migrations"), { recursive: true }).filter(
@@ -80,8 +85,12 @@ describe.each(getConfiguredTestDialects())(
           )
         ).toHaveLength(1);
 
-        const checked = nextly(["migrate:check"]);
+        const checked = await nextly(["migrate:check"]);
         expect(checked.status, `${checked.stdout}\n${checked.stderr}`).toBe(0);
+
+        // Opening SQLite creates its file, and would load the tables for the
+        // command, hiding the gap this covers; a server URL above refuses it.
+        expect(existsSync(sqliteFile())).toBe(false);
       },
       2 * NEXTLY_RUN_TIMEOUT
     );
