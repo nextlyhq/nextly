@@ -11,7 +11,7 @@ import {
   plainFourOnLocked,
   storedAsPlain,
   storedAsPlainLocked,
-} from "../manage-bridge";
+} from "../retired-manage-permissions";
 
 type Row = { id: string; action: string; resource: string };
 type Query = {

@@ -2,7 +2,7 @@
  * The Direct API's collection and Single gates answer a refused access check
  * with the refusal's own code and status.
  *
- * Both gates catch what `checkAccess` throws and deny, as they must. They used
+ * Both gates catch what the caller's lookup throws and deny, as they must. They used
  * to deny with a fixed 500 whatever was thrown, so a check that could not read
  * the caller's roles because the database was busy reached the caller as an
  * internal error rather than as the retryable DATABASE_BUSY it is. A refusal
@@ -35,6 +35,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   return {
     ...(await importOriginal<object>()),
     actorForUser: fake.fakeActorForUser,
+    actorForVisitor: fake.fakeActorForVisitor,
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };

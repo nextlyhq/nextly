@@ -410,9 +410,9 @@ interface CodeAccessSource {
  * the `{operation}-{resource}` grant AND satisfy the code-defined access rule
  * (`defineCollection/defineSingle({ access: { publish/unpublish/... } })`),
  * evaluated against the KEY's own scope — not the owner's. The permission check
- * alone is not enough: `rbac.checkAccess` (which the API-key path replaces) is
- * also where the code-defined rule runs, so skipping it would let a key with the
- * grant bypass an `access.publish` that returns false.
+ * alone is not enough: the session decision (which the API-key path replaces)
+ * is also where the code-defined rule runs, so skipping it would let a key with
+ * the grant bypass an `access.publish` that returns false.
  *
  * Returns `null` for a non-API-key caller, so the caller falls back to its normal
  * RBAC resolution (which already composes the code-defined rule for that path).

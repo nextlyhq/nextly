@@ -11,7 +11,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";
@@ -104,7 +104,9 @@ test.describe("comparing two versions", () => {
     await expect.poll(() => focusedId(page)).toBe("version-change-summary");
 
     // The unchanged fields unfold on request.
-    await expect(page.getByText("Title", { exact: true })).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText("Title", { exact: true })
+    ).toHaveCount(0);
     await tabTo(page, /^Show \d+ unchanged fields?$/);
     await page.keyboard.press("Enter");
     await expect(page.getByText("Title", { exact: true })).toBeVisible();

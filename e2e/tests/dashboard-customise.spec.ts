@@ -15,7 +15,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
 
@@ -513,7 +513,9 @@ test("a pointer drag shows a line, moves nothing else, and puts the card down af
       `moved from 1 to ${after.indexOf(held) + 1} of ${after.length}\\.`
     )
   );
-  await expect(page.getByTestId("widget-drop-line")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("widget-drop-line")
+  ).toHaveCount(0);
   await expect(
     page.locator(`${CELLS}[data-placement-id="${held}"]`)
   ).toHaveAttribute("data-highlighted", "true");
@@ -570,7 +572,9 @@ test.describe("on a phone, with touch", () => {
     ).toBeVisible();
     await page.getByTestId("dashboard-edit-begin").tap();
     await expect(bar(page)).toBeVisible();
-    await expect(page.getByTestId("widget-drag-handle")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("widget-drag-handle")
+    ).toHaveCount(0);
 
     const menu = (n: number) =>
       page.getByRole("button", { name: /^Card actions for / }).nth(n);
@@ -585,8 +589,12 @@ test.describe("on a phone, with touch", () => {
 
     // Resize: the sizes are listed in place in the card menu, which fits the screen.
     await menu(0).tap();
-    await expect(page.getByTestId("card-width-menu")).toHaveCount(0);
-    await expect(page.getByTestId("card-height-menu")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("card-width-menu")
+    ).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("card-height-menu")
+    ).toHaveCount(0);
     const choice = page.getByRole("menuitemradio").first();
     await expect(choice).toBeInViewport({ ratio: 1 });
     await choice.tap();

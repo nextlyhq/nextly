@@ -1,28 +1,28 @@
 /**
- * The system resources whose `manage-` permission still counts as read,
- * create, update and delete on that same resource: a bridge for installs
- * whose roles were given `manage-<resource>` before every action had a plain
- * permission of its own. It never counts as publish or unpublish, as any
- * other action, or on any other resource, and a collection's `manage-`
- * permission means nothing here.
+ * The retired `manage-` permissions: `manage-<resource>` on media, settings,
+ * email providers and email templates, each retired in favour of the plain
+ * read, create, update and delete on that same resource. No gate counts one
+ * any more; a role an earlier release left holding one keeps its access only
+ * once `nextly upgrade` has stored the plain four in its place.
  *
- * A leaf module, importing nothing but types, so the admin's client-safe
- * copy of this list can be held to it by a test without pulling the access
- * decision's server code into the admin's build. It also says how a role stores a
- * retired `manage-` permission (`storedAsPlain`), so every writer of a role's
- * permissions asks it here, without loading the service that keeps them.
+ * `manage-background-jobs`, `manage-permissions` and a plugin's own `manage-`
+ * permissions are not retired, and mean what they always have.
  *
- * @module auth/access/manage-bridge
+ * It also says how a role stores a retired one (`storedAsPlain`), so every
+ * writer of a role's permissions asks it here, without loading the service
+ * that keeps them. It imports nothing but types.
+ *
+ * @module auth/access/retired-manage-permissions
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-const MANAGE_COUNTS_ON: ReadonlySet<string> = new Set([
+const RETIRED_ON: ReadonlySet<string> = new Set([
   "media",
   "settings",
   "email-providers",
   "email-templates",
 ]);
-const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
+const STOOD_FOR: ReadonlySet<string> = new Set([
   "read",
   "create",
   "update",
@@ -30,26 +30,28 @@ const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The resources a `manage-` permission is bridged on, and the actions it
- * counts as there: what a role holding one is converted to, and what any
- * writer stores in its place.
+ * The resources whose `manage-` permission is retired, and the plain actions
+ * it stood for there: what a role holding one is converted to, what any
+ * writer stores in its place, and what a gate still asking it is answered by.
  */
-export const MANAGE_BRIDGED_RESOURCES: readonly string[] = [
-  ...MANAGE_COUNTS_ON,
-];
-export const MANAGE_BRIDGED_ACTIONS: readonly string[] = [...MANAGE_COUNTS_AS];
+export const RETIRED_MANAGE_RESOURCES: readonly string[] = [...RETIRED_ON];
+export const RETIRED_MANAGE_PLAIN_ACTIONS: readonly string[] = [...STOOD_FOR];
 
-/**
- * Whether a permission is a retired `manage-` one: `manage-<resource>` on a
- * resource the bridge names. Stored as, and asked as, the plain four there.
- */
+/** Whether a permission is a retired one: `manage-` on one of those resources. */
 export function isRetiredManage(action: string, resource: string): boolean {
-  return action === "manage" && MANAGE_COUNTS_ON.has(resource);
+  return action === "manage" && RETIRED_ON.has(resource);
 }
 
-/** Whether a `manage-` permission on `resource` can count for `action`. */
-export function manageCounts(action: string, resource: string): boolean {
-  return MANAGE_COUNTS_AS.has(action) && MANAGE_COUNTS_ON.has(resource);
+/**
+ * Whether `action` on `resource` is one of the plain permissions a retired
+ * `manage-` permission stood for. Those resources are no entries and declare
+ * no rule, so each such action is a permission alone.
+ */
+export function isPlainOfRetiredManage(
+  action: string,
+  resource: string
+): boolean {
+  return STOOD_FOR.has(action) && RETIRED_ON.has(resource);
 }
 
 /** Where `storedAsPlain` reads permission rows: an adapter or a transaction. */
@@ -66,9 +68,10 @@ type PermissionRow = { id: unknown; action: string; resource: string };
 function wholeFour(rows: readonly PermissionRow[], resource: string): string[] {
   const four = rows.filter(
     row =>
-      row.resource === resource && MANAGE_BRIDGED_ACTIONS.includes(row.action)
+      row.resource === resource &&
+      RETIRED_MANAGE_PLAIN_ACTIONS.includes(row.action)
   );
-  return MANAGE_BRIDGED_ACTIONS.every(action =>
+  return RETIRED_MANAGE_PLAIN_ACTIONS.every(action =>
     four.some(row => row.action === action)
   )
     ? four.map(row => String(row.id))
@@ -92,7 +95,11 @@ export async function plainFourOnLocked(
     forUpdate: true,
     where: {
       and: [
-        { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
+        {
+          column: "action",
+          op: "IN",
+          value: [...RETIRED_MANAGE_PLAIN_ACTIONS],
+        },
         { column: "resource", op: "=", value: resource },
       ],
     },
@@ -104,8 +111,8 @@ export async function plainFourOnLocked(
  * The permission ids as a role stores them: each retired `manage-` one
  * replaced by the plain read, create, update and delete on its resource, and
  * every other id as it is. Where a resource lacks one of the plain four, its
- * `manage-` id is kept, so the role loses nothing; the bridge still counts it
- * until `nextly upgrade` converts it once they exist.
+ * `manage-` id is kept as it is, counting for nothing, until `nextly upgrade`
+ * converts it once they exist.
  */
 export async function storedAsPlain(
   reader: PermissionReader,
@@ -144,7 +151,11 @@ export async function storedAsPlain(
     ...locking,
     where: {
       and: [
-        { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
+        {
+          column: "action",
+          op: "IN",
+          value: [...RETIRED_MANAGE_PLAIN_ACTIONS],
+        },
         { column: "resource", op: "IN", value: resources },
       ],
     },
