@@ -129,14 +129,16 @@ function describeUploads(counts: UploadCounts): string {
 export function useUploadQueue(options?: {
   /**
    * Called each time the queue empties, with the files uploaded since it last
-   * did, so a caller can act once per batch (the picker selects them).
+   * did, so a caller can act once per batch (the picker selects them). They
+   * come in the order they were added, not the order they finished in: a
+   * single-select picker takes the last, which must be the last one chosen.
    */
   onSettled?: (uploaded: Media[]) => void;
 }): UploadQueue {
   const [rows, setRows] = React.useState<UploadRow[]>([]);
   const rowsRef = React.useRef<UploadRow[]>([]);
-  // What uploaded since the queue last emptied, for `onSettled`.
-  const uploadedRef = React.useRef<Media[]>([]);
+  // What uploaded since the queue last emptied, for `onSettled`, by row id.
+  const uploadedRef = React.useRef(new Map<string, Media>());
   const onSettledRef = React.useRef(options?.onSettled);
   React.useEffect(() => {
     onSettledRef.current = options?.onSettled;
@@ -181,7 +183,7 @@ export function useUploadQueue(options?: {
         onProgress: progress => patch(row.id, { progress }),
       })
         .then(media => {
-          uploadedRef.current.push(media);
+          uploadedRef.current.set(row.id, media);
           patch(row.id, {
             status: "success",
             progress: 100,
@@ -201,9 +203,15 @@ export function useUploadQueue(options?: {
         .finally(() => pumpRef.current());
     }
 
-    if (rowsRef.current.every(isSettled) && uploadedRef.current.length > 0) {
-      const uploaded = uploadedRef.current;
-      uploadedRef.current = [];
+    if (rowsRef.current.every(isSettled) && uploadedRef.current.size > 0) {
+      // Read back in the rows' order, which is the order the files were
+      // added: uploads finish in whatever order the server answers them.
+      const byRow = uploadedRef.current;
+      uploadedRef.current = new Map();
+      const uploaded = rowsRef.current.flatMap(row => {
+        const media = byRow.get(row.id);
+        return media ? [media] : [];
+      });
       onSettledRef.current?.(uploaded);
     }
   }, [patch, uploadOne]);

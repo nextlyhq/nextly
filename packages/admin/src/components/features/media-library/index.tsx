@@ -209,9 +209,7 @@ export function MediaLibrary({
   const [focusReturnId, setFocusReturnId] = React.useState<string | null>(null);
   // What had focus when the panel opened: the fallback when that tile is gone.
   const openerRef = React.useRef<HTMLElement | null>(null);
-  const libraryRef = React.useRef<HTMLDivElement>(null);
   const headingRef = React.useRef<HTMLHeadingElement>(null);
-  const detailsLayout = useMediaDetailsLayout(libraryRef);
 
   // What this person may do. A reader browses and reads; everything that
   // writes is left out rather than offered and refused by the server.
@@ -357,6 +355,10 @@ export function MediaLibrary({
     // Into the folder on screen when the files arrive.
     onFiles: files => uploadQueue.add(files, activeFolderId),
   });
+  // The library's root is the drop target, so react-dropzone's ref to it is
+  // the element the details layout measures and focus returns within.
+  const libraryRef = fileDrop.rootRef;
+  const detailsLayout = useMediaDetailsLayout(libraryRef);
 
   // Handlers: Delete
   const handleDeleteItem = React.useCallback((media: Media) => {
@@ -453,7 +455,8 @@ export function MediaLibrary({
     if (focusMediaEntry(libraryRef.current, focusReturnId)) return;
     if (opener?.isConnected) opener.focus();
     else headingRef.current?.focus();
-  }, [focusReturnId]);
+    // `libraryRef` is react-dropzone's ref object, the same on every render.
+  }, [focusReturnId, libraryRef]);
 
   // Escape closes the panel from anywhere in the library while it sits
   // beside the grid. A dialog or menu opened from the page is portaled out of
@@ -471,7 +474,7 @@ export function MediaLibrary({
       event.preventDefault();
       handleCloseDetails();
     },
-    [openMediaId, detailsLayout, handleCloseDetails]
+    [openMediaId, detailsLayout, handleCloseDetails, libraryRef]
   );
 
   const handleSaveMedia: MediaSave = React.useCallback(
@@ -626,330 +629,326 @@ export function MediaLibrary({
     : null;
 
   return (
-    // The drop target: the whole page, for files from outside it. A reader's
-    // is disabled, so it takes no drop and shows no overlay.
-    <div {...fileDrop.getRootProps({ className: "relative min-w-0" })}>
-      {/* A column rather than the scroll container: the page's main area
-          scrolls, which is what lets the details panel stick beside the grid. */}
-      <div
-        ref={libraryRef}
-        className={cn(
-          "flex min-h-[calc(100vh-4rem)] min-w-0 flex-col",
+    // The library's root, which takes a caller's className, and the drop
+    // target for files from outside the page: a reader's is disabled, so it
+    // takes no drop and shows no overlay. A column rather than the scroll
+    // container: the page's main area scrolls, which is what lets the details
+    // panel stick beside the grid.
+    <div
+      {...fileDrop.getRootProps({
+        className: cn(
+          "relative flex min-h-[calc(100vh-4rem)] min-w-0 flex-col",
           className
-        )}
-        onKeyDown={handleLibraryKeyDown}
-      >
-        <Breadcrumbs
-          items={[
-            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-            { label: "Media Library" },
-          ]}
-          className="mb-6"
-        />
+        ),
+      })}
+      // Beside the spread, not through it: with `noKeyboard`, react-dropzone
+      // drops a root keydown handler it is handed.
+      onKeyDown={handleLibraryKeyDown}
+    >
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          { label: "Media Library" },
+        ]}
+        className="mb-6"
+      />
 
-        <MediaLibraryToolbar
-          total={total}
-          inFolder={Boolean(activeFolderId)}
-          headingRef={headingRef}
-          search={{
-            value: search,
-            onChange: handleSearchChange,
-            isLoading: isFetching,
-          }}
-          typeFilter={{
-            value: typeFilter,
-            onChange: handleTypeFilterChange,
-            allowedTypes,
-          }}
-          sort={{ value: `${sortBy}-${sortOrder}`, onChange: handleSortChange }}
-          view={{
-            mode: viewMode,
-            onChange: setViewMode,
-            hiddenColumns,
-            onToggleColumn: toggleColumn,
-          }}
-          folderTree={{
-            visible: isFolderTreeVisible,
-            onToggle: () => setIsFolderTreeVisible(!isFolderTreeVisible),
-          }}
-          upload={{ allowed: canUpload, onUpload: fileDrop.open }}
-        />
+      <MediaLibraryToolbar
+        total={total}
+        inFolder={Boolean(activeFolderId)}
+        headingRef={headingRef}
+        search={{
+          value: search,
+          onChange: handleSearchChange,
+          isLoading: isFetching,
+        }}
+        typeFilter={{
+          value: typeFilter,
+          onChange: handleTypeFilterChange,
+          allowedTypes,
+        }}
+        sort={{ value: `${sortBy}-${sortOrder}`, onChange: handleSortChange }}
+        view={{
+          mode: viewMode,
+          onChange: setViewMode,
+          hiddenColumns,
+          onToggleColumn: toggleColumn,
+        }}
+        folderTree={{
+          visible: isFolderTreeVisible,
+          onToggle: () => setIsFolderTreeVisible(!isFolderTreeVisible),
+        }}
+        upload={{ allowed: canUpload, onUpload: fileDrop.open }}
+      />
 
-        {/* The chooser Upload opens; a reader has none. Upload is what a
+      {/* The chooser Upload opens; a reader has none. Upload is what a
             person and a screen reader meet, so the input itself is hidden
             from both, as the picker's is. */}
-        {canUpload && (
-          <input
-            {...fileDrop.getInputProps()}
-            aria-hidden="true"
-            tabIndex={-1}
-          />
-        )}
+      {canUpload && (
+        <input {...fileDrop.getInputProps()} aria-hidden="true" tabIndex={-1} />
+      )}
 
-        {/* The grid and, beside it, the open item's details. */}
-        <div className="flex items-start gap-6">
-          <div className="min-w-0 flex-1">
-            {selectedIds.size > 0 && (
-              <div className="mb-6">
-                <MediaBulkActionBar
-                  selectedCount={selectedIds.size}
-                  onDelete={handleBulkDelete}
-                  onClear={handleClearSelection}
-                  isDeleting={isBulkDeleting}
-                  onMoveToFolder={handleMoveToFolder}
-                />
-              </div>
-            )}
+      {/* The grid and, beside it, the open item's details. */}
+      <div className="flex items-start gap-6">
+        <div className="min-w-0 flex-1">
+          {selectedIds.size > 0 && (
+            <div className="mb-6">
+              <MediaBulkActionBar
+                selectedCount={selectedIds.size}
+                onDelete={handleBulkDelete}
+                onClear={handleClearSelection}
+                isDeleting={isBulkDeleting}
+                onMoveToFolder={handleMoveToFolder}
+              />
+            </div>
+          )}
 
-            {/* Inline folder navigation: breadcrumbs + the current level's
+          {/* Inline folder navigation: breadcrumbs + the current level's
               folders. Always rendered (independent of the folder tree toggle)
               so drill-down navigation never moves. */}
-            {(activeFolderId || hasFoldersToDisplay) && (
-              <div className="mb-6">
-                {activeFolderId && (
-                  <FolderBreadcrumbs
-                    activeFolderId={activeFolderId}
-                    onFolderSelect={setActiveFolderId}
-                    className="mb-4"
-                  />
-                )}
-                <FolderCardsRow
-                  folders={foldersToDisplay ?? []}
+          {(activeFolderId || hasFoldersToDisplay) && (
+            <div className="mb-6">
+              {activeFolderId && (
+                <FolderBreadcrumbs
                   activeFolderId={activeFolderId}
                   onFolderSelect={setActiveFolderId}
-                  onCreateSubfolder={parentId => {
-                    setCreateFolderParentId(parentId);
-                    setIsCreateFolderDialogOpen(true);
-                  }}
-                  onRenameFolder={folderId => {
-                    setEditFolderId(folderId);
-                    setIsEditFolderDialogOpen(true);
-                  }}
-                  onDeleteFolder={(folderId, folderName) => {
-                    setDeleteFolderId(folderId);
-                    setDeleteFolderName(folderName);
-                    setIsDeleteFolderDialogOpen(true);
-                  }}
-                  openMenuId={openMenuId}
-                  onOpenMenuChange={setOpenMenuId}
-                />
-              </div>
-            )}
-
-            {/* Media Content - Grid or List view */}
-            <div className="rounded-lg border border-border bg-card overflow-hidden">
-              {viewMode === "grid" ? (
-                <>
-                  <div className="p-4 sm:p-6">
-                    <MediaGrid
-                      media={data?.data || []}
-                      isLoading={isLoading}
-                      error={error}
-                      selectedIds={selectedIds}
-                      currentId={openMedia?.id ?? null}
-                      onSelectionChange={selectionChange}
-                      onItemClick={handleOpenDetails}
-                      onEdit={handleOpenDetails}
-                      onDelete={canDelete ? handleDeleteItem : undefined}
-                      onCopyUrl={(url: string) => {
-                        void navigator.clipboard.writeText(
-                          copyableMediaUrl(url)
-                        );
-                      }}
-                      onDownload={(media: Media) => {
-                        void handleDownload(media);
-                      }}
-                      onRetry={() => {
-                        void refetch();
-                      }}
-                      emptyStateMessage={emptyStateMessage}
-                    />
-                  </div>
-                  {/* Pagination for Grid View */}
-                  {!isLoading && !error && data && data.data.length > 0 && (
-                    <Pagination
-                      currentPage={page}
-                      totalPages={totalPages}
-                      pageSize={pageSize}
-                      pageSizeOptions={[12, 24, 48, 96]}
-                      showPageSizeSelector
-                      // Held while the rows on screen stand in for a result still
-                      // loading: their page count is the old result's, and a page
-                      // picked from it could be one the new result doesn't have.
-                      isLoading={isPlaceholderData}
-                      onPageChange={handlePageChange}
-                      onPageSizeChange={setPageSize}
-                      // This page renders TWO pagers -- one per view -- and they
-                      // are identical in every other prop, so the name is the only
-                      // thing that tells a screen reader which list it moves.
-                      // Rendered directly rather than handed to a table because a
-                      // grid has no row-versus-card view to place one for; the list
-                      // view's pager goes to the table below.
-                      ariaLabel="Media grid pagination"
-                    />
-                  )}
-                </>
-              ) : (
-                <MediaListView
-                  media={data?.data || []}
-                  isLoading={isLoading}
-                  error={error}
-                  selectedIds={selectedIds}
-                  hiddenColumns={hiddenColumns}
-                  onSelectionChange={selectionChange}
-                  onToggleAll={handleToggleAll}
-                  onItemClick={handleOpenDetails}
-                  onEdit={handleOpenDetails}
-                  onDelete={canDelete ? handleDeleteItem : undefined}
-                  onRetry={() => {
-                    void refetch();
-                  }}
-                  emptyStateMessage={emptyStateMessage}
-                  // The list view is a table, so its pager goes to the table
-                  // rather than beside it. The grid branch above keeps its own,
-                  // because a grid has no row-versus-card view to place it for.
-                  pagination={
-                    !isLoading && !error && data && data.data.length > 0
-                      ? {
-                          currentPage: page,
-                          totalPages,
-                          pageSize,
-                          pageSizeOptions: [12, 24, 48, 96],
-                          showPageSizeSelector: true,
-                          // Held for the same reason as the grid's pager.
-                          isLoading: isPlaceholderData,
-                          onPageChange: handlePageChange,
-                          onPageSizeChange: setPageSize,
-                          // The other half of the pair above: same props, other
-                          // view, so the name is what tells a screen reader
-                          // which list it moves.
-                          ariaLabel: "Media list pagination",
-                        }
-                      : undefined
-                  }
+                  className="mb-4"
                 />
               )}
+              <FolderCardsRow
+                folders={foldersToDisplay ?? []}
+                activeFolderId={activeFolderId}
+                onFolderSelect={setActiveFolderId}
+                onCreateSubfolder={parentId => {
+                  setCreateFolderParentId(parentId);
+                  setIsCreateFolderDialogOpen(true);
+                }}
+                onRenameFolder={folderId => {
+                  setEditFolderId(folderId);
+                  setIsEditFolderDialogOpen(true);
+                }}
+                onDeleteFolder={(folderId, folderName) => {
+                  setDeleteFolderId(folderId);
+                  setDeleteFolderName(folderName);
+                  setIsDeleteFolderDialogOpen(true);
+                }}
+                openMenuId={openMenuId}
+                onOpenMenuChange={setOpenMenuId}
+              />
             </div>
-          </div>
-
-          {details && detailsLayout === "beside" && (
-            <MediaDetailsPanel
-              {...details}
-              layout="beside"
-              onExpand={() => setIsViewerOpen(true)}
-              onClose={handleCloseDetails}
-            />
           )}
+
+          {/* Media Content - Grid or List view */}
+          <div className="rounded-lg border border-border bg-card overflow-hidden">
+            {viewMode === "grid" ? (
+              <>
+                <div className="p-4 sm:p-6">
+                  <MediaGrid
+                    media={data?.data || []}
+                    isLoading={isLoading}
+                    error={error}
+                    selectedIds={selectedIds}
+                    currentId={openMedia?.id ?? null}
+                    onSelectionChange={selectionChange}
+                    onItemClick={handleOpenDetails}
+                    onEdit={handleOpenDetails}
+                    onDelete={canDelete ? handleDeleteItem : undefined}
+                    onCopyUrl={(url: string) => {
+                      void navigator.clipboard.writeText(copyableMediaUrl(url));
+                    }}
+                    onDownload={(media: Media) => {
+                      void handleDownload(media);
+                    }}
+                    onRetry={() => {
+                      void refetch();
+                    }}
+                    emptyStateMessage={emptyStateMessage}
+                  />
+                </div>
+                {/* Pagination for Grid View */}
+                {!isLoading && !error && data && data.data.length > 0 && (
+                  <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    pageSize={pageSize}
+                    pageSizeOptions={[12, 24, 48, 96]}
+                    showPageSizeSelector
+                    // Held while the rows on screen stand in for a result still
+                    // loading: their page count is the old result's, and a page
+                    // picked from it could be one the new result doesn't have.
+                    isLoading={isPlaceholderData}
+                    onPageChange={handlePageChange}
+                    onPageSizeChange={setPageSize}
+                    // This page renders TWO pagers -- one per view -- and they
+                    // are identical in every other prop, so the name is the only
+                    // thing that tells a screen reader which list it moves.
+                    // Rendered directly rather than handed to a table because a
+                    // grid has no row-versus-card view to place one for; the list
+                    // view's pager goes to the table below.
+                    ariaLabel="Media grid pagination"
+                  />
+                )}
+              </>
+            ) : (
+              <MediaListView
+                media={data?.data || []}
+                isLoading={isLoading}
+                error={error}
+                selectedIds={selectedIds}
+                hiddenColumns={hiddenColumns}
+                onSelectionChange={selectionChange}
+                onToggleAll={handleToggleAll}
+                onItemClick={handleOpenDetails}
+                onEdit={handleOpenDetails}
+                onDelete={canDelete ? handleDeleteItem : undefined}
+                onRetry={() => {
+                  void refetch();
+                }}
+                emptyStateMessage={emptyStateMessage}
+                // The list view is a table, so its pager goes to the table
+                // rather than beside it. The grid branch above keeps its own,
+                // because a grid has no row-versus-card view to place it for.
+                pagination={
+                  !isLoading && !error && data && data.data.length > 0
+                    ? {
+                        currentPage: page,
+                        totalPages,
+                        pageSize,
+                        pageSizeOptions: [12, 24, 48, 96],
+                        showPageSizeSelector: true,
+                        // Held for the same reason as the grid's pager.
+                        isLoading: isPlaceholderData,
+                        onPageChange: handlePageChange,
+                        onPageSizeChange: setPageSize,
+                        // The other half of the pair above: same props, other
+                        // view, so the name is what tells a screen reader
+                        // which list it moves.
+                        ariaLabel: "Media list pagination",
+                      }
+                    : undefined
+                }
+              />
+            )}
+          </div>
         </div>
 
-        {/* Too narrow for the panel beside the grid: the same panel, over it. */}
-        {details && detailsLayout === "over" && (
+        {details && detailsLayout === "beside" && (
           <MediaDetailsPanel
             {...details}
-            layout="over"
+            layout="beside"
             onExpand={() => setIsViewerOpen(true)}
             onClose={handleCloseDetails}
           />
         )}
-
-        {details && (
-          <MediaViewer
-            {...details}
-            open={isViewerOpen}
-            // Escape or the close button goes back to the panel, not out of it.
-            onClose={() => setIsViewerOpen(false)}
-          />
-        )}
-
-        {/* Media Delete Dialog (single item) */}
-        <MediaDeleteDialog
-          open={isDeleteDialogOpen}
-          media={mediaToDelete}
-          onOpenChange={open => {
-            setIsDeleteDialogOpen(open);
-            if (!open) setMediaToDelete(null);
-          }}
-          onConfirm={handleConfirmDeleteItem}
-          isLoading={isDeleting}
-        />
-
-        {/* Bulk Delete Dialog */}
-        <AlertDialog
-          open={isBulkDeleteDialogOpen}
-          onOpenChange={open => {
-            if (!open) setIsBulkDeleteDialogOpen(false);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                Delete {selectedIds.size}{" "}
-                {selectedIds.size === 1 ? "file" : "files"}?
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                Are you sure you want to delete {selectedIds.size}{" "}
-                {selectedIds.size === 1 ? "media file" : "media files"}? This
-                action cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={isBulkDeleting}>
-                Cancel
-              </AlertDialogCancel>
-              {/* The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here. */}
-              <AlertDialogAction
-                onClick={handleConfirmBulkDelete}
-                disabled={isBulkDeleting}
-                variant="destructive"
-              >
-                {isBulkDeleting ? "Deleting..." : "Delete"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        {/* Create Folder Dialog */}
-        <CreateFolderDialog
-          open={isCreateFolderDialogOpen}
-          onOpenChange={setIsCreateFolderDialogOpen}
-          parentId={createFolderParentId}
-          onSuccess={() => {
-            void refetch();
-          }}
-        />
-
-        {/* Edit Folder Dialog */}
-        <EditFolderDialog
-          open={isEditFolderDialogOpen}
-          onOpenChange={setIsEditFolderDialogOpen}
-          folderId={editFolderId}
-          onSuccess={() => {
-            setIsEditFolderDialogOpen(false);
-          }}
-        />
-
-        {/* Delete Folder Dialog */}
-        <DeleteFolderDialog
-          open={isDeleteFolderDialogOpen}
-          onOpenChange={setIsDeleteFolderDialogOpen}
-          folderId={deleteFolderId}
-          folderName={deleteFolderName}
-          onSuccess={handleDeleteFolderSuccess}
-        />
-
-        {/* Move to Folder Dialog: one item from the details panel, or the bulk
-          selection. Only a bulk move clears the selection. */}
-        <MoveToFolderDialog
-          open={isMoveToFolderDialogOpen}
-          onOpenChange={setIsMoveToFolderDialogOpen}
-          mediaIds={moveMediaIds ?? Array.from(selectedIds)}
-          currentFolderId={activeFolderId}
-          onSuccess={() => {
-            void refetch();
-            if (moveMediaIds === null) setSelectedIds(new Set());
-          }}
-        />
       </div>
+
+      {/* Too narrow for the panel beside the grid: the same panel, over it. */}
+      {details && detailsLayout === "over" && (
+        <MediaDetailsPanel
+          {...details}
+          layout="over"
+          onExpand={() => setIsViewerOpen(true)}
+          onClose={handleCloseDetails}
+        />
+      )}
+
+      {details && (
+        <MediaViewer
+          {...details}
+          open={isViewerOpen}
+          // Escape or the close button goes back to the panel, not out of it.
+          onClose={() => setIsViewerOpen(false)}
+        />
+      )}
+
+      {/* Media Delete Dialog (single item) */}
+      <MediaDeleteDialog
+        open={isDeleteDialogOpen}
+        media={mediaToDelete}
+        onOpenChange={open => {
+          setIsDeleteDialogOpen(open);
+          if (!open) setMediaToDelete(null);
+        }}
+        onConfirm={handleConfirmDeleteItem}
+        isLoading={isDeleting}
+      />
+
+      {/* Bulk Delete Dialog */}
+      <AlertDialog
+        open={isBulkDeleteDialogOpen}
+        onOpenChange={open => {
+          if (!open) setIsBulkDeleteDialogOpen(false);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedIds.size}{" "}
+              {selectedIds.size === 1 ? "file" : "files"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete {selectedIds.size}{" "}
+              {selectedIds.size === 1 ? "media file" : "media files"}? This
+              action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBulkDeleting}>
+              Cancel
+            </AlertDialogCancel>
+            {/* The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here. */}
+            <AlertDialogAction
+              onClick={handleConfirmBulkDelete}
+              disabled={isBulkDeleting}
+              variant="destructive"
+            >
+              {isBulkDeleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Create Folder Dialog */}
+      <CreateFolderDialog
+        open={isCreateFolderDialogOpen}
+        onOpenChange={setIsCreateFolderDialogOpen}
+        parentId={createFolderParentId}
+        onSuccess={() => {
+          void refetch();
+        }}
+      />
+
+      {/* Edit Folder Dialog */}
+      <EditFolderDialog
+        open={isEditFolderDialogOpen}
+        onOpenChange={setIsEditFolderDialogOpen}
+        folderId={editFolderId}
+        onSuccess={() => {
+          setIsEditFolderDialogOpen(false);
+        }}
+      />
+
+      {/* Delete Folder Dialog */}
+      <DeleteFolderDialog
+        open={isDeleteFolderDialogOpen}
+        onOpenChange={setIsDeleteFolderDialogOpen}
+        folderId={deleteFolderId}
+        folderName={deleteFolderName}
+        onSuccess={handleDeleteFolderSuccess}
+      />
+
+      {/* Move to Folder Dialog: one item from the details panel, or the bulk
+          selection. Only a bulk move clears the selection. */}
+      <MoveToFolderDialog
+        open={isMoveToFolderDialogOpen}
+        onOpenChange={setIsMoveToFolderDialogOpen}
+        mediaIds={moveMediaIds ?? Array.from(selectedIds)}
+        currentFolderId={activeFolderId}
+        onSuccess={() => {
+          void refetch();
+          if (moveMediaIds === null) setSelectedIds(new Set());
+        }}
+      />
 
       {fileDrop.isDragActive && (
         <MediaDropOverlay

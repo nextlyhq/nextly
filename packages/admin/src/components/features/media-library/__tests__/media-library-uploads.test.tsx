@@ -255,7 +255,18 @@ describe("the drop overlay", () => {
     // the drag started here, so it is not an upload.
     fireEvent.dragStart(heading);
     fireEvent.dragEnter(heading, filesDrag([png("tile.png")]));
-    fireEvent.drop(heading, filesDrag([png("tile.png")]));
+    // Its drop is still cancelled: left to the browser, a dropped image or
+    // link can open in place of the admin. `fireEvent` answers false for an
+    // event a handler called preventDefault() on.
+    expect(fireEvent.dragOver(heading, filesDrag([png("tile.png")]))).toBe(
+      false
+    );
+    expect(fireEvent.drop(heading, filesDrag([png("tile.png")]))).toBe(false);
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(screen.queryByText(/^Drop to upload to/)).toBeNull();
+    expect(uploads).toHaveLength(0);
 
     // POSITIVE CONTROL: the same files from outside the page are taken once
     // the page's own drag has ended.
@@ -267,6 +278,35 @@ describe("the drop overlay", () => {
     fireEvent.drop(heading, filesDrag([png("outside.png")]));
     await waitFor(() => expect(uploads).toHaveLength(1));
     expect(uploads[0].file.name).toBe("outside.png");
+  });
+
+  it("puts a caller's className on its outermost element", async () => {
+    // MediaLibrary is published, and a page lays it out by the class it
+    // passes (flex-1, h-full, a grid span): that class has to be on the
+    // element the page's layout places, not on one inside it.
+    api.fetchMedia.mockResolvedValue({
+      data: [],
+      meta: { total: 0, page: 1, limit: 24, totalPages: 0 },
+    });
+    renderWithProviders(
+      <div data-testid="host">
+        <MediaProvider>
+          <MediaLibrary className="caller-layout" />
+        </MediaProvider>
+      </div>
+    );
+    await screen.findByRole("heading", { name: "Media Library" });
+
+    const root = screen.getByTestId("host").firstElementChild;
+    expect(root).toHaveClass("caller-layout");
+    // The same element takes the drop: the overlay is drawn inside it.
+    fireEvent.dragEnter(root!, filesDrag([png("a.png")]));
+    expect(
+      await screen.findByText("Drop to upload to Media Library")
+    ).toBeVisible();
+    expect(root).toContainElement(
+      screen.getByText("Drop to upload to Media Library")
+    );
   });
 
   it("gives a reader no drop target and no Upload", async () => {

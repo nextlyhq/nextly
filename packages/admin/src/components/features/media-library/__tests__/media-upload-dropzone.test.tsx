@@ -81,4 +81,31 @@ describe("the media picker's drop area", () => {
       onUploadComplete.mock.calls[0][0].map((m: { id: string }) => m.id)
     ).toEqual(["id-a.png", "id-b.png", "id-c.png", "id-d.png"]);
   });
+
+  it("reports the batch in the order the files were dropped, whatever order they finish in", async () => {
+    const onUploadComplete = vi.fn();
+    renderWithProviders(
+      <MediaUploadDropzone onUploadComplete={onUploadComplete} />
+    );
+    const target = screen.getByRole("button", { name: /^Upload files\./ });
+    const files = [png("a.png"), png("b.png"), png("c.png")];
+    const drag = { dataTransfer: { files, types: ["Files"] } };
+
+    fireEvent.dragEnter(target, drag);
+    await screen.findByText("Drop files here...");
+    fireEvent.drop(target, drag);
+    await waitFor(() => expect(answers).toHaveLength(3));
+
+    // The last file dropped finishes first and the first finishes last: a
+    // picker taking the last of the batch must still get the last dropped.
+    for (const index of [2, 1, 0]) {
+      const { file, resolve } = answers[index];
+      act(() => resolve({ id: `id-${file.name}`, filename: file.name }));
+    }
+
+    await waitFor(() => expect(onUploadComplete).toHaveBeenCalledTimes(1));
+    expect(
+      onUploadComplete.mock.calls[0][0].map((m: { id: string }) => m.id)
+    ).toEqual(["id-a.png", "id-b.png", "id-c.png"]);
+  });
 });

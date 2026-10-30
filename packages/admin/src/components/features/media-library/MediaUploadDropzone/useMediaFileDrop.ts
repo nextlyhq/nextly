@@ -19,6 +19,7 @@
 import * as React from "react";
 import {
   useDropzone,
+  type DropzoneRootProps,
   type DropzoneState,
   type FileRejection,
 } from "react-dropzone";
@@ -52,6 +53,11 @@ export function sortDroppedFiles(
   };
 }
 
+/** Cancels the browser's own handling of a drag event. */
+function cancelDrop(event: React.DragEvent<HTMLElement>): void {
+  event.preventDefault();
+}
+
 /**
  * True from the moment a drag starts on this page until it ends, so a drop
  * target can tell a drag from inside the page from files from outside: only
@@ -80,7 +86,12 @@ function useDragFromThisPage(): boolean {
 export interface MediaFileDrop
   extends Pick<
     DropzoneState,
-    "getRootProps" | "getInputProps" | "isDragActive" | "isDragReject" | "open"
+    | "getRootProps"
+    | "getInputProps"
+    | "isDragActive"
+    | "isDragReject"
+    | "open"
+    | "rootRef"
   > {
   /** The types and size the drop takes, to state before an upload. */
   description: string;
@@ -124,29 +135,51 @@ export function useMediaFileDrop({
   //
   // No `maxFiles`: it refuses the WHOLE batch past the limit, and a drop of
   // any size is taken.
-  const { getRootProps, getInputProps, isDragActive, isDragReject, open } =
-    useDropzone({
-      accept: acceptedFileTypes,
-      maxSize,
-      multiple: true,
-      disabled,
-      noDrag: dragFromThisPage,
-      noClick: true,
-      noKeyboard: true,
-      onDrop: (acceptedFiles, fileRejections) => {
-        onFiles(sortDroppedFiles(acceptedFiles, fileRejections, maxSize));
-      },
-      onDragEnter: undefined,
-      onDragOver: undefined,
-      onDragLeave: undefined,
-    });
-
-  return {
+  const {
     getRootProps,
     getInputProps,
     isDragActive,
     isDragReject,
     open,
+    rootRef,
+  } = useDropzone({
+    accept: acceptedFileTypes,
+    maxSize,
+    multiple: true,
+    disabled,
+    noDrag: dragFromThisPage,
+    noClick: true,
+    noKeyboard: true,
+    onDrop: (acceptedFiles, fileRejections) => {
+      onFiles(sortDroppedFiles(acceptedFiles, fileRejections, maxSize));
+    },
+    onDragEnter: undefined,
+    onDragOver: undefined,
+    onDragLeave: undefined,
+  });
+
+  // `noDrag` turns react-dropzone's handling off for a drag from this page,
+  // and with it the root's dragover and drop handlers; its document guard
+  // leaves a drop inside the root alone. A tile's image or link dropped back
+  // on the page would then get the browser's own drop, which can open it in
+  // place of the admin. So while such a drag is under way the root still
+  // cancels both events, and only never hands anything on to `onFiles`.
+  const getGuardedRootProps = React.useCallback(
+    <T extends DropzoneRootProps>(props?: T): T => {
+      const rootProps = getRootProps(props);
+      if (!dragFromThisPage) return rootProps;
+      return { ...rootProps, onDragOver: cancelDrop, onDrop: cancelDrop };
+    },
+    [getRootProps, dragFromThisPage]
+  );
+
+  return {
+    getRootProps: getGuardedRootProps,
+    getInputProps,
+    isDragActive,
+    isDragReject,
+    open,
+    rootRef,
     description,
     maxSize,
   };
