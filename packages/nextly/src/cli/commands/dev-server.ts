@@ -22,7 +22,7 @@ import {
   sqliteCoreStatementsFor,
 } from "../../database/sqlite-core-tables";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import {
   declaredSlugsOf,
   withoutRemovedFromCode,
@@ -770,7 +770,7 @@ export async function performAutoSync(
           { and: [{ column: "slug", op: "=", value: collection.slug }] }
         );
         // Written past the registry services: the cached rows are cleared.
-        clearCollectionRowCache();
+        clearRegistryRowCache();
       }
     } catch {
       // Ignore errors updating migration status — non-critical metadata.

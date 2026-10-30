@@ -431,10 +431,11 @@ describe.each(getConfiguredTestDialects())(
           expect(await backfilled()).toEqual(["backfilled"]);
           return;
         }
-        // The failed attempt was undone whole: the retry runs the file once.
+        // The failed attempt was undone whole, its ledger row with it: the
+        // retry runs the file once.
         expect(await backfilled()).toEqual([]);
         await expect(migrate()).resolves.toBe(1);
-        expect(await ledgerStatus(filename)).toEqual(["failed", "applied"]);
+        expect(await ledgerStatus(filename)).toEqual(["applied"]);
         expect(await backfilled()).toEqual(["backfilled"]);
       });
 
@@ -491,18 +492,19 @@ describe.each(getConfiguredTestDialects())(
             await expect(markApplied()).rejects.toMatchObject({
               code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
             });
-            expect(await ledgerStatus(filename)).toEqual(["failed"]);
+            // Undone whole, the attempt left no ledger row either.
+            expect(await ledgerStatus(filename)).toEqual([]);
           }
           await expect(
             markApplied(dialect === "mysql" ? undefined : true)
           ).resolves.toMatchObject({ kind: "applied", verified: false });
 
-          // Recorded, so the next run neither refuses it nor repeats it.
+          // Recorded, so the next run neither refuses it nor repeats it. On
+          // MySQL the failed attempt it supersedes stays as history.
           await expect(migrate()).resolves.toBe(0);
-          expect(await ledgerStatus(filename)).toEqual([
-            "superseded",
-            "applied",
-          ]);
+          expect(await ledgerStatus(filename)).toEqual(
+            dialect === "mysql" ? ["superseded", "applied"] : ["applied"]
+          );
           expect(await backfilled()).toEqual(["backfilled"]);
         });
       }

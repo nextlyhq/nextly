@@ -57,7 +57,7 @@
       "compiled": 3
     },
     "docs/database/extending-the-schema.mdx": {
-      "samples": 11,
+      "samples": 12,
       "compiled": 5
     },
     "docs/database/index.mdx": {
@@ -153,8 +153,8 @@
       "compiled": 2
     },
     "docs/permissions/index.mdx": {
-      "samples": 6,
-      "compiled": 4
+      "samples": 9,
+      "compiled": 6
     },
     "docs/plugins/admin-ui.mdx": {
       "samples": 19,

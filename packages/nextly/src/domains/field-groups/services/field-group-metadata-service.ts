@@ -326,7 +326,9 @@ export class FieldGroupMetadataService {
     // Raises NOT_FOUND itself when the slug is gone, so there is no absence branch here. One that
     // existed would be a guard that can never fire, and a guard that cannot fire reads as coverage
     // while proving nothing.
-    const existing = await this.registry.getComponent(input.slug);
+    // As stored, past the registry row cache: a row cached before the lock was taken describes
+    // the state this read exists to re-establish.
+    const existing = await this.registry.getComponentForWrite(input.slug);
     // 🔴 A diverged field group is REFUSED for any edit that would move storage again.
     //
     // Recording the state is only half of it. Without this, an editor opened after the mark reads
@@ -512,7 +514,8 @@ export class FieldGroupMetadataService {
     requestedLocalized: boolean | undefined
   ): Promise<DynamicFieldGroupRecord | null> {
     try {
-      const current = await this.registry.getComponent(input.slug);
+      // As stored: whether this save's own write landed.
+      const current = await this.registry.getComponentForWrite(input.slug);
       if (input.fields !== undefined) {
         if (current.schemaHash !== (await this.hashFields(input.fields)))
           return null;

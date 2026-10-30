@@ -16,6 +16,7 @@
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { generateSQL } from "../../schema/pipeline/sql-templates";
 import {
   indexCatalog,
@@ -337,6 +338,9 @@ function renameStep(
               SET ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.to}
               WHERE ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.from}`
         );
+        // Written past the registry service, so a component row cached with the old table name
+        // is cleared here.
+        clearRegistryRowCache();
       });
     },
     async verify(session) {
