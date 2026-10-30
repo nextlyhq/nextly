@@ -29,6 +29,7 @@ import {
   screen,
   waitFor,
 } from "@admin/__tests__/utils";
+import { RoutedPathnameContext } from "@admin/context/RoutedPathnameContext";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   clearRegistry,
@@ -164,6 +165,12 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
 }
 
 const onExit = vi.fn();
+
+/** A page collection with one field a blocks view could edit. */
+const onePageField = {
+  name: "pages",
+  fields: [{ name: "layout", type: "blocks" }],
+} as never;
 
 const onCancel = vi.fn();
 
@@ -790,7 +797,8 @@ describe("a field-type view on a document with two fields of its type", () => {
     // Next keeps a visited page mounted but hidden under Cache Components
     // (React's Activity), and shows it again on Back with the effects it had,
     // before the admin's router has drawn the page Back went to. The view's
-    // correction then sees the document's own address, with no field named.
+    // correction then sees the document's own address, with no field named,
+    // while the router still holds the view it drew.
     window.history.pushState(
       null,
       "",
@@ -798,18 +806,15 @@ describe("a field-type view on a document with two fields of its type", () => {
     );
     const view = (mode: "visible" | "hidden") => (
       <Activity mode={mode}>
-        <EntryForm
-          collection={
-            {
-              name: "pages",
-              fields: [{ name: "layout", type: "blocks" }],
-            } as never
-          }
-          entry={entry}
-          mode="edit"
-          onCancel={onCancel}
-          documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
-        />
+        <RoutedPathnameContext.Provider value="/admin/collections/pages/e1/builder">
+          <EntryForm
+            collection={onePageField}
+            entry={entry}
+            mode="edit"
+            onCancel={onCancel}
+            documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
+          />
+        </RoutedPathnameContext.Provider>
       </Activity>
     );
     const { rerender } = render(view("visible"), { wrapper: Providers });
@@ -822,6 +827,42 @@ describe("a field-type view on a document with two fields of its type", () => {
     rerender(view("visible"));
     expect(window.location.pathname).toBe("/admin/collections/pages/e1");
     expect(window.location.search).toBe("");
+  });
+
+  it("corrects the address of the view the router moves to, the same view body kept", () => {
+    // One view of the document giving way to another, as a plugin's
+    // `navigateTo` does: the page, and this body with it, stays mounted.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    const view = (routed: string) => (
+      <RoutedPathnameContext.Provider value={routed}>
+        <EntryForm
+          collection={onePageField}
+          entry={entry}
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
+        />
+      </RoutedPathnameContext.Provider>
+    );
+    const { rerender } = render(view("/admin/collections/pages/e1/builder"), {
+      wrapper: Providers,
+    });
+    // The other view, its address naming no field.
+    window.history.pushState(null, "", "/admin/collections/pages/e1/outline");
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    rerender(view("/admin/collections/pages/e1/outline"));
+    expect(window.location.pathname).toBe(
+      "/admin/collections/pages/e1/outline"
+    );
+    expect(new URLSearchParams(window.location.search).get("field")).toBe(
+      "layout"
+    );
   });
 
   it("opens the only field of its type without asking", () => {
