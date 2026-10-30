@@ -977,15 +977,15 @@ interface BulkBody {
 }
 
 /**
- * Asks the REST bulk route by ids for one entry, as the admin's entry list
- * sends a row's or a selection's Delete, Publish and Unpublish: a delete
- * through `bulk-delete`, any other write through `bulk-update` with the body
- * the single write sends as its `data`.
+ * Asks the REST bulk route by ids for `ids`, as the admin's entry list sends
+ * a row's or a selection's Delete, Publish and Unpublish: a delete through
+ * `bulk-delete`, any other write through `bulk-update` with the body the
+ * single write sends as its `data`.
  */
 function bulkRequest(
   slug: string,
   action: Exclude<Row["action"], "list" | "count">,
-  id: string,
+  ids: string[],
   headers: Record<string, string>
 ): Promise<Response> {
   const { body } = COLLECTION_REQUESTS[action];
@@ -994,14 +994,27 @@ function bulkRequest(
         "POST",
         ["collections", slug, "entries", "bulk-delete"],
         headers,
-        { ids: [id] }
+        { ids }
       )
     : request(
         "POST",
         ["collections", slug, "entries", "bulk-update"],
         headers,
-        { ids: [id], data: body }
+        { ids, data: body }
       );
+}
+
+/** The row stored under `id` in the row's target table, if any. */
+async function storedRowOf(world: World, row: Row, id: string) {
+  return (await storedTable(world, row)).find(
+    stored => String(stored.id) === id
+  );
+}
+
+/** Whether a bulk route's items name `id` as changed. */
+async function bulkChanged(res: Response, id: string): Promise<boolean> {
+  const body = (await res.clone().json()) as BulkBody;
+  return body.items?.some(item => String(item.id) === id) === true;
 }
 
 /**
@@ -1036,6 +1049,12 @@ async function bulkItemRefusal(
  * where it was changed, the status of its failure's code where it failed.
  * Every refusal is compared with the same request for an entry that does not
  * exist.
+ *
+ * A write a rule's filter limits sends the entry inside the filter together
+ * with its twin outside it, as a selection holding both is sent: the twin
+ * must be failed on its own and left as it was, or the cell answers
+ * `=twin-written` (changed, or named among the changed) or `=twin-unnamed`
+ * (in neither list), whatever the entry inside was answered.
  */
 async function bulk(world: World, row: Row, who: CallerHandle) {
   // The table asks this door only writes to existing entries.
@@ -1044,8 +1063,31 @@ async function bulk(world: World, row: Row, who: CallerHandle) {
     throw new Error(`a bulk route sends no ${action}`);
   }
   const { slug, id } = addressOf(world, row, "bulk");
-  const res = await bulkRequest(slug, action, id, who.headers);
-  const absent = () => bulkRequest(slug, action, ABSENT_ID, who.headers);
+  const twin =
+    !askingOutside.getStore() && hasOutsideTwin(row)
+      ? askingOutside.run(true, () => addressOf(world, row, "bulk").id)
+      : undefined;
+  const twinBefore =
+    twin === undefined ? undefined : await storedRowOf(world, row, twin);
+  const res = await bulkRequest(
+    slug,
+    action,
+    twin === undefined ? [id] : [id, twin],
+    who.headers
+  );
+  if (twin !== undefined) {
+    const twinAfter = await storedRowOf(world, row, twin);
+    if (
+      !isDeepStrictEqual(twinBefore, twinAfter) ||
+      (res.status < 300 && (await bulkChanged(res, twin)))
+    ) {
+      return "=twin-written";
+    }
+    if (res.status < 300 && !(await bulkItemRefusal(res, twin))) {
+      return "=twin-unnamed";
+    }
+  }
+  const absent = () => bulkRequest(slug, action, [ABSENT_ID], who.headers);
   // A request refused whole names no entry in its path, and is compared with
   // the same request for an entry that does not exist, so a refusal that
   // tells the two apart shows.
@@ -1055,11 +1097,7 @@ async function bulk(world: World, row: Row, who: CallerHandle) {
     return fromStatus(res.status);
   }
   const refusal = await bulkItemRefusal(res, id);
-  if (!refusal) {
-    const body = (await res.json()) as BulkBody;
-    const changed = body.items?.some(item => String(item.id) === id);
-    return changed ? "A" : "=unnamed";
-  }
+  if (!refusal) return (await bulkChanged(res, id)) ? "A" : "=unnamed";
   noteRefusal(refusal);
   const missing = await absent();
   noteMissingRefusal(
@@ -1246,6 +1284,30 @@ function addedPublished(
   );
 }
 
+/**
+ * Whether a write naming one collection entry did what it sent, from the
+ * table after it: a delete left no row under `id`, and an update, publish or
+ * unpublish left the row holding every value its request sent. A create names
+ * no entry, so it is done when it changed the table.
+ */
+function entryWriteDone(
+  row: Row,
+  id: string,
+  after: readonly Record<string, unknown>[],
+  landed: boolean
+): boolean {
+  const { action } = row;
+  if (action === "list" || action === "count") return landed;
+  const { byId, body } = COLLECTION_REQUESTS[action];
+  if (!byId) return landed;
+  const stored = after.find(entry => String(entry.id) === id);
+  if (!body) return stored === undefined;
+  return (
+    stored !== undefined &&
+    Object.entries(body).every(([field, value]) => stored[field] === value)
+  );
+}
+
 /** The status a Single's publish or unpublish leaves it in. */
 const statusAfter = (row: Row) =>
   row.action === "publish" ? "published" : "draft";
@@ -1277,16 +1339,19 @@ export async function ask(
   const inside = await answer(world, row, door);
   const after = await storedTable(world, row);
   const landed = !isDeepStrictEqual(before, after);
-  // A Single's publish or unpublish is done only when its status moved, and
-  // a create sent as published only when the row it added is published: a
-  // write that drops the status changes the table without doing what was
-  // asked.
+  // A Single's publish or unpublish is done only when its status moved, a
+  // create sent as published only when the row it added is published, and a
+  // write to a collection entry only when the entry holds what was sent: a
+  // write that drops the status or the title changes the table without doing
+  // what was asked.
   const done =
     row.target === "single-pub"
       ? after[0]?.status === statusAfter(row)
       : row.action === "new-pub"
         ? addedPublished(before, after)
-        : landed;
+        : row.target === "collection"
+          ? entryWriteDone(row, addressOf(world, row, door).id, after, landed)
+          : landed;
   if (!hasOutsideTwin(row)) return { ...inside, landed, done };
   // The twin, compared with the table as the first ask left it: an ask
   // answered as refused that wrote all the same is caught here.
