@@ -21,12 +21,14 @@ vi.mock("../../../direct-api/nextly", () => ({
 const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
 vi.mock("../../../di/container", () => ({ container: { get: containerGet } }));
 
-const { verdict, createDisabledSlugs } = vi.hoisted(() => ({
+const { verdict, mayUpdate, createDisabledSlugs } = vi.hoisted(() => ({
   verdict: vi.fn<(slug: string) => Promise<boolean>>(),
+  mayUpdate: vi.fn<(slug: string) => Promise<boolean>>(),
   createDisabledSlugs: vi.fn<() => Promise<ReadonlySet<string>>>(),
 }));
 vi.mock("../../../domains/widgets/reader-content", () => ({
   createVerdict: () => verdict,
+  updateVerdict: () => mayUpdate,
   createDisabledSlugs: () => createDisabledSlugs(),
 }));
 
@@ -194,6 +196,7 @@ beforeEach(() => {
     return Promise.resolve({ items: entry === undefined ? [] : [entry] });
   });
   verdict.mockResolvedValue(true);
+  mayUpdate.mockResolvedValue(true);
   createDisabledSlugs.mockResolvedValue(new Set());
 });
 
@@ -274,6 +277,27 @@ describe("the Content table's bounded read", () => {
     expect(most).toBe(4);
   });
 
+  it("builds at most four drawn rows at once", async () => {
+    let running = 0;
+    let most = 0;
+    // A drawn row's own reads: its create decision is asked once per row, so
+    // the decisions in flight are the rows in flight.
+    verdict.mockImplementation(async () => {
+      running += 1;
+      most = Math.max(most, running);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      running -= 1;
+      return true;
+    });
+
+    const answer = await table(MAX_WIDGET_LIMIT);
+
+    expect(answer.rows).toHaveLength(MAX_WIDGET_LIMIT);
+    // 🔴 Four, not fifty: `Promise.all` over the page draws the same rows,
+    // and only how many overlap tells the two apart.
+    expect(most).toBe(4);
+  });
+
   it("reads the trail once when its window reached the trail's end", async () => {
     // A drawn collection with an entry and no save of it in the window: who
     // saved it would be asked past the window, if the window had not reached
@@ -345,17 +369,24 @@ describe("which rows make the page", () => {
 });
 
 describe("the Content table's rows", () => {
-  it("takes each row's Updated from its own data, never from the trail", async () => {
+  it("takes Updated and who made it from the trail's latest change where it holds one, and the row's own date, naming nobody, where it holds none", async () => {
     collections = [collection("posts", "Posts")];
     singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
-    // The trail's save of posts is older than its newest entry, and the trail
-    // holds no save of Home at all.
+    // The trail's latest change of posts is Ben's publish, a status change on
+    // its own, which moved the entry's own date too; the trail holds nothing
+    // of Home at all.
     windowAnswer = {
-      edits: [save("posts", "2026-10-20T10:00:00.000Z")],
+      edits: [
+        save("posts", "2026-10-29T10:00:00.000Z", {
+          userId: "ben",
+          userName: "Ben",
+          event: "published",
+        }),
+      ],
       hasMore: false,
     };
     newest = {
-      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
+      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.004Z" },
     };
     // Saved long before any trail window.
     stored = {
@@ -368,18 +399,40 @@ describe("the Content table's rows", () => {
     const answer = await table(10);
     const bySlug = new Map(answer.rows.map(row => [row.slug, row]));
 
+    // 🔴 The instant, the name and what they did, all from the one change.
     expect(bySlug.get("posts")).toMatchObject({
       updatedAt: "2026-10-29T10:00:00.000Z",
+      userId: "ben",
+      userName: "Ben",
+      event: "published",
     });
-    // 🔴 A real date never reads as unknown for want of a trail row.
+    // 🔴 A real date never reads as unknown for want of a trail row, and
+    // names nobody, since nothing says who made it.
     expect(bySlug.get("home")).toMatchObject({
       updatedAt: "2024-01-05T08:00:00.000Z",
     });
     expect(bySlug.get("home")).not.toHaveProperty("userName");
+    expect(bySlug.get("home")).not.toHaveProperty("userId");
     // Read from the Single's table, never through a read that would create it.
     expect(selectOne).toHaveBeenCalledWith("single_home", {
       columns: ["id", "updated_at"],
     });
+  });
+
+  it("asks the trail for every change, a publish or an unpublish on its own among them", async () => {
+    collections = [collection("posts", "Posts")];
+    windowAnswer = { ...windowAnswer, hasMore: true };
+    newest = {
+      posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
+    };
+
+    await table(10);
+
+    // The window and the read past it for the drawn collection alike.
+    expect(getRecentEdits).toHaveBeenCalledTimes(2);
+    for (const [options] of getRecentEdits.mock.calls) {
+      expect(options).toMatchObject({ statusChanges: true });
+    }
   });
 
   it("names who saved a Single only when the trail's save is of its document", async () => {
@@ -502,13 +555,17 @@ describe("the Content table's rows", () => {
     for (const row of answer.rows) expect(row).not.toHaveProperty("updatedAt");
   });
 
-  it("names who saved a collection only when the trail's save is of its newest entry", async () => {
+  it("takes a collection's Updated and its name together from its latest change of any entry", async () => {
     collections = [collection("posts", "Posts"), collection("tags", "Tags")];
     windowAnswer = {
       edits: [
         save("posts", "2026-10-29T10:00:00.000Z"),
-        // A save of another tag than the newest one.
-        save("tags", "2026-10-28T10:00:00.000Z", { entryId: "doc-older-tag" }),
+        // A change of another tag than the newest one, and the latest the
+        // trail holds of the collection.
+        save("tags", "2026-10-28T10:00:00.000Z", {
+          entryId: "doc-older-tag",
+          userName: "Ben",
+        }),
       ],
       hasMore: false,
     };
@@ -521,14 +578,17 @@ describe("the Content table's rows", () => {
     const bySlug = new Map(answer.rows.map(row => [row.slug, row]));
 
     expect(bySlug.get("posts")).toMatchObject({
+      updatedAt: "2026-10-29T10:00:00.000Z",
       userId: "ana",
       userName: "Ana",
       actorType: "user",
     });
+    // 🔴 Never the newest entry's own date beside the name on another
+    // change: the date and the name describe the same change.
     expect(bySlug.get("tags")).toMatchObject({
-      updatedAt: "2026-10-29T11:00:00.000Z",
+      updatedAt: "2026-10-28T10:00:00.000Z",
+      userName: "Ben",
     });
-    expect(bySlug.get("tags")).not.toHaveProperty("userName");
   });
 
   it("orders the page by each row's own last update, newest first, a Single among them, and the empty collections last", async () => {
@@ -565,6 +625,8 @@ describe("the Content table's rows", () => {
     // 🔴 Every row the table could show, the Single's included: the list
     // answer's total is the rows it matched, as every list answer's is.
     expect(answer.total).toBe(5);
+    // And how it divides, for the card's subtitle.
+    expect(answer.byKind).toEqual({ collection: 4, single: 1 });
   });
 
   it("counts drafts by the collection list's Draft filter, and none for a collection without the lifecycle", async () => {
@@ -616,6 +678,36 @@ describe("the Content table's rows", () => {
     );
 
     expect(canCreate).toEqual({ posts: true, tags: false, forms: false });
+  });
+
+  it("says whether the reader may update each Single, by the reader's update decision", async () => {
+    singles = [
+      { slug: "home", label: "Home", tableName: "single_home" },
+      { slug: "about", label: "About", tableName: "single_about" },
+    ];
+    // A reader who may read both and update only Home.
+    mayUpdate.mockImplementation(slug => Promise.resolve(slug === "home"));
+
+    const answer = await table(10);
+    const canUpdate = Object.fromEntries(
+      answer.rows.map(row => [row.slug, row.canUpdate])
+    );
+
+    // 🔴 About is readable and not updatable: it opens read-only, so its row
+    // must not offer Edit.
+    expect(canUpdate).toEqual({ home: true, about: false });
+    expect(new Set(mayUpdate.mock.calls.map(([slug]) => slug))).toEqual(
+      new Set(["home", "about"])
+    );
+  });
+
+  it("says a Single may not be updated when the update decision fails", async () => {
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    mayUpdate.mockRejectedValue(new Error("rules not read"));
+
+    const answer = await table(10);
+
+    expect(answer.rows[0]?.canUpdate).toBe(false);
   });
 
   it("offers create nowhere while which collections turn it off is unknown", async () => {

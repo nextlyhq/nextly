@@ -6,6 +6,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FrameState, type CardState } from "../frame/card-state";
+import { useCardSubtitle } from "../frame/header-subtitle";
 import { WidgetCard } from "../WidgetCard";
 
 /** Every state the frame draws, each as the renderer hands it. */
@@ -222,6 +223,45 @@ describe("the header", () => {
     expect(
       screen.queryByTestId("widget-card-subtitle")
     ).not.toBeInTheDocument();
+  });
+
+  it("draws the line a body reports beneath the title, and withdraws it with the body", () => {
+    function Summary({ line }: { line: string }) {
+      useCardSubtitle(line);
+      return <p>rows</p>;
+    }
+    const { rerender } = render(
+      <WidgetCard title="Content">
+        <Summary line="8 collections · 5 Singles" />
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-subtitle")).toHaveTextContent(
+      "8 collections · 5 Singles"
+    );
+    rerender(
+      <WidgetCard title="Content">
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.queryByTestId("widget-card-subtitle")
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the subtitle it is given over the line a body reports", () => {
+    function Summary() {
+      useCardSubtitle("8 collections");
+      return <p>rows</p>;
+    }
+    render(
+      <WidgetCard title="Posts" subtitle="Count">
+        <Summary />
+      </WidgetCard>
+    );
+    // 🔴 The widget's own name is what tells two cards about one subject apart.
+    expect(screen.getByTestId("widget-card-subtitle")).toHaveTextContent(
+      /^Count$/
+    );
   });
 
   it("fits a long title to one line and keeps all of it on hover and for assistive technology", () => {

@@ -182,6 +182,19 @@ export function createVerdict(
 }
 
 /**
+ * Whether this reader may update one collection's entries or one Single: the
+ * decision a real write makes, through {@link callerMayPerform}, as
+ * {@link createVerdict} decides creating, so the two never come to disagree
+ * with the write about who may.
+ */
+export function updateVerdict(
+  caller: ReadCaller
+): (slug: string) => Promise<boolean> {
+  return slug =>
+    callerMayPerform(caller.authenticatedScope, "update", slug, caller.user);
+}
+
+/**
  * Of the reader's collections or Singles, the ones a widget may QUERY.
  *
  * A published source is what says an entity's stored shape is not known to be

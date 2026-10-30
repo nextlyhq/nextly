@@ -23,13 +23,15 @@
  * this reader may see on the dashboard, latest update first, at most the
  * query's limit. A collection's row carries its entries, its drafts by the
  * collection list's Draft filter, and whether the reader may create in it,
- * counted for the rows answered and no others; every row carries its own last
- * update, and who saved it where the activity trail names them. Each row says which `kind` it is, since a collection
- * and a Single may share a slug. The answer's `total` is what every list
- * answer's is, the rows the read matched: every collection AND every Single
- * the reader may see on the dashboard, of which `items` is the first page. It
- * adds no access rule of its own: the scope, every count and every save are
- * the service's, read as the reader.
+ * counted for the rows answered and no others; a Single's row carries whether
+ * the reader may update it. Every row carries its last update, with who made
+ * it and what they did taken from the same change where the activity trail
+ * holds one. Each row says which `kind` it is, since a collection and a Single
+ * may share a slug. The answer's `total` is what every list answer's is, the
+ * rows the read matched: every collection AND every Single the reader may see
+ * on the dashboard, of which `items` is the first page; `totalByKind` splits
+ * it into the two. It adds no access rule of its own: the scope, every count,
+ * every decision and every save are the service's, read as the reader.
  *
  * @module services/dashboard/summary-widget-sources
  */
@@ -81,11 +83,13 @@ const CONTENT_FIELDS = [
   { name: "count", type: "number" as const, label: "Entries" },
   { name: "draft", type: "number" as const, label: "Drafts" },
   { name: "canCreate", type: "boolean" as const, label: "May create" },
+  { name: "canUpdate", type: "boolean" as const, label: "May update" },
   { name: "updatedAt", type: "date" as const, label: "Updated" },
   { name: "userId", type: "string" as const, label: "Saved by" },
   { name: "userName", type: "string" as const, label: "Name of saver" },
   { name: "actorType", type: "string" as const, label: "Saved by kind" },
   { name: "identityErasedAt", type: "date" as const, label: "Identity erased" },
+  { name: "event", type: "string" as const, label: "What they did" },
 ];
 
 /**
@@ -181,6 +185,8 @@ async function resolveContent(
     // Every row the table could show, collections and Singles alike: the
     // rows matched, of which `items` is the first page.
     total: table.total,
+    // And how many of those are each kind, for the card's subtitle.
+    totalByKind: table.byKind,
   };
 }
 
