@@ -227,6 +227,24 @@ describe("DashboardHeader while its answers arrive", () => {
     expect(marker()).toBe("settled");
   });
 
+  /*
+   * The bar gives the trail what the controls leave, so the controls must
+   * not shrink: each is a 44 px target, and plugin controls can fill a phone's
+   * bar. jsdom has no layout, so this pins the structure that keeps them
+   * whole: once settled they sit in one flex box that does not shrink, not
+   * loose in the bar's row, where each would yield toward its icon's width.
+   */
+  it("keeps the settled controls in one row that does not shrink", () => {
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    render(<DashboardHeader />);
+    const row = screen.getByRole("link", { name: BESIDE_THE_MENU[0] })
+      .parentElement as HTMLElement;
+    expect(row.getAttribute("data-shell-answers")).toBe("settled");
+    expect(row.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex", "shrink-0"])
+    );
+  });
+
   it("draws the whole row, the menu last, once both answers are in", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     render(<DashboardHeader />);

@@ -147,7 +147,10 @@ function ControlsRow({
   return (
     <div
       hidden={!settled}
-      className={settled ? "contents" : undefined}
+      // One box that does not shrink: each control is a 44 px target, and
+      // the trail beside it, not the controls, gives way when plugin
+      // controls fill a narrow bar.
+      className={settled ? "flex shrink-0 items-center gap-1" : undefined}
       // Whether the answers that decide the row are in, so a reader of the
       // page (the layout-shift browser test) can tell when the row is done.
       data-shell-answers={shellAnswersMarker(settled)}
