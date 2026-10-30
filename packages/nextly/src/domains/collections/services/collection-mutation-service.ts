@@ -273,8 +273,10 @@ import {
   type VersionRef,
   VersionsRepository,
   type VersionRow,
+  WORKING_DRAFT_SHAPE,
 } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import {
@@ -11833,7 +11835,6 @@ export class CollectionMutationService extends BaseService {
       await this.addWorkingDraftLanguages(held, {
         collectionName: args.collectionName,
         entryIds: args.entryIds,
-        configured,
         tx: args.tx,
       });
     }
@@ -11853,39 +11854,63 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Add to `held` each language of `configured` an entry holds a working
-   * draft in: one query per language for every entry, in slices the
-   * database binds in one statement.
+   * Add to `held` each language an entry holds a working draft in, whether
+   * or not the site still configures it, as a delete removes every one: one
+   * query for the drafts of every entry, in slices the database binds in one
+   * statement beside the query's own conditions. A draft naming no language
+   * is the default language's.
    */
   private async addWorkingDraftLanguages(
     held: Map<string, string[]>,
     args: {
       collectionName: string;
       entryIds: readonly string[];
-      configured: readonly string[];
       tx?: TransactionContext;
     }
   ): Promise<void> {
-    const drafts = new VersionsRepository(args.tx ?? this.adapter);
-    const scope = {
-      scopeKind: "collection" as const,
-      scopeSlug: args.collectionName,
-    };
-    const slice = Math.max(1, this.adapter.getCapabilities().maxParamsPerQuery);
-    for (const locale of args.configured) {
-      for (let at = 0; at < args.entryIds.length; at += slice) {
-        const found = await drafts.findWorkingDraftsOf(
-          scope,
-          args.entryIds.slice(at, at + slice),
-          locale
-        );
-        for (const id of found.keys()) {
-          const languages = held.get(id) ?? [];
-          if (!languages.includes(locale)) languages.push(locale);
-          held.set(id, languages);
-        }
+    const db = args.tx ?? this.adapter;
+    const defaultLocale = this.localization?.defaultLocale;
+    // The scope and the working-draft shape take binds of their own.
+    const slice = this.idsPerStatement(2 + WORKING_DRAFT_SHAPE.length);
+    for (let at = 0; at < args.entryIds.length; at += slice) {
+      const drafts = await db.select<{
+        entryId: string;
+        locale: string | null;
+      }>(VERSIONS_TABLE, {
+        columns: ["entryId", "locale"],
+        where: {
+          and: [
+            { column: "scopeKind", op: "=", value: "collection" },
+            { column: "scopeSlug", op: "=", value: args.collectionName },
+            {
+              column: "entryId",
+              op: "IN",
+              value: args.entryIds.slice(at, at + slice),
+            },
+            ...WORKING_DRAFT_SHAPE,
+          ],
+        },
+      });
+      for (const draft of drafts) {
+        const locale = draft.locale ?? defaultLocale;
+        if (locale === undefined) continue;
+        const id = String(draft.entryId);
+        const languages = held.get(id) ?? [];
+        if (!languages.includes(locale)) languages.push(locale);
+        held.set(id, languages);
       }
     }
+  }
+
+  /**
+   * How many ids one statement may bind beside `reserved` binds of its own,
+   * within the database's limit on the parameters one statement takes.
+   */
+  private idsPerStatement(reserved: number): number {
+    return Math.max(
+      1,
+      this.adapter.getCapabilities().maxParamsPerQuery - reserved
+    );
   }
 
   /** {@link languagesToDeleteEach} for one entry. */
@@ -11963,7 +11988,7 @@ export class CollectionMutationService extends BaseService {
     >[0];
     // In slices the database binds in one statement, however many entries a
     // batch names.
-    const slice = Math.max(1, this.adapter.getCapabilities().maxParamsPerQuery);
+    const slice = this.idsPerStatement(0);
     const rows: Record<string, unknown>[] = [];
     for (let at = 0; at < entryIds.length; at += slice) {
       rows.push(

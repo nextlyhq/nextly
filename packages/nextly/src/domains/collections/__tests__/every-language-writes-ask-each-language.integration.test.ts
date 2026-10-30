@@ -50,13 +50,23 @@ const ANY_LANGUAGE = "eachlang_any_language";
 const OWN = "eachlang_own";
 // Refusing German, on a collection whose edits are held as working drafts.
 const DRAFTED = "eachlang_drafted";
+// The same, refusing French, a language the site no longer configures.
+const DRAFTED_NOT_FRENCH = "eachlang_drafted_not_french";
 // Refusing German, on entries only their owner may read.
 const HIDDEN = "eachlang_hidden";
 
 const AUTHOR = "eachlang-author";
 const OTHER = "eachlang-other";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
-const SLUGS = [NOT_GERMAN, NOT_ENGLISH, ANY_LANGUAGE, OWN, DRAFTED, HIDDEN];
+const SLUGS = [
+  NOT_GERMAN,
+  NOT_ENGLISH,
+  ANY_LANGUAGE,
+  OWN,
+  DRAFTED,
+  DRAFTED_NOT_FRENCH,
+  HIDDEN,
+];
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -101,6 +111,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           delete: notIn("de"),
+        },
+        fields,
+      }),
+      defineCollection({
+        slug: DRAFTED_NOT_FRENCH,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          delete: notIn("fr"),
         },
         fields,
       }),
@@ -344,6 +366,45 @@ describe.each(getConfiguredTestDialects())(
           )
         ).toBe(true);
         expect(await stillThere(t, DRAFTED, id)).toBe(true);
+      });
+
+      it("refuses deleting an entry whose held edit is in a language the site no longer configures", async () => {
+        const t = await boot(dialect);
+        const made = await t.nextly.create({
+          collection: DRAFTED_NOT_FRENCH,
+          data: { title: "live", owner: AUTHOR, status: "published" },
+        });
+        const id = String(made.item.id);
+        await t.nextly.update({
+          collection: DRAFTED_NOT_FRENCH,
+          id,
+          locale: "de",
+          data: { title: "entwurf" },
+        } as never);
+        // The German held edit relabelled to a language since removed, as
+        // one left behind when a locale is taken out of the config.
+        await t.adapter.update(
+          "nextly_versions",
+          { locale: "fr" },
+          {
+            and: [
+              { column: "scopeSlug", op: "=", value: DRAFTED_NOT_FRENCH },
+              { column: "entryId", op: "=", value: id },
+              { column: "locale", op: "=", value: "de" },
+            ],
+          }
+        );
+
+        expect(
+          await refused(() =>
+            t.nextly.delete({
+              collection: DRAFTED_NOT_FRENCH,
+              id,
+              ...asAuthor,
+            })
+          )
+        ).toBe(true);
+        expect(await stillThere(t, DRAFTED_NOT_FRENCH, id)).toBe(true);
       });
 
       it("answers a batch's refused entry the caller may not read as it answers a missing one", async () => {

@@ -34,8 +34,6 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { randomUUID } from "node:crypto";
-
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -85,7 +83,7 @@ const GROUPED = "otherdoors_grouped";
 const SEO = "otherdoors_seo";
 // A delete rule reading the languages it is told together, refusing where
 // German is among them.
-const BY_LOCALES = "otherdoors_by_locales";
+const BY_LOCALES = "otherdoors_told_together";
 
 const AUTHOR = "otherdoors-author";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
@@ -514,7 +512,6 @@ describe.each(getConfiguredTestDialects())(
                 );
                 await tx.insert(translations, {
                   ...english,
-                  id: randomUUID(),
                   _locale: "de",
                 });
                 gained.rows++;
@@ -536,10 +533,11 @@ describe.each(getConfiguredTestDialects())(
             }
           );
 
-        // The lock was reached, and the German row it added refused the
-        // delete, which left the entry.
+        // The lock was reached, and the German row it added is asked under
+        // it: the rule refusing German refuses the delete, which left the
+        // entry.
         expect(gained.rows).toBe(1);
-        expect(status).not.toBe("deleted");
+        expect(status).toBe(403);
         expect(await stillThere(t, NOT_GERMAN, englishOnly)).toBe(true);
       });
     });
