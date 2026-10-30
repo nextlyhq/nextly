@@ -1,0 +1,25 @@
+---
+title: PLUGIN_SETUP_FAILED
+description: "A plugin's `setup` function threw while the configuration was loading."
+---
+
+## Cause
+
+A plugin's `setup` function threw while the configuration was loading.
+
+A plugin can change the configuration as it loads, in its `setup` function. When that function throws, the configuration cannot be built, so the command stops. The Why line is the plugin's own message.
+
+## Fix
+
+- Check the options the plugin is given in `nextly.config.ts` against its documentation; the message usually names the option.
+- If the options are right, update the plugin to its latest release.
+- `--verbose` shows the stack, which points into the plugin's code.
+
+## Example
+
+```text
+✗ The `@nextlyhq/plugin-seo` plugin failed while the configuration was loading.
+  Why:  seo: `collections` must name at least one collection
+  Next: Check the options this plugin is given in `nextly.config.ts`, or update the plugin; `--verbose` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-setup-failed  (PLUGIN_SETUP_FAILED)
+```

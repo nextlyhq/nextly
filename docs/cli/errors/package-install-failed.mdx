@@ -1,0 +1,25 @@
+---
+title: PACKAGE_INSTALL_FAILED
+description: "The package manager could not install the package `nextly add` was given."
+---
+
+## Cause
+
+The package manager could not install the package `nextly add` was given.
+
+`nextly add` installs a plugin with the project's package manager (pnpm, yarn or npm) and ends with its exit code when that install fails. The package manager's own output, printed just above, says why.
+
+## Fix
+
+- Read the package manager's output above the error: a misspelled package name, a version it cannot resolve, or no network are the usual causes.
+- Fix what it reports, then run `nextly add <package>` again.
+- To print the wiring snippet without installing, run `nextly add <package> --skip-install`.
+
+## Example
+
+```text
+✗ Install failed (pnpm exited 1).
+  Why:  pnpm could not install `@nextlyhq/plugin-seo`; its own output above says why.
+  Next: Fix what pnpm reports, then run `nextly add @nextlyhq/plugin-seo` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/package-install-failed  (PACKAGE_INSTALL_FAILED)
+```
