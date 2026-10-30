@@ -46,6 +46,11 @@ const ANCHORS: Record<string, string> = {
   users: "settings",
 };
 
+/** The rail id of a standalone plugin's entry, by the plugin's slug. */
+export function standaloneEntryId(slug: string): MainMenuCategory {
+  return `standalone-${slug}`;
+}
+
 /**
  * The primary rail's items, with standalone plugins placed among them.
  *
@@ -69,7 +74,7 @@ export function placeStandalonePlugins<P extends StandaloneMenuPlugin>(
     const anchor = ANCHORS[plugin.after ?? "plugins"] ?? "plugins";
     const entry = {
       item: {
-        id: `standalone-${deps.slugOf(plugin.name)}` as MainMenuCategory,
+        id: standaloneEntryId(deps.slugOf(plugin.name)),
         label: plugin.appearance?.label || plugin.name,
         icon: deps.iconFor(plugin),
         href: "#",
