@@ -344,6 +344,14 @@ export async function generateMigration(
     desiredSnapshot,
     history: companionHistory,
   });
+  // What the snapshot this run writes says of each translated table's companion: read from the
+  // database for `--record-snapshot`, carried forward otherwise (`writtenTranslations`).
+  const written = await writtenTranslations(args, {
+    written: stream.written,
+    entities,
+    previousSnapshot,
+    history: companionHistory,
+  });
   const companionPlans = planCompanionMigrations(
     entities,
     previousSnapshot,
@@ -422,7 +430,7 @@ export async function generateMigration(
     ],
     hasSettingsChanges,
     record: {
-      written: stream.written,
+      written,
       contributions: stream.contributions,
       entities: settingsRecord,
       metaDir,
@@ -592,7 +600,7 @@ export async function generateMigration(
     metaDir,
     now,
     sqlContent,
-    written: stream.written,
+    written,
     contributions: stream.contributions,
     entities: settingsRecord,
   });
@@ -784,9 +792,64 @@ async function recordedUnlessChanged(
 ): Promise<GenerateResult | undefined> {
   if (args.recordSnapshot !== true) return undefined;
   refuseChangesToRecord(run.pendingTables);
-  await refuseTranslatedStorageNotHeld(args, run.record.written);
   if (run.hasSettingsChanges) return undefined;
   return recordSnapshot(args, run.record);
+}
+
+/**
+ * The snapshot this run writes, with each translated table that holds no translated column saying
+ * whether its companion is there (`withEmptyCompanions`). `--record-snapshot` asks the database
+ * (`heldInDatabase`), which also refuses translated fields it holds no storage for. Any other run
+ * carries forward what was there before it (`previousTranslation`): a companion emptied by its last
+ * field leaving stays, so a field joining translation later is moved into it, not made again.
+ */
+async function writtenTranslations(
+  args: Pick<
+    GenerateArgs,
+    | "recordSnapshot"
+    | "liveCompanionColumns"
+    | "collections"
+    | "singles"
+    | "components"
+  >,
+  run: {
+    written: NextlySchemaSnapshot;
+    entities: readonly TaggedConfigEntity[];
+    previousSnapshot: NextlySchemaSnapshot;
+    history: TranslationRecords;
+  }
+): Promise<NextlySchemaSnapshot> {
+  if (args.recordSnapshot === true) return heldInDatabase(args, run.written);
+  const there = new Set(
+    run.entities
+      .filter(
+        ({ entity: c, kind }) =>
+          previousTranslation(c, kind, run.previousSnapshot, run.history)
+            ?.companion === true
+      )
+      .map(({ entity: c }) => c.tableName)
+  );
+  return withEmptyCompanions(run.written, table => there.has(table));
+}
+
+/**
+ * `written` with each translated table that has no translated column recording whether its
+ * companion is there: `localizedColumns: []` where `there` says so, no list otherwise. No run wrote
+ * an empty list before, so an older snapshot's tables read as they always have.
+ */
+function withEmptyCompanions(
+  written: NextlySchemaSnapshot,
+  there: (table: string) => boolean
+): NextlySchemaSnapshot {
+  return {
+    ...written,
+    tables: written.tables.map(table => {
+      if (table.localized !== true) return table;
+      if ((table.localizedColumns ?? []).length > 0) return table;
+      const { localizedColumns: _none, ...rest } = table;
+      return there(table.name) ? { ...rest, localizedColumns: [] } : rest;
+    }),
+  };
 }
 
 /**
@@ -794,20 +857,17 @@ async function recordedUnlessChanged(
  * main table's shape suggests: read from the main table alone, an entity turned translated with only
  * new translated fields looks the same as one whose translations table is there. So each table the
  * snapshot records with translated fields must have its translations table in the database, with a
- * column for each. Refused before anything is written otherwise, naming the entities and fields, and
- * refused when no database was read.
+ * column for each, and one with none records whether its translations table is there
+ * (`withEmptyCompanions`). Refused before anything is written otherwise, naming the entities and
+ * fields, and refused when no database was read.
  */
-async function refuseTranslatedStorageNotHeld(
+async function heldInDatabase(
   args: Pick<
     GenerateArgs,
-    "liveCompanionColumns" | "collections" | "singles" | "components" | "name"
+    "liveCompanionColumns" | "collections" | "singles" | "components"
   >,
   written: NextlySchemaSnapshot
-): Promise<void> {
-  const translated = written.tables.filter(
-    t => t.localized === true && (t.localizedColumns ?? []).length > 0
-  );
-  if (translated.length === 0) return;
+): Promise<NextlySchemaSnapshot> {
   const read = args.liveCompanionColumns;
   const entityOf = new Map<string, string>([
     ...args.collections.map(
@@ -821,8 +881,10 @@ async function refuseTranslatedStorageNotHeld(
     ),
   ]);
   const missing: string[] = [];
-  for (const table of translated) {
+  const there = new Set<string>();
+  for (const table of written.tables.filter(t => t.localized === true)) {
     const live = new Set(read === undefined ? [] : await read(table.name));
+    if (live.size > 0) there.add(table.name);
     const absent = (table.localizedColumns ?? []).filter(c => !live.has(c));
     if (absent.length === 0) continue;
     const entity = entityOf.get(table.name) ?? `"${table.name}"`;
@@ -832,7 +894,9 @@ async function refuseTranslatedStorageNotHeld(
         : `${entity} has no column for ${absent.map(c => `"${c}"`).join(", ")} in ${table.name}_locales`
     );
   }
-  if (missing.length === 0) return;
+  if (missing.length === 0) {
+    return withEmptyCompanions(written, table => there.has(table));
+  }
   throw new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
@@ -1519,7 +1583,10 @@ function previousTranslation(
     const columns = new Set(prevMain.localizedColumns ?? []);
     return {
       columns,
-      companion: columns.size > 0 || history.present.has(key),
+      // An empty list says the companion is there, holding no translated column
+      // (`withEmptyCompanions`); no list at all, that there is none.
+      companion:
+        prevMain.localizedColumns !== undefined || history.present.has(key),
     };
   }
   if (history.snapshotRecords) return NOT_TRANSLATED;

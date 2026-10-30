@@ -1238,6 +1238,50 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         expect(await contentsOf(dir)).toEqual(before);
       });
 
+      it("records a translations table that is there with no translated column, and keeps knowing it", async () => {
+        // Translated with no translated field, its translations table emptied outside the files.
+        const none: MinimalConfigEntity = {
+          ...BODY_SHARED,
+          fields: [
+            { name: "headline", type: "text", localized: false },
+            { name: "body", type: "text", localized: false },
+          ],
+        };
+        const dir = await projectAfter(dialect, [
+          { collections: [BODY_JOINS] },
+          { collections: [none], after: forgetCompanionFiles },
+        ]);
+
+        expect(
+          await generate(dialect, dir, [none], "record", 30, {
+            recordSnapshot: true,
+            liveCompanionColumns: table =>
+              Promise.resolve(
+                table === "dc_docs" ? ["_parent", "_locale"] : []
+              ),
+          })
+        ).not.toBeNull();
+        // A run about something else carries it on.
+        await generate(dialect, dir, [none, NOTES], "notes", 40);
+
+        // A field joining translation is moved into the table that is there.
+        expect(
+          await filesOfRun(dialect, dir, [
+            {
+              ...none,
+              fields: [
+                { name: "headline", type: "text", localized: false },
+                { name: "body", type: "text", localized: true },
+              ],
+            },
+            NOTES,
+          ])
+        ).toEqual([
+          expect.stringMatching(/_joins_localization_docs\.sql$/),
+          expect.stringMatching(/_next\.sql$/),
+        ]);
+      });
+
       it("records a translations table made outside the migration files that holds every column", async () => {
         const dir = await projectAfter(dialect, [
           { collections: [TRANSLATED], after: forgetCompanionFiles },
