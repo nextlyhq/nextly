@@ -81,6 +81,8 @@ interface ReadOptions {
   window?: unknown;
   /** Whether a list asks how many it matched in all. */
   total?: unknown;
+  /** Whether a list answers its links as stored ids. */
+  depth?: unknown;
   signal?: unknown;
 }
 
@@ -229,6 +231,19 @@ function onlyTrue(options: unknown, key: "total"): boolean {
   });
 }
 
+/**
+ * The depth a list is read at: `0`, each link answered as the id it stores, or
+ * `undefined`, core's own default. Refused, before anything is checked, when it
+ * is anything else, as `total` is.
+ */
+function depthOf(options: unknown): 0 | undefined {
+  const value = optionOf(options, "depth");
+  if (value === undefined || value === 0) return value;
+  throw NextlyError.invalidInput({
+    message: 'A widget\'s data read names a "depth" other than 0.',
+  });
+}
+
 /** A count's window, as the call states it, once its shape is known to be one. */
 interface CountWindow {
   range: TimeseriesRange;
@@ -370,18 +385,23 @@ export function bindReadServices(
    * was asked, as a source's answer is, so a read that answered anything else
    * is a fault, never a quiet empty answer.
    */
-  async function run({
-    signal,
-    slug,
-    ...query
-  }: CheckedRead): Promise<WidgetResult> {
+  async function run(
+    { signal, slug, ...query }: CheckedRead,
+    depth?: 0
+  ): Promise<WidgetResult> {
     // After the check, never instead of it: see `answersNothing`.
     if (answersNothing?.(slug) === true) {
       return answerAsAsked(query, nothingThere(query, now));
     }
     return answerAsAsked(
       query,
-      await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
+      await executeWidgetQuery(query, caller, {
+        signal,
+        now: new Date(now),
+        // A list's depth, handed to the executor as core's own `find` takes
+        // it, and only when the call names one.
+        ...(depth === 0 ? { depth } : {}),
+      })
     );
   }
 
@@ -419,6 +439,7 @@ export function bindReadServices(
     },
     async find(collection, options) {
       const counted = onlyTrue(options, "total");
+      const depth = depthOf(options);
       // 🔴 A limit of 0 asks for no rows: what `rowsThatFit` answers for a
       // card whose body holds none, and what that card's frame draws. A query
       // runs at one row at the least, so the read is asked at one, checked as
@@ -436,7 +457,7 @@ export function bindReadServices(
         options
       );
       if (none && !counted) return { items: [] };
-      const answer = await run(checked);
+      const answer = await run(checked, depth);
       // As the browser would receive them, so the function may answer them
       // as they are and the card's transport check passes.
       const sent = sentAsJson(

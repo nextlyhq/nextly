@@ -246,7 +246,14 @@ expectTypeOf<
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
 >().toEqualTypeOf<
-  "where" | "sort" | "limit" | "select" | "status" | "total" | "signal"
+  | "where"
+  | "sort"
+  | "limit"
+  | "select"
+  | "status"
+  | "total"
+  | "depth"
+  | "signal"
 >();
 // A count's window: a range a series is drawn over, the date it places entries by, and the
 // window as long before it; and a list's total, asked for only as `true`.
@@ -258,6 +265,17 @@ expectTypeOf<
 expectTypeOf<
   NonNullable<Parameters<WidgetReadServices["find"]>[1]>["total"]
 >().toEqualTypeOf<true | undefined>();
+// A list's depth: `0` alone, its links as stored ids. Pinned exactly, so a
+// widened `number` or another depth fails here; `1` is refused outright.
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>["depth"]
+>().toEqualTypeOf<0 | undefined>();
+expectTypeOf<{ depth: 1 }>().not.toExtend<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>();
+expectTypeOf<{ depth: number }>().not.toExtend<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>();
 
 // The status a read may name, on every read: the published entries, or all of them.
 expectTypeOf<
