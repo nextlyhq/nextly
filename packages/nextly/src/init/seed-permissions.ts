@@ -13,12 +13,19 @@
  * @module init/seed-permissions
  */
 
+import { inArray } from "drizzle-orm";
+
 import type { AccessTarget } from "../auth/access/decide";
-import { seedRolePresets } from "../database/seeders/role-presets";
+import { getDialectTables } from "../database";
+import {
+  ROLE_PRESETS,
+  seedRolePresets,
+} from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
+  recordPublicReadNotice,
   seedPublicReadGrants,
   withdrawUndeclaredPluginGrants,
 } from "../domains/auth/services/public-read-grant";
@@ -218,6 +225,16 @@ export async function awaitBootSeeding(): Promise<void> {
 }
 
 async function seedEverything(): Promise<void> {
+  // Whether this site is told once which reads its visitors lost to the
+  // Public role: decided before anything is seeded, the one time a site an
+  // earlier release ran on can be told from a new install.
+  await seedingStep("public read notice", () =>
+    recordPublicReadNotice({
+      meta: getService("metaService"),
+      publicRoleMade: () => publicRoleMade(getService("metaService")),
+      seededBefore: presetRoleExists,
+    })
+  );
   const permissionsSeeded = await seedingStep(
     "permissions",
     seedAllPermissions
@@ -322,6 +339,32 @@ async function seedEverything(): Promise<void> {
         "[nextly] Could not check for roles holding a retired manage permission: ",
     })
   );
+}
+
+/**
+ * Whether a boot's seeding has run on this database: a preset role exists,
+ * as every boot's seeding makes them and nothing else does.
+ */
+async function presetRoleExists(): Promise<boolean> {
+  const { roles } = getDialectTables();
+  const db = getService("adapter").getDrizzle<{
+    select(fields: Record<string, unknown>): {
+      from(table: unknown): {
+        where(condition: unknown): { limit(count: number): Promise<unknown[]> };
+      };
+    };
+  }>();
+  const found = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(
+      inArray(
+        roles.slug,
+        ROLE_PRESETS.map(({ slug }) => slug)
+      )
+    )
+    .limit(1);
+  return found.length > 0;
 }
 
 /** How long the retired manage check may hold a boot, as the schema check may. */

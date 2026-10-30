@@ -16,6 +16,7 @@ const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
 const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
+const recordPublicReadNotice = vi.fn();
 const withdrawUndeclaredPluginGrants = vi.fn();
 const seedPluginRoles = vi.fn();
 const rolesHoldingRetiredManage = vi.fn();
@@ -55,6 +56,7 @@ vi.mock("../../domains/auth/services/public-role", () => ({
   seedPublicRole,
 }));
 vi.mock("../../domains/auth/services/public-read-grant", () => ({
+  recordPublicReadNotice,
   seedPublicReadGrants,
   withdrawUndeclaredPluginGrants,
 }));
@@ -86,11 +88,24 @@ beforeEach(() => {
   seedRolePresets.mockResolvedValue(undefined);
   seedPublicRole.mockResolvedValue({ made: true });
   seedPublicReadGrants.mockResolvedValue(undefined);
+  recordPublicReadNotice.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
   rolesHoldingRetiredManage.mockResolvedValue([]);
 });
 
 describe("seedPermissionsAndRolePresets", () => {
+  it("records whether the site is told which reads visitors lost before seeding anything", async () => {
+    // Decided by whether an earlier boot made the preset roles, so it must be
+    // read before this boot makes them.
+    await seedPermissionsAndRolePresets();
+
+    const [recorded] = recordPublicReadNotice.mock.invocationCallOrder;
+    expect(recorded).toBeLessThan(
+      seedSystemPermissions.mock.invocationCallOrder[0]
+    );
+    expect(recorded).toBeLessThan(seedRolePresets.mock.invocationCallOrder[0]);
+  });
+
   it("keeps quiet about a table that does not exist yet, in every step", async () => {
     seedSystemPermissions.mockRejectedValue(missingTable());
     seedRolePresets.mockRejectedValue(missingTable());

@@ -52,8 +52,8 @@ export const Posts = defineCollection({
 ```
 
 A rule is given the caller's `permissions` spelled as the Roles screen spells them —
-`update-posts` — for a signed-in user and an API key alike. A visitor holds none, so a
-permission check refuses them. A super-admin is admitted before any collection or Single
+`update-posts` — for a signed-in user and an API key alike. A visitor is given the Public
+role's permissions (see below). A super-admin is admitted before any collection or Single
 rule runs; field rules still apply to them.
 
 Rules were once given the other spelling, `posts:update`. That spelling is no longer in
@@ -72,22 +72,25 @@ A collection whose `access` says nothing about an operation falls back to grants
 signed-in user needs `read-posts` to read `posts`.
 
 A caller with **no session** — the Direct API with `overrideAccess: false` and no `user`, or
-a plugin service call made `{ as: "public" }` — holds no grants, so only a rule can let it
-write. With no rule for the operation, it may **read** (the public default, which public
-pages rely on), but a **create, update or delete is refused**. A collection that takes
-anonymous writes on purpose, such as a contact form, says so with a rule:
+a plugin service call made `{ as: "public" }` — is a visitor, judged by the built-in
+**Public** role: it may do what the Public role holds, and where the collection declares a
+rule for the operation, only where that rule answers `true`. At boot the Public role is
+granted `read-media` and the read of each collection and Single whose read rule answers a
+visitor `true`, and no write. Without the grant, a visitor is refused whatever the rule says.
+A collection that takes anonymous writes on purpose, such as a contact form, says so with a
+rule, and the Public role is granted the write on the **Roles** screen:
 
 ```ts
 defineCollection({
   slug: "contact-messages",
   access: {
-    // Visitors may send a message.
+    // Visitors may send a message, once the Public role holds
+    // create-contact-messages.
     create: () => true,
-    // Reading them needs the grant. Without this rule a visitor could read
-    // them too, since a read with no rule keeps the public default.
+    // Reading them needs the grant, which the Public role does not hold.
     read: ({ permissions }) => permissions.includes("read-contact-messages"),
-    // Update and delete need no rule: a visitor is refused, and a signed-in
-    // user needs the grant.
+    // Update and delete need no rule: the Public role holds neither, and a
+    // signed-in user needs the grant.
   },
   fields: [
     /* ... */
@@ -105,6 +108,34 @@ hold no grants, so a rule is the only way in. A rule sees them as `principal`
 beside a `null` `user`; a collection with no rule for the operation refuses them,
 and a rule set to `true` admits them as it admits any visitor. See
 [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).
+
+### Upgrading: visitors read only what the Public role holds
+
+Before visitors were judged by the Public role, they could read every collection and Single
+with no `read` rule. Now they read one only where the Public role holds its read, which boot
+grants only where the read rule answers `true`. A collection with no read rule, or with one
+that answers visitors with a filter, is no longer served to them.
+
+On the first start after upgrading, Nextly logs once which collections and Singles visitors
+could read before and can't now. A new install isn't told, and the notice isn't repeated: a
+collection kept private by having no read rule is ordinary. To let visitors read one again,
+either:
+
+- declare that anyone may read it, and the Public role is granted its read the next time
+  Nextly starts:
+
+  ```ts
+  defineCollection({
+    slug: "posts",
+    access: { read: () => true },
+    fields: [
+      /* ... */
+    ],
+  });
+  ```
+
+- or grant the Public role its read (`read-posts`) on the **Roles** screen. A read rule that
+  answers with a filter still applies to visitors once the Public role holds the read.
 
 ### A read rule that answers with a filter (experimental)
 
@@ -299,7 +330,10 @@ import type { AccessControlContext } from "nextly";
 import { defineCollection, relationship, text } from "nextly/config";
 
 // Whoever may publish posts changes every post; anyone else only their own.
-const ownPostsUnlessPublisher = ({ user, permissions }: AccessControlContext) => {
+const ownPostsUnlessPublisher = ({
+  user,
+  permissions,
+}: AccessControlContext) => {
   if (permissions.includes("publish-posts")) return true;
   return user ? { author: { equals: user.id } } : false;
 };
@@ -371,7 +405,8 @@ caller who could read that `users` row by name:
 
 - **A signed-in user** needs `read-<collection>`, as they would to read it directly, and then
   the collection's read rule if it declares one.
-- **A visitor** is judged by the collection's read rule where it declares one.
+- **A visitor** needs the Public role to hold `read-<collection>`, and then the collection's
+  read rule if it declares one.
 - **An API key** always needs `read-<collection>` in its own grants, and then the collection's
   rule if it has one. A key granted only `read-posts` does not see populated authors.
 - **`users` and media** have no rules of their own, so the grant decides: a signed-in user or

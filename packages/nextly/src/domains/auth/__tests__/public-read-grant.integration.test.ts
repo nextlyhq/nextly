@@ -5,10 +5,11 @@
  * once per entity: where it answers exactly `true` (a plain `true`, or a
  * function returning `true`), Public is granted that read. It is always
  * granted `read-media` and never `read-users`. An entity is asked once, so a
- * read an owner takes away again is not granted back. What a visitor could
- * read before and Public does not hold, a rule that failed when asked, and a
- * write a rule opens to anyone are listed at every boot until Public holds
- * them.
+ * read an owner takes away again is not granted back. A read whose rule
+ * answers a filter, a rule that failed when asked, and a write a rule opens to
+ * anyone are listed at every boot until Public holds them. A site an earlier
+ * release ran on is told once which reads its visitors lost, those with no
+ * read rule among them; a new install is not.
  */
 // Set before the harness boots (env validation reads it once).
 process.env.NEXTLY_SECRET =
@@ -20,7 +21,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
 import { getDialectTables } from "../../../database";
-import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
+import { seedRolePresets } from "../../../database/seeders/role-presets";
+import {
+  seedAllPermissions,
+  seedPermissionsAndRolePresets,
+} from "../../../init/seed-permissions";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -218,7 +223,12 @@ async function removePermission(
 }
 
 /** The one startup listing logged, or `undefined` where none was. */
-const listing = () => warnings.find(message => message.includes("Public role"));
+const listing = () =>
+  warnings.find(message => message.includes("does not hold these yet"));
+
+/** Each once-only notice of the reads visitors lost that was logged. */
+const notices = () =>
+  warnings.filter(message => message.includes("Before this upgrade"));
 
 describe.each(getConfiguredTestDialects())(
   "the Public role's read, granted where code says anyone (%s)",
@@ -265,9 +275,10 @@ describe.each(getConfiguredTestDialects())(
 
       const said = listing();
       expect(said).toBeDefined();
-      // What a visitor read with no rule, and Public does not hold.
-      expect(said).toContain("ruleless");
-      expect(said).toContain("notice");
+      // Not a read with no rule: a collection left private that way is
+      // ordinary, and a site that read it before is told once instead.
+      expect(said).not.toContain("read-ruleless");
+      expect(said).not.toContain("read-notice");
       // Rules that failed or gave no answer when asked about a visitor.
       expect(said).toContain("throwing");
       expect(said).toContain("silent");
@@ -285,7 +296,46 @@ describe.each(getConfiguredTestDialects())(
 
       warnings = [];
       await seedPermissionsAndRolePresets();
-      expect(listing()).toContain("ruleless");
+      expect(listing()).toContain("create-guestbook");
+    });
+
+    it("tells a site an earlier release ran on, once, which reads its visitors lost", async () => {
+      const nextly = await boot(dialect);
+      // An earlier release's boot: permissions and the preset roles seeded,
+      // and no Public role, which that release did not have.
+      await seedAllPermissions();
+      await seedRolePresets(nextly.adapter, logger);
+      warnings = [];
+
+      await seedPermissionsAndRolePresets();
+
+      expect(notices()).toHaveLength(1);
+      const [notice] = notices();
+      expect(notice).toContain('collection "ruleless" (no read rule)');
+      expect(notice).toContain('Single "notice" (no read rule)');
+      // Not a read Public is granted because its rule answers true, nor one a
+      // rule refuses visitors.
+      expect(notice).not.toMatch(/"open(fn|async)?"/);
+      expect(notice).not.toContain('"banner"');
+      expect(notice).not.toContain('"closed"');
+
+      warnings = [];
+      await seedPermissionsAndRolePresets();
+      expect(notices()).toEqual([]);
+      // The startup listing is still logged at this boot.
+      expect(listing()).toContain("create-guestbook");
+    });
+
+    it("tells a new install nothing of reads lost, at its first boot or later", async () => {
+      await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      expect(notices()).toEqual([]);
+      expect(listing()).toContain("create-guestbook");
+
+      warnings = [];
+      await seedPermissionsAndRolePresets();
+      expect(notices()).toEqual([]);
+      expect(listing()).toContain("create-guestbook");
     });
 
     it("asks a rule in each language a visitor may read in, and in all at once", async () => {
