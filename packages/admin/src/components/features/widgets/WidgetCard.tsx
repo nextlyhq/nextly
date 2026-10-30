@@ -240,7 +240,8 @@ function stateName(state: CardState): string {
 function bodyClassName(
   refreshing: boolean,
   customizing: boolean,
-  answering: boolean
+  answering: boolean,
+  collapsed: boolean
 ): string {
   return cn(
     // Top-aligned, not centred: cards in a grid row stretch to the tallest of them, so centring
@@ -248,7 +249,66 @@ function bodyClassName(
     "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0",
     FRAME_BODY_GAP.className,
     refreshing && "opacity-60 transition-opacity",
-    customizing && answering && "opacity-55"
+    customizing && answering && "opacity-55",
+    // Collapsed to one line, the header is kept for assistive technology only: no gap under it.
+    collapsed && "pt-0"
+  );
+}
+
+/**
+ * Whether the card is drawn collapsed by its body to one line (`frame/collapse`): the body's line
+ * is then the whole card, so the header is kept for assistive technology only, with no gap under
+ * it and no footer. Never in customise mode, where the card's stored size is what is edited.
+ */
+function useDrawnCollapsed(customizing: boolean): boolean {
+  const collapsed = useFrameCollapsed();
+  return collapsed && !customizing;
+}
+
+/** The frame's padding: its own, or the collapsed card's one line. */
+function framePaddingClass(collapsed: boolean): string {
+  return collapsed ? COLLAPSED_PADDING_CLASS : FRAME_PADDING.className;
+}
+
+/** A boolean as a data attribute: present and empty while it holds, absent otherwise. */
+function presentWhile(holds: boolean): "" | undefined {
+  return holds ? "" : undefined;
+}
+
+/**
+ * What the body is handed while it is drawn: where it reports its state, its count beside the
+ * title and what it has for the footer. Nothing while the frame draws a state of its own.
+ */
+function BodyProviders({
+  drawn,
+  report,
+  setTitleCount,
+  footerSlot,
+  claims,
+  children,
+}: {
+  drawn: boolean;
+  report: (next: CardState | null) => void;
+  setTitleCount: (count: TitleCount | undefined) => void;
+  footerSlot: HTMLElement | null;
+  claims: CardFooterClaims;
+  children: ReactNode;
+}) {
+  if (!drawn) return null;
+  return (
+    <CardStateReportProvider value={report}>
+      <CardTitleCountContext.Provider value={setTitleCount}>
+        <CardFooterSlotProvider value={footerSlot}>
+          <CardFooterClaimProvider value={claims}>
+            {/* A card drawn inside this one is not the cell's card: it reports
+                nothing in its place. */}
+            <CardHiddenReportContext.Provider value={undefined}>
+              {children}
+            </CardHiddenReportContext.Provider>
+          </CardFooterClaimProvider>
+        </CardFooterSlotProvider>
+      </CardTitleCountContext.Provider>
+    </CardStateReportProvider>
   );
 }
 
@@ -347,9 +407,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   // The width the card is drawn at decides how its figures are written; see `frame/tier`.
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = useMeasuredTier(rootRef, props.tier);
-  // Collapsed by its body to one line (`frame/collapse`): the body's line is the whole card, so
-  // the header is kept for assistive technology only, with no gap under it and no footer.
-  const collapsed = useFrameCollapsed() && !customizing;
+  const collapsed = useDrawnCollapsed(customizing);
   // The grid counts the cards on show from this report, so it reads the decision drawn here.
   useReportCardHidden(flags.hidden);
 
@@ -367,13 +425,13 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
               data-card-id={cardId}
               data-tier={tier}
               data-state={stateName(state)}
-              data-collapsed={collapsed ? "" : undefined}
+              data-collapsed={presentWhile(collapsed)}
               // Read by the grid cell, which takes a card whose widget hides when empty out of the
               // grid while it is; never in customise mode, where the card must stay reachable.
-              data-hidden-empty={flags.hiddenEmpty ? "" : undefined}
+              data-hidden-empty={presentWhile(flags.hiddenEmpty)}
               className={cn(
                 "flex h-full flex-col",
-                collapsed ? COLLAPSED_PADDING_CLASS : FRAME_PADDING.className,
+                framePaddingClass(collapsed),
                 props.className
               )}
             >
@@ -395,13 +453,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 aria-busy={flags.busy}
                 // Customise mode: what the card shows stays visible, but nothing in it can be reached.
                 inert={customizing || undefined}
-                className={cn(
-                  bodyClassName(
-                    flags.refreshing,
-                    customizing,
-                    showsBody(state)
-                  ),
-                  collapsed && "pt-0"
+                className={bodyClassName(
+                  flags.refreshing,
+                  customizing,
+                  showsBody(state),
+                  collapsed
                 )}
               >
                 <HiddenWhileEmptyNote
@@ -411,21 +467,15 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 <StateBody state={state} title={title} props={props} />
                 {/* The body stays mounted while it reports a state, so the data it reads keeps
                   arriving; what it renders then is its report, which draws nothing. */}
-                {drawsBody ? (
-                  <CardStateReportProvider value={report}>
-                    <CardTitleCountContext.Provider value={setTitleCount}>
-                      <CardFooterSlotProvider value={footerSlot}>
-                        <CardFooterClaimProvider value={footer.claims}>
-                          {/* A card drawn inside this one is not the cell's card: it reports
-                            nothing in its place. */}
-                          <CardHiddenReportContext.Provider value={undefined}>
-                            {props.children}
-                          </CardHiddenReportContext.Provider>
-                        </CardFooterClaimProvider>
-                      </CardFooterSlotProvider>
-                    </CardTitleCountContext.Provider>
-                  </CardStateReportProvider>
-                ) : null}
+                <BodyProviders
+                  drawn={drawsBody}
+                  report={report}
+                  setTitleCount={setTitleCount}
+                  footerSlot={footerSlot}
+                  claims={footer.claims}
+                >
+                  {props.children}
+                </BodyProviders>
               </CardContent>
 
               {collapsed ? null : (

@@ -94,13 +94,25 @@ async function getStatus(): Promise<SeedStatus> {
   };
 }
 
+/**
+ * Records the decline. Resolves only once the route confirms it: a refusal or
+ * a failure throws, so nothing is drawn declined that the site still offers.
+ */
 async function setSkipped(): Promise<void> {
-  await fetch(META_STATUS_PATH, {
+  const res = await fetch(META_STATUS_PATH, {
     method: "PUT",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ skippedAt: new Date().toISOString() }),
   });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as {
+      errors?: Array<{ message?: string }>;
+    } | null;
+    throw new Error(
+      body?.errors?.[0]?.message ?? `Decline failed (${res.status})`
+    );
+  }
 }
 
 /** The type of {@link seedApi}. */

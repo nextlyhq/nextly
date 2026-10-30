@@ -81,6 +81,14 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
 
 const api = vi.mocked(protectedApi);
 
+/**
+ * How many times the arrangement was read. The dashboard's header also reads the setup card's
+ * own state (`/dashboard/setup`), which is not the arrangement.
+ */
+const layoutReads = () =>
+  api.get.mock.calls.filter(([path]) => path.startsWith("/dashboard/layout"))
+    .length;
+
 /** Full width three rows high by default, resizable from 3 by 2 up to 12 by 6. */
 const RESIZABLE = {
   default: { w: 12, h: 3 },
@@ -1193,7 +1201,7 @@ describe("the guards a save is sent against", () => {
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["dashboard", "layout"] });
     });
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(layoutReads()).toBe(2);
 
     await user.click(screen.getByTestId("dashboard-edit-save"));
 
@@ -1580,22 +1588,22 @@ describe("when the schema changes underneath an open dashboard", () => {
   it("re-reads the arrangement, so the add panel knows what exists now", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:schema-updated"));
       });
-      return waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+      return waitFor(() => expect(layoutReads()).toBe(2));
     });
   });
 
   it("does not re-read on an unrelated event", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:something-else"));
       });
-      expect(api.get).toHaveBeenCalledTimes(1);
+      expect(layoutReads()).toBe(1);
     });
   });
 });

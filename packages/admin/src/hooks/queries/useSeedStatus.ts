@@ -34,7 +34,10 @@ export type SeedStatus =
   | { kind: "idle"; template: { slug: string; label: string } }
   | { kind: "seeding" }
   | { kind: "success"; result: SeedResult }
-  | { kind: "error"; message: string };
+  /** A decline on its way: the offer stays until the route confirms it. */
+  | { kind: "declining" }
+  /** A load or a decline that failed, and which, so Retry repeats it. */
+  | { kind: "error"; message: string; failed: "load" | "decline" };
 
 interface UseSeedStatusReturn {
   status: SeedStatus;
@@ -93,16 +96,22 @@ export function useSeedStatus(): UseSeedStatusReturn {
       void qc.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
     },
     onError: err => {
-      setOverlay({ kind: "error", message: err.message });
+      setOverlay({ kind: "error", message: err.message, failed: "load" });
     },
   });
 
   const skipMut = useMutation<void, Error, void>({
     mutationFn: seedApi.setSkipped,
+    // Declining, never declined, until the route confirms it: a decline that
+    // fails leaves the offer as the site still has it.
     onMutate: () => {
-      setOverlay({ kind: "hidden" });
+      setOverlay({ kind: "declining" });
+    },
+    onError: err => {
+      setOverlay({ kind: "error", message: err.message, failed: "decline" });
     },
     onSuccess: () => {
+      setOverlay({ kind: "hidden" });
       void qc.invalidateQueries({ queryKey: QK_STATUS });
       // Declining now closes the `seed:unanswered` condition, so the server
       // stops offering this card exactly as it does after a successful seed.

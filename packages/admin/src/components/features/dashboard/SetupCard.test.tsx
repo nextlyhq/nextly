@@ -14,6 +14,7 @@ import { CardGrowContext } from "@admin/components/features/widgets/frame/grow";
 import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
 import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -34,7 +35,8 @@ const seed = vi.hoisted(() => ({
     | { kind: "idle"; template: { slug: string; label: string } }
     | { kind: "seeding" }
     | { kind: "success"; result: unknown }
-    | { kind: "error"; message: string },
+    | { kind: "declining" }
+    | { kind: "error"; message: string; failed: "load" | "decline" },
   startSeed: vi.fn(),
   skip: vi.fn(),
 }));
@@ -405,7 +407,11 @@ describe("the setup card", () => {
     expect(seed.skip).toHaveBeenCalledTimes(1);
     unmount();
 
-    seed.status = { kind: "error", message: "Seed failed (500)" };
+    seed.status = {
+      kind: "error",
+      message: "Seed failed (500)",
+      failed: "load",
+    };
     draw(dataOf());
     const failed = tiles()[0]!;
     expect(within(failed).getByRole("alert")).toHaveTextContent(
@@ -415,19 +421,91 @@ describe("the setup card", () => {
     expect(seed.startSeed).toHaveBeenCalledTimes(2);
   });
 
-  it("draws sample content done at once on No thanks, and asks for the card again once the decline lands", () => {
+  it("draws sample content done only once the decline is confirmed, and asks for the card again then", () => {
     draw(dataOf());
     fireEvent.click(
       within(tiles()[0]!).getByRole("button", { name: "No thanks" })
     );
-    // Done here and counted, before any answer: never gone, then back.
+    // Not yet: the route has not confirmed it, and may refuse it.
+    expect(tiles()[0]).toHaveAttribute("data-status", "open");
+    expect(headerCount()).toHaveTextContent("1 of 5 done");
+    expect(retry).not.toHaveBeenCalled();
+    // The decline is recorded: done, counted, and the card asks for its steps as they now are.
+    const [onRecorded] = seed.skip.mock.calls[0] as [() => void];
+    act(() => onRecorded());
     expect(tiles()[0]).toHaveAttribute("data-status", "done");
     expect(headerCount()).toHaveTextContent("2 of 5 done");
-    expect(retry).not.toHaveBeenCalled();
-    // The decline is recorded, and the card asks for its steps as they now are.
-    const [onRecorded] = seed.skip.mock.calls[0] as [() => void];
-    onRecorded();
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps sample content open when the decline fails, says so, and Retry declines again", () => {
+    const { rerender } = draw(dataOf());
+    fireEvent.click(
+      within(tiles()[0]!).getByRole("button", { name: "No thanks" })
+    );
+    // The decline failed: its confirmation never comes, and the offer says why.
+    seed.status = {
+      kind: "error",
+      message: "Decline failed (500)",
+      failed: "decline",
+    };
+    rerender(
+      <CardHeightContext.Provider value={2}>
+        {inFrame(
+          <SetupCard
+            widgetId="core/setup"
+            placementId="core/setup"
+            settings={{}}
+            size={{ w: 12, h: 2, tier: "large" }}
+            data={dataOf()}
+            refreshing={false}
+            retry={retry}
+          />,
+          "Set up your project"
+        )}
+      </CardHeightContext.Provider>
+    );
+    const sample = tiles()[0]!;
+    expect(sample).toHaveAttribute("data-status", "open");
+    expect(headerCount()).toHaveTextContent("1 of 5 done");
+    expect(within(sample).getByRole("alert")).toHaveTextContent(
+      "Couldn't save: Decline failed (500)"
+    );
+    fireEvent.click(within(sample).getByRole("button", { name: "Retry" }));
+    expect(seed.skip).toHaveBeenCalledTimes(2);
+    expect(seed.startSeed).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("says You're all set over the steps it draws, and asks the host to record it with what the route said", async () => {
+    // No sample route for this reader, and Invite skipped: one tile drawn, done.
+    seed.status = { kind: "hidden" };
+    const steps: SetupStep[] = [
+      { kind: "sample", status: "open" },
+      { kind: "invite", status: "skipped" },
+    ];
+    draw(dataOf({ setup: { known: true, steps, done: 1, total: 2 } }));
+    expect(screen.getByTestId("setup-all-set")).toHaveTextContent(
+      "You're all set."
+    );
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/dashboard/setup", {
+        retire: { sampleRefused: true },
+      })
+    );
+    expect(put).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks no retirement while a step it draws is open", () => {
+    // The must-differ half: the same steps where the route offers the load.
+    const steps: SetupStep[] = [
+      { kind: "sample", status: "open" },
+      { kind: "invite", status: "skipped" },
+    ];
+    draw(dataOf({ setup: { known: true, steps, done: 1, total: 2 } }));
+    expect(screen.queryByTestId("setup-all-set")).toBeNull();
+    expect(headerCount()).toHaveTextContent("1 of 2 done");
+    expect(put).not.toHaveBeenCalled();
   });
 
   it("asks for the card again once per load that succeeds, however often it is drawn", () => {
