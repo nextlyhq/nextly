@@ -24,6 +24,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
 import {
   everyLanguageOf,
+  queryWriteLanguagesFor,
   readLanguagesFor,
   withRuleLanguage,
   writeAsNamedLanguagesFor,
@@ -1163,11 +1164,12 @@ export class CollectionEntryService extends BaseService {
     // Thrown, as the bulk service throws any request-level refusal: there are
     // no items yet to report a partial failure on.
     assertWellFormedFilter(params.where, { allowTranslated: true });
-    // It writes the default language, but its filter may choose the rows by
-    // any language's translation state, so it is told every language: the
-    // REST gate, which cannot see the filter in the body, tells the same.
+    // It writes the default language, so its rule judges that one, while
+    // its filter may choose the rows by any language's translation state, so
+    // it is told every language as well: the REST gate, which cannot see the
+    // filter in the body, tells the same.
     const result = await withRuleLanguage(
-      everyLanguageOf(this.localization),
+      queryWriteLanguagesFor(this.localization),
       () => this.bulkService.bulkUpdateByQuery(params, options)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);

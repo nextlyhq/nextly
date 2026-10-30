@@ -134,6 +134,22 @@ export function writeAsNamedLanguagesFor(
   return writeLanguagesFor(cfg, requested);
 }
 
+/**
+ * The languages a write by query involves: every configured language, since
+ * its filter may choose its rows by any language's translation state, with
+ * the default judged, the language it writes. A rule refusing that language
+ * refuses it; one refusing another does not.
+ */
+export function queryWriteLanguagesFor(
+  cfg: SanitizedLocalizationConfig | undefined
+): RuleLanguage {
+  if (!cfg) return NO_LANGUAGE;
+  return {
+    locale: oneLanguage(cfg, undefined).locale,
+    locales: everyLanguageOf(cfg).locales,
+  };
+}
+
 /** What a collection, Single or field group declares about its languages. */
 interface DeclaredContent {
   slug: string;
@@ -260,6 +276,11 @@ export function registeredWriteAsNamedLanguagesFor(
   requested: string | undefined
 ): RuleLanguage {
   return writeAsNamedLanguagesFor(registeredLocalization(), requested);
+}
+
+/** {@link queryWriteLanguagesFor}, on the site's registered configuration. */
+export function registeredQueryWriteLanguages(): RuleLanguage {
+  return queryWriteLanguagesFor(registeredLocalization());
 }
 
 /** Every language `cfg` configures, with none judged alone. */

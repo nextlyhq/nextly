@@ -11770,6 +11770,66 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The languages a delete of `entryId` removes, which its rule is asked in:
+   * each language the entry holds a row in, and every configured language
+   * where the content reaches a localized field group, which keeps its own
+   * rows per language. None for a collection that keeps no languages, whose
+   * rule is asked once. Read on `tx` where one is given.
+   */
+  private async languagesToDelete(args: {
+    collectionName: string;
+    entryId: string;
+    fields: readonly { type: string; name?: string }[];
+    tx?: TransactionContext;
+  }): Promise<string[]> {
+    const held = await this.storedLanguageStatuses(
+      args.collectionName,
+      args.entryId,
+      args.tx
+    );
+    return languagesToAsk(held === null ? [] : [...held.keys()], {
+      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+      reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
+        args.fields,
+        args.tx
+      ),
+    });
+  }
+
+  /**
+   * The refusal of a delete asked in each of `languages`, or `null` where
+   * every answer allows it. Each ask is the delete gate's, never on the
+   * route's authority: the route asks the grant alone, as it cannot know the
+   * entry's languages. Each filter answered is matched in its language and
+   * added to `checks`, for the delete to match again under the row lock.
+   * With no language, asked once in the operation's languages.
+   */
+  private async deleteRefusalInEachLanguage(
+    checks: FilteredWriteCheck[],
+    args: {
+      schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+      params: FilteredWriteCheck["params"];
+      appliesFilter: boolean;
+      languages: readonly string[];
+    }
+  ): Promise<CollectionServiceResult | null> {
+    const params = { ...args.params, routeAuthorized: false };
+    const refused = await askEachLanguage(args.languages, async () => {
+      const access = await this.deleteAccess(params, args.appliesFilter);
+      return (
+        access.denied ??
+        (await this.addWriteFilter(checks, {
+          schema: args.schema,
+          access,
+          params,
+          locale: currentRuleLanguage().locale,
+        }))
+      );
+    });
+    return refused?.refusal ?? null;
+  }
+
+  /**
    * The delete gate's answer: allowed, with the delete rule's filter to match
    * the entry against where it answered one, or the refusal to hand back.
    * Where the delete does not apply a filter, the gate that refuses one is
@@ -12610,38 +12670,32 @@ export class CollectionMutationService extends BaseService {
         // super-admin bypass does not apply to a super-admin-owned key here.
         authenticatedScope: params.authenticatedScope,
       };
-      const access = await this.deleteAccess(
-        accessParams,
-        params.appliesFilter !== false
-      );
-      if (access.denied) {
-        return access.denied;
-      }
-      // An entry outside the filter is refused before any hook runs, and asked
-      // again under the row lock below, so the entry removed is the one judged.
-      const filtered = await this.prepareFilteredWrite(
-        params.collectionName,
-        "delete",
-        schema,
-        access
-      );
-      if (filtered) {
-        const outside = (
-          await this.judgedAgainstWriteFilter(
-            this.db,
-            schema,
-            params.entryId,
-            filtered,
-            accessParams
-          )
-        ).refusal;
-        if (outside) return outside;
-      }
-
-      // Get collection metadata for stored hooks
+      // Collection metadata: for the languages the entry holds, and for the
+      // stored hooks below.
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
+      // A delete removes every language the entry holds, so it is asked in
+      // each of them, each time told that one, and a refusal in any refuses
+      // it. Each filter answered is matched in its language now, before any
+      // hook runs, and again under the row lock below, so the entry removed
+      // is the one judged.
+      const deleteLanguages = {
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        fields: (collection.schemaDefinition?.fields ||
+          collection.fields ||
+          []) as FieldConfig[],
+      };
+      const askedLanguages = await this.languagesToDelete(deleteLanguages);
+      const deleteFilters: FilteredWriteCheck[] = [];
+      const denied = await this.deleteRefusalInEachLanguage(deleteFilters, {
+        schema,
+        params: accessParams,
+        appliesFilter: params.appliesFilter !== false,
+        languages: askedLanguages,
+      });
+      if (denied) return denied;
       const { storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
 
@@ -12773,19 +12827,27 @@ export class CollectionMutationService extends BaseService {
           .where(eq(schema.id, params.entryId))
           .limit(1);
         if (!currentRow) return; // a concurrent delete won the race.
-        if (filtered) {
-          refusedUnderLock = (
-            await this.judgedAgainstWriteFilter(
-              tx.getDrizzle<typeof this.db>(),
-              schema,
-              params.entryId,
-              filtered,
-              accessParams,
-              { underLock: true }
-            )
-          ).refusal;
-          if (refusedUnderLock) return;
+        // A language the entry gained since it was judged was not asked
+        // about, so the delete is refused as a conflict rather than remove it.
+        const unasked = unaskedLanguages(
+          askedLanguages,
+          await this.languagesToDelete({ ...deleteLanguages, tx })
+        );
+        if (unasked.length > 0) {
+          refusedUnderLock = errorToServiceResult(
+            languagesChangedConflict(unasked),
+            { defaultMessage: "Failed to delete entry" },
+            this.dialect
+          );
+          return;
         }
+        refusedUnderLock = await this.refusalOutsideWriteFilters(
+          tx,
+          schema,
+          params.entryId,
+          deleteFilters
+        );
+        if (refusedUnderLock) return;
 
         // Read the removed document before the cascade delete removes its
         // relations, in the read shape create/update events use. A localized
