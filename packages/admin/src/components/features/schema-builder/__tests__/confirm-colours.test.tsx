@@ -1,11 +1,12 @@
 /**
  * Red means data is deleted, and nothing else, in every Builder dialog.
  *
- * The save review takes its answer from the preview's own rows, each of which
- * the server has already classed: a removed field or a type change the server
- * classes `destructive` deletes stored values, and every other row (an add, a
- * type change that only converts, a field made required, translations moving
- * to the archive) does not. The preview's overall flag is NOT that answer: it
+ * The save review takes its answer from the preview's own rows: a removed
+ * field always deletes (its column goes, and the preview's count of the values
+ * in it reads 0 when counting fails), a type change deletes when the server
+ * classes it `destructive`, and every other row (an add, a type change that
+ * only converts, a field made required, translations moving to the archive)
+ * does not. The preview's overall flag is NOT that answer: it
  * is set for any change that is not `safe`, a question to answer included, so
  * a review that followed it showed a red save over changes that delete
  * nothing.
@@ -106,6 +107,28 @@ describe("each Builder dialog's confirming button is destructive only when it de
       reviewColour({
         changes: { removed: [removedWithValues] },
         hasDestructiveChanges: false,
+      })
+    ).toBe("destructive");
+  });
+
+  it("is destructive for a removed field the preview counts as empty", () => {
+    // Removing a field drops its column. The preview's count of the values in
+    // it is best-effort and reads 0 when counting fails, so a removal is a
+    // deletion whatever its count.
+    expect(
+      reviewColour({
+        changes: {
+          removed: [
+            {
+              name: "summary",
+              type: "text",
+              rowCount: 0,
+              classification: "safe",
+            },
+          ],
+        },
+        hasDestructiveChanges: false,
+        classification: "safe",
       })
     ).toBe("destructive");
   });
@@ -224,24 +247,6 @@ describe("each Builder dialog's confirming button is destructive only when it de
               rowCount: 40,
               classification: "safe",
               reason: "type_changed",
-            },
-          ],
-        },
-        hasDestructiveChanges: false,
-      })
-    ).toBe("primary");
-  });
-
-  it("is primary for a removed field that holds no values", () => {
-    expect(
-      reviewColour({
-        changes: {
-          removed: [
-            {
-              name: "draft",
-              type: "text",
-              rowCount: 0,
-              classification: "safe",
             },
           ],
         },
