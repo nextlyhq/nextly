@@ -171,8 +171,6 @@ test.describe("a release's page", () => {
         "1 document can't be shown (deleted, or you can't view it)"
       )
     ).toBeVisible();
-    // Absence is judged with hidden elements in view too, so a hidden copy of
-    // a page that named the note would fail it.
     await expect(includingHidden(page).getByText(/Private note/)).toHaveCount(
       0
     );

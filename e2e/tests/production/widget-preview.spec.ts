@@ -46,8 +46,6 @@ test.describe("the widget preview page on a production build", () => {
       .filter({ visible: true })
       .click();
     await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
-    // Absence is judged with hidden elements in view too: a production build
-    // draws the link nowhere, not merely nowhere visible.
     await expect(
       includingHidden(page).getByTestId("widget-previews-link")
     ).toHaveCount(0);
@@ -67,7 +65,10 @@ test.describe("the widget preview page on a production build", () => {
     await page.goto(PREVIEWS);
     await expect(notFound).toBeVisible({ timeout: 60_000 });
     await expect(
-      page.getByRole("heading", { name: "Widget previews" })
+      page.getByRole("heading", {
+        name: "Widget previews",
+        includeHidden: true,
+      })
     ).toHaveCount(0);
     await expect(page.locator("[data-preview-section]")).toHaveCount(0);
     // The tab says what it says for any unserved address.
