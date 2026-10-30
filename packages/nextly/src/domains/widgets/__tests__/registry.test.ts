@@ -270,6 +270,32 @@ describe("the doors a widget whose data core builds may come through", () => {
     ).toThrow(/overrideWidget\(\) with serverData/);
   });
 
+  it("takes a setting's own editor through core's door alone", () => {
+    const settings: WidgetDefinition["settings"] = [
+      {
+        name: "goal",
+        label: "Goal",
+        type: "number",
+        editor: { component: "@acme/goals/admin#GoalEditor" },
+      },
+    ];
+    // A declared widget's editor joins the generated component map, so it is kept.
+    registerDeclaredDefinition(
+      { ...declared("acme/goal"), settings },
+      "plugin @acme/goals"
+    );
+    expect(getWidget("acme/goal")?.settings?.[0]?.editor).toEqual({
+      component: "@acme/goals/admin#GoalEditor",
+    });
+
+    // The same setting through the public door is refused at startup, naming
+    // the widget and the setting: nothing there would ever register its editor.
+    expect(() => registerWidget(def("acme/legacy-goal", { settings }))).toThrow(
+      /acme\/legacy-goal: setting "goal" declares an editor: custom setting editors need a defineWidget declaration/
+    );
+    expect(getWidget("acme/legacy-goal")).toBeUndefined();
+  });
+
   it("cannot be handed a query by a patch", () => {
     registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
     expect(() =>

@@ -29,6 +29,11 @@
  * - a declared key that is absent takes the setting's default;
  * - a value the declaration no longer accepts takes the default too.
  *
+ * The one exception on write is a declared value the CALLER CHANGED: the
+ * layout write holds it to the same rule (`settingValueProblem`) and refuses
+ * it, since a value set aside on read would otherwise save as if kept. A value
+ * stored before its declaration narrowed still saves unchanged.
+ *
  * 🔴 Rejecting unknown keys at write time would make a saved layout unwritable
  * the moment a plugin renames a setting or is uninstalled, and plugins version
  * independently of core — so the strict reading punishes exactly the upgrade it
@@ -91,6 +96,21 @@ export interface WidgetSettingBase {
    * controls settle.
    */
   quick?: boolean;
+  /**
+   * The component the settings sheet draws in place of this setting's own
+   * field, as `"<module>#<Export>"`, handed the setting's value, a way to
+   * change it, and the card's other settings. A top-level key the field
+   * configs do not have, like `quick`: read by the sheet, never by
+   * `FieldRenderer`.
+   *
+   * Taken from a `defineWidget` declaration alone: `registerWidget` and
+   * `contributes.admin.widgets` refuse it at startup, since only a
+   * declaration's editors reach the generated component map the sheet loads
+   * them from.
+   *
+   * @experimental
+   */
+  editor?: { component: string };
 }
 
 /**
@@ -507,6 +527,16 @@ export function widgetSettingsProblem(
   // A widget whose query core builds from its declaration reads its content
   // settings there, so they reach the data it shows: nothing to refuse.
   if (queryBuiltByCore) return undefined;
+  // Every other widget came through `registerWidget` or
+  // `contributes.admin.widgets`, whose settings' editors the generated
+  // component map never collects: the sheet would draw "unavailable" in the
+  // setting's place for every reader, so startup says so instead.
+  const edited = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
+    setting => setting.editor !== undefined
+  );
+  if (edited !== undefined) {
+    return `setting "${edited.name}" declares an editor: custom setting editors need a defineWidget declaration`;
+  }
   // One Collection setting decides the source: a second would be drawn and
   // saved and always lose to the other.
   const collections = (settings as readonly AnyWidgetSetting[] | undefined)
@@ -729,8 +759,28 @@ function settingProblem(
     defaultFrom
   );
   if (flags !== undefined) return `setting "${name}" ${flags}`;
+  const editor = editorProblem((rest as { editor?: unknown }).editor);
+  if (editor !== undefined) return `setting "${name}" ${editor}`;
 
   return problemForType(type, rest, defaultValue, name);
+}
+
+/**
+ * Why a setting's own editor is unusable, or `undefined`: it names the
+ * component the settings sheet draws in place of the setting's field, where
+ * the admin loads it from, as a view's component does. Absent is a setting
+ * drawn by its own field. Judged here, where every channel's settings pass,
+ * because the sheet reads `editor.component` as soon as an editor is stated.
+ */
+function editorProblem(editor: unknown): string | undefined {
+  if (editor === undefined) return undefined;
+  const component =
+    typeof editor === "object" && editor !== null
+      ? (editor as { component?: unknown }).component
+      : undefined;
+  return isName(component)
+    ? undefined
+    : 'editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from';
 }
 
 /** Why a setting's `quick`, `rows` or `defaultFrom` is unusable, or `undefined`. */
@@ -948,6 +998,61 @@ export function startingValueProblem(
 /** Whether a stored value is usable as this setting's type. */
 function matchesType(setting: AnyWidgetSetting, value: unknown): boolean {
   return USABLE_AS[setting.type](value, limitsOf(setting));
+}
+
+/**
+ * Whether a value names no choice at all: absent, `null` (a cleared number),
+ * blank, or an empty list. Each reads back as the setting's default, so
+ * writing one chooses nothing rather than choosing something unusable.
+ */
+function isNoChoice(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+/**
+ * Why `value` cannot be kept as `setting`, in the reader's words, or
+ * `undefined` when it can: a value of the wrong kind, outside the setting's
+ * range or options, or longer than it allows.
+ *
+ * The rule a stored value is read back by (`resolveWidgetSettings`), asked
+ * before it is written, so a value a card would set aside never saves as if
+ * it had been kept: the layout write refuses a card holding one, and the
+ * settings sheet holds a setting's own editor to it on Done. A value that
+ * names no choice ({@link isNoChoice}) is kept, as the default it reads as.
+ *
+ * @experimental While a setting's own editor is.
+ */
+export function settingValueProblem(
+  setting: AnyWidgetSetting,
+  value: unknown
+): string | undefined {
+  if (isNoChoice(value) || matchesType(setting, value)) return undefined;
+  const label = setting.label ?? setting.name;
+  const limits = limitsOf(setting);
+  if (setting.type === "select") return `"${label}" is not one of its choices.`;
+  if (setting.type === "textarea" && typeof value === "string") {
+    return `"${label}" is at most ${limits.maxLength} characters.`;
+  }
+  // Only a finite number can fail by its range alone; one with no range
+  // failed by its kind, and is said so below.
+  const ranged = limits.min !== undefined || limits.max !== undefined;
+  if (typeof value === "number" && Number.isFinite(value) && ranged) {
+    return `"${label}" is ${rangeWords(limits)}.`;
+  }
+  return `"${label}" is not a value this setting takes.`;
+}
+
+/** A number setting's declared range, as a reader reads it. */
+function rangeWords({ min, max }: SettingLimits): string {
+  if (min !== undefined && max !== undefined) {
+    return `between ${min} and ${max}`;
+  }
+  return min === undefined ? `at most ${max}` : `at least ${min}`;
 }
 
 /** The default a setting declares, or `undefined` when it declares none. */
