@@ -177,6 +177,47 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ headline: "Hello again", excerpt: "A first article." });
     });
 
+    // Publishing stays document-level for an entity that is not translated: its per-language row
+    // holds values, not a status of its own, so a published read keeps every translatable value.
+    it("keeps the translatable fields of a published entry that is not translated, on a Draft/Published collection", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        collections: [
+          defineCollection({
+            slug: "notes",
+            status: true,
+            fields: [text({ name: "headline" }), number({ name: "views" })],
+          }),
+        ],
+      });
+      const t = current;
+      // The values the published read must keep are only in the per-language table.
+      const columns = await columnsOf(t, ["dc_notes", "dc_notes_locales"]);
+      expect(columns.dc_notes).not.toContain("headline");
+      expect(columns.dc_notes_locales).toContain("headline");
+      const created = await t.nextly.create({
+        collection: "notes",
+        data: { headline: "Published", views: 1, status: "published" },
+      });
+      const id = (created.item as { id: string }).id;
+
+      expect(
+        await t.nextly.findByID({
+          collection: "notes",
+          id,
+          status: "published",
+        })
+      ).toMatchObject({ headline: "Published", views: 1 });
+      const list = await t.nextly.find({
+        collection: "notes",
+        status: "published",
+      });
+      expect(list.items).toEqual([
+        expect.objectContaining({ id, headline: "Published" }),
+      ]);
+    });
+
     it("stores as it always has with the setting off", async () => {
       const t = await boot(dialect, false);
       expect(perLanguageStorageEnabled()).toBe(false);
