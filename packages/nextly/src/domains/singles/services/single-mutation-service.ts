@@ -151,6 +151,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionFoundMissing,
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
@@ -4472,6 +4473,32 @@ export class SingleMutationService extends BaseService {
         const cause = (error as { cause?: unknown } | null)?.cause;
         if (cause instanceof NextlyError) {
           throw cause;
+        }
+        // A translation table dropped after its `ready` verdict was remembered
+        // fails the write at its first statement on it. Answered, after the
+        // rollback, as the check above answers a table that is not there, and
+        // its verdict forgotten so the next write resolves it again.
+        if (
+          companion &&
+          this.localization &&
+          companionFoundMissing(
+            this.adapter,
+            this.adapter.dialect,
+            companion.companionTableName,
+            error
+          )
+        ) {
+          throw NextlyError.conflict({
+            reason: "state",
+            message: companionNotReadyMessage("single"),
+            logContext: {
+              cause: "localized-write-without-companion",
+              single: singleMeta.slug,
+              locale: writeLocale,
+              defaultLocale: this.localization.defaultLocale,
+              companionTable: companion.companionTableName,
+            },
+          });
         }
         throw error;
       }

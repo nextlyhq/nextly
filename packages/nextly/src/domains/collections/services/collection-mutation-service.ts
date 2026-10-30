@@ -223,6 +223,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionFoundMissing,
   companionNotReadyMessage,
   isCompanionReady,
   resolveCompanionReadiness,
@@ -11753,6 +11754,21 @@ export class CollectionMutationService extends BaseService {
           this.dialect
         );
       }
+      // A translation table dropped after its `ready` verdict was remembered
+      // fails the write at its first statement on it: answered, after the
+      // rollback, as a write to a table that is not there is answered.
+      const companionGone = await this.companionGoneRefusal(
+        params.collectionName,
+        params.locale,
+        error
+      );
+      if (companionGone) {
+        return errorToServiceResult(
+          companionGone,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        );
+      }
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
@@ -11767,6 +11783,44 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The refusal for a write that `error` failed because the collection's translation table is
+   * missing (`companionFoundMissing`, which forgets the table's `ready` verdict), or `undefined`
+   * for any other failure. The same 409, with the same remedy, as the check before a write gives
+   * a table it finds is not there. Read after the transaction, on a pooled connection.
+   */
+  private async companionGoneRefusal(
+    collectionName: string,
+    locale: string | undefined,
+    error: unknown
+  ): Promise<NextlyError | undefined> {
+    if (!this.localization) return undefined;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (
+      !companion ||
+      !companionFoundMissing(
+        this.adapter,
+        this.adapter.dialect,
+        companion.companionTableName,
+        error
+      )
+    ) {
+      return undefined;
+    }
+    return NextlyError.conflict({
+      reason: "state",
+      message: companionNotReadyMessage("collection"),
+      logContext: {
+        cause: "localized-write-without-companion",
+        collection: collectionName,
+        locale: resolveRequestedLocale(this.localization, locale),
+        defaultLocale: this.localization.defaultLocale,
+        companionTable: companion.companionTableName,
+      },
+    });
   }
 
   /**

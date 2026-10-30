@@ -52,6 +52,11 @@
  * @module domains/i18n/runtime/companion-readiness
  */
 
+import {
+  isMissingTable,
+  type MigrationDialect,
+} from "../../field-groups/migration/session";
+
 import type { CompanionIntrospectAdapter } from "./companion-io";
 
 export type CompanionReadiness = "ready" | "pre-migration" | "broken";
@@ -276,6 +281,46 @@ export function forgetCompanionReadiness(
   // companion inherit the shape of the one it replaced, which is the exact claim this whole
   // module exists to stop being made from memory.
   columnVerdicts(scope).delete(companionTableName);
+}
+
+/**
+ * Whether `error` is a statement finding this companion table missing, after a remembered
+ * `ready` verdict sent a write to it: the table was dropped while the verdict was still fresh.
+ * Forgets that verdict when it is, so the next write resolves readiness again and meets the
+ * refusal an unready companion gets.
+ *
+ * Narrow on purpose: a missing table by the dialect's own error code (`isMissingTable`), and one
+ * whose error names this companion. Any other failure, a missing main table included, is not
+ * this companion's to explain and is left to propagate.
+ */
+export function companionFoundMissing(
+  scope: ReadinessScope,
+  dialect: MigrationDialect,
+  companionTableName: string,
+  error: unknown
+): boolean {
+  if (!isMissingTable(error, dialect)) return false;
+  if (!errorNamesTable(error, companionTableName)) return false;
+  forgetCompanionReadiness(scope, companionTableName);
+  return true;
+}
+
+/**
+ * Whether any error in `error`'s cause chain names `table` in its message. Every dialect's
+ * missing-table message names the table it could not find. Bounded, as `isMissingTable` is,
+ * because a cyclic `cause` is a hang.
+ */
+function errorNamesTable(error: unknown, table: string): boolean {
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && link !== null && link !== undefined;
+    depth++
+  ) {
+    if (link instanceof Error && link.message.includes(table)) return true;
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /** Test seam: drop every verdict for this connection and re-verify on the next resolve. */
