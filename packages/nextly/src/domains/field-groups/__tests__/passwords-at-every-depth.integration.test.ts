@@ -90,6 +90,10 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The boot's seeding: the checked reads below, made with no user, are
+        // judged by the Public role, which boot grants each read because its
+        // rule answers `true`.
+        seedPublic: true,
         fieldGroups: [
           defineFieldGroup({
             slug: "pwpin",
@@ -318,6 +322,10 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The boot's seeding: the checked reads below, made with no user, are
+        // judged by the Public role, which boot grants the read because its
+        // rule answers `true`.
+        seedPublic: true,
         localization: {
           locales: ["en", "es"],
           defaultLocale: "en",
