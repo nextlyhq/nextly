@@ -47,7 +47,7 @@ import { createReleaseMutations } from "../release-mutations";
 import { ReleasesRepository } from "../releases-repository";
 import { RELEASES_RESOURCE } from "../releases-resource";
 
-import { seedLiveAuthor } from "./helpers/live-author";
+import { deactivate, seedLiveAuthor } from "./helpers/live-author";
 import {
   ANY_EDITABLE_STATE,
   lockServerOf,
@@ -398,6 +398,28 @@ describe.each(getConfiguredTestDialects())(
       expect(await emailJobs(t)).toEqual([
         { input: expect.any(Object), state: "done" },
       ]);
+      expect(sentTo(address)).toEqual([]);
+    });
+
+    it("is not emailed to an owner deactivated after the notice", async () => {
+      const t = await boot(dialect);
+      const owner = await releaseReader(t);
+      const id = await scheduledRelease(t, owner, PAST);
+      const address = await emailOf(t, owner);
+      await new ReleasesRepository(t.adapter).recordOverdueReleases(new Date());
+
+      // Deactivated between the notice and the run of its email job, with
+      // their roles, and so their release access, left as they were. The
+      // drain then stops the release, whose document they added, and the
+      // stop's email job runs on the trigger after.
+      await deactivate(t, owner);
+      await trigger(t);
+      await trigger(t);
+
+      expect(await overdueNotices(t, id)).toHaveLength(1);
+      const jobs = await emailJobs(t);
+      expect(jobs.length).toBeGreaterThan(0);
+      expect(jobs.map(job => job.state)).toEqual(jobs.map(() => "done"));
       expect(sentTo(address)).toEqual([]);
     });
 

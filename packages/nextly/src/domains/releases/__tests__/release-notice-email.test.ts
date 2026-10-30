@@ -75,19 +75,28 @@ const NOTICE = {
   },
 };
 
-/** A database holding one notice and its person's address. */
-function holding(notice: typeof NOTICE | null, email: string | null) {
+/**
+ * A database holding one notice and its person's address. A person who is
+ * not active is found only by a read that does not ask for an active one.
+ */
+function holding(
+  notice: typeof NOTICE | null,
+  email: string | null,
+  active = true
+) {
   return {
     dialect: "postgresql",
     tableExists: async () => true,
-    select: async (table: string) =>
-      table === NOTICES_TABLE
-        ? notice === null
-          ? []
-          : [notice]
-        : email === null
-          ? []
-          : [{ email }],
+    select: async (
+      table: string,
+      query?: { where?: { and: Array<{ column: string; value?: unknown }> } }
+    ) => {
+      if (table === NOTICES_TABLE) return notice === null ? [] : [notice];
+      const asksActive = (query?.where?.and ?? []).some(
+        condition => condition.column === "isActive" && condition.value === true
+      );
+      return email === null || (asksActive && !active) ? [] : [{ email }];
+    },
   } as unknown as NoticesDb;
 }
 
@@ -210,6 +219,19 @@ describe("a release notice's email", () => {
     expect(
       await emailReleaseNotice(
         { db: holding(NOTICE, "owner@example.com"), email },
+        "n1"
+      )
+    ).toBeNull();
+    expect(email.queue).not.toHaveBeenCalled();
+  });
+
+  it("is not queued to a person deactivated since, who keeps their roles", async () => {
+    site.releases.add("r1");
+    const email = sender();
+
+    expect(
+      await emailReleaseNotice(
+        { db: holding(NOTICE, "owner@example.com", false), email },
         "n1"
       )
     ).toBeNull();

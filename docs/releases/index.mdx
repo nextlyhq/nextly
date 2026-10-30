@@ -655,8 +655,8 @@ on the way: the next [jobs](/docs/jobs) pass queues the email through Nextly's q
 process that stops before then leaves the job for the pass after. The email is sent with a key
 made from the notice's id, so a repeat of the job sends nothing more where the provider honours
 idempotency keys; elsewhere a rare duplicate is possible.
-The email goes only to a person the notice still shows to: someone who may no longer read releases
-is sent nothing, as their list of notices hides it.
+The email goes only to a person the notice still shows to, whose account is active: someone who may
+no longer read releases, or who was deactivated, is sent nothing.
 
 The email gives what happened and the time the release was scheduled for, written in the zone it
 was scheduled in and named, since an email has no reader's zone. It links to the release only

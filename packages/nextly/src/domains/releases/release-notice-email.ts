@@ -161,7 +161,7 @@ export function createReleaseNoticeEmailJob(
 /**
  * Queue the email for one notice, or nothing: the site sends no email, the
  * notice is gone, it is not a release notice, its person may no longer see
- * it, or its person has no address. The notice alone then stands, and
+ * it or is deactivated, or its person has no address. The notice alone then stands, and
  * nothing fails.
  *
  * @returns the queued email, or `null` when none was queued
@@ -183,9 +183,18 @@ export async function emailReleaseNotice(
   if (kind.visible !== undefined && !(await kind.visible(notice.userId))) {
     return null;
   }
+  // Only an active account, asked of the database as the releases domain
+  // asks it of a member's author, so SQLite's 0 and 1 and a real boolean give
+  // one answer: a deactivated person keeps their roles, and with them the
+  // kind's `visible`, so that alone would still send it.
   const [person] = await db.select<{ email: string | null }>("users", {
     columns: ["email"],
-    where: { and: [{ column: "id", op: "=", value: notice.userId }] },
+    where: {
+      and: [
+        { column: "id", op: "=", value: notice.userId },
+        { column: "isActive", op: "=", value: true },
+      ],
+    },
     limit: 1,
   });
   if (!person?.email) return null;
