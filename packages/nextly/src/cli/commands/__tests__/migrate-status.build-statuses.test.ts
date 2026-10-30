@@ -264,6 +264,23 @@ describe("ledgerRecords", () => {
     ]);
   });
 
+  it("lists no failure for a rollback that ended with nothing applied", () => {
+    // Resolved: it changed nothing, and the migration is still applied. An
+    // older failure it came after is resolved too, so it is not reported
+    // either.
+    const applied = ledgerRecords([event("0001_a.sql", "applied", 1000)]);
+    const rollback = (status: SchemaEventRow["status"], at: number) => ({
+      ...event("0001_a.sql", status, at),
+      eventType: "file_rollback" as const,
+    });
+    expect(
+      failedRollbacksSinceApply(applied, [
+        rollback("failed", 2000),
+        rollback("nothing_applied", 3000),
+      ])
+    ).toEqual([]);
+  });
+
   it("lists a rollback that recorded no outcome as stopped and possibly partial", () => {
     const applied = ledgerRecords([event("0001_a.sql", "applied", 1000)]);
     const failures = failedRollbacksSinceApply(applied, [

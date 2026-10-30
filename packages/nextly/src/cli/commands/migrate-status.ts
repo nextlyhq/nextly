@@ -35,7 +35,10 @@ import {
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
-import { standingsByFilename } from "../../domains/schema/events/migration-state";
+import {
+  attemptUnfinished,
+  standingsByFilename,
+} from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -530,7 +533,13 @@ export function failedRollbacksSinceApply(
   for (const record of applied) {
     if (record.status !== "applied") continue;
     const failure = newestFailure.get(record.filename);
-    if (failure === undefined || failure.startedAt <= record.appliedAt) {
+    // Only a newest rollback that failed or stopped is one: an attempt that
+    // ended with nothing applied resolved it, and the failures before it.
+    if (
+      failure === undefined ||
+      !attemptUnfinished(failure) ||
+      failure.startedAt <= record.appliedAt
+    ) {
       continue;
     }
     const stopped = failure.status === "in_progress";
