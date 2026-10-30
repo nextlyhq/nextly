@@ -124,3 +124,34 @@ describe("the media edit dialog's focus point", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("the media edit dialog's image sizes", () => {
+  it("offers none, even for an item that carried them", () => {
+    // An older response carried the sizes an upload once cut.
+    const older = {
+      ...item,
+      ...({
+        sizes: {
+          small: {
+            url: "/uploads/s.jpg",
+            width: 480,
+            height: 200,
+            filesize: 9,
+          },
+        },
+      } as object),
+    };
+    render(
+      <MediaEditDialog
+        open
+        media={older}
+        onOpenChange={vi.fn()}
+        onSave={vi.fn()}
+      />
+    );
+
+    // The control: the dialog drew its form.
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeVisible();
+    expect(screen.queryByText(/image sizes/i)).toBeNull();
+  });
+});

@@ -285,7 +285,9 @@ for (const dialect of getConfiguredTestDialects()) {
       for (const slug of PLAIN) expect(listed).toContain(slug);
     });
 
-    const IMAGE_SIZE_CHANGES: Array<
+    // User fields are the settings that are created, edited and deleted one
+    // by one, so each of the three permissions is asked by a route of its own.
+    const USER_FIELD_CHANGES: Array<
       [
         label: string,
         change: "create" | "update" | "delete",
@@ -294,23 +296,23 @@ for (const dialect of getConfiguredTestDialects()) {
         body?: unknown,
       ]
     > = [
-      ["creating an image size", "create", "POST", "image-sizes", {}],
+      ["creating a user field", "create", "POST", "user-fields", {}],
       [
-        "editing an image size",
+        "editing a user field",
         "update",
         "PATCH",
-        "image-sizes/no-such-size",
+        "user-fields/no-such-field",
         {},
       ],
       [
-        "deleting an image size",
+        "deleting a user field",
         "delete",
         "DELETE",
-        "image-sizes/no-such-size",
+        "user-fields/no-such-field",
       ],
     ];
 
-    for (const [label, change, method, path, body] of IMAGE_SIZE_CHANGES) {
+    for (const [label, change, method, path, body] of USER_FIELD_CHANGES) {
       it(`lets a caller who may change settings go on to ${label}`, async () => {
         expect(REFUSED).not.toContain(
           await rest(method, path, settingsWriter, body)

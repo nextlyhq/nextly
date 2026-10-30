@@ -60,10 +60,9 @@ function only(
  * - Roles: their own action on `roles`; changing what a role grants is
  *   updating the role.
  * - Permissions: their own action on `permissions`, or `manage-permissions`.
- * - Settings: the general settings, languages, image sizes, user fields,
- *   field groups, the sidebar's groups, a plugin's settings and the preview
- *   links all ask their own action on `settings`. Regenerating image sizes
- *   updates them.
+ * - Settings: the general settings, languages, user fields, field groups,
+ *   the sidebar's groups, a plugin's settings and the preview links all ask
+ *   their own action on `settings`.
  * - Email providers and email templates: their own action on each. Sending
  *   a test through a provider, or previewing a template, creates nothing
  *   stored and asks create, as the routes have; making a provider the
@@ -90,12 +89,6 @@ export const SYSTEM_WRITE_POLICY = {
   },
   settings: {
     update: only("update", "settings"),
-  },
-  imageSizes: {
-    create: only("create", "settings"),
-    update: only("update", "settings"),
-    delete: only("delete", "settings"),
-    regenerate: only("update", "settings"),
   },
   userFields: {
     create: only("create", "settings"),

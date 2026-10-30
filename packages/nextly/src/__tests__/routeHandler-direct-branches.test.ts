@@ -1,20 +1,14 @@
 /**
- * respondX wire shapes for the seven endpoints that bypass the dispatcher
- * and live as private branches inside `routeHandler.ts` (or its delegated
- * REST handler in `api/image-sizes.ts`):
+ * respondX wire shapes for the endpoints that bypass the dispatcher and live
+ * as private branches inside `routeHandler.ts`:
  *
  *   handleAdminMetaRequest         GET    /admin-meta
  *   handleAdminMetaSidebarGroups   PATCH  /admin-meta/sidebar-groups
- *   listImageSizes                 GET    /image-sizes
- *   getImageSizeById               GET    /image-sizes/:id
- *   createImageSize                POST   /image-sizes
- *   updateImageSize                PATCH  /image-sizes/:id
- *   deleteImageSize                DELETE /image-sizes/:id
  *
  * Every assertion includes a regression guard (`not.toHaveProperty("data")`)
  * to make sure the legacy `{ data: ... }` envelope cannot regress through
- * these branches. Mocks isolate the handlers from the DI container, the
- * generalSettingsService, and the underlying ImageSizeService.
+ * these branches. Mocks isolate the handlers from the DI container and the
+ * generalSettingsService.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,16 +37,15 @@ vi.mock("../auth/middleware/to-nextly-error", () => ({
   }),
 }));
 
-// Image-size handlers cache an instance keyed off `getCachedNextly` and
-// `container.get("adapter")`. Stub both so the cached path resolves without
-// real adapter wiring; the actual ImageSizeService is replaced below.
+// `getCachedNextly` is stubbed so nothing the handlers reach boots a real
+// adapter.
 vi.mock("../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue(undefined),
 }));
 
 // container.has is consulted by the admin-meta branch to decide whether
 // to pull DB-overridden branding values; container.get is consulted by the
-// image-sizes service factory and the sidebar-groups branch.
+// sidebar-groups branch.
 vi.mock("../di/container", () => ({
   container: {
     has: vi.fn().mockReturnValue(false),
@@ -68,34 +61,6 @@ vi.mock("../services/lib/permissions", async importOriginal => ({
   ...(await importOriginal<typeof import("../services/lib/permissions")>()),
   isSuperAdmin: vi.fn().mockResolvedValue(false),
   resolveRoleSlugs: vi.fn().mockResolvedValue([]),
-}));
-
-// Replace the ImageSizeService class with a vi.fn-backed constructor whose
-// instance methods can be reassigned per test via `mockImageSizeServiceImpl`.
-// The factory closes over a mutable holder so each test can swap behavior
-// without re-mocking the module.
-const mockImageSizeServiceImpl: {
-  list: ReturnType<typeof vi.fn>;
-  getById: ReturnType<typeof vi.fn>;
-  create: ReturnType<typeof vi.fn>;
-  update: ReturnType<typeof vi.fn>;
-  delete: ReturnType<typeof vi.fn>;
-} = {
-  list: vi.fn(),
-  getById: vi.fn(),
-  create: vi.fn(),
-  update: vi.fn(),
-  delete: vi.fn(),
-};
-
-// Use a real constructor function (not an arrow factory) so vitest's spy
-// machinery can be invoked with `new` from the SUT. Returning the shared
-// mock object lets each test reach into `mockImageSizeServiceImpl.<method>`
-// without re-mocking the module.
-vi.mock("../services/image-size", () => ({
-  ImageSizeService: vi.fn(function MockImageSizeService(this: unknown) {
-    return mockImageSizeServiceImpl;
-  }),
 }));
 
 // The handler-config helper drives admin-meta branding; we feed it from
@@ -141,30 +106,6 @@ import {
   _stripReservedIdentityParamsForTest,
 } from "../routeHandler";
 import { resolveRoleSlugs } from "../services/lib/permissions";
-import {
-  createImageSize,
-  deleteImageSize,
-  getImageSizeById,
-  listImageSizes,
-  updateImageSize,
-} from "../api/image-sizes";
-
-// --- Fixtures -----------------------------------------------------------
-
-const IMAGE_SIZE = {
-  id: "sz_1",
-  name: "thumb",
-  width: 320,
-  height: 240,
-  fit: "inside",
-  quality: 80,
-  format: "auto",
-  isDefault: false,
-  sortOrder: 0,
-  createdAt: new Date("2026-04-01T00:00:00Z"),
-  updatedAt: new Date("2026-04-01T00:00:00Z"),
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
   // Default: every auth gate allows the request through.
@@ -251,143 +192,6 @@ describe("handleAdminMetaSidebarGroups (PATCH /admin-meta/sidebar-groups)", () =
     expect(json.item).toEqual(updated);
   });
 });
-
-// =======================================================================
-// image-sizes endpoints (api/image-sizes.ts handlers, which the
-// handleImageSizesRequest branch in routeHandler.ts delegates to)
-// =======================================================================
-
-describe("listImageSizes (GET /image-sizes)", () => {
-  it("emits respondList with synthetic single-page meta", async () => {
-    // Service returns two sizes; endpoint is not server-paginated so meta
-    // is synthesised to total=2, page=1, totalPages=1.
-    mockImageSizeServiceImpl.list.mockResolvedValueOnce([
-      IMAGE_SIZE,
-      IMAGE_SIZE,
-    ]);
-    // The factory pulls the adapter via container.get; return a sentinel
-    // (never actually used because ImageSizeService is fully mocked).
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({});
-
-    const res = await listImageSizes(new Request("http://x/api/image-sizes"));
-
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      items: unknown[];
-      meta: { total: number; page: number; totalPages: number };
-    };
-    expect(json).not.toHaveProperty("data");
-    expect(json.items).toHaveLength(2);
-    expect(json.meta).toMatchObject({
-      total: 2,
-      page: 1,
-      totalPages: 1,
-      hasNext: false,
-      hasPrev: false,
-    });
-  });
-});
-
-describe("getImageSizeById (GET /image-sizes/:id)", () => {
-  it("emits respondDoc (bare doc body)", async () => {
-    mockImageSizeServiceImpl.getById.mockResolvedValueOnce(IMAGE_SIZE);
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({});
-
-    const res = await getImageSizeById(
-      new Request("http://x/api/image-sizes/sz_1"),
-      "sz_1"
-    );
-
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as Record<string, unknown>;
-    expect(json).not.toHaveProperty("data");
-    expect(json).not.toHaveProperty("item");
-    // Doc body matches the service result (Date fields serialise to ISO
-    // strings through JSON.stringify, so we compare structural fields).
-    expect(json.id).toBe(IMAGE_SIZE.id);
-    expect(json.name).toBe(IMAGE_SIZE.name);
-  });
-});
-
-describe("createImageSize (POST /image-sizes)", () => {
-  it("emits respondMutation with status 201 and the created row as item", async () => {
-    const created = { ...IMAGE_SIZE, id: "sz_2", name: "hero" };
-    mockImageSizeServiceImpl.create.mockResolvedValueOnce(created);
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({});
-
-    const res = await createImageSize(
-      new Request("http://x/api/image-sizes", {
-        method: "POST",
-        body: JSON.stringify({
-          name: "hero",
-          width: 1920,
-          height: 1080,
-        }),
-      })
-    );
-
-    expect(res.status).toBe(201);
-    const json = (await res.json()) as {
-      message: string;
-      item: { id: string };
-    };
-    expect(json).not.toHaveProperty("data");
-    expect(json.message).toMatch(/created/i);
-    expect(json.item.id).toBe("sz_2");
-  });
-});
-
-describe("updateImageSize (PATCH /image-sizes/:id)", () => {
-  it("emits respondMutation with the updated row as item", async () => {
-    const updated = { ...IMAGE_SIZE, name: "thumb-renamed" };
-    mockImageSizeServiceImpl.update.mockResolvedValueOnce(updated);
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({});
-
-    const res = await updateImageSize(
-      new Request("http://x/api/image-sizes/sz_1", {
-        method: "PATCH",
-        body: JSON.stringify({ name: "thumb-renamed" }),
-      }),
-      "sz_1"
-    );
-
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      message: string;
-      item: { name: string };
-    };
-    expect(json).not.toHaveProperty("data");
-    expect(json.message).toMatch(/updated/i);
-    expect(json.item.name).toBe("thumb-renamed");
-  });
-});
-
-describe("deleteImageSize (DELETE /image-sizes/:id)", () => {
-  it("emits respondAction with the deleted id alongside the message", async () => {
-    // service.delete returns void; the handler surfaces the id via the
-    // respondAction result spread (mirrors the deleteSingle precedent).
-    mockImageSizeServiceImpl.delete.mockResolvedValueOnce(undefined);
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({});
-
-    const res = await deleteImageSize(
-      new Request("http://x/api/image-sizes/sz_1", { method: "DELETE" }),
-      "sz_1"
-    );
-
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as Record<string, unknown>;
-    expect(json).not.toHaveProperty("data");
-    expect(json).not.toHaveProperty("item");
-    expect(json.message).toMatch(/deleted/i);
-    expect(json.id).toBe("sz_1");
-  });
-});
-
-// Reference the imported helpers so unused-import lint stays quiet on the
-// rare auth helpers we mock for completeness but do not invoke directly
-// in any test branch (different SUTs reach them via the auth/middleware
-// barrel).
-void createJsonErrorResponse;
 
 describe("requestCallerFor", () => {
   const resolveRoleSlugsMock = vi.mocked(resolveRoleSlugs);
