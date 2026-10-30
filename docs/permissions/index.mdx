@@ -175,7 +175,8 @@ A collection's `update`, `delete`, `publish` and `unpublish` rules may return a 
 its `read` rule may, typed by the collection's fields in the same way. The write then
 changes an entry only if the filter matches it. An entry outside the filter is refused and
 left as it was: with a 403 where the caller may read the entry, and as a missing entry
-(404) where it may not.
+(404) where it may not. The filter applies to a signed-in user or an API key: a visitor,
+with neither, is refused a write whose rule answers a filter, whatever the filter matches.
 
 ```ts
 import { defineCollection, relationship, text } from "nextly/config";
