@@ -111,16 +111,16 @@ describe("reading a row's level", () => {
     ).toBe("edit");
   });
 
-  it("reads a built-in resource's legacy manage as Can edit", () => {
-    // A role `nextly upgrade` has not converted yet: manage gave read, create,
-    // update and delete, so the row shows that, never No access.
-    expect(levelOf("system", ["manage"], "settings")).toBe("edit");
-    expect(levelOf("system", ["manage", "read"], "media")).toBe("edit");
+  it("reads a built-in resource's legacy manage as giving nothing", () => {
+    // A role `nextly upgrade` has not converted yet: the server counts the
+    // retired manage for nothing, so the row shows only what else it holds.
+    expect(levelOf("system", ["manage"], "settings")).toBe("none");
+    expect(levelOf("system", ["manage", "read"], "media")).toBe("view");
   });
 
   it("counts a built-in resource's legacy manage among the actions its level decides", () => {
-    // So a row moved off Can edit loses it with the rest, rather than keeping
-    // edit access through it under the switch.
+    // So a row moved to a level loses it with the rest, rather than keeping
+    // it under the switch.
     expect(standardActions("system", "settings").has("manage")).toBe(true);
     expect(standardActions("collection").has("manage")).toBe(false);
   });
@@ -158,11 +158,12 @@ describe("saving a level", () => {
 
   it("moves a legacy manage row to plain permissions when its level changes", () => {
     // Settings as it is seeded before `nextly upgrade`: read and manage, both
-    // held. The row reads Can edit; set to Can view, what the caller keeps is
-    // the held actions outside the level, and manage is not among them.
+    // held. The row reads Can view, the retired manage counting for nothing;
+    // saved at Can view, what the caller keeps is the held actions outside the
+    // level, and manage is not among them.
     const seeded = resource("read", "manage");
     const held = ["read", "manage"];
-    expect(levelOf("system", held, "settings")).toBe("edit");
+    expect(levelOf("system", held, "settings")).toBe("view");
     const kept = held.filter(
       action => !standardActions("system", "settings").has(action)
     );
