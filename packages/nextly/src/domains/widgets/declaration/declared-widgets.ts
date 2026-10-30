@@ -40,6 +40,7 @@ import type { AnyWidgetSetting } from "../settings";
 
 import type { WidgetAccessGate } from "./define-widget";
 import { displayOfView, type WidgetDisplay, type WidgetView } from "./displays";
+import { WIDGET_SKELETON_SKETCH, type WidgetSkeleton } from "./skeleton";
 import {
   collectWidgetDeclarationFaults,
   widgetDeclarationsRefused,
@@ -104,6 +105,8 @@ interface DeclaredWidgetShape {
   };
   readonly several?: boolean;
   readonly hidesWhenEmpty?: boolean;
+  /** The card's loading shape and add-panel sketch, checked at startup. */
+  readonly skeleton?: WidgetSkeleton;
   /**
    * The cases the development preview page draws the card's ready state from,
    * each held at startup to what JSON carries (`previewProblems`).
@@ -195,8 +198,11 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * named here. `serverData` says core builds the card's data, so there is no
  * query. The size is published with every end filled in (`sizeBounds`), the
  * one reading of a declared size, so no reader fills a missing end its own way.
+ *
+ * Exported for the test harness alone (`nextly/testing`), which describes a
+ * widget to a test exactly as the registry publishes it.
  */
-function toDefinition(
+export function toDefinition(
   declaration: DeclaredWidgetShape,
   owner: string
 ): WidgetDefinition {
@@ -211,6 +217,11 @@ function toDefinition(
     description: declaration.description,
     ...publishedLabels(declaration, owner),
     ...drawnBy(displayOfView(declaration.view), owner),
+    // The display its loading state and its add-panel row are drawn as: the
+    // registry's own `sketch`, which both read.
+    ...(declaration.skeleton === undefined
+      ? {}
+      : { sketch: WIDGET_SKELETON_SKETCH[declaration.skeleton] }),
     ...(settings.length > 0 ? { settings } : {}),
     size: sizeBounds(declaration.size),
     ...publishedGates(declaration),

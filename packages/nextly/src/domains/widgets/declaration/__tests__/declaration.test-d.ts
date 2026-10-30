@@ -18,6 +18,7 @@ import type { WidgetSizeDeclaration } from "../../grid-size";
 import { rangeWindow, type RangeInterval } from "../../query";
 import type { WidgetRenderSize, WidgetResultField } from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
+import type { WidgetFieldChoice, WidgetSourceFieldType } from "../../sources";
 import type { CoreView } from "../displays";
 import {
   defineWidget,
@@ -38,6 +39,7 @@ import {
   type DateRange,
   type WidgetFilter,
 } from "../setting-builders";
+import type { TransportableValue } from "../transportable";
 
 import type { RevenueCard } from "./plugin/admin";
 import type { ordersByState, revenue, unpaidCount } from "./plugin/widgets";
@@ -240,12 +242,22 @@ defineWidget({
 // is a decision made here, not an accident.
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["count"]>[1]>
->().toEqualTypeOf<"where" | "status" | "signal">();
+>().toEqualTypeOf<"where" | "status" | "window" | "signal">();
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
 >().toEqualTypeOf<
-  "where" | "sort" | "limit" | "select" | "status" | "signal"
+  "where" | "sort" | "limit" | "select" | "status" | "total" | "signal"
 >();
+// A count's window: a range a series is drawn over, the date it places entries by, and the
+// window as long before it; and a list's total, asked for only as `true`.
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["count"]>[1]>["window"]
+>().toEqualTypeOf<
+  { range: WidgetRange; dateField?: string; previous?: true } | undefined
+>();
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>["total"]
+>().toEqualTypeOf<true | undefined>();
 
 // The status a read may name, on every read: the published entries, or all of them.
 expectTypeOf<
@@ -264,7 +276,37 @@ expectTypeOf<
   Awaited<ReturnType<WidgetReadServices["groupBy"]>>
 >().toEqualTypeOf<{
   buckets: readonly { value: string | null; count: number }[];
+  truncated?: boolean;
+  atLeast?: boolean;
 }>();
+// What a list read answers: its rows as JSON carries them, and, asked for, how many it matched.
+expectTypeOf<Awaited<ReturnType<WidgetReadServices["find"]>>>().toEqualTypeOf<{
+  items: { readonly [field: string]: TransportableValue }[];
+  total?: number;
+  atLeast?: boolean;
+}>();
+// What `describe` answers: the collection's title field, its status, and each field a reader
+// may read, labelled.
+expectTypeOf<
+  Awaited<ReturnType<WidgetReadServices["describe"]>>
+>().toEqualTypeOf<
+  | {
+      title?: string;
+      status: boolean;
+      fields: readonly {
+        name: string;
+        label: string;
+        type: WidgetSourceFieldType;
+        choices?: readonly WidgetFieldChoice[];
+        groupable?: false;
+        presentable?: false;
+      }[];
+    }
+  | undefined
+>();
+expectTypeOf<Parameters<WidgetReadServices["describe"]>>().toEqualTypeOf<
+  [collection: string]
+>();
 expectTypeOf<
   Awaited<ReturnType<WidgetReadServices["timeseries"]>>
 >().toEqualTypeOf<{

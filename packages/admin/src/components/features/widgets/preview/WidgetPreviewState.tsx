@@ -16,9 +16,11 @@
 import type { GridSize } from "nextly/config";
 import type { JSX, ReactNode } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { cardHeightPx, cardSpanClass } from "../sizes";
+import { settingsAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { StateFindings } from "./preview-findings";
@@ -77,6 +79,9 @@ export function WidgetPreviewState({
   caseName,
   settings,
 }: WidgetPreviewStateProps): JSX.Element {
+  // The collections this reader may see, which a Collection setting's default
+  // and its dependents resolve against, as on the dashboard.
+  const sources = useBranding().widgetSources;
   const label =
     caseName === undefined
       ? PREVIEW_STATE_LABELS[state]
@@ -104,7 +109,13 @@ export function WidgetPreviewState({
             definition={definition}
             slot={drawn.slot}
             slotFor={drawn.slotFor}
-            placement={{ id: stateKey, settings: settings ?? {}, size }}
+            // As a card on the dashboard is handed them: the case's
+            // settings over the widget's defaults (`settingsAsAsked`).
+            placement={{
+              id: stateKey,
+              settings: settingsAsAsked(definition, settings, sources),
+              size,
+            }}
           />
         ) : answer === undefined ? (
           <InPlaceOfCard testId="no-preview-case">

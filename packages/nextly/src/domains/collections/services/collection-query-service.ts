@@ -197,6 +197,7 @@ import {
   componentTableNamesFor,
   localizedFilterContext,
   prepareFilterCondition,
+  prepareRuleFilter,
   ruleFilterCondition,
   type FilterConditionSources,
 } from "../query/filter-condition";
@@ -1897,6 +1898,51 @@ export class CollectionQueryService extends BaseService {
       componentTables: prepared.componentTables,
       componentTypeColumns: prepared.componentTypeColumns,
     };
+  }
+
+  /**
+   * Whether a signed-in caller may edit `entryId`, which a held edit is shown
+   * only to: the update gate's answer and, where the update rule answers a
+   * filter, whether the entry's live row matches it, as the save that held
+   * the edit was matched.
+   */
+  private async mayEditEntry(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    schema: DynamicSchema & { id: SQLWrapper },
+    localizedCtx: LocalizedQueryContext | null
+  ): Promise<boolean> {
+    const update = await this.accessService.checkCollectionWrite({
+      ...params,
+      operation: "update",
+      // The route attested a read, never an update, so the update grant is
+      // checked rather than assumed from `routeAuthorized`.
+      routeAuthorized: false,
+    });
+    if (update.denied) return false;
+    if (!update.filter) return true;
+    const prepared = await prepareRuleFilter(
+      {
+        collectionName: params.collectionName,
+        filter: update.filter,
+        action: "update",
+      },
+      this.filterSources(),
+      this.logger
+    );
+    const condition = prepared.condition(schema, localizedCtx);
+    const idCondition = eq(schema.id, params.entryId);
+    const [row] = await this.db
+      .select({ id: schema.id })
+      .from(schema)
+      .where(condition ? and(idCondition, condition) : idCondition)
+      .limit(1);
+    return row !== undefined;
   }
 
   /** Where the filter builder reads its facts about a collection. */
@@ -4759,7 +4805,8 @@ export class CollectionQueryService extends BaseService {
       // caller. Every non-override authenticated caller is instead judged by an
       // actual update-capability check, then a publish-capability one, so a
       // reader the collection's update and publish rules refuse is shown the
-      // live document.
+      // live document, and one its update rule's filter limits is an editor of
+      // the entries it matches.
       let draftView = false;
       // Set where the caller is shown a pending change on publish alone. The
       // change is then shown only where they could put it live, below.
@@ -4772,28 +4819,41 @@ export class CollectionQueryService extends BaseService {
         if (params.overrideAccess === true) {
           draftView = true;
         } else if (params.user !== undefined) {
-          const { user } = params;
-          // The route attested a read, never a write, so each grant is checked
-          // rather than assumed from `routeAuthorized`.
-          const denied = (operation: "update" | "publish") =>
-            this.accessService.checkCollectionAccess({
+          const mayEdit = await this.mayEditEntry(
+            {
               collectionName: params.collectionName,
-              operation,
-              user,
+              entryId: resolvedEntryId,
+              user: params.user,
               overrideAccess: params.overrideAccess,
-              routeAuthorized: false,
               authenticatedScope: params.authenticatedScope,
-            });
-          const mayUpdate = !(await denied("update"));
+            },
+            schema,
+            localizedFilterContext(
+              companion,
+              localeChain,
+              schema,
+              statusFilter?.values
+            )
+          );
           // Asked as the status write that would put the change live asks it:
           // in that write's language, not every language this read involves.
+          // The route attested a read, never a write, so the grant is checked
+          // rather than assumed from `routeAuthorized`.
           publishOnly =
-            !mayUpdate &&
+            !mayEdit &&
             !(await withRuleLanguage(
               writeLanguagesFor(this.localization, params.locale),
-              () => denied("publish")
+              () =>
+                this.accessService.checkCollectionAccess({
+                  collectionName: params.collectionName,
+                  operation: "publish",
+                  user: params.user,
+                  overrideAccess: params.overrideAccess,
+                  routeAuthorized: false,
+                  authenticatedScope: params.authenticatedScope,
+                })
             ));
-          draftView = mayUpdate || publishOnly;
+          draftView = mayEdit || publishOnly;
         }
       }
       if (draftView) {

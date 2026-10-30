@@ -16,7 +16,7 @@ import { useId, type JSX } from "react";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { sizeName } from "../sizes";
+import { GRID_COLUMNS_CLASS, sizeName } from "../sizes";
 
 import {
   FRAME_STATES,
@@ -84,7 +84,7 @@ function StatesAtSize({
   return (
     // The container every card span answers to, as the dashboard's is.
     <div className="@container/dashboard">
-      <div className="grid grid-cols-12 gap-4">
+      <div className={`grid ${GRID_COLUMNS_CLASS} gap-y-4`}>
         {preview.preview.length === 0 ? (
           <WidgetPreviewState
             stateKey={stateKeyOf(preview.id, size, "ready")}

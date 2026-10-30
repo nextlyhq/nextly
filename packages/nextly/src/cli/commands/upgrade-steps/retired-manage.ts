@@ -18,6 +18,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { rolesHoldingRetiredManage } from "../../../domains/auth/retired-manage";
+import { afterGrantsChanged } from "../../../domains/auth/services/role-grants-changed";
 import { RolePermissionService } from "../../../domains/auth/services/role-permission-service";
 import { consoleLogger } from "../../../services/shared";
 import type { UpgradeStepContext } from "../upgrade-step";
@@ -40,10 +41,16 @@ export async function convertRoles(
   const roles = new RolePermissionService(adapter, consoleLogger);
   let converted = 0;
   let kept = 0;
+  // Each role's cached answers are retired as it converts; the scheduled
+  // releases are checked once, after the last, not once a role.
   for (const role of await rolesHoldingRetiredManage(adapter)) {
-    if (await roles.convertRetiredManage(role.id)) converted++;
-    else kept++;
+    if (await roles.convertRetiredManage(role.id, { recheckReleases: false })) {
+      converted++;
+    } else {
+      kept++;
+    }
   }
+  if (converted > 0) await afterGrantsChanged();
   // A role whose resource lacks one of the plain four keeps its `manage-`
   // permission rather than lose access, so the upgrade is not done for it:
   // said here with the remedy, never counted as converted.

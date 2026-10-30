@@ -142,6 +142,9 @@ export default defineConfig([
       "src/index.ts",
       "src/lib/plugins/component-registry.ts",
       "src/lib/plugins/plugin-components.ts",
+      // For tests alone: no admin module imports it, so it never joins the
+      // admin's own bundle.
+      "src/testing.tsx",
     ],
     format: ["esm"],
     outDir: "dist",
