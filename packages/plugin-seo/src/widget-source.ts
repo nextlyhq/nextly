@@ -392,10 +392,17 @@ type ScanStep =
  * What follows `page`: the end, when no more rows matched than it asked for;
  * the row it continues from; or a stop with its counts said to be floors, when
  * more matched and the page answered no row to continue from.
+ *
+ * 🔴 The end is exact only when the rows the page answered cover every row it
+ * matched. Fewer means a hook or the reader's rules left some out, which this
+ * cannot tell from rows the reader may not see, so the counts are floors: a
+ * hook keeping 30 rows of each answer leaves the last ten of a hundred unread,
+ * and the card says "90+" rather than 90.
  */
 function nextStep(page: ScanPage): ScanStep {
-  if (matchedBy(page) <= ISSUE_SCAN_PAGE_SIZE) {
-    return { done: true, bounded: false };
+  const matched = matchedBy(page);
+  if (matched <= ISSUE_SCAN_PAGE_SIZE) {
+    return { done: true, bounded: page.items.length < matched };
   }
   const next = cursorOf(page.items.at(-1));
   if (next === undefined) return { done: true, bounded: true };

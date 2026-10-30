@@ -47,7 +47,7 @@ export const SEO_ISSUES_WIDGET_ID = "seo/issues";
 /**
  * The most Needs attention items core takes from one plugin. Core's own bound,
  * restated because the SDK does not publish it; a plugin past it is refused at
- * startup, so the items below are built to stay within it.
+ * startup, so no more lines than this are declared.
  */
 const MAX_ATTENTION_ITEMS = 10;
 
@@ -172,9 +172,10 @@ export function seoIssuesWidget(
  * it, and reads its count as that reader, so every line a reader is shown
  * links to a list they can open and counts what they may read there.
  *
- * Past the most items core takes from one plugin, the collections beyond the
- * first nine share one more line, which names all of them, counts the issues
- * in those its reader may read, and links to the first of them.
+ * Needs attention lists up to ten SEO collections, the most items core takes
+ * from one plugin: the first ten configured get a line each, and a collection
+ * past them gets none. The card covers all of them, so no issue goes uncounted
+ * where a reader may see it.
  */
 export function seoIssuesAttentionItems(
   collections: readonly string[],
@@ -183,30 +184,11 @@ export function seoIssuesAttentionItems(
   const checks = checksFor(installed);
   if (reportableIssues(checks).length === 0) return [];
 
-  const fitsOnePerCollection = collections.length <= MAX_ATTENTION_ITEMS;
-  const own = fitsOnePerCollection
-    ? collections
-    : collections.slice(0, MAX_ATTENTION_ITEMS - 1);
-  const shared = fitsOnePerCollection
-    ? []
-    : collections.slice(MAX_ATTENTION_ITEMS - 1);
-  const ids = attentionIds([...own, ...(shared.length > 0 ? ["others"] : [])]);
-
-  const items = own.map((slug, index) =>
+  const listed = collections.slice(0, MAX_ATTENTION_ITEMS);
+  const ids = attentionIds(listed);
+  return listed.map((slug, index) =>
     issuesItem(ids[index], `SEO issues in ${slug}`, [slug], checks)
   );
-  const [firstShared, ...restShared] = shared;
-  if (firstShared !== undefined) {
-    items.push(
-      issuesItem(
-        ids[own.length],
-        `SEO issues in ${shared.length} more collections`,
-        [firstShared, ...restShared],
-        checks
-      )
-    );
-  }
-  return items;
 }
 
 /** One line counting the issues in `collections`, linked to the first's list. */
@@ -228,15 +210,20 @@ function issuesItem(
 
 /**
  * An item id for each name, `seo/issues-<name>`: lowercase letters, digits and
- * dashes, which is all an item id may hold, and each one distinct, a repeat
- * taking its position, so two slugs that read alike (`blog_posts`,
- * `blog-posts`) cannot become one id, which core would refuse at startup.
+ * dashes, which is all an item id may hold, and each one distinct, so two
+ * slugs that read alike (`blog_posts`, `blog-posts`) cannot become one id,
+ * which core would refuse at startup.
+ *
+ * 🔴 A repeat takes the first `-2`, `-3`, ... that no id holds yet, checked
+ * against every id already taken. A suffix chosen without that check can be
+ * an id another slug already has (`blog-posts-3` beside `blog-posts`).
  */
 function attentionIds(names: readonly string[]): string[] {
   const taken = new Set<string>();
-  return names.map((name, index) => {
+  return names.map(name => {
     const base = `seo/issues-${name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`;
-    const id = taken.has(base) ? `${base}-${index + 1}` : base;
+    let id = base;
+    for (let suffix = 2; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
     taken.add(id);
     return id;
   });

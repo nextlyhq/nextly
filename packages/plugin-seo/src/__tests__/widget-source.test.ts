@@ -302,25 +302,37 @@ describe("what the scan reads", () => {
     expect(cursors).toEqual([undefined, "r0049", "r0099"]);
   });
 
-  it("does not take a page a hook shortened for the last one", async () => {
+  it("says its counts are floors when a hook leaves rows of the last page out", async () => {
     // 🔴 The rows a page answers are what survived the reader's rules and the
-    // collection's hooks; `total` counted every row that matched. Stopping at
-    // the first short page would leave the rest unread, with no floor said.
+    // collection's hooks; `total` counted every row that matched. Each page
+    // continues from the last row it answered, so a short page is never taken
+    // for the last one: 30 of rows 0-49, 30 of rows 30-79, 30 of rows 60-99.
+    // That last page answered 30 of the 40 it matched, so the ten rows after
+    // it went unread, and an exact 90 would say there are no more.
     const rows = ISSUE_SCAN_PAGE_SIZE * 2;
     const services = servicesWith(
       { pages: untitledRows(rows) },
       { survivingPerPage: 30 }
     );
 
-    // Each page continues from the last row it answered, so a page re-reads
-    // only rows the hook dropped, and none is counted twice: 30 of rows 0-49,
-    // 30 of rows 30-79, and 30 of rows 60-99, the last page, whose last ten the
-    // hook dropped. Stopping at the first short page counts 30.
     expect(await tallied(services, ["pages"])).toEqual({
       byIssue: { "Missing meta title": 90 },
-      bounded: false,
+      bounded: true,
     });
     expect(services.find).toHaveBeenCalledTimes(3);
+  });
+
+  it("is exact when the last page answers every row it matched, the control", async () => {
+    const rows = ISSUE_SCAN_PAGE_SIZE * 2;
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { survivingPerPage: ISSUE_SCAN_PAGE_SIZE }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": rows },
+      bounded: false,
+    });
   });
 
   it("stops, and says its counts are floors, when a page answers no row while more matched", async () => {

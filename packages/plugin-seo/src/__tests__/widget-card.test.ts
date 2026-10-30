@@ -253,30 +253,30 @@ describe("the SEO issues lines of Needs attention", () => {
     ]);
   });
 
-  it("stay within the most core takes from one plugin, the rest sharing one line", async () => {
-    // Core refuses an eleventh item from one plugin at startup, so past ten
-    // collections the first nine keep a line each and the rest share the tenth.
-    const slugs = Array.from({ length: 12 }, (_, i) => `c${i + 1}`);
+  it("list the first ten collections, while the card counts every one", async () => {
+    // Core refuses an eleventh item from one plugin at startup, so the first
+    // ten collections get a line each and the eleventh none. The card still
+    // reads all eleven, so no issue goes uncounted where a reader may see it.
+    const slugs = Array.from({ length: 11 }, (_, i) => `c${i + 1}`);
     const items = seoIssuesAttentionItems(slugs, defaultSeoFields());
 
-    expect(items).toHaveLength(10);
-    expect(items.slice(0, 9).map(item => item.collections)).toEqual(
-      slugs.slice(0, 9).map(slug => [slug])
+    expect(items.map(item => item.collections)).toEqual(
+      slugs.slice(0, 10).map(slug => [slug])
     );
-    expect(items[9]).toMatchObject({
-      id: "seo/issues-others",
-      label: "SEO issues in 3 more collections",
-      collections: ["c10", "c11", "c12"],
-      link: "collections/c10",
-    });
-    expect(new Set(items.map(item => item.id)).size).toBe(10);
+    expect(items.map(item => item.link)).toEqual(
+      slugs.slice(0, 10).map(slug => `collections/${slug}`)
+    );
 
-    // Ten collections exactly still fit one line each.
-    expect(
-      seoIssuesAttentionItems(slugs.slice(0, 10), defaultSeoFields()).map(
-        item => item.collections
+    const card = declared(seoIssuesWidget(slugs, defaultSeoFields()));
+    const services = servicesHolding(
+      Object.fromEntries(
+        slugs.map(slug => [slug, [{ id: `${slug}-1`, seo: { noindex: true } }]])
       )
-    ).toEqual(slugs.slice(0, 10).map(slug => [slug]));
+    );
+    expect(await card.load({ services })).toEqual({
+      buckets: [{ value: "Hidden from search engines", count: 11 }],
+    });
+    expect(services.find.mock.calls.map(([slug]) => slug)).toEqual(slugs);
   });
 
   it("take ids core accepts, distinct even for slugs that read alike", () => {
@@ -290,6 +290,18 @@ describe("the SEO issues lines of Needs attention", () => {
       "seo/issues-blog-posts",
       "seo/issues-blog-posts-2",
       "seo/issues-news",
+    ]);
+    // 🔴 A suffix is checked against every id taken, not only the base: here
+    // the third slug's first choice of suffix is the first slug's own id.
+    expect(
+      seoIssuesAttentionItems(
+        ["blog-posts-3", "blog-posts", "blog_posts"],
+        defaultSeoFields()
+      ).map(item => item.id)
+    ).toEqual([
+      "seo/issues-blog-posts-3",
+      "seo/issues-blog-posts",
+      "seo/issues-blog-posts-2",
     ]);
   });
 
