@@ -25,7 +25,6 @@ describe("the group each widget is listed in", () => {
     expect(groups).toEqual({
       "core/get-started": "overview",
       "core/content": "overview",
-      "core/quick-create": "overview",
       "core/team": "team",
       "core/needs-attention": "overview",
       "core/recently-edited": "overview",
@@ -104,14 +103,14 @@ describe("the order the panel lists widgets in", () => {
       core("core/team"),
       core("site/alpha"),
       core("core/recently-edited"),
-      core("core/quick-create"),
+      core("core/content"),
       { id: "seo/issues", plugin: "@acme/seo" },
       { id: "forms/totals", plugin: "@acme/forms" },
     ]).map(widget => widget.id);
 
     expect(listed).toEqual([
       // Overview: built-ins in core's own order, whatever order they came in.
-      "core/quick-create",
+      "core/content",
       "core/recently-edited",
       // Then the site's own, in the order they were declared.
       "site/zeta",

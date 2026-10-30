@@ -55,6 +55,10 @@ import {
   getDashboardActivity,
 } from "./api/dashboard";
 import {
+  getDashboardNewTypes,
+  postDashboardNewType,
+} from "./api/dashboard-new-types";
+import {
   deleteDashboardPin,
   getDashboardPins,
   postDashboardPin,
@@ -583,6 +587,10 @@ async function handleDashboardRequest(
       return postDashboardPin(req);
     case "deleteDashboardPin":
       return deleteDashboardPin(req);
+    case "getDashboardNewTypes":
+      return getDashboardNewTypes(req);
+    case "postDashboardNewType":
+      return postDashboardNewType(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),

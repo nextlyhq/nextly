@@ -42,7 +42,6 @@ export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
 const CORE_GROUPS = {
   [CORE_WIDGET_ID.getStarted]: "overview",
   [CORE_WIDGET_ID.content]: "overview",
-  [CORE_WIDGET_ID.quickCreate]: "overview",
   [CORE_WIDGET_ID.team]: "team",
   [CORE_WIDGET_ID.needsAttention]: "overview",
   [CORE_WIDGET_ID.recentlyEdited]: "overview",

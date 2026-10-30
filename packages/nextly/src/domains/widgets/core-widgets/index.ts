@@ -66,7 +66,6 @@ import { getStartedWidget } from "./get-started";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
-import { quickCreateWidget } from "./quick-create";
 import { recentActivityWidget } from "./recent-activity";
 import { recentEntriesWidget } from "./recent-entries";
 import { recentlyEditedWidget } from "./recently-edited";
@@ -91,7 +90,6 @@ export const CORE_DECLARATIONS = [
 const CORE_WIDGET_LITERALS = [
   getStartedWidget,
   contentWidget,
-  quickCreateWidget,
   teamWidget,
   needsAttentionWidget,
   recentlyEditedWidget,

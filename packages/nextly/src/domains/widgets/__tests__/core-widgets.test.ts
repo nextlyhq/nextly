@@ -14,7 +14,7 @@ import { registerRecentEditsWidgetSource } from "../../../services/dashboard/rec
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
-import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
+import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
   chromeFieldProblem,
   requiredPermissionSlugs,
@@ -163,13 +163,12 @@ describe("core widget definitions", () => {
     expect(content?.visibleWhen).toBe("content:present");
   });
 
-  it("offers Create, Needs attention and Upcoming releases each on what it needs", () => {
+  it("offers Needs attention and Upcoming releases each on what it needs", () => {
     const shownWhen = (id: string) => {
       const declared = card(id);
       expect(declared.lifecycle, id).toBe("conditional");
       return declared.visibleWhen;
     };
-    expect(shownWhen("core/quick-create")).toBe("create:available");
     expect(shownWhen("core/needs-attention")).toBe("attention:readable");
     expect(shownWhen("core/upcoming-releases")).toBe("releases:present");
     // Its gate stays: the condition is about existence, the gate about access.
@@ -195,7 +194,6 @@ describe("core widget definitions", () => {
     ).map(w => w.id);
     expect(conditional).toEqual([
       "core/content",
-      "core/quick-create",
       "core/needs-attention",
       "core/upcoming-releases",
     ]);
@@ -295,10 +293,8 @@ describe("the default dashboard", () => {
   // The agreed cards, in order, each at its agreed size and within its agreed
   // bounds, in grid units: [id, default, min, max].
   const AGREED = [
-    // Needs attention four rows tall at the least, so each of its three kinds has a row;
-    // Create as tall, beside it.
+    // Needs attention four rows tall at the least, so each of its three kinds has a row.
     ["core/needs-attention", [8, 4], [4, 4], [12, 6]],
-    ["core/quick-create", [4, 4], [4, 2], [12, 4]],
     // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
     // default.
     ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
@@ -311,10 +307,14 @@ describe("the default dashboard", () => {
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });
 
   it("is core's own defaultLayout: the onboarding card, then the agreed cards as agreed", () => {
-    // Each at its widget's starting size: no entry states a size or settings of its own.
+    // Each at its widget's starting size, but Needs attention, which takes the
+    // full row as an interim until the approved default layout. No entry states
+    // settings of its own.
     expect(CORE_DEFAULT_LAYOUT).toEqual([
       { widget: "core/get-started" },
-      ...AGREED.map(([id]) => ({ widget: id })),
+      ...AGREED.map(([id]) =>
+        id === "core/needs-attention" ? { widget: id, w: 12 } : { widget: id }
+      ),
     ]);
   });
 
@@ -353,5 +353,19 @@ describe("the default dashboard", () => {
     for (const heights of rows) {
       expect(new Set(heights).size).toBe(1);
     }
+  });
+});
+
+describe("the Create card", () => {
+  // Creating an entry is the dashboard header's New button and the command
+  // palette's, so core registers no card for it, under its old id or any.
+  it("is not one of core's widgets, nor on the default dashboard", () => {
+    expect(CORE_WIDGET_IDS).not.toContain("core/quick-create");
+    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain(
+      "core/quick-create"
+    );
+    expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
+      "core/quick-create"
+    );
   });
 });

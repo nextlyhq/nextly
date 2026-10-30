@@ -18,7 +18,6 @@ import type { DefaultLayoutCard } from "../declaration/dashboard";
 export const CORE_WIDGET_ID = {
   getStarted: "core/get-started",
   content: "core/content",
-  quickCreate: "core/quick-create",
   team: "core/team",
   needsAttention: "core/needs-attention",
   recentlyEdited: "core/recently-edited",
@@ -42,7 +41,6 @@ export type CoreWidgetId = (typeof CORE_WIDGET_ID)[keyof typeof CORE_WIDGET_ID];
 export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.getStarted,
   CORE_WIDGET_ID.content,
-  CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.team,
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.recentlyEdited,
@@ -68,11 +66,11 @@ void everyIdOrdered;
 /**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
  * there is one path to the default whoever wrote it: the onboarding card, then
- * Needs attention, Create, Recently edited, Recent activity, Content and
- * Upcoming releases, each at its widget's starting size. The cards that share
- * a row share a height, so the default dashboard tiles: Needs attention and
- * Create at 4 rows, the two activity lists at 5. A site's own `defaultLayout`
- * takes its place whole.
+ * Needs attention, Recently edited, Recent activity, Content and Upcoming
+ * releases, each at its widget's starting size. Creating an entry is the
+ * header's New button, not a card, so Needs attention takes the full row the
+ * Create card shared; the two activity lists share a row and a height. A
+ * site's own `defaultLayout` takes its place whole.
  *
  * Team is not on it: the card is for the people who manage the team, who add
  * it from the add panel.
@@ -81,11 +79,10 @@ void everyIdOrdered;
  * and the default's builder read it without loading every core card.
  */
 export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
-  CORE_WIDGET_ID.getStarted,
-  CORE_WIDGET_ID.needsAttention,
-  CORE_WIDGET_ID.quickCreate,
-  CORE_WIDGET_ID.recentlyEdited,
-  CORE_WIDGET_ID.recentActivity,
-  CORE_WIDGET_ID.content,
-  CORE_WIDGET_ID.upcomingReleases,
-].map(widget => ({ widget }));
+  { widget: CORE_WIDGET_ID.getStarted },
+  { widget: CORE_WIDGET_ID.needsAttention, w: 12 },
+  { widget: CORE_WIDGET_ID.recentlyEdited },
+  { widget: CORE_WIDGET_ID.recentActivity },
+  { widget: CORE_WIDGET_ID.content },
+  { widget: CORE_WIDGET_ID.upcomingReleases },
+];

@@ -35,9 +35,6 @@ vi.mock("@admin/components/features/dashboard/GetStartedCard", () => ({
 vi.mock("@admin/components/features/dashboard/CollectionQuickLinks", () => ({
   CollectionQuickLinks: stub,
 }));
-vi.mock("@admin/components/features/dashboard/QuickCreate", () => ({
-  QuickCreate: stub,
-}));
 vi.mock("@admin/components/features/dashboard/TeamSummary", () => ({
   TeamSummary: stub,
 }));
@@ -75,13 +72,23 @@ describe("core widget components register at runtime", () => {
     for (const path of [
       "core#GetStartedCard",
       "core#CollectionQuickLinks",
-      "core#QuickCreate",
       "core#TeamSummary",
       "core#RecentActivity",
       "core#UpcomingReleases",
     ]) {
       expect(hasComponent(path), `${path} is not registered`).toBe(true);
     }
+  });
+
+  it("registers no Create card: creating is the header's New button", async () => {
+    const { hasComponent } = await import(
+      "@admin/lib/plugins/component-registry"
+    );
+    const { registerCoreWidgetComponents } = await import("../core-components");
+    registerCoreWidgetComponents();
+    // Registration ran, so its absence is the registry's answer, not an empty one.
+    expect(hasComponent("core#TeamSummary")).toBe(true);
+    expect(hasComponent("core#QuickCreate")).toBe(false);
   });
 
   it("resolves each path to something renderable", async () => {

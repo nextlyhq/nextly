@@ -2781,10 +2781,12 @@ const DASHBOARD_ROUTES: Readonly<
     layout: { operation: "list", method: "getWidgetLayout" },
     pins: { operation: "list", method: "getDashboardPins" },
     summary: { operation: "list", method: "getDashboardSummary" },
+    "new-types": { operation: "list", method: "getDashboardNewTypes" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
     pins: { operation: "create", method: "postDashboardPin" },
+    "new-types": { operation: "create", method: "postDashboardNewType" },
   },
   PUT: {
     layout: { operation: "update", method: "putWidgetLayout" },
@@ -2810,6 +2812,8 @@ const DASHBOARD_ROUTES: Readonly<
  *   GET  /api/dashboard/pins           → getDashboardPins
  *   POST /api/dashboard/pins           → postDashboardPin
  *   DELETE /api/dashboard/pins         → deleteDashboardPin
+ *   GET  /api/dashboard/new-types      → getDashboardNewTypes
+ *   POST /api/dashboard/new-types      → postDashboardNewType
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.
