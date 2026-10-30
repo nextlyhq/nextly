@@ -2601,12 +2601,29 @@ async function applyReloadHolding(
   // So the whole apply waits rather than proceeding entity by entity: the schema stays as it is,
   // the content stays where it is, and the next save retries the copy from a position that still
   // has everything.
-  if (preservation.preservationFailed.length > 0) {
-    const names = preservation.preservationFailed.join(", ");
+  //
+  // Fields this reload makes shared on an entity that stays translated, read from the live
+  // translations tables, stop it the same way when the default language's values cannot take their
+  // Required or Unique setting: each is reported, and nothing changes.
+  const {
+    prepareFieldsLeavingOnReload,
+    withLeavingSettingsHeld,
+    moveFieldsLeavingOnReload,
+  } = await import("../domains/i18n/runtime/fields-leaving-on-reload");
+  const leaving = await prepareFieldsLeavingOnReload(
+    adapter as unknown as DrizzleAdapter,
+    newConfig,
+    fieldGroupTables,
+    deferredEntities,
+    message => logger.error(message)
+  );
+  const blocked = [...preservation.preservationFailed, ...leaving.refused];
+  if (blocked.length > 0) {
+    const names = blocked.join(", ");
     logger.error(
-      `[nextly] Schema changes were not applied: existing content could not be copied into the ` +
-        `translations table for ${names}. Applying now would drop the columns holding that ` +
-        `content. Fix the error above and save again.`
+      `[nextly] Schema changes were not applied: the content of ${names} could not be made ready ` +
+        `for this change (see above), and applying now could lose it. Fix the error above and ` +
+        `save again.`
     );
     // The schema and metadata never landed, so the previous config is still the
     // one describing the database, and the work applied ahead of the schema
@@ -2622,9 +2639,13 @@ async function applyReloadHolding(
   // and only in the cycle where a transition actually happened.
   if (preservation.schemaChanged) clearLiveSnapshots();
 
-  const applyResult = await apply(desired, "code", {
-    promptChannel: "terminal",
-  });
+  // A field leaving translation gets its main column without its Required or Unique setting, so the
+  // apply asks nothing about rows it has no value for yet; the setting follows the values below.
+  const applyResult = await apply(
+    withLeavingSettingsHeld(desired, leaving.entries),
+    "code",
+    { promptChannel: "terminal" }
+  );
 
   if (applyResult.success) {
     // Create the `_locales` companion of every localized entity, now that the apply
@@ -2648,11 +2669,30 @@ async function applyReloadHolding(
     // successful retry copy the companion's older values over those edits. The registry keeps
     // describing the entity as localized until the copy succeeds, so reads keep resolving through
     // the companion that still holds the content.
-    if (postApply.restoreFailed.length > 0) {
+    //
+    // The same holds for a field leaving translation whose move did not finish
+    // (`moveFieldsLeavingOnReload`): its translations column keeps every language until a save
+    // finishes it, and the settings follow the values through a second apply of the whole config.
+    const stopped = [
+      ...postApply.restoreFailed,
+      ...(await moveFieldsLeavingOnReload({
+        adapter: adapter as unknown as DrizzleAdapter,
+        entries: leaving.entries,
+        config: newConfig,
+        blockedBy: postApply.restoreFailed,
+        // The live snapshot the pipeline reuses predates the first apply, so it is dropped first.
+        push: () => {
+          clearLiveSnapshots();
+          return apply(desired, "code", { promptChannel: "terminal" });
+        },
+        report: message => logger.error(message),
+      })),
+    ];
+    if (stopped.length > 0) {
       logger.error(
-        `[nextly] Localization stays on for ${postApply.restoreFailed.join(", ")}: their content ` +
-          `could not be copied back out of the translations table. Fix the error above and save ` +
-          `again — the content is intact where it is.`
+        `[nextly] Translation stays on for ${stopped.join(", ")}: their content could not be ` +
+          `copied out of the translations table. Fix the error above and save again — the content ` +
+          `is intact where it is.`
       );
       // Deliberately publishes NOTHING. The DDL landed, so the previous field
       // types are not restored either -- they describe tables that now exist.
