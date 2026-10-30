@@ -932,6 +932,29 @@ interface FilteredTransactionWrite extends FilteredWriteCheck {
 }
 
 /**
+ * The gate question a release asks of a write it will make: asked of a
+ * named caller, never as route-authorized, and of the key where one adds the
+ * document.
+ */
+function writeFilterQuestion(params: {
+  collectionName: string;
+  action: FilteredWrite;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}) {
+  return {
+    collectionName: params.collectionName,
+    operation: params.action,
+    user: params.user,
+    overrideAccess: false,
+    routeAuthorized: false,
+    ...(params.authenticatedScope
+      ? { authenticatedScope: params.authenticatedScope }
+      : {}),
+  };
+}
+
+/**
  * Whether a held edit changes a field `filter` names, or may: a filter's
  * match moves only through the fields it reads, so an edit leaving each as
  * the live document holds it cannot take the entry out of the filter. A
@@ -12133,20 +12156,270 @@ export class CollectionMutationService extends BaseService {
     /** Asked under the row lock: then the select is itself a locking read. */
     options: { underLock?: boolean } = {}
   ): Promise<ReturnType<typeof writeMatchOf>> {
+    const found = await this.storedWriteMatches(
+      db,
+      schema,
+      [entryId],
+      match,
+      options
+    );
+    return found.get(entryId) ?? writeMatchOf(undefined);
+  }
+
+  /**
+   * How the stored rows of `entryIds`, read on `db`, match a write's filter
+   * and the caller's read access, keyed by id, in one select: the question
+   * {@link storedWriteMatch} asks of one entry, asked of many. An id with no
+   * row is left out.
+   */
+  private async storedWriteMatches(
+    db: typeof this.db,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryIds: readonly string[],
+    match: FilteredWriteMatch,
+    /** Asked under the row lock: then the select is itself a locking read. */
+    options: { underLock?: boolean } = {}
+  ): Promise<Map<string, ReturnType<typeof writeMatchOf>>> {
+    if (entryIds.length === 0) return new Map();
     const query = db
-      .select({ writes: match.columns.writes, reads: match.columns.reads })
+      .select({
+        id: schema.id,
+        writes: match.columns.writes,
+        reads: match.columns.reads,
+      })
       .from(schema)
-      .where(eq(schema.id as never, entryId))
-      .limit(1);
+      .where(inArray(schema.id as never, [...entryIds]));
     // A plain read under the lock answers from the transaction's snapshot,
     // which on MySQL's REPEATABLE READ can predate a commit that moved the
     // entry out of the filter. SQLite runs one writer at a time, and has no
     // `FOR UPDATE`.
-    const [row] =
+    const rows: { id: unknown; writes: unknown; reads: unknown }[] =
       options.underLock && this.adapter.dialect !== "sqlite"
         ? await query.for("update")
         : await query;
-    return writeMatchOf(row);
+    return new Map(rows.map(row => [String(row.id), writeMatchOf(row)]));
+  }
+
+  /**
+   * Which of `entryIds` a write of `action` to every language by this caller
+   * would find inside its rule's filter, judged now and without writing: the
+   * gate's refusal, or the entries the caller may write. Every entry where the
+   * rule answers no filter; with one, an entry whose stored row the filter
+   * matches and the caller may read, so an entry the caller may not read is
+   * left out as one that is gone is. The write itself judges each entry again
+   * under its row lock.
+   *
+   * An unpublish is matched once, in the default language. A publish is
+   * asked in each language it puts live, as the write asks it, and an entry
+   * is within only where every one matches; an entry holding a working draft
+   * the publish would promote is left out where the draft changes a field a
+   * filter names, as the write refuses one the promotion takes out of it.
+   *
+   * Asked of a named caller, never as route-authorized: a release asks it of
+   * the author its run will act as, and of the key that adds a document.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(params: {
+    collectionName: string;
+    action: FilteredWrite;
+    entryIds: readonly string[];
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<
+    | { readonly denied: CollectionServiceResult }
+    | { readonly within: ReadonlySet<string> }
+  > {
+    const ids = [...new Set(params.entryIds)];
+    // The gate first, before anything of the collection is read: a caller it
+    // refuses, a collection that is gone among them, is answered here.
+    const asked = await this.accessService.checkCollectionWrite(
+      writeFilterQuestion(params)
+    );
+    if (asked.denied !== null) return { denied: asked.denied };
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    // An unpublish is asked once, in the default language. So is a publish
+    // whose translation table lacks its per-language status: the write is
+    // refused on that before any language is asked, and there are no
+    // statuses to read the languages going live from.
+    if (
+      params.action !== "publish" ||
+      (await this.companionLacksStatus(params.collectionName))
+    ) {
+      return this.entriesWithinWriteFilterNow(params, schema, ids, {
+        asked,
+      });
+    }
+
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const fields = collectionFields(collection);
+    const rows: Record<string, unknown>[] =
+      ids.length === 0
+        ? []
+        : await this.db
+            .select()
+            .from(schema as never)
+            .where(inArray(schema.id as never, ids));
+    const heldEdits = await this.heldEditsPromotedBy(
+      params.collectionName,
+      collection,
+      rows
+    );
+    // Entries putting the same languages live are asked together, each
+    // language told all of them, as the write tells its rule.
+    const byLanguages = new Map<
+      string,
+      { languages: string[]; ids: string[] }
+    >();
+    // An entry with no stored row puts nothing live: it is asked once, in
+    // the rule language now, so a filter leaves it out as a gone one is and
+    // a rule answering none keeps it, as every entry is kept.
+    const stored = new Set(rows.map(row => String(row.id)));
+    const gone = ids.filter(id => !stored.has(id));
+    if (gone.length > 0) byLanguages.set("[]", { languages: [], ids: gone });
+    for (const row of rows) {
+      const entryId = String(row.id);
+      const languages = await this.languagesToPublish({
+        collectionName: params.collectionName,
+        entryId,
+        row,
+        fields,
+        promotesDraftOf: collection,
+      });
+      const key = JSON.stringify(languages);
+      const group = byLanguages.get(key) ?? { languages, ids: [] };
+      group.ids.push(entryId);
+      byLanguages.set(key, group);
+    }
+    const within = new Set<string>();
+    for (const { languages, ids: groupIds } of byLanguages.values()) {
+      // Asked in each language as the write asks its rule (askEachLanguage),
+      // each language narrowing what the ones before it left.
+      let left: ReadonlySet<string> = new Set(groupIds);
+      await askEachLanguage(languages, async () => {
+        const inLanguage = await this.entriesWithinWriteFilterNow(
+          params,
+          schema,
+          [...left],
+          { promoted: { heldEdits, fields } }
+        );
+        left = "within" in inLanguage ? inLanguage.within : new Set();
+        return null;
+      });
+      for (const entryId of left) within.add(entryId);
+    }
+    return { within };
+  }
+
+  /**
+   * {@link entriesWithinWriteFilter} asked once, in the rule language now:
+   * the gate's refusal, or the entries the filter it answers matches in that
+   * language, the caller may read, and whose held edit in `promoted`, if
+   * any, changes no field the filter names.
+   */
+  private async entriesWithinWriteFilterNow(
+    params: Parameters<
+      CollectionMutationService["entriesWithinWriteFilter"]
+    >[0],
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    ids: readonly string[],
+    given: {
+      /** The gate's answer in this rule language, where it was asked already. */
+      asked?: Awaited<
+        ReturnType<CollectionAccessService["checkCollectionWrite"]>
+      >;
+      promoted?: {
+        heldEdits: ReadonlyMap<
+          string,
+          { draft: Record<string, unknown>; live: Record<string, unknown> }
+        >;
+        fields: readonly FieldDefinition[];
+      };
+    } = {}
+  ): Promise<
+    | { readonly denied: CollectionServiceResult }
+    | { readonly within: ReadonlySet<string> }
+  > {
+    const access =
+      given.asked ??
+      (await this.accessService.checkCollectionWrite(
+        writeFilterQuestion(params)
+      ));
+    if (access.denied !== null) return { denied: access.denied };
+    const promoted = given.promoted;
+    const match = await this.prepareFilteredWrite(
+      params.collectionName,
+      params.action,
+      schema,
+      access,
+      { locale: currentRuleLanguage().locale }
+    );
+    if (!match || !access.filter) return { within: new Set(ids) };
+    const filter = access.filter;
+    const found = await this.storedWriteMatches(this.db, schema, ids, match);
+    return {
+      within: new Set(
+        ids.filter(id => {
+          const entry = found.get(id);
+          if (entry === undefined || !entry.writes || !entry.reads) {
+            return false;
+          }
+          const held = promoted?.heldEdits.get(id);
+          if (promoted === undefined || held === undefined) return true;
+          return !changesFieldFilterNames(
+            filter,
+            held.draft,
+            held.live,
+            promoted.fields
+          );
+        })
+      ),
+    };
+  }
+
+  /**
+   * The working draft a publish of every language would promote for each of
+   * these stored rows, keyed by entry id, beside the live row it replaces:
+   * the draft kept in that write's own slot, read in one query. The live row
+   * holds the main table's columns only, so a filter naming a translated
+   * field, a component or a many-to-many field counts as changed, and the
+   * entry is left out: a draft can only be judged as changing more.
+   */
+  private async heldEditsPromotedBy(
+    collectionName: string,
+    collection: unknown,
+    rows: readonly Record<string, unknown>[]
+  ): Promise<
+    Map<
+      string,
+      { draft: Record<string, unknown>; live: Record<string, unknown> }
+    >
+  > {
+    const held = new Map<
+      string,
+      { draft: Record<string, unknown>; live: Record<string, unknown> }
+    >();
+    if (rows.length === 0 || !this.keepsWorkingDrafts(collection)) return held;
+    const drafts = await new VersionsRepository(
+      this.adapter
+    ).findWorkingDraftsOf(
+      { scopeKind: "collection", scopeSlug: collectionName },
+      rows.map(row => String(row.id)),
+      this.wildcardDraftLocale(collection)
+    );
+    for (const row of rows) {
+      const draft = drafts.get(String(row.id));
+      if (draft === undefined) continue;
+      held.set(String(row.id), {
+        draft: snapshotRecord(draft.snapshot),
+        live: row,
+      });
+    }
+    return held;
   }
 
   /**
