@@ -23,7 +23,6 @@ vi.mock("../../../shared/lib/get-base-url", () => ({
 // The links are read from the registered adapter; here, from the releases the
 // case says exist, by the same page path.
 vi.mock("../release-notice-links", () => ({
-  releaseAdminPath: (id: string) => `/admin/releases/${id}`,
   releaseNoticeLinks: async (ids: readonly string[]) =>
     new Map(
       ids

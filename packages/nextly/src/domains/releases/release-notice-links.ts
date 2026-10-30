@@ -13,8 +13,8 @@ import type { VersionsDbApi } from "../versions/db-api";
 import { RELEASES_TABLE } from "./release-tables";
 import { RELEASES_RESOURCE } from "./releases-resource";
 
-/** A release's page in the admin, as a path. @experimental */
-export function releaseAdminPath(id: string): string {
+/** A release's page in the admin, as a path. */
+function releaseAdminPath(id: string): string {
   return `/admin/releases/${id}`;
 }
 
