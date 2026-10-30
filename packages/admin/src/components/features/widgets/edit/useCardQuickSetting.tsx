@@ -146,7 +146,7 @@ function changesQuery(
  * collection resets the settings that work over it to where each starts on that collection, as
  * the sheet does, so no filter or sort names a field the new collection lacks.
  */
-export function quickChangeConfig(
+function quickChangeConfig(
   settings: readonly AnyWidgetSetting[],
   config: Record<string, unknown> | undefined,
   name: string,
@@ -162,6 +162,26 @@ export function quickChangeConfig(
     }
   }
   return toStoredConfig(settings, values, config);
+}
+
+/**
+ * What Undo of one quick setting stores: the card's settings as they are NOW, with that setting,
+ * and the settings that work over it, put back as they were before the change. Only those: a
+ * later save of another of the card's settings, from the sheet say, is the reader's too, and
+ * putting back the whole earlier config would quietly undo it.
+ */
+function undoneConfig(
+  settings: readonly AnyWidgetSetting[],
+  current: Record<string, unknown> | undefined,
+  previous: Record<string, unknown>,
+  name: string
+): Record<string, unknown> {
+  const values = initialValues(settings, current);
+  const before = initialValues(settings, previous);
+  for (const each of [name, ...dependentsOf(settings, name).map(d => d.name)]) {
+    values[each] = before[each];
+  }
+  return toStoredConfig(settings, values, current);
 }
 
 /** What the reader is told a popover setting's value now is. */
@@ -279,6 +299,8 @@ interface ChangeContext {
   widget: DashboardWidget;
   settings: readonly AnyWidgetSetting[];
   config: Record<string, unknown> | undefined;
+  /** The card's stored settings as they are when asked, which a later save may have changed. */
+  latestConfig: () => Record<string, unknown> | undefined;
   size: GridSize;
   sources: readonly PublishedContentSource[] | undefined;
   /** Absent while customising, where `staged` keeps the change. */
@@ -314,7 +336,7 @@ function changeSetting(
     return;
   }
   const label = setting.label ?? setting.name;
-  // Captured now: Undo puts back what the card had just before THIS change.
+  // Captured now: Undo puts back what this setting was just before THIS change.
   const previous = config ?? {};
   const asksAgain = changesQuery(ctx.widget, config, stored, sources);
   const said = (value: unknown) => valueLabel(setting, value, sources);
@@ -325,14 +347,17 @@ function changeSetting(
   atRest.write(stored, {
     onLanded: () =>
       ctx.announceLater(label, said(next), asksAgain, () =>
-        atRest.write(previous, {
-          onLanded: () =>
-            ctx.announceLater(
-              label,
-              said(resolveWidgetSettings(settings, previous)[setting.name]),
-              asksAgain
-            ),
-        })
+        atRest.write(
+          undoneConfig(settings, ctx.latestConfig(), previous, setting.name),
+          {
+            onLanded: () =>
+              ctx.announceLater(
+                label,
+                said(resolveWidgetSettings(settings, previous)[setting.name]),
+                asksAgain
+              ),
+          }
+        )
       ),
     onFailed: () => {
       ctx.setShown(ahead => ({ ...ahead, values: {} }));
@@ -392,13 +417,9 @@ function popoverModel(
   resolved: Readonly<Record<string, unknown>>,
   shown: Shown
 ): CardQuickPopoverModel | undefined {
-  const { atRest, widget, size } = ctx;
+  const { widget, size } = ctx;
   const settings = popoverSettingsOf(ctx.settings);
-  // Resizable from the popover where the card may be resized from its menu: while customising,
-  // and at rest where the grid offers the size write.
-  const resizable =
-    (!atRest || atRest.resize !== undefined) &&
-    sizeAxes(size, widget.size, () => {}).length > 0;
+  const resizable = isResizableHere(ctx);
   if (settings.length === 0 && !resizable) return undefined;
   return {
     settings,
@@ -409,8 +430,30 @@ function popoverModel(
       : {}),
     changeSetting: (setting, next) => changeSetting(ctx, setting, next),
     changeSize: next => changeSize(ctx, next),
-    disabled: atRest ? atRest.isWriting : ctx.staged.isWriting,
-    ...(atRest?.unavailable === undefined
+    ...writeState(ctx.atRest, ctx.staged),
+  };
+}
+
+/**
+ * Whether the card may be resized from the popover: where it may be from its menu, while
+ * customising and at rest where the grid offers the size write, and only where its widget's
+ * bounds allow more than one size.
+ */
+function isResizableHere(ctx: ChangeContext): boolean {
+  const { atRest, widget, size } = ctx;
+  if (atRest !== undefined && atRest.resize === undefined) return false;
+  return sizeAxes(size, widget.size, () => {}).length > 0;
+}
+
+/** Whether the popover waits for a write, and why it cannot save one, when it cannot. */
+function writeState(
+  atRest: CellSettingsWrite | undefined,
+  staged: CellStagedWrite
+): Pick<CardQuickPopoverModel, "disabled" | "unavailable"> {
+  if (!atRest) return { disabled: staged.isWriting };
+  return {
+    disabled: atRest.isWriting,
+    ...(atRest.unavailable === undefined
       ? {}
       : { unavailable: atRest.unavailable }),
   };
@@ -453,6 +496,12 @@ export function useCardQuickSetting(args: {
     settingsWrite
   );
   const [shown, setShown] = useShownAhead(args.config, args.size);
+  // The stored settings as last drawn, for an Undo pressed after a later save. Kept after each
+  // commit: Undo is pressed later, never while the card is drawing.
+  const latestConfig = useRef(args.config);
+  useEffect(() => {
+    latestConfig.current = args.config;
+  });
 
   // Nowhere to keep a change: at rest before an arrangement has been read.
   if (!isEditing && !settingsWrite) return {};
@@ -463,6 +512,7 @@ export function useCardQuickSetting(args: {
     widget: args.widget,
     settings,
     config: args.config,
+    latestConfig: () => latestConfig.current,
     size: args.size,
     sources,
     atRest: isEditing ? undefined : settingsWrite,

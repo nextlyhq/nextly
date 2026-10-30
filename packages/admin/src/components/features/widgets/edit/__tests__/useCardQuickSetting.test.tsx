@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { gridBounds } from "../../__tests__/grid-bounds";
+import type { QuickSetting } from "../quick-setting";
 import type { CardSettingsWriteCallbacks } from "../useCardSettingsWrite";
 import {
   useCardQuickSetting,
@@ -53,6 +54,20 @@ vi.mock("../../widget-as-asked", () => {
   };
 });
 
+/** The widget's quick setting: its range. */
+const range: QuickSetting = {
+  name: "range",
+  type: "select",
+  label: "Date range",
+  quick: true,
+  defaultValue: "7d",
+  options: [
+    { label: "Last 7 days", value: "7d" },
+    { label: "Last 30 days", value: "30d" },
+    { label: "Last 90 days", value: "90d" },
+  ],
+};
+
 const WIDGET: DashboardWidget = {
   id: "core/activity",
   title: "Activity",
@@ -61,18 +76,9 @@ const WIDGET: DashboardWidget = {
   size: { default: { w: 4, h: 3 }, min: { w: 3, h: 2 }, max: { w: 12, h: 6 } },
   query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [
-    {
-      name: "range",
-      type: "select",
-      label: "Date range",
-      quick: true,
-      defaultValue: "7d",
-      options: [
-        { label: "Last 7 days", value: "7d" },
-        { label: "Last 30 days", value: "30d" },
-        { label: "Last 90 days", value: "90d" },
-      ],
-    },
+    range,
+    // Changed in the sheet, never quick: what a later save changes beside the quick setting.
+    { name: "limit", type: "number", label: "Rows", defaultValue: 5 },
   ],
 };
 
@@ -145,9 +151,6 @@ function pressUndo() {
   if (!options?.action) throw new Error("no Undo offered");
   act(() => options.action?.onClick());
 }
-
-const range = WIDGET.settings?.[0];
-if (range?.type !== "select") throw new Error("fixture: range is a select");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -235,6 +238,26 @@ describe("a quick setting changed at rest", () => {
       call => (call[1] as { id?: string }).id
     );
     expect(new Set(ids)).toEqual(new Set(["card-change-p1"]));
+  });
+
+  it("is undone for that setting alone, keeping a later save of another of the card's settings", () => {
+    const { settingsWrite, write } = landingWrite();
+    const props = base(settingsWrite, { config: { range: "30d" } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSetting(range, "90d"));
+    const changed = { ...props, config: { range: "90d" } };
+    settle(rerender, changed, new Date(2_000));
+    // The sheet's Done saves Rows after it, while the change's Undo is still on offer.
+    rerender({
+      ...changed,
+      updatedAt: new Date(2_000),
+      config: { range: "90d", limit: 9 },
+    });
+
+    pressUndo();
+    expect(write.mock.calls.at(-1)?.[0]).toEqual({ range: "30d", limit: 9 });
   });
 
   it("goes back to the stored value, and offers no Undo, when the write does not land", () => {
@@ -333,7 +356,7 @@ describe("a new collection from the popover", () => {
     collection,
     label: collection[0]?.toUpperCase() + collection.slice(1),
     lifecycle: false,
-    fields: fields.map(name => ({ name, label: name, type: "text" })),
+    fields: fields.map(name => ({ name, label: name, type: "string" })),
   });
 
   it("resets the settings that work over it, and is said by the collection's label", () => {
