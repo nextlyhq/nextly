@@ -44,6 +44,9 @@ const FUTURE = new Date("2099-01-01T00:00:00Z");
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The Single is read as a visitor, judged by the Public role a real boot
+    // makes, which reads it by its rule.
+    seedPublic: true,
     singles: [
       defineSingle({
         slug: SLUG,

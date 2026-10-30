@@ -41,6 +41,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   return {
     ...(await importOriginal<object>()),
     actorForUser: fake.fakeActorForUser,
+    actorForVisitor: fake.fakeActorForVisitor,
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };

@@ -20,6 +20,10 @@ export interface PermissionLevelRowsProps {
   /** The base roles and the permissions each gives; see {@link PermissionLevelRow}. */
   bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
+  /** Shown but not changed: Find still narrows the rows. */
+  readOnly?: boolean;
+  /** The Public role's rows: see {@link PermissionLevelRow}'s `visitors`. */
+  visitors?: boolean;
 }
 
 /** The sections the rows are shown in, by the kind of entity each holds. */
@@ -46,7 +50,11 @@ export function PermissionLevelRows({
   lockedIds,
   bases,
   disabled = false,
+  readOnly = false,
+  visitors = false,
 }: PermissionLevelRowsProps): JSX.Element {
+  // A read-only role can still be searched; only its rows are held.
+  const changesHeld = disabled || readOnly;
   const [find, setFind] = useState("");
   const wanted = find.trim().toLowerCase();
   const matches = (row: LevelRow) =>
@@ -107,7 +115,8 @@ export function PermissionLevelRows({
                 onChange={onChange}
                 lockedIds={lockedIds}
                 bases={bases}
-                disabled={disabled}
+                disabled={changesHeld}
+                visitors={visitors}
               />
             ))}
           </section>
@@ -128,7 +137,8 @@ export function PermissionLevelRows({
               onChange={onChange}
               lockedIds={lockedIds}
               bases={bases}
-              disabled={disabled}
+              disabled={changesHeld}
+              visitors={visitors}
             />
           ))}
         </section>

@@ -23,8 +23,11 @@ export function PermissionMatrix({
   value = [],
   onChange,
   disabled = false,
+  readOnly = false,
   lockedIds = [],
 }: PermissionMatrixProps): JSX.Element {
+  // A read-only matrix can still be searched; only its changes are held.
+  const changesHeld = disabled || readOnly;
   const {
     searchTerm,
     setSearchTerm,
@@ -99,7 +102,7 @@ export function PermissionMatrix({
                 )
               }
               disabled={
-                disabled || permissions.every(p => shown.includes(p.id))
+                changesHeld || permissions.every(p => shown.includes(p.id))
               }
               aria-label="Select all permissions"
             >
@@ -113,7 +116,7 @@ export function PermissionMatrix({
               // The value is the role's own permissions, so clearing takes the
               // grid's away; inherited ones stay shown, as the base gives them.
               onClick={() => onChange(value.filter(id => !own.has(id)))}
-              disabled={disabled || !value.some(id => own.has(id))}
+              disabled={changesHeld || !value.some(id => own.has(id))}
               aria-label="Clear all permissions"
             >
               Clear All
@@ -133,7 +136,7 @@ export function PermissionMatrix({
                 contentTypes={filteredContentTypes[category] ?? []}
                 value={shown}
                 lockedIds={lockedIds}
-                disabled={disabled}
+                disabled={changesHeld}
                 searchTerm={searchTerm}
                 onClearSearch={() => setSearchTerm("")}
                 onTogglePermission={togglePermission}
