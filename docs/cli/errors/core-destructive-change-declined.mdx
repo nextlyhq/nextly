@@ -1,0 +1,24 @@
+---
+title: CORE_DESTRUCTIVE_CHANGE_DECLINED
+description: "A destructive change to Nextly's own tables was not confirmed at the prompt, so none was made."
+---
+
+## Cause
+
+A destructive change to Nextly's own tables was not confirmed at the prompt, so none was made.
+
+`nextly upgrade --reconcile-core` asks before each destructive change to Nextly's own tables. One was not confirmed, so the reconcile stopped without making any of them.
+
+## Fix
+
+- Check that the data in the tables and columns the Why line names is not needed.
+- Run `nextly upgrade --reconcile-core` again and confirm each change.
+
+## Example
+
+```text
+✗ Core schema reconciliation aborted: destructive operations were not confirmed.
+  Why:  drops column 'nextly_users.legacy_role'
+  Next: Run `nextly upgrade --reconcile-core` again and confirm each change once you have checked its data is not needed.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-destructive-change-declined  (CORE_DESTRUCTIVE_CHANGE_DECLINED)
+```

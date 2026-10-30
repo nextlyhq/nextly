@@ -1,0 +1,24 @@
+---
+title: PLUGIN_ADMIN_WIDGET_NOT_JSON
+description: "A plugin's admin widget holds a value that cannot be sent to the browser as JSON."
+---
+
+## Cause
+
+A plugin's admin widget holds a value that cannot be sent to the browser as JSON.
+
+A plugin's `contributes.admin.widgets` are sent to the admin as JSON, in one response for the whole workspace. A function, class instance, `Date`, `Map` or `bigint` cannot be, and would fail that response for every admin. The message names the widget and its keys at fault.
+
+## Fix
+
+- Remove the keys listed from the widget, or give them values of strings, numbers, booleans, null, arrays or plain objects.
+- If the plugin is not yours, update it to a release whose widgets are plain JSON.
+
+## Example
+
+```text
+✗ Plugin "reviews" contributes an admin widget "stats" that is not JSON (keys: query).
+  Why:  It is serialized into /api/admin-meta/workspace, so it may hold only strings, numbers, booleans, null, arrays and plain objects — no functions, class instances, Dates, Maps or bigints. A bigint in query.where throws while the whole workspace payload is serialized, which fails that request for every admin rather than just this card.
+  Next: Remove `query` from the widget in `contributes.admin.widgets`, or give it a value of strings, numbers, booleans, null, arrays or plain objects.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-admin-widget-not-json  (PLUGIN_ADMIN_WIDGET_NOT_JSON)
+```

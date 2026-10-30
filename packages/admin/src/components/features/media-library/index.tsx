@@ -900,7 +900,7 @@ export function MediaLibrary({
               <AlertDialogAction
                 onClick={handleConfirmBulkDelete}
                 disabled={isBulkDeleting}
-                className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+                variant="destructive"
               >
                 {isBulkDeleting ? "Deleting..." : "Delete"}
               </AlertDialogAction>

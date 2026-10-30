@@ -1,0 +1,24 @@
+---
+title: BUILD_STRICT_WARNINGS
+description: "`nextly build --strict` found validation warnings, and `--strict` fails the build on any warning."
+---
+
+## Cause
+
+`nextly build --strict` found validation warnings, and `--strict` fails the build on any warning.
+
+`nextly build` reports validation warnings, such as a relationship to a collection the config does not define, and continues. With `--strict` any warning fails the build, so CI can hold the configuration to having none.
+
+## Fix
+
+- Fix each warning the Why line lists in `nextly.config.ts`, then run `nextly build --strict` again.
+- If the warnings are expected, run `nextly build` without `--strict`.
+
+## Example
+
+```text
+✗ Build failed due to 1 warning (--strict mode).
+  Why:  Collection "posts" field "author": relationship target "people" is not defined in this config.
+  Next: Fix each warning listed, or run `nextly build` without `--strict` to let warnings pass.
+  Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)
+```
