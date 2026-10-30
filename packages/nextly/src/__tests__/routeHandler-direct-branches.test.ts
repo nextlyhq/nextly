@@ -615,6 +615,21 @@ describe("needsResolvedRoles", () => {
     );
   });
 
+  it("resolves roles for the preview of a publish of every language, as for the publish", () => {
+    // The preview runs the publish's own gate, whose rules match roles; a GET
+    // would otherwise skip the lookup and arrive holding none.
+    expect(
+      _needsResolvedRolesForTest(
+        "singles",
+        "previewPublishAllSingleLocales",
+        "GET"
+      )
+    ).toBe(true);
+    expect(
+      _needsResolvedRolesForTest("singles", "publishAllSingleLocales", "POST")
+    ).toBe(true);
+  });
+
   it("skips the lookup for reads that consume no roles", () => {
     // A permissions query on every one of these would be paid for nothing.
     expect(_needsResolvedRolesForTest("media", "listMedia", "GET")).toBe(false);

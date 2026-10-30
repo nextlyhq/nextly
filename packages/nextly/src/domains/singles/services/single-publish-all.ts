@@ -30,7 +30,6 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
-import type { SharedFieldsConflictPublicData } from "../../../errors/public-data";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -53,7 +52,11 @@ import {
   fieldGroupWriteAccessOf,
   type FieldGroupWriteAccess,
 } from "../../field-groups/services/field-group-mutation-service";
-import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
+import {
+  isBlank,
+  populateTranslationStatus,
+  readCompanionLocaleStatusAll,
+} from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   languagesChangedConflict,
@@ -70,6 +73,7 @@ import {
   perLanguageFieldNames,
   reachesLocalizedFieldGroup,
 } from "../../i18n/per-language-fields";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
   type CompanionSchema,
@@ -82,16 +86,30 @@ import { captureInTx } from "../../versions/capture-in-tx";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
-  differingFields,
-  editedSharedFields,
-  outOfDateSharedFields,
+  judgeSharedValues,
+  type LanguageOutcome,
+  languageOutcomes,
+  languageStatusBefore,
+  languagesGoingLiveAsStored,
+  type LiveSharedDocument,
+  type NamedVerdict,
+  nameVerdict,
+  type PendingChange,
+  pendingChangesInSaveOrder,
+  type PublishableShape,
+  type PromotionIssue,
+  promotionBlockers,
+  type PublishAllBlocker,
+  type RefuseSharedFields,
+  sharedStateForPublish,
+  withVerdictState,
+} from "../../versions/publish-all-plan";
+import {
+  type FieldNameReader,
+  readableFieldNames,
   releaseAllSharedBases,
-  sameSharedValue,
-  sharedEditOrder,
-  type SharedEditTime,
   sharedValuesConflict,
   snapshotRecord,
-  type SharedViews,
 } from "../../versions/shared-publish-base";
 import {
   type ComponentFieldResolver,
@@ -136,6 +154,7 @@ import type { SingleRegistryService } from "./single-registry-service";
 import {
   buildSingleWebhookDoc,
   readCompanionLocaleValues,
+  readCompanionValuesByLocale,
 } from "./single-webhook-doc";
 
 /**
@@ -146,6 +165,27 @@ import {
 export interface PublishAllSingleResult {
   id: string;
   status?: "published";
+  /**
+   * What the publish did to each configured language, as its preview said it
+   * would. Empty for a Single whose languages carry no status of their own,
+   * and absent where the Single has no lifecycle to publish.
+   */
+  languages?: LanguageOutcome[];
+}
+
+/**
+ * What a publish of every language would do, without doing it: each configured
+ * language's outcome, and what in the shared values would refuse the publish
+ * as a whole. The field rules the promotion is judged by are not asked here:
+ * the publish answers to them when it runs. A language
+ * whose pending change is out of date is one of the outcomes, naming the
+ * shared fields the caller may read and counting the others, as the
+ * publish's refusal does.
+ */
+export interface PublishAllSinglePreview {
+  id: string;
+  languages: LanguageOutcome[];
+  blockers: PublishAllBlocker[];
 }
 
 /**
@@ -184,6 +224,8 @@ interface PublishOutcome {
   committed: boolean;
   /** A durable outbox event was appended, so the fast drain is owed. */
   eventRecorded: boolean;
+  /** What the publish did to each configured language. */
+  languages: LanguageOutcome[];
 }
 
 /**
@@ -335,7 +377,11 @@ export class SinglePublishAllService extends BaseService {
         success: true,
         statusCode: 200,
         message: "All languages published.",
-        data: { id: plan.existingDoc.id, status: "published" },
+        data: {
+          id: plan.existingDoc.id,
+          status: "published",
+          languages: outcome.languages,
+        },
         eventRecorded: outcome.eventRecorded,
         committed: outcome.committed,
         // A Single is consumed sitewide, so its one tag is the whole cascade.
@@ -354,6 +400,61 @@ export class SinglePublishAllService extends BaseService {
       throw NextlyError.internal({
         cause: error instanceof Error ? error : undefined,
         logContext: { reason: "single-publish-all", single: slug },
+      });
+    }
+  }
+
+  /**
+   * What publishing every language would do, language by language, without
+   * doing it.
+   *
+   * Asked as the publish is asked: the same refusals before any read (a
+   * Single removed from code, no Single, no document) and the same publish
+   * permission and rule in each language it would put live, so a caller who
+   * may not publish is not told what a publish would do. Then the same
+   * verdict, read on a transaction that writes nothing and takes no lock.
+   */
+  async previewPublishAllLocales(
+    slug: string,
+    options: PublishAllSingleLocalesOptions = {}
+  ): Promise<SingleResult<PublishAllSinglePreview>> {
+    await refuseWriteIfRemovedFromCode("single", slug);
+    try {
+      const resolved = await this.resolvePublishTarget(slug, options);
+      if ("result" in resolved) return previewOf(resolved.result);
+      const { plan } = resolved;
+      const askedLanguages = await this.languagesAsStored(
+        this.adapter,
+        plan,
+        (plan.existingDoc as { status?: unknown }).status
+      );
+      const denied = await this.refusedInEachLanguage(
+        plan,
+        options,
+        askedLanguages
+      );
+      if (denied) return previewOf(denied);
+      // Resolved before the transaction, as the publish resolves them: they
+      // query the pooled connection.
+      const promoteGrants = await resolvedCallerGrants(
+        options.user,
+        options.authenticatedScope,
+        this.fieldRuleVisitor
+      );
+      const preview = await this.adapter.transaction(tx =>
+        this.previewIn(tx, plan, { options, promoteGrants })
+      );
+      return {
+        success: true,
+        statusCode: 200,
+        message: "What publishing every language does.",
+        data: { id: plan.existingDoc.id, ...preview },
+      };
+    } catch (error) {
+      if (error instanceof NextlyError) throw error;
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { reason: "single-publish-all-preview", single: slug },
       });
     }
   }
@@ -624,7 +725,7 @@ export class SinglePublishAllService extends BaseService {
     const judged = [
       ...pending,
       ...languagesGoingLiveAsStored(
-        plan,
+        publishableShape(plan),
         pending,
         { mainStatus, companion: statuses },
         new Set(this.localization?.locales.map(locale => locale.code) ?? [])
@@ -722,7 +823,12 @@ export class SinglePublishAllService extends BaseService {
       { where: this.whereEq("id", existingDoc.id), forUpdate: true }
     );
     if (!lockedRow) {
-      return { documentVanished: true, committed: false, eventRecorded: false };
+      return {
+        documentVanished: true,
+        committed: false,
+        eventRecorded: false,
+        languages: [],
+      };
     }
 
     // Each locale's committed `_status` BEFORE the bulk flip below, so a real
@@ -751,7 +857,7 @@ export class SinglePublishAllService extends BaseService {
     // merged ones below: merging shared values replaces a change's values,
     // never a change or its language.
     const alsoGoingLive = languagesGoingLiveAsStored(
-      plan,
+      publishableShape(plan),
       stored,
       { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
       new Set(this.localization?.locales.map(locale => locale.code) ?? [])
@@ -794,6 +900,18 @@ export class SinglePublishAllService extends BaseService {
       promoteGrants
     );
 
+    // What the publish does to each language, judged before it writes, as a
+    // preview of it judges it. Nothing pending is out of date by now: the
+    // shared values were judged above.
+    const languages = await this.languagesOf(
+      tx,
+      plan,
+      stored,
+      priorCompanionStatuses,
+      lockedRow.status,
+      new Map()
+    );
+
     // The components as they stood before the drafts are promoted, for each
     // language an event's previous state is built in: the promotion rewrites
     // the component tables that assembly would otherwise read.
@@ -802,6 +920,13 @@ export class SinglePublishAllService extends BaseService {
       plan,
       pending,
       priorCompanionStatuses
+    );
+    // Each language's translated values before the drafts are promoted, for
+    // the same reason: the promotion rewrites the companion rows too.
+    const priorCompanionValues = await this.companionValuesBeforePromotion(
+      tx,
+      plan,
+      pending
     );
 
     const written = await this.writePublishedStatuses(
@@ -858,6 +983,8 @@ export class SinglePublishAllService extends BaseService {
           mainRowTransitioned: written.mainRowTransitioned,
           priorCompanionStatuses,
           priorComponents,
+          priorCompanionValues,
+          promotedLocales: new Set(pending.map(draft => draft.locale)),
         })
       : false;
 
@@ -865,6 +992,7 @@ export class SinglePublishAllService extends BaseService {
       documentVanished: false,
       committed,
       eventRecorded,
+      languages,
     };
   }
 
@@ -956,16 +1084,21 @@ export class SinglePublishAllService extends BaseService {
       );
     }
 
-    return {
-      publishedRow: {
-        ...lockedRow,
-        ...(hasMainStatus
-          ? { status: "published", updated_at: publishNow }
-          : {}),
-        ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
-      },
-      mainRowTransitioned,
+    // The row as this publish left it, read back on the lock it holds: the
+    // promotion wrote the pending changes' shared values to it, so the locked
+    // row with the status laid over it would still carry the old ones, in the
+    // version the publish records and in every event's current state.
+    const publishedRow = (await tx.selectOne<Record<string, unknown>>(
+      singleMeta.tableName,
+      {
+        where: this.whereEq("id", existingDoc.id),
+      }
+    )) ?? {
+      ...lockedRow,
+      ...(hasMainStatus ? { status: "published", updated_at: publishNow } : {}),
+      ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
     };
+    return { publishedRow, mainRowTransitioned };
   }
 
   /**
@@ -1251,59 +1384,63 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * Each language's translated values before the drafts are promoted, keyed by
+   * locale, for the previous state of this publish's events. Read only for the
+   * languages whose pending change the promotion writes: every other
+   * language's companion row is left as it is, so the values read after the
+   * publish are the same. Empty when no event is recorded.
+   */
+  private async companionValuesBeforePromotion(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    pending: readonly PendingChange[]
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const { companion } = plan;
+    if (!plan.recordingEnabled || pending.length === 0) return new Map();
+    if (!companion || !plan.companionPublishable) return new Map();
+    // One read for every promoted language, however many there are: it runs
+    // while this publish holds the row's lock.
+    return readCompanionValuesByLocale(
+      this.adapter,
+      tx,
+      companion,
+      plan.existingDoc.id,
+      [
+        ...new Set(
+          pending.flatMap(draft =>
+            draft.locale === null ? [] : [draft.locale]
+          )
+        ),
+      ]
+    );
+  }
+
+  /**
    * Every language's pending change, where the Single keeps drafts, in the
-   * order their languages last saved. They are applied to one main row in this
-   * order, so where two changed one shared field the later save's value is
-   * the one left, whatever order the database returns the rows in.
+   * order their languages last saved.
    */
   private async pendingChanges(
     tx: TransactionContext | DrizzleAdapter,
     plan: PublishPlan
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
-    const repo = new VersionsRepository(tx);
-    const drafts = await repo.findAllWorkingDrafts(this.workingDraftRef(plan));
-    if (drafts.length < 2) return drafts;
-    const newest = await repo.newestVersionNoByLocale(
-      this.workingDraftRef(plan),
-      drafts.map(draft => draft.locale)
-    );
-    const savedAt = (draft: PendingChange) => newest.get(draft.locale) ?? 0;
-    return [...drafts].sort((a, b) => savedAt(a) - savedAt(b));
+    return pendingChangesInSaveOrder(tx, this.workingDraftRef(plan));
   }
 
   /**
-   * The pending changes as this publish writes them, each carrying the one
-   * shared state the publish leaves.
-   *
-   * Refused first, naming every field, when any change holds a shared value
-   * someone else published after it began: that is the out-of-date change a
-   * single publish refuses too, and nothing is merged on its behalf.
-   *
-   * Otherwise every change began from the live shared values, and each brings
-   * only the shared fields it edited itself, measured against its own base.
-   * Where two edited one field, the later edit's value is kept, and the
-   * publish is refused, naming the field, when history can no longer show
-   * which edit was later. Combining the
-   * edits of changes that are all current is not the field-by-field merge an
-   * out-of-date change was refused to avoid: no change here is behind live,
-   * so none of its values reverts another's. Every change is then written with
-   * the same shared state, so the order the rows are applied in no longer
-   * decides it.
+   * The Single's shared values as they are live, with its shared components,
+   * read on the caller's transaction: what the planner judges pending changes
+   * against. Null for a Single with no translations, where nothing is shared
+   * between languages.
    */
-  private async sharedValuesForPublish(
+  private async liveSharedDocument(
     tx: TransactionContext,
-    plan: PublishPlan,
-    pending: readonly PendingChange[],
-    options: PublishAllSingleLocalesOptions,
-    promoteGrants?: () => Promise<CallerGrants>
-  ): Promise<PendingChange[]> {
+    plan: PublishPlan
+  ): Promise<LiveSharedDocument | null> {
     const { companion, singleMeta, existingDoc } = plan;
     const reader = this.queryService;
-    if (!companion || !reader || pending.length === 0) return [...pending];
-    // Read under the lock this transaction took on the row, with its shared
-    // components.
-    const { live, shared, views, byHand } = await liveSharedSingle(
+    if (!companion || !reader) return null;
+    return liveSharedSingle(
       tx,
       {
         fieldGroupDataService: this.fieldGroupDataService,
@@ -1320,186 +1457,249 @@ export class SinglePublishAllService extends BaseService {
         translated: new Set(companion.localizedFields.map(f => f.name)),
       }
     );
-    const caller = { options, promoteGrants };
-    await this.assertNoneOutOfDate(
-      tx,
-      plan,
-      pending,
-      { live, shared, views },
-      caller
-    );
-    await this.assertTranslatedComponentsUnedited(
-      plan,
-      pending,
-      { live, views, byHand },
-      caller
-    );
-    // A translated component's shared parts are judged above but not merged:
-    // each language's component also holds its own translated values, so it
-    // goes live as that language saved it.
-    const merged = shared.filter(name => !byHand.has(name));
-    const state = await this.mergedSharedState(
-      tx,
-      plan,
-      pending,
-      { live, shared: merged },
-      caller
-    );
-    return pending.map(draft => withSharedState(draft, merged, state));
   }
 
   /**
-   * Refuse, naming each, a component kept per language whose shared parts
-   * (its instances, and the sub-fields it marks shared) a change edited, when
-   * more than one language publishes. Each language's promotion writes its
-   * own copy of the component, so whichever went last would undo the others'
-   * edit, and the edit can't be merged into another language's instances
-   * safely. Published one language at a time, the later one is out of date
-   * and its editor copies the shared parts by hand.
+   * The pending changes as this publish writes them, each carrying the one
+   * shared state the publish leaves, judged by the shared planner on the
+   * Single's live shared values, read under the lock this transaction took on
+   * the row.
    */
-  private async assertTranslatedComponentsUnedited(
-    plan: PublishPlan,
-    pending: readonly PendingChange[],
-    document: {
-      live: Record<string, unknown>;
-      views: SharedViews;
-      byHand: ReadonlySet<string>;
-    },
-    caller: SharedFieldsCaller
-  ): Promise<void> {
-    if (pending.length < 2) return;
-    const { live, views } = document;
-    const edited = [...document.byHand].filter(name =>
-      pending.some(draft => {
-        const values = snapshotRecord(draft.snapshot);
-        return (
-          name in values &&
-          differingFields([name], values, live, views).length > 0
-        );
-      })
-    );
-    if (edited.length === 0) return;
-    throw await this.sharedConflict(plan, caller, {
-      fields: edited,
-      live,
-      reason: "shared-edits-unmergeable",
-    });
-  }
-
-  /** Refuse, naming every field, when any change is behind live. */
-  private async assertNoneOutOfDate(
+  private async sharedValuesForPublish(
     tx: TransactionContext,
     plan: PublishPlan,
     pending: readonly PendingChange[],
-    document: {
-      live: Record<string, unknown>;
-      shared: readonly string[];
-      views: SharedViews;
-    },
+    options: PublishAllSingleLocalesOptions,
+    promoteGrants?: () => Promise<CallerGrants>
+  ): Promise<PendingChange[]> {
+    if (pending.length === 0) return [...pending];
+    const document = await this.liveSharedDocument(tx, plan);
+    if (!document) return [...pending];
+    const caller = { options, promoteGrants };
+    return sharedStateForPublish(
+      tx,
+      this.workingDraftRef(plan),
+      pending,
+      document,
+      refused => this.sharedConflict(plan, caller, refused)
+    );
+  }
+
+  /**
+   * Who is told the names of the shared fields a publish judges: the fields
+   * their read rules hide are counted, never named, in a refusal and in a
+   * preview alike.
+   */
+  private fieldNameReader(
+    plan: PublishPlan,
     caller: SharedFieldsCaller
-  ): Promise<void> {
-    const ref = this.workingDraftRef(plan);
-    const stale = new Set<string>();
-    for (const draft of pending) {
-      const fields = await outOfDateSharedFields(tx, {
-        ref,
-        locale: draft.locale,
-        shared: document.shared,
-        live: document.live,
-        pending: snapshotRecord(draft.snapshot),
-        views: document.views,
-      });
-      for (const name of fields) stale.add(name);
-    }
-    if (stale.size === 0) return;
-    throw await this.sharedConflict(plan, caller, {
-      fields: [...stale],
-      live: document.live,
-    });
+  ): FieldNameReader {
+    const { options } = caller;
+    return {
+      kind: "single",
+      slug: plan.slug,
+      user: options.user,
+      // A routed request runs trusted but still answers to the caller's field
+      // read rules.
+      overrideAccess: options.overrideAccess && !options.routeAuthorized,
+      authenticatedScope: options.authenticatedScope,
+      // Resolved before any transaction opened.
+      grants: caller.promoteGrants,
+    };
   }
 
   /** A refusal over shared fields, named as this caller may read them. */
   private sharedConflict(
     plan: PublishPlan,
     caller: SharedFieldsCaller,
-    refused: {
-      fields: string[];
-      live: Record<string, unknown>;
-      reason?: SharedFieldsConflictPublicData["reason"];
-    }
+    refused: Parameters<RefuseSharedFields>[0]
   ): Promise<NextlyError> {
-    const { options } = caller;
     return sharedValuesConflict({
-      kind: "single",
-      slug: plan.slug,
+      ...this.fieldNameReader(plan, caller),
       entryId: plan.existingDoc.id,
       ...refused,
-      user: options.user,
-      // A routed request runs trusted but still answers to the caller's field
-      // read rules.
-      overrideAccess: options.overrideAccess && !options.routeAuthorized,
-      authenticatedScope: options.authenticatedScope,
-      // Resolved before the transaction opened.
-      grants: caller.promoteGrants,
     });
   }
 
   /**
-   * The live shared values, each overlaid by the change that edited it last:
-   * where two changes edited one field, the one whose edit of THAT field is
-   * the later, from its language's version history, whichever language saved
-   * anything last. Later only where history proves it: a field whose edits it
-   * can no longer order is refused, naming it, and never decided by a guess.
+   * What a publish of every language does to each configured language, judged
+   * from the stored rows before anything is written, by the shared planner.
+   * Empty for a Single whose languages carry no status of their own.
    */
-  private async mergedSharedState(
+  private async languagesOf(
     tx: TransactionContext,
     plan: PublishPlan,
-    pending: readonly PendingChange[],
-    document: { live: Record<string, unknown>; shared: readonly string[] },
-    caller: SharedFieldsCaller
-  ): Promise<Record<string, unknown>> {
-    const { live, shared } = document;
-    const ref = this.workingDraftRef(plan);
-    const edits = new Map<string, SharedEdit[]>();
-    for (const draft of pending) {
-      const values = snapshotRecord(draft.snapshot);
-      const edited = await editedSharedFields(tx, {
-        ref,
-        locale: draft.locale,
-        shared,
-        pending: values,
-      });
-      const order = await sharedEditOrder(tx, {
-        ref,
-        locale: draft.locale,
-        fields: edited,
-        pending: values,
-      });
-      for (const name of edited) {
-        const time = order.get(name) ?? { after: 0, by: 0 };
-        edits.set(name, [
-          ...(edits.get(name) ?? []),
-          { value: values[name], ...time },
-        ]);
-      }
-    }
-    const state: Record<string, unknown> = Object.fromEntries(
-      shared.map(name => [name, live[name]])
+    stored: readonly PendingChange[],
+    prior: ReadonlyMap<string, string | null>,
+    /** The main row's status before the publish. */
+    mainStatus: unknown,
+    outOfDate: NamedVerdict["outOfDate"]
+  ): Promise<LanguageOutcome[]> {
+    const { companion } = plan;
+    const localization = this.localization;
+    if (!companion || !plan.companionPublishable || !localization) return [];
+    const configured = localization.locales.map(locale => locale.code);
+    // Whether each language has content of its own, as the translation
+    // overview judges it, so the two never disagree.
+    const row: Record<string, unknown> = { id: plan.existingDoc.id };
+    await populateTranslationStatus({
+      db: tx.getDrizzle<
+        Parameters<typeof populateTranslationStatus>[0]["db"]
+      >(),
+      companionTable: companion.table,
+      localizedFields: companion.localizedFields,
+      rows: [row],
+      locales: configured,
+      defaultLocale: localization.defaultLocale,
+      hasStatus: companion.hasStatus,
+      // A publishable companion is one that is there.
+      readiness: "ready",
+    });
+    const overview = (row._translations ?? {}) as Record<
+      string,
+      { translated?: boolean } | undefined
+    >;
+    // Content of its own as the publish leaves it: a language whose pending
+    // change goes live has what that change holds, by the overview's rule (a
+    // translated value that isn't blank); every other one keeps what it has.
+    const pendingContent = new Map(
+      stored.flatMap(draft => {
+        if (draft.locale === null) return [];
+        const values = snapshotRecord(draft.snapshot);
+        return [
+          [
+            draft.locale,
+            companion.localizedFields.some(f => !isBlank(values[f.name])),
+          ] as const,
+        ];
+      })
     );
-    const unordered: string[] = [];
-    for (const [name, candidates] of edits) {
-      const winner = latestEdit(candidates);
-      if (winner) state[name] = winner.value;
-      else unordered.push(name);
+    return languageOutcomes({
+      configured,
+      defaultLocale: localization.defaultLocale,
+      pending: new Set(stored.map(draft => draft.locale)),
+      outOfDate,
+      prior,
+      mainStatus,
+      hasOwnContent: locale =>
+        locale === localization.defaultLocale ||
+        (pendingContent.get(locale) ?? overview[locale]?.translated === true),
+      // The chain a read of the language resolves through, so the language
+      // named is the one its readers see.
+      fallbackChain: locale =>
+        resolveLocaleChain(localization, locale, undefined) ?? [locale],
+    });
+  }
+
+  /**
+   * What publishing every language would do, read on one transaction that
+   * writes nothing and locks nothing, judged in the order the publish judges
+   * it: the planner's verdict on the shared values, then, where that refuses
+   * nothing, the promotion's own gate on what the write would leave. Every
+   * refusal is named as the caller may read it.
+   */
+  private async previewIn(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    caller: SharedFieldsCaller
+  ): Promise<Omit<PublishAllSinglePreview, "id">> {
+    const prior =
+      plan.companion && plan.companionPublishable
+        ? await this.readPriorCompanionStatuses(
+            tx,
+            plan.companion,
+            plan.existingDoc.id,
+            plan.slug
+          )
+        : new Map<string, string | null>();
+    const mainRow =
+      (await tx.selectOne<Record<string, unknown>>(plan.singleMeta.tableName, {
+        where: this.whereEq("id", plan.existingDoc.id),
+      })) ?? plan.existingDoc;
+    const stored = await this.pendingChanges(tx, plan);
+    const document =
+      stored.length > 0 ? await this.liveSharedDocument(tx, plan) : null;
+    const reader = this.fieldNameReader(plan, caller);
+    const nameIn =
+      (live: Record<string, unknown>) => (fields: readonly string[]) =>
+        readableFieldNames(reader, fields, live);
+    const verdict = document
+      ? await judgeSharedValues(
+          tx,
+          this.workingDraftRef(plan),
+          stored,
+          document
+        )
+      : null;
+    const named: NamedVerdict = verdict
+      ? await nameVerdict(verdict, nameIn(document!.live))
+      : { outOfDate: new Map(), blockers: [] };
+    const blockers = [...named.blockers];
+    // The gate runs only where the shared values refuse nothing, as in the
+    // publish, which refuses on them first.
+    if (named.outOfDate.size === 0 && blockers.length === 0) {
+      blockers.push(
+        ...(await this.promotionBlockersOf(
+          tx,
+          plan,
+          mainRow,
+          [
+            ...(verdict ? withVerdictState(stored, verdict) : stored),
+            ...languagesGoingLiveAsStored(
+              publishableShape(plan),
+              stored,
+              { mainStatus: mainRow.status, companion: prior },
+              new Set(this.localization?.locales.map(l => l.code) ?? [])
+            ),
+          ],
+          caller,
+          nameIn(document?.live ?? mainRow)
+        ))
+      );
     }
-    if (unordered.length > 0) {
-      throw await this.sharedConflict(plan, caller, {
-        fields: unordered,
-        live,
-        reason: "shared-edits-unordered",
-      });
+    return {
+      languages: await this.languagesOf(
+        tx,
+        plan,
+        stored,
+        prior,
+        mainRow.status,
+        named.outOfDate
+      ),
+      blockers,
+    };
+  }
+
+  /**
+   * What the promotion's gate would refuse, asked as the publish asks it, as
+   * blockers rather than a refusal. A refusal that names no field is not one
+   * the preview can report, so it is thrown as the publish would throw it.
+   */
+  private async promotionBlockersOf(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    mainRow: Record<string, unknown>,
+    judged: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
+    caller: SharedFieldsCaller,
+    name: (
+      fields: readonly string[]
+    ) => Promise<{ named: string[]; hidden: number }>
+  ): Promise<PublishAllBlocker[]> {
+    try {
+      await this.assertPendingChangesMayBePromoted(
+        tx,
+        plan,
+        mainRow,
+        judged,
+        caller.options,
+        caller.promoteGrants
+      );
+      return [];
+    } catch (error) {
+      const issues = promotionIssuesOf(error);
+      if (!issues) throw error;
+      return promotionBlockers(issues, name);
     }
-    return state;
   }
 
   private workingDraftRef(plan: PublishPlan) {
@@ -1686,11 +1886,14 @@ export class SinglePublishAllService extends BaseService {
    * Append this publish's outbox events on the publish transaction, so they
    * commit with the status write and never survive a rollback.
    *
-   * Three kinds, matching what a consumer of the ordinary write path already
-   * expects: one `single.updated` for the write itself; one untagged
+   * Matching what a consumer of the ordinary write path already expects: one
+   * untagged `single.updated` for the write itself; one untagged
    * `single.published` when the main row transitioned and no default-locale
-   * companion event already encodes it; and one locale-tagged
-   * `single.published` per translation that actually went live.
+   * companion event already encodes it; and, for each translation whose live
+   * content changed, the locale-tagged events a publish of that one language
+   * records (`single.updated`, with `single.published` where it went live).
+   * The default language's write is then described by both an untagged and a
+   * tagged `single.updated`.
    *
    * The untagged main event is SUPPRESSED when the default locale's own
    * companion row transitions here, because that locale-tagged event stands in
@@ -1708,6 +1911,10 @@ export class SinglePublishAllService extends BaseService {
       priorCompanionStatuses: Map<string, string | null>;
       /** Each language's components before promotion, keyed by locale ("" for none). */
       priorComponents: Map<string, Record<string, unknown>>;
+      /** Each language's translated values before promotion, keyed by locale. */
+      priorCompanionValues: Map<string, Record<string, unknown>>;
+      /** The languages whose pending change this publish promoted. */
+      promotedLocales: ReadonlySet<string | null>;
     }
   ): Promise<boolean> {
     const {
@@ -1754,6 +1961,7 @@ export class SinglePublishAllService extends BaseService {
       webhookFields,
       resource,
       priorComponents: args.priorComponents,
+      priorCompanionValues: args.priorCompanionValues,
       // The untagged publish event is emitted only when the main row really
       // transitioned AND no default-locale companion event already encodes it.
       emitPublished:
@@ -1770,6 +1978,8 @@ export class SinglePublishAllService extends BaseService {
       webhookFields,
       resource,
       priorComponents: args.priorComponents,
+      priorCompanionValues: args.priorCompanionValues,
+      promotedLocales: args.promotedLocales,
     });
 
     return documentRecorded || localeRecorded;
@@ -1825,6 +2035,7 @@ export class SinglePublishAllService extends BaseService {
       resource: WebhookResource;
       emitPublished: boolean;
       priorComponents: Map<string, Record<string, unknown>>;
+      priorCompanionValues: Map<string, Record<string, unknown>>;
     }
   ): Promise<boolean> {
     const { plan, lockedRow, publishedRow, webhookFields, resource } = args;
@@ -1847,11 +2058,15 @@ export class SinglePublishAllService extends BaseService {
       defaultCompanionValues,
       defaultLocale
     );
+    // The default language as readers saw it before: its translated values
+    // read before the promotion rewrote them, where it did.
     const previous = await this.buildEventDocument(
       tx,
       plan,
       lockedRow,
-      defaultCompanionValues,
+      (defaultLocale !== undefined
+        ? args.priorCompanionValues.get(defaultLocale)
+        : undefined) ?? defaultCompanionValues,
       defaultLocale,
       undefined,
       args.priorComponents.get(defaultLocale ?? "")
@@ -1880,8 +2095,11 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * One locale-tagged `single.published` per translation that actually went
-   * live.
+   * The locale-tagged events of each translation whose live content this
+   * publish changed, as a publish of that one language records them: a
+   * `single.updated` and a `single.published` for a translation that went
+   * live, and a `single.updated` for one already live whose pending change
+   * went live.
    *
    * The bulk flip moved every companion locale in one statement, but a
    * subscriber watching a single language needs its own event, carrying that
@@ -1902,6 +2120,8 @@ export class SinglePublishAllService extends BaseService {
       webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
       resource: WebhookResource;
       priorComponents: Map<string, Record<string, unknown>>;
+      priorCompanionValues: Map<string, Record<string, unknown>>;
+      promotedLocales: ReadonlySet<string | null>;
     }
   ): Promise<boolean> {
     const {
@@ -1917,151 +2137,142 @@ export class SinglePublishAllService extends BaseService {
     );
     let recorded = false;
 
-    for (const [locale, priorStatus] of priorCompanionStatuses) {
-      if (configuredLocales.size > 0 && !configuredLocales.has(locale))
-        continue;
-      if (priorStatus === "published") continue;
+    // The languages this publish tells: those that went live, and those
+    // already live whose pending change went live, a change that creates the
+    // language's translation row included. Each one's status before is read
+    // as the outcomes read it.
+    const defaultLocale = this.localization?.defaultLocale ?? "";
+    const candidates = new Set([
+      ...priorCompanionStatuses.keys(),
+      ...[...args.promotedLocales].filter(
+        (locale): locale is string => locale !== null
+      ),
+    ]);
+    const told = [...candidates]
+      .filter(
+        locale => configuredLocales.size === 0 || configuredLocales.has(locale)
+      )
+      .map(
+        locale =>
+          [
+            locale,
+            languageStatusBefore(locale, {
+              defaultLocale,
+              prior: priorCompanionStatuses,
+              mainStatus: lockedRow.status,
+            }),
+          ] as const
+      )
+      .filter(
+        ([locale, priorStatus]) =>
+          priorStatus !== "published" || args.promotedLocales.has(locale)
+      );
+    // Each language's translated values as the publish left them, in one read
+    // for all of them: it runs while this publish holds the row's lock. As
+    // they stood before it, the promotion rewrote them where a pending change
+    // was promoted, and left them alone where none was.
+    const after = plan.companion
+      ? await readCompanionValuesByLocale(
+          this.adapter,
+          tx,
+          plan.companion,
+          plan.existingDoc.id,
+          told.map(([locale]) => locale)
+        )
+      : new Map<string, Record<string, unknown>>();
 
-      // Publishing changes only the status, so this language's translatable
-      // values and its component subtrees are identical on both sides — read
-      // once and used for both.
-      const localeValues = plan.companion
-        ? await readCompanionLocaleValues(
-            this.adapter,
-            tx,
-            plan.companion,
-            plan.existingDoc.id,
-            locale
-          )
-        : {};
-      const localeRecorded = await recordMutationEvent(tx, {
-        type: "single.published",
-        resource: { ...resource, locale },
-        data: await this.buildEventDocument(
-          tx,
-          plan,
-          publishedRow,
-          localeValues,
-          locale,
-          "published"
-        ),
-        previous: await this.buildEventDocument(
-          tx,
-          plan,
-          lockedRow,
-          localeValues,
-          locale,
-          priorStatus ?? undefined,
-          args.priorComponents.get(locale)
-        ),
-        fields: webhookFields,
-        actor: plan.actor,
-      });
-      recorded = localeRecorded || recorded;
+    for (const [locale, priorStatus] of told) {
+      const localeValues = after.get(locale) ?? {};
+      const data = await this.buildEventDocument(
+        tx,
+        plan,
+        publishedRow,
+        localeValues,
+        locale,
+        "published"
+      );
+      const previous = await this.buildEventDocument(
+        tx,
+        plan,
+        lockedRow,
+        args.priorCompanionValues.get(locale) ?? localeValues,
+        locale,
+        typeof priorStatus === "string" ? priorStatus : undefined,
+        args.priorComponents.get(locale)
+      );
+      // What a publish of this one language records: the write, and, where
+      // the language went live, its move to published.
+      const types =
+        priorStatus === "published"
+          ? (["single.updated"] as const)
+          : (["single.updated", "single.published"] as const);
+      for (const type of types) {
+        const localeRecorded = await recordMutationEvent(tx, {
+          type,
+          resource: { ...resource, locale },
+          data,
+          previous,
+          fields: webhookFields,
+          actor: plan.actor,
+        });
+        recorded = localeRecorded || recorded;
+      }
     }
     return recorded;
   }
 }
 
-/** One language's pending change, as the versions store holds it. */
-type PendingChange = Awaited<
-  ReturnType<VersionsRepository["findAllWorkingDrafts"]>
->[number];
-
-/** Each language's status as committed before this publish moved it. */
-interface PriorStatuses {
-  /** The main row's, which is the whole document's for an unlocalized Single. */
-  readonly mainStatus: unknown;
-  /** Each stored translation's `_status`, keyed by locale. */
-  readonly companion: ReadonlyMap<string, string | null>;
+/**
+ * The fields a promotion's gate refusal lists, or undefined for any other
+ * error: the gate refuses as a validation error, one issue per field.
+ */
+function promotionIssuesOf(error: unknown): PromotionIssue[] | undefined {
+  if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR") {
+    return undefined;
+  }
+  const errors = (error.publicData as { errors?: unknown } | undefined)?.errors;
+  if (!Array.isArray(errors)) return undefined;
+  const issues = errors.flatMap(issue =>
+    issue &&
+    typeof issue === "object" &&
+    typeof (issue as { path?: unknown }).path === "string"
+      ? [
+          {
+            path: (issue as { path: string }).path,
+            code:
+              typeof (issue as { code?: unknown }).code === "string"
+                ? (issue as { code: string }).code
+                : "",
+          },
+        ]
+      : []
+  );
+  return issues.length > 0 ? issues : undefined;
 }
 
 /**
- * The languages this publish judges as stored, beside its pending changes:
- * those it puts live from their stored rows alone, and, when a pending change
- * may rewrite the shared values beneath them, those already live too. A
- * language that was live and is not touched was judged as published when it
- * went live, and a pending change is judged on its own account.
- *
- * The main row is one of them where nothing else carries it: shared content
- * goes live with the main row's status even where no translation is stored,
- * as on a Single whose only edits were shared ones, so it is judged then too.
+ * A publish's early answer as its preview's: a refusal as it is, and a Single
+ * with nothing to publish as a preview in which nothing moves.
  */
-function languagesGoingLiveAsStored(
-  plan: PublishPlan,
-  pending: ReadonlyArray<{ locale: string | null }>,
-  prior: PriorStatuses,
-  /**
-   * The languages the app configures. A removed language's row can outlive
-   * it, and no request can reach it to repair, so it is not judged.
-   */
-  configured: ReadonlySet<string>
-): { locale: string | null; snapshot: Record<string, never> }[] {
-  const held = new Set(pending.map(change => change.locale));
-  // A pending change can write shared values to the main row, which every
-  // language's document reads, so a language already live is changed by it as
-  // surely as one going live: with anything pending, every stored translation
-  // is judged.
-  const changesShared = pending.length > 0;
-  const translations =
-    plan.companion && plan.companionPublishable
-      ? [...prior.companion]
-          .filter(
-            ([locale, status]) =>
-              !held.has(locale) &&
-              (configured.size === 0 || configured.has(locale)) &&
-              (changesShared || status !== "published")
-          )
-          .map(([locale]) => ({ locale, snapshot: {} }))
-      : [];
-  // Each of these is judged on the main row too, so it carries it already.
-  if (translations.length > 0 || pending.length > 0) return translations;
-  if (!plan.hasMainStatus || prior.mainStatus === "published") return [];
-  return [{ locale: null, snapshot: {} }];
+function previewOf(
+  result: SingleResult<PublishAllSingleResult>
+): SingleResult<PublishAllSinglePreview> {
+  const { data, ...rest } = result;
+  return data
+    ? { ...rest, data: { id: data.id, languages: [], blockers: [] } }
+    : rest;
 }
 
-/** A pending change carrying the one shared state a publish of every language leaves. */
+/** How the Single carries its languages' statuses, as the planner reads it. */
+function publishableShape(plan: PublishPlan): PublishableShape {
+  return {
+    hasMainStatus: plan.hasMainStatus,
+    translationsPublishable: !!plan.companion && plan.companionPublishable,
+  };
+}
+
 /** Who publishes, for the field read rules a refusal answers to. */
 interface SharedFieldsCaller {
   options: PublishAllSingleLocalesOptions;
   promoteGrants?: () => Promise<CallerGrants>;
-}
-
-/** One language's edit of a shared field, and when it was made. */
-interface SharedEdit extends SharedEditTime {
-  value: unknown;
-}
-
-/**
- * The edit history proves later than every edit of another value, or null
- * when none is: two edits whose times overlap can't be ordered.
- */
-function latestEdit(edits: readonly SharedEdit[]): SharedEdit | null {
-  return (
-    edits.find(edit =>
-      edits.every(
-        other =>
-          other === edit ||
-          sameSharedValue(other.value, edit.value) ||
-          edit.after >= other.by
-      )
-    ) ?? null
-  );
-}
-
-function withSharedState(
-  draft: PendingChange,
-  shared: readonly string[],
-  state: Record<string, unknown>
-): PendingChange {
-  const values = snapshotRecord(draft.snapshot);
-  return {
-    ...draft,
-    snapshot: {
-      ...values,
-      ...Object.fromEntries(
-        shared.filter(name => name in values).map(name => [name, state[name]])
-      ),
-    },
-  };
 }

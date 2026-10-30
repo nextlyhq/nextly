@@ -826,6 +826,9 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // definition mutation's settings grants. The service checks `publish-{slug}`
   // on top, which no route-level gate can express.
   "publishAllSingleLocales",
+  // What publishing every language would do, without doing it. A read, but
+  // admitted on the publish grant as the publish is (LIFECYCLE_ROUTE_ACTIONS).
+  "previewPublishAllSingleLocales",
   // Discarding the working draft reverts the document to its live row. Left out
   // of the read branch below so it resolves to `update-{slug}`: a caller who may
   // not update the document may not throw away its pending edits either.
@@ -864,6 +867,9 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // Marking a version seen runs the same document gate as reading it.
   "markEntryVersionSeen",
   "markSingleVersionSeen",
+  // The preview of a publish of every language runs the publish's own gate,
+  // which reads roles as the publish's does.
+  "previewPublishAllSingleLocales",
   "listEntries",
   "getEntry",
   "countEntries",
@@ -998,6 +1004,7 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   publishAllLocales: "publish",
   unpublishAllLocales: "unpublish",
   publishAllSingleLocales: "publish",
+  previewPublishAllSingleLocales: "publish",
 };
 
 /**
@@ -2426,6 +2433,9 @@ const SESSION_PRIVATE_METHODS = new Set([
   // the list nor the refusal is shared between callers.
   "listEntryEvents",
   "listSingleEvents",
+  // What a publish of every language would do is told only to a caller who
+  // may publish, naming only the fields they may read.
+  "previewPublishAllSingleLocales",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from

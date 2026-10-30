@@ -823,11 +823,38 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const published = unwrapServiceResult<{
         id: string;
         status?: "published";
+        languages?: unknown[];
       }>(result, { slug });
       return respondAction(result.message ?? "All languages published.", {
         slug,
         ...published,
       });
+    },
+  },
+
+  previewPublishAllSingleLocales: {
+    // What publishing every language would do, language by language, without
+    // doing it. Asked as the publish is: the service judges the publish
+    // permission and rule in each language it would put live, and names only
+    // the fields the caller may read.
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const result = await svc.entry.previewPublishAllLocales(slug, {
+        user: readAuthenticatedUser(),
+        overrideAccess: false,
+        // The route admitted this read on the `publish-{slug}` grant alone,
+        // so it attests no gate, as the publish's route attests none.
+        routeAuthorized: false,
+        authenticatedScope: readAuthenticatedScope(),
+      });
+      const preview = unwrapServiceResult<{
+        id: string;
+        languages: unknown[];
+        blockers: unknown[];
+      }>(result, { slug });
+      // One caller's answer: who may publish, and which fields they may read,
+      // decide it, so no shared cache may hand it to anyone else.
+      return withSessionCacheHeaders(respondData({ slug, ...preview }));
     },
   },
 
