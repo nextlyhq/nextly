@@ -177,6 +177,7 @@ import {
   liveFieldGroupReadPass,
   sharedPerTransaction,
 } from "../../field-groups/live-read-access";
+import { isMissingTable } from "../../field-groups/migration/session";
 import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import {
@@ -228,6 +229,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionFoundMissing,
   companionNotReadyMessage,
   isCompanionReady,
   resolveCompanionReadiness,
@@ -6494,6 +6496,19 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     } catch (error: unknown) {
+      // A translation table dropped after its `ready` verdict was remembered,
+      // answered as the update answers it: only for a create that did not
+      // commit.
+      const companionGone = await this.companionGoneResult(
+        {
+          collectionName: params.collectionName,
+          locale: params.locale,
+          committed: committedWrite,
+          defaultMessage: "Failed to create entry",
+        },
+        error
+      );
+      if (companionGone) return companionGone;
       // Legacy per-kind override messages ("Duplicate value: ...",
       // "Missing required field", etc.) are dropped: the new mapping uses
       // the §13.8-compliant generic strings from fromDatabaseError so the
@@ -11946,6 +11961,21 @@ export class CollectionMutationService extends BaseService {
           this.dialect
         );
       }
+      // A translation table dropped after its `ready` verdict was remembered
+      // fails the write at its first statement on it: answered, after the
+      // rollback, as a write to a table that is not there is answered. Only
+      // for a write that did not commit; a later step's failure keeps the
+      // committed write's answer below.
+      const companionGone = await this.companionGoneResult(
+        {
+          collectionName: params.collectionName,
+          locale: params.locale,
+          committed: committedWrite,
+          defaultMessage: "Failed to update entry",
+        },
+        error
+      );
+      if (companionGone) return companionGone;
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.
       // Pass dialect explicitly so the helper can normalise raw driver errors.
@@ -11969,6 +11999,77 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The answer for a write that `error` failed because the collection's translation table is
+   * missing (see {@link companionGoneRefusal}), or `undefined` for any other failure and for a
+   * write that committed, whose later failure keeps its own answer.
+   */
+  private async companionGoneResult(
+    write: {
+      collectionName: string;
+      locale: string | undefined;
+      committed: boolean;
+      defaultMessage: string;
+    },
+    error: unknown
+  ): Promise<CollectionServiceResult | undefined> {
+    if (write.committed) return undefined;
+    const refusal = await this.companionGoneRefusal(
+      write.collectionName,
+      write.locale,
+      error
+    );
+    return refusal
+      ? errorToServiceResult(
+          refusal,
+          { defaultMessage: write.defaultMessage },
+          this.dialect
+        )
+      : undefined;
+  }
+
+  /**
+   * The refusal for a write that `error` failed because the collection's translation table is
+   * missing (`companionFoundMissing`, which forgets the table's `ready` verdict), or `undefined`
+   * for any other failure. The same 409, with the same remedy, as the check before a write gives
+   * a table it finds is not there. Read after the transaction, on a pooled connection.
+   */
+  private async companionGoneRefusal(
+    collectionName: string,
+    locale: string | undefined,
+    error: unknown
+  ): Promise<NextlyError | undefined> {
+    if (!this.localization) return undefined;
+    // Classified before anything is read: a failure that is no missing table,
+    // a lost connection among them, keeps its own answer rather than meeting
+    // a second failure on the metadata read.
+    if (!isMissingTable(error, this.adapter.dialect)) return undefined;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (
+      !companion ||
+      !companionFoundMissing(
+        this.adapter,
+        this.adapter.dialect,
+        companion.companionTableName,
+        error
+      )
+    ) {
+      return undefined;
+    }
+    return NextlyError.conflict({
+      reason: "state",
+      message: companionNotReadyMessage("collection"),
+      logContext: {
+        cause: "localized-write-without-companion",
+        collection: collectionName,
+        locale: resolveRequestedLocale(this.localization, locale),
+        defaultLocale: this.localization.defaultLocale,
+        companionTable: companion.companionTableName,
+      },
+    });
   }
 
   /**

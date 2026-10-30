@@ -9,6 +9,7 @@ import type { WidgetQuery } from "nextly/config";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import { useWidgetQueries, type WidgetQueryRequest } from "./useWidgetQueries";
 import { fetchWidgetBatch, type StreamedSlot } from "./widget-query-stream";
 
@@ -21,6 +22,17 @@ function wrapper({ children }: { children: ReactNode }) {
     defaultOptions: { queries: { retryDelay: 0, gcTime: 0 } },
   });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+/** One client for a whole case, and a wrapper that provides it on every render. */
+function ownClient() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retryDelay: 0 } },
+  });
+  const own = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  return { client, own };
 }
 
 const count = (source: string): WidgetQuery => ({ source, op: "count" });
@@ -94,6 +106,60 @@ describe("useWidgetQueries, streamed", () => {
     await answer.started;
 
     expect(fetchBatch.mock.calls[0]?.[1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("is asked again, once, under a new layout answer's token, keeping its numbers on screen meanwhile", async () => {
+    // Not `wrapper`, which makes a new client each time it renders, and `rerender` renders it:
+    // this case keeps one cache across the layout answers it draws.
+    const { client, own } = ownClient();
+    const first = heldAnswer();
+    const { result, rerender } = renderHook(
+      ({ token }: { token: string }) => useWidgetQueries(REQUESTS, token),
+      { wrapper: own, initialProps: { token: "load-1" } }
+    );
+    await first.started;
+    expect(fetchBatch.mock.calls[0]?.[1].readAheadToken).toBe("load-1");
+    await first.end([total(1), total(2)]);
+    await waitFor(() => expect(result.current.slots.slow).toEqual(total(2)));
+
+    // The same layout answer drawn again asks nothing: a request made here would be the second
+    // call, and the next answer's request would not be.
+    rerender({ token: "load-1" });
+
+    // A later layout read is another load: the batch is asked again, under its token...
+    const second = heldAnswer();
+    rerender({ token: "load-2" });
+    await second.started;
+    expect(fetchBatch).toHaveBeenCalledTimes(2);
+    expect(fetchBatch.mock.calls[1]?.[1].readAheadToken).toBe("load-2");
+    // ...and the cards keep the answer they showed until each new one arrives, as a refetch keeps
+    // them, rather than drawing as busy cards with nothing in them.
+    expect(result.current.slots.fast).toEqual(total(1));
+    expect(result.current.slots.slow).toEqual(total(2));
+
+    await second.send(0, total(10));
+    await waitFor(() => expect(result.current.slots.fast).toEqual(total(10)));
+    expect(result.current.slots.slow).toEqual(total(2));
+    await second.end([total(10), total(20)]);
+    await waitFor(() => expect(result.current.slots.slow).toEqual(total(20)));
+    // Once: the new token asked the batch one time.
+    expect(fetchBatch).toHaveBeenCalledTimes(2);
+    client.clear();
+  });
+
+  it("sends no token when it is given none, whatever layout answer the cache holds", async () => {
+    // Not `wrapper`'s client: this case writes a layout answer into the cache, which the batch
+    // must not read: its token is the one it is given, the one its key carries.
+    const { client, own } = ownClient();
+    client.setQueryData(DASHBOARD_LAYOUT_KEY, {
+      readAheadToken: "load-cached",
+    });
+    const answer = heldAnswer();
+    renderHook(() => useWidgetQueries(REQUESTS), { wrapper: own });
+    await answer.started;
+
+    expect(fetchBatch.mock.calls[0]?.[1]).not.toHaveProperty("readAheadToken");
+    client.clear();
   });
 
   it("keeps the numbers on screen through a refetch until each card's new one arrives", async () => {

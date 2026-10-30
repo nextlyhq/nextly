@@ -24,7 +24,7 @@ function isExternalHref(href: string): boolean {
  * window), or a link aimed at another browsing context. Intercepting these
  * would swallow navigation the user explicitly asked for.
  */
-function prefersNativeNavigation(
+export function prefersNativeNavigation(
   event: React.MouseEvent<HTMLAnchorElement>,
   target: string | undefined
 ): boolean {

@@ -107,6 +107,7 @@ import {
   useMeasuredTier,
   type RowsLayout,
 } from "./frame/tier";
+import { CardTitleCountContext, titleCountSpoken } from "./frame/title-count";
 
 export interface WidgetCardProps {
   /** The card's subject, always rendered, in every state, once. */
@@ -153,10 +154,20 @@ export interface WidgetCardProps {
   /** A stats card's cell labels, which its loading skeleton draws under each held value. */
   skeletonCells?: readonly string[];
   /**
-   * The widget takes its card off the dashboard while its answer is empty, rather than saying
-   * so; customise mode still shows it, marked, so it can be moved or removed.
+   * The widget hides while empty and the layout read found this card empty, so the card is off
+   * the dashboard for this visit; customise mode still shows it, marked, so it can be moved or
+   * removed. Decided before the first paint and held (`hidden-while-empty`), never from an answer
+   * that arrives after it: a card that left, or joined, the page then would move every card after
+   * it. A card of such a widget not taken off draws its own state, its empty one included.
    */
-  hidesWhenEmpty?: boolean;
+  hiddenWhileEmpty?: boolean;
+  /**
+   * The widget hides while empty and the layout read cannot answer it ahead (a widget of the
+   * `registerWidget` or `contributes.admin.widgets` channel, named by the layout's
+   * `hiddenWhenAnswerEmpty`), so the card is taken off the dashboard while its own answer is
+   * empty, as it is drawn; customise mode still shows it, marked.
+   */
+  hidesWhenAnswerEmpty?: boolean;
   /**
    * The widget's own `shows` said no for this person: the card is taken off the dashboard as one
    * hidden while empty is, and customise mode shows it marked, so it can be removed.
@@ -234,17 +245,24 @@ function bodyClassName(
 
 /**
  * Whether the card is off the dashboard and why: its widget's own `shows` said no for this person,
- * or it hides when empty and is. Taken out at rest, and shown marked with that reason while
- * customising, so it can still be moved or removed.
+ * or it hides while empty and was found so when the layout was read (`hiddenWhileEmpty`), or by
+ * its own answer, for a widget the layout read cannot answer (`hidesWhenAnswerEmpty`). Taken out
+ * at rest, and shown marked with that reason while customising, so it can still be moved or
+ * removed.
  */
 function hiddenFlags(
-  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown">,
+  props: Pick<
+    WidgetCardProps,
+    "hiddenWhileEmpty" | "hidesWhenAnswerEmpty" | "notShown"
+  >,
   state: CardState,
   customizing: boolean
 ) {
   const notShown = props.notShown === true;
+  const emptyByOwnAnswer =
+    props.hidesWhenAnswerEmpty === true && state.kind === "empty";
   const hidden =
-    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+    notShown || props.hiddenWhileEmpty === true || emptyByOwnAnswer;
   return {
     hiddenEmpty: hidden && !customizing,
     markedHidden: hidden && customizing,
@@ -260,7 +278,10 @@ function hiddenFlags(
  * its quick control is out of reach, how its body is marked, and whether its footer link shows.
  */
 function frameFlags(
-  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown" | "link">,
+  props: Pick<
+    WidgetCardProps,
+    "hiddenWhileEmpty" | "hidesWhenAnswerEmpty" | "notShown" | "link"
+  >,
   state: CardState,
   modes: {
     customizing: boolean;
@@ -299,6 +320,9 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
   const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
+  // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
+  // stops being drawn unmounts, and its unmount withdraws the count.
+  const [titleCount, setTitleCount] = useState<number | undefined>(undefined);
   const given = props.state ?? READY;
   const state = shownState(given, reported);
   const drawsBody = showsBody(given);
@@ -338,6 +362,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 titleId={titleId}
                 subtitleId={subtitleId}
                 title={title}
+                titleCount={titleCount}
                 subtitle={props.subtitle}
                 leading={props.leading}
                 quick={props.quick}
@@ -356,24 +381,22 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                   showsBody(state)
                 )}
               >
-                {flags.markedHidden ? (
-                  <p
-                    className="mb-2 text-xs font-medium text-muted-foreground"
-                    data-testid="hidden-while-empty"
-                  >
-                    {flags.hiddenBecause}
-                  </p>
-                ) : null}
+                <HiddenWhileEmptyNote
+                  marked={flags.markedHidden}
+                  because={flags.hiddenBecause}
+                />
                 <StateBody state={state} title={title} props={props} />
                 {/* The body stays mounted while it reports a state, so the data it reads keeps
                   arriving; what it renders then is its report, which draws nothing. */}
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
-                    <CardFooterSlotProvider value={footerSlot}>
-                      <CardFooterClaimProvider value={footer.claims}>
-                        {props.children}
-                      </CardFooterClaimProvider>
-                    </CardFooterSlotProvider>
+                    <CardTitleCountContext.Provider value={setTitleCount}>
+                      <CardFooterSlotProvider value={footerSlot}>
+                        <CardFooterClaimProvider value={footer.claims}>
+                          {props.children}
+                        </CardFooterClaimProvider>
+                      </CardFooterSlotProvider>
+                    </CardTitleCountContext.Provider>
                   </CardStateReportProvider>
                 ) : null}
               </CardContent>
@@ -388,6 +411,28 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
         </AnswerSizeContext.Provider>
       </ListDensityContext.Provider>
     </CardTierContext.Provider>
+  );
+}
+
+/**
+ * The line above the body that says why a card is hidden from the dashboard while it is empty,
+ * drawn while it is (`frameFlags`); nothing otherwise.
+ */
+function HiddenWhileEmptyNote({
+  marked,
+  because,
+}: {
+  marked: boolean;
+  because: string | undefined;
+}) {
+  if (!marked) return null;
+  return (
+    <p
+      className="mb-2 text-xs font-medium text-muted-foreground"
+      data-testid="hidden-while-empty"
+    >
+      {because}
+    </p>
   );
 }
 
@@ -531,6 +576,7 @@ function WidgetCardHeader({
   titleId,
   subtitleId,
   title,
+  titleCount,
   subtitle,
   leading,
   quick,
@@ -540,6 +586,8 @@ function WidgetCardHeader({
   titleId: string;
   subtitleId: string;
   title: string;
+  /** A count the body shows beside the title, muted; read after it as ", N items". */
+  titleCount?: number | undefined;
   subtitle?: string | undefined;
   leading?: ReactNode;
   quick?: ReactNode;
@@ -563,9 +611,21 @@ function WidgetCardHeader({
         <h2
           id={titleId}
           title={title}
-          className="truncate text-sm font-semibold leading-5 tracking-tight text-foreground"
+          className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
-          {title}
+          <span className="truncate">{title}</span>
+          {titleCount !== undefined && (
+            <>
+              <span
+                aria-hidden
+                className="shrink-0 text-xs font-normal text-muted-foreground"
+                data-testid="widget-card-title-count"
+              >
+                {titleCount}
+              </span>
+              <span className="sr-only">{titleCountSpoken(titleCount)}</span>
+            </>
+          )}
         </h2>
         {subtitle && (
           <p

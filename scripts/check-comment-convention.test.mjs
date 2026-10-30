@@ -298,7 +298,9 @@ describe("the allowlist", () => {
   // exists; its entry remains.
   // 479 -> 477: the two recorded offences in `legacy-preview/translate.ts`, each
   // naming a numbered change, no longer exist, and its entry emptied (217 -> 216).
-  const EXPECTED_TOTAL = 477;
+  // 477 -> 475: one recorded offence each in `register-collections.ts` and
+  // `collections-handler.ts` no longer exists; both entries remain.
+  const EXPECTED_TOTAL = 475;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

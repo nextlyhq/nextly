@@ -106,13 +106,13 @@ describe("core widget component paths resolve", () => {
    */
   it("reads a non-empty set of named paths from core", () => {
     expect(named).toEqual(
-      expect.arrayContaining(["core#TeamSummary", "core#RecentActivity"])
+      expect.arrayContaining(["core#TeamSummary", "core#TeamActivity"])
     );
   });
 
   it("reads a non-empty set of registrations from the admin", () => {
     expect(registered).toEqual(
-      expect.arrayContaining(["core#TeamSummary", "core#RecentActivity"])
+      expect.arrayContaining(["core#TeamSummary", "core#TeamActivity"])
     );
   });
 
@@ -149,7 +149,7 @@ describe("core list cards select only fields that get drawn", () => {
 
   /*
    * The population, pinned rather than merely non-empty. Core declares no
-   * list card today: Recently edited and Upcoming releases each draw through a
+   * list card today: Continue and Upcoming releases each draw through a
    * component of their own. Pinned, a card that becomes a list card fails here
    * until it is named, and is then checked below; a bare loop over an empty
    * list would pass having checked nothing.

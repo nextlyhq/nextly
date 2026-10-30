@@ -18,6 +18,25 @@ import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
+ * What an activity row says happened, as a reader is told it: an entry or
+ * Single was created, saved, published, unpublished or deleted.
+ *
+ * The `event` of a `system:activity` row and of a `GET /dashboard/activity`
+ * row, published here beside the rows' other wire types so a consumer can
+ * switch on it exhaustively. A closed set: the server names an event only by
+ * one of these (`activityEventOf`), and leaves it out of a row it cannot name
+ * one for.
+ *
+ * @experimental
+ */
+export type ActivityEvent =
+  | "created"
+  | "saved"
+  | "published"
+  | "unpublished"
+  | "deleted";
+
+/**
  * One column of a list result, as the admin needs to head it.
  *
  * Carried on the RESULT rather than published as source metadata, and the
@@ -209,6 +228,46 @@ export type WidgetResult =
     };
 
 /**
+ * Whether an answer holds nothing a core display would draw: a list with no
+ * items, groups with no bucket, a series with no point. A count always holds
+ * its number, and a declared widget's own data is judged by its `isEmpty`.
+ *
+ * The one rule: each core display draws its empty state by it, and the layout
+ * read leaves a card that hides while empty off the dashboard by it, so the
+ * page is drawn without the card exactly when the card would draw nothing.
+ */
+export function answerHasNothing(result: WidgetResult): boolean {
+  switch (result.op) {
+    case "list":
+      return result.items.length === 0;
+    case "groupBy":
+      return result.buckets.length === 0;
+    case "timeseries":
+      return result.points.length === 0;
+    case "count":
+    case "data":
+      return false;
+  }
+}
+
+/**
+ * Whether a card's answer holds nothing: its widget's own empty test held
+ * (`empty`), or the core display that draws it would find nothing in it
+ * (`answerHasNothing`).
+ *
+ * The one rule a card that hides while empty is judged by, on both sides of
+ * the dashboard: the layout read leaves such a card off the page when its
+ * answer holds nothing, and the admin shows a card it was drawn without once
+ * the card's own batch answer holds something.
+ */
+export function cardAnswerIsEmpty(answer: {
+  result: WidgetResult;
+  empty?: boolean;
+}): boolean {
+  return answer.empty === true || answerHasNothing(answer.result);
+}
+
+/**
  * A setting's label as it reads inside a sentence: "Collection" becomes
  * "collection". The one rule for every prompt built from a label, on the
  * server and in the admin, so the two never write it differently.
@@ -335,8 +394,11 @@ export interface SettingEditorProps<Value> {
   label: string;
   /** Its value in the sheet; `undefined` while none is chosen. */
   value: Value | undefined;
-  /** Sets its value in the sheet. */
-  onChange: (value: Value) => void;
+  /**
+   * Sets its value in the sheet; `undefined` clears it, so the setting is
+   * saved unset and the card reads its default, or no value where it has none.
+   */
+  onChange: (value: Value | undefined) => void;
   /** The card's other settings, by key, as the sheet holds them now. */
   settings: Readonly<Record<string, unknown>>;
   /** True while the sheet is saving: the editor takes no input then. */

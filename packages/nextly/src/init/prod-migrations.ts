@@ -66,6 +66,8 @@ interface MigrateCoreLike {
     pluginsWithMigrations?: ReadonlySet<string>;
     /** Spread in by `pluginMigrationArgs`, checked here for the same reason. */
     declaredPlugins?: ReadonlySet<string>;
+    /** See `MigrateCoreDeps.refuseBuilderFilesWithoutSnapshot`. */
+    refuseBuilderFilesWithoutSnapshot?: boolean;
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -251,6 +253,9 @@ async function applyBootMigrations(
     // table while reporting a clean migrate.
     ...(await pluginMigrationArgs(args.config.plugins ?? [])),
     ensureLedger: run.ensureLedger,
+    // A Schema Builder file with no snapshot is refused here as `nextly migrate`
+    // refuses it: this boot applies the same pending files, in production.
+    refuseBuilderFilesWithoutSnapshot: true,
   });
   // REFUSES rather than serving. A held lock no longer comes back as
   // `ran: false` (the lock throws `NEXTLY_MIGRATE_LOCK_BUSY`, which the

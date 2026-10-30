@@ -19,15 +19,15 @@
 
 import { BreakdownCard } from "@admin/components/features/dashboard/BreakdownCard";
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
+import { ContinueCard } from "@admin/components/features/dashboard/ContinueCard";
 import { CountCard } from "@admin/components/features/dashboard/CountCard";
 import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedCard";
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
 import { NoteCard } from "@admin/components/features/dashboard/NoteCard";
 import { OverTimeCard } from "@admin/components/features/dashboard/OverTimeCard";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
-import { RecentActivityCard } from "@admin/components/features/dashboard/RecentActivity";
 import { RecentEntriesCard } from "@admin/components/features/dashboard/RecentEntriesCard";
-import { RecentlyEdited } from "@admin/components/features/dashboard/RecentlyEdited";
+import { TeamActivityCard } from "@admin/components/features/dashboard/TeamActivity";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -46,8 +46,8 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#NeedsAttention", NeedsAttention);
-  registerCoreComponent("core#RecentActivity", RecentActivityCard);
-  registerCoreComponent("core#RecentlyEdited", RecentlyEdited);
+  registerCoreComponent("core#TeamActivity", TeamActivityCard);
+  registerCoreComponent("core#ContinueCard", ContinueCard);
   registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
   registerCoreComponent("core#Count", CountCard);
   registerCoreComponent("core#Breakdown", BreakdownCard);

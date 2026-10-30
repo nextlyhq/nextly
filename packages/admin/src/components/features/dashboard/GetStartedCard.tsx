@@ -33,8 +33,9 @@ import { useSingles } from "@admin/hooks/queries/useSingles";
 import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
+import { useRowFold } from "../widgets/frame/fold";
 
-import { stepsToDoFirst, useStepFold } from "./get-started/fold";
+import { stepsToDoFirst } from "./get-started/fold";
 import { isSkippable, stepPresentation } from "./get-started/step-presentation";
 import {
   useGetStartedWrite,
@@ -222,7 +223,7 @@ function StepRow({
   const { label, href } = stepPresentation(step, singleLabels);
   return (
     <li
-      data-step-row
+      data-fold-row
       className="flex flex-wrap items-center justify-between gap-2 py-2.5"
     >
       <StepMark step={step} label={label} />
@@ -240,7 +241,7 @@ function StepList({
 }) {
   const singleLabels = useSingleLabels();
   const steps = stepsToDoFirst(answer.steps);
-  const fold = useStepFold(steps.length);
+  const fold = useRowFold(steps.length);
   const listId = useId();
   return (
     <div ref={fold.listRef} className="grid gap-3">
@@ -265,7 +266,7 @@ function StepList({
         </p>
       </div>
       {/* The steps to do first, then those finished (`stepsToDoFirst`). Only whole steps are
-          drawn, as many as the card holds (`useStepFold`); the rest are one click away, and that
+          drawn, as many as the card holds (`useRowFold`); the rest are one click away, and that
           click grows the card. */}
       <ul id={listId} className="grid divide-y divide-border">
         {steps.slice(0, fold.shown).map(step => (
