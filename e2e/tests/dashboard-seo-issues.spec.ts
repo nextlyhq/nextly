@@ -181,7 +181,9 @@ test("the SEO issues card draws a bar for each issue the pages have", async ({
   await gotoAdmin(page, "/");
   await placeCard(page);
   await gotoAdmin(page, "/");
-  const card = page.getByTestId(`widget-cell-${CARD}`);
+  const card = page
+    .getByTestId(`widget-cell-${CARD}`)
+    .filter({ visible: true });
   await expect(card).toBeVisible();
   const before = await drawnBars(card);
 
@@ -208,7 +210,9 @@ test("its issue count is a Needs attention line naming the pages it checks", asy
   await gotoAdmin(page, "/");
   await placeCard(page);
   await gotoAdmin(page, "/");
-  const bars = await drawnBars(page.getByTestId(`widget-cell-${CARD}`));
+  const bars = await drawnBars(
+    page.getByTestId(`widget-cell-${CARD}`).filter({ visible: true })
+  );
 
   const line = await seoLineFor(page.request);
   // The same issues the card draws, as one count, linked to the list they are
