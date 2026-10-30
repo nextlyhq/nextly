@@ -69,6 +69,7 @@ describe("BuilderFieldList", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -97,6 +98,7 @@ describe("BuilderFieldList", () => {
     const { container } = render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, u1, u2]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -117,6 +119,7 @@ describe("BuilderFieldList", () => {
     const { container } = render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, u1, u2, u3]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -136,6 +139,7 @@ describe("BuilderFieldList", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -158,6 +162,7 @@ describe("BuilderFieldList", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug]}
           onAddAt={onAddAt}
           onEditField={vi.fn()}
@@ -176,6 +181,7 @@ describe("BuilderFieldList", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, u1]}
           readOnly
           onAddAt={vi.fn()}
@@ -202,6 +208,7 @@ describe("BuilderFieldList", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, u1]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -225,6 +232,7 @@ describe("BuilderFieldList", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -293,6 +301,7 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, repeaterParent]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -315,6 +324,7 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, repeaterParent]}
           onAddAt={vi.fn()}
           onEditField={onEdit}
@@ -333,6 +343,7 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, groupParent]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -363,6 +374,7 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, compParent]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -383,6 +395,7 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
     render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, repeaterParent]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}
@@ -411,6 +424,7 @@ describe("BuilderFieldList -- nested rendering (PR I)", () => {
     const { container } = render(
       withDndContext(
         <BuilderFieldList
+          kind="collection"
           fields={[sysTitle, sysSlug, u1, halfWidthRepeater]}
           onAddAt={vi.fn()}
           onEditField={vi.fn()}

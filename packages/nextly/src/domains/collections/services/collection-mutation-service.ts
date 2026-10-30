@@ -59,7 +59,7 @@ import {
 // CollectionEntryService facade and CollectionBulkService still consume it;
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
-import { NextlyError } from "../../../errors";
+import { NEXTLY_ERROR_STATUS, NextlyError } from "../../../errors";
 import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
@@ -371,6 +371,27 @@ function emitCollectionEvent(
   }
 }
 
+/** A write's words for an entry that is not there, naming it in a batch item. */
+function missingEntryMessage(entryId: string, identify: boolean): string {
+  return identify ? `Entry not found: ${entryId}` : "Entry not found";
+}
+
+/**
+ * A batch item's refusal answered as missing, in the words its missing entry
+ * gets, so an entry the caller may not read cannot be told apart from one
+ * that is not there. Any other refusal is returned as it is.
+ */
+function asMissingItem<T>(
+  refused: CollectionServiceResult<T>,
+  entryId: string,
+  identify: boolean
+): CollectionServiceResult<T> {
+  if (!identify || refused.statusCode !== NEXTLY_ERROR_STATUS.NOT_FOUND) {
+    return refused;
+  }
+  return { ...refused, message: missingEntryMessage(entryId, identify) };
+}
+
 /**
  * Convert any thrown error into the legacy CollectionServiceResult shape.
  *
@@ -561,9 +582,19 @@ interface DeleteEntryWriteParams {
 }
 
 /** The only things that differ between the two delete entry points. */
+/**
+ * A batch's delete gate, asked once before its transaction opened, where its
+ * rule answered a filter: each row is matched against it under its lock.
+ */
+export interface DeleteRowFilter {
+  readonly denied: null;
+  readonly filter: RuleFilter;
+  readonly read?: ReadReach;
+}
+
 interface DeleteEntryWriteOptions {
   /** Which shape of the row gate to apply — see the comment at its use. */
-  rowGate: "access-service" | "batch-hoisted";
+  rowGate: "access-service" | "batch-hoisted" | DeleteRowFilter;
   /** Run user hooks. Access and recording are NOT hooks and always run. */
   runHooks: boolean;
   /** Name the missing id in a 404, so a failing batch item is identifiable. */
@@ -904,6 +935,29 @@ interface FilteredWriteCheck {
 /** A filter a write in the caller's own transaction was judged by. */
 interface FilteredTransactionWrite extends FilteredWriteCheck {
   schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+}
+
+/**
+ * The gate question a release asks of a write it will make: asked of a
+ * named caller, never as route-authorized, and of the key where one adds the
+ * document.
+ */
+function writeFilterQuestion(params: {
+  collectionName: string;
+  action: FilteredWrite;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}) {
+  return {
+    collectionName: params.collectionName,
+    operation: params.action,
+    user: params.user,
+    overrideAccess: false,
+    routeAuthorized: false,
+    ...(params.authenticatedScope
+      ? { authenticatedScope: params.authenticatedScope }
+      : {}),
+  };
 }
 
 /**
@@ -4069,6 +4123,14 @@ export class CollectionMutationService extends BaseService {
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
+    /**
+     * Ask the update `user` was authorized for again under the lock, so a
+     * change since the caller judged it cannot move the entry out of an
+     * update rule's filter and still have its pending change removed. Set by
+     * a caller that authorized the discard as `user`'s update; without it,
+     * authorization stays the caller's concern.
+     */
+    updateUnderLock?: { authenticatedScope?: AuthenticatedScope };
   }): Promise<number> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -4083,6 +4145,26 @@ export class CollectionMutationService extends BaseService {
         // Serialize with concurrent draft-save upserts, which lock this same parent
         // row before writing the sidecar.
         await tx.lockRow(tableName, params.entryId);
+        if (params.updateUnderLock) {
+          // Route authorization already ran, so only the coarse re-check is
+          // skipped; the document's own rules and their filter are asked here.
+          const denied = await this.refusalOfWriteInTransaction(
+            tx,
+            {
+              collectionName: params.collectionName,
+              operation: "update",
+              entryId: params.entryId,
+              user: params.user,
+              overrideAccess: false,
+              routeAuthorized: true,
+              authenticatedScope: params.updateUnderLock.authenticatedScope,
+              executor: tx.getDrizzle(),
+            },
+            [],
+            params.locale ?? undefined
+          );
+          if (denied) throw errorFromServiceEnvelope(denied);
+        }
         const draftLocale = workingDraftLocale({
           documentLocalized:
             (collection as { localized?: boolean }).localized === true,
@@ -4157,15 +4239,21 @@ export class CollectionMutationService extends BaseService {
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
-      const accessDenied =
-        await this.accessService.checkCollectionAccess<TakenLiveValues>({
+      // An update of this entry: a rule that answers a filter allows it only
+      // where the filter matches the entry as it is stored, in the language
+      // whose pending change it writes.
+      const accessDenied = await this.refusalOfStoredUpdate<TakenLiveValues>(
+        {
           collectionName: params.collectionName,
           operation: "update",
+          entryId: params.entryId,
           user: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
           authenticatedScope: params.authenticatedScope,
-        });
+        },
+        params.locale ?? undefined
+      );
       if (accessDenied) return accessDenied;
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -4265,6 +4353,25 @@ export class CollectionMutationService extends BaseService {
     // The lock every save and publish of this document takes, so the live
     // values read here are the ones the next publish compares with.
     await tx.lockRow(tableName, params.entryId);
+    // The update asked again on the locked row, so a change since it was
+    // judged above cannot move the entry out of a filter and still have its
+    // pending change written.
+    const deniedUnderLock = await this.refusalOfWriteInTransaction(
+      tx,
+      {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        executor: tx.getDrizzle(),
+      },
+      [],
+      params.locale ?? undefined
+    );
+    if (deniedUnderLock) throw errorFromServiceEnvelope(deniedUnderLock);
     const pending = await new VersionsRepository(tx).findWorkingDraft(
       ref,
       draftLocale
@@ -7664,6 +7771,12 @@ export class CollectionMutationService extends BaseService {
      * super-admin-owned key when this gate authorizes a version-label edit.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The language the caller's write acts in: a filter on a translated field
+     * is matched in it, so an autosave in German is held to the German
+     * entry. The default language where it names none.
+     */
+    locale?: string;
   }): Promise<boolean> {
     // Loaded because the hooks below are shown the row as it stands, and a
     // write to a row that is not there is a not-found rather than a refusal.
@@ -7677,20 +7790,58 @@ export class CollectionMutationService extends BaseService {
     // the difference between them be probed.
     if (!existingEntry) return false;
 
-    const denied = await this.accessService.checkCollectionAccess({
-      collectionName: params.collectionName,
-      operation: "update",
-      entryId: params.entryId,
-      user: params.user,
-      // Never overridden: this exists to APPLY the document's rules, so a
-      // caller that could opt out of them would defeat the point.
-      overrideAccess: false,
-      routeAuthorized: params.routeAuthorized,
-      // A scoped API key is judged on its own update grant, so the session
-      // super-admin bypass does not apply to a super-admin-owned key here.
-      authenticatedScope: params.authenticatedScope,
-    });
+    const denied = await this.refusalOfStoredUpdate(
+      {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.user,
+        // Never overridden: this exists to APPLY the document's rules, so a
+        // caller that could opt out of them would defeat the point.
+        overrideAccess: false,
+        routeAuthorized: params.routeAuthorized,
+        // A scoped API key is judged on its own update grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        authenticatedScope: params.authenticatedScope,
+      },
+      params.locale
+    );
     return denied === null;
+  }
+
+  /**
+   * The refusal of an update of `params.entryId` as it is stored, or `null`
+   * where the caller may make it: the update gate's own refusal, or, where
+   * its rule answers a filter, that of an entry the filter does not match, in
+   * words where the caller may read it and as a missing entry where it may
+   * not. A filter on a translated field is matched in `locale`, the language
+   * the update acts in, or in the default where it names none.
+   */
+  private async refusalOfStoredUpdate<T>(
+    params: FilteredWriteCheck["params"],
+    locale?: string
+  ): Promise<CollectionServiceResult<T> | null> {
+    const access = await this.accessService.checkCollectionWrite<T>(params);
+    if (access.denied) return access.denied;
+    const schema = (await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    )) as Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+    const match = await this.prepareFilteredWrite(
+      params.collectionName,
+      params.operation,
+      schema,
+      access,
+      { locale }
+    );
+    if (!match) return null;
+    const judged = await this.judgedAgainstWriteFilter<T>(
+      this.db,
+      schema,
+      String(params.entryId),
+      match,
+      params
+    );
+    return judged.refusal;
   }
 
   /**
@@ -11754,14 +11905,6 @@ export class CollectionMutationService extends BaseService {
           });
     const ready = readiness === "ready" ? (companion ?? null) : null;
     const writeLocale = options.locale ?? this.localization?.defaultLocale;
-    // Whether the caller may read the entry is a plain read's question, asked
-    // in the default language and its fallbacks, every language of the chain,
-    // as the read by id asks it.
-    const reads = localizedFilterContext(
-      ready,
-      resolveLocaleChain(this.localization, undefined, undefined),
-      schema
-    );
     return {
       columns: prepared.columns(schema, {
         writes: localizedFilterContext(
@@ -11769,7 +11912,14 @@ export class CollectionMutationService extends BaseService {
           writeLocale ? [writeLocale] : null,
           schema
         ),
-        reads: reads && { ...reads, inEveryFallbackLanguage: true },
+        // Whether the caller may read the entry is a plain read's question,
+        // asked in the default language and its fallbacks; the read column
+        // judges it in every language of the chain, as the read by id does.
+        reads: localizedFilterContext(
+          ready,
+          resolveLocaleChain(this.localization, undefined, undefined),
+          schema
+        ),
       }),
     };
   }
@@ -11814,16 +11964,24 @@ export class CollectionMutationService extends BaseService {
    * `params` names, asked on that transaction: the gate's own refusal or,
    * where its rule answers a filter, that of an entry outside it. An entry
    * inside the filter has it added to `filteredWrites`, which the written row
-   * is matched against again before the write may stand.
+   * is matched against again before the write may stand. A filter on a
+   * translated field is matched in `locale`, or in the default.
    */
   private async refusalOfWriteInTransaction(
     tx: TransactionContext,
     params: FilteredWriteCheck["params"],
-    filteredWrites: FilteredTransactionWrite[]
+    filteredWrites: FilteredTransactionWrite[],
+    locale?: string
   ): Promise<CollectionServiceResult | null> {
     const access = await this.accessService.checkCollectionWrite(params);
     if (access.denied) return access.denied;
-    return this.refusalOutsideFilterOfWrite(tx, params, access, filteredWrites);
+    return this.refusalOutsideFilterOfWrite(
+      tx,
+      params,
+      access,
+      filteredWrites,
+      locale
+    );
   }
 
   /**
@@ -11836,13 +11994,15 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     params: FilteredWriteCheck["params"],
     access: { filter?: RuleFilter; read?: ReadReach },
-    filteredWrites: FilteredTransactionWrite[]
+    filteredWrites: FilteredTransactionWrite[],
+    locale?: string
   ): Promise<CollectionServiceResult | null> {
     const prepared = await this.matchInTransaction(
       tx,
       params.operation,
       access,
-      params.collectionName
+      params.collectionName,
+      locale
     );
     if (!prepared) return null;
     const judged = await this.judgedAgainstWriteFilter(
@@ -11933,7 +12093,8 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     action: FilteredWrite,
     access: { filter?: RuleFilter; read?: ReadReach },
-    collectionName: string
+    collectionName: string,
+    locale?: string
   ): Promise<
     | {
         schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
@@ -11952,7 +12113,7 @@ export class CollectionMutationService extends BaseService {
       action,
       schema,
       access,
-      { executor }
+      { executor, locale }
     );
     return match ? { schema, match } : undefined;
   }
@@ -12043,20 +12204,270 @@ export class CollectionMutationService extends BaseService {
     /** Asked under the row lock: then the select is itself a locking read. */
     options: { underLock?: boolean } = {}
   ): Promise<ReturnType<typeof writeMatchOf>> {
+    const found = await this.storedWriteMatches(
+      db,
+      schema,
+      [entryId],
+      match,
+      options
+    );
+    return found.get(entryId) ?? writeMatchOf(undefined);
+  }
+
+  /**
+   * How the stored rows of `entryIds`, read on `db`, match a write's filter
+   * and the caller's read access, keyed by id, in one select: the question
+   * {@link storedWriteMatch} asks of one entry, asked of many. An id with no
+   * row is left out.
+   */
+  private async storedWriteMatches(
+    db: typeof this.db,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryIds: readonly string[],
+    match: FilteredWriteMatch,
+    /** Asked under the row lock: then the select is itself a locking read. */
+    options: { underLock?: boolean } = {}
+  ): Promise<Map<string, ReturnType<typeof writeMatchOf>>> {
+    if (entryIds.length === 0) return new Map();
     const query = db
-      .select({ writes: match.columns.writes, reads: match.columns.reads })
+      .select({
+        id: schema.id,
+        writes: match.columns.writes,
+        reads: match.columns.reads,
+      })
       .from(schema)
-      .where(eq(schema.id as never, entryId))
-      .limit(1);
+      .where(inArray(schema.id as never, [...entryIds]));
     // A plain read under the lock answers from the transaction's snapshot,
     // which on MySQL's REPEATABLE READ can predate a commit that moved the
     // entry out of the filter. SQLite runs one writer at a time, and has no
     // `FOR UPDATE`.
-    const [row] =
+    const rows: { id: unknown; writes: unknown; reads: unknown }[] =
       options.underLock && this.adapter.dialect !== "sqlite"
         ? await query.for("update")
         : await query;
-    return writeMatchOf(row);
+    return new Map(rows.map(row => [String(row.id), writeMatchOf(row)]));
+  }
+
+  /**
+   * Which of `entryIds` a write of `action` to every language by this caller
+   * would find inside its rule's filter, judged now and without writing: the
+   * gate's refusal, or the entries the caller may write. Every entry where the
+   * rule answers no filter; with one, an entry whose stored row the filter
+   * matches and the caller may read, so an entry the caller may not read is
+   * left out as one that is gone is. The write itself judges each entry again
+   * under its row lock.
+   *
+   * An unpublish is matched once, in the default language. A publish is
+   * asked in each language it puts live, as the write asks it, and an entry
+   * is within only where every one matches; an entry holding a working draft
+   * the publish would promote is left out where the draft changes a field a
+   * filter names, as the write refuses one the promotion takes out of it.
+   *
+   * Asked of a named caller, never as route-authorized: a release asks it of
+   * the author its run will act as, and of the key that adds a document.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(params: {
+    collectionName: string;
+    action: FilteredWrite;
+    entryIds: readonly string[];
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<
+    | { readonly denied: CollectionServiceResult }
+    | { readonly within: ReadonlySet<string> }
+  > {
+    const ids = [...new Set(params.entryIds)];
+    // The gate first, before anything of the collection is read: a caller it
+    // refuses, a collection that is gone among them, is answered here.
+    const asked = await this.accessService.checkCollectionWrite(
+      writeFilterQuestion(params)
+    );
+    if (asked.denied !== null) return { denied: asked.denied };
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    // An unpublish is asked once, in the default language. So is a publish
+    // whose translation table lacks its per-language status: the write is
+    // refused on that before any language is asked, and there are no
+    // statuses to read the languages going live from.
+    if (
+      params.action !== "publish" ||
+      (await this.companionLacksStatus(params.collectionName))
+    ) {
+      return this.entriesWithinWriteFilterNow(params, schema, ids, {
+        asked,
+      });
+    }
+
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const fields = collectionFields(collection);
+    const rows: Record<string, unknown>[] =
+      ids.length === 0
+        ? []
+        : await this.db
+            .select()
+            .from(schema as never)
+            .where(inArray(schema.id as never, ids));
+    const heldEdits = await this.heldEditsPromotedBy(
+      params.collectionName,
+      collection,
+      rows
+    );
+    // Entries putting the same languages live are asked together, each
+    // language told all of them, as the write tells its rule.
+    const byLanguages = new Map<
+      string,
+      { languages: string[]; ids: string[] }
+    >();
+    // An entry with no stored row puts nothing live: it is asked once, in
+    // the rule language now, so a filter leaves it out as a gone one is and
+    // a rule answering none keeps it, as every entry is kept.
+    const stored = new Set(rows.map(row => String(row.id)));
+    const gone = ids.filter(id => !stored.has(id));
+    if (gone.length > 0) byLanguages.set("[]", { languages: [], ids: gone });
+    for (const row of rows) {
+      const entryId = String(row.id);
+      const languages = await this.languagesToPublish({
+        collectionName: params.collectionName,
+        entryId,
+        row,
+        fields,
+        promotesDraftOf: collection,
+      });
+      const key = JSON.stringify(languages);
+      const group = byLanguages.get(key) ?? { languages, ids: [] };
+      group.ids.push(entryId);
+      byLanguages.set(key, group);
+    }
+    const within = new Set<string>();
+    for (const { languages, ids: groupIds } of byLanguages.values()) {
+      // Asked in each language as the write asks its rule (askEachLanguage),
+      // each language narrowing what the ones before it left.
+      let left: ReadonlySet<string> = new Set(groupIds);
+      await askEachLanguage(languages, async () => {
+        const inLanguage = await this.entriesWithinWriteFilterNow(
+          params,
+          schema,
+          [...left],
+          { promoted: { heldEdits, fields } }
+        );
+        left = "within" in inLanguage ? inLanguage.within : new Set();
+        return null;
+      });
+      for (const entryId of left) within.add(entryId);
+    }
+    return { within };
+  }
+
+  /**
+   * {@link entriesWithinWriteFilter} asked once, in the rule language now:
+   * the gate's refusal, or the entries the filter it answers matches in that
+   * language, the caller may read, and whose held edit in `promoted`, if
+   * any, changes no field the filter names.
+   */
+  private async entriesWithinWriteFilterNow(
+    params: Parameters<
+      CollectionMutationService["entriesWithinWriteFilter"]
+    >[0],
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    ids: readonly string[],
+    given: {
+      /** The gate's answer in this rule language, where it was asked already. */
+      asked?: Awaited<
+        ReturnType<CollectionAccessService["checkCollectionWrite"]>
+      >;
+      promoted?: {
+        heldEdits: ReadonlyMap<
+          string,
+          { draft: Record<string, unknown>; live: Record<string, unknown> }
+        >;
+        fields: readonly FieldDefinition[];
+      };
+    } = {}
+  ): Promise<
+    | { readonly denied: CollectionServiceResult }
+    | { readonly within: ReadonlySet<string> }
+  > {
+    const access =
+      given.asked ??
+      (await this.accessService.checkCollectionWrite(
+        writeFilterQuestion(params)
+      ));
+    if (access.denied !== null) return { denied: access.denied };
+    const promoted = given.promoted;
+    const match = await this.prepareFilteredWrite(
+      params.collectionName,
+      params.action,
+      schema,
+      access,
+      { locale: currentRuleLanguage().locale }
+    );
+    if (!match || !access.filter) return { within: new Set(ids) };
+    const filter = access.filter;
+    const found = await this.storedWriteMatches(this.db, schema, ids, match);
+    return {
+      within: new Set(
+        ids.filter(id => {
+          const entry = found.get(id);
+          if (entry === undefined || !entry.writes || !entry.reads) {
+            return false;
+          }
+          const held = promoted?.heldEdits.get(id);
+          if (promoted === undefined || held === undefined) return true;
+          return !changesFieldFilterNames(
+            filter,
+            held.draft,
+            held.live,
+            promoted.fields
+          );
+        })
+      ),
+    };
+  }
+
+  /**
+   * The working draft a publish of every language would promote for each of
+   * these stored rows, keyed by entry id, beside the live row it replaces:
+   * the draft kept in that write's own slot, read in one query. The live row
+   * holds the main table's columns only, so a filter naming a translated
+   * field, a component or a many-to-many field counts as changed, and the
+   * entry is left out: a draft can only be judged as changing more.
+   */
+  private async heldEditsPromotedBy(
+    collectionName: string,
+    collection: unknown,
+    rows: readonly Record<string, unknown>[]
+  ): Promise<
+    Map<
+      string,
+      { draft: Record<string, unknown>; live: Record<string, unknown> }
+    >
+  > {
+    const held = new Map<
+      string,
+      { draft: Record<string, unknown>; live: Record<string, unknown> }
+    >();
+    if (rows.length === 0 || !this.keepsWorkingDrafts(collection)) return held;
+    const drafts = await new VersionsRepository(
+      this.adapter
+    ).findWorkingDraftsOf(
+      { scopeKind: "collection", scopeSlug: collectionName },
+      rows.map(row => String(row.id)),
+      this.wildcardDraftLocale(collection)
+    );
+    for (const row of rows) {
+      const draft = drafts.get(String(row.id));
+      if (draft === undefined) continue;
+      held.set(String(row.id), {
+        draft: snapshotRecord(draft.snapshot),
+        live: row,
+      });
+    }
+    return held;
   }
 
   /**
@@ -13374,7 +13785,9 @@ export class CollectionMutationService extends BaseService {
         // may also name are never stored, and no hook is handed a value sent by
         // a caller judged without update.
         if (gate !== "update") body = { status: body.status };
-        if (denied) return denied;
+        if (denied) {
+          return asMissingItem(denied, entryId, options.identifyMissingEntry);
+        }
         if (gate !== "update") rowAllowed = gate;
       }
 
@@ -13400,9 +13813,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -13413,7 +13824,9 @@ export class CollectionMutationService extends BaseService {
           rowFilter.access,
           filteredWrites
         );
-        if (outside) return outside;
+        if (outside) {
+          return asMissingItem(outside, entryId, options.identifyMissingEntry);
+        }
       }
 
       let currentData: Record<string, unknown> = { ...body };
@@ -13935,9 +14348,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14653,9 +15064,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14666,8 +15075,8 @@ export class CollectionMutationService extends BaseService {
 
       if (options.rowGate === "batch-hoisted") {
         // Nothing to re-check per row: the batch caller hoists the
-        // collection-level delete gate out of its loop, and no row-ownership
-        // rule remains for a safety net to compare against.
+        // collection-level delete gate out of its loop, and its rule answered
+        // no filter to match the row against.
       } else {
         // The transaction API asks the access service for the whole verdict,
         // with the caller's `overrideAccess` as the create and update paths
@@ -14683,11 +15092,20 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),
         };
-        const access = await this.accessService.checkCollectionWrite<{
-          deleted: boolean;
-        }>(accessParams);
+        // A batch asked its gate before its transaction opened and hands each
+        // row the filter it answered; anything else asks here.
+        const access =
+          options.rowGate === "access-service"
+            ? await this.accessService.checkCollectionWrite<{
+                deleted: boolean;
+              }>(accessParams)
+            : options.rowGate;
         if (access.denied) {
-          return access.denied;
+          return asMissingItem(
+            access.denied,
+            entryId,
+            options.identifyMissingEntry
+          );
         }
         // A delete rule's filter allows only the entries it matches. Matched on
         // the caller's transaction under the row lock, before any hook runs.
@@ -14695,7 +15113,13 @@ export class CollectionMutationService extends BaseService {
           const refused = await this.refusalOutsideFilterInTransaction<{
             deleted: boolean;
           }>(tx, tableName, entryId, access, accessParams);
-          if (refused) return refused;
+          if (refused) {
+            return asMissingItem(
+              refused,
+              entryId,
+              options.identifyMissingEntry
+            );
+          }
         }
       }
 
@@ -14792,9 +15216,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14837,9 +15259,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -15154,11 +15574,12 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     params: DeleteEntryWriteParams,
     entryId: string,
-    skipHooks: boolean
+    skipHooks: boolean,
+    rowGate: "batch-hoisted" | DeleteRowFilter = "batch-hoisted"
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.deleteEntryWrite(tx, params, entryId, {
-        rowGate: "batch-hoisted",
+        rowGate,
         runHooks: !skipHooks,
         identifyMissingEntry: true,
         failureMessage: "Failed to delete entry",

@@ -1232,6 +1232,21 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     );
   }
 
+  /**
+   * The column type this dialect gives `field`, spelled exactly as the CREATE TABLE and ADD COLUMN
+   * statements spell it.
+   *
+   * The same value `generateColumnSQL`, `generateAlterTableMigration` and `ensureUserExtSchema` put
+   * into their column definitions, exposed so a caller that needs only the type can ask for it
+   * instead of restating this mapping or recovering it from rendered SQL.
+   *
+   * `null` where this service would emit no column at all, which is the same condition that makes
+   * those statements skip a field.
+   */
+  columnTypeFor(field: UserFieldConfig): string | null {
+    return this.getColumnType(field);
+  }
+
   private getColumnType(field: UserFieldConfig): string | null {
     const types = SQL_COLUMN_TYPES[this.dialect];
     // Captured before the built-in guards narrow `field` to `never`.
