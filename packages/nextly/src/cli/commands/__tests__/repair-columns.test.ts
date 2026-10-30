@@ -23,6 +23,7 @@ describe("formatFinding", () => {
       expected: { type: "jsonb", nullable: true },
       live: { type: "text", nullable: true },
       aspects: { type: true, nullability: false },
+      judgement: null,
       cause: {
         kind: "legacy",
         shape: "structured-as-text",
@@ -42,6 +43,7 @@ describe("formatFinding", () => {
         expected: { type: "text", nullable: true },
         live: { type: "text", nullable: false },
         aspects: { type: false, nullability: true },
+        judgement: null,
         cause: { kind: "current-generator" },
       })
     ).toContain(
@@ -57,9 +59,73 @@ describe("formatFinding", () => {
         expected: { type: "float8", nullable: true },
         live: { type: "numeric", nullable: true, typeModifier: "10,2" },
         aspects: { type: true, nullability: false },
+        judgement: null,
         cause: null,
       })
     ).toContain("is numeric(10,2) NULL, expected float8 NULL.");
+  });
+
+  it("gives a difference's class, and each reason with its rows by key", () => {
+    const differs: ColumnFinding = {
+      kind: "differs",
+      location,
+      expected: { type: "jsonb", nullable: false },
+      live: { type: "text", nullable: true },
+      aspects: { type: true, nullability: true },
+      cause: null,
+      judgement: { class: "safe", reasons: [] },
+    };
+    expect(formatFinding(differs)).toBe(
+      'collection "posts", field "links" (dc_posts.links): is text NULL, expected jsonb NOT NULL. safe.'
+    );
+
+    const blocked = formatFinding({
+      ...differs,
+      location: { ...location, table: "dc_posts_locales", translation: true },
+      judgement: {
+        class: "blocked",
+        reasons: [
+          {
+            kind: "not-json",
+            class: "lossy",
+            rows: {
+              first: [
+                { parent: "p1", locale: "en" },
+                { parent: "p1", locale: "fr" },
+              ],
+              count: 25,
+            },
+          },
+          {
+            kind: "null-under-not-null",
+            class: "blocked",
+            rows: { first: [{ parent: "p2", locale: "en" }], count: 1 },
+          },
+        ],
+      },
+    });
+    expect(blocked).toContain(
+      "blocked: values that do not parse as JSON would be cleared (25 rows, first 2: parent p1 locale en, parent p1 locale fr); rows hold a null where the column is to be NOT NULL (1 row: parent p2 locale en)."
+    );
+  });
+
+  it("gives a reason the pair of types gives with no rows", () => {
+    expect(
+      formatFinding({
+        kind: "differs",
+        location,
+        expected: { type: "double", nullable: true },
+        live: { type: "bigint", nullable: true },
+        aspects: { type: true, nullability: false },
+        cause: null,
+        judgement: {
+          class: "blocked",
+          reasons: [{ kind: "late-write", class: "blocked" }],
+        },
+      })
+    ).toMatch(
+      /blocked: MySQL checks the rows and changes the column in separate transactions, so a value written meanwhile could be changed with no error\.$/
+    );
   });
 
   it("points a column that is not migrated to nextly migrate", () => {
@@ -97,6 +163,7 @@ describe("formatFinding", () => {
         expected: { type: "jsonb", nullable: true },
         live: { type: "text", nullable: true },
         aspects: { type: true, nullability: false },
+        judgement: null,
         cause: null,
       })
     ).toMatch(/Owned by plugin "seo-kit"; reported, never changed here\.$/);

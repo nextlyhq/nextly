@@ -1,7 +1,8 @@
 // Find every column whose type or nullability differs from its field's descriptor.
 //
-// Read-only: it introspects the live tables once and changes nothing in the database. Each column
-// is judged against its field AS THE DATABASE LAST HAD IT APPLIED, never against a newer
+// Read-only: it introspects the live tables once, reads the rows of each differing column to class
+// it, and changes nothing in the database. Each column is judged against its field AS THE DATABASE
+// LAST HAD IT APPLIED, never against a newer
 // configuration, because a change the configuration holds and no migration has applied is that
 // migration's to make: converting the column towards it here would let a repair stand in for a
 // reviewed migration file. Such a change is reported on its own record, so the owner sees both what
@@ -19,6 +20,7 @@ import {
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 
+import { classifyDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
 import { differenceCause } from "./difference-cause";
 import type {
@@ -237,13 +239,14 @@ export async function findColumnDifferences(args: {
       continue;
     }
     findings.push(
-      ...appliedColumnFindings(
+      ...(await appliedColumnFindings(
+        db,
         entity,
         entity.applied.origin,
         applied,
         live,
         dialect
-      )
+      ))
     );
     if (configured !== null) {
       findings.push(
@@ -291,18 +294,36 @@ function awaitingMigrationFindings(
 /**
  * Every applied column of one entity that the database lacks or holds differently. `origin` is the
  * applied definition's builder, the one that made the live table.
+ *
+ * Each differing column is classed from the rows it holds, except one a plugin owns: that column is
+ * reported and never changed, so nothing would act on its class.
  */
-function appliedColumnFindings(
+async function appliedColumnFindings(
+  db: unknown,
   entity: RepairEntity,
   origin: RepairColumnOrigin,
   applied: readonly NamedColumn[],
   live: LiveTables,
   dialect: SupportedDialect
-): ColumnFinding[] {
+): Promise<ColumnFinding[]> {
   const findings: ColumnFinding[] = [];
   for (const column of applied) {
     const finding = judgeAppliedColumn(entity, origin, column, live, dialect);
-    if (finding !== null) findings.push(finding);
+    if (finding === null) continue;
+    if (finding.kind !== "differs" || finding.plugin !== undefined) {
+      findings.push(finding);
+      continue;
+    }
+    findings.push({
+      ...finding,
+      judgement: await classifyDifference(db, dialect, {
+        kind: entity.kind,
+        field: column.field,
+        location: finding.location,
+        live: finding.live,
+        expected: finding.expected,
+      }),
+    });
   }
   return findings;
 }
@@ -342,6 +363,7 @@ function judgeAppliedColumn(
     expected: column.expected,
     live: state,
     aspects,
+    judgement: null,
     cause: differenceCause({
       field: column.field,
       kind: entity.kind,

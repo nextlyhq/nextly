@@ -28,6 +28,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { parseColumnType } from "../../value-conversion/column-type";
+import { judgeStoredColumn } from "../../value-conversion/read-values";
 import { countLongerThan } from "../classifier/count-helpers";
 import { narrowingRefusal } from "../classifier/narrowing-refusal";
 import { stringNarrowingLimit } from "../classifier/type-widening";
@@ -44,12 +46,6 @@ import {
 import { referenceConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
 import { generateSQL } from "../sql-templates/index";
-
-import {
-  columnHoldsOnlyJson,
-  columnReadsAsReferenceList,
-  isJsonTarget,
-} from "./json-convertibility";
 
 interface AsyncExecuteHandle {
   execute(query: unknown): Promise<unknown>;
@@ -206,14 +202,17 @@ async function assertConversionsAreSafe(
     // Only a conversion INTO json is a question this probe can answer. Any change of type at all
     // produces `change_column_type`, so gating on its mere presence would run a JSON check against a
     // column becoming `varchar(255)` or `bigint` and refuse an ordinary rename as unconvertible.
-    const converts = conversions.some(
-      c => c.type === "change_column_type" && isJsonTarget(c.toType)
+    const converts = conversions.find(
+      (c): c is ChangeColumnTypeOp =>
+        c.type === "change_column_type" &&
+        parseColumnType({ type: c.toType, nullable: true }).family === "json"
     );
-    if (!converts) continue;
+    if (converts === undefined) continue;
 
-    // The probe reads rows that are NOT NULL, because a NULL cannot make a cast fail. It can make a
-    // NOT NULL fail, so a conversion carrying a nullability change would be guarded by a question
-    // asked over the wrong rows — and would still look guarded.
+    // The probe is asked about the type change with the nullability left as it is, so it weighs no
+    // NULL, which cannot make a cast fail. A NULL can make a NOT NULL fail, so a conversion carrying
+    // a nullability change would be guarded by a question that leaves it out — and would still look
+    // guarded.
     //
     // Stated as what the probe DOES cover, so that an op kind added to `conversionForRename` later
     // is refused until someone decides it is covered. A list of what to reject would instead be a
@@ -231,9 +230,9 @@ async function assertConversionsAreSafe(
           // Named so the obvious response is to widen the probe. A refusal that only says no gets
           // resolved under deadline by deleting the check.
           remedy:
-            `The probe reads only rows that are NOT NULL, so it cannot speak for "${unguarded.type}". ` +
-            `Widen columnHoldsOnlyJson to cover it and add it to COVERED_CONVERSIONS before this ` +
-            `op runs on this path.`,
+            `The probe judges the type change alone, so it cannot speak for "${unguarded.type}". ` +
+            `Pass that change to the value-conversion judgement and add it to COVERED_CONVERSIONS ` +
+            `before this op runs on this path.`,
         },
       });
     }
@@ -241,13 +240,19 @@ async function assertConversionsAreSafe(
     // Both names as the database currently has them: nothing has run yet, so neither the table's
     // new name nor the column's exists.
     const liveTable = currentTableName.get(op.tableName) ?? op.tableName;
-    const safe = await columnHoldsOnlyJson(
+    // The shared judgement every path that changes a saved column uses; any value it would clear
+    // or change refuses the rename here, before anything has run.
+    const judgement = await judgeStoredColumn(
       txOrDb,
-      liveTable,
-      op.fromColumn,
-      dialect
+      {
+        dialect,
+        from: { type: converts.fromType, nullable: true },
+        to: { type: converts.toType, nullable: true },
+        compareAs: "json",
+      },
+      { table: liveTable, column: op.fromColumn, keyedBy: "id" }
     );
-    if (safe) continue;
+    if (judgement.class === "safe") continue;
 
     throw NextlyError.validation({
       errors: [
@@ -281,13 +286,18 @@ async function assertReferenceListsConvert(
   for (const op of ordered) {
     if (!isReferenceListConversion(op)) continue;
     const liveTable = currentTableName.get(op.tableName) ?? op.tableName;
-    const readable = await columnReadsAsReferenceList(
+    const judgement = await judgeStoredColumn(
       txOrDb,
-      liveTable,
-      op.columnName,
-      dialect
+      {
+        dialect,
+        from: { type: op.fromType, nullable: true },
+        to: { type: op.toType, nullable: true },
+        compareAs: "json",
+        referenceList: true,
+      },
+      { table: liveTable, column: op.columnName, keyedBy: "id" }
     );
-    if (readable) continue;
+    if (judgement.class === "safe") continue;
 
     throw NextlyError.validation({
       errors: [
