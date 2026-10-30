@@ -18,7 +18,14 @@
  * left tables in would fail these cases for a reason that is not theirs.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -179,6 +186,31 @@ for (const entry of DIALECTS) {
           logger: quiet,
           ...(step === undefined ? {} : { step }),
         });
+      }
+
+      /**
+       * `nextly migrate`, as a run that stopped before the files `held` matches: they are put
+       * aside while it runs and back after, so the ledger records only what ran. `--step` can't
+       * stand in for this inside a move between translated and shared, since it runs on through.
+       */
+      async function migrateStoppingBefore(
+        held: (file: string) => boolean
+      ): Promise<number> {
+        const aside = resolve(migrationsDir, "aside");
+        await mkdir(aside, { recursive: true });
+        const files = (await readdir(migrationsDir)).filter(
+          f => f.endsWith(".sql") && held(f)
+        );
+        for (const f of files) {
+          await rename(resolve(migrationsDir, f), resolve(aside, f));
+        }
+        try {
+          return await migrate();
+        } finally {
+          for (const f of files) {
+            await rename(resolve(aside, f), resolve(migrationsDir, f));
+          }
+        }
       }
 
       /** `nextly migrate:down --step <n> --allow-data-loss --yes`, reading each file's DOWN. */
@@ -406,10 +438,13 @@ for (const entry of DIALECTS) {
         await migrateCreate(translated);
         await migrate();
         await seed();
+        const before = new Set(await readdir(migrationsDir));
         await migrateCreate(shared);
         // The archive file alone, as a run that stopped after it leaves the database; the companion
         // still has the column its statements read.
-        await migrate(1);
+        await migrateStoppingBefore(
+          f => !before.has(f) && !f.includes("_archive_localization_")
+        );
         expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
 
         const file = (await readdir(migrationsDir)).find(f =>
@@ -575,8 +610,8 @@ for (const entry of DIALECTS) {
         await migrate();
         await seed();
         await migrateCreate(shared);
-        // The archive file and the main file.
-        await migrate(2);
+        // The archive file and the main file, as a run that stopped before the shared file.
+        await migrateStoppingBefore(f => f.includes("_shared_localization_"));
         await adapter.executeQuery(
           `ALTER TABLE ${q(companion)} RENAME COLUMN ${q("body")} TO ${q("body_moved")}`
         );

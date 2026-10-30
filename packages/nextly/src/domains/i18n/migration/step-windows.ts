@@ -178,10 +178,18 @@ export function filesWithinStep<T extends StepFile>(
     if (past && open.size === 0) break;
     if (past) continued ??= describeMoves([...open.values()]);
     if (!done) run.push(file);
-    for (const key of windows[i]?.closes ?? []) open.delete(key);
-    for (const [key, intent] of windows[i]?.opens ?? []) open.set(key, intent);
+    shiftWindows(open, windows[i]);
   }
   return { run, budget, continued };
+}
+
+/** Closes the windows a file closes, then opens those it opens. */
+function shiftWindows(
+  open: Map<string, LocalizationMigrationIntent>,
+  file: FileWindows | undefined
+): void {
+  for (const key of file?.closes ?? []) open.delete(key);
+  for (const [key, intent] of file?.opens ?? []) open.set(key, intent);
 }
 
 /** The moves, as the notice names them: `"body" in collection "docs"`. */

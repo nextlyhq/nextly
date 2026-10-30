@@ -1715,16 +1715,55 @@ async function listMigrationFiles(
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
   if (!hasLedger) return all.map(file => ({ file, applied: false }));
+  return withApplied(all, new SchemaEventsRepository(db, dialect));
+}
 
-  const repo = new SchemaEventsRepository(db, dialect);
+/** `files` in run order, each with whether the ledger records it applied. */
+async function withApplied(
+  files: readonly ParsedMigration[],
+  repo: SchemaEventsRepository
+): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   const listed: { file: ParsedMigration; applied: boolean }[] = [];
-  for (const file of all) {
+  for (const file of files) {
     listed.push({
       file,
       applied: await repo.isFileApplied(`${file.name}.sql`),
     });
   }
   return listed;
+}
+
+/**
+ * What a run with `step` does with `listed`: the files the ledger records applied (`done`), the
+ * files it applies (`runs`, as `filesWithinStep` reads them, so the dry run lists the same), and
+ * the file it goes on to past its step inside a move (`continuesAt`), with what it says there. A
+ * step of zero or less reads as no limit here, as it always has; to `filesWithinStep` it would
+ * mean no file at all.
+ */
+function fileRunPlan(
+  listed: readonly { file: ParsedMigration; applied: boolean }[],
+  step: number | undefined
+): {
+  done: ReadonlySet<ParsedMigration>;
+  runs: ReadonlySet<ParsedMigration>;
+  continuesAt: ParsedMigration | undefined;
+  notice: string;
+} {
+  const within = filesWithinStep(
+    listed.map(({ file, applied }) => ({ file, done: applied })),
+    step !== undefined && step > 0 ? step : undefined,
+    "up"
+  );
+  return {
+    done: new Set(listed.filter(l => l.applied).map(l => l.file)),
+    runs: new Set(within.run),
+    // Past the budget only inside a move, so this is set exactly when `continued` is.
+    continuesAt: within.run[within.budget],
+    notice:
+      within.continued === undefined
+        ? ""
+        : stepContinuedNotice(within.continued),
+  };
 }
 
 async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
@@ -1941,28 +1980,14 @@ export async function runFileMigrations(args: {
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
-  const listed: { file: ParsedMigration; applied: boolean }[] = [];
-  for (const file of all) {
-    listed.push({
-      file,
-      applied: await repo.isFileApplied(`${file.name}.sql`),
-    });
-  }
-  // A step of zero or less reads as no limit here, as it always has; to `filesWithinStep` it
-  // would mean no file at all.
-  const within = filesWithinStep(
-    listed.map(({ file, applied }) => ({ file, done: applied })),
-    args.step !== undefined && args.step > 0 ? args.step : undefined,
-    "up"
-  );
-  const runs = new Set(within.run);
+  const plan = fileRunPlan(await withApplied(all, repo), args.step);
 
-  for (const [i, m] of all.entries()) {
+  for (const m of all) {
     const filename = `${m.name}.sql`;
     const targetFile = await loadTargetSnapshot(metaDir, m.name);
     const target = targetFile?.snapshot ?? null;
 
-    if (listed[i]?.applied === true) {
+    if (plan.done.has(m)) {
       // Advance the baseline past applied files.
       if (targetFile) {
         before = targetFile.snapshot;
@@ -1970,10 +1995,8 @@ export async function runFileMigrations(args: {
       }
       continue;
     }
-    if (!runs.has(m)) break;
-    if (applied === within.budget && within.continued !== undefined) {
-      logger.info(stepContinuedNotice(within.continued));
-    }
+    if (!plan.runs.has(m)) break;
+    if (m === plan.continuesAt) logger.info(plan.notice);
 
     // Both apply routes run the same whole-file judgement, so a foreign drop
     // — or a statement the runner's transaction cannot hold — is refused

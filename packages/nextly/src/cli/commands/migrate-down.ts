@@ -167,8 +167,9 @@ export function selectAppliedTargets(
  * The files `migrate:down --step` rolls back, newest first: `step` of them, and on through a move
  * between translated and shared it would otherwise end inside, saying so (`filesWithinStep`). Each
  * applied file is read for what it is for; one that is missing or can't be read opens and closes
- * nothing, and its own refusal comes from `planRollback` if it is a target. A plugin's modules move
- * no translation, so its stream keeps to the step.
+ * nothing, and its own refusal comes from `planRollback` if it is a target. `reads` hands those
+ * reads on, so the plan is made from the DOWN the window was judged from, read once per pass. A
+ * plugin's modules move no translation, so its stream keeps to the step.
  */
 async function targetsWithinStep(
   rows: SchemaEventRow[],
@@ -178,17 +179,23 @@ async function targetsWithinStep(
     "options" | "fileExists" | "readDownSql" | "logger"
   >,
   notify: boolean
-): Promise<string[]> {
+): Promise<{ targets: string[]; reads?: ReadonlyMap<string, DownRead> }> {
   if (deps.options.plugin !== undefined) {
-    return selectAppliedTargets(rows, step, deps.options.plugin);
+    return {
+      targets: selectAppliedTargets(rows, step, deps.options.plugin),
+    };
   }
   const applied = selectAppliedTargets(rows, Number.POSITIVE_INFINITY);
+  const reads = new Map<string, DownRead>();
   const files = await Promise.all(
     applied.map(async filename => {
-      const read = (await deps.fileExists(filename))
-        ? await deps.readDownSql(filename).catch(() => undefined)
-        : undefined;
-      return { filename, ...(read?.stepFile ?? NO_STEP_FILE) };
+      if (!(await deps.fileExists(filename))) {
+        return { filename, ...NO_STEP_FILE };
+      }
+      const read = await readDown(filename, deps);
+      reads.set(filename, read);
+      const stepFile = "down" in read ? read.down.stepFile : undefined;
+      return { filename, ...(stepFile ?? NO_STEP_FILE) };
     })
   );
   const within = filesWithinStep(
@@ -199,10 +206,24 @@ async function targetsWithinStep(
   if (notify && within.continued !== undefined) {
     deps.logger.info(stepContinuedNotice(within.continued));
   }
-  return within.run.map(f => f.filename);
+  return { targets: within.run.map(f => f.filename), reads };
 }
 
 const NO_STEP_FILE: StepFile = { collections: [], singles: [], components: [] };
+
+/** A file's DOWN, or why it couldn't be read, which `planRollback` turns into its refusal. */
+type DownRead = { down: MigrationDown } | { unreadable: unknown };
+
+async function readDown(
+  filename: string,
+  deps: Pick<MigrateDownCoreDeps, "readDownSql">
+): Promise<DownRead> {
+  try {
+    return { down: await deps.readDownSql(filename) };
+  } catch (unreadable) {
+    return { unreadable };
+  }
+}
 
 /**
  * Negative when ledger filename `a` runs after `b` in its stream: by module
@@ -594,31 +615,46 @@ export async function planRollback(
     | "readLiveElements"
     | "readLiveTables"
     | "readLiveIndexTables"
-  >
+  >,
+  reads?: ReadonlyMap<string, DownRead>
 ): Promise<PlannedDown[]> {
   const planned: PlannedDown[] = [];
   for (const filename of filenames) {
-    try {
-      const down = await deps.readDownSql(filename);
-      const downSql = down.sql.trim();
-      planned.push({
-        filename,
-        downSql,
-        transaction: down.transaction,
-        statements: splitSqlStatements(downSql, deps.dialect, down),
-      });
-    } catch (unreadable) {
-      planned.push({
-        filename,
-        downSql: "",
-        transaction: true,
-        statements: [],
-        unreadable,
-      });
-    }
+    // A DOWN `targetsWithinStep` read for this pass is planned as it was read, not read again.
+    const read = reads?.get(filename) ?? (await readDown(filename, deps));
+    planned.push(plannedFrom(filename, read, deps.dialect));
   }
   await readLiveState(planned, deps);
   return planned;
+}
+
+/** One target's plan from its DOWN, or the reason it can't be planned. */
+function plannedFrom(
+  filename: string,
+  read: DownRead,
+  dialect: SupportedDialect
+): PlannedDown {
+  let unreadable: unknown = "unreadable" in read ? read.unreadable : undefined;
+  if ("down" in read) {
+    try {
+      const downSql = read.down.sql.trim();
+      return {
+        filename,
+        downSql,
+        transaction: read.down.transaction,
+        statements: splitSqlStatements(downSql, dialect, read.down),
+      };
+    } catch (error) {
+      unreadable = error;
+    }
+  }
+  return {
+    filename,
+    downSql: "",
+    transaction: true,
+    statements: [],
+    unreadable,
+  };
 }
 
 /**
@@ -646,7 +682,7 @@ async function planAndGuard(
     await deps.listFileApplies(),
     deps.options.plugin
   );
-  const targets = await targetsWithinStep(
+  const { targets, reads } = await targetsWithinStep(
     rows,
     step,
     deps,
@@ -654,7 +690,7 @@ async function planAndGuard(
   );
   if (targets.length === 0)
     return { planned: [], deletions: [], declined: false };
-  const planned = await planRollback(targets, deps);
+  const planned = await planRollback(targets, deps, reads);
   if (deps.options.dryRun) return { planned, deletions: [], declined: false };
 
   // Guards — evaluated up front for every target, before executing anything.
