@@ -542,30 +542,23 @@ export class DynamicCollectionSchemaService {
    * development, where saves queue files without running them: a save that turns Unique off and
    * a later one that turns it back on must replay as a drop and then a create, whatever the table
    * shows while both are waiting.
-   *
-   * This database's own run (`planFor: "database"`) also skips what the live table already shows,
-   * for a save MySQL stopped part-way: a create where a unique index already covers the column
-   * (asked by what the index covers, since a name proves nothing), and a drop where none is left.
    */
   private uniquenessToggleStatements(
     tableName: string,
     pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
     options:
       | {
-          planFor?: "artefact" | "database";
           uniqueColumns?: ReadonlyMap<string, string | null>;
           indexNames?: ReadonlySet<string>;
         }
       | undefined
   ): string[] {
-    const forDatabase = options?.planFor === "database";
     const statements: string[] = [];
     for (const { previous, field } of pairs) {
       if (previous.unique === field.unique || !fieldProducesColumn(field))
         continue;
       const column = toSnakeCase(field.name);
       if (field.unique === true) {
-        if (forDatabase && options?.uniqueColumns?.has(column)) continue;
         if (this.plannedUniqueIndexName(tableName, field) === null) {
           if (column === "slug") continue;
           throw this.uniquenessNotEnforceable(tableName, field);
@@ -586,7 +579,6 @@ export class DynamicCollectionSchemaService {
         ) ??
         options?.uniqueColumns?.get(before) ??
         undefined;
-      if (forDatabase && live === undefined) continue;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
       // index of its own to drop.
       if (
@@ -848,32 +840,6 @@ export class DynamicCollectionSchemaService {
         `uq_${tableName}_${column}`,
       ]),
     ];
-  }
-
-  /**
-   * Whether this database's own run already has a column's plain index: a save that MySQL, which
-   * commits each schema statement, refused part-way can have created it while the registry still
-   * records the index off. The migration file keeps the create, since it is replayed on
-   * databases that never ran that save.
-   */
-  private indexAlreadyRun(
-    tableName: string,
-    column: string,
-    options:
-      | {
-          planFor?: "artefact" | "database";
-          indexColumns?: ReadonlyMap<string, readonly string[]>;
-        }
-      | undefined
-  ): boolean {
-    // The index of the expected name, and on exactly this column: another index can hold the name.
-    return (
-      options?.planFor === "database" &&
-      this.indexNameCandidates(tableName, column).some(name => {
-        const covered = options.indexColumns?.get(name);
-        return covered?.length === 1 && covered[0] === column;
-      })
-    );
   }
 
   private indexNameCandidates(tableName: string, column: string): string[] {
@@ -1399,13 +1365,6 @@ ${allColumnDefs.join(",\n")}
     newFields: FieldDefinition[],
     options?: {
       /**
-       * Whom the statements are for. The migration file (`"artefact"`, the default) is replayed on
-       * databases that only ever ran migrations, so what it does to an index follows from the
-       * field's history alone. `"database"` is this database's own run, which also skips an index
-       * change the live table already shows: a save MySQL stopped part-way can have made it.
-       */
-      planFor?: "artefact" | "database";
-      /**
        * Previous Draft/Published flag — pass `existing.status === true` so
        * the diff knows whether the table currently has a `status` column.
        */
@@ -1576,12 +1535,6 @@ ${allColumnDefs.join(",\n")}
       );
 
       for (const column of lifecycleColumns) {
-        // This database's own run skips a lifecycle column change the table already shows: a
-        // save that MySQL, which commits each schema statement, refused part-way can have added
-        // or dropped it while the registry still records the lifecycle as before. The migration
-        // file keeps both, since it is replayed on databases that never ran that save.
-        const present = options?.liveColumnTypes?.has(column.name) === true;
-        if (options?.planFor === "database" && present === hasStatus) continue;
         statements.push(
           hasStatus
             ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
@@ -1823,12 +1776,7 @@ ${allColumnDefs.join(",\n")}
                 field
               )
           );
-          if (
-            toggleIndexSql &&
-            !this.indexAlreadyRun(tableName, idxCol, options)
-          ) {
-            statements.push(toggleIndexSql);
-          }
+          if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
           // Same guard as the removal path: turning an index off that the table never carried
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.

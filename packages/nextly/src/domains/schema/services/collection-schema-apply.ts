@@ -15,6 +15,8 @@
  *
  * @module domains/schema/services/collection-schema-apply
  */
+import { sql } from "drizzle-orm";
+
 import {
   isLeavingSettingsRefusal,
   leavingSettingsStep,
@@ -40,6 +42,7 @@ import {
   companionHasStatusColumn,
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
+import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
   movedOnto,
@@ -47,6 +50,12 @@ import {
 } from "../pipeline/apply";
 import { RealClassifier } from "../pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../pipeline/database-url";
+import { desiredCollectionTable } from "../pipeline/desired-collection-table";
+import {
+  readIndexColumns,
+  readIndexUniqueness,
+  readUniqueColumns,
+} from "../pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../pipeline/pre-cleanup/executor";
 import {
   BrowserPromptDispatcher,
@@ -61,9 +70,11 @@ import {
 } from "../pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import type { Resolution } from "../pipeline/resolution/types";
+import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-recovery";
 import type { DesiredCollection } from "../pipeline/types";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
+import { toSnakeCase } from "./field-column-descriptor";
 
 /**
  * The fields the registry records for a collection before a Schema Builder change, as it records
@@ -337,6 +348,16 @@ export async function applyCollectionSchemaChange(
     recordedFields: recordedFieldsOf(collection),
   };
 
+  // A SQLite table rebuild an earlier apply was stopped in the middle of is finished or undone
+  // first, before anything reads the live schema: the push would otherwise meet the rebuild's copy
+  // as a table of its own.
+  if (dialect === "sqlite") {
+    await recoverInterruptedSqliteRebuilds(db, managedTablesOf(desired));
+  }
+  // An index the change declares whose name another index already holds is refused before
+  // anything changes, naming it.
+  await refuseIndexNamesTaken(adapter, desired.collections[slug]);
+
   // A field leaving translation has preconditions of its own, asked before the push alters
   // anything.
   await archiveFieldsLeavingTranslation({
@@ -472,5 +493,123 @@ export async function applyCollectionSchemaChange(
       });
     }
   }
+  // The unique index a field that stops being unique still has under a name the push does not
+  // declare, as an older table carries, or one an earlier save took on as the field's: dropped,
+  // so the column is no longer held unique while the change records it is not.
+  await dropUniquenessLeftOn(adapter, tableName, oldFields, fields);
   return result;
+}
+
+/** Every table the desired schema manages, by name. */
+function managedTablesOf(desired: {
+  collections: Record<string, { tableName: string }>;
+  singles: Record<string, { tableName: string }>;
+  components: Record<string, { tableName: string }>;
+}): ReadonlySet<string> {
+  return new Set(
+    [
+      ...Object.values(desired.collections),
+      ...Object.values(desired.singles),
+      ...Object.values(desired.components),
+    ].map(entry => entry.tableName)
+  );
+}
+
+/**
+ * Refuse a change that declares an index under a name another index of the table already holds,
+ * on other columns or with another uniqueness: the push creates an index only where its name is
+ * free, so the field would be recorded unique, or indexed, while the index under that name
+ * enforces something else. A precondition, read from the live table before anything changes,
+ * against the indexes the push itself declares.
+ */
+async function refuseIndexNamesTaken(
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
+  collection: DesiredCollection
+): Promise<void> {
+  const { tableName } = collection;
+  if (!(await adapter.tableExists(tableName))) return;
+  const db = adapter.getDrizzle();
+  const [covers, uniqueness] = await Promise.all([
+    readIndexColumns(db, adapter.dialect, tableName),
+    readIndexUniqueness(db, adapter.dialect, tableName),
+  ]);
+  const declared =
+    desiredCollectionTable(collection, adapter.dialect).indexes ?? [];
+  const taken = declared.flatMap(index => {
+    const live = covers.get(index.name);
+    if (live === undefined || index.columns.length === 0) return [];
+    const sameColumns =
+      live.length === index.columns.length &&
+      live.every((column, i) => column === index.columns[i]);
+    const sameUniqueness =
+      (uniqueness.get(index.name)?.unique === true) === index.unique;
+    return sameColumns && sameUniqueness ? [] : [{ index, live }];
+  });
+  if (taken.length === 0) return;
+  throw NextlyError.validation({
+    errors: taken.map(({ index, live }) => ({
+      path: `fields.${index.columns[0]}`,
+      code: "INDEX_NAME_TAKEN",
+      message:
+        `The table already has an index "${index.name}" on ${live.join(", ")}, under the name ` +
+        `this change's ${index.unique ? "unique " : ""}index on ${index.columns.join(", ")} ` +
+        `takes. Remove that index first, then save again.`,
+    })),
+    logContext: {
+      tableName,
+      indexes: taken.map(({ index, live }) => ({ name: index.name, live })),
+    },
+  });
+}
+
+/**
+ * Drop the single-column unique index still covering a column whose field stops being unique.
+ * The push drops the index it declared; one under another name, as an older table carries it, or
+ * an earlier save took on as the field's, is the column's other uniqueness. A composite index is
+ * never touched: it is not the field's.
+ */
+async function dropUniquenessLeftOn(
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
+  tableName: string,
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[]
+): Promise<void> {
+  const stopped = newFields.filter(
+    field =>
+      field.unique !== true &&
+      oldFields.some(old => old.name === field.name && old.unique === true)
+  );
+  if (stopped.length === 0) return;
+  const db = adapter.getDrizzle();
+  const dialect = adapter.dialect;
+  const unique = await readUniqueColumns(db, dialect, tableName);
+  for (const field of stopped) {
+    const name = unique.get(toSnakeCase(field.name));
+    // No name: the primary key, or SQLite's index for an inline UNIQUE, which no statement drops.
+    if (name === undefined || name === null) continue;
+    if (dialect === "postgresql") {
+      await runStatement(
+        db,
+        dialect,
+        sql`ALTER TABLE ${sql.identifier(tableName)} DROP CONSTRAINT IF EXISTS ${sql.identifier(name)}`
+      );
+      await runStatement(
+        db,
+        dialect,
+        sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`
+      );
+    } else if (dialect === "mysql") {
+      await runStatement(
+        db,
+        dialect,
+        sql`DROP INDEX ${sql.identifier(name)} ON ${sql.identifier(tableName)}`
+      );
+    } else {
+      await runStatement(
+        db,
+        dialect,
+        sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`
+      );
+    }
+  }
 }
