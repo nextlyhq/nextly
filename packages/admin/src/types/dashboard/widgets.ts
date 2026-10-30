@@ -334,6 +334,19 @@ export interface DashboardLayoutResponse {
   readAheadToken?: string;
 }
 
+/**
+ * A layout answer as the admin holds it: the server's answer, with the dashboard width its read
+ * was sent. Set by the admin's own read (`fetchDashboardLayout`), never by the server.
+ */
+export interface DashboardLayoutRead extends DashboardLayoutResponse {
+  /**
+   * The dashboard width the read was sent, which its `hiddenWhileEmpty` was judged at; absent
+   * when it was sent none. The verdict holds only on a dashboard whose width draws every card at
+   * the tier this one does (`tierBandAt`), so an answer held from another width judges no card.
+   */
+  askedAtWidth?: number;
+}
+
 /** What the layout read says of the Get started card. */
 export interface GetStartedLayoutView {
   /** Whether the reader's card is drawn. */
