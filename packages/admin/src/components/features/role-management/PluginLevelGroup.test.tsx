@@ -213,6 +213,54 @@ describe("PluginLevelGroup", () => {
     ).toBeInTheDocument();
   });
 
+  it("adds the action where two of its permissions share a name and a resource", async () => {
+    const user = userEvent.setup();
+    const onReports = (action: string): Permission => ({
+      id: `reports-${action}`,
+      name: "Export",
+      resource: "reports",
+      action,
+      owner: FORMS,
+    });
+    render(
+      <Harness
+        group={{
+          ...GROUP,
+          permissions: [
+            onReports("export-csv"),
+            onReports("export-pdf"),
+            { ...onReports("export"), resource: "submissions", id: "s-export" },
+          ],
+        }}
+        initial={[]}
+      />
+    );
+
+    await user.click(fold());
+
+    expect(
+      screen.getByRole("switch", {
+        name: "Form builder: Export (reports, export-csv)",
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", {
+        name: "Form builder: Export (reports, export-pdf)",
+      })
+    ).toBeInTheDocument();
+    // A name shared only across resources still reads by its resource alone.
+    expect(
+      screen.getByRole("switch", { name: "Form builder: Export (submissions)" })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the folded level's words on one line beside a long name", () => {
+    render(<Harness group={GROUP} initial={[]} />);
+
+    const badge = within(fold()).getByText("No access");
+    expect(badge).toHaveClass("shrink-0", "whitespace-nowrap");
+  });
+
   it("gives a plugin with no collection a switch for each permission it declares", async () => {
     const user = userEvent.setup();
     render(<Harness group={{ ...GROUP, rows: [] }} initial={[]} />);

@@ -10,7 +10,7 @@
 
 import type { Permission } from "../../types/ui/form";
 
-import type { AccessLevel } from "./levels";
+import type { AccessLevel, LevelKind } from "./levels";
 
 /** What each level is called on the screen. */
 export const LEVEL_LABELS: Readonly<Record<AccessLevel, string>> = {
@@ -86,12 +86,17 @@ export function listed(words: readonly string[]): string {
  * role can be given, since the rule may still refuse or narrow it.
  */
 export function narrowedInCode(
-  kind: "collection" | "single",
+  kind: LevelKind,
   declaredRules: readonly string[]
 ): string {
   const actions = listed(
     declaredRules.map(rule => ACTION_LABELS.get(rule)?.toLowerCase() ?? rule)
   );
-  const owner = kind === "single" ? "This Single's" : "This collection's";
+  const owner =
+    kind === "single"
+      ? "This Single's"
+      : kind === "system"
+        ? "This resource's"
+        : "This collection's";
   return `${owner} code also limits who can ${actions} it. The level here is the most a role can be given.`;
 }
