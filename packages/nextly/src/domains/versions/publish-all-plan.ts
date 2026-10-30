@@ -17,6 +17,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { NextlyError, SharedFieldsConflictPublicData } from "../../errors";
+import { isBlank, populateTranslationStatus } from "../i18n/companion-join";
+import type { SanitizedLocalizationConfig } from "../i18n/config/types";
+import { resolveLocaleChain } from "../i18n/resolve-locale";
+import type { CompanionSchema } from "../i18n/runtime/companion-io";
 
 import {
   differingFields,
@@ -449,6 +453,79 @@ export function languageOutcomes(args: {
         .fallbackChain(locale)
         .find(code => code !== locale && args.hasOwnContent(code)) ?? null;
     return { locale, outcome: "shows-fallback", fallback };
+  });
+}
+
+/**
+ * Each configured language's outcome for a document whose translations are
+ * stored in `companion`, read on `tx` before anything is written: the one
+ * reading of {@link languageOutcomes} every kind of document gives, so a
+ * collection entry and a Single report one publish the same way.
+ */
+export async function storedLanguageOutcomes(
+  tx: TransactionContext,
+  args: {
+    companion: CompanionSchema;
+    localization: SanitizedLocalizationConfig;
+    entryId: string;
+    /** The pending changes as stored, before their shared values are merged. */
+    pending: readonly PendingChange[];
+    /** Each stored translation's status before the publish. */
+    prior: ReadonlyMap<string, string | null>;
+    /** The document's own status before the publish, on its main row. */
+    mainStatus: unknown;
+    outOfDate: NamedVerdict["outOfDate"];
+  }
+): Promise<LanguageOutcome[]> {
+  const { companion, localization } = args;
+  const configured = localization.locales.map(locale => locale.code);
+  // Whether each language has content of its own, as the translation
+  // overview judges it, so the two never disagree.
+  const row: Record<string, unknown> = { id: args.entryId };
+  await populateTranslationStatus({
+    db: tx.getDrizzle<Parameters<typeof populateTranslationStatus>[0]["db"]>(),
+    companionTable: companion.table,
+    localizedFields: companion.localizedFields,
+    rows: [row],
+    locales: configured,
+    defaultLocale: localization.defaultLocale,
+    hasStatus: companion.hasStatus,
+    // A publishable companion is one that is there.
+    readiness: "ready",
+  });
+  const overview = (row._translations ?? {}) as Record<
+    string,
+    { translated?: boolean } | undefined
+  >;
+  // Content of its own as the publish leaves it: a language whose pending
+  // change goes live has what that change holds, by the overview's rule (a
+  // translated value that isn't blank); every other one keeps what it has.
+  const pendingContent = new Map(
+    args.pending.flatMap(draft => {
+      if (draft.locale === null) return [];
+      const values = snapshotRecord(draft.snapshot);
+      return [
+        [
+          draft.locale,
+          companion.localizedFields.some(f => !isBlank(values[f.name])),
+        ] as const,
+      ];
+    })
+  );
+  return languageOutcomes({
+    configured,
+    defaultLocale: localization.defaultLocale,
+    pending: new Set(args.pending.map(draft => draft.locale)),
+    outOfDate: args.outOfDate,
+    prior: args.prior,
+    mainStatus: args.mainStatus,
+    hasOwnContent: locale =>
+      locale === localization.defaultLocale ||
+      (pendingContent.get(locale) ?? overview[locale]?.translated === true),
+    // The chain a read of the language resolves through, so the language
+    // named is the one its readers see.
+    fallbackChain: locale =>
+      resolveLocaleChain(localization, locale, undefined) ?? [locale],
   });
 }
 

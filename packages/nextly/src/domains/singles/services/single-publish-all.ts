@@ -58,11 +58,7 @@ import {
   fieldGroupWriteAccessOf,
   type FieldGroupWriteAccess,
 } from "../../field-groups/services/field-group-mutation-service";
-import {
-  isBlank,
-  populateTranslationStatus,
-  readCompanionLocaleStatusAll,
-} from "../../i18n/companion-join";
+import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   languagesChangedConflict,
@@ -79,7 +75,6 @@ import {
   perLanguageFieldNames,
   reachesLocalizedFieldGroup,
 } from "../../i18n/per-language-fields";
-import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
   type CompanionSchema,
@@ -94,7 +89,6 @@ import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
   judgeSharedValues,
   type LanguageOutcome,
-  languageOutcomes,
   languageStatusBefore,
   languagesGoingLiveAsStored,
   type LiveSharedDocument,
@@ -108,6 +102,7 @@ import {
   type PublishAllBlocker,
   type RefuseSharedFields,
   sharedStateForPublish,
+  storedLanguageOutcomes,
   withVerdictState,
 } from "../../versions/publish-all-plan";
 import {
@@ -115,7 +110,6 @@ import {
   readableFieldNames,
   releaseAllSharedBases,
   sharedValuesConflict,
-  snapshotRecord,
 } from "../../versions/shared-publish-base";
 import {
   type ComponentFieldResolver,
@@ -1545,56 +1539,14 @@ export class SinglePublishAllService extends BaseService {
     const { companion } = plan;
     const localization = this.localization;
     if (!companion || !plan.companionPublishable || !localization) return [];
-    const configured = localization.locales.map(locale => locale.code);
-    // Whether each language has content of its own, as the translation
-    // overview judges it, so the two never disagree.
-    const row: Record<string, unknown> = { id: plan.existingDoc.id };
-    await populateTranslationStatus({
-      db: tx.getDrizzle<
-        Parameters<typeof populateTranslationStatus>[0]["db"]
-      >(),
-      companionTable: companion.table,
-      localizedFields: companion.localizedFields,
-      rows: [row],
-      locales: configured,
-      defaultLocale: localization.defaultLocale,
-      hasStatus: companion.hasStatus,
-      // A publishable companion is one that is there.
-      readiness: "ready",
-    });
-    const overview = (row._translations ?? {}) as Record<
-      string,
-      { translated?: boolean } | undefined
-    >;
-    // Content of its own as the publish leaves it: a language whose pending
-    // change goes live has what that change holds, by the overview's rule (a
-    // translated value that isn't blank); every other one keeps what it has.
-    const pendingContent = new Map(
-      stored.flatMap(draft => {
-        if (draft.locale === null) return [];
-        const values = snapshotRecord(draft.snapshot);
-        return [
-          [
-            draft.locale,
-            companion.localizedFields.some(f => !isBlank(values[f.name])),
-          ] as const,
-        ];
-      })
-    );
-    return languageOutcomes({
-      configured,
-      defaultLocale: localization.defaultLocale,
-      pending: new Set(stored.map(draft => draft.locale)),
-      outOfDate,
+    return storedLanguageOutcomes(tx, {
+      companion,
+      localization,
+      entryId: plan.existingDoc.id,
+      pending: stored,
       prior,
       mainStatus,
-      hasOwnContent: locale =>
-        locale === localization.defaultLocale ||
-        (pendingContent.get(locale) ?? overview[locale]?.translated === true),
-      // The chain a read of the language resolves through, so the language
-      // named is the one its readers see.
-      fallbackChain: locale =>
-        resolveLocaleChain(localization, locale, undefined) ?? [locale],
+      outOfDate,
     });
   }
 
