@@ -110,7 +110,7 @@ import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { createContext, type CommandContext } from "../program";
+import { createContext, type CommandContext } from "../context";
 import {
   getDialectDisplayName,
   validateDatabaseEnv,

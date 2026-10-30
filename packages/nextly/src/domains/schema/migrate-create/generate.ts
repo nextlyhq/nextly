@@ -317,42 +317,25 @@ export async function generateMigration(
   // Tagged rather than concatenated: the kind is half of the transition marker's key, so an entry
   // that lost track of which list it came from could not name the record it belongs to.
   // What the companion files left: each companion's columns, and which companions exist; and
-  // whether the previous snapshot says which tables were translated without them. A project with
-  // no localization file and nothing translated in the config was never translated through its
-  // migrations, so its snapshot has nothing left unsaid.
-  const fileHistory = await readCompanionHistory(args.migrationsDir);
-  const translatedNow = [
-    ...args.collections,
-    ...args.singles,
-    ...args.components,
-  ].some(e => e.localized === true);
-  const snapshotSays = recordsTranslatedFields(previous?.data ?? null);
-  const companionHistory: TranslationRecords = {
-    ...fileHistory,
-    snapshotRecords: snapshotSays || (!fileHistory.anyFile && !translatedNow),
-  };
+  // whether the previous snapshot says which tables were translated without them.
+  const { records: companionHistory, snapshotSays } =
+    await readTranslationRecords(args, previous?.data ?? null);
   // Nothing to record, whatever else the config holds: the snapshot already says which tables
   // are translated. Decided before any planner, whose refusals and warnings are about a change
   // this run does not make. A never-translated project's older snapshot doesn't say so itself,
   // and turning translation on there is refused until it does, so it records.
-  if (args.recordSnapshot === true && snapshotSays) {
-    return null;
-  }
+  if (args.recordSnapshot === true && snapshotSays) return null;
   const entities = [
     ...args.collections.map(e => tagged(e, "collection")),
     ...args.singles.map(e => tagged(e, "single")),
     ...args.components.map(e => tagged(e, "fieldGroup")),
   ];
-  // A recording run refuses any change below, this one included, as a change to migrate.
-  if (args.recordSnapshot !== true) {
-    refuseUnrecordedTranslationChanges(
-      entities,
-      previousSnapshot,
-      desiredSnapshot,
-      companionHistory,
-      args.name
-    );
-  }
+  refuseUnrecordedUnlessRecording(args, {
+    entities,
+    previousSnapshot,
+    desiredSnapshot,
+    history: companionHistory,
+  });
   const companionPlans = planCompanionMigrations(
     entities,
     previousSnapshot,
@@ -419,8 +402,8 @@ export async function generateMigration(
   );
   const hasSettingsChanges = changedSettings.length > 0;
 
-  if (args.recordSnapshot === true) {
-    refuseChangesToRecord([
+  const recorded = await recordedUnlessChanged(args, {
+    pendingTables: [
       ...operations.map(operationTableName),
       ...[
         ...companionPlans,
@@ -428,19 +411,17 @@ export async function generateMigration(
         ...fieldJoinsPlans.map(({ plan }) => plan),
         ...uniquePlans,
       ].map(({ spec }) => spec.mainTable),
-    ]);
-    // A settings change alone is written below as the settings-only migration it is, and its
-    // snapshot records the translated fields as every snapshot does.
-    if (!hasSettingsChanges) {
-      return recordSnapshot(args, {
-        written: stream.written,
-        contributions: stream.contributions,
-        entities: settingsRecord,
-        metaDir,
-        now,
-      });
-    }
-  }
+    ],
+    hasSettingsChanges,
+    record: {
+      written: stream.written,
+      contributions: stream.contributions,
+      entities: settingsRecord,
+      metaDir,
+      now,
+    },
+  });
+  if (recorded !== undefined) return recorded;
   if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }
@@ -711,6 +692,79 @@ export async function generateMigration(
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
   };
+}
+
+/**
+ * What says how each entity's companion stood before this run (`TranslationRecords`), and whether
+ * the previous snapshot says so itself (`snapshotSays`, `recordsTranslatedFields`). A project with
+ * no localization file and nothing translated in the config was never translated through its
+ * migrations, so its snapshot has nothing left unsaid either.
+ */
+async function readTranslationRecords(
+  args: Pick<
+    GenerateArgs,
+    "migrationsDir" | "collections" | "singles" | "components"
+  >,
+  previous: SnapshotFile | null
+): Promise<{ records: TranslationRecords; snapshotSays: boolean }> {
+  const fileHistory = await readCompanionHistory(args.migrationsDir);
+  const translatedNow = [
+    ...args.collections,
+    ...args.singles,
+    ...args.components,
+  ].some(e => e.localized === true);
+  const snapshotSays = recordsTranslatedFields(previous);
+  return {
+    records: {
+      ...fileHistory,
+      snapshotRecords: snapshotSays || (!fileHistory.anyFile && !translatedNow),
+    },
+    snapshotSays,
+  };
+}
+
+/**
+ * `refuseUnrecordedTranslationChanges`, for a run that isn't recording: a recording run refuses
+ * any change, these included, as a change to migrate (`recordedUnlessChanged`).
+ */
+function refuseUnrecordedUnlessRecording(
+  args: Pick<GenerateArgs, "recordSnapshot" | "name">,
+  plan: {
+    entities: readonly TaggedConfigEntity[];
+    previousSnapshot: NextlySchemaSnapshot;
+    desiredSnapshot: NextlySchemaSnapshot;
+    history: TranslationRecords;
+  }
+): void {
+  if (args.recordSnapshot === true) return;
+  refuseUnrecordedTranslationChanges(
+    plan.entities,
+    plan.previousSnapshot,
+    plan.desiredSnapshot,
+    plan.history,
+    args.name
+  );
+}
+
+/**
+ * A recording run's result, or `undefined` for any other run and for a recording run that writes
+ * a settings change: refused while a table change is pending (`refuseChangesToRecord`), and
+ * otherwise the record migration (`recordSnapshot`). A settings change alone is written as the
+ * settings-only migration it is, and its snapshot records the translated fields as every snapshot
+ * does.
+ */
+async function recordedUnlessChanged(
+  args: GenerateArgs,
+  run: {
+    pendingTables: readonly string[];
+    hasSettingsChanges: boolean;
+    record: Omit<MigrationPair, "sqlContent">;
+  }
+): Promise<GenerateResult | undefined> {
+  if (args.recordSnapshot !== true) return undefined;
+  refuseChangesToRecord(run.pendingTables);
+  if (run.hasSettingsChanges) return undefined;
+  return recordSnapshot(args, run.record);
 }
 
 /**

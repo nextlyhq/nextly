@@ -33,7 +33,7 @@ import {
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { describeError } from "../../errors/index";
-import { createContext, type CommandContext } from "../program";
+import { createContext, type CommandContext } from "../context";
 import { validateDatabaseEnv, withAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
