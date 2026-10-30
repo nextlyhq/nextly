@@ -53,6 +53,7 @@ const CORE_GROUPS = {
   [CORE_WIDGET_ID.note]: "overview",
   [CORE_WIDGET_ID.recentEntries]: "content",
   [CORE_WIDGET_ID.overTime]: "content",
+  [CORE_WIDGET_ID.systemHealth]: "overview",
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */
