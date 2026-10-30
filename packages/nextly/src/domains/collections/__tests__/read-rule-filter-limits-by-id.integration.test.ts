@@ -9,13 +9,14 @@
  * for an entry outside the filter is compared whole with the answer for an
  * id no entry has.
  *
- * Asked as a visitor through the Direct API, so no stored role is needed: a
- * visitor's read is judged by the collection's read rule alone.
+ * Asked as a visitor through the Direct API, whom the Public role grants the
+ * read, so the collection's read rule is what narrows it.
  *
  * @module domains/collections/__tests__/read-rule-filter-limits-by-id.integration.test
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
 import {
@@ -57,6 +58,11 @@ afterEach(async () => {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    // The cases read as a visitor, judged by the Public role a real boot
+    // makes. Each read rule answers a filter rather than `true`, so boot
+    // grants Public no read of them; it is granted below, as a site admin
+    // would, so the filter is what decides which entries a visitor sees.
+    seedPublic: true,
     fieldGroups: [
       defineFieldGroup({ slug: META, fields: [text({ name: "heading" })] }),
     ],
@@ -99,6 +105,12 @@ async function boot(): Promise<TestNextly> {
       }),
     ],
   });
+  await grantPublic(
+    current,
+    [NOTES, DRAFTED, COMPONENTED, RENAMED_CHILD, VANISHED].map(
+      slug => `read-${slug}`
+    )
+  );
   return current;
 }
 
