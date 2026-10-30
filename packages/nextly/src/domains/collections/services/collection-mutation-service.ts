@@ -9839,6 +9839,10 @@ export class CollectionMutationService extends BaseService {
       const baseFinalData = { ...finalData };
       const baseManyToManyData = { ...manyToManyData };
       const baseComponentFieldData = { ...componentFieldData };
+      // The caller's own translated values, which the promote fold replaces
+      // with the merged draft's. Never written in place, only rebound, so the
+      // reference is the caller's split for every attempt.
+      const baseLocalizedUpdate = localizedUpdate;
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;
@@ -9850,6 +9854,9 @@ export class CollectionMutationService extends BaseService {
           finalData = { ...baseFinalData };
           manyToManyData = { ...baseManyToManyData };
           componentFieldData = { ...baseComponentFieldData };
+          // A retry that no longer finds the pending change writes the
+          // caller's translated values, not the ones a lost attempt promoted.
+          localizedUpdate = baseLocalizedUpdate;
           workingDraftDocument = undefined;
           // `let` because promote-on-publish rebinds it from the merged
           // draft+payload after the working draft is folded in below. Annotated
