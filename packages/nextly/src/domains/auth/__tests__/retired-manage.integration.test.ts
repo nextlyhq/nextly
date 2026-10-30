@@ -26,8 +26,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runUpgrade, type UpgradeAdapter } from "../../../cli/commands/upgrade";
 import { getDialectTables } from "../../../database/index";
+import { getService } from "../../../di";
 import { seedSuperAdmin } from "../../../database/seeders/super-admin";
-import { warnIfCoreSchemaIsBehind } from "../../../init/first-run";
 import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
   createTestNextly,
@@ -37,6 +37,11 @@ import {
 } from "../../../plugins/test-nextly";
 import { ServiceContainer } from "../../../services/index";
 
+import {
+  plantRetiredManagePermissions,
+  plantRole,
+} from "./retired-manage-rows";
+
 /** The resources whose `manage` permission is retired. */
 const RETIRED = ["media", "settings", "email-providers", "email-templates"];
 const PLAIN = ["read", "create", "update", "delete"];
@@ -44,10 +49,6 @@ const PLAIN = ["read", "create", "update", "delete"];
 /** The plain four on `resource`, as slugs. */
 const plainOn = (resource: string) =>
   PLAIN.map(action => `${action}-${resource}`);
-
-type Db = {
-  insert: (table: unknown) => { values: (rows: unknown) => Promise<unknown> };
-};
 
 describe.each(getConfiguredTestDialects())(
   "retired manage permissions (%s)",
@@ -75,24 +76,11 @@ describe.each(getConfiguredTestDialects())(
     /** A role holding exactly `slugs`, stored as an earlier release stored them. */
     async function plantedRole(name: string, slugs: string[]): Promise<string> {
       const ids = await idsBySlug();
-      const roleId = randomUUID();
-      const { roles, rolePermissions } = getDialectTables();
-      const db = t.adapter.getDrizzle() as unknown as Db;
-      await db.insert(roles).values({
-        id: roleId,
+      return plantRole(
+        t.adapter,
         name,
-        slug: name,
-        level: 10,
-        isSystem: false,
-      });
-      await db.insert(rolePermissions).values(
-        slugs.map(slug => ({
-          id: randomUUID(),
-          roleId,
-          permissionId: ids.get(slug),
-        }))
+        slugs.map(slug => ids.get(slug)!)
       );
-      return roleId;
     }
 
     /** Every role holding a retired `manage` permission, by name. */
@@ -124,18 +112,15 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
-    /** What a start says about the core schema and stored access data. */
+    /** What a start's seeding warns, as a boot runs it. */
     async function startupWarnings(): Promise<string[]> {
-      const warned: string[] = [];
-      await warnIfCoreSchemaIsBehind(
-        t.adapter as unknown as Parameters<typeof warnIfCoreSchemaIsBehind>[0],
-        {
-          info: () => undefined,
-          warn: (msg: string) => warned.push(msg),
-        } as unknown as Parameters<typeof warnIfCoreSchemaIsBehind>[1],
-        30_000
-      );
-      return warned;
+      const warn = vi.spyOn(getService("logger"), "warn");
+      try {
+        await seedPermissionsAndRolePresets();
+        return warn.mock.calls.map(call => String(call[0]));
+      } finally {
+        warn.mockRestore();
+      }
     }
 
     beforeAll(async () => {
@@ -144,6 +129,8 @@ describe.each(getConfiguredTestDialects())(
       });
       // The boot's seeding: permissions and the role presets.
       await seedPermissionsAndRolePresets();
+      // An install upgraded from a release that seeded the retired ones.
+      await plantRetiredManagePermissions(t.adapter);
     });
 
     afterAll(async () => {
@@ -489,10 +476,39 @@ describe.each(getConfiguredTestDialects())(
         jobsId = await plantedRole("planted-jobs", ["manage-background-jobs"]);
       });
 
+      it("names no built-in role the same start's seeding converts", async () => {
+        // A preset is brought back to its set at each boot, and its writer
+        // stores a retired permission as the plain four: by the time the
+        // start names anyone, the preset holds none.
+        const { data } = await services().roles.listRoles({ limit: 1000 });
+        const editor = data.find(role => role.slug === "editor")!;
+        const ids = await idsBySlug();
+        const { rolePermissions } = getDialectTables();
+        await (
+          t.adapter.getDrizzle() as unknown as {
+            insert: (table: unknown) => {
+              values: (rows: unknown) => Promise<unknown>;
+            };
+          }
+        )
+          .insert(rolePermissions)
+          .values({
+            id: randomUUID(),
+            roleId: String(editor.id),
+            permissionId: ids.get("manage-media"),
+          });
+        const warned = (await startupWarnings()).join("\n");
+        expect(warned).toContain("planted-manager");
+        expect(warned).not.toContain(`${editor.name}:`);
+        expect(await holds(String(editor.id))).not.toContain("manage-media");
+      });
+
       it("is named once at each start, with the command that converts it", async () => {
         const warned = (await startupWarnings()).join("\n");
         expect(warned.split("planted-manager").length - 1).toBe(1);
         expect(warned).toContain("nextly upgrade");
+        // Said as it is: until converted, the role has no access from it.
+        expect(warned).toContain("no longer gives any access");
         expect(warned).not.toContain("planted-jobs");
       });
 

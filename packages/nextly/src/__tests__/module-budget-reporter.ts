@@ -83,14 +83,17 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * suite measured 70: four tests that already sat just under the heavy line
  * (two migrate commands', the production guard of the dev server, the plugin
  * codegen) crossed it as their shared graph grew by two modules on chains
- * they already held, with no new edge to make lazy. Each
+ * they already held, with no new edge to make lazy. Pinned at the measured
+ * 70, it broke when the same chains grew again; at 74 measured it is 76: two
+ * files of headroom, and still within the margin should CI measure one fewer.
+ * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
  * measures below a pin by more than its margin fails, naming the pin to set;
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 70, tailMeanModules: 1_255 };
+export const BUDGET = { heavyFiles: 76, tailMeanModules: 1_255 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
