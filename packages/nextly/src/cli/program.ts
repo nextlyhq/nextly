@@ -47,6 +47,7 @@ import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune";
 import { createContext, type CommandContext } from "./context";
+import { CLI_MODES, setModeLineWriter } from "./environment";
 
 export {
   createContext,
@@ -100,6 +101,14 @@ export function createProgram(): Command {
     .addOption(
       new Option("--cwd <path>", "Working directory").default(process.cwd())
     )
+    // Read before Commander runs, by the entry point's environment step; declared
+    // here so every command accepts it and a value outside the three is refused.
+    .addOption(
+      new Option(
+        "--mode <mode>",
+        "Mode to run in, which picks the environment files (default: from NODE_ENV)"
+      ).choices(CLI_MODES)
+    )
     .addOption(new Option("--no-color", "Disable colored output"))
     .configureHelp({
       sortSubcommands: true,
@@ -131,6 +140,13 @@ ${pc.bold("Documentation:")}
   let currentCommand = "";
 
   program.hook("preAction", async thisCommand => {
+    // The mode line goes to stderr, so a command's `--json` output stays one
+    // document, and `--quiet` keeps it to errors only.
+    setModeLineWriter(
+      thisCommand.opts<{ quiet?: boolean }>().quiet
+        ? undefined
+        : line => process.stderr.write(`${line}\n`)
+    );
     currentCommand = thisCommand.name();
     if (currentCommand === "telemetry") return; // sub-command handles its own init
     commandStartedAt = Date.now();
