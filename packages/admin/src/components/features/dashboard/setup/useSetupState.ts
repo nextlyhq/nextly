@@ -20,6 +20,8 @@ import { useCallback } from "react";
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
+import { DASHBOARD_SETUP_KEY } from "./useSetupResume";
+
 const SETUP_PATH = "/dashboard/setup";
 
 /** One change, as the route takes it. */
@@ -48,6 +50,8 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     onSuccess: (_answer, change) => {
       if ("dismissed" in change) {
         void queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
+        // The header's "Resume setup" is offered from this answer.
+        void queryClient.invalidateQueries({ queryKey: DASHBOARD_SETUP_KEY });
         return;
       }
       refresh();

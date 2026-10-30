@@ -8,11 +8,13 @@
  *
  * Nothing is drawn while the summary loads or when it could not be read, and
  * "You're all caught up" only when every part was read and none has anything.
+ * What the header ends the line with (`trailing`, "Resume setup") is drawn
+ * after the parts whatever the summary says, as it is not one of them.
  *
  * @module components/features/dashboard/header/SummaryLine
  */
 
-import { Fragment, type JSX, type MouseEvent } from "react";
+import { Fragment, type JSX, type MouseEvent, type ReactNode } from "react";
 
 import { Link, prefersNativeNavigation } from "@admin/components/ui/link";
 import type { DashboardSummary } from "@admin/types/dashboard/summary";
@@ -21,7 +23,8 @@ import { CELL_PLACEMENT_ATTRIBUTE } from "../../widgets/edit/drag/useCardDrag";
 
 import { summaryLine, type SummaryLinePart } from "./summary-wording";
 
-const LINK_CLASS =
+/** How a part that can be pressed is drawn, and anything the line ends with. */
+export const LINK_CLASS =
   "text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm";
 
 /**
@@ -106,28 +109,41 @@ export function SummaryLine({
   summary,
   cards,
   now,
+  trailing,
 }: {
   summary: DashboardSummary | undefined;
   /** Each widget's cards on the dashboard, in its order, by widget id. */
   cards: Readonly<Record<string, readonly string[]>>;
   now: Date;
+  /** Drawn at the line's end, after a " · " when the line has words before it. */
+  trailing?: ReactNode;
 }): JSX.Element | null {
-  if (summary === undefined) return null;
-  const line = summaryLine(summary, now);
-  if (line.kind === "none") return null;
+  const line =
+    summary === undefined
+      ? ({ kind: "none" } as const)
+      : summaryLine(summary, now);
+  if (line.kind === "none" && trailing == null) return null;
   return (
     <p
       className="mt-[3px] text-[12.5px] text-muted-foreground"
       data-testid="dashboard-summary"
     >
-      {line.kind === "caught-up"
-        ? "You're all caught up"
-        : line.parts.map((part, index) => (
-            <Fragment key={part.key}>
-              {index > 0 ? " · " : null}
-              <PartLink part={part} card={cardOf(part, cards)} />
-            </Fragment>
-          ))}
+      {line.kind === "none"
+        ? null
+        : line.kind === "caught-up"
+          ? "You're all caught up"
+          : line.parts.map((part, index) => (
+              <Fragment key={part.key}>
+                {index > 0 ? " · " : null}
+                <PartLink part={part} card={cardOf(part, cards)} />
+              </Fragment>
+            ))}
+      {trailing == null ? null : (
+        <>
+          {line.kind === "none" ? null : " · "}
+          {trailing}
+        </>
+      )}
     </p>
   );
 }

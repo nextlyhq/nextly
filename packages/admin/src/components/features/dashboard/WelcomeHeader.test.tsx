@@ -37,6 +37,18 @@ vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
   useDashboardSummary: () => summaryRead,
 }));
 
+// Whether the reader's dismissed setup card can come back, as a case sets it;
+// the read and the write behind it are `ResumeSetupLink.test.tsx`'s.
+const setupResume = vi.hoisted(() => ({
+  resumable: false,
+  resume: vi.fn(),
+  isResuming: false,
+  failed: false,
+}));
+vi.mock("./setup/useSetupResume", () => ({
+  useSetupResume: () => setupResume,
+}));
+
 let appName = "Acme Site";
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useAppName: () => appName,
@@ -76,6 +88,8 @@ afterEach(() => {
   userRead = { user: null, isLoading: true, error: null };
   summaryRead = { data: undefined };
   appName = "Acme Site";
+  setupResume.resumable = false;
+  setupResume.resume.mockReset();
 });
 
 describe("the dashboard's main heading", () => {
@@ -292,6 +306,46 @@ describe("the dashboard header", () => {
     expect(screen.getByTestId("dashboard-summary")).toHaveTextContent(
       "You're all caught up"
     );
+  });
+
+  it("ends the summary line with Resume setup while the dismissed card can come back, and resumes it when pressed", () => {
+    setupResume.resumable = true;
+    summaryRead = {
+      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
+    };
+    renderHeader({});
+    const line = screen.getByTestId("dashboard-summary");
+    expect(line).toHaveTextContent("2 things need you · Resume setup");
+    const resume = within(line).getByRole("button", { name: "Resume setup" });
+    // The line's last control: after every part, not among them.
+    expect(line.lastElementChild).toBe(resume);
+    fireEvent.click(resume);
+    expect(setupResume.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Resume setup on a line of its own words when the summary says nothing", () => {
+    // 🔴 Drawn only inside a worded line, the way back to a dismissed card
+    // vanished while the summary loaded or a part of it failed.
+    setupResume.resumable = true;
+    summaryRead = { data: { parts: [], failed: 1 } };
+    renderHeader();
+    expect(screen.getByTestId("dashboard-summary")).toHaveTextContent(
+      /^Resume setup$/
+    );
+  });
+
+  it("offers no Resume setup when the card cannot come back", () => {
+    summaryRead = {
+      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
+    };
+    renderHeader({});
+    expect(screen.getByTestId("dashboard-summary")).not.toHaveTextContent(
+      "Resume setup"
+    );
+    cleanup();
+    summaryRead = { data: { parts: [], failed: 1 } };
+    renderHeader();
+    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
   });
 
   it("says how old the data is only past five minutes, once, with Refresh", () => {

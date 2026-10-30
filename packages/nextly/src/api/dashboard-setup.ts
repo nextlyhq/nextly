@@ -14,7 +14,7 @@
  * Internal to the admin, not published API.
  *
  * @module api/dashboard-setup
- * @experimental Until the dashboard's header reads `resumable`.
+ * @experimental
  */
 import { z } from "zod";
 
