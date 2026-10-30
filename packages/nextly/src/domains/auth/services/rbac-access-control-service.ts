@@ -425,19 +425,6 @@ export class RBACAccessControlService {
   }
 
   /**
-   * {@link checkAnonymousCodeAccess}, asked by a reader that applies a
-   * collection read rule's filter: a rule answering one admits the visitor to
-   * the entries it matches, and the filter is handed back to apply.
-   */
-  async checkAnonymousCodeAccessApplyingFilter(params: {
-    operation: AccessOperation;
-    resource: string;
-    codeAccess?: CollectionAccessControl | SingleAccessControl;
-  }): Promise<FilteredRead | undefined> {
-    return this.codeRuleRead(params, null, true);
-  }
-
-  /**
    * A collection's or Single's code-defined rule, judged for a call made as a
    * plugin-defined person.
    *

@@ -15,7 +15,7 @@ import {
   plainFourOnLocked,
   storedAsPlain,
   storedAsPlainLocked,
-} from "../../../auth/access/manage-bridge";
+} from "../../../auth/access/retired-manage-permissions";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -507,7 +507,10 @@ export class RolePermissionService extends BaseService {
    * its resource. Whether anything changed; a role with none changes nothing,
    * so a second conversion finds nothing to do.
    */
-  async convertRetiredManage(roleId: string): Promise<boolean> {
+  async convertRetiredManage(
+    roleId: string,
+    options: { recheckReleases?: boolean } = {}
+  ): Promise<boolean> {
     const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
     let changed = false;
     await this.adapter.transaction(async tx => {
@@ -528,7 +531,7 @@ export class RolePermissionService extends BaseService {
       await this.insertAssignments(tx, roleId, added);
       changed = true;
     });
-    if (changed) await afterRoleGrantsChanged(roleId);
+    if (changed) await afterRoleGrantsChanged(roleId, options);
     return changed;
   }
 

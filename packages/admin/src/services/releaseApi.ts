@@ -22,9 +22,14 @@ import type {
   ReleaseCalendarRead,
   ReleaseListParams,
   ReleaseMember,
+  ReleaseMemberAction,
+  ReleaseReadiness,
   ReleaseReadinessEntry,
   ScheduleReleasePayload,
+  UpdateReleasePayload,
 } from "../types/releases";
+
+import type { DocumentEvent } from "./versionApi";
 
 /**
  * The canonical list envelope this API returns.
@@ -276,3 +281,69 @@ export const deleteRelease = (id: string): Promise<ReleaseMutationResponse> =>
     { method: "DELETE" },
     true
   );
+
+/**
+ * What the checks say about one release's documents right now: the hard
+ * problems that stop it, the soft ones that are notes, and those of documents
+ * the reader may not read, counted by collection.
+ *
+ * Every member is checked, however many the release holds, so a release made
+ * before the member limit is judged whole here rather than left unchecked.
+ */
+export const fetchReleaseReadiness = (id: string): Promise<ReleaseReadiness> =>
+  fetcher<ReleaseReadiness>(`/releases/${id}/readiness`, {}, true);
+
+/**
+ * Rename a release, change its description, or both. The answer is the
+ * release as it now stands, with what the reader may do to it.
+ */
+export const updateRelease = (
+  id: string,
+  payload: UpdateReleasePayload
+): Promise<ReleaseMutationResponse> =>
+  fetcher<ReleaseMutationResponse>(
+    `/releases/${id}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+    true
+  );
+
+/**
+ * Switch one document between going live and coming down. Bound to the
+ * release in the path, as a removal is, so a stale view cannot switch a
+ * document in a release it never opened.
+ */
+export const changeReleaseMemberAction = (
+  releaseId: string,
+  memberId: string,
+  action: ReleaseMemberAction
+): Promise<MemberMutationResponse> =>
+  fetcher<MemberMutationResponse>(
+    `/releases/${releaseId}/members/${memberId}`,
+    { method: "PATCH", body: JSON.stringify({ action }) },
+    true
+  );
+
+/**
+ * A page of a release's history, newest first, from the record of content
+ * events: one shape for every subject, so a release's events read as a
+ * document's do. The next page passes the last event's id as `before`.
+ */
+export interface ReleaseHistoryResponse {
+  items: DocumentEvent[];
+  meta: { total: number; hasNext: boolean };
+}
+
+export const fetchReleaseHistory = (
+  id: string,
+  params: { limit?: number; before?: string; kind?: string } = {}
+): Promise<ReleaseHistoryResponse> => {
+  const search = new URLSearchParams({ subject: "release", id });
+  if (params.limit !== undefined) search.set("limit", String(params.limit));
+  if (params.before !== undefined) search.set("before", params.before);
+  if (params.kind !== undefined) search.set("kind", params.kind);
+  return fetcher<ReleaseHistoryResponse>(
+    `/content-events?${search.toString()}`,
+    {},
+    true
+  );
+};

@@ -20,6 +20,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import {
   date,
   defineCollection,
@@ -45,7 +46,7 @@ const BOARD = "rulefilter_localized_board";
 const CARD = "rulefilter_localized_card";
 const SHELVES = "rulefilter_localized_shelves";
 
-/** A read rule answering `value`, which the rule type does not allow yet. */
+/** A read rule answering `value`, unchecked by the filter type, as untyped code may. */
 const answering = (value: unknown) => () => value as boolean;
 
 let current: TestNextly | undefined;
@@ -56,6 +57,9 @@ afterEach(async () => {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    // The cases read as a visitor, judged by the Public role a real boot
+    // makes, which reads each target whose rule answers `true`.
+    seedPublic: true,
     localization: { locales: ["en", "fr"], defaultLocale: "en" },
     collections: [
       defineCollection({
@@ -101,6 +105,9 @@ async function boot(): Promise<TestNextly> {
       }),
     ],
   });
+  // Granted as a site admin would: these rules answer a filter, so boot
+  // grants Public no read of them, and the filter decides what is shown.
+  await grantPublic(current, [`read-${EVENTS}`, `read-${NOTES}`]);
   return current;
 }
 
