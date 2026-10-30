@@ -27,4 +27,16 @@ describe("RoleSchema", () => {
     const { assignable: _left, ...older } = publicRole;
     expect(RoleSchema.parse(older).assignable).toBeUndefined();
   });
+
+  it("keeps which built-in role a role is, and leaves an ordinary role unmarked", () => {
+    const marked = { ...publicRole, builtIn: "public" };
+    expect(RoleSchema.parse(marked).builtIn).toBe("public");
+    expect(RoleListResponseSchema.parse([marked])[0].builtIn).toBe("public");
+    // CONTROL: a role sent without the marker parses without one.
+    expect(RoleSchema.parse(publicRole).builtIn).toBeUndefined();
+    // Only the two built-in roles are named.
+    expect(() =>
+      RoleSchema.parse({ ...publicRole, builtIn: "editor" })
+    ).toThrow();
+  });
 });

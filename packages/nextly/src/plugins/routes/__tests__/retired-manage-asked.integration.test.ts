@@ -6,9 +6,11 @@
  * create, update and delete there instead. A plugin written before that may
  * still ask for it, by a route's `requiredPermission` or by
  * `ctx.caller.can("manage", resource)`. Either is answered by the plain four:
- * a caller holding all four passes, one holding three of them does not, and
- * a role not yet converted, still holding the retired permission, passes as
- * it did. Each plugin asking it is told once which permission to ask instead.
+ * a caller holding all four passes, and one holding three of them does not.
+ * Nor does a role not yet converted, still holding only the retired
+ * permission: it counts for nothing until `nextly upgrade` has stored the
+ * plain four in its place. Each plugin asking it is told once which
+ * permission to ask instead.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -20,7 +22,10 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { getDialectTables } from "../../../database/index";
+import {
+  plantRetiredManagePermissions,
+  plantRole,
+} from "../../../domains/auth/__tests__/retired-manage-rows";
 import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import { setNextlyLogger } from "../../../observability/logger";
 import { createDynamicHandlers } from "../../../routeHandler";
@@ -83,10 +88,6 @@ function post(plugin: string, sub: string, key: string): Promise<Response> {
   );
 }
 
-type Db = {
-  insert: (table: unknown) => { values: (rows: unknown) => Promise<unknown> };
-};
-
 describe("a plugin gate asking for a retired manage permission", () => {
   let t: TestNextly;
   let ownerId: string;
@@ -101,22 +102,10 @@ describe("a plugin gate asking for a retired manage permission", () => {
     const ids = new Map(data.map(p => [`${p.action}-${p.resource}`, p.id]));
     // Stored through the adapter, as an earlier release stored a role, since
     // every writer now stores a retired permission as the plain four.
-    const roleId = randomUUID();
-    const { roles, rolePermissions } = getDialectTables();
-    const db = t.adapter.getDrizzle() as unknown as Db;
-    await db.insert(roles).values({
-      id: roleId,
-      name: `holder ${roleId}`,
-      slug: `holder-${roleId}`,
-      level: 10,
-      isSystem: false,
-    });
-    await db.insert(rolePermissions).values(
-      slugs.map(slug => ({
-        id: randomUUID(),
-        roleId,
-        permissionId: ids.get(slug),
-      }))
+    const roleId = await plantRole(
+      t.adapter,
+      `holder-${randomUUID()}`,
+      slugs.map(slug => String(ids.get(slug)))
     );
     const apiKeys = t.getService("apiKeyService") as unknown as {
       createApiKey: (
@@ -144,6 +133,8 @@ describe("a plugin gate asking for a retired manage permission", () => {
       plugins: [gateAsker, canAsker],
     });
     await seedPermissionsAndRolePresets();
+    // An install upgraded from a release that seeded the retired ones.
+    await plantRetiredManagePermissions(t.adapter);
     // The first user made is the super-admin, who may mint any key.
     const owner = await t.nextly.users.create({
       email: "owner@manage-asker.test",
@@ -188,11 +179,11 @@ describe("a plugin gate asking for a retired manage permission", () => {
       });
     });
 
-    it("lets through a role not yet converted, holding the retired permission", async () => {
+    it("refuses a role not yet converted, holding only the retired permission", async () => {
       const key = await keyHolding([`manage-${resource}`]);
-      expect((await post(GATE_PLUGIN, resource, key)).status).toBe(200);
+      expect((await post(GATE_PLUGIN, resource, key)).status).toBe(403);
       expect(await (await post(CAN_PLUGIN, resource, key)).json()).toEqual({
-        may: true,
+        may: false,
       });
     });
 

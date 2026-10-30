@@ -21,7 +21,13 @@ import { describe, expect, it, vi } from "vitest";
  * would make this a test of the field renderer, which has its own.
  */
 vi.mock("./EntryFormContent", () => ({
-  EntryFormContent: ({ fields }: { fields: FieldConfig[] }) => (
+  EntryFormContent: ({
+    fields,
+    readOnly,
+  }: {
+    fields: FieldConfig[];
+    readOnly?: boolean;
+  }) => (
     <>
       <span>{fields.map(f => f.name).join(",")}</span>
       {/*
@@ -32,7 +38,7 @@ vi.mock("./EntryFormContent", () => ({
       */}
       {fields.map(f => (
         <span key={f.name}>
-          <input aria-label={`${f.name} input`} />
+          <input aria-label={`${f.name} input`} readOnly={readOnly} />
           <textarea aria-label={`${f.name} textarea`} />
         </span>
       ))}
@@ -205,6 +211,15 @@ describe("the panel a takeover surface offers back", () => {
         values: { editorMode: "builder" },
       })
     ).toBeNull();
+  });
+
+  it("hands its fields read-only, not disabled, when asked to hold them", () => {
+    // A refused publish's recovery holds them so, and a held field keeps focus.
+    render(<div>{fieldsBesidePanel(minimal, "body", { readOnly: true })}</div>);
+
+    const input = screen.getByLabelText("title input");
+    expect(input).toHaveAttribute("readonly");
+    expect(input).not.toBeDisabled();
   });
 
   it("refuses Enter in a single-line field, which would submit the form behind it", () => {

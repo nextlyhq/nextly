@@ -122,8 +122,10 @@ for (const dialect of getConfiguredTestDialects()) {
           "read-email-providers",
         ]);
         manager = await sessionFor(t, services, "manager", [
-          "manage-email-templates",
-          "manage-email-providers",
+          ...["read", "create", "update", "delete"].flatMap(action => [
+            `${action}-email-templates`,
+            `${action}-email-providers`,
+          ]),
         ]);
         stranger = await sessionFor(t, services, "stranger", ["read-users"]);
         const template = await t.nextly.emailTemplates.create({
