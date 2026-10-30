@@ -139,7 +139,7 @@ async function migrationDrops(
     { splitSqlStatements, marksNoTransaction },
     { tablesDroppedIn },
   ] = await Promise.all([
-    import("../../../cli/commands/migrate"),
+    import("../../schema/migrate/sql-sections"),
     import("../../schema/migrate/split-sql"),
     import("../../schema/ownership/drop-guard"),
   ]);
