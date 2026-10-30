@@ -11,8 +11,17 @@
  * grant the delete, and, where it does, asked in each language the entry
  * holds, as a signed-in caller's delete is.
  *
+ * A collection's delete cell in the capabilities answer names no entry, so it
+ * cannot know which languages a delete would remove: it is a hint, yes where
+ * the rule allows some language, in whichever language the request names, and
+ * no only where it allows none.
+ *
  * @module domains/collections/__tests__/every-language-deletes-other-doors.integration.test
  */
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +30,9 @@ import {
 } from "../../../__tests__/fixtures/permission-holders";
 import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
+import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineCollection, text } from "../../../config";
 import { NextlyError } from "../../../errors/nextly-error";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -40,10 +52,12 @@ import type { AccessControlContext } from "../../../shared/types/access";
 const NOT_GERMAN = "otherdoors_not_german";
 // A delete rule allowing every language: the control.
 const ANY_LANGUAGE = "otherdoors_any_language";
+// A delete rule refusing every language.
+const NO_LANGUAGE = "otherdoors_no_language";
 
 const AUTHOR = "otherdoors-author";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
-const SLUGS = [NOT_GERMAN, ANY_LANGUAGE];
+const SLUGS = [NOT_GERMAN, ANY_LANGUAGE, NO_LANGUAGE];
 
 /** The collection service a plugin is handed, kept from its `init`. */
 let services: PluginRouteContext["services"]["collections"] | undefined;
@@ -59,6 +73,7 @@ const probe = definePlugin({
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  resetSessionStandingForTests();
   await current?.destroy();
   current = undefined;
   services = undefined;
@@ -88,6 +103,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: [
       collection(NOT_GERMAN, notGerman),
       collection(ANY_LANGUAGE, () => true),
+      collection(NO_LANGUAGE, () => false),
     ],
   });
   await userWhoMay(current, AUTHOR, "read", SLUGS);
@@ -171,6 +187,36 @@ async function visitorDelete(collection: string, id: string): Promise<number> {
   return res.status;
 }
 
+/** The author's delete cell for each collection, as `?locale=` names it. */
+async function deleteCells(locale: string): Promise<Record<string, unknown>> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId: AUTHOR,
+      email: `${AUTHOR}@example.test`,
+      name: AUTHOR,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  const path = ["me", "capabilities"];
+  const res = await createDynamicHandlers().GET(
+    new Request(`http://localhost/api/${path.join("/")}?locale=${locale}`, {
+      headers: {
+        origin: "http://localhost",
+        cookie: `nextly_session=${token}`,
+      },
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  expect(res.status).toBe(200);
+  const { entities } = (await res.json()) as {
+    entities: Record<string, { delete?: unknown }>;
+  };
+  return Object.fromEntries(SLUGS.map(slug => [slug, entities[slug]?.delete]));
+}
+
 // Each language's rule is asked, and each entry's languages read, in SQL on
 // each database this run reaches.
 describe.each(getConfiguredTestDialects())(
@@ -252,6 +298,22 @@ describe.each(getConfiguredTestDialects())(
         expect(
           await remaining(t, NOT_GERMAN, [withGerman, englishOnly])
         ).toEqual([true, false]);
+      });
+    });
+
+    describe("a collection's delete cell", () => {
+      it("says yes where the rule allows some language, in either language the request names, and no where it allows none", async () => {
+        await boot(dialect);
+        const expected = {
+          [NOT_GERMAN]: true,
+          [ANY_LANGUAGE]: true,
+          [NO_LANGUAGE]: false,
+        };
+
+        // An English-only entry is one the author may delete, so the cell
+        // offers the delete whichever language the admin is shown in.
+        expect(await deleteCells("de")).toEqual(expected);
+        expect(await deleteCells("en")).toEqual(expected);
       });
     });
   }
