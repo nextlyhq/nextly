@@ -23,9 +23,14 @@ type EntriesQuery = {
 
 let entriesQuery: EntriesQuery;
 let collection: Record<string, unknown>;
+// What the list asked of its entries query, last render last.
+let entriesAsked: Array<{ enabled?: boolean }>;
 
 vi.mock("@admin/hooks/queries", () => ({
-  useEntries: () => entriesQuery,
+  useEntries: (options: { enabled?: boolean }) => {
+    entriesAsked.push(options);
+    return entriesQuery;
+  },
   useBulkDeleteEntries: () => ({ mutate: vi.fn(), isPending: false }),
   useBulkUpdateEntries: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -74,6 +79,7 @@ function pages(state?: RemovedFromCodeState): Record<string, unknown> {
 
 beforeEach(() => {
   entriesQuery = { data: ONE_ENTRY, isLoading: false, error: null };
+  entriesAsked = [];
 });
 
 describe("EntryList for a collection removed from code", () => {
@@ -132,6 +138,27 @@ describe("EntryList for a collection removed from code", () => {
     );
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(/no pages yet/i)).toBeNull();
+  });
+
+  it("does not ask for a half-retired one's entries, whose table is gone", () => {
+    // The read would only fail, after its retries, so the table's skeleton
+    // would stand under the notice until then. It is not sent at all.
+    collection = pages({ state: "half-retired" });
+    entriesQuery = { data: undefined, isLoading: true, error: null };
+    renderWithProviders(<EntryList collectionSlug="pages" />);
+
+    expect(entriesAsked.at(-1)?.enabled).toBe(false);
+    expect(screen.getByTestId("removed-from-code-notice")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByPlaceholderText(/search pages/i)).toBeNull();
+  });
+
+  it("still asks for the entries of one whose table exists", () => {
+    collection = pages({ state: "not-dropped" });
+    renderWithProviders(<EntryList collectionSlug="pages" />);
+
+    expect(entriesAsked.at(-1)?.enabled).not.toBe(false);
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
   it("is the same list as before for a declared collection", () => {

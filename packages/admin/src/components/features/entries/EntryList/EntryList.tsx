@@ -290,6 +290,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     asksTranslationStatus,
   ]);
 
+  // A collection removed from code whose main table an applied migration
+  // dropped has no entries to read: the read would only fail, after its
+  // retries, with the table's skeleton standing under the notice until then.
+  const tableGone = removedEntityHasNoTable(collection);
+
   // Fetch entries with pagination and filters
   const {
     data: entriesResponse,
@@ -297,6 +302,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     error: entriesError,
   } = useEntries({
     collectionSlug,
+    enabled: !tableGone,
     params: {
       page,
       limit,
@@ -678,8 +684,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       {/* Content — a plugin List override replaces the default table (D23) */}
       {listViewPath ? (
         <PluginSlot path={listViewPath} props={injectionProps} />
-      ) : entriesError &&
-        removedEntityHasNoTable(collection) ? null : entriesError ? (
+      ) : tableGone ? null : entriesError ? (
         // A list the server refused says so in its own words where the rows
         // would be. Without this a failed read has no rows and is not
         // loading, which draws the empty state and calls the collection empty.
