@@ -407,6 +407,27 @@ describe.each(getConfiguredTestDialects())(
         expect(await stillThere(t, DRAFTED_NOT_FRENCH, id)).toBe(true);
       });
 
+      it("refuses deleting an entry with English rows alone whose recovery point is in German", async () => {
+        const t = await boot(dialect);
+        const id = await entryIn(t, NOT_GERMAN, "english");
+        // An author's autosave of the German edit, never saved: the delete
+        // would remove it with the entry.
+        await t.getService("versionsService").autosave({
+          ref: { scopeKind: "collection", scopeSlug: NOT_GERMAN, entryId: id },
+          status: "draft",
+          snapshot: { title: "entwurf" },
+          locale: "de",
+          createdBy: AUTHOR,
+        });
+
+        expect(
+          await refused(() =>
+            t.nextly.delete({ collection: NOT_GERMAN, id, ...asAuthor })
+          )
+        ).toBe(true);
+        expect(await stillThere(t, NOT_GERMAN, id)).toBe(true);
+      });
+
       it("answers a batch's refused entry the caller may not read as it answers a missing one", async () => {
         const t = await boot(dialect);
         const made = await t.nextly.create({

@@ -273,7 +273,6 @@ import {
   type VersionRef,
   VersionsRepository,
   type VersionRow,
-  WORKING_DRAFT_SHAPE,
 } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
@@ -11817,8 +11816,6 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryIds: readonly string[];
     fields: readonly { type: string; name?: string }[];
-    /** The collection, for whether it keeps working drafts. */
-    collection: unknown;
     tx?: TransactionContext;
   }): Promise<Map<string, string[]> | undefined> {
     const held = await this.languagesWithRows(
@@ -11829,15 +11826,14 @@ export class CollectionMutationService extends BaseService {
     if (held === undefined) return undefined;
     const configured =
       this.localization?.locales.map(locale => locale.code) ?? [];
-    // A delete removes each language's held edit too, and a language may
-    // hold one with no row of its own yet, so those languages are asked.
-    if (this.keepsWorkingDrafts(args.collection)) {
-      await this.addWorkingDraftLanguages(held, {
-        collectionName: args.collectionName,
-        entryIds: args.entryIds,
-        tx: args.tx,
-      });
-    }
+    // A delete removes each language's held edit and recovery point too,
+    // whatever the collection keeps today, and a language may hold one with
+    // no row of its own, so those languages are asked.
+    await this.addPendingLanguages(held, {
+      collectionName: args.collectionName,
+      entryIds: args.entryIds,
+      tx: args.tx,
+    });
     const reachesLocalizedFieldGroup = await this.reachesLocalizedFieldGroup(
       args.fields,
       args.tx
@@ -11854,13 +11850,14 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Add to `held` each language an entry holds a working draft in, whether
-   * or not the site still configures it, as a delete removes every one: one
-   * query for the drafts of every entry, in slices the database binds in one
-   * statement beside the query's own conditions. A draft naming no language
-   * is the default language's.
+   * Add to `held` each language an entry holds a pending row in, a working
+   * draft or an autosave, whether or not the site still configures it or
+   * the collection still keeps drafts, as a delete removes every one: one
+   * query for every entry, in slices the database binds in one statement
+   * beside the query's own conditions. A row naming no language is the
+   * default language's.
    */
-  private async addWorkingDraftLanguages(
+  private async addPendingLanguages(
     held: Map<string, string[]>,
     args: {
       collectionName: string;
@@ -11870,8 +11867,8 @@ export class CollectionMutationService extends BaseService {
   ): Promise<void> {
     const db = args.tx ?? this.adapter;
     const defaultLocale = this.localization?.defaultLocale;
-    // The scope and the working-draft shape take binds of their own.
-    const slice = this.idsPerStatement(2 + WORKING_DRAFT_SHAPE.length);
+    // The scope takes binds of its own.
+    const slice = this.idsPerStatement(2);
     for (let at = 0; at < args.entryIds.length; at += slice) {
       const drafts = await db.select<{
         entryId: string;
@@ -11887,7 +11884,9 @@ export class CollectionMutationService extends BaseService {
               op: "IN",
               value: args.entryIds.slice(at, at + slice),
             },
-            ...WORKING_DRAFT_SHAPE,
+            // Pending rows carry no version number: a durable version always
+            // takes one, and a delete leaves the history it numbers.
+            { column: "versionNo", op: "IS NULL" },
           ],
         },
       });
@@ -11918,7 +11917,6 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryId: string;
     fields: readonly { type: string; name?: string }[];
-    collection: unknown;
     tx?: TransactionContext;
   }): Promise<string[] | undefined> {
     const each = await this.languagesToDeleteEach({
@@ -12076,7 +12074,6 @@ export class CollectionMutationService extends BaseService {
       collectionName: gate.collectionName,
       entryIds: ids,
       fields,
-      collection,
       tx,
     });
     if (each === undefined) {
@@ -12120,8 +12117,6 @@ export class CollectionMutationService extends BaseService {
       tableName: string;
       entryId: string;
       fields: readonly { type: string; name?: string }[];
-      /** The collection, for whether it keeps working drafts. */
-      collection: unknown;
       accessParams: Parameters<
         CollectionAccessService["checkCollectionWrite"]
       >[0] & { operation: "delete"; entryId: string };
@@ -12137,7 +12132,6 @@ export class CollectionMutationService extends BaseService {
       collectionName: args.accessParams.collectionName,
       entryId: args.entryId,
       fields: args.fields,
-      collection: args.collection,
       tx,
     });
     if (held === undefined) {
@@ -12146,12 +12140,16 @@ export class CollectionMutationService extends BaseService {
     // An entry holding no row in any language is judged as a delete of one
     // is: by the gate asked once, in the operation's languages.
     if (held.length === 0) {
+      // The batch's answer names no entry, so a refusal of it is asked again
+      // for this one, as below: a caller who may not read the entry is told
+      // it is missing.
+      const once = typeof rowGate === "object" ? rowGate.once : undefined;
       return this.deleteRowRefusalIn(
         tx,
         args,
-        typeof rowGate === "object"
-          ? rowGate.once
-          : await this.accessService.checkCollectionWrite(args.accessParams),
+        once === undefined || once.denied
+          ? await this.accessService.checkCollectionWrite(args.accessParams)
+          : once,
         undefined
       );
     }
@@ -13073,7 +13071,6 @@ export class CollectionMutationService extends BaseService {
         fields: (collection.schemaDefinition?.fields ||
           collection.fields ||
           []) as FieldConfig[],
-        collection,
       };
       // The companion is read for the entry's languages, so it is ready first.
       await this.warmLocalizedReadiness(params.collectionName);
@@ -15465,7 +15462,6 @@ export class CollectionMutationService extends BaseService {
           fields: (collection.schemaDefinition?.fields ||
             collection.fields ||
             []) as FieldConfig[],
-          collection,
           accessParams,
           rowGate: options.rowGate,
         });
