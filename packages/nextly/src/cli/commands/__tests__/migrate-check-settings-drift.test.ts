@@ -74,6 +74,10 @@ async function run(
     options: {},
     cwd: dir,
   } as CommandContext;
+  // The error a command ends with is printed on standard error, in the error shape.
+  const printed = vi.spyOn(console, "error").mockImplementation(message => {
+    said.push(String(message));
+  });
   const exit = vi.spyOn(process, "exit").mockImplementation(code => {
     throw new Error(`exit ${String(code)}`);
   });
@@ -86,6 +90,7 @@ async function run(
     throw error;
   } finally {
     exit.mockRestore();
+    printed.mockRestore();
   }
 }
 
@@ -115,6 +120,7 @@ describe("migrate:check and settings", () => {
     const { code, said } = await check(project("Articles"));
 
     expect(code).toBe(1);
+    expect(said.join("\n")).toContain("(SETTINGS_CHANGE_WITHOUT_MIGRATION)");
     expect(said.join("\n")).toContain("posts: description");
     expect(said.join("\n")).toContain("migrate:create");
   });

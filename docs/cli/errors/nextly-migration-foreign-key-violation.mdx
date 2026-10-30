@@ -1,0 +1,24 @@
+---
+title: NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION
+description: "On SQLite, a migration left rows that reference rows that do not exist, or foreign-key enforcement could not be switched off for it."
+---
+
+## Cause
+
+On SQLite, a migration left rows that reference rows that do not exist, or foreign-key enforcement could not be switched off for it.
+
+On SQLite, a migration that rebuilds tables runs with foreign-key enforcement switched off and checks every reference after its last statement. Rows left pointing at rows that do not exist fail that check (`dangling-reference`). Enforcement cannot be switched off while another transaction is open on the connection (`enforcement-still-on`), and then nothing is applied.
+
+## Fix
+
+- For dangling references, fix the migration so it moves or deletes the rows that point at removed rows, then run it again.
+- For enforcement still on, run the command again when no other run holds the database.
+
+## Example
+
+```text
+✗ This migration would leave 3 row(s) referencing rows that do not exist (dc_posts → dc_authors).
+  Why:  It was rolled back, and nothing was applied.
+  Next: Remove or repair the rows it leaves without a parent, in the migration or before it runs, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-foreign-key-violation  (NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION)
+```

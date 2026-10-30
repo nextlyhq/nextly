@@ -800,8 +800,9 @@ type OperationLanguage =
  *   `_translated` filter, is told every language; see `readLanguagesFor`.
  * - `write`: a write of one language's content, `?locale=` (every language
  *   for `*`) or the default.
- * - `as-named`: an autosave, discarding a working draft, or sharing a preview
- *   link to one language, which keep the language as the request names it: a
+ * - `as-named`: an autosave, discarding a working draft, taking the live
+ *   values into one, or sharing a preview link to one language, which keep
+ *   the language as the request names it: a
  *   language the site does not configure is told every language, not the
  *   default a write resolves it to. A preview link naming no language is
  *   shared with no operation named, so it is told every language.
@@ -824,6 +825,8 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["createEntry", "write"],
   ["updateEntry", "write"],
   ["discardWorkingDraft", "as-named"],
+  ["takeLiveSharedValues", "as-named"],
+  ["takeLiveSingleSharedValues", "as-named"],
   ["autosaveEntry", "as-named"],
   ["updateSingleDocument", "write"],
   ["autosaveSingle", "as-named"],
@@ -1051,10 +1054,10 @@ export async function requireCollectionAccess(
  * Whether authentication refused a visitor: a request carrying no credential
  * at all, neither a session cookie nor a key. One whose credential is not
  * valid is not a visitor, and is asked to sign in again whatever the Public
- * role grants. The one test every gate that may serve a visitor asks, to be
- * exported where a gate outside this module asks it.
+ * role grants. The one test every gate that may serve a visitor asks, here
+ * and at the media routes.
  */
-function isVisitorRefusal(refused: ErrorResponse): boolean {
+export function isVisitorRefusal(refused: ErrorResponse): boolean {
   return refused.noCredential === true;
 }
 
@@ -1157,6 +1160,32 @@ export async function requireLifecycleAccess(
     );
     return isErrorResponse(asUpdate) ? onGrant : asUpdate;
   });
+}
+
+/**
+ * The access check for a route whose write's language only its service
+ * knows: a restore, which writes the restored version's language. By the
+ * grant alone, since the update the restore makes asks the rule in that
+ * language before it writes. Told every language here, a rule allowing only
+ * the version's language would refuse what the update allows.
+ */
+export async function requireGrantAccess(
+  req: Request,
+  action: string,
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  // The languages still matter to the read a refusal is answered by.
+  return withRuleLanguage(requestLanguage(operation), () =>
+    authorizeCallerOnGrant(
+      authResult,
+      action,
+      collectionSlug,
+      operation?.namesOne ? "one" : "all"
+    )
+  );
 }
 
 /** The action a write route admitted each caller on, where it accepts several. */

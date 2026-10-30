@@ -292,7 +292,7 @@ export default function SingleBuilderEditPage({
   if (!slug) {
     return (
       <BuilderNotFoundScreen
-        title="Single Not Found"
+        title="Single not found"
         description="No Single slug was provided."
       />
     );
@@ -336,6 +336,7 @@ export default function SingleBuilderEditPage({
     >
       <BuilderSchemaChangeDialogs
         confirmation={confirmation}
+        kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
       />

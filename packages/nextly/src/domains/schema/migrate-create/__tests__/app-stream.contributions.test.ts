@@ -221,6 +221,12 @@ describe("what a hook contributes to the app's ENTITY tables", () => {
       .spyOn(process, "exit")
       .mockImplementation((() => undefined) as never);
     const errors: string[] = [];
+    // A failure prints in the CLI's error shape on standard error; read it with the log.
+    const printed = vi
+      .spyOn(console, "error")
+      .mockImplementation((...parts: unknown[]) => {
+        errors.push(parts.map(String).join(" "));
+      });
     try {
       await runChecks({
         migrationsDir,
@@ -245,6 +251,7 @@ describe("what a hook contributes to the app's ENTITY tables", () => {
       });
     } finally {
       exit.mockRestore();
+      printed.mockRestore();
     }
     return errors;
   }
@@ -267,7 +274,7 @@ describe("what a hook contributes to the app's ENTITY tables", () => {
 
   it("are pending for migrate:check until generated, and then settled", async () => {
     await generateEntities([]);
-    expect((await check([contributes])).join("\n")).toMatch(/SCHEMA_DRIFT/);
+    expect((await check([contributes])).join("\n")).toMatch(/\(SCHEMA_DRIFT\)/);
     await generateEntities([contributes]);
     expect(await check([contributes])).toEqual([]);
     // And a second generation owes nothing.
