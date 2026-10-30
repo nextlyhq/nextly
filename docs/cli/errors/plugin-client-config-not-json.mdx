@@ -1,0 +1,24 @@
+---
+title: PLUGIN_CLIENT_CONFIG_NOT_JSON
+description: "A plugin's `admin.clientConfig` holds a value that cannot be sent to the browser as JSON."
+---
+
+## Cause
+
+A plugin's `admin.clientConfig` holds a value that cannot be sent to the browser as JSON.
+
+A plugin's `contributes.admin.clientConfig` is sent to the admin as JSON. A function, class instance, `Date` or `Map` in it would arrive changed or missing, so it is refused when the configuration loads. The message names the keys at fault.
+
+## Fix
+
+- Remove the keys listed from `clientConfig`, or give them values of strings, numbers, booleans, null, arrays or plain objects.
+- If the plugin is not yours, update it to a release whose client configuration is plain JSON.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares an admin.clientConfig that is not JSON (keys: onSave).
+  Why:  It is serialized into /api/admin-meta, so it may hold only strings, numbers, booleans, null, arrays and plain objects — no functions, class instances, Dates or Maps.
+  Next: Remove `onSave` from `contributes.admin.clientConfig`, or give it a value of strings, numbers, booleans, null, arrays or plain objects.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-client-config-not-json  (PLUGIN_CLIENT_CONFIG_NOT_JSON)
+```

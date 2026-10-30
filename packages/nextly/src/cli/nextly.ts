@@ -66,8 +66,7 @@ if (existsSync(envPath)) {
  */
 async function main(): Promise<void> {
   const { createProgram } = await import("./program");
-  const { createLogger } = await import("./utils/logger");
-  const { NextlyError, describeError } = await import("../errors/index");
+  const { reportCliError } = await import("./errors/index");
   const telemetry = await import("@nextlyhq/telemetry");
 
   const program = createProgram();
@@ -75,8 +74,6 @@ async function main(): Promise<void> {
   try {
     await program.parseAsync(process.argv);
   } catch (error) {
-    const logger = createLogger();
-
     // Best-effort telemetry: capture a typed failure event with no raw
     // message or stack. Wrapped so a telemetry failure can never mask the
     // underlying user-visible error.
@@ -91,41 +88,17 @@ async function main(): Promise<void> {
       // Swallow.
     }
 
-    const debugMode = process.env.DEBUG === "true" || process.env.DEBUG === "1";
-
-    if (NextlyError.is(error)) {
-      // CLI is operator-facing — print publicMessage as the headline, then the
-      // full description (code, cause chain, logContext) so the terminal
-      // carries what the wire deliberately withholds. cause.stack only under
-      // DEBUG=true per existing convention.
-      // describeError already leads with the public message, so printing it
-      // separately would say the same thing twice.
-      logger.error(describeError(error));
-      if (debugMode && error.cause?.stack) {
-        logger.newline();
-        console.error(error.cause.stack);
-      }
-    } else if (error instanceof Error) {
-      // Check if this is a Commander error (user input error)
-      if ("code" in error) {
-        // Commander errors (e.g., missing required argument)
-        // are already handled by Commander's error display
-        process.exit(1);
-      }
-
-      // Application error. describeError adds any `cause` chain, which a bare
-      // `error.message` drops.
-      logger.error(describeError(error));
-
-      // Show stack trace in debug mode
-      if (debugMode) {
-        logger.newline();
-        console.error(error.stack);
-      }
-    } else {
-      // Non-Error throwables still get rendered rather than reported as an
-      // opaque "unexpected error".
-      logger.error(describeError(error));
+    // Commander's own errors (a missing argument, an unknown option) were already printed by
+    // Commander, with its help hint; anything else is printed in the error shape, with the
+    // run's `--verbose`.
+    const commanderError =
+      error instanceof Error &&
+      "code" in error &&
+      typeof error.code === "string" &&
+      error.code.startsWith("commander.");
+    if (!commanderError) {
+      const globals = program.opts<{ verbose?: boolean }>();
+      reportCliError(error, { verbose: globals.verbose === true });
     }
 
     process.exit(1);

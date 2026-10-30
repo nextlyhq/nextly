@@ -1,0 +1,23 @@
+---
+title: OWNERSHIP_TAKEOVER_REFUSED
+description: "A table or element recorded as one owner's would pass to another, so the change was refused."
+---
+
+## Cause
+
+A table or element recorded as one owner's would pass to another, so the change was refused.
+
+Nextly records who owns each table and element (the app, or a plugin) in `nextly_schema_owners`, so that one owner's migration never changes another's. A change that would hand a recorded table or element to a different owner is refused.
+
+## Fix
+
+If the earlier owner was removed and its table or element is meant to pass to the new one, delete the earlier owner's rows from `nextly_schema_owners`, then run the command again. Otherwise rename the new owner's table or element.
+
+## Example
+
+```text
+✗ The table "seo_redirects" is recorded as belonging to "@acme/seo", so "@acme/redirects" cannot take it over.
+  Why:  Each table and element has one owner, recorded in `nextly_schema_owners`, so no plugin or app takes over another's.
+  Next: If "@acme/seo" was removed and its table is meant to pass to "@acme/redirects", delete "@acme/seo"'s rows from nextly_schema_owners first.
+  Docs: https://nextlyhq.com/docs/cli/errors/ownership-takeover-refused  (OWNERSHIP_TAKEOVER_REFUSED)
+```
