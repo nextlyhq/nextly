@@ -16,6 +16,12 @@ import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
+import {
+  PILL_LABEL,
+  savedPillState,
+  type SavedPillState,
+} from "./panels/pill-state";
+
 export interface DocumentStatusPillProps {
   /** The status in the language being edited ("draft", "published", ...). */
   status: string;
@@ -24,21 +30,13 @@ export interface DocumentStatusPillProps {
   className?: string;
 }
 
-type PillState = "draft" | "published" | "changed";
-
-const PILL_LABEL: Record<PillState, string> = {
-  draft: "Draft",
-  published: "Published",
-  changed: "Changed",
-};
-
 /*
  * Monochrome, token-only, and told apart by shape as well as by fill so the
  * three read differently in either colour scheme: a draft is dashed (not out
  * yet), a published document is filled with the muted surface, and a changed
  * one is the card surface with a solid edge — live, with more to come.
  */
-const PILL_CLASS: Record<PillState, string> = {
+const PILL_CLASS: Record<SavedPillState, string> = {
   draft: "border-dashed border-border text-muted-foreground",
   published: "border-transparent bg-muted text-foreground",
   changed: "border-border bg-card text-foreground",
@@ -49,15 +47,9 @@ export function DocumentStatusPill({
   hasWorkingDraft,
   className,
 }: DocumentStatusPillProps): JSX.Element {
-  const isPublished = status === "published";
-  // A published entry with a pending working draft is the "Changed" state —
-  // the live row stays published while newer edits wait to be promoted.
-  const state: PillState =
-    isPublished && hasWorkingDraft
-      ? "changed"
-      : isPublished
-        ? "published"
-        : "draft";
+  // The one answer the panel's Status section draws too (`savedPillState`),
+  // so the pill and the sentence cannot disagree.
+  const state = savedPillState(status, hasWorkingDraft);
   return (
     <span
       data-status={state}
