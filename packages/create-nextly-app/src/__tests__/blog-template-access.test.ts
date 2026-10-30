@@ -21,7 +21,11 @@ import { describe, expect, it } from "vitest";
 import { Categories } from "../../../../templates/blog/src/collections/Categories";
 import { Posts } from "../../../../templates/blog/src/collections/Posts/index";
 import { Tags } from "../../../../templates/blog/src/collections/Tags";
-import { pickPermissionIdsForRoles } from "../../../../templates/blog/src/endpoints/seed/index";
+import visualConfig from "../../../../templates/blog/configs/visual.config";
+import {
+  pickPermissionIdsForRoles,
+  postsLimitDeletesToTheirAuthor,
+} from "../../../../templates/blog/src/endpoints/seed/index";
 
 type Operation = "create" | "read" | "update" | "delete";
 type Rule = (ctx: Record<string, unknown>) => unknown;
@@ -253,14 +257,39 @@ describe("blog template — seeded roles", () => {
     permissions: { find: async () => ({ items: catalog }) },
   } as unknown as Parameters<typeof pickPermissionIdsForRoles>[0];
 
-  it("gives an author delete but no publish on posts", async () => {
-    const { author } = await pickPermissionIdsForRoles(nextly);
+  it("gives an author delete but no publish on posts where Posts limits a delete to its author", async () => {
+    const { author } = await pickPermissionIdsForRoles(nextly, {
+      authorsDeleteOwnPosts: true,
+    });
     expect(author.filter(id => id.endsWith("-posts")).sort()).toEqual([
       "create-posts",
       "delete-posts",
       "read-posts",
       "update-posts",
     ]);
+  });
+
+  // A visual blog's Posts carries no code rule, so the permission alone
+  // decides a delete: granted, it would reach every author's posts.
+  it("withholds delete from an author where nothing limits a delete to its author", async () => {
+    const { author } = await pickPermissionIdsForRoles(nextly, {
+      authorsDeleteOwnPosts: false,
+    });
+    expect(author.filter(id => id.endsWith("-posts")).sort()).toEqual([
+      "create-posts",
+      "read-posts",
+      "update-posts",
+    ]);
+  });
+
+  it("finds the own-posts delete rule in the code-first Posts, and none in the visual config", () => {
+    expect(postsLimitDeletesToTheirAuthor({ collections: [Posts] })).toBe(true);
+    expect(postsLimitDeletesToTheirAuthor(visualConfig)).toBe(false);
+    expect(
+      postsLimitDeletesToTheirAuthor({
+        collections: [{ ...Posts, access: { ...Posts.access, delete: true } }],
+      })
+    ).toBe(false);
   });
 
   it("leaves an editor able to publish and delete posts", async () => {
