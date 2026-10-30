@@ -58,6 +58,13 @@ export const NOTE_TEXT = setting.textarea({
 });
 
 /**
+ * Where every list card's Density is drawn: folded under Advanced in the
+ * card's settings panel, since how tightly rows are spaced is a preference
+ * few readers change. One value for both forms of the setting below.
+ */
+const DENSITY_SECTION = "advanced";
+
+/**
  * Every list card's Density, as a declaration takes it: default or compact
  * rows, default unless chosen, one option for every density the admin sizes
  * rows by (`DENSITY_OPTIONS`), so core's list cards and a plugin's offer the
@@ -68,6 +75,7 @@ export const LIST_DENSITY_SETTING = setting.select({
   label: "Density",
   options: DENSITY_OPTIONS,
   defaultValue: "default",
+  section: DENSITY_SECTION,
 });
 
 /**
@@ -81,6 +89,7 @@ export const LIST_DENSITY: WidgetSetting = {
   type: "select",
   defaultValue: "default",
   options: [...DENSITY_OPTIONS],
+  section: DENSITY_SECTION,
 };
 
 /** The card's Collection: the collection it reads, set from the group it is added from. */
@@ -161,7 +170,12 @@ export const RECENTLY_EDITED_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
  */
 export const RECENTLY_EDITED_ONLY_MINE: WidgetSetting = {
   name: "onlyMine",
-  ...setting.checkbox({ label: "Only mine", defaultValue: false }),
+  // Drawn with the card's data: it narrows which saves the card reads.
+  ...setting.checkbox({
+    label: "Only mine",
+    defaultValue: false,
+    section: "data",
+  }),
 };
 
 /**

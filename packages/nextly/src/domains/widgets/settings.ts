@@ -63,6 +63,20 @@ import {
   type WidgetSourceFilter,
 } from "./sources";
 
+/**
+ * Where a card's settings panel draws a setting: with what the card reads
+ * (`data`), with how it shows it (`display`), or folded away under Advanced
+ * (`advanced`).
+ */
+export type SettingSection = "data" | "display" | "advanced";
+
+/** Every section, in the order the settings panel draws them. */
+export const SETTING_SECTIONS: readonly SettingSection[] = [
+  "data",
+  "display",
+  "advanced",
+];
+
 /** What every setting carries, whatever kind it is. */
 export interface WidgetSettingBase {
   name: string;
@@ -112,6 +126,16 @@ export interface WidgetSettingBase {
    * @experimental
    */
   editor?: { component: string };
+  /**
+   * The section of the card's settings panel the setting is drawn in. Absent,
+   * a setting over the card's content (its Collection, Filter, Sort, Group by
+   * and Field) and a date range are drawn under Data, and every other setting
+   * under Display; a setting is folded under Advanced only when it says so.
+   *
+   * A top-level key the field configs do not have, like `quick`: read by the
+   * panel, never by `FieldRenderer`.
+   */
+  section?: SettingSection;
 }
 
 /**
@@ -760,12 +784,9 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${quote(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  const flags = flagsProblem(
-    type,
-    quick,
-    (rest as { rows?: unknown }).rows,
-    defaultFrom
-  );
+  const flags =
+    flagsProblem(type, quick, (rest as { rows?: unknown }).rows, defaultFrom) ??
+    sectionProblem((rest as { section?: unknown }).section);
   if (flags !== undefined) return `setting "${name}" ${flags}`;
   const editor = editorProblem((rest as { editor?: unknown }).editor);
   if (editor !== undefined) return `setting "${name}" ${editor}`;
@@ -789,6 +810,18 @@ function editorProblem(editor: unknown): string | undefined {
   return isName(component)
     ? undefined
     : 'editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from';
+}
+
+/**
+ * Why a setting's `section` is unusable, or `undefined`. Refused rather than
+ * ignored: a misspelt section would otherwise draw the setting somewhere the
+ * author did not ask for, with no fault pointing at the declaration.
+ */
+function sectionProblem(section: unknown): string | undefined {
+  if (section === undefined) return undefined;
+  return SETTING_SECTIONS.some(known => known === section)
+    ? undefined
+    : `has section ${quote(section)}; expected one of ${SETTING_SECTIONS.map(known => `"${known}"`).join(", ")}`;
 }
 
 /** Why a setting's `quick`, `rows` or `defaultFrom` is unusable, or `undefined`. */

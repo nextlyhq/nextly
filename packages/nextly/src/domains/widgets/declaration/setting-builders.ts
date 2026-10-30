@@ -20,6 +20,7 @@
 
 import type { RelativeSpan, WidgetQuery } from "../query";
 import { LIST_DENSITIES, type ListDensity } from "../query-limits";
+import type { SettingSection } from "../settings";
 
 /**
  * Carries a setting's value type without a runtime property.
@@ -79,6 +80,11 @@ export interface SettingDeclaration<
    * @experimental
    */
   readonly editor?: { readonly component: Editor };
+  /**
+   * The section of the card's settings panel it is drawn in; see
+   * `WidgetSettingBase.section` for where a setting that names none goes.
+   */
+  readonly section?: SettingSection;
   readonly [settingValue]?: Value;
 }
 
@@ -263,6 +269,8 @@ type PickerConfig = {
   label: string;
   /** Help text under the control, where the field renderer reads it. */
   admin?: { description?: string };
+  /** The section of the card's settings panel it is drawn in. */
+  section?: SettingSection;
 };
 
 /** The quick flag a choice or an on/off may carry: drawn on the card's header. */
@@ -374,6 +382,10 @@ export const setting = {
       EditorConfig<Editor>
   ) =>
     declare<DateRange, "select", never, Editor>("select", {
+      // A range is part of what the card reads, so it is drawn with the
+      // card's data unless the author says otherwise: a select the panel
+      // cannot otherwise tell from any other choice.
+      section: "data",
       ...config,
       defaultValue: config.defaultValue ?? "30d",
       options: DATE_RANGE_OPTIONS.map(option => ({ ...option })),

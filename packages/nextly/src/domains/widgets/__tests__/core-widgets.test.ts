@@ -13,7 +13,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
-import { CORE_WIDGETS } from "../core-widgets";
+import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
+import { toDefinition } from "../declaration/declared-widgets";
 import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import {
   chromeFieldProblem,
@@ -23,6 +24,7 @@ import {
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
 import { DENSITY_OPTIONS } from "../declaration/setting-builders";
 import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
+import { resolveWidgetSettings } from "../settings";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { clearSystemResolvers } from "../system-sources";
@@ -250,6 +252,58 @@ describe("the list cards' Density", () => {
         option => option.value
       )
     ).toEqual([...LIST_DENSITIES]);
+  });
+});
+
+describe("a new card's defaults, before its reader touches a setting", () => {
+  /** A declared core card as the registry publishes it to the admin. */
+  function published(id: string) {
+    const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
+    if (!declared) throw new Error(`no core declaration with id "${id}"`);
+    return toDefinition(declared, "core");
+  }
+
+  it("reads Over time's range as the last 30 days, through the reader its card is asked with", () => {
+    // Through `resolveWidgetSettings`, what the card's load and the admin read, rather than the
+    // literal: a default the reader set aside (one its options no longer hold) reads otherwise.
+    expect(
+      resolveWidgetSettings(published("core/over-time").settings, {}).dateRange
+    ).toBe("30d");
+  });
+
+  it("draws Over time's range with the card's data, and its chart style with how it shows", () => {
+    const sections = Object.fromEntries(
+      (published("core/over-time").settings ?? []).map(setting => [
+        setting.name,
+        setting.section,
+      ])
+    );
+    // The range is a select the panel cannot tell from any other: it says where it goes.
+    expect(sections.dateRange).toBe("data");
+    // The rest state nothing, and the panel places them by kind.
+    expect(sections.chartStyle).toBeUndefined();
+  });
+
+  it.each([
+    ["core/recent-entries", true],
+    ["core/recently-edited", false],
+    ["core/recent-activity", false],
+    ["core/upcoming-releases", false],
+  ])("folds %s's Density under Advanced", (id, declared) => {
+    const settings = declared
+      ? published(id).settings
+      : CORE_WIDGETS.find(widget => widget.id === id)?.settings;
+    expect(settings?.find(setting => setting.name === "density")?.section).toBe(
+      "advanced"
+    );
+  });
+
+  it("draws Recently edited's Only mine with the card's data, since it narrows what the card reads", () => {
+    expect(
+      CORE_WIDGETS.find(
+        widget => widget.id === "core/recently-edited"
+      )?.settings?.find(setting => setting.name === "onlyMine")?.section
+    ).toBe("data");
   });
 });
 
