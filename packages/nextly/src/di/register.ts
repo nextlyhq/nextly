@@ -1065,6 +1065,9 @@ async function registerServicesOnce(
     languages: new LanguageRegistry({
       configured: transformedConfig.localization,
       reader: storedLanguageReader(adapter),
+      // A site keeping every translatable field per language stores its values under one language
+      // even before it declares any.
+      implicitLanguage: transformedConfig.perLanguageStorage === true,
     }),
     schemasDir,
     migrationsDir,
