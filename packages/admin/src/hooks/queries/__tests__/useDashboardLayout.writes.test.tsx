@@ -19,6 +19,8 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: api }));
 
+import { SCHEMA_UPDATED_EVENT } from "@admin/hooks/useSchemaUpdateInvalidation";
+
 import { useDashboardLayout } from "../useDashboardLayout";
 import { useDashboardSummary } from "../useDashboardSummary";
 
@@ -216,5 +218,19 @@ describe("the header's summary, beside the layout", () => {
     await waitFor(() =>
       expect(result.current.summary.data).toMatchObject({ read: 2 })
     );
+  });
+  it("is read again when the schema changes, as the layout is", async () => {
+    // Mounted alone, so nothing but its own listener can read it again: a
+    // schema change can add, remove or change what its parts count.
+    const reads = summaryReads();
+    const { result } = renderHook(() => useDashboardSummary(), { wrapper });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(reads()).toBe(1);
+
+    act(() => {
+      window.dispatchEvent(new Event(SCHEMA_UPDATED_EVENT));
+    });
+
+    await waitFor(() => expect(result.current.data).toMatchObject({ read: 2 }));
   });
 });

@@ -20,10 +20,16 @@ import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { callerMayReadReleases } from "../domains/releases/releases-widget-source";
-import { createBatchScope } from "../domains/widgets/batch-scope";
+import {
+  createBatchScope,
+  type BatchScope,
+} from "../domains/widgets/batch-scope";
 import { refreshContentSources } from "../domains/widgets/content-sources";
 import { needsAttentionWidget } from "../domains/widgets/core-widgets/needs-attention";
-import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
+import {
+  declaredWidget,
+  type DeclaredWidget,
+} from "../domains/widgets/declaration/declared-widgets";
 import { bindReadServices } from "../domains/widgets/declaration/read-services";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetPlacement } from "../domains/widgets/layout";
@@ -44,7 +50,7 @@ import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { respondData, SKIP_DATE_FORMATTING_HEADER } from "./response-shapes";
-import { cardIsShownTo } from "./widget-cards";
+import { cardShownTo, type CardBatch, type CardShown } from "./widget-cards";
 import { askableCards } from "./widget-layout";
 import { cardBatchFor } from "./widget-query";
 import { SLOT_TIMEOUT_MS, withinSlotBudget } from "./widget-slots";
@@ -58,11 +64,12 @@ export const getDashboardSummary = withErrorHandler(async (req: Request) => {
   // reads are published by this refresh, not at boot.
   await refreshContentSources();
   const now = new Date();
-  const reads = await Promise.all([
+  const [attention, releases, widgets] = await Promise.all([
     settled(signal => attentionRead(reader, signal), req.signal),
     settled(signal => releasesRead(reader, signal, now), req.signal),
-    ...(await widgetSummaryReads(auth, reader, req.signal, now)),
+    widgetSummaryReads(auth, reader, req.signal, now),
   ]);
+  const reads = [attention, releases, ...widgets];
   const environment = getHandlerConfig()?.admin?.environment;
   return respondData(
     {
@@ -182,26 +189,50 @@ async function releasesRead(
     : "failed";
 }
 
+/** The cards on a reader's dashboard, as the layout hands them. */
+type PlacedCards = Awaited<ReturnType<typeof askableCards>>;
+
+/**
+ * The cards on the reader's dashboard, read within a part's budget as a part
+ * is: none for a reader with no dashboard of their own (one the layout
+ * refuses), who has no card to count for; `"failed"` when the layout throws or
+ * does not answer in time, so its outage is one unknown part rather than the
+ * whole line.
+ */
+async function placedCards(
+  auth: AuthContext,
+  request: AbortSignal
+): Promise<PlacedCards | undefined | "failed"> {
+  try {
+    return await withinSlotBudget(
+      () => askableCards(auth),
+      partTimedOut,
+      request
+    );
+  } catch (error) {
+    return isRefusal(error) ? undefined : "failed";
+  }
+}
+
 /**
  * One read for each widget on the reader's dashboard that declares a
  * `summary`: counted as the reader, and only where one of its cards would be
- * shown to them (`cardIsShownTo`, its `access` and `shows`), so the header
+ * shown to them (`cardShownTo`, its `access` and `shows`), so the header
  * never counts for a card the reader is not drawn. A widget placed more than
  * once is judged card by card, in the dashboard's order, until one is shown;
  * that card is the one the part names, and the widget is counted once.
+ *
+ * A dashboard that could not be read is one failed part, standing for every
+ * summary it may have held.
  */
 async function widgetSummaryReads(
   auth: AuthContext,
   reader: ReadCaller,
   request: AbortSignal,
   now: Date
-): Promise<Promise<PartRead>[]> {
-  // A reader with no dashboard of their own (one the layout refuses) has no
-  // card to count for: an empty summary, never an error.
-  const cards = await askableCards(auth).catch((error: unknown) => {
-    if (isRefusal(error)) return undefined;
-    throw error;
-  });
+): Promise<PartRead[]> {
+  const cards = await placedCards(auth, request);
+  if (cards === "failed") return ["failed"];
   if (cards === undefined) return [];
   const placementsOf = new Map<string, WidgetPlacement[]>();
   for (const placement of cards.handed.values()) {
@@ -209,45 +240,90 @@ async function widgetSummaryReads(
     placements.push(placement);
     placementsOf.set(placement.widgetId, placements);
   }
-  const batch = cardBatchFor(auth, reader);
-  const scope = createBatchScope();
-  return [...placementsOf].flatMap(([widgetId, placements]) => {
-    const declared = declaredWidget(widgetId);
-    const summary = declared?.declaration.summary;
-    if (declared === undefined || summary === undefined) return [];
-    return [
-      settled(async signal => {
-        let shown: WidgetPlacement | undefined;
-        for (const placement of placements) {
-          if (
-            await cardIsShownTo(declared, placement, batch, {
-              signal,
-              now,
-              scope: scope.forOwner(declared.owner),
-            })
-          ) {
-            shown = placement;
-            break;
-          }
-        }
-        if (shown === undefined) return null;
-        // As its card's `load` is handed them: the person, and reads bound to
-        // them through the batch's own check, under the part's own signal.
-        const count = await summary.count({
-          user: batch.caller.user,
-          signal,
-          services: bindReadServices({
-            caller: batch.caller,
-            prepare: batch.check,
-            signal,
-            now,
-            ...(declared.collections === undefined
-              ? {}
-              : { collections: declared.collections }),
-          }),
-        });
-        return widgetPart(widgetId, shown.id, summary.label, count);
-      }, request),
-    ];
+  const judging: Judging = {
+    batch: cardBatchFor(auth, reader),
+    scope: createBatchScope(),
+    now,
+  };
+  return Promise.all(
+    [...placementsOf].flatMap(([widgetId, placements]) => {
+      const declared = declaredWidget(widgetId);
+      if (declared?.declaration.summary === undefined) return [];
+      return [
+        settled(
+          signal => widgetRead(declared, placements, judging, signal),
+          request
+        ),
+      ];
+    })
+  );
+}
+
+/**
+ * What every widget's part is judged and counted with: the reader's batch,
+ * its share scope and the request's instant.
+ */
+interface Judging {
+  batch: CardBatch;
+  scope: BatchScope;
+  now: Date;
+}
+
+/**
+ * One widget's part: its count, for the first of its cards shown to the
+ * reader. None where no card of it is shown; `"failed"` where none is shown
+ * and one could not be judged, since the batch draws that card as failed and
+ * the part is then unknown rather than nothing.
+ */
+async function widgetRead(
+  declared: DeclaredWidget,
+  placements: readonly WidgetPlacement[],
+  { batch, scope, now }: Judging,
+  signal: AbortSignal
+): Promise<PartRead> {
+  const { summary } = declared.declaration;
+  if (summary === undefined) return null;
+  const shown = await firstShown(placements, placement =>
+    cardShownTo(declared, placement, batch, {
+      signal,
+      now,
+      scope: scope.forOwner(declared.owner),
+    })
+  );
+  if (shown === undefined) return null;
+  if (shown === "failed") return "failed";
+  // As its card's `load` is handed them: the person, and reads bound to
+  // them through the batch's own check, under the part's own signal.
+  const count = await summary.count({
+    user: batch.caller.user,
+    signal,
+    services: bindReadServices({
+      caller: batch.caller,
+      prepare: batch.check,
+      signal,
+      now,
+      ...(declared.collections === undefined
+        ? {}
+        : { collections: declared.collections }),
+    }),
   });
+  return widgetPart(shown.widgetId, shown.id, summary.label, count);
+}
+
+/**
+ * The first of a widget's cards judged shown, in the dashboard's order; else
+ * `"failed"` where one of them could not be judged, since that card may be
+ * the one shown; else none.
+ */
+async function firstShown(
+  placements: readonly WidgetPlacement[],
+  judge: (placement: WidgetPlacement) => Promise<CardShown>
+): Promise<WidgetPlacement | undefined | "failed"> {
+  let failed = false;
+  for (const placement of placements) {
+    const verdict = await judge(placement);
+    if (verdict === "shown") return placement;
+    failed ||= verdict === "failed";
+  }
+  return failed ? "failed" : undefined;
 }

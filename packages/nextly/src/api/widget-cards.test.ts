@@ -17,6 +17,7 @@ import { clearSources, registerSource } from "../domains/widgets/sources";
 
 import {
   cardIsShownTo,
+  cardShownTo,
   prepareCards,
   readableCollectionsOnce,
 } from "./widget-cards";
@@ -863,7 +864,20 @@ describe("a card's load that fails", () => {
 describe("whether a card is shown to the person asking, without its load", () => {
   /** The card of `widget` placed with `config`, asked as the batch asks one. */
   function shown(widget: string, config?: Record<string, unknown>) {
-    return cardIsShownTo(
+    return cardIsShownTo(...cardAsked(widget, config));
+  }
+
+  /** As `shown`, with whether it could be judged at all (`cardShownTo`). */
+  function verdict(widget: string, config?: Record<string, unknown>) {
+    return cardShownTo(...cardAsked(widget, config));
+  }
+
+  /** What judging the card of `widget` placed with `config` is handed. */
+  function cardAsked(
+    widget: string,
+    config?: Record<string, unknown>
+  ): Parameters<typeof cardShownTo> {
+    return [
       declarations[widget] as never,
       {
         id: `c-${widget.slice(5)}`,
@@ -878,8 +892,8 @@ describe("whether a card is shown to the person asking, without its load", () =>
         signal: new AbortController().signal,
         scope: createBatchScope().forOwner("plugin @acme/shop"),
         now: new Date(Date.UTC(2026, 9, 22)),
-      }
-    );
+      },
+    ];
   }
 
   it("is shown when nothing says otherwise, and its load is never run", async () => {
@@ -1006,6 +1020,38 @@ describe("whether a card is shown to the person asking, without its load", () =>
     expect(warned[0]?.[0]).toMatchObject({
       logContext: { reason: "widget-judging-timed-out", stage: "access" },
     });
+  });
+  it("could not be judged when shows throws or does not settle, which is not hidden", async () => {
+    // 🔴 The batch draws such a card as failed: whoever counts for the card
+    // has to know it is unknown, not left out.
+    showsPredicate.mockImplementation(() => {
+      throw new Error("lookup failed");
+    });
+    await expect(verdict("acme/maybe")).resolves.toBe("failed");
+    vi.useFakeTimers();
+    try {
+      showsPredicate.mockImplementation(() => new Promise(() => {}));
+      const judging = verdict("acme/maybe");
+      await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+      await expect(judging).resolves.toBe("failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is hidden, not failed, when its own rules leave it out", async () => {
+    // The control: a refusal, a predicate that throws refusing included, and
+    // a shows answering anything but true are each a card left out.
+    showsPredicate.mockImplementation(() => "yes");
+    await expect(verdict("acme/maybe")).resolves.toBe("hidden");
+    accessPredicate.mockImplementation(() => false);
+    await expect(verdict("acme/gated")).resolves.toBe("hidden");
+    accessPredicate.mockImplementation(() => {
+      throw new Error("access lookup failed");
+    });
+    await expect(verdict("acme/gated")).resolves.toBe("hidden");
+    showsPredicate.mockImplementation(() => true);
+    await expect(verdict("acme/maybe")).resolves.toBe("shown");
   });
 });
 
