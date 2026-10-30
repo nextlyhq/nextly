@@ -2346,6 +2346,8 @@ async function assertCallerFilterReadable(
       caller: {
         user: params.user as Record<string, unknown> | undefined,
         authenticatedScope: params.authenticatedScope,
+        // A visitor's Public grants, read where the write's gate reads them.
+        visitor: queryService.fieldRuleVisitor,
       },
     }
   );

@@ -61,6 +61,16 @@ vi.mock("../../../hooks/stored-hook-executor", () => {
 /** The table the collection's rows actually live in, from its `dbName`. */
 const PHYSICAL_TABLE = "dc_articles";
 /** What the slug alone would produce; deliberately NOT the physical table. */
+// A visitor holds what the faked Public role grants: the read these reads
+// make, as the target declares no rule.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
+  return {
+    ...(await importOriginal<object>()),
+    actorForVisitor: fake.fakeActorForVisitor,
+  };
+});
+
 const SLUG = "posts";
 
 async function activateContributedColumn(): Promise<void> {
