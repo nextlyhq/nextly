@@ -459,10 +459,13 @@ export async function runChecks(args: {
   // shows. A new one the rule refuses fails the check; one an entity already
   // has (its table is in the latest snapshot) keeps working, and is reported
   // once as a warning naming the address and the reason.
-  if (!reportMigrationAddresses(args.entities, latest, logger)) {
-    process.exit(1);
-    return;
-  }
+  const addressRefusal = reportMigrationAddresses(
+    args.entities,
+    latest,
+    logger
+  );
+  if (addressRefusal !== undefined)
+    return exitWithError(logger, addressRefusal);
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
   if (ops.length > 0) {
