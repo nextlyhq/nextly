@@ -16,7 +16,6 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { FieldConfig } from "../../../collections/fields/types";
 import { defineCollection, text } from "../../../config";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { builderSchemaPush } from "../../../dispatcher/helpers/builder-schema-push";
@@ -35,7 +34,6 @@ import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-li
 import type { Operation } from "../../schema/pipeline/diff/types";
 import type { DesiredFieldGroup } from "../../schema/pipeline/types";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
-import { FieldGroupSchemaService } from "../services/field-group-schema-service";
 
 let handle: TestNextly | undefined;
 
@@ -166,19 +164,6 @@ async function pendingOperations(
   return diffSnapshots(live, { tables: [desired] });
 }
 
-/** The indexes over `related` a fresh create of the group would write. */
-function createdRelatedIndexes(dialect: TestDialect, table: string): string[] {
-  const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(table, [
-    HEADING,
-    RELATED,
-  ] as unknown as FieldConfig[]);
-  return [
-    ...sql.matchAll(
-      /CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?["`]([^"`]+)["`] ON ["`][^"`]+["`]\(["`]related["`]\)/g
-    ),
-  ].map(match => match[1] ?? "");
-}
-
 /** Embed the field group in a Single and write two related ids into it. */
 async function writeTwoIds(
   t: TestNextly,
@@ -240,9 +225,22 @@ const INDEX_MATRIX: Record<string, { field: object; indexes: string[] }> = {
     },
     indexes: [],
   },
+  "indexed many-to-many": {
+    field: {
+      type: "relationship",
+      relationTo: "tags",
+      options: { relationType: "manyToMany" },
+      index: true,
+    },
+    indexes: [],
+  },
   "single relation": {
     field: { type: "relationship", relationTo: "tags" },
     indexes: ["idx"],
+  },
+  "unique relation": {
+    field: { type: "relationship", relationTo: "tags", unique: true },
+    indexes: ["uq"],
   },
   unique: {
     field: { type: "text", maxLength: 100, unique: true },
@@ -364,11 +362,6 @@ describe.each(getConfiguredTestDialects())(
       const live = await liveTable(t, dialect, tableName);
       expect(live.columns).toContain("related");
       expect(live.relatedIndexes).toEqual([]);
-      // The table an ALTER leaves carries the indexes a fresh create of the same group writes, so
-      // a group's indexes do not depend on whether the field was there from the start.
-      expect(live.relatedIndexes).toEqual(
-        createdRelatedIndexes(dialect, tableName)
-      );
     });
 
     // A PostgreSQL or SQLite site whose field group an earlier release created carries the plain

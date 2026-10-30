@@ -289,17 +289,19 @@ export class FieldGroupSchemaService {
 
     // A plain index on every column that references one entry, then on every
     // other column a field asks to index — one per column either way, by the
-    // rule the desired schema applies (`collectionIndexSpecs`), so neither side
-    // declares an index the other lacks. Localized fields live in the
+    // per-field rule the desired schema applies (`collectionIndexSpecs`), so
+    // the two agree on every user column's index. Localized fields live in the
     // companion, not the main comp_ table, so they get no main index.
     //
     // A unique column the dialect can key carries its uniqueness as `uq_`
-    // below and gets no plain index besides. Either kind of plain index goes
-    // only where the dialect can index the column: MySQL cannot index a JSON
-    // column, and the index statement would fail after the table was already
-    // created.
+    // below and gets no plain index besides. A relation holding a JSON list
+    // gets none even when it asks: no lookup reads a whole list, and a btree
+    // entry over a long one exceeds PostgreSQL's row size and refuses the save.
+    // Otherwise a plain index goes only where the dialect can index the
+    // column: MySQL cannot index a JSON column, and the index statement would
+    // fail after the table was already created.
     const indexed = (field: DataFieldConfig, wanted: boolean): boolean => {
-      if (!wanted) return false;
+      if (!wanted || componentRelationshipStoresJson(field)) return false;
       const columnType = this.columnTypeFor(field) ?? "";
       if (
         "unique" in field &&

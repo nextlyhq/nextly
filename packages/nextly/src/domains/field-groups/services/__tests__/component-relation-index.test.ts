@@ -64,6 +64,29 @@ const SHAPES: Record<
     field: { type: "relationship", relationTo: ["users", "posts"] },
     expected: everywhere([]),
   },
+  "an upload of several files": {
+    field: { type: "upload", relationTo: "media", hasMany: true },
+    expected: everywhere([]),
+  },
+  // Asking for an index does not give a list one: it would serve no lookup and refuse long lists.
+  "an indexed many-to-many": {
+    field: {
+      type: "relationship",
+      relationTo: "users",
+      options: { relationType: "manyToMany" },
+      index: true,
+    },
+    expected: everywhere([]),
+  },
+  "an indexed hasMany relationship": {
+    field: {
+      type: "relationship",
+      relationTo: "users",
+      hasMany: true,
+      index: true,
+    },
+    expected: everywhere([]),
+  },
   // A reference to one entry is a scalar column, indexable on every dialect.
   "a relationship to one entry": {
     field: { type: "relationship", relationTo: "users" },

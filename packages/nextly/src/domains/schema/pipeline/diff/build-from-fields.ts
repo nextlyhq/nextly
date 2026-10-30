@@ -36,6 +36,7 @@ import {
 } from "../../extension/naming";
 import {
   componentRelationshipHoldsReferenceList,
+  componentRelationshipStoresJson,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
   componentRelationIsSingleReference,
@@ -155,8 +156,8 @@ interface CollectionIndexContext<F> {
   columnNameFor: (field: F) => string | null;
   /**
    * Whether a relationship is indexed as a single foreign key. Defaults to the collection rule; a
-   * component passes the rule its creator follows, which indexes only a relationship with a string
-   * `relationTo`.
+   * component passes the rule its creator follows (`componentRelationIsSingleReference`), which
+   * indexes only a relationship naming one collection whose value is not a JSON list.
    */
   isSingleRelation?: (field: F) => boolean;
   /**
@@ -800,7 +801,11 @@ export function buildDesiredTableFromComponentFields(
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
     ...collectionIndexSpecs(tableName, fields, {
-      columnIsIndexable: (_field, col) =>
+      // A relation holding a JSON list takes no plain index even when it asks for one, as the
+      // creator writes none: no lookup reads a whole list, and a btree entry over a long one
+      // exceeds PostgreSQL's row size and refuses the save.
+      columnIsIndexable: (field, col) =>
+        !componentRelationshipStoresJson(field) &&
         columnTypeIsIndexable(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
