@@ -1126,19 +1126,30 @@ export interface CollectionConfig {
  * `FieldConfig` because a union member carrying an index signature widens
  * property access for every internal reader of that union.
  *
- * `Fields` is the declared fields as written, so a read rule's filter is
- * typed by their names (see `CollectionRuleFilter`); `ReadAnswer` is what the
- * read rule answers, inferred so each key of a filter it returns is checked.
- * Both default to what they were before they were inferred, so a config
- * annotated with this type reads as it did.
+ * `Fields` is the declared fields as written, so a rule's filter is typed by
+ * their names (see `CollectionRuleFilter`); each `…Answer` is what that rule
+ * answers, inferred so each key of a filter it returns is checked. All
+ * default to what they were before they were inferred, so a config annotated
+ * with this type reads as it did.
  */
 export type CollectionConfigInput<
   Fields extends readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
   ReadAnswer = boolean,
+  UpdateAnswer = boolean,
+  DeleteAnswer = boolean,
+  PublishAnswer = boolean,
+  UnpublishAnswer = boolean,
 > = Omit<CollectionConfig, "fields" | "access"> & {
   fields: Fields;
-  access?: Omit<CollectionAccessControl, "read"> & {
+  access?: Omit<
+    CollectionAccessControl,
+    "read" | "update" | "delete" | "publish" | "unpublish"
+  > & {
     read?: CollectionFilterRuleInput<Fields, ReadAnswer>;
+    update?: CollectionFilterRuleInput<Fields, UpdateAnswer>;
+    delete?: CollectionFilterRuleInput<Fields, DeleteAnswer>;
+    publish?: CollectionFilterRuleInput<Fields, PublishAnswer>;
+    unpublish?: CollectionFilterRuleInput<Fields, UnpublishAnswer>;
   };
 };
 
@@ -1146,7 +1157,20 @@ export function defineCollection<
   const Fields extends
     readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
   ReadAnswer = boolean,
->(config: CollectionConfigInput<Fields, ReadAnswer>): CollectionConfig {
+  UpdateAnswer = boolean,
+  DeleteAnswer = boolean,
+  PublishAnswer = boolean,
+  UnpublishAnswer = boolean,
+>(
+  config: CollectionConfigInput<
+    Fields,
+    ReadAnswer,
+    UpdateAnswer,
+    DeleteAnswer,
+    PublishAnswer,
+    UnpublishAnswer
+  >
+): CollectionConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================

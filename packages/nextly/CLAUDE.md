@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (74a783fae8808cba). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (64f5e70084ec44da). Edit that file, never this one. -->
 
 # packages/nextly: Agent Guide
 
@@ -24,8 +24,9 @@ inside `packages/nextly`.
   `.item`. There is no `docs`/`totalDocs` shape anywhere.
 - `overrideAccess` defaults to `true` (trusted server context) and returns
   before any check. Under `overrideAccess: false` there is ONE decision, the
-  RBAC gate (`checkCollectionAccess` → `rbacAccessControlService.checkAccess`,
-  or `apiKeyWriteAllowed` for a scoped key): super-admin bypass, then DB
+  RBAC gate (`checkCollectionAccess` → the access decision, `decide()`, through
+  `auth/access/gate-adapters`, or `apiKeyWriteAllowed` for a scoped key):
+  super-admin bypass, then DB
   permissions, then the code-defined `access` from
   `defineCollection`/`defineSingle` when it names the operation (only
   `true` allows). There is no stored rule layer; the

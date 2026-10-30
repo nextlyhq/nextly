@@ -16,7 +16,6 @@
 
 import { relative, sep } from "node:path";
 
-import { describeError } from "../../errors/index";
 import {
   checkComponentMapFiles,
   componentMapAgrees,
@@ -24,6 +23,8 @@ import {
 } from "../../plugins/codegen/check-component-map";
 import { describeComponentUse } from "../../plugins/codegen/component-import-map";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { componentMapOutOfDate } from "../errors/areas/commands";
+import { printCliError } from "../errors/report";
 import type { CommandContext } from "../program";
 import { loadConfig } from "../utils/config-loader";
 
@@ -58,41 +59,44 @@ export async function runComponentMapCheck(
       loaded.config.admin?.dashboard
     );
   } catch (error) {
-    logger.error(
-      `Component map: could not be checked. ${describeError(error)}`
-    );
+    // What stopped the check, in the error shape; the status still says it was not an answer.
+    printCliError(logger, error);
     return COMPONENT_MAP_CHECK_EXIT.couldNotCheck;
   }
   if (componentMapAgrees(found)) {
     logger.success("Component map: agrees with the config.");
     return COMPONENT_MAP_CHECK_EXIT.agrees;
   }
-  for (const line of outOfDateReport(found, cwd)) logger.error(line);
+  printCliError(logger, componentMapOutOfDate(outOfDateReport(found, cwd)));
   return COMPONENT_MAP_CHECK_EXIT.outOfDate;
 }
 
-/** The report of a map that disagrees: the verdict, each disagreement, then the fix. */
-function outOfDateReport(found: ComponentMapAgreement, cwd: string): string[] {
+/** The report of a map that disagrees: the files, then each disagreement. */
+function outOfDateReport(
+  found: ComponentMapAgreement,
+  cwd: string
+): { files: string; disagreements: string[] } {
   const shown = (file: string) => relative(cwd, file).split(sep).join("/");
   const [map, list] = found.files.map(shown) as [string, string];
-  return [
-    `Component map: OUT OF DATE (${map} and ${list}).`,
-    ...found.absent.map(file => `- absent: ${shown(file)}`),
-    ...(found.listReadable
-      ? []
-      : [`- not a list the generator writes: ${list}`]),
-    ...(found.mapMatchesList
-      ? []
-      : [
-          `- the map does not register exactly the paths its list names: ${map}`,
-        ]),
-    ...(found.otherConfig === undefined
-      ? []
-      : [
-          `- checks its widgets against ${found.otherConfig.written ?? "no config"}, not ${found.otherConfig.expected ?? "no config"}: ${map}`,
-        ]),
-    ...found.missing.map(each => `- missing: ${describeComponentUse(each)}`),
-    ...found.obsolete.map(path => `- no longer declared: ${path}`),
-    "Run `npx nextly generate:types` and commit both files.",
-  ];
+  return {
+    files: `${map} and ${list}`,
+    disagreements: [
+      ...found.absent.map(file => `- absent: ${shown(file)}`),
+      ...(found.listReadable
+        ? []
+        : [`- not a list the generator writes: ${list}`]),
+      ...(found.mapMatchesList
+        ? []
+        : [
+            `- the map does not register exactly the paths its list names: ${map}`,
+          ]),
+      ...(found.otherConfig === undefined
+        ? []
+        : [
+            `- checks its widgets against ${found.otherConfig.written ?? "no config"}, not ${found.otherConfig.expected ?? "no config"}: ${map}`,
+          ]),
+      ...found.missing.map(each => `- missing: ${describeComponentUse(each)}`),
+      ...found.obsolete.map(path => `- no longer declared: ${path}`),
+    ],
+  };
 }

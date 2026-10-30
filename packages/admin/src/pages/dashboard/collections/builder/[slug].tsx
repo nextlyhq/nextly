@@ -355,7 +355,7 @@ export default function CollectionBuilderEditPage({
   if (!slug) {
     return (
       <BuilderNotFoundScreen
-        title="Collection Not Found"
+        title="Collection not found"
         description="No collection slug was provided."
       />
     );
@@ -401,6 +401,7 @@ export default function CollectionBuilderEditPage({
     >
       <BuilderSchemaChangeDialogs
         confirmation={confirmation}
+        kind={COLLECTION_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
       />

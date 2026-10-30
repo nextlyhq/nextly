@@ -34,6 +34,7 @@ import type {
 } from "../../../storage/types";
 import { mediaPlaceIsExclusive } from "../../../domains/media/orphan-thumbnails";
 import type { ReferencedNow } from "../../../domains/media/orphan-thumbnails";
+import type { CliError } from "../../errors";
 import { mediaOrphans, type MediaReferences } from "../media";
 
 const NOW = new Date("2026-10-18T12:00:00Z");
@@ -208,6 +209,24 @@ async function run(
     now: NOW,
   });
   return { code, said: said.join("\n") };
+}
+
+/** As `run`, with the command's `fail`, which takes the reason a run fails. */
+async function runFailing(layout: Layout) {
+  const said: string[] = [];
+  const failures: CliError[] = [];
+  const code = await mediaOrphans({
+    storage: layout.storage,
+    prefix: "media",
+    exclusive: true,
+    referenced: async () => refs(layout.referenced),
+    referencedNow: askedOf(async () => refs(layout.referenced)),
+    apply: true,
+    say: line => said.push(line),
+    fail: error => failures.push(error),
+    now: NOW,
+  });
+  return { code, said: said.join("\n"), failures };
 }
 
 describe("nextly media orphans", () => {
@@ -682,6 +701,40 @@ describe("nextly media orphans", () => {
 
     expect(said).toContain(`Kept ${layout.orphan}`);
     expect(await layout.stored()).toContain(layout.orphan);
+  });
+
+  it("names a thumbnail it could not remove in the run's error, when it is given `fail`", async () => {
+    const layout = inBucket("s3");
+    (layout.storage as Bucket).failOn = layout.orphan;
+
+    const { code, said, failures } = await runFailing(layout);
+
+    expect(code).toBe(1);
+    expect(failures.map(failure => failure.code)).toEqual([
+      "MEDIA_THUMBNAILS_NOT_REMOVED",
+    ]);
+    expect(failures[0]?.why).toContain(`Could not remove ${layout.orphan}`);
+    // Said once, in the error, and the count is still said with the rest.
+    expect(said).not.toContain("Could not remove");
+    expect(said).toContain("0 removed, 0 kept, 1 not removed.");
+  });
+
+  it("says a storage that cannot list its files in the run's error, when it is given `fail`", async () => {
+    const layout = inBucket("s3");
+    const { list: _list, ...unlistable } = layout.storage as Bucket;
+    const storage = Object.assign(
+      Object.create(Object.getPrototypeOf(layout.storage)),
+      unlistable,
+      { list: undefined }
+    );
+
+    const { code, said, failures } = await runFailing({ ...layout, storage });
+
+    expect(code).toBe(1);
+    expect(failures.map(failure => failure.code)).toEqual([
+      "MEDIA_STORAGE_UNLISTABLE",
+    ]);
+    expect(said).toBe("");
   });
 
   it("names a thumbnail it could not remove, and ends with an error", async () => {

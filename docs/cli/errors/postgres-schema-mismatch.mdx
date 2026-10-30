@@ -1,0 +1,24 @@
+---
+title: POSTGRES_SCHEMA_MISMATCH
+description: "`db.postgres.schema` and the database adapter's schema option name different PostgreSQL schemas."
+---
+
+## Cause
+
+`db.postgres.schema` and the database adapter's schema option name different PostgreSQL schemas.
+
+The schema in `nextly.config.ts` and the schema the database adapter connects with must be the same one: otherwise tables are created in one and migrations recorded in the other. The Why line says which side names which.
+
+## Fix
+
+- Do the edit the Next line names: give the adapter the schema `db.postgres.schema` names, or change `db.postgres.schema` to the adapter's.
+- Leaving both unset uses `public` on both sides.
+
+## Example
+
+```text
+✗ db.postgres.schema is not set (so "public"), but the database adapter passed to Nextly uses schema "tenant_a".
+  Why:  Both must name the same schema, or tables and migrations end up split between them.
+  Next: To fix it, create the adapter without a schema option, or set db.postgres.schema to "tenant_a".
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-mismatch  (POSTGRES_SCHEMA_MISMATCH)
+```

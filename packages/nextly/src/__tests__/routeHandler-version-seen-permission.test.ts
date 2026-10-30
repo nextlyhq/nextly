@@ -44,7 +44,8 @@ async function admits(segments: string[], grants: string[]): Promise<boolean> {
     route.routeParams,
     "PUT"
   );
-  return !("statusCode" in result);
+  // `null` is a visitor admitted, which a signed-in request never is.
+  return result !== null && !("statusCode" in result);
 }
 
 const ENTRY = [

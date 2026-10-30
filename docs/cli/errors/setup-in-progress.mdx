@@ -1,0 +1,24 @@
+---
+title: SETUP_IN_PROGRESS
+description: "Another setup holds this install's setup claim, so the command changed nothing."
+---
+
+## Cause
+
+Another setup holds this install's setup claim, so the command changed nothing.
+
+Setup, from the web or the CLI, takes the install's setup claim from accepting its token to finishing, so only one runs at a time. Another setup holds it, so this command changed nothing.
+
+## Fix
+
+- Wait for the other setup to finish, then run the command again.
+- If no setup is running, the claim lapses on its own; run the command again in a moment.
+
+## Example
+
+```text
+✗ A setup is in progress on this install, so the token was not replaced.
+  Why:  One setup runs at a time, and another setup, from the web or this command, holds this install's setup claim.
+  Next: Run `nextly setup-token` again in a moment.
+  Docs: https://nextlyhq.com/docs/cli/errors/setup-in-progress  (SETUP_IN_PROGRESS)
+```

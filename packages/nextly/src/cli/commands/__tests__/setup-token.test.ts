@@ -14,7 +14,16 @@ import {
   type SetupTokenMeta,
 } from "../../../auth/setup-token/setup-token";
 import { claimFirstSetup } from "../../../auth/setup-token/setup-gate";
-import { setupTokenCommand } from "../setup-token";
+import {
+  setupTokenCommand,
+  type SetupTokenCommandResult,
+} from "../setup-token";
+
+/** The lines a run that succeeded prints; a refusal fails the test with its error. */
+function printed(result: SetupTokenCommandResult): string[] {
+  if (!result.ok) throw result.error;
+  return result.lines;
+}
 
 function memoryMeta(): SetupTokenMeta & { rows: Map<string, string> } {
   const rows = new Map<string, string>();
@@ -65,7 +74,7 @@ describe("nextly setup-token", () => {
       env: {},
     });
     expect(result.ok).toBe(true);
-    const fresh = token(result.lines[0]);
+    const fresh = token(printed(result)[0]);
     expect(await accepts(meta, fresh)).toBe("valid");
     expect(await accepts(meta, old)).toBe("invalid");
   });
@@ -73,9 +82,9 @@ describe("nextly setup-token", () => {
   it("refuses, changing nothing, while the operator's variable sets the token", async () => {
     const meta = memoryMeta();
     const env = {
-      [SETUP_TOKEN_ENV]: (
+      [SETUP_TOKEN_ENV]: printed(
         await setupTokenCommand({ generate: true })
-      ).lines[0].split("=")[1],
+      )[0].split("=")[1],
     };
     const result = await setupTokenCommand({
       generate: false,
@@ -83,8 +92,13 @@ describe("nextly setup-token", () => {
       hasAdministrator: async () => false,
       env,
     });
-    expect(result.ok).toBe(false);
-    expect(result.lines[0]).toMatch(/Change the variable where it is set/);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "SETUP_TOKEN_SET_BY_ENV",
+        next: expect.stringMatching(/Change the variable where it is set/),
+      },
+    });
     expect(meta.rows.has(SETUP_TOKEN_META_KEY)).toBe(false);
     expect(await accepts(meta, env[SETUP_TOKEN_ENV], env)).toBe("valid");
   });
@@ -106,10 +120,15 @@ describe("nextly setup-token", () => {
       hasAdministrator: async () => false,
       env: {},
     });
-    expect(during.ok).toBe(false);
-    expect(during.lines[0]).toMatch(/setup is in progress/);
+    expect(during).toMatchObject({
+      ok: false,
+      error: {
+        code: "SETUP_IN_PROGRESS",
+        what: expect.stringMatching(/setup is in progress/),
+      },
+    });
     // The token the setup is using still opens setup.
-    expect(await accepts(meta, token(first.lines[0]))).toBe("valid");
+    expect(await accepts(meta, token(printed(first)[0]))).toBe("valid");
     await held?.release();
   });
 
@@ -121,13 +140,16 @@ describe("nextly setup-token", () => {
       hasAdministrator: async () => true,
       env: {},
     });
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "SETUP_ALREADY_COMPLETE" },
+    });
     expect(meta.rows.size).toBe(0);
   });
 
   it("prints, with --generate, a value the variable accepts, touching nothing", async () => {
     const result = await setupTokenCommand({ generate: true });
-    const [assignment] = result.lines;
+    const [assignment] = printed(result);
     expect(assignment.startsWith(`${SETUP_TOKEN_ENV}=`)).toBe(true);
     const value = assignment.slice(SETUP_TOKEN_ENV.length + 1);
     expect(operatorSetupToken({ [SETUP_TOKEN_ENV]: value }).kind).toBe("set");

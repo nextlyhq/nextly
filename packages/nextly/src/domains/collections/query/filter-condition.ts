@@ -237,7 +237,7 @@ export async function prepareRuleFilter(
     return { condition: () => sql`1 = 0` };
   }
   // A field stored as serialized JSON, a list or a reference to several
-  // collections, is refused the same way, by reads and writes alike:
+  // collections, is refused the same way, for a read's rule and a write's:
   // compared with one value, its column's text would match entries the rule
   // meant to refuse.
   if (prepared.namesStructuredFields) {
@@ -279,14 +279,21 @@ export async function ruleFilterCondition(
     sources,
     logger
   );
-  // A localized field the read shows from a fallback language is judged on
-  // that language's value too, so the read shows nothing the rule refuses.
-  return prepared.condition(
-    params.schema,
-    params.localizedCtx
-      ? { ...params.localizedCtx, inEveryFallbackLanguage: true }
-      : null
-  );
+  return prepared.condition(params.schema, asReadOf(params.localizedCtx));
+}
+
+/**
+ * The language a read judges a rule's filter in: a localized field the read
+ * shows from a fallback language is judged on that language's value too, so
+ * the read shows nothing the rule refuses. Every answer to "may the caller
+ * read this entry" builds its filter in this context.
+ */
+export function asReadOf(
+  localizedCtx: LocalizedQueryContext | null
+): LocalizedQueryContext | null {
+  return localizedCtx
+    ? { ...localizedCtx, inEveryFallbackLanguage: true }
+    : null;
 }
 
 /**

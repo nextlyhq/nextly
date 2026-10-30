@@ -178,10 +178,9 @@ export function createMockComponentDataService(): MockRecord {
 
 // ── Mock RBACAccessControlService ───────────────────────────────────────
 
-export function createMockRBACService(allowed: boolean = true): MockRecord {
+export function createMockRBACService(): MockRecord {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
-    checkAccess: vi.fn().mockResolvedValue(allowed),
     // Answers `undefined`: no code-defined rule governs the operation for an
     // anonymous caller, who then falls through to the public default.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),

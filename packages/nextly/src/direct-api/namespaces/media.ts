@@ -8,8 +8,10 @@
  * A write made by an instance, or a call, that asks to be checked
  * (`overrideAccess: false`) is judged as REST's media routes judge the same
  * caller, before any work: `create-media` to upload or make a folder,
- * `update-media` to edit, `delete-media` to delete, and a checked call that
- * names nobody is refused as unauthenticated. A trusted write is unchanged.
+ * `update-media` to edit, `delete-media` to delete, and a checked write that
+ * names nobody is refused as unauthenticated. A checked read that names nobody
+ * is a visitor's, judged by the Public role's `read-media`. A trusted call is
+ * unchanged.
  *
  * @packageDocumentation
  */
@@ -18,10 +20,7 @@ import {
   currentCallerScope,
   runWithCallerScope,
 } from "../../auth/caller-scope";
-import {
-  SYSTEM_READ_POLICY,
-  SYSTEM_WRITE_POLICY,
-} from "../../domains/auth/system-write-policy";
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   MediaFile,
@@ -45,7 +44,7 @@ import type { NextlyContext } from "./context";
 import {
   checkedCaller,
   checkedScope,
-  checkRead,
+  checkMediaRead,
   checkWrite,
   createRequestContext,
   directApiActor,
@@ -129,7 +128,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
       // A read is held to the key scope it is checked with, as a write is.
       return asChecked(args, async () => {
-        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        await checkMediaRead(ctx.defaultConfig, args);
         if (args.parent) {
           return await ctx.mediaService.listSubfolders(
             args.parent,
@@ -196,7 +195,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
 
     async find(args: FindMediaArgs = {}): Promise<ListResult<MediaFile>> {
       return asChecked(args, async () => {
-        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        await checkMediaRead(ctx.defaultConfig, args);
         const limit = args.limit ?? 24;
         const page = args.page ?? 1;
 
@@ -221,7 +220,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       return asChecked(args, async () => {
         // Refused before the lookup, so `disableErrors` answers a refusal as
         // a refusal, never as a missing file.
-        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        await checkMediaRead(ctx.defaultConfig, args);
         const config = mergeConfig(ctx.defaultConfig, args);
 
         try {

@@ -21,6 +21,7 @@ import { useEffect, useState } from "react";
 
 import { builderRowId, builderRows } from "@admin/lib/builder/builder-rows";
 
+import type { BuilderKind } from "./builder-config";
 import { EmptyState } from "./builder-field-list/EmptyState";
 import { NestedFieldGroup } from "./builder-field-list/NestedFieldGroup";
 import { SortableRow } from "./builder-field-list/SortableRow";
@@ -28,6 +29,8 @@ import { SystemFieldsRow } from "./builder-field-list/SystemFieldsRow";
 import type { BuilderField } from "./types";
 
 type Props = {
+  /** The kind of entity being built; the empty state names it. */
+  kind: BuilderKind;
   fields: readonly BuilderField[];
   /** Called when the user wants to insert a new field. index = position. */
   onAddAt: (index: number) => void;
@@ -46,6 +49,7 @@ type Props = {
 };
 
 export function BuilderFieldList({
+  kind,
   fields,
   onAddAt,
   onEditField,
@@ -73,7 +77,11 @@ export function BuilderFieldList({
         </div>
 
         {userFields.length === 0 ? (
-          <EmptyState onAdd={() => onAddAt(0)} readOnly={readOnly} />
+          <EmptyState
+            kind={kind}
+            onAdd={() => onAddAt(0)}
+            readOnly={readOnly}
+          />
         ) : (
           // Why: dnd-kit's useSortable inside SortableRow needs an
           // enclosing SortableContext that knows the ordered list of

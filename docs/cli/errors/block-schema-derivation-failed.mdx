@@ -1,0 +1,24 @@
+---
+title: BLOCK_SCHEMA_DERIVATION_FAILED
+description: "The block document schema could not be derived, because something in the process extended `Object.prototype`."
+---
+
+## Cause
+
+The block document schema could not be derived, because something in the process extended `Object.prototype`.
+
+The block document schema is derived from Nextly's own definition of the format. When something in the process has added properties to `Object.prototype`, the derivation loses the block node's fields, and Nextly refuses to emit a schema that would accept malformed documents.
+
+## Fix
+
+- Find the code that adds properties to `Object.prototype`, often a dependency, and remove or update it.
+- `--verbose` shows the stack where the schema was derived.
+
+## Example
+
+```text
+✗ The block document schema could not be derived, so it was not emitted.
+  Why:  Object.prototype has been extended; zod's registry reads `id` off the object given to .meta(), so the emitted schema loses the node's fields and would describe a format that accepts malformed nodes.
+  Next: Find the code that adds properties to `Object.prototype`, often a dependency, and remove it; `--verbose` shows where the schema was derived.
+  Docs: https://nextlyhq.com/docs/cli/errors/block-schema-derivation-failed  (BLOCK_SCHEMA_DERIVATION_FAILED)
+```

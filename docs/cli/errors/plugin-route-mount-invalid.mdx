@@ -1,0 +1,23 @@
+---
+title: PLUGIN_ROUTE_MOUNT_INVALID
+description: 'A plugin declares a route whose `mount` is neither "plugin" nor "root".'
+---
+
+## Cause
+
+A plugin declares a route whose `mount` is neither "plugin" nor "root".
+
+A route's `mount` is `"plugin"` or `"root"`. Any other value, which only a plugin written in JavaScript can pass, would register the route under one name and look it up under another, so it would never match.
+
+## Fix
+
+- Set the route's `mount` to `"plugin"` or `"root"`, or leave it out to mount it under the plugin's namespace.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares route "/summary" with an unknown mount "global".
+  Why:  A route is registered under the mount it declares and looked up under "plugin" or "root", so it would never match.
+  Next: Set the route's `mount` to "plugin" or "root", or leave it out for "plugin".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-mount-invalid  (PLUGIN_ROUTE_MOUNT_INVALID)
+```

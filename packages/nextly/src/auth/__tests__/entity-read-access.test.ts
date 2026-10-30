@@ -160,8 +160,8 @@ describe("canReadEntity — API key callers", () => {
   });
 
   it("does not let a super-admin owner widen a key's scope", async () => {
-    // `checkAccess` bypasses everything for a super admin, which is correct for
-    // a session and wrong for a key: a read-only key issued by an administrator
+    // The session decision admits a super admin to everything, which is right
+    // for a session and wrong for a key: a read-only key issued by an administrator
     // would otherwise carry their whole account.
     checkAccessSpy.mockResolvedValue({ allowed: true });
 

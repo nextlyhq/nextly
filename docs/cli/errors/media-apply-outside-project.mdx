@@ -1,0 +1,24 @@
+---
+title: MEDIA_APPLY_OUTSIDE_PROJECT
+description: "`nextly media orphans --apply` was run from outside the project `--cwd` names, so the database settings it read may be another project's."
+---
+
+## Cause
+
+`nextly media orphans --apply` was run from outside the project `--cwd` names, so the database settings it read may be another project's.
+
+The database settings are read when the CLI starts, from `.env` where it runs, the shell or a parent process, before `--cwd` names the project. From another folder they may be another project's database, against which this project's files would read as left behind. Nothing was changed.
+
+## Fix
+
+- Change into the project folder and run `nextly media orphans --apply` there.
+- Without `--apply` the command only lists, and runs from anywhere.
+
+## Example
+
+```text
+✗ Nothing was changed: --apply was run from outside /home/you/app.
+  Why:  The database settings were read before --cwd named /home/you/app, so they may be another project's.
+  Next: Run the command from /home/you/app to remove files.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-apply-outside-project  (MEDIA_APPLY_OUTSIDE_PROJECT)
+```

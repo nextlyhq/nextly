@@ -2677,6 +2677,74 @@ describe("a card's note", () => {
   });
 });
 
+describe("a card's settings, held on write to what its widget takes", () => {
+  const goalWidget = () =>
+    widget({
+      id: "core/goal",
+      settings: [
+        { name: "goal", label: "Goal", type: "number", min: 1, max: 10 },
+        {
+          name: "tone",
+          label: "Tone",
+          type: "select",
+          options: [
+            { label: "Calm", value: "calm" },
+            { label: "Loud", value: "loud" },
+          ],
+        },
+      ],
+    });
+  const placed = (config: Record<string, unknown>) => [
+    { id: "g", widgetId: "core/goal", w: 12, h: 3, removed: false, config },
+  ];
+  const put = (config: Record<string, unknown>, version = 0) =>
+    putWidgetLayout(
+      putReq({ placements: placed(config), version, scope: scopeFor() })
+    );
+
+  it("refuses a number outside the range its widget declares, naming the setting, and saves nothing", async () => {
+    registerWidget(goalWidget());
+    const res = await put({ goal: 20 });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain(
+      '\\"Goal\\" is between 1 and 10.'
+    );
+    expect(saved).toBeUndefined();
+  });
+
+  it("refuses a choice that is not among its options", async () => {
+    registerWidget(goalWidget());
+    const res = await put({ tone: "shouty" });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain(
+      '\\"Tone\\" is not one of its choices.'
+    );
+    expect(saved).toBeUndefined();
+  });
+
+  it("saves values its widget takes, and a number cleared to no value", async () => {
+    // The must-differ half of the two above: the same card, within its
+    // declaration.
+    registerWidget(goalWidget());
+    expect((await put({ goal: 10, tone: "loud" })).status).toBe(200);
+    expect(saved?.placements.find(p => p.id === "g")?.config).toEqual({
+      goal: 10,
+      tone: "loud",
+    });
+    // A cleared number is held as null, which reads back as the default.
+    expect((await put({ goal: null })).status).toBe(200);
+  });
+
+  it("still saves a value it already held, stored before its widget narrowed the range", async () => {
+    registerWidget(goalWidget());
+    stored = {
+      version: 1,
+      layout: serializeLayout(placed({ goal: 20 }) as WidgetPlacement[]),
+    };
+    expect((await put({ goal: 20 }, 1)).status).toBe(200);
+  });
+});
+
 describe("the one default", () => {
   const plan = (patch: Partial<DefaultLayoutPlan>) =>
     setDefaultLayoutPlan({

@@ -15,6 +15,7 @@ import {
   collectBlockEditorComponentPaths,
   buildComponentPathsModule,
   componentImportMapEntries,
+  describeComponentUse,
   componentImportMapPaths,
   configImportSpecifier,
 } from "./component-import-map";
@@ -1030,6 +1031,51 @@ describe("the map's entries: each component with who declared it and what it is 
     // The paths the map registers are the entries' paths, in their order.
     expect(componentImportMapPaths([shop])).toEqual(
       componentImportMapEntries([shop]).map(each => each.path)
+    );
+  });
+
+  it("registers each setting's own editor beside its widget's component", () => {
+    const goals = {
+      name: "@acme/goals",
+      version: "1.0.0",
+      contributes: {
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/goal",
+              view: { component: "@acme/goals/admin#GoalCard" },
+              settings: {
+                goal: {
+                  type: "number",
+                  label: "Goal",
+                  editor: { component: "@acme/goals/admin#GoalEditor" },
+                },
+                // Drawn by its own field: nothing to register.
+                title: { type: "text", label: "Title" },
+              },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+
+    const entries = componentImportMapEntries([goals]);
+    expect(entries).toEqual([
+      {
+        path: "@acme/goals/admin#GoalCard",
+        owner: 'plugin "@acme/goals"',
+        use: "widget",
+        widget: "acme/goal",
+      },
+      {
+        path: "@acme/goals/admin#GoalEditor",
+        owner: 'plugin "@acme/goals"',
+        use: "setting editor",
+        widget: "acme/goal",
+      },
+    ]);
+    expect(describeComponentUse(entries[1])).toBe(
+      'plugin "@acme/goals", a setting editor of widget "acme/goal": @acme/goals/admin#GoalEditor'
     );
   });
 

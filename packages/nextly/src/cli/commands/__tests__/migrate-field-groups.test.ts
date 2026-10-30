@@ -23,7 +23,13 @@ vi.mock("../../../domains/field-groups/migration/run", () => ({
 const setTableResolver = vi.fn();
 
 vi.mock("../../utils/adapter", () => ({
-  validateDatabaseEnv: () => ({ valid: true, errors: [] }),
+  // As the real check answers for a valid environment: the dialect and URL come with it.
+  validateDatabaseEnv: () => ({
+    valid: true,
+    errors: [],
+    dialect: "postgresql",
+    databaseUrl: "postgres://localhost/test",
+  }),
   withAdapter: async (
     work: (adapter: unknown) => Promise<void>
   ): Promise<void> => {

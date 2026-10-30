@@ -98,7 +98,10 @@ export function BuilderPageLayout({
             announcements: builderAnnouncements(builder.fields),
           }}
         >
+          {/* The kind reaches the list so its empty state names what is being
+              built rather than calling every entity a collection. */}
           <BuilderFieldList
+            kind={config.kind}
             fields={builder.fields}
             readOnly={locked}
             onAddAt={insertAt => onActiveChange({ kind: "picker", insertAt })}

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_MIGRATION_NOT_SHIPPED
+description: "A full uninstall needs the DOWN of an applied migration the configured version of the plugin no longer ships."
+---
+
+## Cause
+
+A full uninstall needs the DOWN of an applied migration the configured version of the plugin no longer ships.
+
+A migration's DOWN lives in the version of the plugin that shipped it. The database records a migration as applied that the configured version of the plugin no longer ships, so its DOWN cannot be read. Nothing was changed.
+
+## Fix
+
+- Install the version of the plugin that shipped the migrations the What line names, then run the uninstall again.
+- Or run the uninstall with `--keep-data`.
+
+## Example
+
+```text
+✗ "@acme/seo" has applied migrations its configured version no longer ships (20261020_120000_add_redirects), so they cannot be undone.
+  Why:  A migration's DOWN lives in the version of the plugin that shipped it. Nothing was changed.
+  Next: Configure the version that shipped them and uninstall again, or use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-not-shipped  (PLUGIN_MIGRATION_NOT_SHIPPED)
+```

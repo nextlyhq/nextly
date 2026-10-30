@@ -41,7 +41,7 @@ export interface ReadAccessCaller {
   /**
    * An API key's grants in the STORED spelling (`read-posts`): what the coarse
    * `read-{slug}` check compares against. Empty for a session caller, whose
-   * grants `checkAccess` resolves from the database.
+   * grants the access decision resolves from the database.
    */
   permissions: string[];
   /**

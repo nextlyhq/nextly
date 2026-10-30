@@ -11,10 +11,15 @@ import * as loggerModule from "../observability/logger";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { readableOfKind } from "../domains/widgets/reader-content";
 import { setSiteDashboardRules } from "../domains/widgets/site-rules";
 import { clearSources, registerSource } from "../domains/widgets/sources";
 
-import { cardIsShownTo, prepareCards } from "./widget-cards";
+import {
+  cardIsShownTo,
+  prepareCards,
+  readableCollectionsOnce,
+} from "./widget-cards";
 import { askableCards } from "./widget-layout";
 import {
   answerReadyQueries,
@@ -37,11 +42,23 @@ vi.mock(
   })
 );
 vi.mock("../domains/widgets/execute", () => ({ executeWidgetQuery: vi.fn() }));
+// Partial: the registry read a card's Field settings are judged against is stood in for.
+vi.mock("../domains/widgets/reader-content", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../domains/widgets/reader-content")
+  >()),
+  readableOfKind: vi.fn(),
+}));
 
 const person = { user: { id: "reader" } } as never;
 const auth = {} as never;
 const check = vi.fn(async (raw: unknown) => raw as WidgetQuery);
-const batch = { auth, caller: person, check };
+const batch = {
+  auth,
+  caller: person,
+  check,
+  readableCollections: async () => ({ slugs: [], reachable: true }),
+};
 
 const ordersFunction = vi.fn(async () => ({ total: 7 }));
 const gatedLoad = vi.fn(async () => ({ total: 1 }));
@@ -50,6 +67,10 @@ const needsLoad = vi.fn(async () => ({ total: 3 }));
 const maybeLoad = vi.fn(async () => ({ total: 4 }));
 const accessPredicate = vi.fn((_input: { user: unknown }): unknown => true);
 const showsPredicate = vi.fn((_input: unknown): unknown => true);
+// Records the Field setting each card of the by-field widgets was loaded with.
+const fieldLoad = vi.fn(async (_input: { settings: { field?: unknown } }) => ({
+  total: 5,
+}));
 // Reads a trend only for a card with the room to draw one: the size it is handed decides how much
 // it asks.
 const trendLoad = vi.fn(
@@ -141,7 +162,7 @@ const declarations: Record<string, unknown> = {
     declaration: {
       id: "acme/needs",
       size: { default: { w: 12, h: 3 } },
-      settings: { collection: { type: "collection" } },
+      settings: { collection: { type: "collection", label: "Collection" } },
       load: needsLoad,
       view: "figure",
     },
@@ -223,6 +244,40 @@ const declarations: Record<string, unknown> = {
       id: "acme/dated",
       size: { default: { w: 12, h: 3 } },
       load: async () => ({ total: 3, at: new Date(0) }),
+      view: "figure",
+    },
+  },
+  // A field of a chosen collection, with no default and with one.
+  "acme/by-field": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/by-field",
+      size: { default: { w: 12, h: 3 } },
+      settings: {
+        collection: { type: "collection", label: "Collection" },
+        field: { type: "field", of: "collection", label: "Field" },
+      },
+      load: fieldLoad,
+      view: "figure",
+    },
+  },
+  "acme/by-field-default": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/by-field-default",
+      size: { default: { w: 12, h: 3 } },
+      settings: {
+        collection: { type: "collection", label: "Collection" },
+        field: {
+          type: "field",
+          of: "collection",
+          label: "Field",
+          defaultValue: "state",
+        },
+      },
+      load: fieldLoad,
       view: "figure",
     },
   },
@@ -673,9 +728,10 @@ describe("a card's load, judged before it runs", () => {
     expect(answer).toEqual({
       settled: {
         ok: false,
+        // Its label in a sentence, as the admin writes it: lowered, never "No Collection".
         error: "No collection chosen yet",
         code: "needs-setting",
-        setting: "collection",
+        setting: "Collection",
       },
     });
   });
@@ -1178,5 +1234,121 @@ describe("the size a card's load is handed", () => {
     expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
       size: { w: 12, h: 3, tier: "medium" },
     });
+  });
+});
+
+describe("a card's Field settings, judged against the reader's collections", () => {
+  /** A card of `widget` storing `field` over the orders collection. */
+  const fieldCard = (id: string, widget: string, field: string) =>
+    [
+      id,
+      {
+        id,
+        widgetId: widget,
+        w: 12,
+        h: 3,
+        removed: false,
+        config: { collection: "orders", field },
+      },
+    ] as const;
+
+  beforeEach(() => {
+    clearSources();
+    registerSource({
+      id: "collection:orders",
+      label: "Orders",
+      kind: "collection",
+      supports: ["count"],
+      fields: [
+        { name: "state", type: "string" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+    vi.mocked(readableOfKind).mockResolvedValue({
+      slugs: ["orders"],
+      reachable: true,
+    });
+    vi.mocked(askableCards).mockResolvedValue({
+      handed: new Map([
+        fieldCard("f-1", "acme/by-field", "state"),
+        fieldCard("f-2", "acme/by-field", "createdAt"),
+        fieldCard("f-3", "acme/by-field", "state"),
+        fieldCard("f-gone", "acme/by-field", "gone"),
+        fieldCard("f-gone-default", "acme/by-field-default", "gone"),
+      ]) as never,
+      placeable: new Set(["acme/by-field", "acme/by-field-default"]),
+    });
+  });
+  afterEach(() => clearSources());
+
+  /** Each card asked, in one batch that reads the reader's collections as the endpoint's does. */
+  async function answeredCards(cards: string[]): Promise<unknown[]> {
+    const fieldBatch = {
+      auth,
+      caller: person,
+      check,
+      readableCollections: readableCollectionsOnce(person),
+    };
+    const prepared = await prepareCards(
+      cards.map(card => ({
+        widget: card.endsWith("-default")
+          ? "acme/by-field-default"
+          : "acme/by-field",
+        card,
+      })),
+      fieldBatch
+    );
+    return Promise.all(
+      cards.map((_card, index) =>
+        (prepared.get(index) as { answer: Function }).answer({
+          signal: new AbortController().signal,
+          scope: createBatchScope().forOwner("plugin @acme/shop"),
+          now: new Date(Date.UTC(2026, 9, 22)),
+        })
+      )
+    );
+  }
+
+  /** The Field setting each run of the by-field load was handed, in order. */
+  const fieldsLoaded = () =>
+    fieldLoad.mock.calls.map(([input]) => input.settings.field);
+
+  it("reads the reader's collections once for every card of the batch", async () => {
+    await answeredCards(["f-1", "f-2", "f-3"]);
+    // The control: each card's Field setting was judged and loaded.
+    expect(fieldsLoaded()).toEqual(["state", "createdAt", "state"]);
+    expect(readableOfKind).toHaveBeenCalledTimes(1);
+    expect(readableOfKind).toHaveBeenCalledWith(person, "collection");
+  });
+
+  it("asks for a field the collection no longer offers again, without loading", async () => {
+    const [answer] = await answeredCards(["f-gone"]);
+    expect(answer).toEqual({
+      settled: {
+        ok: false,
+        error: "No field chosen yet",
+        code: "needs-setting",
+        setting: "Field",
+      },
+    });
+    expect(fieldLoad).not.toHaveBeenCalled();
+  });
+
+  it("loads a stale field with its declared default, where the collection offers it", async () => {
+    await expect(answeredCards(["f-gone-default"])).resolves.toEqual([
+      { result: { op: "count", total: 5 }, empty: false },
+    ]);
+    expect(fieldsLoaded()).toEqual(["state"]);
+  });
+
+  it("keeps a stored field while the registry cannot be read, and loads with it", async () => {
+    vi.mocked(readableOfKind).mockResolvedValue({
+      slugs: [],
+      reachable: false,
+    });
+    // Without a reachable registry nothing says the field is stale: it is not
+    // cleared into a "No field chosen yet" the reader would have to answer.
+    await answeredCards(["f-1"]);
+    expect(fieldsLoaded()).toEqual(["state"]);
   });
 });

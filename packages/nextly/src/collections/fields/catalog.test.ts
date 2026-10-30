@@ -373,7 +373,7 @@ describe("binding kinds", () => {
 // This pins them apart. A sweep that renames the label and takes the value with it would pass every
 // other test in the suite while silently making existing content unreadable.
 describe("field group entry: display name vs stored value", () => {
-  const entry = FIELD_TYPE_CATALOG.find(f => f.label === "Field Group");
+  const entry = FIELD_TYPE_CATALOG.find(f => f.label === "Field group");
 
   it("presents itself as a field group", () => {
     expect(entry).toBeDefined();

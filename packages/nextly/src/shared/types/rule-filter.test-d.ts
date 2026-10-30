@@ -1,8 +1,9 @@
 /**
- * The compile-time half of a read rule that answers a filter: the filter is
- * typed by the collection's own fields, so a misspelt field or operator, or
- * an operand of the wrong kind, fails to compile; only a collection's read
- * rule may answer one; and a collection whose field names the checker cannot
+ * The compile-time half of a rule that answers a filter: the filter is typed
+ * by the collection's own fields, so a misspelt field or operator, or an
+ * operand of the wrong kind, fails to compile; only a collection's read rule
+ * and the write rules a filter limits (update, delete, publish, unpublish)
+ * may answer one; and a collection whose field names the checker cannot
  * know, or a config written before filters were typed, compiles as it did.
  *
  * Each refused case is asserted on the type that refuses it rather than
@@ -457,24 +458,109 @@ expectTypeOf<
 >().toEqualTypeOf<never>();
 
 // ---------------------------------------------------------------------------
-// Only a collection's read rule may answer a filter
+// A write rule's filter is typed by the collection's fields too
 // ---------------------------------------------------------------------------
 
-// Each rule beside the read rule answers true or false: a rule answering a
-// filter is not one, where a rule answering a boolean is.
+// Each write rule a filter limits answers one typed as a read rule's is,
+// sync or async, beside a read rule of its own.
+defineCollection({
+  slug: "typed-writes",
+  fields,
+  access: {
+    read: () => ({ team: { equals: "a" } }),
+    update: ({ user }) => (user ? { owner: { equals: user.id } } : false),
+    delete: async ({ user }) =>
+      user ? { team: { equals: await teamOf(user.id) } } : false,
+    publish: () => ({ rank: { greater_than: 2 } }),
+    unpublish: () => ({ open: true }),
+  },
+});
+
+// defineCollection checks each of them with the read rule's own type, so a
+// misspelt field or operator, or an operand of the wrong kind, is refused in
+// a write rule exactly as the cases above refuse it in a read rule.
+type WriteAccess = NonNullable<
+  CollectionConfigInput<
+    Fields,
+    boolean,
+    { team: string },
+    { rank: number },
+    { open: boolean },
+    { tier: string }
+  >["access"]
+>;
+expectTypeOf<
+  Mismatches<{
+    update: [
+      NonNullable<WriteAccess["update"]>,
+      CollectionFilterRuleInput<Fields, { team: string }>,
+    ];
+    delete: [
+      NonNullable<WriteAccess["delete"]>,
+      CollectionFilterRuleInput<Fields, { rank: number }>,
+    ];
+    publish: [
+      NonNullable<WriteAccess["publish"]>,
+      CollectionFilterRuleInput<Fields, { open: boolean }>,
+    ];
+    unpublish: [
+      NonNullable<WriteAccess["unpublish"]>,
+      CollectionFilterRuleInput<Fields, { tier: string }>,
+    ];
+  }>
+>().toEqualTypeOf<never>();
+// And a misspelt field in a write rule, as one of them.
+expectTypeOf<() => { teem: string }>().not.toExtend<
+  NonNullable<
+    NonNullable<
+      CollectionConfigInput<Fields, boolean, { teem: string }>["access"]
+    >["update"]
+  >
+>();
+
+// The stored rule type holds a typed write rule, as it holds a read rule.
+type TypedRule = CollectionFilterRule<[ReturnType<typeof text<"team">>]>;
+type StoredFilterRule<Rule> = Extract<Rule, CollectionFilterRule>;
+expectTypeOf<
+  Disagreements<{
+    update: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["update"]>,
+      true,
+    ];
+    delete: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["delete"]>,
+      true,
+    ];
+    publish: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["publish"]>,
+      true,
+    ];
+    unpublish: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["unpublish"]>,
+      true,
+    ];
+  }>
+>().toEqualTypeOf<never>();
+
+// ---------------------------------------------------------------------------
+// Only a collection's read and write rules may answer a filter
+// ---------------------------------------------------------------------------
+
+// A create rule, a Single's rule and a field's rule answer true or false: a
+// rule answering a filter is not one, where a rule answering a boolean is.
 type AnswersBoolean = () => boolean;
 type AnswersFilter = () => { team: string };
 type CreateRule = NonNullable<CollectionAccessControl["create"]>;
-type UpdateRule = NonNullable<CollectionAccessControl["update"]>;
 type SingleRule = NonNullable<SingleAccessControl["read"]>;
 type FieldRule = NonNullable<FieldAccess["read"]>;
 expectTypeOf<
   Disagreements<{
     createBoolean: [AnswersBoolean, CreateRule, true];
     createFilter: [AnswersFilter, CreateRule, false];
-    // An update rule, for now.
-    updateBoolean: [AnswersBoolean, UpdateRule, true];
-    updateFilter: [AnswersFilter, UpdateRule, false];
     singleBoolean: [AnswersBoolean, SingleRule, true];
     singleFilter: [AnswersFilter, SingleRule, false];
     fieldBoolean: [AnswersBoolean, FieldRule, true];

@@ -1,0 +1,23 @@
+---
+title: PLUGIN_WIDGET_SOURCE_NAMESPACE
+description: "A plugin contributes a widget source whose id is not in the plugin's own namespace."
+---
+
+## Cause
+
+A plugin contributes a widget source whose id is not in the plugin's own namespace.
+
+A contributed widget source's id starts with its plugin's name, so two plugins' sources can never collide.
+
+## Fix
+
+Prefix the source's id with the plugin's name, or update the plugin.
+
+## Example
+
+```text
+✗ "@acme/stats" contributes widget source "visits", but a contributed source's id must start with its plugin's name.
+  Why:  A contributed source's id starts with its plugin's name, so two plugins' sources cannot collide.
+  Next: Prefix the source's id with the plugin's name, or update the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-widget-source-namespace  (PLUGIN_WIDGET_SOURCE_NAMESPACE)
+```

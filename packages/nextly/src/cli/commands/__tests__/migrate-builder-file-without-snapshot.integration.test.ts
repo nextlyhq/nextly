@@ -70,6 +70,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await instance?.destroy();
   instance = undefined;
   if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -127,6 +128,10 @@ function command(): { context: CommandContext; said: string[] } {
   const capture = (message: string) => {
     said.push(message);
   };
+  // The error a command ends with is printed on standard error, in the error shape.
+  vi.spyOn(console, "error").mockImplementation(message => {
+    said.push(String(message));
+  });
   return {
     context: {
       logger: {
@@ -220,6 +225,36 @@ describe.each(getConfiguredTestDialects())(
       expect(said.filter(line => line.includes(file))).toEqual([
         expect.stringMatching(/Schema Builder.*`nextly migrate:create`/s),
       ]);
+    });
+
+    it("--dry-run --step 1 names the refusal of a file the step leaves out", async () => {
+      const t = instance!;
+      // A pending app migration that sorts before the Builder's file, so
+      // `--step 1` previews it alone. The real run refuses the Builder file
+      // before applying anything, so the dry run must say so too.
+      const first = "0001_000000_first.sql";
+      writeFileSync(
+        join(dir, "migrations", first),
+        "-- Migration: first\n\n-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n"
+      );
+      const file = await builderCreates(t, "bf_events");
+      expect(readdirSync(join(dir, "migrations")).sort()).toEqual(
+        [first, file].sort()
+      );
+
+      const { context, said } = command();
+      const code = await exitCode(() =>
+        runMigrate({ cwd: dir, dryRun: true, step: 1 }, context)
+      );
+
+      expect(code, said.join("\n")).toBeUndefined();
+      expect(
+        said.filter(
+          line =>
+            line.includes("a real run would refuse") && line.includes(file)
+        ),
+        said.join("\n")
+      ).toHaveLength(1);
     });
 
     it("a hand-written file with no snapshot still applies as written", async () => {

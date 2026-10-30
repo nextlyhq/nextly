@@ -148,7 +148,9 @@ export function UploadEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.Upload className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Upload Configuration</Label>
+        {/* "Settings": the options header above already names the type in
+            its plain words, and every Builder label is in sentence case. */}
+        <Label className="text-xs font-medium">Settings</Label>
       </div>
 
       {/* Allow Multiple */}
@@ -156,7 +158,7 @@ export function UploadEditor({
         <div className="space-y-0.5">
           <FormLabelWithTooltip
             className="text-sm font-medium"
-            label="Allow Multiple"
+            label="Allow multiple"
             description="Upload multiple files"
           />
         </div>
@@ -166,12 +168,12 @@ export function UploadEditor({
       {/* File Type Filter */}
       <div className="space-y-3 pt-2 border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
-          File Type Filter
+          File type filter
         </Label>
 
         {/* MIME Type Category Selector */}
         <div className="space-y-2">
-          <Label className="text-xs font-medium">Allowed File Types</Label>
+          <Label className="text-xs font-medium">Allowed file types</Label>
           <Select
             value={currentMimeCategory}
             onValueChange={(value: MimeTypeCategory) =>
@@ -219,7 +221,7 @@ export function UploadEditor({
         <div className="space-y-2">
           <FormLabelWithTooltip
             className="text-xs font-medium"
-            label="Max File Size"
+            label="Max file size"
             description="Maximum allowed file size for uploads"
           />
           <div className="flex gap-2">
@@ -255,7 +257,7 @@ export function UploadEditor({
       {/* Admin Options */}
       <div className="space-y-3 pt-2 border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
-          Admin Options
+          Admin options
         </Label>
 
         {/* Allow Create -- the only surviving Admin Options toggle.
@@ -267,7 +269,7 @@ export function UploadEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Create"
+              label="Allow create"
               description="Upload new files from this field"
             />
           </div>

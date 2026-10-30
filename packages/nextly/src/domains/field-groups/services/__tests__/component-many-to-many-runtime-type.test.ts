@@ -196,8 +196,10 @@ describe("an indexed component many-to-many in the creating SQL", () => {
     expect(indexLine("mysql")).toBeUndefined();
   });
 
-  it("keeps its index where the dialect can index the column", () => {
-    expect(indexLine("postgresql")).toBeDefined();
-    expect(indexLine("sqlite")).toBeDefined();
+  // A list takes no plain index even where the dialect could build one: no lookup reads a whole
+  // list, and on PostgreSQL a btree entry over a long one exceeds the row size and refuses the save.
+  it("gets no index on PostgreSQL or SQLite either", () => {
+    expect(indexLine("postgresql")).toBeUndefined();
+    expect(indexLine("sqlite")).toBeUndefined();
   });
 });

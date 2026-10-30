@@ -16,7 +16,7 @@ import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { ok } from "./support/releases-api";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const API = "/admin/api";
 
@@ -171,9 +171,9 @@ test.describe("a release's page", () => {
         "1 document can't be shown (deleted, or you can't view it)"
       )
     ).toBeVisible();
-    await expect(
-      page.getByText(/Private note/).filter({ visible: true })
-    ).toHaveCount(0);
+    await expect(includingHidden(page).getByText(/Private note/)).toHaveCount(
+      0
+    );
     // No document is named by its id.
     const text = (await page.locator("main").textContent()) ?? "";
     for (const id of ids) expect(text).not.toContain(id);

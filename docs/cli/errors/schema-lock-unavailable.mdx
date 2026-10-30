@@ -1,0 +1,24 @@
+---
+title: SCHEMA_LOCK_UNAVAILABLE
+description: "The schema lock's row could not be established, so the command refused to run without it."
+---
+
+## Cause
+
+The schema lock's row could not be established, so the command refused to run without it.
+
+The schema lock is a row in the `nextly_schema_lock` table. The row could not be read or created, and running without the lock would leave other runs free to change the schema at the same moment, so the command refused to start.
+
+## Fix
+
+- Check that the database user can create and write `nextly_schema_lock`.
+- Run the command again with `--verbose` to see the underlying error.
+
+## Example
+
+```text
+✗ The command did not run: the schema lock could not be taken.
+  Why:  Its row in `nextly_schema_lock` could not be established, and running without the lock would leave other runs free to change the schema at the same time.
+  Next: Check that the database user can create and write that table, then run the command again; `--verbose` shows the details.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-unavailable  (SCHEMA_LOCK_UNAVAILABLE)
+```

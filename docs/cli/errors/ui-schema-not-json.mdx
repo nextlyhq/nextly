@@ -1,0 +1,24 @@
+---
+title: UI_SCHEMA_NOT_JSON
+description: "The Schema Builder's `ui-schema.json` is not valid JSON."
+---
+
+## Cause
+
+The Schema Builder's `ui-schema.json` is not valid JSON.
+
+The Schema Builder writes `ui-schema.json` as JSON. The file could not be parsed, usually after a hand edit or a merge conflict left in it, so none of its entities could be read.
+
+## Fix
+
+- Fix the JSON at the position the Why line names, or resolve the merge conflict in the file.
+- Or restore the file from version control, for example `git checkout -- ui-schema.json`.
+
+## Example
+
+```text
+✗ ui-schema.json is not valid JSON.
+  Why:  Unexpected token '}', "{ "collections": [ }" is not valid JSON
+  Next: Fix the JSON at the position named, or restore `ui-schema.json` from version control, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/ui-schema-not-json  (UI_SCHEMA_NOT_JSON)
+```

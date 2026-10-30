@@ -1,0 +1,24 @@
+---
+title: CORE_TABLES_NOT_CREATED
+description: "The command could not create the core tables on a database that has none."
+---
+
+## Cause
+
+The command could not create the core tables on a database that has none.
+
+On a database with no core tables, the sync creates them with a schema push. On PostgreSQL and MySQL a failed push is not retried another way, so the command stops. The Why line holds the push's error.
+
+## Fix
+
+- Run `nextly migrate` to create the database schema, then run the command again.
+- If the error names a permission, give the database user the right to create tables in its schema.
+
+## Example
+
+```text
+✗ Core tables not found, and they could not be created.
+  Why:  The schema push that creates them failed: permission denied for schema "public"
+  Next: Run `nextly migrate` first to create the database schema.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-tables-not-created  (CORE_TABLES_NOT_CREATED)
+```

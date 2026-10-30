@@ -535,12 +535,18 @@ export async function resolveContent(
       );
       return overlaid ?? found;
     } catch (error) {
-      // An access denial (403) means the read policy hides this entry from the
+      // An access denial (403), or a visitor asked to sign in
+      // (`AUTH_REQUIRED`), means the read policy hides this entry from the
       // caller — treat it as absent (→ notFound), never as a transient error.
-      // Any other error still rethrows (retryable, not a permanently-cached 404).
-      // `NextlyError.is` matches across bundled package copies where a plain
-      // `instanceof` would miss a differently-realmed error class.
-      if (NextlyError.is(error) && error.statusCode === 403) {
+      // Any other error still rethrows (retryable, not a permanently-cached
+      // 404), other 401s included: an invalid or expired credential is the
+      // caller's to fix, not a missing page. `NextlyError.is` matches across
+      // bundled package copies where a plain `instanceof` would miss a
+      // differently-realmed error class.
+      if (
+        (NextlyError.is(error) && error.statusCode === 403) ||
+        NextlyError.isCode(error, "AUTH_REQUIRED")
+      ) {
         return null;
       }
       throw error;

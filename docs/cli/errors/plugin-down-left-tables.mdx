@@ -1,0 +1,23 @@
+---
+title: PLUGIN_DOWN_LEFT_TABLES
+description: "A plugin's DOWN migrations ran and left a table it owns in place, so the uninstall was not recorded."
+---
+
+## Cause
+
+A plugin's DOWN migrations ran and left a table it owns in place, so the uninstall was not recorded.
+
+The DOWN statements were read to drop every table the plugin owns, and after they ran a table named on the What line was still there, so one did something its text does not say. The migrations are recorded as rolled back, and the plugin is not recorded as uninstalled.
+
+## Fix
+
+- Drop the table the What line names, then run `nextly plugins uninstall <name>` again to record the uninstall.
+
+## Example
+
+```text
+✗ @acme/seo's DOWN migrations ran but left seo_redirects in place, so it was not recorded as uninstalled.
+  Why:  Its DOWN statements were read to drop that table before they ran, so one did something its text does not say. Its migrations are recorded as rolled back.
+  Next: Drop that table, then run the uninstall again to record it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-down-left-tables  (PLUGIN_DOWN_LEFT_TABLES)
+```

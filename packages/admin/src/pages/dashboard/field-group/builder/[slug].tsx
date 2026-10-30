@@ -272,7 +272,7 @@ export default function FieldGroupBuilderEditPage({
   if (!slug) {
     return (
       <BuilderNotFoundScreen
-        title="Field Group Not Found"
+        title="Field group not found"
         description="No field group slug was provided."
       />
     );
@@ -364,6 +364,7 @@ export default function FieldGroupBuilderEditPage({
 
       <BuilderSchemaChangeDialogs
         confirmation={confirmation}
+        kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
       />

@@ -21,6 +21,7 @@ import {
   actionGatesOf,
   collectionSettingField,
   knobQueriesField,
+  settingsField,
   textBoundsField,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
@@ -609,6 +610,9 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     // a placement's text to: a contribution's settings passed the registry's
     // own check above, so they are read as declared.
     ...textBoundsField(widget.settings),
+    // Its settings, so the layout write holds a changed value to the rule it
+    // is read back by.
+    ...settingsField(widget.settings),
     // Its Collection setting, so a card is judged by the collection it reads
     // whichever channel declared the widget.
     ...collectionSettingField(widget.settings),

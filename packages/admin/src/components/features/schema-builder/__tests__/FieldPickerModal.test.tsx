@@ -22,7 +22,7 @@ describe("FieldPickerModal", () => {
     expect(screen.getByText(/^basic$/i)).toBeInTheDocument();
     expect(screen.getByText("Text")).toBeInTheDocument();
     expect(screen.getByText(/^structured$/i)).toBeInTheDocument();
-    expect(screen.getByText("Repeater")).toBeInTheDocument();
+    expect(screen.getByText("Repeating rows")).toBeInTheDocument();
   });
 
   it("hides excluded types from any category", () => {
@@ -34,7 +34,7 @@ describe("FieldPickerModal", () => {
         onSelect={vi.fn()}
       />
     );
-    expect(screen.queryByText("Relationship")).not.toBeInTheDocument();
+    expect(screen.queryByText("Link to entries")).not.toBeInTheDocument();
     // Category header for Relational disappears too when its only entry
     // was excluded.
     expect(screen.queryByText(/^relational$/i)).not.toBeInTheDocument();
@@ -51,9 +51,9 @@ describe("FieldPickerModal", () => {
       />
     );
     await user.type(screen.getByRole("textbox", { name: /search/i }), "rich");
-    // PR C renamed `richText` label to "Editor"; the hint contains
-    // "Lexical rich-text editor" so "rich" still matches the row.
-    expect(screen.getByText("Editor")).toBeInTheDocument();
+    // The `richText` row is labelled "Rich text", so "rich" matches it by
+    // name (its hint, "Lexical rich-text editor", matches as well).
+    expect(screen.getByText("Rich text")).toBeInTheDocument();
     expect(screen.queryByText("Email")).not.toBeInTheDocument();
   });
 

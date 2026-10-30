@@ -739,6 +739,34 @@ describe("a widget declaration as startup receives it", () => {
       ]);
     });
 
+    it("with an editor that names no component, and passes one that does", () => {
+      const editorFault = (name: string) =>
+        `setting "${name}" editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from`;
+      expect(
+        problemsOf(
+          valid({
+            settings: {
+              goal: {
+                type: "number",
+                label: "Goal",
+                editor: { component: "@acme/goal/admin#GoalEditor" },
+              },
+              blank: {
+                type: "number",
+                label: "Blank",
+                editor: { component: " " },
+              },
+              bare: {
+                type: "text",
+                label: "Bare",
+                editor: "@acme/goal/admin#X",
+              },
+            },
+          })
+        )
+      ).toEqual([editorFault("blank"), editorFault("bare")]);
+    });
+
     it("over the limit, still saying so when one is malformed", () => {
       const many = Object.fromEntries(
         Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [
@@ -972,6 +1000,40 @@ describe("startup with several declarations", () => {
           'id "acme/orders-by-state" is already declared by plugin "@acme/shop"',
       },
     ]);
+  });
+
+  it("refuses one component drawn both as a view and as a setting's editor, naming both", () => {
+    /** A valid widget with a Goal setting edited by `editor`. */
+    const editedBy = (editor: string) =>
+      valid({
+        id: "acme/goal",
+        settings: {
+          ...(valid() as { settings: Record<string, unknown> }).settings,
+          goal: {
+            type: "number",
+            label: "Goal",
+            editor: { component: editor },
+          },
+        },
+      });
+    const groups = (editor: string) => [
+      { owner: 'plugin "@acme/shop"', declarations: [validComponent()] },
+      { owner: "the site config", declarations: [editedBy(editor)] },
+    ];
+    expect(
+      collectWidgetDeclarationFaults(groups("@acme/shop/admin#RevenueCard"))
+    ).toEqual([
+      {
+        owner: "the site config",
+        widget: "acme/goal",
+        problem:
+          'component "@acme/shop/admin#RevenueCard" is the editor of setting "goal" of widget "acme/goal" of the site config and the view of widget "acme/revenue" of plugin "@acme/shop"; a view and a setting editor are handed different props, so one component cannot be both',
+      },
+    ]);
+    // The must-differ half: an editor of its own passes beside the view.
+    expect(
+      collectWidgetDeclarationFaults(groups("@acme/shop/admin#GoalEditor"))
+    ).toEqual([]);
   });
 
   it("throws one error whose detail lists every fault", () => {
