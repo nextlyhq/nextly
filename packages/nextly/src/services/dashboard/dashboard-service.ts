@@ -1280,6 +1280,12 @@ export class DashboardService extends BaseService {
    * drawn rows are put in the order of what they show once built. Ranked newest
    * first, then the rest by label, the collections holding no entries this
    * caller may read last (`inTableOrder`).
+   * Kept as it is, deliberately: a subject whose only change newer than its own
+   * date lies past the trail's window is picked for the page by its own date.
+   * Such a change is older than every change the window holds, so it can only
+   * decide which rows make a short page, never a date shown or the order of
+   * the rows drawn, and reading it would cost a read per subject outside the
+   * window.
    * A ranking drawn from a window of the activity trail alone would not do:
    * one collection saved often fills any window, and every other subject's
    * latest save then falls outside it.
