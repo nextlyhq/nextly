@@ -188,6 +188,20 @@ export function noticeDedupeKey(input: {
   return createHash("sha256").update(joined, "utf8").digest("hex");
 }
 
+/** A notice's identity under its kind: the key its write is deduplicated on. */
+function identityOf(
+  kind: Pick<NoticeKind<unknown>, "key" | "subjectType">,
+  notice: { userId: string; subjectId: string; occurrence: string }
+): string {
+  return noticeDedupeKey({
+    userId: notice.userId,
+    kind: kind.key,
+    subjectType: kind.subjectType,
+    subjectId: notice.subjectId,
+    occurrence: notice.occurrence,
+  });
+}
+
 export class NoticesService {
   /** Once seen, the table stays; absence is probed again on each call. */
   private tableKnownPresent = false;
@@ -257,13 +271,7 @@ export class NoticesService {
       subjectType: input.kind.subjectType,
       subjectId: input.subjectId,
       occurrence: input.occurrence,
-      dedupeKey: noticeDedupeKey({
-        userId: input.userId,
-        kind: input.kind.key,
-        subjectType: input.kind.subjectType,
-        subjectId: input.subjectId,
-        occurrence: input.occurrence,
-      }),
+      dedupeKey: identityOf(input.kind, input),
       data,
       createdAt: new Date(),
       readAt: null,
@@ -285,6 +293,37 @@ export class NoticesService {
       return { created: false, id: null };
     }
     return { created: stored.id === row.id, id: stored.id ?? null };
+  }
+
+  /**
+   * Which of these notices are already recorded, in the order given: for a
+   * writer that would otherwise open a transaction for each one only to find
+   * it standing. Asked of the identity `record` writes, so it answers as a
+   * write would, in one read through that identity's unique index. None are,
+   * while the table does not exist yet.
+   */
+  async recorded<TData>(
+    kind: NoticeKind<TData>,
+    notices: readonly Pick<
+      RecordNoticeInput<TData>,
+      "userId" | "subjectId" | "occurrence"
+    >[]
+  ): Promise<boolean[]> {
+    if (notices.length === 0 || !(await this.tablePresent())) {
+      return notices.map(() => false);
+    }
+    const keys = notices.map(notice => identityOf(kind, notice));
+    const rows = await this.deps.db.select<{ dedupeKey: string }>(
+      NOTICES_TABLE,
+      {
+        columns: ["dedupeKey"],
+        where: {
+          and: [{ column: "dedupeKey", op: "IN", value: [...new Set(keys)] }],
+        },
+      }
+    );
+    const stored = new Set(rows.map(row => row.dedupeKey));
+    return keys.map(key => stored.has(key));
   }
 
   /**

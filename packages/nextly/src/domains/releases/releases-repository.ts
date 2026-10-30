@@ -1554,7 +1554,9 @@ export class ReleasesRepository {
    *
    * Nobody is told when the release records no owner, or its owner's account
    * is gone: a notice belongs to a person who exists, and writing one for an
-   * account that does not would refuse the whole change.
+   * account that does not would refuse the whole change. Nor when the release
+   * no longer meets `still`, the conditions a caller that read it before the
+   * transaction requires of it now.
    *
    * @returns whether this call created the notice
    */
@@ -1566,6 +1568,7 @@ export class ReleasesRepository {
       occurrence: string;
       /** The kind's snapshot, from the release as the transaction reads it. */
       data: (release: { title: string; timezone: string | null }) => TData;
+      still?: readonly VersionsWhereCondition[];
     }
   ): Promise<boolean> {
     const [release] = await tx.select<{
@@ -1574,7 +1577,12 @@ export class ReleasesRepository {
       timezone: string | null;
     }>(RELEASES, {
       columns: ["title", "createdBy", "timezone"],
-      where: { and: [{ column: "id", op: "=", value: releaseId }] },
+      where: {
+        and: [
+          { column: "id", op: "=", value: releaseId },
+          ...(notice.still ?? []),
+        ],
+      },
     });
     const owner = release?.createdBy ?? null;
     if (owner === null) return false;
@@ -1626,33 +1634,78 @@ export class ReleasesRepository {
       now,
     });
     if (listing === null) return 0;
-    const overdue = await this.db.select<{
+    const rows = await this.db.select<{
       id: string;
       scheduledAt: Date | string;
+      createdBy: string | null;
     }>(RELEASES, {
-      columns: ["id", "scheduledAt"],
+      columns: ["id", "scheduledAt", "createdBy"],
       where: listing.where,
       orderBy: listing.orderBy,
     });
-    let told = 0;
-    for (const release of overdue) {
-      const scheduledAt = isoOf(release.scheduledAt);
-      const created = await this.db.transaction(tx =>
-        this.tellOwner(tx, release.id, {
-          kind: RELEASE_OVERDUE_NOTICE,
-          // The missed instant, as the transition to published keys it.
-          occurrence: scheduledAt,
-          data: row => ({
-            title: row.title,
-            scheduledAt,
-            timezone: row.timezone,
-            ranAt: null,
-          }),
-        })
-      );
-      if (created) told += 1;
+    const overdue = rows.flatMap(row =>
+      row.createdBy === null
+        ? []
+        : [
+            {
+              id: row.id,
+              owner: row.createdBy,
+              at: new Date(row.scheduledAt),
+              // The missed instant, as the transition to published keys it.
+              occurrence: isoOf(row.scheduledAt),
+            },
+          ]
+    );
+    // The misses already told, in one read, so a release that stays overdue
+    // costs each later pass nothing per release before the pass runs what is
+    // due.
+    const told = await this.notices.recorded(
+      RELEASE_OVERDUE_NOTICE,
+      overdue.map(release => ({
+        userId: release.owner,
+        subjectId: release.id,
+        occurrence: release.occurrence,
+      }))
+    );
+    let newlyTold = 0;
+    for (const [index, release] of overdue.entries()) {
+      if (told[index]) continue;
+      try {
+        const created = await this.db.transaction(tx =>
+          this.tellOwner(tx, release.id, {
+            kind: RELEASE_OVERDUE_NOTICE,
+            occurrence: release.occurrence,
+            data: row => ({
+              title: row.title,
+              scheduledAt: release.occurrence,
+              timezone: row.timezone,
+              ranAt: null,
+            }),
+            // Read before the transaction: a release cancelled, run or
+            // moved since has not missed this instant.
+            still: [
+              {
+                column: "state",
+                op: "=",
+                value: "scheduled" satisfies ReleaseState,
+              },
+              { column: "scheduledAt", op: "=", value: release.at },
+            ],
+          })
+        );
+        if (created) newlyTold += 1;
+      } catch (error) {
+        // One release that cannot be told leaves the others told, rather
+        // than every one after it waiting behind it on every pass.
+        getNextlyLogger().warn({
+          kind: "release-overdue-notice-failed",
+          message: "A release's owner could not be told it is overdue",
+          releaseId: release.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
-    return told;
+    return newlyTold;
   }
 
   /**

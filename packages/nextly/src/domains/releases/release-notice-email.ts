@@ -26,7 +26,11 @@ import type { EmailService } from "../email/services/email-service";
 import { escapeHtml } from "../email/services/template-engine";
 import { defineJob, type JobDefinition } from "../jobs/job-registry";
 import { enqueueInTransaction } from "../jobs/jobs-repository";
-import type { NoticeKind, NoticeText } from "../notices/notice-kinds";
+import {
+  registeredNoticeKind,
+  type NoticeKind,
+  type NoticeText,
+} from "../notices/notice-kinds";
 import {
   NoticesService,
   type NoticesDb,
@@ -156,8 +160,9 @@ export function createReleaseNoticeEmailJob(
 
 /**
  * Queue the email for one notice, or nothing: the site sends no email, the
- * notice is gone, it is not a release notice, or its person has no address.
- * The notice alone then stands, and nothing fails.
+ * notice is gone, it is not a release notice, its person may no longer see
+ * it, or its person has no address. The notice alone then stands, and
+ * nothing fails.
  *
  * @returns the queued email, or `null` when none was queued
  * @experimental
@@ -170,6 +175,14 @@ export async function emailReleaseNotice(
   if (email === null || !(await email.isConfigured())) return null;
   const notice = await new NoticesService({ db }).byId(noticeId);
   if (notice === null) return null;
+  // Only to a person the notice itself still shows to, by its kind's own
+  // rule as their list of notices applies it: a person who may no longer
+  // read releases is not sent what their list now hides from them.
+  const kind = registeredNoticeKind(notice.kind);
+  if (kind === undefined) return null;
+  if (kind.visible !== undefined && !(await kind.visible(notice.userId))) {
+    return null;
+  }
   const [person] = await db.select<{ email: string | null }>("users", {
     columns: ["email"],
     where: { and: [{ column: "id", op: "=", value: notice.userId }] },

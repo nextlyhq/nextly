@@ -20,6 +20,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
 import { container } from "../../../di/container";
@@ -44,6 +45,7 @@ import {
 } from "../release-notice-email";
 import { createReleaseMutations } from "../release-mutations";
 import { ReleasesRepository } from "../releases-repository";
+import { RELEASES_RESOURCE } from "../releases-resource";
 
 import { seedLiveAuthor } from "./helpers/live-author";
 import {
@@ -153,6 +155,16 @@ async function scheduledRelease(
   );
   await scheduleAsItStands(repo, release.id, at, "Europe/Berlin");
   return release.id;
+}
+
+/**
+ * An owner who may read releases, as a person given release notices is: the
+ * notice, and so its email, is shown only to them.
+ */
+async function releaseReader(t: TestNextly): Promise<string> {
+  const owner = await seedLiveAuthor(t);
+  await grantTo(t, owner, "read", [RELEASES_RESOURCE]);
+  return owner;
 }
 
 /** A stored JSON value: text on SQLite, a value elsewhere. */
@@ -307,7 +319,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("is told by the drain's own pass before the release runs, and emailed once, in its zone", async () => {
       const t = await boot(dialect);
-      const owner = await seedLiveAuthor(t);
+      const owner = await releaseReader(t);
       const id = await scheduledRelease(t, owner, PAST);
       const address = await emailOf(t, owner);
 
@@ -339,7 +351,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("is emailed by the next run when the process stopped after the notice, and a repeat sends nothing more", async () => {
       const t = await boot(dialect);
-      const owner = await seedLiveAuthor(t);
+      const owner = await releaseReader(t);
       const id = await scheduledRelease(t, owner, PAST);
       const address = await emailOf(t, owner);
 
@@ -366,6 +378,27 @@ describe.each(getConfiguredTestDialects())(
         notice.id
       );
       expect(sentTo(address)).toHaveLength(1);
+    });
+
+    it("is not emailed to an owner whose release access was revoked after the notice", async () => {
+      const t = await boot(dialect);
+      const owner = await releaseReader(t);
+      const id = await scheduledRelease(t, owner, PAST);
+      const address = await emailOf(t, owner);
+      await new ReleasesRepository(t.adapter).recordOverdueReleases(new Date());
+
+      // Revoked between the notice and the run of its email job: their list
+      // now hides the notice, so its email is not sent either.
+      await t.adapter.delete("user_roles", {
+        and: [{ column: "userId", op: "=", value: owner }],
+      });
+      await trigger(t);
+
+      expect(await overdueNotices(t, id)).toHaveLength(1);
+      expect(await emailJobs(t)).toEqual([
+        { input: expect.any(Object), state: "done" },
+      ]);
+      expect(sentTo(address)).toEqual([]);
     });
 
     it("is told without email where the site sends none, and the job completes", async () => {

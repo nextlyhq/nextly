@@ -7,12 +7,15 @@
  * send the owner to a page that is not theirs. And the email is sent under
  * the notice's key with the same message on every run of its job, so a repeat
  * is answered from the first send rather than refused as a different message.
+ * It goes only to a person the notice itself still shows to.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const site = vi.hoisted(() => ({
   origin: null as string | null,
   releases: new Set<string>(),
+  /** Whether the notice's person may still read releases. */
+  mayRead: true,
 }));
 
 // The origin is read from an environment validated once on import, so it is
@@ -29,21 +32,34 @@ vi.mock("../release-notice-links", () => ({
         .filter(id => site.releases.has(id))
         .map(id => [id, `/admin/releases/${id}`])
     ),
-  mayReadReleaseNotices: async () => true,
+  mayReadReleaseNotices: async () => site.mayRead,
 }));
 
 const { emailReleaseNotice, releaseNoticeEmailKey, releaseNoticeMessage } =
   await import("../release-notice-email");
 const { RELEASE_OVERDUE_NOTICE } = await import("../release-overdue-notice");
+const { RELEASE_STOPPED_NOTICE } = await import("../release-stopped-notice");
+const { clearNoticeKindsForTests, registerNoticeKind } = await import(
+  "../../notices/notice-kinds"
+);
 const { NOTICES_TABLE } = await import("../../../schemas/notices/table-name");
 type NoticesDb = import("../../notices/notices-service").NoticesDb;
 type QueueOptions = Parameters<
   import("../../email/services/email-service").EmailService["queue"]
 >[0];
 
+// Registered as the releases feature registers them, since the email shows a
+// notice only as the person's own list would.
+beforeEach(() => {
+  registerNoticeKind(RELEASE_STOPPED_NOTICE);
+  registerNoticeKind(RELEASE_OVERDUE_NOTICE);
+});
+
 afterEach(() => {
   site.origin = null;
   site.releases.clear();
+  site.mayRead = true;
+  clearNoticeKindsForTests();
 });
 
 const NOTICE = {
@@ -184,6 +200,20 @@ describe("a release notice's email", () => {
       idempotencyKey: releaseNoticeEmailKey("n1"),
     });
     expect(email.queue.mock.calls[1][0]).toEqual(email.queue.mock.calls[0][0]);
+  });
+
+  it("is not queued to a person who may no longer read releases, whose list hides the notice", async () => {
+    site.releases.add("r1");
+    site.mayRead = false;
+    const email = sender();
+
+    expect(
+      await emailReleaseNotice(
+        { db: holding(NOTICE, "owner@example.com"), email },
+        "n1"
+      )
+    ).toBeNull();
+    expect(email.queue).not.toHaveBeenCalled();
   });
 
   it("is not queued where the site sends no email, the notice is gone, or its person has no address", async () => {
