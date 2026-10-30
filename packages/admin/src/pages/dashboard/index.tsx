@@ -12,6 +12,7 @@
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 
+import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
 import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
@@ -60,14 +61,18 @@ const DashboardErrorFallback = (
 const DashboardPage: React.FC = () => {
   return (
     <ErrorBoundary fallback={DashboardErrorFallback}>
-      <PageContainer>
-        <div className="max-w-[1600px] mx-auto space-y-12 py-6 lg:py-10 animate-in fade-in slide-in-from-bottom-4 duration-1000">
-          {/* Top Section: Welcome and Actions */}
-          <div className="space-y-2">
+      {/* The header and the grid share Customize, the freshness line and the
+          cards the summary links to, through the page. */}
+      <DashboardChromeProvider>
+        <PageContainer>
+          {/* The header's own bottom padding is the space above the cards, as
+            the approved design draws it. No padding of its own above or
+            below: the page container's is every admin page's, so the header
+            starts where other pages' headings do. */}
+          <div className="max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-1000">
             <WelcomeHeader />
-          </div>
 
-          {/* Every card, through ONE grid.
+            {/* Every card, through ONE grid.
  
               The seed prompt, the collection counts, the singles and the team
               summary used to be mounted here by name, above a grid that drew
@@ -85,9 +90,10 @@ const DashboardPage: React.FC = () => {
               the resource sections competes with getting an editor to their
               content without answering a question they actually have. The
               component still ships and is cheap to restore, as a widget now. */}
-          <WidgetGrid />
-        </div>
-      </PageContainer>
+            <WidgetGrid />
+          </div>
+        </PageContainer>
+      </DashboardChromeProvider>
     </ErrorBoundary>
   );
 };

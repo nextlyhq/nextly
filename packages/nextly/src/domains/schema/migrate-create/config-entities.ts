@@ -66,7 +66,7 @@ export function toMinimalEntities(
       // was validated and then discarded since it was introduced, so an app
       // that declared one has been running without it.
       ...(e.indexes !== undefined ? { indexes: e.indexes } : {}),
-      settings: { source: "code", settings: settingsOf(raw) },
+      settings: { source: "code", settings: settingsOf(raw, "code") },
     };
   });
 }
@@ -92,7 +92,10 @@ function withBuilderSettings(
     if (declared === undefined) return entity;
     return {
       ...entity,
-      settings: { source: "builder", settings: settingsOf(declared) },
+      settings: {
+        source: "builder",
+        settings: settingsOf(declared, "builder"),
+      },
     };
   });
 }

@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
-import { publishedWidgetDefinition, widgetCardSlot } from "../test-widget-load";
+import { publishedWidgetDefinition, widgetCardSlot } from "../test-widget-card";
 
 const figure = defineWidget({
   id: "acme/open-orders",

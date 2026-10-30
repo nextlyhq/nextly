@@ -233,10 +233,12 @@ for `setting.number`, a picker for `setting.collection`. Where none of those fit
 name a component of your own with `editor` (**experimental**), drawn in the sheet in its place.
 The component is handed `SettingEditorProps` of the setting's value: the value, an `onChange`, the
 card's other settings as the sheet holds them now, and whether the sheet is saving. A setting with
-no value is handed `undefined`. A change is held to the setting's own rules (its type, `min` and
-`max`, its options, and for a Field setting the fields its collection offers the reader) and saved
-with the rest of the settings when the reader saves; a value that breaks them is named under the
-editor, and the server refuses it too.
+no value is handed `undefined`, and an editor clears a setting by calling `onChange(undefined)`:
+the setting is saved unset, so the card reads its default, or no value where it has none. A change
+is held to the setting's own rules (its type, `min` and `max`, its options, and for a Field
+setting the fields its collection offers the reader) and saved with the rest of the settings when
+the reader saves; a value that breaks them is named under the editor, and the server refuses it
+too.
 
 ```ts
 import { defineWidget, setting } from "@nextlyhq/plugin-sdk";
@@ -270,7 +272,7 @@ export function GoalEditor({
   onChange,
   disabled,
 }: SettingEditorProps<number>) {
-  // ...draw the value, and call onChange with a number
+  // ...draw the value, and call onChange with a number, or with undefined to clear it
 }
 ```
 
