@@ -717,6 +717,30 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect(await contentsOf(dir)).toEqual(before);
     });
 
+    it("refuses turning translation off for the last translated collection, when the snapshot's settings say it was translated", async () => {
+      // Its companion came from outside the files, and this edit turns its translation off: nothing
+      // is translated now and no file is left, but the settings record says it was translated.
+      const declared = (localized: boolean): MinimalConfigEntity => ({
+        ...TRANSLATED,
+        localized,
+        settings: { source: "code", settings: { slug: "docs", localized } },
+      });
+      let dir = "";
+      let before: Record<string, string> = {};
+      const run = secondRun(dialect, declared(false), {
+        first: declared(true),
+        beforeSecond: async d => {
+          await forgetCompanionFiles(d);
+          dir = d;
+          before = await contentsOf(d);
+        },
+      });
+
+      await expect(run).rejects.toThrow(/"body" in collection "docs"/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
+    });
+
     it("refuses turning translation off for a collection whose nameless localization file made its companion, writing nothing", async () => {
       let dir = "";
       let before: Record<string, string> = {};
