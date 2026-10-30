@@ -40,7 +40,10 @@ import type { ReadCaller } from "../../../services/dashboard/readable-resources"
 import { isAdminRelativePath } from "../admin-path";
 import { createBatchScope } from "../batch-scope";
 import { renamedCollection } from "../declaration/card-settings";
-import type { AttentionItem } from "../declaration/dashboard";
+import {
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
+  type AttentionItem,
+} from "../declaration/dashboard";
 import { isPermissionName } from "../declaration/permission-name";
 import { bindReadServices } from "../declaration/read-services";
 import type { WidgetDeclarationFault } from "../declaration/validate";
@@ -50,8 +53,9 @@ import { getSource } from "../sources";
 
 import type { DigestReader } from "./digest";
 
-/** The most attention items one plugin may declare. */
-export const MAX_ATTENTION_ITEMS_PER_PLUGIN = 10;
+// The most attention items one plugin may declare, declared beside the item
+// type it bounds, and named here beside the startup check that holds it.
+export { MAX_ATTENTION_ITEMS_PER_PLUGIN };
 
 /** Namespaces core keeps for its own kinds and content: no plugin item may use them. */
 const RESERVED_NAMESPACES: ReadonlySet<string> = new Set([

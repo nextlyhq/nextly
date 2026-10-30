@@ -647,6 +647,7 @@ export type {
 export {
   defineAttentionItem,
   defineWidget,
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
   setting,
   type AnyWidget,
   type AttentionCount,
