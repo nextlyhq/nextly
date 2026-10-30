@@ -43,6 +43,7 @@ import {
   resetWebhookActivation,
 } from "../domains/webhooks/recording-activation";
 import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-policy";
+import type { AdminDashboardConfig } from "../domains/widgets/declaration/dashboard";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
@@ -283,6 +284,14 @@ export interface CreateTestNextlyOptions {
   pluginConsent?: PluginConsent;
   /** Code-first collections to register (tables created on the in-memory DB). */
   collections?: CollectionConfig[];
+  /**
+   * Widgets the site declares itself, as `admin.dashboard.widgets` in a site
+   * config: booted through the same path, so a site's widget can be tested
+   * without wrapping it in a plugin.
+   *
+   * @experimental Until the widget SDK's test helpers settle.
+   */
+  widgets?: AdminDashboardConfig["widgets"];
   /** Code-first singles. */
   singles?: SingleConfig[];
   /** Code-first field groups. */
@@ -347,6 +356,7 @@ interface ProvisionedDatabase {
 function snapshotEnv(): () => void {
   const previousUrl = process.env.DATABASE_URL;
   const previousDialect = process.env.DB_DIALECT;
+  const previousSecret = process.env.NEXTLY_SECRET;
   // One-shot. `destroy()` may be called more than once, and a repeat must not
   // reapply a snapshot that has already been honoured — by then the values it
   // holds are stale, and whatever set the environment since (the next test's
@@ -360,8 +370,19 @@ function snapshotEnv(): () => void {
     else process.env.DATABASE_URL = previousUrl;
     if (previousDialect === undefined) delete process.env.DB_DIALECT;
     else process.env.DB_DIALECT = previousDialect;
+    if (previousSecret === undefined) delete process.env.NEXTLY_SECRET;
+    else process.env.NEXTLY_SECRET = previousSecret;
     _resetEnvCache();
   };
+}
+
+/**
+ * A secret for an instance booted without one, so a test that signs a person
+ * in (`runWidgetLoad`) works as written. Random per instance and put back by
+ * the instance's environment snapshot; one already set is kept.
+ */
+function giveTestSecret(): void {
+  process.env.NEXTLY_SECRET ??= randomBytes(32).toString("hex");
 }
 
 /**
@@ -463,6 +484,7 @@ async function provisionDatabase(
   try {
     process.env.DATABASE_URL = serverUrl;
     process.env.DB_DIALECT = dialect;
+    giveTestSecret();
     // Everything that reads the dialect through the `env` proxy — the boolean
     // conversion in `toDialectBool`, the schema services' fallback — would
     // otherwise answer for whichever dialect booted first in this process.
@@ -656,6 +678,7 @@ export async function createTestNextly(
     // (env.DATABASE_URL access) passes without a configured database — SQLite
     // needs no DATABASE_URL, and production-only checks are skipped under test.
     process.env.DB_DIALECT = "sqlite";
+    giveTestSecret();
     // Same reason as the provisioned path: a previous boot on another dialect
     // would otherwise still be the one this process's `env` reports.
     _resetEnvCache();
@@ -730,6 +753,10 @@ async function bootServices(
       plugins: opts.plugins,
       pluginConsent: opts.pluginConsent,
       collections: opts.collections,
+      // A site's own widgets reach boot where a site config puts them.
+      ...(opts.widgets
+        ? { admin: { dashboard: { widgets: opts.widgets } } }
+        : {}),
       singles: opts.singles,
       fieldGroups: opts.fieldGroups,
       localization: opts.localization

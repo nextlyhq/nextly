@@ -6,6 +6,28 @@ description: Put the numbers your team actually checks on the admin dashboard.
 The admin dashboard is built from widgets. Each one declares what it wants to know, and the
 system runs that query on its behalf, scoped to the permissions of whoever is looking.
 
+## Quick start
+
+From your app's root, or your plugin's:
+
+```bash
+npx nextly generate:widget open-orders
+```
+
+It writes a working widget and its test, and lists the widget where yours are listed: a site's
+in `admin.dashboard.widgets`, a plugin's in its `contributes.dashboard.widgets`. Choose how it
+shows its data with `--view figure` (the default), `list`, `table`, `bars`, `series` or
+`component`, which writes a component of your own. `--collection` makes it read from a
+collection the reader chooses. On a terminal it asks for anything you leave out.
+
+- A site's widgets are named `site/<name>`, and a plugin's are named under the plugin's own name.
+- It never writes over a file that exists, unless you pass `--force`.
+- `--dry-run` shows the files and the config edit without writing them.
+- When it cannot edit your config safely, it leaves the file as it was and prints the line to add.
+
+Then open `/admin/dev/widget-previews` on your dev server to see the card before it has data,
+and run its test with `npx vitest run`.
+
 ## Availability
 
 |                            |                                                                                                                                   |
@@ -244,7 +266,7 @@ it("counts the open orders for the instance's administrator", async () => {
   const admin = await t.nextly.users.create({
     email: "admin@example.com",
     password: "Password123!",
-    data: { isActive: true },
+    data: { name: "Admin", isActive: true },
   });
   await t.nextly.create({ collection: "orders", data: { state: "open" } });
   const answer = await runWidgetLoad(t, openOrders, {
