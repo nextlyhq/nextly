@@ -16,6 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DesiredSchema } from "../../schema/pipeline/types";
 import { resolveLocalizedFieldNames } from "../classify-fields";
+import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
 import {
   type LeavingFieldLike,
   type LeavingTranslationRefusal,
@@ -280,6 +281,30 @@ export async function moveFieldsLeavingOnReload(args: {
   return stopped;
 }
 
+/**
+ * `e.oldFields` with each leaving field Unique only where its translations table has the field's
+ * per-language unique index. The setting the config gives it now is the one it gains as a shared
+ * field; read as its old one, the move would first build that index over values it never held
+ * unique, and the move would stop there.
+ */
+function uniqueAsIndexed(
+  e: FieldsLeavingOnReload,
+  liveIndexes: readonly string[],
+  dialect: ReturnType<DrizzleAdapter["getCapabilities"]>["dialect"]
+): LeavingFieldLike[] {
+  const indexed = new Set(liveIndexes);
+  return e.oldFields.map(f => {
+    if (!e.leaving.has(f.name)) return f;
+    const column = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
+    const unique =
+      column !== null &&
+      indexed.has(
+        companionUniqueIndexName(`${e.tableName}_locales`, column.name)
+      );
+    return { ...f, unique };
+  });
+}
+
 async function moveLeavingFields(
   adapter: DrizzleAdapter,
   e: FieldsLeavingOnReload,
@@ -293,18 +318,19 @@ async function moveLeavingFields(
     builtBy: "codeFirst",
     companionExists: true,
   });
+  const dialect = adapter.getCapabilities().dialect;
   const plan = buildCompanionTransitionStatements({
     builtBy: "codeFirst",
     slug: e.slug,
     kind: e.kind,
     tableName: e.tableName,
-    dialect: adapter.getCapabilities().dialect,
+    dialect,
     defaultLocale,
     status: e.status,
     wasStatus: e.status,
     wasLocalized: true,
     isLocalized: true,
-    oldFields: [...e.oldFields],
+    oldFields: uniqueAsIndexed(e, shape.liveCompanionIndexes ?? [], dialect),
     newFields: [...e.newFields],
     companionExists: true,
     holdLeavingDrops: true,
