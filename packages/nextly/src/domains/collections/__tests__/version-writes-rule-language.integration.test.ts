@@ -111,12 +111,16 @@ async function newestIn(
   return versionNo!;
 }
 
-/** The status of a REST request the author signs. */
+/**
+ * The status of a REST request the author signs, or, `asVisitor`, one that
+ * carries no credential at all.
+ */
 async function rest(
   method: "PATCH" | "POST",
   path: string[],
   body?: unknown,
-  query = ""
+  query = "",
+  asVisitor = false
 ): Promise<number> {
   const token = await signAccessToken(
     buildClaims({
@@ -137,7 +141,7 @@ async function rest(
     new Request(`http://localhost/api/${path.join("/")}${query}`, {
       method,
       headers: {
-        cookie: `nextly_session=${token}`,
+        ...(asVisitor ? {} : { cookie: `nextly_session=${token}` }),
         "content-type": "application/json",
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -262,6 +266,31 @@ describe.each(getConfiguredTestDialects())(
           }
           return id;
         }
+
+        it("asks a visitor restoring a version to sign in", async () => {
+          const t = await boot();
+          const id = await publishedWithHeldEdits(t, BY_LANGUAGE);
+          const versionNo = await newestIn(
+            t,
+            { scopeKind: "collection", scopeSlug: BY_LANGUAGE, entryId: id },
+            "en"
+          );
+
+          expect(
+            await rest(
+              "POST",
+              [
+                ...entry(BY_LANGUAGE, id),
+                "versions",
+                String(versionNo),
+                "restore",
+              ],
+              undefined,
+              "",
+              true
+            )
+          ).toBe(401);
+        });
 
         it("answers an update in each language as the rule does there", async () => {
           const t = await boot();
