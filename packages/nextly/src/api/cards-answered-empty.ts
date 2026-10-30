@@ -83,7 +83,8 @@ export interface AheadOfTheBatch {
  * The ids of the cards among `placements`, as handed to this reader, whose
  * widget is judged ahead (`hideRule`) and whose answer is empty for them
  * (`cardAnswersEmpty`), in the placements' order. Every other card, a card
- * that failed or ran out of time included, is placed.
+ * that failed or ran out of time included, is placed. A card the reader
+ * removed is not asked: nothing draws it.
  *
  * Every card is asked at once, with one instant and one share scope for the
  * read, under the request's `signal`, at the tier it is drawn at on a
@@ -103,6 +104,9 @@ export async function cardsAnsweredEmpty(
 ): Promise<readonly string[]> {
   const byId = new Map(ahead.widgets.map(widget => [widget.id, widget]));
   const asked = placements.flatMap(placement => {
+    // A card the reader removed is kept only so it can be put back: it is
+    // never drawn or asked by the batch, so its `load` is not run here either.
+    if (placement.removed) return [];
     const declared = declaredWidget(placement.widgetId);
     return declared !== undefined &&
       hideRule(byId.get(placement.widgetId)) === "ahead"

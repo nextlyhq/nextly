@@ -205,6 +205,21 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
     expect(readAheadState("load-handover")).toBe("open");
   });
 
+  it("never asks a card the reader removed, which nothing draws", async () => {
+    cardAnswersEmpty.mockResolvedValue(true);
+    const hidden = await cardsAnsweredEmpty(
+      auth,
+      reader,
+      [{ ...card("core/quiet-a"), removed: true }, card("core/quiet-b")],
+      aheadOf("load-1")
+    );
+    expect(hidden).toEqual(["core/quiet-b"]);
+    expect(cardAnswersEmpty).toHaveBeenCalledOnce();
+    expect(cardAnswersEmpty.mock.calls[0]?.[1]).toMatchObject({
+      widgetId: "core/quiet-b",
+    });
+  });
+
   it("asks nothing, and reads no source, when no card hides while empty", async () => {
     const hidden = await cardsAnsweredEmpty(
       auth,
