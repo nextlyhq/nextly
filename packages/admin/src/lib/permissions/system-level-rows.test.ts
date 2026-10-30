@@ -163,6 +163,23 @@ describe("rowNotes", () => {
       NOT_SCHEMA
     );
   });
+
+  it("leaves out the Settings lines on the Public role, whose rows offer no Can edit", () => {
+    // A visitor's row offers No access and Can view only, so a line asking
+    // for Can edit asks for what the row can't give.
+    expect(
+      rowNotes(row("settings"), ["update-settings"], [], { visitors: true })
+    ).toEqual([]);
+    // The retired manage permission is still named: it is what the role holds.
+    const legacy = rowNotes(
+      row("settings"),
+      ["manage-settings"],
+      ["manage-settings"],
+      { visitors: true }
+    );
+    expect(legacy).toHaveLength(1);
+    expect(legacy[0]).toContain("manage-settings");
+  });
 });
 
 describe("roleScreenRows", () => {

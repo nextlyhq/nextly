@@ -32,6 +32,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   currentRuleLanguage,
@@ -103,6 +104,7 @@ import {
   callerAccessGrants,
   type ReadAccessRedactions,
   runFieldHooks,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   assertFieldGroupPathsFilterable,
@@ -1021,6 +1023,15 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * Where this service's field rules read a visitor's Public grants, as its
+   * collection gate reads them. A write by query reads it from here, so the
+   * fields its `where` may name are judged as this service's reads judge them.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return this.accessService.fieldRuleVisitor;
+  }
+
+  /**
    * The documents a due release would publish in this collection, if any.
    *
    * Costs a memo read while nothing is scheduled — see `createReleaseVisibility`
@@ -1253,6 +1264,7 @@ export class CollectionQueryService extends BaseService {
           | Record<string, unknown>
           | undefined,
         authenticatedScope: params.authenticatedScope,
+        visitor: this.accessService.fieldRuleVisitor,
       },
     };
     // `params.where` -- what the CALLER sent -- never the hook-settled
@@ -1390,6 +1402,7 @@ export class CollectionQueryService extends BaseService {
         caller: {
           user: caller.user as Record<string, unknown> | undefined,
           authenticatedScope: caller.authenticatedScope,
+          visitor: this.accessService.fieldRuleVisitor,
         },
       }
     );
@@ -1788,6 +1801,8 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     overrideAccess?: boolean;
     status?: StatusOption;
+    /** The user access is judged for; absent for a visitor's read. */
+    accessUser?: UserContext;
   }): Promise<{
     statusFilter: ReturnType<typeof resolveStatusFilter>;
     collection: unknown;
@@ -1803,6 +1818,10 @@ export class CollectionQueryService extends BaseService {
       collectionHasStatus: (collection as { status?: boolean }).status === true,
       overrideAccess: params.overrideAccess === true,
       explicit: params.status,
+      publishedOnly: readsAsVisitor({
+        overrideAccess: params.overrideAccess,
+        user: params.accessUser,
+      }),
     });
 
     return { statusFilter, collection };
@@ -2076,6 +2095,7 @@ export class CollectionQueryService extends BaseService {
       collectionName: params.collectionName,
       overrideAccess: params.overrideAccess,
       status: params.status,
+      accessUser: params.accessUser,
     });
     // The lifecycle predicate: the resolved status set, widened by whatever a
     // due release has made public as of this read's instant. Built here rather
@@ -2657,9 +2677,12 @@ export class CollectionQueryService extends BaseService {
     const fieldGroupCaller = {
       user: params.fieldAccessUser ?? params.user,
       authenticatedScope: params.authenticatedScope,
+      // A visitor is handed the Public role the collection gate read.
       grants: callerAccessGrants(
         params.fieldAccessUser ?? params.user,
-        params.authenticatedScope
+        params.authenticatedScope,
+        undefined,
+        this.accessService.fieldRuleVisitor
       ),
     };
     for (const row of finalData) {
@@ -2977,6 +3000,13 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks (collection-level, field permissions) */
     overrideAccess?: boolean;
     /**
+     * A write rule's filter the list is narrowed to, matched as the read's
+     * own rule filter is. A bulk write lists through a trusted read
+     * (`overrideAccess`), which asks no read rule, and this keeps that list to
+     * the entries the caller's write rule matches.
+     */
+    writeRuleFilter?: RuleFilter;
+    /**
      * Enforce FIELD-level read rules even on a read that is otherwise trusted.
      *
      * `overrideAccess` governs two different trusts with one boolean — "you may
@@ -3189,7 +3219,8 @@ export class CollectionQueryService extends BaseService {
         localeChain,
         // This path has rows to evaluate them over.
         extractGeo: true,
-        ruleFilter: access.filter,
+        // A trusted list asks no read rule; a bulk write's narrows it instead.
+        ruleFilter: access.filter ?? params.writeRuleFilter,
       });
       const hasGeoFilters = geoFilters.length > 0;
 
@@ -4543,6 +4574,9 @@ export class CollectionQueryService extends BaseService {
           collectionName: params.collectionName,
           overrideAccess: params.overrideAccess,
           status: params.status,
+          // The user access is judged for, as the gate above judged it: none
+          // for a trusted read, and none for a visitor's.
+          accessUser: params.overrideAccess ? undefined : params.user,
         });
 
       const idCondition = eq(schema.id, entryId);
