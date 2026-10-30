@@ -41,7 +41,10 @@ import {
 } from "@admin/context/providers/BrandingProvider";
 import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
+import type {
+  DashboardLayoutRead,
+  DashboardLayoutResponse,
+} from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
 import { DrawFailureContext, useDrawFailures } from "./draw-failures";
@@ -232,6 +235,7 @@ function useCardsAtDashboardWidth(
   const draws = useDrawFailures();
   return {
     dashboardRef,
+    dashboardWidth,
     drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
     // Asked under the token of the layout answer the cards are drawn from, and again under each
     // new one: a layout read that lands after the batch started is the load the cards are then
@@ -348,21 +352,28 @@ function ArrangementLoading() {
  * it, and which cards the dashboard is drawn without while empty: those the first layout answer
  * found empty, less any a later layout answer, or the card's own batch answer (`answers`), finds
  * with something waiting (`hidden-while-empty`).
- * Mounted with the grid, which waits for that answer, so the verdict is taken before any card is
- * drawn.
+ * Mounted with the grid, which waits for that answer, and taken at the dashboard's width, which
+ * is measured before the first paint, so the verdict is in place before any card is painted.
  */
 function CardContexts({
   reportDraw,
   layout,
+  dashboardWidth,
   answers,
   children,
 }: {
   reportDraw: ComponentProps<typeof DrawFailureContext.Provider>["value"];
-  layout: DashboardLayoutResponse | undefined;
+  layout: DashboardLayoutRead | undefined;
+  /** The dashboard's width, which the verdict is taken at once it has one. */
+  dashboardWidth: number | undefined;
   answers: CardAnswers;
   children: ReactNode;
 }): JSX.Element {
-  const hiddenWhileEmpty = useHiddenWhileEmptyAtFirstPaint(layout, answers);
+  const hiddenWhileEmpty = useHiddenWhileEmptyAtFirstPaint(
+    layout,
+    dashboardWidth,
+    answers
+  );
   return (
     <DrawFailureContext.Provider value={reportDraw}>
       <HiddenWhileEmptyContext.Provider value={hiddenWhileEmpty}>
@@ -479,6 +490,7 @@ export function WidgetGrid(): JSX.Element {
   // The dashboard's own width, the cards asked at it, and dragging them by their handles.
   const {
     dashboardRef,
+    dashboardWidth,
     drag,
     slots,
     cellSlots,
@@ -601,6 +613,7 @@ export function WidgetGrid(): JSX.Element {
                 reportDraw={reportDraw}
                 layout={layout.layout}
                 answers={{ slots, fetching: fetchingPlacementIds }}
+                dashboardWidth={dashboardWidth}
               >
                 <ArrangedGrid
                   rows={visible}

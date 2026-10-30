@@ -15,7 +15,11 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { cardTierAt, tierOfWidth } from "nextly/card-geometry";
-import { effectiveWidgetLimit, type ListDensity } from "nextly/config";
+import {
+  effectiveWidgetLimit,
+  GRID_COLUMNS,
+  type ListDensity,
+} from "nextly/config";
 import { createContext, useContext, type RefObject, type Context } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
@@ -51,6 +55,18 @@ export function predictedTier(
 ): SizeTier | undefined {
   if (dashboardWidth === null || dashboardWidth === undefined) return undefined;
   return cardTierAt(w, dashboardWidth);
+}
+
+/**
+ * The tier a card of each span, one column to all of them, is drawn at on a dashboard
+ * `dashboardWidth` wide (`cardTierAt` of each), as one key. Two widths with the same key draw
+ * every card at the same tier, so what was judged of a card at its tier on one holds on the other;
+ * two with different keys draw some card at another tier.
+ */
+export function tierBandAt(dashboardWidth: number): string {
+  return Array.from({ length: GRID_COLUMNS }, (_, index) =>
+    cardTierAt(index + 1, dashboardWidth)
+  ).join(" ");
 }
 
 /**
