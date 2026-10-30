@@ -11857,14 +11857,6 @@ export class CollectionMutationService extends BaseService {
           });
     const ready = readiness === "ready" ? (companion ?? null) : null;
     const writeLocale = options.locale ?? this.localization?.defaultLocale;
-    // Whether the caller may read the entry is a plain read's question, asked
-    // in the default language and its fallbacks, every language of the chain,
-    // as the read by id asks it.
-    const reads = localizedFilterContext(
-      ready,
-      resolveLocaleChain(this.localization, undefined, undefined),
-      schema
-    );
     return {
       columns: prepared.columns(schema, {
         writes: localizedFilterContext(
@@ -11872,7 +11864,14 @@ export class CollectionMutationService extends BaseService {
           writeLocale ? [writeLocale] : null,
           schema
         ),
-        reads: reads && { ...reads, inEveryFallbackLanguage: true },
+        // Whether the caller may read the entry is a plain read's question,
+        // asked in the default language and its fallbacks; the read column
+        // judges it in every language of the chain, as the read by id does.
+        reads: localizedFilterContext(
+          ready,
+          resolveLocaleChain(this.localization, undefined, undefined),
+          schema
+        ),
       }),
     };
   }
