@@ -70,14 +70,12 @@ import {
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
-import { describeError, NextlyError } from "../../errors/index";
+import { NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
-import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 import { maybeForceUnlock } from "./migrate";
@@ -650,11 +648,7 @@ export async function runMigrateBaseline(
   const { logger } = context;
   logger.header("Migrate Baseline");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
   const dialect = dbValidation.dialect;
 
   const configResult = await loadConfig({
@@ -829,8 +823,7 @@ export function registerMigrateBaselineCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }
