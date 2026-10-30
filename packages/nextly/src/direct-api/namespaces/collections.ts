@@ -477,6 +477,29 @@ export async function group(
 }
 
 /**
+ * A timeseries' arguments as core's own widget executor passes them: the
+ * published `TimeseriesArgs`, and the end of the rows its window keeps.
+ *
+ * 🔴 Not published. Neither this type nor its field is exported from the
+ * package: a Direct API caller states a window by its anchor, and only the
+ * widget executor, which reads a window ending at its batch's instant and keeps
+ * that instant's whole second (`openWindowEnd`), names where its rows end.
+ *
+ * @internal
+ */
+export interface InternalTimeseriesArgs extends TimeseriesArgs {
+  /**
+   * The exclusive end of the rows the window keeps, where that is past the end
+   * of its last interval: a row a database stored rounded into the next
+   * interval before this end counts in the last interval. Never read past the
+   * interval after the last.
+   *
+   * @internal
+   */
+  rowsEnd?: Date;
+}
+
+/**
  * How many documents fall in each interval of a recent window.
  *
  * Reaches the same resolved row set `count` and `group` do — one pipeline
@@ -486,7 +509,7 @@ export async function group(
  */
 export async function timeseries(
   ctx: NextlyContext,
-  args: TimeseriesArgs
+  args: InternalTimeseriesArgs
 ): Promise<TimeseriesResult> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
@@ -505,6 +528,7 @@ export async function timeseries(
     context: config.context,
     ...(args.intervals === undefined ? {} : { intervals: args.intervals }),
     ...(args.now === undefined ? {} : { now: args.now }),
+    ...(args.rowsEnd === undefined ? {} : { rowsEnd: args.rowsEnd }),
   });
 
   if (!result.success) {

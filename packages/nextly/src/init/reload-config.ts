@@ -26,6 +26,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
+import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
@@ -128,6 +129,7 @@ import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
+import { refusedConfiguredAddresses } from "../shared/address-rule";
 import { consoleLogger } from "../shared/types";
 import type { SingleHooks } from "../singles/config/types";
 
@@ -170,6 +172,13 @@ interface AdapterLike {
   getCapabilities(): ReturnType<DrizzleAdapter["getCapabilities"]>;
   // Holds one connection for a statement the companion reconcile builds from the catalog.
   transaction: DrizzleAdapter["transaction"];
+}
+
+/** An entity the configuration names: one without a slug cannot be addressed. */
+function hasSlug<T extends { slug?: string }>(
+  entity: T
+): entity is T & { slug: string } {
+  return typeof entity.slug === "string";
 }
 
 type CollectionDef = {
@@ -1834,6 +1843,42 @@ async function applyReloadHolding(
   // Resolution can succeed and still hand back no adapter, which is the same
   // outcome as it throwing: nothing below runs, so the reload never lands.
   if (!adapter) {
+    undoOptimisticReloadWork();
+    return;
+  }
+
+  // The reloaded configuration's new addresses, judged as a start judges them and before this
+  // reload changes anything: a collection, Single or field group added while `next dev` runs is a
+  // new address like one added before a start. A refused reload keeps the previous configuration.
+  // `AdapterLike` is a narrow view of the registered adapter, which is a `DrizzleAdapter` at runtime.
+  const liveAdapter = adapter as unknown as DrizzleAdapter;
+  let refusedAddresses: Awaited<ReturnType<typeof refusedConfiguredAddresses>>;
+  try {
+    refusedAddresses = await refusedConfiguredAddresses(
+      {
+        collections: (newConfig.collections ?? []).filter(hasSlug),
+        singles: (newConfig.singles ?? []).filter(hasSlug),
+        fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
+      },
+      await loadBuilderEntities(liveAdapter),
+      table => liveAdapter.tableExists(table)
+    );
+  } catch (err) {
+    // A check that could not read the database cannot pass the reload: it gives up the way
+    // every refused reload does, putting back what it installed optimistically.
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not check the configuration's addresses: ${msg}. Keeping the previously-loaded config.`
+    );
+    undoOptimisticReloadWork();
+    return;
+  }
+  if (refusedAddresses.length > 0) {
+    for (const { refusal } of refusedAddresses) {
+      logger?.error(
+        `[Nextly HMR] ${refusal.code}: ${refusal.message}. Keeping the previously-loaded config.`
+      );
+    }
     undoOptimisticReloadWork();
     return;
   }

@@ -167,8 +167,19 @@ describeEachDialect(
     async function migrate(config: unknown) {
       loaded.config = config;
       const { context, said } = command();
-      const code = await exiting(() => runMigrate({ cwd: dir }, context));
-      return { code, said: said.join("\n") };
+      // A refusal ends in the CLI's error shape, which goes to standard error through
+      // `console.error`, not through the logger.
+      const stderr = vi
+        .spyOn(console, "error")
+        .mockImplementation((...parts: unknown[]) => {
+          said.push(parts.map(String).join(" "));
+        });
+      try {
+        const code = await exiting(() => runMigrate({ cwd: dir }, context));
+        return { code, said: said.join("\n") };
+      } finally {
+        stderr.mockRestore();
+      }
     }
 
     function adapter(): DrizzleAdapter {
