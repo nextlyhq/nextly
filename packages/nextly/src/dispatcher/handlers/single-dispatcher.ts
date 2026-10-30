@@ -36,6 +36,7 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
@@ -69,10 +70,10 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { withSessionCacheHeaders } from "../../routeHandler";
-import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
+import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
 import {
@@ -544,23 +545,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         | undefined;
 
       if (!b?.slug) throw new Error("Single slug is required");
-      // Rejected before the DDL below runs: a reserved slug seeds the same
-      // permission rows a system resource's routes check, and checking only at
-      // registration (further down) would create `single_<slug>` and its locale
-      // companion first, leaving orphan tables when registration then refused it.
-      if (isReservedResourceSlug(b.slug)) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "slug",
-              code: "reserved_slug",
-              message:
-                "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
-            },
-          ],
-          logContext: { reason: "system-resource-slug", slug: b.slug },
-        });
-      }
+      // Judged by the one address rule every road shares, before the DDL below runs, so a refused
+      // address leaves no `single_<slug>` table behind. A system resource's name is among its
+      // refusals: it seeds the same permission rows that resource's routes check.
+      assertAddressAllowed("single", b.slug);
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
@@ -575,6 +563,22 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // Canonical resolver keeps the UI-create path in sync with registry
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
+
+      // Refused for a slug a COLLECTION already owns, one reserved by a system resource, or one
+      // with the same snake_case form as another collection's or Single's address; asked before
+      // the table-family check below so that refusal names both addresses. `registerSingle` makes
+      // this check too, but it makes it after the table has been created, so a conflicting slug
+      // rejected the request and left `single_<slug>` behind with nothing describing it. Checked
+      // here, the rejection costs nothing and creates nothing. The registry keeps its own call
+      // because other callers reach it without passing through this handler.
+      const conflictAdapter = container.has("adapter")
+        ? container.get<DrizzleAdapter>("adapter")
+        : undefined;
+      if (conflictAdapter) {
+        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug, {
+          addressKind: "single",
+        });
+      }
 
       // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
       // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
@@ -594,19 +598,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             ownedBy: owner.slug,
           },
         });
-      }
-
-      // The same refusal for a slug a COLLECTION already owns, or one reserved by a system
-      // resource. `registerSingle` makes this check too, but it makes it after the table has been
-      // created, so a conflicting slug rejected the request and left `single_<slug>` behind with
-      // nothing describing it. Checked here, the rejection costs nothing and creates nothing.
-      // The registry keeps its own call because other callers reach it without passing through
-      // this handler.
-      const conflictAdapter = container.has("adapter")
-        ? container.get<DrizzleAdapter>("adapter")
-        : undefined;
-      if (conflictAdapter) {
-        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug);
       }
 
       // i18n: a localized single stores translatable values via the app's
@@ -839,7 +830,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
 
       // Code-first Singles are locked and cannot be deleted via API.
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const single = await svc.registry.getSingleForWrite(slug);
       consoleLogger.info(`[deleteSingle] getSingleBySlug returned`, {
         detail: single ? `found (tableName: ${single.tableName})` : "null",
       });
@@ -969,7 +961,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!b) throw new Error("Update data is required");
 
-      const existing = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const existing = await svc.registry.getSingleForWrite(slug);
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
@@ -1158,7 +1151,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   applySingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: its schema version is checked and advanced below.
+      const single = await svc.registry.getSingleForWrite(slug);
       if (!single) throw new Error("Single not found");
       refuseChangeDefinedInCode(single, "Single", slug);
 
@@ -1360,6 +1354,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
+        // Written past the registry service, so the cached registry row is cleared here.
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);

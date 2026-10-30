@@ -232,8 +232,9 @@ describe("core widget definitions", () => {
 });
 
 describe("the list cards' Density", () => {
+  // Recent entries' Density, declared, is held to the same choice in
+  // `core-declarations.test.ts`.
   it.each([
-    "core/recent-entries",
     "core/recently-edited",
     "core/recent-activity",
     "core/upcoming-releases",
@@ -303,12 +304,12 @@ describe("the default dashboard", () => {
     ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
     ["core/quick-create", [4, 3], [4, 2], [12, 4]],
     // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
-    // default, but four beside Team, whose row it shares.
+    // default.
     ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
     ["core/recent-activity", [6, 5], [4, 4], [12, 8]],
     ["core/content", [12, 4], [6, 3], [12, 6]],
+    // Alone on its row: Team, for the people who manage the team, is not on the default.
     ["core/upcoming-releases", [4, 4], [4, 4], [8, 8]],
-    ["core/team", [4, 4], [3, 2], [6, 4]],
   ] as const;
 
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });

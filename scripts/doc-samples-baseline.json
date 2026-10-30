@@ -20,6 +20,10 @@
       "samples": 3,
       "compiled": 2
     },
+    "docs/cli/errors/config-invalid-export.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/configuration/collections.mdx": {
       "samples": 8,
       "compiled": 3
@@ -57,7 +61,7 @@
       "compiled": 3
     },
     "docs/database/extending-the-schema.mdx": {
-      "samples": 11,
+      "samples": 12,
       "compiled": 5
     },
     "docs/database/index.mdx": {
@@ -153,8 +157,8 @@
       "compiled": 2
     },
     "docs/permissions/index.mdx": {
-      "samples": 6,
-      "compiled": 4
+      "samples": 9,
+      "compiled": 6
     },
     "docs/plugins/admin-ui.mdx": {
       "samples": 20,
@@ -245,8 +249,8 @@
       "compiled": 1
     },
     "docs/widgets/index.mdx": {
-      "samples": 6,
-      "compiled": 5
+      "samples": 8,
+      "compiled": 7
     },
     "packages/adapter-mysql/README.md": {
       "samples": 1,
@@ -546,8 +550,8 @@
       "reader-file #5 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/widgets/index.mdx": {
-      "reader-file #4 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1,
-      "reader-file #5 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1
+      "reader-file #6 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1,
+      "reader-file #7 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1
     },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1

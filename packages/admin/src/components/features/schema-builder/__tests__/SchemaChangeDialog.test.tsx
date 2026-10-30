@@ -7,6 +7,7 @@ import type {
   SchemaPreviewRenameCandidate,
 } from "@admin/services/schemaApi";
 
+import { SafeChangeConfirmDialog } from "../SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "../SchemaChangeDialog";
 
 // A preview diff with nothing in it; each test fills only the arrays it needs.
@@ -17,9 +18,10 @@ const emptyChanges = (): SchemaPreviewChange => ({
   unchanged: [],
 });
 
-// Renders the dialog in its destructive-change state (the only mode that shows
-// the confirm button as "Apply Changes") and captures the resolutions the
-// dialog emits on confirm, which is what these tests assert on.
+// Renders the dialog in its destructive-change state and captures the
+// resolutions the dialog emits on confirm, which is what these tests assert on.
+// The confirm reads "Apply changes" when a row deletes values and "Save
+// changes" when none does.
 function renderDialog(
   changes: SchemaPreviewChange,
   onConfirm: (
@@ -32,7 +34,8 @@ function renderDialog(
     <SchemaChangeDialog
       open
       onOpenChange={() => {}}
-      collectionName="posts"
+      kind="collection"
+      entityName="posts"
       hasDestructiveChanges
       classification="destructive"
       changes={changes}
@@ -94,7 +97,8 @@ describe("SchemaChangeDialog destructive-drop acknowledgment", () => {
     ];
     renderDialog(changes, onConfirm);
 
-    fireEvent.click(screen.getByRole("button", { name: /apply changes/i }));
+    // Nothing is deleted, so the confirm is the plain save.
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     const resolutions = onConfirm.mock.calls[0][0] as Record<
       string,
@@ -127,7 +131,8 @@ describe("SchemaChangeDialog renames of a translated field", () => {
       screen.getByRole("radio", { name: /rename to title2/i })
     ).toBeChecked();
 
-    fireEvent.click(screen.getByRole("button", { name: /apply changes/i }));
+    // A rename keeps every value, so the confirm is the plain save.
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     expect(onConfirm.mock.calls[0][1]).toEqual([
       {
@@ -137,5 +142,53 @@ describe("SchemaChangeDialog renames of a translated field", () => {
         choice: "rename",
       },
     ]);
+  });
+});
+
+describe("SchemaChangeDialog and SafeChangeConfirmDialog name the kind", () => {
+  // The review is shown for Singles and field groups too, so a title or
+  // description fixed to "collection" misnames what is being saved.
+  it("titles a Single's plain save by its kind and names it in the description", () => {
+    render(
+      <SchemaChangeDialog
+        open
+        onOpenChange={() => {}}
+        kind="single"
+        entityName="homepage"
+        hasDestructiveChanges={false}
+        classification="safe"
+        changes={emptyChanges()}
+        warnings={[]}
+        interactiveFields={[]}
+        onConfirm={() => {}}
+        isApplying={false}
+      />
+    );
+    expect(
+      screen.getByRole("heading", { name: "Save Single" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/will be applied to the Single/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/collection/i)).not.toBeInTheDocument();
+  });
+
+  it("names a field group in the short confirmation's title", () => {
+    render(
+      <SafeChangeConfirmDialog
+        open
+        onOpenChange={() => {}}
+        kind="field-group"
+        entityName="hero"
+        changes={emptyChanges()}
+        onConfirm={() => {}}
+        isApplying={false}
+      />
+    );
+    expect(
+      screen.getByRole("heading", {
+        name: "Apply changes to the field group hero?",
+      })
+    ).toBeInTheDocument();
   });
 });

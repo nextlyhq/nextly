@@ -33,9 +33,10 @@ type CheckboxConfig = ConfigOf<typeof setting.checkbox>;
 type SelectConfig = ConfigOf<typeof setting.select>;
 type DateConfig = ConfigOf<typeof setting.date>;
 
-// `quick` is the one key a builder takes beyond its field's: the card's header
-// reads it, never the field renderer.
-type CardOnly = "quick";
+// `quick` and `editor` are the keys a builder takes beyond its field's: the
+// card's header reads the one and the settings sheet the other, never the field
+// renderer.
+type CardOnly = "quick" | "editor";
 
 // 🔴 No key the collection field does not have: a key spelt the dashboard's
 // own way would type-check here and be a second vocabulary.
@@ -61,10 +62,10 @@ expectTypeOf<
 // The control for the six above: a config that resolved to nothing would have
 // no keys, and pass them all.
 expectTypeOf<keyof NumberConfig>().toEqualTypeOf<
-  "label" | "admin" | "defaultValue" | "min" | "max"
+  "label" | "admin" | "defaultValue" | "min" | "max" | "editor"
 >();
 expectTypeOf<keyof SelectConfig>().toEqualTypeOf<
-  "label" | "admin" | "defaultValue" | "options" | "quick"
+  "label" | "admin" | "defaultValue" | "options" | "quick" | "editor"
 >();
 
 // Each key the builder reads, of the collection field's own type.

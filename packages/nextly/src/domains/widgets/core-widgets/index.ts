@@ -14,8 +14,8 @@
  * Which of them the default dashboard holds, and in what order, is
  * `CORE_DEFAULT_LAYOUT` in `./ids`, written as a site writes its own `defaultLayout`.
  *
- * Collections, Singles and Team draw inside the shared frame like every other
- * card, so they read as one product. The other `custom` ones still carry
+ * Content, Team and the per-collection cards draw inside the shared frame like
+ * every other card, so they read as one product. The other `custom` ones still carry
  * `chrome: "none"` until each moves into the frame: each draws a titled section
  * with its own rules, loading skeleton and error state. `title` is still required and
  * still meaningful -- it is what names the card in the layout editor, where a
@@ -74,10 +74,19 @@ import { teamWidget } from "./team";
 import { upcomingReleasesWidget } from "./upcoming-releases";
 
 /**
- * Core's widgets declared with `defineWidget`, as a plugin declares its own.
- * Registered through the same call as everyone's declarations, under core.
+ * Core's widgets declared with `defineWidget`, as a plugin declares its own,
+ * in core's order. Registered through the same call as everyone's
+ * declarations, under core; each card's data is answered on the server by its
+ * declaration's `load`.
  */
-export const CORE_DECLARATIONS = [needsAttentionWidget, noteWidget] as const;
+export const CORE_DECLARATIONS = [
+  countWidget,
+  breakdownWidget,
+  needsAttentionWidget,
+  noteWidget,
+  recentEntriesWidget,
+  overTimeWidget,
+] as const;
 
 /** Core's widgets still written as definitions: every one not declared. */
 const CORE_WIDGET_LITERALS = [
@@ -88,10 +97,6 @@ const CORE_WIDGET_LITERALS = [
   recentlyEditedWidget,
   upcomingReleasesWidget,
   recentActivityWidget,
-  countWidget,
-  breakdownWidget,
-  recentEntriesWidget,
-  overTimeWidget,
 ] as const satisfies readonly WidgetDefinition[];
 
 /**

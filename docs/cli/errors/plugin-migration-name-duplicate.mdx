@@ -1,0 +1,23 @@
+---
+title: PLUGIN_MIGRATION_NAME_DUPLICATE
+description: "A plugin ships two migrations with the same name, ignoring case."
+---
+
+## Cause
+
+A plugin ships two migrations with the same name, ignoring case.
+
+A plugin migration's name is its key in the migration ledger, compared without regard to case, so two modules with one name would share one record.
+
+## Fix
+
+Rename one of the two modules, then reseal it with `migrationChecksum` from `@nextlyhq/plugin-sdk/schema`.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" ships more than one migration named "0002_Redirects".
+  Why:  Each module's name is its key in the migration ledger, so every name must be unique (ignoring case).
+  Next: Rename one, then reseal it with `migrationChecksum`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-name-duplicate  (PLUGIN_MIGRATION_NAME_DUPLICATE)
+```

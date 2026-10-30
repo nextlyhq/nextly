@@ -75,6 +75,7 @@ import {
 } from "./dynamic-collection-registry-service";
 import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-service";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+import { namesKeptFromStored } from "./field-names";
 import { refusalsForCollectionSave } from "./save-preconditions";
 
 export interface CollectionArtifacts {
@@ -451,7 +452,8 @@ export class DynamicCollectionService extends BaseService {
     ));
     await Promise.all(
       [...slugs].map(async slug => {
-        const record = await registry.getComponentBySlug(slug);
+        // As stored, past the registry row cache: the DDL is planned against this table.
+        const record = await registry.findComponentForWrite(slug);
         if (record) resolved.set(slug, record.tableName);
       })
     );
@@ -540,7 +542,8 @@ export class DynamicCollectionService extends BaseService {
     }
 
     const normalizedName = data.name.toLowerCase();
-    const tableName = `dc_${normalizedName}`;
+    // A hyphen in the address is written as an underscore in the table, as configuration names it.
+    const tableName = `dc_${normalizedName.replace(/-/g, "_")}`;
 
     this.validationService.validateCollectionName(normalizedName);
 
@@ -725,18 +728,26 @@ export class DynamicCollectionService extends BaseService {
   }
 
   /**
-   * The fields a save defines itself, validated: names lower-cased, the
-   * reserved fields dropped, every name checked, and no two many-to-many
-   * fields sharing one junction table — asked through the schema service's own
-   * naming, which is what the DDL is written with.
+   * The fields a save defines itself, validated: the reserved fields dropped,
+   * every name checked by the column it becomes, and no two many-to-many fields
+   * sharing one junction table — asked through the schema service's own naming,
+   * which is what the DDL is written with.
+   *
+   * Each field keeps the name it was sent with, so its column is
+   * `toSnakeCase(name)`, the name the write path uses. On an update, a field
+   * that differs from a stored one only in case keeps the stored name, so a
+   * field saved lowercased before names kept their case keeps its column and
+   * values (`namesKeptFromStored`).
    */
   private userFieldsOf(
     fields: FieldDefinition[],
-    tableName: string
+    tableName: string,
+    stored: readonly FieldDefinition[] = []
   ): FieldDefinition[] {
-    const userDefinedFields = fields
-      .map(f => ({ ...f, name: f.name.toLowerCase() }))
-      .filter(f => !RESERVED_FIELD_NAMES.includes(f.name));
+    const userDefinedFields = namesKeptFromStored(
+      fields.filter(f => !RESERVED_FIELD_NAMES.includes(f.name.toLowerCase())),
+      stored
+    );
     this.validationService.validateFieldNames(userDefinedFields);
     this.validationService.validateJunctionOwnership(userDefinedFields, field =>
       this.schemaService.junctionTableNameFor(tableName, field)
@@ -1501,7 +1512,8 @@ export class DynamicCollectionService extends BaseService {
     if (updates.fields !== undefined) {
       const userDefinedFields = this.userFieldsOf(
         updates.fields,
-        collection.tableName
+        collection.tableName,
+        collection.fields || []
       );
 
       const oldUserFields = (collection.fields || []).filter(

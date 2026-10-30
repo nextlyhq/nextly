@@ -51,6 +51,7 @@ import {
 } from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import { staleFieldSettings } from "../domains/widgets/declaration/card-settings";
 import { defaultLayoutPlacements } from "../domains/widgets/default-layout";
 import {
   getStartedDrawn,
@@ -74,11 +75,18 @@ import {
   type StoredLayout,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
+import { publishableContentSources } from "../domains/widgets/publish";
+import type { PublishedContentSource } from "../domains/widgets/published-content-source";
 import {
   retiredWidgetReplacement,
   type NamedCollection,
 } from "../domains/widgets/retired-widget-namespaces";
-import type { TextBound } from "../domains/widgets/settings";
+import {
+  resolveWidgetSettings,
+  settingValueProblem,
+  type AnyWidgetSetting,
+  type TextBound,
+} from "../domains/widgets/settings";
 import { getSource } from "../domains/widgets/sources";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -971,9 +979,116 @@ function changedText(
   name: string
 ): string | undefined {
   const value = placement.config?.[name];
-  const unchanged =
-    shown?.widgetId === placement.widgetId && shown.config?.[name] === value;
-  return typeof value === "string" && !unchanged ? value : undefined;
+  return typeof value === "string" && changedSetting(placement, shown, name)
+    ? value
+    : undefined;
+}
+
+/**
+ * Whether `placement` holds a value for `name` other than the one `shown` held: the one test of
+ * which settings a write is judged on. Unchanged only on a card of the same widget. Compared as
+ * JSON, since a filter's value is an object parsed afresh on each side.
+ */
+function changedSetting(
+  placement: WidgetPlacement,
+  shown: WidgetPlacement | undefined,
+  name: string
+): boolean {
+  if (shown?.widgetId !== placement.widgetId) return true;
+  const before = shown.config?.[name];
+  const after = placement.config?.[name];
+  return before !== after && JSON.stringify(before) !== JSON.stringify(after);
+}
+
+/**
+ * Refuses a card whose setting the caller changed to a value its widget's declaration does not
+ * take, naming the setting.
+ *
+ * Two rules, each the one a card's read applies to the stored value, so nothing saves that the
+ * card would then set aside while the save looked kept:
+ *
+ * - a value of the wrong kind, outside its range, or not among its options
+ *   (`settingValueProblem`), which the read replaces with the default;
+ * - a Field setting naming a field the chosen collection does not offer this reader
+ *   (`staleFieldSettings`), which the read resets. Removed, unreadable and absent fields get one
+ *   answer, so a refusal says nothing about which fields exist.
+ *
+ * Judged only where the value changed (`changedSetting`), as a note's length is: a value stored
+ * before its widget narrowed its declaration still saves as it is. The declarations come from the
+ * canonical set the caller sees, so every channel's widget is held alike.
+ */
+function refuseUnusableSettings(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[],
+  widgets: readonly CanonicalWidget[],
+  readable: ReadonlySet<string>
+): void {
+  const shownById = new Map(shown.map(p => [p.id, p]));
+  const settingsById = new Map(
+    widgets.map(widget => [widget.id, widget.settings ?? []])
+  );
+  // The reader's collections, read from the sources only once a Field setting needs them.
+  let sources: PublishedContentSource[] | undefined;
+  const readableSources = () =>
+    (sources ??= publishableContentSources(readable));
+  for (const placement of submitted) {
+    const message = unusableSettingIn(
+      placement,
+      shownById.get(placement.id),
+      settingsById.get(placement.widgetId) ?? [],
+      readableSources
+    );
+    if (message === undefined) continue;
+    throw NextlyError.validation({
+      errors: [{ path: "placements", code: "INVALID_VALUE", message }],
+    });
+  }
+}
+
+/** Whether a stored value names something: text with more than blanks in it. */
+function statesName(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/**
+ * What is wrong with the first setting of `placement` the caller changed to a value it does not
+ * take, or `undefined`. See {@link refuseUnusableSettings}.
+ */
+function unusableSettingIn(
+  placement: WidgetPlacement,
+  shown: WidgetPlacement | undefined,
+  settings: readonly AnyWidgetSetting[],
+  sources: () => readonly PublishedContentSource[]
+): string | undefined {
+  const changed = settings.filter(setting =>
+    changedSetting(placement, shown, setting.name)
+  );
+  for (const setting of changed) {
+    const problem = settingValueProblem(
+      setting,
+      placement.config?.[setting.name]
+    );
+    if (problem !== undefined) return problem;
+  }
+  // A Field setting is judged where its own value is stated, and changed or now over another
+  // collection; one left to its default is the declaration's, and the read resets it unaided.
+  const judged = settings.filter(
+    setting =>
+      setting.type === "field" &&
+      statesName(placement.config?.[setting.name]) &&
+      (changed.includes(setting) ||
+        changedSetting(placement, shown, setting.of))
+  );
+  if (judged.length === 0) return undefined;
+  const stale = staleFieldSettings(
+    Object.fromEntries(settings.map(setting => [setting.name, setting])),
+    resolveWidgetSettings(settings, placement.config),
+    sources()
+  ).map(([name]) => name);
+  const field = judged.find(setting => stale.includes(setting.name));
+  return field === undefined
+    ? undefined
+    : `"${field.label ?? field.name}" names a field that is not available.`;
 }
 
 /**
@@ -1130,6 +1245,12 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const shown = visibleArrangement(stored.layout, view, notShown);
   refuseExtraCards(submitted, shown, sizesOf(view.widgets));
   refuseOverlongText(submitted, shown, view.widgets);
+  refuseUnusableSettings(
+    submitted,
+    shown,
+    view.widgets,
+    view.audience.readableCollections
+  );
 
   // 🔴 MONOTONIC. A row a reader has arranged stays arranged whatever a later
   // write says: a removal outside customise mode states `false` because IT is

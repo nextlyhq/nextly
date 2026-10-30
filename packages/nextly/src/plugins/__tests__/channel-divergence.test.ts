@@ -198,6 +198,27 @@ const MUST_AGREE: Array<{
     expect: /declares a "limit" setting, and a query with a range/,
   },
   {
+    // Accepted, the editor would never reach the generated component map, and
+    // the settings sheet would draw "unavailable" in the setting's place.
+    case: "a setting with its own editor",
+    expect: /custom setting editors need a defineWidget declaration/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      size: { default: { w: 3, h: 2 } },
+      component: "p#X",
+      settings: [
+        {
+          name: "goal",
+          type: "number",
+          label: "Goal",
+          editor: { component: "p#GoalEditor" },
+        },
+      ],
+    },
+  },
+  {
     case: "a minimum above the default",
     expect: /size\.min must not be larger than size\.default/,
     widget: {

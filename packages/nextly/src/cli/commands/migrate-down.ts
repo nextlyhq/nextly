@@ -27,9 +27,12 @@ import {
   type StepFile,
 } from "../../domains/i18n/migration/step-windows";
 import {
+  isPluginLedgerRow,
+  ledgerFilename,
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
+import { standingsByFilename } from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -82,13 +85,14 @@ import { findUnexpectedDestructiveStatements } from "../../domains/schema/pipeli
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
@@ -134,8 +138,10 @@ export function isDestructiveDown(
 
 /**
  * Newest-applied-first filenames, limited to `step`. A file counts as applied
- * only when the NEWEST event for it is `applied` (a later rolled_back retires
- * it). Ordered by that newest event's startedAt, descending.
+ * when its standing says so (`standingsByFilename`): an app migration's latest
+ * outcome is `applied` (a later rolled_back retires it; an attempt that failed
+ * or stopped does not), a plugin module's newest record is. Ordered by that
+ * applied record's startedAt, descending.
  *
  * Migrations recorded in the same millisecond — a run of plugin modules
  * adopted together, say — share a `startedAt`, and the ledger is read with no
@@ -152,9 +158,9 @@ export function selectAppliedTargets(
   plugin?: string
 ): string[] {
   const applied: { filename: string; at: number }[] = [];
-  for (const [filename, newest] of newestEventsByFilename(rows)) {
-    if (newest.status === "applied") {
-      applied.push({ filename, at: newest.startedAt.getTime() });
+  for (const [filename, standing] of standingsByFilename(rows)) {
+    if (standing.state === "applied" && standing.outcome !== undefined) {
+      applied.push({ filename, at: standing.outcome.startedAt.getTime() });
     }
   }
   applied.sort(
@@ -318,6 +324,20 @@ export interface MigrateDownCoreDeps {
     transaction: boolean
   ) => Promise<void>;
   /**
+   * Records, durably and before the first statement, that a DOWN started:
+   * an attempt with no outcome yet (`downStartRecordedFirst`). Returns its id.
+   * Optional so a caller with no ledger of its own supplies nothing, and the
+   * DOWN is recorded only once it ends, as it was before.
+   */
+  recordDownStarted?: (filename: string) => Promise<string>;
+  /**
+   * Removes a DOWN's started attempt once its ending is recorded, through
+   * `db`: the handle the rolled-back row was written on when it ended in a
+   * rollback, so the two commit together. The ending's own record then says
+   * how the attempt ended.
+   */
+  endDownAttempt?: (id: string, db?: unknown) => Promise<void>;
+  /**
    * Table-level owner rows for the drop guard; absent when no registry is
    * reachable, which reads as nothing being claimed.
    */
@@ -441,7 +461,7 @@ export function refusalOf(
   if (p.statements.length === 0) {
     return NextlyError.invalidInput({
       message: `${p.filename} has no down SQL — it is irreversible. Hand-write a -- DOWN section or use 'nextly migrate:fresh'.`,
-      logContext: { filename: p.filename },
+      logContext: { filename: p.filename, reason: "down-sql-missing" },
     });
   }
   try {
@@ -552,12 +572,20 @@ export async function rollBackOne(
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordFailed"
+    | "recordDownStarted"
+    | "endDownAttempt"
   >
 ): Promise<void> {
   if (!p.transaction) {
     deps.logger.warn(outsideTransactionNotice(p.filename));
   }
   const partial = failedAttemptMayBePartial(p, deps.dialect);
+  // Before the first statement, where a stop can leave part of the DOWN
+  // committed: the ledger then shows an attempt with no outcome, and the
+  // migration stays recorded applied until the DOWN's last statement ran.
+  const attempt = downStartRecordedFirst(p, deps.dialect)
+    ? await deps.recordDownStarted?.(p.filename)
+    : undefined;
   try {
     await deps.execDown(
       p.statements,
@@ -571,6 +599,13 @@ export async function rollBackOne(
           });
         }
         if (deps.options.plugin) await deps.recordPluginSchemaVersion?.(db);
+        // The rollback is recorded, and it resolves the start row, which is
+        // older: failing to remove that row never fails a DOWN whose
+        // statements ran. A start row is recorded only where a failed write
+        // leaves the transaction usable (MySQL, or no transaction at all).
+        if (attempt !== undefined) {
+          await deps.endDownAttempt?.(attempt, db).catch(() => undefined);
+        }
       }
     );
   } catch (err) {
@@ -581,8 +616,31 @@ export async function rollBackOne(
         p.transaction
       );
     }
+    // Recorded failed above; a lost race rolled back whole left nothing to
+    // record, and the other run's rollback is the migration's outcome. A
+    // start row left behind reads as a stopped DOWN, which is still true, so
+    // failing to remove it never hides the DOWN's own error.
+    if (attempt !== undefined) {
+      await deps.endDownAttempt?.(attempt).catch(() => undefined);
+    }
     throw err;
   }
+}
+
+/**
+ * Whether a DOWN's attempt is recorded before its first statement: an app
+ * migration's DOWN wherever a stop can leave part of it committed
+ * (`failedAttemptMayBePartial`, the predicate an UP's attempt is recorded
+ * by). A plugin module's DOWN keeps its history's record, written once it
+ * ends.
+ */
+function downStartRecordedFirst(
+  p: Pick<PlannedDown, "filename" | "transaction">,
+  dialect: SupportedDialect
+): boolean {
+  return (
+    !isPluginLedgerRow(p.filename) && failedAttemptMayBePartial(p, dialect)
+  );
 }
 
 /**
@@ -795,6 +853,7 @@ export async function migrateDownCore(
     throw NextlyError.invalidInput({
       message:
         "Refusing to roll back in production without --yes. Prefer rolling forward with a corrective migration, or restore from backup. Re-run with --yes to override.",
+      logContext: { reason: "production-needs-yes" },
     });
   }
 
@@ -895,6 +954,8 @@ export async function downDatabaseDeps(args: {
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordFailed"
+    | "recordDownStarted"
+    | "endDownAttempt"
   >
 > {
   const { adapter, dialect, plugin } = args;
@@ -956,6 +1017,14 @@ export async function downDatabaseDeps(args: {
         owners: new OwnersRepo(handle, dialect),
       });
     },
+    recordDownStarted: filename =>
+      repo.recordStart({
+        eventType: "file_rollback",
+        source: "cli-migrate",
+        filename: ledgerFilename(filename),
+      }),
+    endDownAttempt: (id, handle) =>
+      (handle === undefined ? repo : repo.boundTo(handle)).discardAttempt(id),
     recordFailed: (filename, message, transaction) =>
       recordRollbackFailed({
         repo,
@@ -1018,11 +1087,7 @@ export async function runMigrateDown(
   const { logger } = context;
   logger.header("Migrate Down");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
   const dialect = dbValidation.dialect;
 
   const configResult = await loadConfig({
@@ -1175,8 +1240,7 @@ export function registerMigrateDownCommand(program: Command): void {
       try {
         await runMigrateDown(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

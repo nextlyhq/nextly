@@ -4,10 +4,11 @@
  * to choose, a stored choice naming it falls back to the card's own fields, and
  * a read that asks for it anyway answers without it.
  *
- * The declaration is core's, as the registry holds it; the reader's sources
- * are what the workspace payload publishes them (`publishableContentSources`);
- * the settings become the query through `applyWidgetSettings`, the admin's
- * one path; and the query runs against real rows as the reader.
+ * The declaration is core's, its `load` run as the reader: the reader's
+ * sources are what the workspace payload publishes them
+ * (`publishableContentSources`), the settings become the query through
+ * `applyWidgetSettings`, the one path the admin's own cards take too, and the
+ * query runs against real rows as the reader.
  */
 
 // Must be set before the harness boots (env validation).
@@ -26,14 +27,15 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
+import { recentEntriesWidget } from "../core-widgets/recent-entries";
 import { executeWidgetQuery } from "../execute";
 import {
   publishableContentSources,
   type PublishedContentSource,
 } from "../publish";
 import { validateWidgetQuery, type WidgetQuery } from "../query";
-import { getWidget } from "../registry";
-import { applyWidgetSettings, type KnobContext } from "../settings";
+
+import { loadCard } from "./core-card-load";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const NOTES = "ref_notes";
@@ -44,29 +46,22 @@ describe.each(getConfiguredTestDialects())(
     let handle: TestNextly;
     let caller: ReadCaller;
     let sources: PublishedContentSource[];
-    let ctx: KnobContext;
 
     /** What a Recent entries card with `stored` asks, and the rows it is answered. */
     async function shown(stored: Record<string, unknown>): Promise<{
       select: string[] | undefined;
-      rows: Record<string, unknown>[];
+      rows: readonly Record<string, unknown>[];
     }> {
-      const recent = getWidget("core/recent-entries")!;
-      const query = applyWidgetSettings(
-        recent.query as WidgetQuery,
-        recent.settings,
-        stored,
-        ctx
-      );
-      const result = await executeWidgetQuery(
-        validateWidgetQuery(query),
-        caller
-      );
-      expect(result.op).toBe("list");
-      return {
-        select: query.select,
-        rows: (result as { items: Record<string, unknown>[] }).items,
-      };
+      const asked: WidgetQuery[] = [];
+      const answer = await loadCard(recentEntriesWidget, stored, caller, {
+        asked: query => asked.push(query),
+      });
+      // The one list it reads (beside the check `describe` makes): the
+      // select it ASKED, not the columns the read answered, which leave a
+      // guarded field out whatever is asked.
+      const lists = asked.filter(query => query.op === "list");
+      expect(lists).toHaveLength(1);
+      return { select: lists[0]?.select, rows: answer.rows };
     }
 
     beforeAll(async () => {
@@ -93,12 +88,6 @@ describe.each(getConfiguredTestDialects())(
       // collection sources from the live registry, which boot does not do.
       await refreshCollectionSources();
       sources = publishableContentSources([NOTES]);
-      ctx = {
-        sourceOf: collection =>
-          sources.find(source => source.collection === collection),
-        fieldsOf: collection =>
-          sources.find(source => source.collection === collection)?.fields,
-      };
     }, 120_000);
 
     afterAll(async () => {

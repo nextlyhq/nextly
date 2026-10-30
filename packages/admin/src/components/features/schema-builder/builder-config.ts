@@ -10,6 +10,20 @@ import { FIELD_TYPES_CATALOG } from "./field-picker-modal/field-types-catalog";
 
 export type BuilderKind = "collection" | "single" | "field-group";
 
+/**
+ * How each kind is named in a sentence, e.g. "This Single has no custom fields
+ * yet." The kind is a slug, so it cannot be interpolated as it is ("This
+ * field-group ..."). "Single" keeps its capital as the product's name for that
+ * kind. Field groups are called components in code, and that word is never
+ * shown. Every builder message that names the kind reads it from here, so the
+ * three kinds are spelled the same way on every screen.
+ */
+export const BUILDER_KIND_NOUN: Record<BuilderKind, string> = {
+  collection: "collection",
+  single: "Single",
+  "field-group": "field group",
+};
+
 export type BasicsField =
   | "singularName"
   | "pluralName"

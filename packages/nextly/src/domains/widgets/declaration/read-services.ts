@@ -314,12 +314,12 @@ function windowSpan(window: CountWindow, now: Date): { from: Date; to: Date } {
 }
 
 /**
- * `where` narrowed to the entries whose `field` falls in `[from, to)`, joined
+ * A checked `where` narrowed to the entries whose `field` falls in `[from, to)`, joined
  * under `and` so a condition the call places on the same field still applies,
  * and a top-level key the collection reads stays where it is read.
  */
 function withinSpan(
-  where: unknown,
+  where: Readonly<Record<string, unknown>> | undefined,
   field: string,
   { from, to }: { from: Date; to: Date }
 ): Record<string, unknown> {
@@ -329,10 +329,11 @@ function withinSpan(
       less_than: to.toISOString(),
     },
   };
-  if (typeof where !== "object" || where === null) return { and: [span] };
-  const given = where as Record<string, unknown>;
-  const joined = Array.isArray(given.and) ? given.and : [];
-  return { ...given, and: [...joined, span] };
+  if (where === undefined) return { and: [span] };
+  // A checked filter's `and`, when it has one, is a list (the check refuses
+  // any other); read defensively all the same, as a guard over values in hand.
+  const joined = Array.isArray(where.and) ? where.and : [];
+  return { ...where, and: [...joined, span] };
 }
 
 /**
@@ -501,33 +502,36 @@ function readServices(binding: ReadServiceBinding): WidgetReadServices {
   const services: WidgetReadServices = {
     async count(collection, options) {
       const window = windowOf(options);
+      const counting = (where: unknown) => ({
+        op: "count",
+        ...(where === undefined ? {} : { where }),
+        ...statusOf(options),
+      });
+      // 🔴 The call's own `where` is checked as it was written, window or
+      // not: joined to a window first, a malformed one (`{ and: "bad" }`, a
+      // primitive, null) was wrapped or replaced, the check never saw it, and
+      // the count ran over more entries than the call could have meant.
       const checked = await read(
         collection,
-        () => {
-          const { where } = readOptionsOf(options, ["where"]);
-          return {
-            op: "count",
-            // A window narrows the call's own `where` to the span it reads.
-            ...(window === undefined
-              ? where === undefined
-                ? {}
-                : { where }
-              : {
-                  where: withinSpan(
-                    where,
-                    window.dateField,
-                    windowSpan(window, now)
-                  ),
-                }),
-            ...statusOf(options),
-          };
-        },
+        () => counting(readOptionsOf(options, ["where"]).where),
         options
       );
-      if (window !== undefined) {
-        refuseUnreadableDate(checked.slug, window.dateField);
+      if (window === undefined) {
+        const answer = await run(checked);
+        return answer.op === "count" ? answer.total : 0;
       }
-      const answer = await run(checked);
+      refuseUnreadableDate(checked.slug, window.dateField);
+      // Only a filter the check accepted is narrowed to the window, and the
+      // narrowed read is checked again, as every read is, before it runs.
+      const windowed = await read(
+        collection,
+        () =>
+          counting(
+            withinSpan(checked.where, window.dateField, windowSpan(window, now))
+          ),
+        options
+      );
+      const answer = await run(windowed);
       return answer.op === "count" ? answer.total : 0;
     },
     async find(collection, options) {

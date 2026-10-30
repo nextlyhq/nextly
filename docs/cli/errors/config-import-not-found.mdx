@@ -1,0 +1,25 @@
+---
+title: CONFIG_IMPORT_NOT_FOUND
+description: "The configuration file imports a file or package that could not be found."
+---
+
+## Cause
+
+The configuration file imports a file or package that could not be found.
+
+While it compiles the configuration, the CLI follows each import. A relative import must name a file that exists; any other import must name a package installed in the project.
+
+## Fix
+
+- For a relative import (`./collections/posts`), check the path and the file's name.
+- For a package, install it in the project, for example `pnpm add @nextlyhq/plugin-seo`.
+- Then run the command again.
+
+## Example
+
+```text
+✗ `nextly.config.ts` imports something that could not be found.
+  Why:  nextly.config.ts:2:22: Could not resolve "./collections/posts"
+  Next: Correct the import's path, or install the package it names, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-import-not-found  (CONFIG_IMPORT_NOT_FOUND)
+```

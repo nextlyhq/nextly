@@ -232,6 +232,23 @@ export function answerHasNothing(result: WidgetResult): boolean {
 }
 
 /**
+ * A setting's label as it reads inside a sentence: "Collection" becomes
+ * "collection". The one rule for every prompt built from a label, on the
+ * server and in the admin, so the two never write it differently.
+ */
+export function settingInSentence(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
+/**
+ * What a card missing a setting says: "No collection chosen yet". The
+ * server's needs-setting answer and the admin's empty state alike.
+ */
+export function noSettingChosen(label: string): string {
+  return `No ${settingInSentence(label)} chosen yet`;
+}
+
+/**
  * One slot of the dashboard batch response: what ONE widget's query answered.
  *
  * 🔴 A failure is a VALUE here, not a thrown error, because the batch answers
@@ -321,6 +338,32 @@ export interface WidgetQueryBatchResponse {
  */
 export interface WidgetRenderSize extends GridSize {
   tier: "small" | "medium" | "large";
+}
+
+/**
+ * What a setting's own editor is handed by the card's settings sheet: the
+ * setting's value and a way to change it, and the card's other settings as
+ * the sheet holds them now, so an editor whose choices depend on another
+ * setting (a collection's fields, say) can offer the right ones.
+ *
+ * A change is the sheet's like any field's: kept in the form, checked by the
+ * setting's own rules, and saved with the rest when the reader saves.
+ *
+ * @experimental While the dashboard widget SDK is being built.
+ */
+export interface SettingEditorProps<Value> {
+  /** The setting's key among the card's settings. */
+  name: string;
+  /** Its label, as the settings sheet names it. */
+  label: string;
+  /** Its value in the sheet; `undefined` while none is chosen. */
+  value: Value | undefined;
+  /** Sets its value in the sheet. */
+  onChange: (value: Value) => void;
+  /** The card's other settings, by key, as the sheet holds them now. */
+  settings: Readonly<Record<string, unknown>>;
+  /** True while the sheet is saving: the editor takes no input then. */
+  disabled: boolean;
 }
 
 /**

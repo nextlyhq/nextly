@@ -15,8 +15,10 @@ import type { AuthContext } from "../auth/middleware";
 import { cardTierAt } from "../domains/widgets/card-geometry";
 import { cardAnswerResult } from "../domains/widgets/declaration/card-answer";
 import {
+  hasFieldSettingValue,
   renamedCollection,
   resolveCardSettings,
+  staleFieldSettings,
   unsetSetting,
 } from "../domains/widgets/declaration/card-settings";
 import {
@@ -39,9 +41,15 @@ import {
   type GridSize,
 } from "../domains/widgets/grid-size";
 import type { WidgetPlacement } from "../domains/widgets/layout";
+import { publishableContentSources } from "../domains/widgets/publish";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { readableOfKind } from "../domains/widgets/reader-content";
 import { getWidget } from "../domains/widgets/registry";
-import { answerHasNothing, type WidgetSlot } from "../domains/widgets/result";
+import {
+  answerHasNothing,
+  noSettingChosen,
+  type WidgetSlot,
+} from "../domains/widgets/result";
 import { withSiteOverride } from "../domains/widgets/site-rules";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
@@ -185,6 +193,28 @@ export interface CardBatch {
    * batch was asked on (`readAheadFor`).
    */
   readAhead?: Omit<ReadAheadSide, "credential">;
+
+  /**
+   * The collections the caller may read, and whether the registry could be
+   * read at all: what a card's Field settings are judged against. One answer
+   * for the whole batch ({@link readableCollectionsOnce}), however many of its
+   * cards ask.
+   */
+  readableCollections: () => ReturnType<typeof readableOfKind>;
+}
+
+/**
+ * The caller's readable collections, read from the registry the first time a
+ * card asks and shared with every card after it. Each read enumerates the
+ * registry and authorizes every collection, and a batch answers its cards at
+ * once, so a dashboard of cards with Field settings asked it once per card
+ * otherwise.
+ */
+export function readableCollectionsOnce(
+  caller: ReadCaller
+): CardBatch["readableCollections"] {
+  let read: ReturnType<CardBatch["readableCollections"]> | undefined;
+  return () => (read ??= readableOfKind(caller, "collection"));
 }
 
 /**
@@ -492,6 +522,27 @@ async function judgeCard(
   // The settings' starting values as the site's `overrides` change them.
   const declaration = withSiteOverride(declared.declaration);
   const settings = resolveCardSettings(declaration.settings, placement.config);
+  // A Field setting naming a field this reader is not offered takes what
+  // their settings sheet would reset it to: its default where that fits, and
+  // no value otherwise, so `load` never reads the stale one and the card asks
+  // for it instead. Asked of their collections only when a Field setting has
+  // a value to judge.
+  if (hasFieldSettingValue(declaration.settings, settings)) {
+    const readable = await batch.readableCollections();
+    // A registry that could not be read says nothing about the field: the
+    // stored value is kept, and `load`'s own reads fail the card as an outage
+    // rather than it asking the reader to choose again.
+    if (readable.reachable) {
+      const sources = publishableContentSources(readable.slugs);
+      for (const [name, replacement] of staleFieldSettings(
+        declaration.settings,
+        settings,
+        sources
+      )) {
+        settings[name] = replacement;
+      }
+    }
+  }
   const missing = unsetSetting(declaration.settings, settings);
   if (missing !== undefined) {
     return { kind: "needs-setting", label: missing.label };
@@ -550,7 +601,7 @@ async function answerCard(
       return {
         settled: {
           ok: false,
-          error: `No ${verdict.label} chosen yet`,
+          error: noSettingChosen(verdict.label),
           code: "needs-setting",
           setting: verdict.label,
         },
