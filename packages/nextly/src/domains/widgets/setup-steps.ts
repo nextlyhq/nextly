@@ -119,3 +119,42 @@ export function talliedSetup(steps: SetupStep[]): SetupAnswer {
     total: steps.length,
   };
 }
+
+/** What only the project's sample-content route can say of this reader. */
+export interface SampleRoute {
+  /**
+   * Whether the route refuses this reader the load, or the project ships no
+   * sample content at all. Only the admin can ask it, so the host, which
+   * cannot, answers `false`.
+   */
+  sampleRefused: boolean;
+}
+
+/**
+ * The steps the setup card draws, counted: `answer` less an open sample step
+ * where the project's route refuses this reader. A sample step already
+ * answered stays, as someone on the site loaded or declined it.
+ *
+ * ONE function for the admin's "N of M done" and the host's "You're all set"
+ * (`setupAllSet`), so a step the card leaves out never holds the card open,
+ * and a step it draws is never passed over.
+ */
+export function drawnSetup(
+  answer: SetupAnswer,
+  { sampleRefused }: SampleRoute
+): SetupAnswer {
+  if (!answer.known || !sampleRefused) return answer;
+  return talliedSetup(
+    answer.steps.filter(
+      step => !(step.kind === "sample" && step.status === "open")
+    )
+  );
+}
+
+/**
+ * Whether every step drawn is done or skipped: what "You're all set" says.
+ * Never while setup is not known.
+ */
+export function setupAllSet(drawn: SetupAnswer): boolean {
+  return drawn.known && drawn.done === drawn.total;
+}

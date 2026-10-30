@@ -378,23 +378,6 @@ export async function setupSteps(
 }
 
 /**
- * The kinds a stored value records as skipped: a comma-separated list. Any
- * name that is not a skippable kind is ignored, so a value written by an
- * older or newer release never skips a step it should not.
- */
-export function skippedKinds(
-  stored: string | undefined
-): ReadonlySet<SkippableSetupStepKind> {
-  if (!stored) return new Set();
-  return new Set(
-    stored
-      .split(",")
-      .map(name => name.trim())
-      .filter(isSkippableKind)
-  );
-}
-
-/**
  * The answer with this reader's skips applied: an open step of a skippable
  * kind that they skipped reads as skipped, which "N of M done" counts as done.
  * A step already done stays done, and an answer not known stays not known.

@@ -321,9 +321,12 @@ export {
 export {
   SETUP_SKIPPABLE_KINDS,
   SETUP_STEP_KINDS,
+  drawnSetup,
   isSkippableKind,
+  setupAllSet,
   stepFinished,
   talliedSetup,
+  type SampleRoute,
   type SetupAnswer,
   type SetupCardData,
   type SetupSingle,

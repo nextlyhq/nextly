@@ -34,6 +34,7 @@ import { COLLECTION_DEFINITION_PERMISSIONS } from "../../auth/collection-definit
 import { authorizationGroups } from "../../auth/entity-read-access";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import { getService } from "../../di";
+import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
   callerMayReadAnyRelease,
@@ -119,8 +120,9 @@ export interface ConditionProbe {
    * The first collection, in the registry's order, this reader may read and
    * create an entry in from the admin, resolved at most once: the one setup's
    * "Add your first entry" opens a new entry of. `undefined` when there is
-   * none. The same create decision as {@link mayCreateOnDashboard}, over the
-   * same collections, so the two cannot disagree.
+   * none. Rejects when a decision that could have changed that answer threw.
+   * The same create decision as {@link mayCreateOnDashboard}, over the same
+   * collections, so the two cannot disagree.
    */
   firstCreatableCollection(): Promise<string | undefined>;
   /**
@@ -132,8 +134,9 @@ export interface ConditionProbe {
   sampleAnswered(): Promise<boolean>;
   /**
    * The setup steps offered to this reader, before their skips, resolved at
-   * most once: the one answer the setup card and the `onboarding:incomplete`
-   * condition both read, so the two cannot disagree.
+   * most once. The setup card and the `onboarding:incomplete` condition both
+   * read it through `readerSetup`, which applies the reader's skips, so the
+   * two cannot disagree.
    */
   setup(): Promise<SetupAnswer>;
 }
@@ -308,8 +311,14 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
 /**
  * The first of `slugs`, in order, that `mayCreateIn` allows, asked in
  * {@link authorizationGroups} order so a cold per-user cache is filled once and
- * no group is asked past the first allowed one. A decision that threw counts
- * as refused: it has told us nothing, and nothing must not read as a grant.
+ * no group is asked past the first allowed one.
+ *
+ * A decision that threw has told us nothing, and nothing must read as neither
+ * a grant nor a refusal: one that threw ahead of the first grant could have
+ * been the first itself, or, with no grant after it, the only one. Either way
+ * the answer is not known, so this rejects with it, and the step that asks is
+ * not known rather than not offered. One that threw after a grant changes
+ * nothing, and is passed over.
  */
 async function firstCreatableOf(
   slugs: readonly string[],
@@ -317,10 +326,18 @@ async function firstCreatableOf(
 ): Promise<string | undefined> {
   for (const group of authorizationGroups(slugs)) {
     const settled = await Promise.allSettled(group.map(mayCreateIn));
-    const at = settled.findIndex(
-      result => result.status === "fulfilled" && result.value
-    );
-    if (at !== -1) return group[at];
+    for (const [index, result] of settled.entries()) {
+      if (result.status === "rejected") {
+        throw NextlyError.internal({
+          ...(result.reason instanceof Error ? { cause: result.reason } : {}),
+          logContext: {
+            reason: "create-decision-failed",
+            collection: group[index],
+          },
+        });
+      }
+      if (result.value) return group[index];
+    }
   }
   return undefined;
 }

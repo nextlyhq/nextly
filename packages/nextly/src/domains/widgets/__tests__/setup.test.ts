@@ -45,7 +45,6 @@ import type { ContentAnswer } from "../reader-content";
 import {
   answeredWithin,
   setupSteps,
-  skippedKinds,
   withSkips,
   writtenSinceCreated,
 } from "../setup";
@@ -54,7 +53,11 @@ import {
   SETUP_STEP_KINDS,
   type SetupAnswer,
   type SetupStep,
+  type SkippableSetupStepKind,
 } from "../setup-steps";
+
+/** A reader's skips, as stored ones are read: only skippable kinds are ever named. */
+const skips = (...kinds: SkippableSetupStepKind[]) => new Set(kinds);
 
 interface World {
   collections?: { slugs: string[]; reachable: boolean };
@@ -226,15 +229,6 @@ describe("adding a first entry", () => {
     expect(
       (await stepsFor({ content: "unknown", firstCreatable: "posts" })).answer
     ).toEqual({ known: false });
-  });
-
-  it("makes the answer not known when whether the reader could add one is not known", async () => {
-    const probe: ConditionProbe = {
-      ...probeOf({ content: false }),
-      firstCreatableCollection: () =>
-        Promise.reject(new Error("permission read failed")),
-    };
-    expect(await setupSteps(probe)).toEqual({ known: false });
   });
 });
 
@@ -431,9 +425,11 @@ describe("the order, the count and the reader's skips", () => {
   });
 
   it("applies a skip only to an open step of a skippable kind, and counts it done", async () => {
+    // Every kind named, the unskippable ones included, as a value from another release could.
+    const everyKind: ReadonlySet<string> = new Set(SETUP_STEP_KINDS);
     const skipped = withSkips(
       await everyStep(),
-      skippedKinds("singles,invite,entry,sample,collection,nonsense")
+      everyKind as ReadonlySet<SkippableSetupStepKind>
     );
     expect(skipped.known && skipped.steps.map(step => step.status)).toEqual([
       // Sample content has its own decline, and a collection and a first entry
@@ -456,16 +452,10 @@ describe("the order, the count and the reader's skips", () => {
       done: 1,
       total: 1,
     };
-    expect(withSkips(done, skippedKinds("invite"))).toEqual(done);
-    expect(withSkips({ known: false }, skippedKinds("invite"))).toEqual({
+    expect(withSkips(done, skips("invite"))).toEqual(done);
+    expect(withSkips({ known: false }, skips("invite"))).toEqual({
       known: false,
     });
-  });
-
-  it("reads no skips from an empty or unknown stored value", () => {
-    expect(skippedKinds(undefined).size).toBe(0);
-    expect(skippedKinds("").size).toBe(0);
-    expect([...skippedKinds("entry, nonsense ,invite")]).toEqual(["invite"]);
   });
 });
 

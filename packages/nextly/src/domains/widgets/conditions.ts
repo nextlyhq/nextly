@@ -23,6 +23,8 @@ import {
   type WidgetCondition,
 } from "./lifecycle";
 import { queryableSlugs } from "./reader-content";
+import { readerSetup } from "./setup-reader";
+import { setupAllSet } from "./setup-steps";
 
 /**
  * Whether this reader can see any content at all.
@@ -138,11 +140,14 @@ function releasesArePresent(probe: ConditionProbe): Promise<boolean> {
 }
 
 /**
- * Whether setup is left to do, answering "yes" when it is not known.
+ * Whether setup is left to do for this reader, answering "yes" when it is not
+ * known.
  *
- * DERIVED from the setup card's own answer (`probe.setup`), so a card naming
- * this condition is offered exactly while that card has a step open or could
- * not check one.
+ * DERIVED from the answer the setup card counts (`readerSetup`): the probe's
+ * steps with this reader's skips applied, so a skip that finishes the card
+ * finishes this condition too. A card that has said "You're all set" has
+ * finished it as well, whatever the steps say since: that card judged the
+ * steps it draws, which only the admin can know.
  *
  * 🔴 The one condition that fails VISIBLE. Every other evaluator that throws
  * is left unanswered, which hides its card; that is right for a card that is
@@ -152,8 +157,9 @@ function releasesArePresent(probe: ConditionProbe): Promise<boolean> {
  */
 async function setupNotKnownToBeDone(probe: ConditionProbe): Promise<boolean> {
   try {
-    const answer = await probe.setup();
-    return !answer.known || answer.steps.some(step => step.status === "open");
+    const { state, setup } = await readerSetup(probe);
+    if (state.retiredAt !== undefined) return false;
+    return !setupAllSet(setup);
   } catch {
     return true;
   }

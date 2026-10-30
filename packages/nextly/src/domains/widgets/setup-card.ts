@@ -1,19 +1,10 @@
 /**
- * The setup card on the server: who it shows to, what it answers, and what
- * each reader's card remembers for them.
+ * The setup card on the server: who it shows to, what it answers, and the
+ * changes a reader makes to it.
  *
  * The card is a super-admin's alone (`dashboard-experience` D16), and only a
  * person's: an API key has no dashboard of its own. What it remembers per
- * reader is kept in the dashboard preferences (`nextly_dashboard_preferences`),
- * never in the layout, whose row means "this reader arranged the dashboard":
- * collapsing, dismissing or skipping a step there would stop the reader
- * following the default.
- *
- * - `setup-collapsed`: drawn as its one-line bar.
- * - `setup-dismissed`: removed by the reader, until they resume it.
- * - `setup-skipped`: the skippable steps they skipped.
- * - `setup-retired`: when it said "You're all set". It says so once, and the
- *   next load leaves it out for good.
+ * reader, and their setup as it counts it, are `setup-reader`'s.
  *
  * Handed to the card's declaration (`core-widgets/setup`) when the dashboard's
  * widgets are registered (`registerSetupCard`), so the widget list stays free
@@ -22,67 +13,30 @@
  * @module domains/widgets/setup-card
  */
 
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-
-import { container } from "../../di/container";
 import { getNextlyLogger } from "../../observability/logger";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { isSuperAdminOrRefuse } from "../../services/lib/permissions";
-import { DashboardPreferences } from "../dashboard/dashboard-preferences";
+import type { DashboardPreferences } from "../dashboard/dashboard-preferences";
 
 import { conditionProbe } from "./condition-probe";
 import { provideSetupCard } from "./core-widgets/setup";
 import { boundCaller } from "./declaration/read-services";
-import { skippedKinds, withSkips } from "./setup";
 import {
-  SETUP_SKIPPABLE_KINDS,
+  NO,
+  preferences,
+  readerSetup,
+  readSetupState,
+  skipKey,
+  YES,
+  type SetupState,
+} from "./setup-reader";
+import {
+  drawnSetup,
+  setupAllSet,
+  type SampleRoute,
   type SetupCardData,
   type SkippableSetupStepKind,
 } from "./setup-steps";
-
-/** How a yes is stored in a preference. */
-const YES = "true";
-const NO = "false";
-
-/** What a reader's setup card remembers for them. */
-export interface SetupState {
-  collapsed: boolean;
-  dismissed: boolean;
-  /** When the card said "You're all set", as an ISO 8601 instant. */
-  retiredAt: string | undefined;
-  skipped: ReadonlySet<SkippableSetupStepKind>;
-}
-
-/** The repository over the booted instance's database. */
-function preferences(): DashboardPreferences {
-  return new DashboardPreferences(container.get<DrizzleAdapter>("adapter"), {
-    warn: (message, context) =>
-      getNextlyLogger().warn({
-        kind: "dashboard-preferences-missing",
-        message,
-        ...context,
-      }),
-  });
-}
-
-/** What `userId`'s setup card remembers, each key read at once. */
-export async function readSetupState(
-  userId: string,
-  repository: DashboardPreferences = preferences()
-): Promise<SetupState> {
-  const [collapsed, dismissed, retiredAt, skipped] = await Promise.all([
-    repository.get(userId, "setup-collapsed"),
-    repository.get(userId, "setup-dismissed"),
-    repository.get(userId, "setup-retired"),
-    repository.get(userId, "setup-skipped"),
-  ]);
-  return {
-    collapsed: collapsed === YES,
-    dismissed: dismissed === YES,
-    retiredAt: retiredAt || undefined,
-    skipped: skippedKinds(skipped),
-  };
-}
 
 /**
  * Whether this caller is a person who holds super-admin. An API key is not:
@@ -107,9 +61,16 @@ export async function setupShownTo(caller: ReadCaller): Promise<boolean> {
 
 /**
  * The card's answer: the steps with this reader's skips, whether they
- * collapsed it, and whether every step is now done.
+ * collapsed it, and whether every step it draws is now done.
  *
- * When every step offered is done or skipped, the card says "You're all set"
+ * "All set" is judged over the steps the card DRAWS (`drawnSetup`), the one
+ * function the admin counts "N of M done" with, so a sample step the
+ * project's route refuses this reader never holds the card open. Only the
+ * admin can ask that route: the card's own load is answered with
+ * `sampleRefused: false`, and the admin, when the route refuses and what it
+ * draws is all done, asks again with `true` (`retire` on `PUT /api/dashboard/setup`).
+ *
+ * When every step drawn is done or skipped, the card says "You're all set"
  * this once, and that it did is recorded at `now`, so the next load leaves the
  * card out. A record that cannot be written leaves the card to say so again
  * next time, never the answer failed. Setup that is not known is never all
@@ -117,15 +78,15 @@ export async function setupShownTo(caller: ReadCaller): Promise<boolean> {
  */
 export async function setupCardData(
   caller: ReadCaller,
-  now: Date
+  now: Date,
+  route: SampleRoute = { sampleRefused: false }
 ): Promise<SetupCardData> {
   const repository = preferences();
-  const [state, answer] = await Promise.all([
-    readSetupState(caller.user.id, repository),
-    conditionProbe(caller).setup(),
-  ]);
-  const setup = withSkips(answer, state.skipped);
-  const allSet = setup.known && setup.done === setup.total;
+  const { state, setup } = await readerSetup(
+    conditionProbe(caller),
+    repository
+  );
+  const allSet = setupAllSet(drawnSetup(setup, route));
   if (allSet && state.retiredAt === undefined) {
     try {
       await repository.set(caller.user.id, "setup-retired", now.toISOString());
@@ -171,17 +132,10 @@ export async function changeSetupState(
     );
   }
   if (change.skip !== undefined) {
+    // Its own key, written alone: no read of the other step's skip, so a skip
+    // of the other step written at the same moment is never overwritten.
     const { kind, skipped } = change.skip;
-    const current = new Set<SkippableSetupStepKind>(
-      (await readSetupState(userId, repository)).skipped
-    );
-    if (skipped) current.add(kind);
-    else current.delete(kind);
-    // In the kinds' own order, so the stored value is one spelling per set.
-    const value = SETUP_SKIPPABLE_KINDS.filter(name => current.has(name)).join(
-      ","
-    );
-    writes.push(repository.set(userId, "setup-skipped", value));
+    writes.push(repository.set(userId, skipKey(kind), skipped ? YES : NO));
   }
   await Promise.all(writes);
   return readSetupState(userId, repository);

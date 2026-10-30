@@ -3,13 +3,19 @@
  * remembers for them, and the changes they make to it.
  *
  *   GET /api/dashboard/setup   `{ collapsed, dismissed, skipped, resumable }`
- *   PUT /api/dashboard/setup   `{ collapsed?, dismissed?, skip? }`, one or more
+ *   PUT /api/dashboard/setup   `{ collapsed?, dismissed?, skip?, retire? }`, one or more
  *
  * The reader is ALWAYS the signed-in person, never a parameter. An API key is
  * refused, as a person's own dashboard is not a key's; so is anyone but a
  * super-admin, whom the card is not offered to (`domains/widgets/setup-card`).
  * The steps themselves are the card's `load`; this keeps only the reader's own
  * choices, in the dashboard preferences.
+ *
+ * `retire` asks for "You're all set" to be judged again over the steps the
+ * card draws, with what only the admin can learn: whether the project's
+ * sample-content route refuses this reader. It is judged as the card's load
+ * judges it (`setupCardData`), and recorded only when every step drawn is
+ * done; a reader can retire only their own card.
  *
  * Internal to the admin, not published API.
  *
@@ -21,11 +27,15 @@ import { z } from "zod";
 import {
   changeSetupState,
   isSetupReader,
+  setupCardData,
+} from "../domains/widgets/setup-card";
+import {
   readSetupState,
   type SetupState,
-} from "../domains/widgets/setup-card";
+} from "../domains/widgets/setup-reader";
 import { SETUP_SKIPPABLE_KINDS } from "../domains/widgets/setup-steps";
 import { NextlyError } from "../errors/nextly-error";
+import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { readBoundedJsonBody } from "./read-json-body";
@@ -36,7 +46,7 @@ import { withErrorHandler } from "./with-error-handler";
 /** A change names a few booleans and one kind; nothing larger is a real one. */
 const MAX_SETUP_BODY_BYTES = 1024;
 
-/** The change a PUT may make: at least one of the three. */
+/** The change a PUT may make: at least one of the four. */
 const setupChange = z
   .object({
     collapsed: z.boolean().optional(),
@@ -48,21 +58,23 @@ const setupChange = z
       })
       .strict()
       .optional(),
+    retire: z.object({ sampleRefused: z.boolean() }).strict().optional(),
   })
   .strict()
   .refine(
     change =>
       change.collapsed !== undefined ||
       change.dismissed !== undefined ||
-      change.skip !== undefined,
-    { message: "Name at least one of collapsed, dismissed or skip." }
+      change.skip !== undefined ||
+      change.retire !== undefined,
+    { message: "Name at least one of collapsed, dismissed, skip or retire." }
   );
 
 /**
  * The signed-in super-admin behind the request, or a refusal: an API key as
  * "Only a signed-in person can …", anyone else as forbidden.
  */
-async function setupReader(req: Request): Promise<string> {
+async function setupReader(req: Request): Promise<ReadCaller> {
   const caller = await readCaller(
     await signedInPerson(req, "set up the project from the dashboard")
   );
@@ -71,7 +83,7 @@ async function setupReader(req: Request): Promise<string> {
       logContext: { reason: "the setup card is for super-admins" },
     });
   }
-  return caller.user.id;
+  return caller;
 }
 
 /**
@@ -89,14 +101,14 @@ function stateView(state: SetupState) {
 }
 
 export const getDashboardSetup = withErrorHandler(async (req: Request) => {
-  const userId = await setupReader(req);
-  return respondData(stateView(await readSetupState(userId)), {
+  const { user } = await setupReader(req);
+  return respondData(stateView(await readSetupState(user.id)), {
     headers: PRIVATE_NO_STORE_HEADERS,
   });
 });
 
 export const putDashboardSetup = withErrorHandler(async (req: Request) => {
-  const userId = await setupReader(req);
+  const caller = await setupReader(req);
   const parsed = setupChange.safeParse(
     await readBoundedJsonBody(req, MAX_SETUP_BODY_BYTES, {
       route: "dashboard-setup",
@@ -105,14 +117,20 @@ export const putDashboardSetup = withErrorHandler(async (req: Request) => {
   if (!parsed.success) {
     throw NextlyError.invalidInput({
       message:
-        "The body must name at least one of `collapsed` or `dismissed` (true or false), or `skip: { kind, skipped }` with a kind that may be skipped.",
+        "The body must name at least one of `collapsed` or `dismissed` (true or false), `skip: { kind, skipped }` with a kind that may be skipped, or `retire: { sampleRefused }`.",
     });
   }
-  const { collapsed, dismissed, skip } = parsed.data;
-  const state = await changeSetupState(userId, {
+  const { collapsed, dismissed, skip, retire } = parsed.data;
+  let state = await changeSetupState(caller.user.id, {
     ...(collapsed === undefined ? {} : { collapsed }),
     ...(dismissed === undefined ? {} : { dismissed }),
     ...(skip === undefined ? {} : { skip }),
   });
+  if (retire !== undefined) {
+    // After the change, so a skip sent with it counts; read again, as the
+    // retirement may now be recorded.
+    await setupCardData(caller, new Date(), retire);
+    state = await readSetupState(caller.user.id);
+  }
   return respondMutation("Saved.", stateView(state));
 });

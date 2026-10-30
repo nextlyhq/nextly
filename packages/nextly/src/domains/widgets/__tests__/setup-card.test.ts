@@ -32,7 +32,7 @@ vi.mock("../../../di/container", () => ({
   container: { get: () => ({}) },
 }));
 vi.mock("../condition-probe", () => ({
-  conditionProbe: () => ({ setup: steps }),
+  conditionProbe: (caller: unknown) => ({ caller, setup: steps }),
 }));
 // The caller a card's read services were bound for: the services stand for it.
 vi.mock("../declaration/read-services", () => ({
@@ -43,11 +43,11 @@ import type { ReadCaller } from "../../../services/dashboard/readable-resources"
 import { setupWidget } from "../core-widgets/setup";
 import {
   changeSetupState,
-  readSetupState,
   registerSetupCard,
   setupCardData,
   setupShownTo,
 } from "../setup-card";
+import { readSetupState } from "../setup-reader";
 import type { SetupAnswer } from "../setup-steps";
 
 const person: ReadCaller = { user: { id: "ana" } };
@@ -125,6 +125,43 @@ describe('"You\'re all set", once', () => {
     expect(await setupShownTo(person)).toBe(true);
   });
 
+  it("judges all set over the steps the card draws: a sample step the route refuses this reader holds nothing open", async () => {
+    // Builder off, no collection, nothing to create in, no sample route, Invite skipped:
+    // the card draws one tile, "1 of 1 done".
+    steps.mockResolvedValue({
+      known: true,
+      steps: [
+        { kind: "sample", status: "open" },
+        { kind: "invite", status: "open" },
+      ],
+      done: 0,
+      total: 2,
+    });
+    await changeSetupState("ana", { skip: { kind: "invite", skipped: true } });
+    // The must-differ half: where the route was not asked, the open sample step holds it open.
+    expect((await setupCardData(person, now)).allSet).toBe(false);
+    expect(stored.has("ana:setup-retired")).toBe(false);
+    const refused = await setupCardData(person, now, { sampleRefused: true });
+    expect(refused.allSet).toBe(true);
+    expect(stored.get("ana:setup-retired")).toBe(now.toISOString());
+  });
+
+  it("never passes over a sample step the route offers, nor one already answered", async () => {
+    steps.mockResolvedValue({
+      known: true,
+      steps: [
+        { kind: "sample", status: "open" },
+        { kind: "invite", status: "done" },
+      ],
+      done: 1,
+      total: 2,
+    });
+    expect(
+      (await setupCardData(person, now, { sampleRefused: false })).allSet
+    ).toBe(false);
+    expect(stored.has("ana:setup-retired")).toBe(false);
+  });
+
   it("counts a skipped step as done, so a skip can finish setup", async () => {
     await changeSetupState("ana", { skip: { kind: "invite", skipped: true } });
     const card = await setupCardData(person, now);
@@ -146,10 +183,19 @@ describe("what a reader's card remembers", () => {
     expect((await readSetupState("rui")).dismissed).toBe(false);
   });
 
-  it("stores skips in one spelling, and restores one", async () => {
-    await changeSetupState("ana", { skip: { kind: "invite", skipped: true } });
-    await changeSetupState("ana", { skip: { kind: "singles", skipped: true } });
-    expect(stored.get("ana:setup-skipped")).toBe("singles,invite");
+  it("keeps both of two skips written at once, and restores one", async () => {
+    // From two devices at the same moment: neither write may undo the other.
+    await Promise.all([
+      changeSetupState("ana", { skip: { kind: "invite", skipped: true } }),
+      changeSetupState("ana", { skip: { kind: "singles", skipped: true } }),
+    ]);
+    expect([...(await readSetupState("ana")).skipped].sort()).toEqual([
+      "invite",
+      "singles",
+    ]);
+    // One row per step.
+    expect(stored.get("ana:setup-skipped-invite")).toBe("true");
+    expect(stored.get("ana:setup-skipped-singles")).toBe("true");
     await changeSetupState("ana", {
       skip: { kind: "singles", skipped: false },
     });
