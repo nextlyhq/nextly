@@ -59,7 +59,10 @@ import { findConfigFile } from "../../../shared/lib/config-file";
 import { generatedTypesFile } from "../../../shared/lib/generated-output-paths";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
-import { adminComponentPlugins } from "./component-map-store";
+import {
+  adminComponentPlugins,
+  adminSiteDashboard,
+} from "./component-map-store";
 
 /** What the admin's server layout hands the check. */
 export interface AdminComponentCheckInput {
@@ -84,8 +87,10 @@ export async function checkAdminComponents(
   if (plugins === undefined) return;
 
   const registered = new Set(input.registeredComponentPaths);
-  // The site's own widgets draw through the map as the plugins' do.
-  const siteDashboard = input.config.admin?.dashboard;
+  // The site's own widgets draw through the map as the plugins' do, as the
+  // boot registered them: after every plugin's setup(), which may add one the
+  // config as written does not hold.
+  const siteDashboard = adminSiteDashboard();
   // Every use, not one per path: two widgets drawn with one missing component
   // are both named.
   const uses = componentUses(plugins, siteDashboard);

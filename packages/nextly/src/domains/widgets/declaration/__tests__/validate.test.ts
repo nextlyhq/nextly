@@ -524,6 +524,57 @@ describe("a widget declaration as startup receives it", () => {
     }
   });
 
+  it("refuses a preview case whose settings cannot be sent to the browser as they are", () => {
+    // A `filter` setting accepts any plain object, so its own type rule lets a
+    // value through that JSON would change: what separates the transport check
+    // from the setting check is a value the setting's type ACCEPTS.
+    const withFilter = (where: unknown) =>
+      problemsOf(
+        valid({
+          settings: {
+            collection: { type: "collection", label: "Collection" },
+            where: { type: "filter", label: "Filter", of: "collection" },
+          },
+          preview: [
+            { name: "Plain", data: { buckets: [] } },
+            { name: "Busy week", data: { buckets: [] }, settings: { where } },
+          ],
+        })
+      );
+    // The control: a plain filter passes both rules.
+    expect(withFilter({ state: { equals: "open" } })).toEqual([]);
+    for (const [value, said] of [
+      [new Date(0), "is a Date"],
+      [new Map(), "is a Map"],
+      [new (class Range {})(), "is a Range"],
+      [() => "open", "is a function"],
+      [Symbol("open"), "is a symbol"],
+    ] as const) {
+      expect(withFilter({ after: value }), said).toEqual([
+        `preview[1].settings cannot be sent to the browser as it is: preview[1].settings.where.after ${said}`,
+      ]);
+    }
+    // A whole settings object that is a class instance is refused by the same
+    // rule, before any value in it is read as a setting.
+    expect(
+      problemsOf(
+        valid({
+          preview: [
+            {
+              name: "Odd",
+              data: { buckets: [] },
+              settings: new (class Settings {
+                top = 3;
+              })(),
+            },
+          ],
+        })
+      )
+    ).toEqual([
+      "preview[0].settings cannot be sent to the browser as it is: preview[0].settings is a Settings",
+    ]);
+  });
+
   it("refuses preview data holding NaN or an infinity, as it refuses a card's data", () => {
     // JSON writes NaN and both infinities as `null`, so the preview would draw a number the
     // case does not hold. The same rule a card's data is held to says so, in the same words.

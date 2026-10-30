@@ -1382,8 +1382,13 @@ export class FieldGroupQueryService extends BaseService {
           // The read's verdicts, so every component instance relating to one
           // target shares one question rather than asking it afresh.
           targetVerdicts: access.targetVerdicts,
+          // And the match columns built from those verdicts' filters.
+          targetRuleMatches: access.targetRuleMatches,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
+          // Every language the read falls back through, so a target's
+          // localized rule filter is judged as a direct read judges it.
+          localeChain: access.localeChain,
           status: access.status,
         }
       );

@@ -22,7 +22,12 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -65,6 +70,11 @@ const BEFOREOP_SLUG = "poolreentrybeforeop";
 // transaction — the binding this fixture exercises. Its teardown also drops the
 // companion table (see `drop`).
 const LOCALIZED_DELETE_SLUG = "poolreentrylocdel";
+// A delete limited by a rule's filter on a field-group value: matching the
+// entry against it resolves the field group's table, which must be read on
+// the caller's transaction too. Its field group is torn down with it.
+const FILTERED_DELETE_SLUG = "poolreentryfiltdel";
+const FILTERED_DELETE_GROUP = "poolreentryseo";
 // A write whose outbox recording gate reads endpoint presence from a
 // synchronous out-of-band flag, never the database, so it takes no connection
 // inside the write transaction.
@@ -82,6 +92,7 @@ const SLUGS = [
   BEFOREOP_SLUG,
   LOCALIZED_DELETE_SLUG,
   GATE_SLUG,
+  FILTERED_DELETE_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -606,6 +617,81 @@ describePg(
       } finally {
         unregisterHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
         await handle?.destroy();
+      }
+    }, 30_000);
+
+    it("completes, refused, a delete its rule's filter limits by a field-group value, inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        // The rule's filter names a field-group path, so preparing the match
+        // resolves that group's table: on a pooled read it would wait here for
+        // the one connection the transaction holds. Such a filter is then
+        // refused as one that is not well formed, so the delete answers, and
+        // refuses, rather than hanging.
+        const metaTitleIsMine = () =>
+          ({
+            "seo.metaTitle": { equals: "mine" },
+          }) as unknown as boolean;
+        handle = await createTestNextly({
+          adapter,
+          fieldGroups: [
+            defineFieldGroup({
+              slug: FILTERED_DELETE_GROUP,
+              fields: [text({ name: "metaTitle" })],
+            }),
+          ],
+          collections: [
+            defineCollection({
+              slug: FILTERED_DELETE_SLUG,
+              access: {
+                read: () => true,
+                delete: metaTitleIsMine,
+              },
+              fields: [
+                text({ name: "title" }),
+                fieldGroup({ name: "seo", component: FILTERED_DELETE_GROUP }),
+              ],
+            }),
+          ],
+        });
+        const editor = await seatEditor(handle, FILTERED_DELETE_SLUG);
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        const created = await h.createEntry(
+          { collectionName: FILTERED_DELETE_SLUG, overrideAccess: true },
+          { title: "doomed", seo: { metaTitle: "mine" } }
+        );
+        const id = (created.data as { id: string }).id;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.deleteEntryInTransaction(tx, {
+              collectionName: FILTERED_DELETE_SLUG,
+              entryId: id,
+              user: { id: editor },
+            })
+          ),
+          15_000
+        );
+
+        // Refused in words: the caller may read the entry, and the filter
+        // matches nothing.
+        expect(result.success).toBe(false);
+        expect(result.statusCode).toBe(403);
+      } finally {
+        await handle?.destroy();
+        for (const stmt of [
+          `DROP TABLE IF EXISTS comp_${FILTERED_DELETE_GROUP}`,
+          `DELETE FROM dynamic_components WHERE slug = '${FILTERED_DELETE_GROUP}'`,
+          `DELETE FROM dynamic_field_groups WHERE slug = '${FILTERED_DELETE_GROUP}'`,
+        ]) {
+          try {
+            await boot?.executeQuery(stmt);
+          } catch {
+            // Best-effort: a registry this database does not carry.
+          }
+        }
       }
     }, 30_000);
 

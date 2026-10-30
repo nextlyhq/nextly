@@ -10,7 +10,10 @@
  */
 
 import { runWithAccessMemo } from "../../auth/access/request-memo";
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import {
+  scopeHoldsSuperAdmin,
+  type AuthenticatedScope,
+} from "../../auth/authenticated-scope";
 import {
   authorizeCaller,
   authorizeCallerForAny,
@@ -275,6 +278,9 @@ function asRouteCaller(userId: string, access: AccessOptions): AuthContext {
       permissions: [...scope.permissions],
       ...(scope.grants ? { grants: scope.grants } : {}),
       roles: [...(scope.roles ?? [])],
+      // Only a scope authentication made for a super-admin's full-access key
+      // carries that authority; one built by hand or narrowed carries none.
+      keyHoldsSuperAdmin: scopeHoldsSuperAdmin(scope),
     };
   }
   return {

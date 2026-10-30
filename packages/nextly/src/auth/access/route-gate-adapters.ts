@@ -29,13 +29,14 @@ import {
 } from "../../services/lib/permissions";
 import {
   apiKeyScopeFrom,
+  scopeHoldsSuperAdmin,
   type AuthenticatedScope,
 } from "../authenticated-scope";
 import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
-import { manageCounts, type Actor, type KeyActor } from "./actor";
-import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
+import { isSuperAdmin, type Actor, type KeyActor } from "./actor";
+import { storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";
@@ -52,6 +53,11 @@ import {
   userIsSuperAdmin,
   withHeldPermissions,
 } from "./resolve-actor";
+import {
+  RETIRED_MANAGE_PLAIN_ACTIONS,
+  isPlainOfRetiredManage,
+  isRetiredManage,
+} from "./retired-manage-permissions";
 import { allowsSome } from "./rule-answer";
 import {
   askEachLanguage,
@@ -99,8 +105,8 @@ function isAccessOperation(action: string): action is AccessOperation {
  * Whether one permission is an entity's operation, asked of the target with
  * its rules, rather than a permission alone. A route naming no resource
  * (`requiredPermission: "manage"`) asks about nothing a rule or a permission
- * row can name. A system resource a `manage-` permission still counts on
- * declares no rule, so it is a permission alone, unless an entity registered
+ * row can name. A system resource whose `manage-` permission is retired
+ * declares no rule, so its plain actions are a permission alone, unless an entity registered
  * rules under its name: those rules are read whatever the name.
  */
 function asksTheEntity(
@@ -111,7 +117,7 @@ function asksTheEntity(
   return (
     isAccessOperation(action) &&
     resource !== "" &&
-    (target !== undefined || !manageCounts(action, resource))
+    (target !== undefined || !isPlainOfRetiredManage(action, resource))
   );
 }
 
@@ -126,14 +132,29 @@ function callerOf(auth: AuthContext): GateCaller {
     : { userId: auth.userId };
 }
 
-/** The key's actor, from what authentication resolved; it makes no query. */
+/**
+ * The key's actor, from what authentication resolved; it makes no query. Its
+ * super-admin authority is the scope's, which only authentication gives.
+ */
 function keyActorOf(caller: GateCaller, key: AuthenticatedScope): KeyActor {
   return actorForKey({
     keyId: caller.keyId ?? "",
     userId: caller.userId,
     grants: key.grants ?? [],
     roles: key.roles ?? caller.roles ?? [],
+    superAdmin: scopeHoldsSuperAdmin(key),
   });
+}
+
+/**
+ * Whether a key holds every permission by its maker's super-admin authority,
+ * as a super-admin's session does, whatever its stored list names. Asked
+ * first by the single-permission gate and the any-of gate alike, so a key the
+ * one lets through the other does not refuse on a list that lags the
+ * catalogue.
+ */
+function keyHoldsEveryPermission(actor: KeyActor): boolean {
+  return isSuperAdmin(actor);
 }
 
 /** The caller's actor: a key's from its scope, a user's looked up. */
@@ -165,7 +186,7 @@ export function routeGateVerdict(
     resource,
     rules,
     () => hasPermission(auth.userId, action, resource),
-    appliesFilter
+    appliesFilter ? "applied" : "refused"
   );
 }
 
@@ -409,8 +430,14 @@ export async function routeGateCapabilities(
 ): Promise<RouteCapabilities> {
   const answer = () =>
     entityCapabilities(caller, entities, rules, languageOf, hasLifecycle);
-  // A key never carries super-admin authority through the gates.
-  if (caller.key) return { isSuperAdmin: false, entities: await answer() };
+  // A key carries super-admin authority only as authentication gave it: a
+  // full-access key whose maker is an active super-admin.
+  if (caller.key) {
+    return {
+      isSuperAdmin: scopeHoldsSuperAdmin(caller.key),
+      entities: await answer(),
+    };
+  }
   return withHeldPermissions(caller.userId, async held => ({
     isSuperAdmin: held.superAdmin,
     entities: await answer(),
@@ -530,8 +557,16 @@ async function capability(
   rules: RouteRules
 ): Promise<boolean> {
   const verdict = await aboutSubject(permissionSlug(action, resource), () =>
-    gateVerdict(caller, action, resource, rules, () =>
-      userHoldsPermission(caller.userId, action, resource)
+    gateVerdict(
+      caller,
+      action,
+      resource,
+      rules,
+      () => userHoldsPermission(caller.userId, action, resource),
+      // A cell is a hint of what the caller may try, and the write it offers
+      // applies the rule's filter, so a cell answers yes under a filter for
+      // every action.
+      "cell"
     )
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
@@ -550,7 +585,7 @@ function gateVerdict(
   resource: string,
   rules: RouteRules,
   permissionWithoutService: () => Promise<boolean>,
-  appliesFilter = false
+  readFilter: ReadFilterUse = "refused"
 ): Promise<GateVerdict> {
   const registered =
     resource === "" ? undefined : rules?.getRegisteredTarget(resource);
@@ -572,32 +607,30 @@ function gateVerdict(
     principal: null,
     rules,
     permissionWithoutService,
-    appliesFilter,
+    appliesFilter: readFilter === "applied",
+    // A yes or no answers yes under a filter for a read alone: the caller may
+    // read the entries the filter matches. A write under a filter names no
+    // entry and applies no filter here, so its yes would let the caller act
+    // past the filter.
+    asksSomeEntries:
+      readFilter === "cell" ||
+      (readFilter === "some-entries" && action === "read"),
   });
 }
 
-/** Whether a signed-in user holds any permission holding the action. */
-async function userHoldsAnswering(
-  userId: string,
-  action: string,
-  resource: string
-): Promise<boolean> {
-  for (const permission of answeringPermissions(action, resource)) {
-    if (
-      await userHoldsPermission(userId, permission.action, permission.resource)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
+/**
+ * What an asker does with a collection rule's filter: applies it to the
+ * entries it reads (`applied`); asks only a yes or no, which a read's filter
+ * answers yes and a write's no (`some-entries`); shows a capability cell,
+ * which any action's filter answers yes, as the request it offers applies the
+ * filter (`cell`); or neither, and refuses it (`refused`).
+ */
+type ReadFilterUse = "applied" | "some-entries" | "cell" | "refused";
 
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
  * slug; a session, with the access-control service, by super-admin authority
- * and then the permission, and without it by the permission alone. On a
- * system resource its `manage-` permission holds it too, as it does for the
- * decision.
+ * and then the permission, and without it by the permission alone.
  */
 async function permissionVerdict(
   caller: GateCaller,
@@ -605,8 +638,20 @@ async function permissionVerdict(
   resource: string,
   rules: RouteRules
 ): Promise<GateVerdict> {
+  // A retired `manage-` permission, asked by a gate written before it was
+  // retired, is held only by holding all four plain permissions it stood
+  // for, each asked here as any other: the decision answers it the same way.
+  if (isRetiredManage(action, resource)) {
+    for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
+      if (!(await permissionVerdict(caller, plain, resource, rules)).allowed) {
+        return verdictOf(false);
+      }
+    }
+    return verdictOf(true);
+  }
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
+    if (keyHoldsEveryPermission(actor)) return verdictOf(true);
     const today = storedSlugHolds(caller.key.permissions, action, resource);
     // The decision reads the grant's action and resource, which agree with
     // the stored slug unless a grant was stored under a slug of its own.
@@ -619,15 +664,15 @@ async function permissionVerdict(
   }
   return verdictOf(
     (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
-      (await userHoldsAnswering(caller.userId, action, resource))
+      (await userHoldsPermission(caller.userId, action, resource))
   );
 }
 
 /**
  * The verdict when any one of several permissions will do. Today a key holds
- * one by its stored slug and a session by its database permissions, a system
- * resource's `manage-` permission counting on it as the decision counts it,
- * and no rule is read for either.
+ * one by its stored slug and a session by its database permissions, and no
+ * rule is read for either. A retired `manage-` permission among them is held
+ * as {@link permissionVerdict} holds it.
  */
 export function anyPermissionVerdict(
   auth: AuthContext,
@@ -643,9 +688,29 @@ async function anyPermissionVerdictOf(
   permissions: readonly RoutePermission[],
   rules: RouteRules
 ): Promise<GateVerdict> {
+  // A retired `manage-` permission in the list is asked as the single gate
+  // asks it, held only by the four plain permissions it stood for, never by
+  // its own stored row; the rest are asked together, any one of them doing.
+  const retired = permissions.filter(({ action, resource }) =>
+    isRetiredManage(action, resource)
+  );
+  if (retired.length > 0) {
+    for (const { action, resource } of retired) {
+      if ((await permissionVerdict(caller, action, resource, rules)).allowed) {
+        return verdictOf(true);
+      }
+    }
+    const rest = permissions.filter(
+      ({ action, resource }) => !isRetiredManage(action, resource)
+    );
+    return rest.length > 0
+      ? anyPermissionVerdictOf(caller, rest, rules)
+      : verdictOf(false);
+  }
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
+    if (keyHoldsEveryPermission(actor)) return verdictOf(true);
     const today = permissions.some(({ action, resource }) =>
       storedSlugHolds(key.permissions, action, resource)
     );
@@ -661,12 +726,7 @@ async function anyPermissionVerdictOf(
     );
     return verdictOf(today);
   }
-  const today = await hasAnyPermission(
-    caller.userId,
-    permissions.flatMap(({ action, resource }) =>
-      answeringPermissions(action, resource)
-    )
-  );
+  const today = await hasAnyPermission(caller.userId, [...permissions]);
   // The user's actor is resolved only while a test listens, and once.
   let actor: Promise<Actor> | undefined;
   const userActor = () => (actor ??= actorForUser(caller.userId));
@@ -742,7 +802,7 @@ async function decidedOne(
  *
  * `action` is a plain string rather than the operation union, because a
  * permission's action is not bounded by those six: `export-submissions` and
- * `manage-settings` are both real grants.
+ * `manage-background-jobs` are both real grants.
  */
 export async function callerMayPerform(
   scope: AuthenticatedScope | undefined,
@@ -754,12 +814,25 @@ export async function callerMayPerform(
   const rules = getRBACService();
   const caller = probedCaller(scope, user);
   if (!action || !resource) return refusedEmpty(caller, action, resource);
-  if (!caller.key) return sessionAnswer(caller.userId, action, resource, rules);
+  if (!caller.key) {
+    return sessionAnswer(
+      caller.userId,
+      action,
+      resource,
+      rules,
+      "some-entries"
+    );
+  }
   // A key is judged on its own scope, the route gate's way, with or without
   // the service.
   return (
-    await gateVerdict(caller, action, resource, rules, () =>
-      Promise.resolve(false)
+    await gateVerdict(
+      caller,
+      action,
+      resource,
+      rules,
+      () => Promise.resolve(false),
+      "some-entries"
     )
   ).allowed;
 }
@@ -800,8 +873,8 @@ export async function callerHoldsAny(
 /**
  * Whether the caller holds the permission a slug names, as a dashboard
  * widget's `requiredPermission` and a document lock's release ask it. A key
- * holds it by the stored slug alone; a signed-in user is asked as
- * `ctx.caller.can` asks one.
+ * holds it by the stored slug alone; a signed-in user is asked as a
+ * capability cell asks one, a rule's filter counting as the permission held.
  */
 export function holdsPermissionAnswer(
   slug: string,
@@ -826,8 +899,18 @@ async function heldPermission(
       userId: caller.userId,
       grants: caller.grants ?? [],
       roles: caller.roles,
+      superAdmin: caller.keyHoldsSuperAdmin === true,
     });
-    const today = storedSlugHolds(caller.permissions, action, resource);
+    // A key carrying its maker's super-admin authority holds every
+    // permission, as a super-admin's session does.
+    if (isSuperAdmin(actor)) return true;
+    // A retired `manage-` permission is held as the route gate holds it: by
+    // all four plain permissions it stood for, each by its stored slug.
+    const today = isRetiredManage(action, resource)
+      ? RETIRED_MANAGE_PLAIN_ACTIONS.every(plain =>
+          storedSlugHolds(caller.permissions, plain, resource)
+        )
+      : storedSlugHolds(caller.permissions, action, resource);
     // Two steps from today's answer to the decision's, each named apart: the
     // grant rather than the stored slug, then the target's rules read.
     const byPermission = decidePermission(actor, action, resource).allowed;
@@ -841,24 +924,60 @@ async function heldPermission(
   // Refused without the service before the slug is read, as it always was.
   if (!rules) return refusedWithoutService(user, action, resource);
   if (!action || !resource) return refusedEmpty(user, action, resource);
-  return sessionAnswer(caller.userId, action, resource, rules);
+  // Holding a permission is a hint of what the caller may do, as a capability
+  // cell is: a lock's release and the dashboard's offers read a filter as the
+  // permission held, and the write itself applies the filter.
+  return sessionAnswer(caller.userId, action, resource, rules, "cell");
 }
 
 /**
  * A signed-in user's answer to a caller check: the route gate's, a yes or a
  * no, and refused without the access-control service. A lookup that failed
- * fails the check, as it always has, rather than answering no.
+ * fails the check, as it always has, rather than answering no. `readFilter`
+ * says what a rule's filter answers: a yes or no (`some-entries`), or a hint
+ * of what the caller holds (`cell`).
  */
 async function sessionAnswer(
   userId: string,
   action: string,
   resource: string,
-  rules: RouteRules
+  rules: RouteRules,
+  readFilter: "some-entries" | "cell"
 ): Promise<boolean> {
   const caller: GateCaller = { userId };
   if (!rules) return refusedWithoutService(caller, action, resource);
-  const verdict = await gateVerdict(caller, action, resource, rules, () =>
-    Promise.resolve(false)
+  const verdict = await gateVerdict(
+    caller,
+    action,
+    resource,
+    rules,
+    () => Promise.resolve(false),
+    readFilter
+  );
+  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
+  return verdict.allowed;
+}
+
+/**
+ * Whether the signed-in user `userId` may perform `action` on `resource`, as
+ * the route gate decides it for that user's session, with the rules `rules`
+ * holds now: a read a rule's filter limits answers yes, since the user may
+ * read the entries it matches (`nextly.access.check`). A lookup that fails
+ * throws, as the gate's does.
+ */
+export async function sessionMayPerform(
+  userId: string,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<boolean> {
+  const verdict = await gateVerdict(
+    { userId },
+    action,
+    resource,
+    rules,
+    () => Promise.resolve(false),
+    "some-entries"
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   return verdict.allowed;
@@ -909,6 +1028,9 @@ export async function schemaListed<T extends ListedCollection>(
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
+    // A key carrying its maker's super-admin authority is shown every one,
+    // as a super-admin's session is.
+    if (isSuperAdmin(actor)) return [...collections];
     return keptWhere(collections, slug =>
       readByPermission(
         actor,
@@ -925,8 +1047,7 @@ export async function schemaListed<T extends ListedCollection>(
   const actor = await actorForUserFailingClosed(caller.userId);
   // The super-admin authority the actor's roles carry counts too: it is what
   // each collection's permission check passed first, and it holds when the
-  // cached check above failed but the roles were read. So does a system
-  // resource's `manage-` permission, as the decision counts it.
+  // cached check above failed but the roles were read.
   return keptWhere(collections, slug =>
     readByPermission(
       actor,
