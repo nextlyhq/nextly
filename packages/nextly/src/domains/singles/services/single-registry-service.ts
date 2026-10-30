@@ -49,6 +49,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   moveWebhookRecording,
   renameEntity,
@@ -204,6 +205,9 @@ export class SingleRegistryService extends BaseRegistryService<
   DynamicSingleRecord,
   SingleMigrationStatus
 > {
+  // Every read of one looks its registry row up, so it comes from the registry row cache.
+  protected override readonly readsRowsFromCache = true;
+
   protected readonly registryTableName = "dynamic_singles";
   protected readonly resourceType = "Single";
   protected readonly tableNamePrefix = "single_";
@@ -310,6 +314,14 @@ export class SingleRegistryService extends BaseRegistryService<
   }
 
   /**
+   * The Single's registry row as stored, past the registry row cache; null if it is missing. For
+   * a schema save, which checks the stored schema version and advances it.
+   */
+  async getSingleForWrite(slug: string): Promise<DynamicSingleRecord | null> {
+    return this.findRecordForWrite(slug);
+  }
+
+  /**
    * Every Single's slug and label, read without the rest of its record: what
    * a screen naming every Single needs.
    */
@@ -383,7 +395,7 @@ export class SingleRegistryService extends BaseRegistryService<
 
     await assertGlobalResourceSlugAvailable(this.adapter, data.slug);
 
-    const existing = await this.getSingleBySlug(data.slug);
+    const existing = await this.findRecordForWrite(data.slug);
     if (existing) {
       // §13.8: generic "Resource already exists." — slug stays in logContext
       // for operator visibility but never on the wire.
@@ -402,6 +414,8 @@ export class SingleRegistryService extends BaseRegistryService<
         record,
         { returning: "*" }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.publishRegisteredRecording(data);
 
@@ -456,6 +470,8 @@ export class SingleRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
 
     this.publishRegisteredRecording(data);
 
@@ -506,7 +522,7 @@ export class SingleRegistryService extends BaseRegistryService<
   ): Promise<DynamicSingleRecord> {
     this.logger.debug("Updating Single", { slug });
 
-    const existing = await this.getSingle(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     const targetSlug = data.slug ?? slug;
     await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
@@ -652,6 +668,8 @@ export class SingleRegistryService extends BaseRegistryService<
               targetSlug,
               updateData
             );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -797,7 +815,7 @@ export class SingleRegistryService extends BaseRegistryService<
   ): Promise<void> {
     this.logger.debug("Deleting Single", { slug, force: options?.force });
 
-    const existing = await this.getSingle(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     if (!options?.force) {
       // Refused in words that say a Single is not deleted from here, a fact
@@ -839,6 +857,8 @@ export class SingleRegistryService extends BaseRegistryService<
       const count = await this.adapter.transaction(async tx => {
         return deleteEntityRegistryRow(tx, "single", slug, tables);
       });
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (count === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -915,7 +935,7 @@ export class SingleRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.getSingleBySlug(config.slug);
+        const existing = await this.findRecordForWrite(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
 
         if (!existing) {
@@ -1249,7 +1269,9 @@ export class SingleRegistryService extends BaseRegistryService<
       return { status: "error", error: message };
     }
 
-    const refetched = await this.getSingleBySlug(config.slug).catch(() => null);
+    const refetched = await this.findRecordForWrite(config.slug).catch(
+      () => null
+    );
     if (refetched) {
       this.logger.warn(
         `Code-first sync: "${config.slug}" already in DB — treating as unchanged`,
