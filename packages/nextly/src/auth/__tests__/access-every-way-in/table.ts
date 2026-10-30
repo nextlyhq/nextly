@@ -879,8 +879,9 @@ function visitorAnswer(row: Row, action: Action): Verdict {
  * - a collection's read rule may answer a well-formed filter instead of
  *   `true`, which allows the entries it matches: a list or a count returns
  *   those alone, and a read of the probe entry, which it matches, is allowed.
- *   A delete rule may answer one too: the entry inside it is deleted and its
- *   twin outside it refused. A filter from any other rule refuses.
+ *   An update, delete, publish or unpublish rule may answer one too: the
+ *   entry inside it is changed and its twin outside it refused. A filter from
+ *   any other rule refuses.
  */
 export function oneAnswer(row: Row): Verdict {
   if (row.action === "new-pub") {
