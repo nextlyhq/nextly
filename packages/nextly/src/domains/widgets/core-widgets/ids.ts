@@ -23,7 +23,7 @@ export const CORE_WIDGET_ID = {
   needsAttention: "core/needs-attention",
   recentlyEdited: "core/recently-edited",
   upcomingReleases: "core/upcoming-releases",
-  recentActivity: "core/recent-activity",
+  teamActivity: "core/team-activity",
   count: "core/count",
   breakdown: "core/breakdown",
   note: "core/note",
@@ -47,7 +47,7 @@ export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.recentlyEdited,
   CORE_WIDGET_ID.upcomingReleases,
-  CORE_WIDGET_ID.recentActivity,
+  CORE_WIDGET_ID.teamActivity,
   CORE_WIDGET_ID.count,
   CORE_WIDGET_ID.breakdown,
   CORE_WIDGET_ID.note,
@@ -68,7 +68,7 @@ void everyIdOrdered;
 /**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
  * there is one path to the default whoever wrote it: the onboarding card, then
- * Needs attention, Create, Recently edited, Recent activity, Content and
+ * Needs attention, Create, Recently edited, Team activity, Content and
  * Upcoming releases, each at its widget's starting size. The cards that share
  * a row share a height, so the default dashboard tiles: Needs attention and
  * Create at 4 rows, the two activity lists at 5. A site's own `defaultLayout`
@@ -85,7 +85,7 @@ export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.recentlyEdited,
-  CORE_WIDGET_ID.recentActivity,
+  CORE_WIDGET_ID.teamActivity,
   CORE_WIDGET_ID.contentTable,
   CORE_WIDGET_ID.upcomingReleases,
 ].map(widget => ({ widget }));

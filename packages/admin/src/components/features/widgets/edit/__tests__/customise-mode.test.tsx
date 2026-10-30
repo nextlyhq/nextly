@@ -18,6 +18,7 @@ import type {
   WidgetLayoutFacts,
 } from "@admin/types/dashboard/widgets";
 
+import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
 import {
@@ -30,6 +31,7 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -45,6 +47,11 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
     isLoading: false,
     error: null,
   }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -194,10 +201,10 @@ function renderDashboard() {
   );
   // The page's heading beside the grid, so the outline is the page's.
   return render(
-    <>
+    <DashboardChromeProvider>
       <WelcomeHeader />
       <WidgetGrid />
-    </>,
+    </DashboardChromeProvider>,
     { wrapper: Wrapper }
   );
 }
@@ -409,7 +416,7 @@ describe("the bar", () => {
     await beginEditing();
     const mains = screen.getAllByRole("heading", { level: 1 });
     expect(mains).toHaveLength(1);
-    expect(mains[0]).toHaveTextContent("Welcome, Dev");
+    expect(mains[0]).toHaveTextContent("Acme Site");
   });
 
   it("marks unsaved changes only while there are some", async () => {
