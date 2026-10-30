@@ -29,6 +29,10 @@ import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import {
+  PUBLIC_ROLE_SLUG,
+  publicRoleMade,
+} from "../../domains/auth/services/public-role";
+import {
   MAX_ROLE_HIERARCHY_DEPTH,
   walkRoleGraph,
 } from "../../domains/auth/services/role-graph";
@@ -379,6 +383,38 @@ const ACTOR_CACHE_MAX_ENTRIES = 10_000;
 const actorCache = new Map<string, KeptActor>();
 
 /**
+ * Whether what this process kept under `key` may still be served: the role
+ * version it was read under stands and it has not expired. When it may, the
+ * request's memo of `key` is told when it expires, so a request that keeps
+ * serving its own copy never outlives this one: without that, a request
+ * running past the minute would go on serving what a change made through
+ * another instance, unseen by the role version, had replaced. Shared by
+ * every cache here, so each is bounded the same way.
+ */
+function keptStillServes(
+  key: string,
+  kept: { readonly epoch: string; readonly expiresAt: number }
+): boolean {
+  if (!stampIsCurrent(kept.epoch) || kept.expiresAt <= Date.now()) {
+    return false;
+  }
+  answersHoldUntil(key, kept.expiresAt);
+  return true;
+}
+
+/**
+ * When what was read under `key` just now stops being served: after the
+ * minute, or at `validUntil`, the soonest expiry of a role assignment it came
+ * from, whichever is first. The request's memo of `key` is told too, so
+ * nothing the request keeps outlives what this process would keep.
+ */
+function keptUntil(key: string, validUntil: number | undefined): number {
+  const expiresAt = cacheExpiry(Date.now(), ACTOR_CACHE_TTL_MS, validUntil);
+  answersHoldUntil(key, expiresAt);
+  return expiresAt;
+}
+
+/**
  * The user's actor, read now with nothing kept: one walk of their roles, then
  * those roles' slugs and grants. Throws on a failed read.
  */
@@ -424,22 +460,14 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
   const kept = actorCache.get(userId);
   if (kept) {
     actorCache.delete(userId);
-    if (stampIsCurrent(kept.epoch) && kept.expiresAt > Date.now()) {
+    if (keptStillServes(userId, kept)) {
       // Most recently asked last, so the oldest-asked goes first when full.
       actorCache.set(userId, kept);
-      answersHoldUntil(userId, kept.expiresAt);
       return kept.actor;
     }
   }
   const actor = await loadActor(userId);
-  const expiresAt = cacheExpiry(
-    Date.now(),
-    ACTOR_CACHE_TTL_MS,
-    actor.validUntil
-  );
-  // Nothing the request keeps about this user outlives what this process
-  // would keep: these roles, and the kept actor's own life.
-  answersHoldUntil(userId, expiresAt);
+  const expiresAt = keptUntil(userId, actor.validUntil);
   if (stampIsCurrent(resolvedUnder)) {
     if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
       const oldest = actorCache.keys().next().value;
@@ -460,6 +488,136 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
  */
 function actorThisRequest(userId: string): Promise<ResolvedActor> {
   return keptForRequest(userId, "actor", () => actorOnPool(userId));
+}
+
+/** The Public role's grants as this process keeps them, as an actor is kept. */
+interface KeptPublicGrants {
+  readonly grants: readonly GrantedPermission[];
+  /** The role version they were read under. */
+  readonly epoch: string;
+  readonly expiresAt: number;
+}
+
+let publicGrantsKept: KeptPublicGrants | undefined;
+
+/**
+ * The key the Public role's grants are kept under for a request, beside each
+ * user's. A role slug with a prefix no user id carries, so it names no user.
+ */
+const PUBLIC_GRANTS_KEY = `role:${PUBLIC_ROLE_SLUG}`;
+
+/** What reading the Public role's id needs of `nextly_meta`. */
+interface MetaReader {
+  get<T>(key: string, executor?: unknown): Promise<T | null>;
+}
+
+/**
+ * A database of the caller's own that the Public role is read on, as a
+ * signed-in user's grants are read on it (`hasPermission`'s `dialect`): the
+ * reader of that database's `nextly_meta`, and the dialect its role and
+ * permission tables are named by. Absent, the configured database is read,
+ * through the global container, which a setup holding its own database may
+ * not have filled, or may have filled for another instance.
+ */
+export interface PublicRoleDatabase {
+  readonly meta: MetaReader;
+  readonly dialect: string;
+}
+
+/**
+ * The Public role's id, once boot seeding has recorded making it, and `null`
+ * before: until then the slug may still be held by a site's own role, whose
+ * grants are not visitors'. Read on `own` where given, else the configured
+ * database. Throws on a failed read.
+ */
+async function publicRoleId(
+  executor?: unknown,
+  own?: PublicRoleDatabase
+): Promise<string | null> {
+  const meta = own?.meta ?? container.get<MetaReader>("metaService");
+  const made = await publicRoleMade({
+    get: <T>(key: string) => meta.get<T>(key, executor),
+  });
+  if (!made) return null;
+  const { roles } = own ? getDialectTables(own.dialect) : getTablesLazy();
+  const [row] = await rbacQuery(executor)
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.slug, PUBLIC_ROLE_SLUG))
+    .limit(1);
+  return row === undefined ? null : String(row.id);
+}
+
+/**
+ * The Public role's grants, read now with nothing kept: none while the role is
+ * not made. The role inherits no other (its writers refuse that), so its own
+ * grants are all it holds. Throws on a failed read.
+ */
+async function loadPublicGrants(
+  executor?: unknown,
+  own?: PublicRoleDatabase
+): Promise<GrantedPermission[]> {
+  const roleId = await publicRoleId(executor, own);
+  if (roleId === null) return [];
+  return grantsOf(PUBLIC_GRANTS_KEY, new Set([roleId]), executor, own?.dialect);
+}
+
+/**
+ * The Public role's grants on the pool: what this process kept, while the role
+ * version they were read under stands and before they expire, and otherwise
+ * read now and kept, exactly as a user's actor is (`actorOnPool`).
+ */
+async function publicGrantsOnPool(): Promise<readonly GrantedPermission[]> {
+  const resolvedUnder = await refreshEpoch();
+  const kept = publicGrantsKept;
+  if (kept && keptStillServes(PUBLIC_GRANTS_KEY, kept)) return kept.grants;
+  const grants = await loadPublicGrants();
+  // No role assignment is behind them, so only the minute bounds them.
+  const expiresAt = keptUntil(PUBLIC_GRANTS_KEY, undefined);
+  if (stampIsCurrent(resolvedUnder)) {
+    publicGrantsKept = { grants, epoch: resolvedUnder, expiresAt };
+  }
+  return grants;
+}
+
+/**
+ * The permissions the Public role grants, which are what a visitor holds, as
+ * their rows name them, sorted by slug. None until boot seeding has made the
+ * role.
+ *
+ * With `executor`, read on the caller's transaction and kept nowhere, as a
+ * user's lookups are inside one; with `own` too, on a database of the
+ * caller's own (`executor` its handle), by that database's `nextly_meta` and
+ * dialect. Otherwise read once per request on the pool, and kept per process
+ * behind the role version.
+ *
+ * A lookup that fails refuses rather than answering empty, as a user's do:
+ * an empty list would judge visitors by a role that holds nothing, which is
+ * not the role the site configured.
+ *
+ * @throws NextlyError when the Public role or its grants cannot be read.
+ */
+export async function listPublicGrants(
+  executor?: unknown,
+  own?: PublicRoleDatabase
+): Promise<GrantedPermission[]> {
+  try {
+    // A database of the caller's own is never answered from, or kept in,
+    // what is kept for the configured one.
+    if (executor !== undefined || own !== undefined) {
+      return await loadPublicGrants(executor, own);
+    }
+    // A list of its own for each caller: a rule handed it may change it.
+    return [
+      ...(await keptForRequest(
+        PUBLIC_GRANTS_KEY,
+        "grants",
+        publicGrantsOnPool
+      )),
+    ];
+  } catch (cause) {
+    throw unreadable(cause, { reason: "public-grants-unreadable" });
+  }
 }
 
 /**
@@ -725,13 +883,16 @@ async function loadEffectiveGrants(
 async function grantsOf(
   userId: string,
   roleIds: ReadonlySet<string>,
-  executor?: unknown
+  executor?: unknown,
+  // The dialect `executor` reads, when it is a database of the caller's own;
+  // absent, the configured one.
+  dialect?: string
 ): Promise<GrantedPermission[]> {
   if (roleIds.size === 0) {
     return [];
   }
 
-  const t = getTablesLazy();
+  const t = dialect ? getDialectTables(dialect) : getTablesLazy();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { rolePermissions, permissions } = t as any;
 
@@ -923,6 +1084,7 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
  */
 function clearInMemoryTiers(): void {
   actorCache.clear();
+  publicGrantsKept = undefined;
 }
 
 /**
@@ -1069,7 +1231,11 @@ export async function invalidatePermissionCache(
   // an actor is one walk of a user's roles. A role change is rare; guessing
   // at the subset is how a demotion survives.
   if (userId) actorCache.delete(userId);
-  if (roleId) actorCache.clear();
+  // The Public role's grants go too: the role changed may be Public.
+  if (roleId) {
+    actorCache.clear();
+    publicGrantsKept = undefined;
+  }
 
   await publishRetirement();
 }
