@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, group, repeater, text } from "../../../config";
 import {
   createTestNextly,
@@ -122,7 +123,12 @@ describe.each(getConfiguredTestDialects())(
         slug: "site-meta",
         entryId: held.entryId,
         versionNo: held.versionNo!,
-        user: superAdmin,
+        // Stored, so the update gate the restore asks finds its role: role
+        // names a caller hands in grant nothing.
+        user: {
+          ...superAdmin,
+          id: await superAdminUser(current, superAdmin.id),
+        },
       });
       await singles.update(
         "site-meta",
