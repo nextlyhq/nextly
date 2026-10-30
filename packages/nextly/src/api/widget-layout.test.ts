@@ -203,6 +203,7 @@ interface LayoutPayload {
   available?: string[];
   version?: number;
   source?: string;
+  arranged?: boolean;
   scope?: string;
   defaultPlacements?: WidgetPlacement[];
   widgets?: Record<
@@ -332,6 +333,25 @@ describe("GET /api/dashboard/layout", () => {
     // Sorted by the reader's own order, not the registry's -- and the hidden
     // one still comes back, or nothing could ever put it back.
     expect(body.placements?.map(p => p.id)).toEqual(["p2", "p1"]);
+  });
+
+  it("says whether the reader arranged the dashboard: an arranged row, a row of dismissals alone, no row", async () => {
+    registerWidget(widget({ id: "core/a" }));
+    const placements: WidgetPlacement[] = [
+      { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: true },
+    ];
+
+    stored = { version: 4, layout: serializeLayout(placements) };
+    expect((await bodyOf(await getWidgetLayout(getReq()))).arranged).toBe(true);
+    // A card dismissed at rest leaves a row that still follows the default.
+    stored = { version: 5, layout: serializeLayout(placements, false) };
+    const dismissed = await bodyOf(await getWidgetLayout(getReq()));
+    expect(dismissed.source).toBe("own");
+    expect(dismissed.arranged).toBe(false);
+    stored = undefined;
+    expect((await bodyOf(await getWidgetLayout(getReq()))).arranged).toBe(
+      false
+    );
   });
 
   it("serves a row whose ids collide, without leaking the repair onto the wire", async () => {

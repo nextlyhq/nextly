@@ -576,6 +576,9 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       available,
       version: stored.version,
       source,
+      // Whether the reader has arranged this dashboard, not merely dismissed a card or saved a
+      // setting on one: a card is then removed from the row they arranged rather than hidden.
+      arranged,
       // Over the cards withheld from what they were handed, so a save staged
       // before one of those verdicts changed is refused rather than dropping
       // a card it never held.

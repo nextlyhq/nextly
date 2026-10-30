@@ -767,6 +767,29 @@ describe("a widget declaration as startup receives it", () => {
       ).toEqual([editorFault("blank"), editorFault("bare")]);
     });
 
+    it("marking up to three quick, and refuses a fourth in the one report of every fault", () => {
+      const choice = (label: string) =>
+        setting.select({
+          label,
+          options: [
+            { label: "One", value: "one" },
+            { label: "Two", value: "two" },
+          ],
+          defaultValue: "one",
+          quick: true,
+        });
+      const three = { a: choice("A"), b: choice("B"), c: choice("C") };
+      expect(problemsOf(valid({ settings: three }))).toEqual([]);
+      // A fourth, beside a fault of another field, so both are reported together.
+      const problems = problemsOf(
+        valid({ settings: { ...three, d: choice("D") }, view: 7 })
+      );
+      expect(problems).toContain(
+        'settings "a", "b", "c", "d" are all marked quick; a widget may mark at most three'
+      );
+      expect(problems.length).toBeGreaterThan(1);
+    });
+
     it("over the limit, still saying so when one is malformed", () => {
       const many = Object.fromEntries(
         Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [
