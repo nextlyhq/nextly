@@ -183,155 +183,160 @@ const takeLiveIn = (collection: string, id: string, locale: string) =>
     `?locale=${locale}`
   );
 
-// The rule answers by the language alone, so these are the route's and the
-// gate's logic, on the database every run has. Each rule is answered in the
-// language a write changes: one refusing German refuses only German writes,
-// and one allowing only German allows only those.
-describe.each([
-  {
-    rule: "refuses German",
-    update: (context: AccessControlContext) => context.locale !== "de",
-    german: 403,
-    english: 200,
-  },
-  {
-    rule: "allows only German",
-    update: (context: AccessControlContext) => context.locale === "de",
-    german: 200,
-    english: 403,
-  },
-])(
-  "a write through a document's versions under a rule that $rule",
-  ({ update, german, english }) => {
-    async function boot(): Promise<TestNextly> {
-      current = await createTestNextly({
-        localization: LANGUAGES,
-        collections: [
-          defineCollection({
-            slug: BY_LANGUAGE,
-            localized: true,
-            status: true,
-            versions: { drafts: true },
-            access: { read: () => true, update },
-            fields: [text({ name: "title" }), text({ name: "owner" })],
-          }),
-        ],
-        singles: [
-          defineSingle({
-            slug: BY_LANGUAGE_SINGLE,
-            localized: true,
-            status: true,
-            versions: { drafts: true },
-            access: { read: () => true, update },
-            fields: [text({ name: "headline", localized: true })],
-          }),
-        ],
-      });
-      const resources = [BY_LANGUAGE, BY_LANGUAGE_SINGLE];
-      await userWhoMay(current, AUTHOR, "read", resources);
-      await grantTo(current, AUTHOR, "update", resources);
-      return current;
-    }
+// Each rule is answered in the language a write changes: one refusing German
+// refuses only German writes, and one allowing only German allows only those.
+// On each database this run reaches.
+describe.each(getConfiguredTestDialects())(
+  "a write through a document's versions, on %s",
+  (dialect: TestDialect) => {
+    describe.each([
+      {
+        rule: "refuses German",
+        update: (context: AccessControlContext) => context.locale !== "de",
+        german: 403,
+        english: 200,
+      },
+      {
+        rule: "allows only German",
+        update: (context: AccessControlContext) => context.locale === "de",
+        german: 200,
+        english: 403,
+      },
+    ])(
+      "a write through a document's versions under a rule that $rule",
+      ({ update, german, english }) => {
+        async function boot(): Promise<TestNextly> {
+          current = await createTestNextly({
+            dialect,
+            localization: LANGUAGES,
+            collections: [
+              defineCollection({
+                slug: BY_LANGUAGE,
+                localized: true,
+                status: true,
+                versions: { drafts: true },
+                access: { read: () => true, update },
+                fields: [text({ name: "title" }), text({ name: "owner" })],
+              }),
+            ],
+            singles: [
+              defineSingle({
+                slug: BY_LANGUAGE_SINGLE,
+                localized: true,
+                status: true,
+                versions: { drafts: true },
+                access: { read: () => true, update },
+                fields: [text({ name: "headline", localized: true })],
+              }),
+            ],
+          });
+          const resources = [BY_LANGUAGE, BY_LANGUAGE_SINGLE];
+          await userWhoMay(current, AUTHOR, "read", resources);
+          await grantTo(current, AUTHOR, "update", resources);
+          return current;
+        }
 
-    /** The Single published in English and German, with a held edit in each; its id. */
-    async function singleWithHeldEdits(t: TestNextly): Promise<string> {
-      const singles = t.getService("singleEntryService");
-      let id = "";
-      for (const locale of ["en", "de"]) {
-        const written = await singles.update(
-          BY_LANGUAGE_SINGLE,
-          { headline: `live ${locale}`, status: "published" },
-          { overrideAccess: true, locale }
-        );
-        expect(written.success).toBe(true);
-        id = String((written.data as { id: unknown }).id);
-      }
-      for (const locale of ["en", "de"]) {
-        expect(
-          (
-            await singles.update(
+        /** The Single published in English and German, with a held edit in each; its id. */
+        async function singleWithHeldEdits(t: TestNextly): Promise<string> {
+          const singles = t.getService("singleEntryService");
+          let id = "";
+          for (const locale of ["en", "de"]) {
+            const written = await singles.update(
               BY_LANGUAGE_SINGLE,
-              { headline: `held ${locale}` },
+              { headline: `live ${locale}`, status: "published" },
               { overrideAccess: true, locale }
-            )
-          ).success
-        ).toBe(true);
+            );
+            expect(written.success).toBe(true);
+            id = String((written.data as { id: unknown }).id);
+          }
+          for (const locale of ["en", "de"]) {
+            expect(
+              (
+                await singles.update(
+                  BY_LANGUAGE_SINGLE,
+                  { headline: `held ${locale}` },
+                  { overrideAccess: true, locale }
+                )
+              ).success
+            ).toBe(true);
+          }
+          return id;
+        }
+
+        it("answers an update in each language as the rule does there", async () => {
+          const t = await boot();
+          const id = await publishedWithHeldEdits(t, BY_LANGUAGE);
+          const patch = (locale: string) =>
+            rest(
+              "PATCH",
+              entry(BY_LANGUAGE, id),
+              { title: locale },
+              `?locale=${locale}`
+            );
+
+          expect(await patch("de")).toBe(german);
+          expect(await patch("en")).toBe(english);
+        });
+
+        it("answers a restore of each language's version as the rule does there", async () => {
+          const t = await boot();
+          const id = await publishedWithHeldEdits(t, BY_LANGUAGE);
+
+          expect(await restoreIn(t, BY_LANGUAGE, id, "de")).toBe(german);
+          expect(await restoreIn(t, BY_LANGUAGE, id, "en")).toBe(english);
+        });
+
+        it("answers a take of the live values into each language's held edit as the rule does there", async () => {
+          const t = await boot();
+          const id = await publishedWithHeldEdits(t, BY_LANGUAGE);
+
+          expect(await takeLiveIn(BY_LANGUAGE, id, "de")).toBe(german);
+          expect(await takeLiveIn(BY_LANGUAGE, id, "en")).toBe(english);
+        });
+
+        it("answers a restore of each language's version of a Single as the rule does there", async () => {
+          const t = await boot();
+          const id = await singleWithHeldEdits(t);
+          const ref = {
+            scopeKind: "single" as const,
+            scopeSlug: BY_LANGUAGE_SINGLE,
+            entryId: id,
+          };
+          const restore = async (locale: string) =>
+            rest("POST", [
+              "singles",
+              BY_LANGUAGE_SINGLE,
+              "versions",
+              String(await newestIn(t, ref, locale)),
+              "restore",
+            ]);
+
+          expect(await restore("de")).toBe(german);
+          expect(await restore("en")).toBe(english);
+        });
+
+        it("answers a take of the live values into each language's held edit of a Single as the rule does there", async () => {
+          const t = await boot();
+          await singleWithHeldEdits(t);
+          const takeLive = (locale: string) =>
+            rest(
+              "POST",
+              [
+                "singles",
+                BY_LANGUAGE_SINGLE,
+                "versions",
+                "working-draft",
+                "take-live",
+              ],
+              {},
+              `?locale=${locale}`
+            );
+
+          expect(await takeLive("de")).toBe(german);
+          expect(await takeLive("en")).toBe(english);
+        });
       }
-      return id;
-    }
-
-    it("answers an update in each language as the rule does there", async () => {
-      const t = await boot();
-      const id = await publishedWithHeldEdits(t, BY_LANGUAGE);
-      const patch = (locale: string) =>
-        rest(
-          "PATCH",
-          entry(BY_LANGUAGE, id),
-          { title: locale },
-          `?locale=${locale}`
-        );
-
-      expect(await patch("de")).toBe(german);
-      expect(await patch("en")).toBe(english);
-    });
-
-    it("answers a restore of each language's version as the rule does there", async () => {
-      const t = await boot();
-      const id = await publishedWithHeldEdits(t, BY_LANGUAGE);
-
-      expect(await restoreIn(t, BY_LANGUAGE, id, "de")).toBe(german);
-      expect(await restoreIn(t, BY_LANGUAGE, id, "en")).toBe(english);
-    });
-
-    it("answers a take of the live values into each language's held edit as the rule does there", async () => {
-      const t = await boot();
-      const id = await publishedWithHeldEdits(t, BY_LANGUAGE);
-
-      expect(await takeLiveIn(BY_LANGUAGE, id, "de")).toBe(german);
-      expect(await takeLiveIn(BY_LANGUAGE, id, "en")).toBe(english);
-    });
-
-    it("answers a restore of each language's version of a Single as the rule does there", async () => {
-      const t = await boot();
-      const id = await singleWithHeldEdits(t);
-      const ref = {
-        scopeKind: "single" as const,
-        scopeSlug: BY_LANGUAGE_SINGLE,
-        entryId: id,
-      };
-      const restore = async (locale: string) =>
-        rest("POST", [
-          "singles",
-          BY_LANGUAGE_SINGLE,
-          "versions",
-          String(await newestIn(t, ref, locale)),
-          "restore",
-        ]);
-
-      expect(await restore("de")).toBe(german);
-      expect(await restore("en")).toBe(english);
-    });
-
-    it("answers a take of the live values into each language's held edit of a Single as the rule does there", async () => {
-      const t = await boot();
-      await singleWithHeldEdits(t);
-      const takeLive = (locale: string) =>
-        rest(
-          "POST",
-          [
-            "singles",
-            BY_LANGUAGE_SINGLE,
-            "versions",
-            "working-draft",
-            "take-live",
-          ],
-          {},
-          `?locale=${locale}`
-        );
-
-      expect(await takeLive("de")).toBe(german);
-      expect(await takeLive("en")).toBe(english);
-    });
+    );
   }
 );
 
