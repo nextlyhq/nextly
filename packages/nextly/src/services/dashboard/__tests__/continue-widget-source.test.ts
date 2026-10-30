@@ -137,7 +137,10 @@ beforeEach(() => {
     for (const ref of refs) {
       if (readable.has(`${ref.slug}/${ref.entryId}`)) {
         headings.set(headingKey(ref), {
-          title: `Read ${ref.entryId}`,
+          // Each language its own title, as the read path answers it.
+          title: ref.locale
+            ? `Read ${ref.entryId} in ${ref.locale}`
+            : `Read ${ref.entryId}`,
           icon: "Bookmark",
           status: "published",
         });
@@ -248,7 +251,7 @@ describe("the titles it shows", () => {
     expect(JSON.stringify(answer)).not.toContain("Stored p1");
     // Read as the caller, for the documents the saves name.
     expect(readableHeadings).toHaveBeenCalledWith(
-      [{ kind: "collection", slug: "posts", entryId: "p1" }],
+      [{ kind: "collection", slug: "posts", entryId: "p1", locale: null }],
       caller,
       expect.anything()
     );
@@ -263,6 +266,40 @@ describe("the titles it shows", () => {
     expect(rows(answer).map(row => row.entryId)).toEqual(["p1"]);
     // 🔴 Neither its row nor anything naming it: not "Untitled", not its stored title.
     expect(JSON.stringify(answer)).not.toContain("hidden");
+  });
+});
+
+describe("a save in another language", () => {
+  it("is titled in the language it was saved in, and is still the document its pin names", async () => {
+    listPins.mockResolvedValue([pin("p1", "2026-10-21T00:00:00.000Z")]);
+    getRecentEdits.mockResolvedValue({
+      edits: [{ ...edit("posts", "p1"), locale: "fr" }],
+      hasMore: false,
+    });
+    const [row] = rows(await ask({ tab: "team" }));
+    // 🔴 Read in French, as the row links to French: not the default language's title.
+    expect(row).toMatchObject({
+      entryTitle: "Read p1 in fr",
+      locale: "fr",
+      // The pin names the document, whatever language it was saved in.
+      pinned: true,
+    });
+    expect(readableHeadings).toHaveBeenCalledWith(
+      [{ kind: "collection", slug: "posts", entryId: "p1", locale: "fr" }],
+      caller,
+      expect.anything()
+    );
+  });
+
+  it("is not listed again on Mine after its pin, whatever language it was saved in", async () => {
+    listPins.mockResolvedValue([pin("p1", "2026-10-21T00:00:00.000Z")]);
+    getRecentEdits.mockResolvedValue({
+      edits: [{ ...edit("posts", "p1", "user-1"), locale: "fr" }],
+      hasMore: false,
+    });
+    expect(rows(await ask({ tab: "mine" })).map(row => row.entryId)).toEqual([
+      "p1",
+    ]);
   });
 });
 

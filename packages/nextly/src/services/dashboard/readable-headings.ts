@@ -33,11 +33,16 @@ import type { ReadCaller } from "./readable-resources";
 /** The title of a readable document whose title field holds nothing: never its id. */
 const UNTITLED = "Untitled";
 
-/** A document a row names: an entry of a collection, or a Single (`entryId` ""). */
+/**
+ * A document a row names: an entry of a collection, or a Single (`entryId` ""),
+ * in the language it is read in: `locale`, or the default language when it
+ * names none (`null` or absent).
+ */
 export interface DocumentRef {
   kind: "collection" | "single";
   slug: string;
   entryId: string;
+  locale?: string | null;
 }
 
 /** A document's heading, as the reader reads it now. */
@@ -64,12 +69,17 @@ export interface HeadingRegistries {
   } | null>;
 }
 
-/** The key a document's heading is filed under. */
+/**
+ * The key a document's heading is filed under: the document and the language
+ * it was read in, so one document read in two languages has two headings, each
+ * its own language's title, status and update time.
+ */
 export function headingKey(ref: DocumentRef): string {
   return JSON.stringify([
     ref.kind,
     ref.slug,
     ref.kind === "single" ? "" : ref.entryId,
+    ref.locale ?? null,
   ]);
 }
 
@@ -104,13 +114,13 @@ function refused(error: unknown): boolean {
 }
 
 /**
- * The headings of the entries among `ids` the reader may read in `slug`: one
- * read, as the reader, of every one of them. None when the collection is gone
- * or the read refuses outright; any other failure is a real one and is thrown.
+ * The headings of the entries among `ids` the reader may read in `slug`, in
+ * `locale`: one read, as the reader, of every one of them. None when the
+ * collection is gone or the read refuses outright; any other failure is a real
+ * one and is thrown.
  */
 async function collectionHeadings(
-  slug: string,
-  ids: readonly string[],
+  { slug, locale, ids }: EntryGroup,
   caller: ReadCaller,
   registries: HeadingRegistries
 ): Promise<Map<string, DocumentHeading>> {
@@ -120,13 +130,19 @@ async function collectionHeadings(
   const icon = text(collection.admin?.icon);
   let documents: Map<string, Record<string, unknown>>;
   try {
-    documents = await readableDocumentColumns(slug, ids, caller, [
-      titleField,
-      ...COMMON_TITLE_FIELDS,
-      // Asked only of a collection that has one: the read refuses a field the
-      // collection does not have.
-      ...(collection.status === true ? ["status"] : []),
-    ]);
+    documents = await readableDocumentColumns(
+      slug,
+      ids,
+      caller,
+      [
+        titleField,
+        ...COMMON_TITLE_FIELDS,
+        // Asked only of a collection that has one: the read refuses a field
+        // the collection does not have.
+        ...(collection.status === true ? ["status"] : []),
+      ],
+      locale
+    );
   } catch (error) {
     if (refused(error)) return new Map();
     throw error;
@@ -145,10 +161,11 @@ async function collectionHeadings(
 
 /**
  * A Single's heading, its label, when the reader may read it and it still
- * exists; its status and update time from its document read as the reader.
+ * exists; its status and update time from its document read as the reader, in
+ * `locale`.
  */
 async function singleHeading(
-  slug: string,
+  { slug, locale }: SingleGroup,
   caller: ReadCaller,
   registries: HeadingRegistries
 ): Promise<DocumentHeading | undefined> {
@@ -156,7 +173,7 @@ async function singleHeading(
   if (single === null) return undefined;
   let document: Record<string, unknown> | null;
   try {
-    document = await readableSingleColumns(slug, caller, ["status"]);
+    document = await readableSingleColumns(slug, caller, ["status"], locale);
   } catch (error) {
     if (refused(error)) return undefined;
     throw error;
@@ -169,23 +186,42 @@ async function singleHeading(
   };
 }
 
-/** `refs` grouped for reading: each collection's entry ids, and the Singles. */
+/** One collection's entries read in one language, by one read. */
+interface EntryGroup {
+  slug: string;
+  locale: string | null;
+  ids: string[];
+}
+
+/** One Single read in one language. */
+interface SingleGroup {
+  slug: string;
+  locale: string | null;
+}
+
+/**
+ * `refs` grouped for reading: each collection's entry ids per language, and
+ * each Single per language, so every (document, language) is read once and a
+ * read names one language.
+ */
 function grouped(refs: readonly DocumentRef[]): {
-  entries: Map<string, string[]>;
-  singles: Set<string>;
+  entries: EntryGroup[];
+  singles: SingleGroup[];
 } {
-  const entries = new Map<string, string[]>();
-  const singles = new Set<string>();
+  const entries = new Map<string, EntryGroup>();
+  const singles = new Map<string, SingleGroup>();
   for (const ref of refs) {
+    const locale = ref.locale ?? null;
+    const key = JSON.stringify([ref.slug, locale]);
     if (ref.kind === "single") {
-      singles.add(ref.slug);
+      singles.set(key, { slug: ref.slug, locale });
       continue;
     }
-    const ids = entries.get(ref.slug) ?? [];
-    if (!ids.includes(ref.entryId)) ids.push(ref.entryId);
-    entries.set(ref.slug, ids);
+    const group = entries.get(key) ?? { slug: ref.slug, locale, ids: [] };
+    if (!group.ids.includes(ref.entryId)) group.ids.push(ref.entryId);
+    entries.set(key, group);
   }
-  return { entries, singles };
+  return { entries: [...entries.values()], singles: [...singles.values()] };
 }
 
 /**
@@ -194,7 +230,8 @@ function grouped(refs: readonly DocumentRef[]): {
  * gone: its row is left out, never titled from anything else.
  *
  * One entity check for every collection and Single named, then one read per
- * collection for all its entries at once and one per Single, all as the reader.
+ * collection and language for all its entries in it at once, and one per
+ * Single and language, all as the reader.
  */
 export async function readableHeadings(
   refs: readonly DocumentRef[],
@@ -211,20 +248,30 @@ export async function readableHeadings(
     refs.filter(ref => readable.has(ref.slug))
   );
   await Promise.all([
-    ...[...entries].map(async ([slug, ids]) => {
-      const found = await collectionHeadings(slug, ids, caller, registries);
+    ...entries.map(async group => {
+      const found = await collectionHeadings(group, caller, registries);
       for (const [entryId, heading] of found) {
         headings.set(
-          headingKey({ kind: "collection", slug, entryId }),
+          headingKey({
+            kind: "collection",
+            slug: group.slug,
+            entryId,
+            locale: group.locale,
+          }),
           heading
         );
       }
     }),
-    ...[...singles].map(async slug => {
-      const heading = await singleHeading(slug, caller, registries);
+    ...singles.map(async group => {
+      const heading = await singleHeading(group, caller, registries);
       if (heading !== undefined) {
         headings.set(
-          headingKey({ kind: "single", slug, entryId: "" }),
+          headingKey({
+            kind: "single",
+            slug: group.slug,
+            entryId: "",
+            locale: group.locale,
+          }),
           heading
         );
       }

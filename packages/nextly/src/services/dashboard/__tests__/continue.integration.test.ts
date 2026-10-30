@@ -179,6 +179,34 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   return t;
 }
 
+/** A collection whose entries are written in each of the site's languages. */
+const INTL = "re_intl";
+
+/**
+ * A site in English and French with one localized collection, its title
+ * per language: apart from `boot`, so no other case runs on a localized site.
+ */
+async function bootLocalized(dialect: TestDialect): Promise<TestNextly> {
+  const t = await createTestNextly({
+    dialect,
+    collections: [
+      defineCollection({
+        slug: INTL,
+        localized: true,
+        access: { read: () => true },
+        fields: [text({ name: "title", localized: true })],
+      }),
+    ],
+    localization: { locales: ["en", "fr"], defaultLocale: "en" },
+  });
+  current = t;
+  for (const person of [ANA, CLEO]) {
+    await t.adapter.insert("users", { ...person, is_active: true });
+    await grantTo(t, person.id, "read", [INTL]);
+  }
+  return t;
+}
+
 interface TrailRow {
   id: string;
   action: string;
@@ -741,6 +769,41 @@ describe.each(getConfiguredTestDialects())(
       // Ben's pin is kept, so it returns with his access.
       refused.delete(BEN.id);
       expect((await mine(as(BEN))).map(row => row.entryId)).toEqual([gated]);
+    });
+
+    it("titles a save made in another language in that language, as the row links to it", async () => {
+      const t = await bootLocalized(dialect);
+      const id = await create(t, ANA, INTL, { title: "Title EN" }, at(10));
+      await written(t, at(5), () =>
+        handlerOf(t).updateEntry(
+          { ...asPerson(ANA, INTL), entryId: id, locale: "fr" },
+          { title: "Titre FR" }
+        )
+      );
+      // Ana's latest save of it, recorded in French: the row this case reads.
+      await t.adapter.insert("activity_log", {
+        id: randomUUID(),
+        actor_type: "user",
+        user_id: ANA.id,
+        user_name: ANA.name,
+        user_email: ANA.email,
+        action: "update",
+        collection: INTL,
+        entry_id: id,
+        entry_title: "Titre FR",
+        subject_kind: "collection",
+        locale: "fr",
+        metadata: JSON.stringify({ changedFields: ["title"] }),
+        created_at: new Date(T0),
+      });
+
+      const answer = await asked(as(CLEO), "team");
+      const rows = answer.op === "list" ? answer.items : [];
+      expect(rows.map(row => [row.entryId, row.locale])).toEqual([[id, "fr"]]);
+      // 🔴 The French title, read in French as Cleo: the default language's
+      // title would name the row in a language its link does not open.
+      expect(rows[0]).toMatchObject({ entryTitle: "Titre FR" });
+      expect(JSON.stringify(answer)).not.toContain("Title EN");
     });
   }
 );

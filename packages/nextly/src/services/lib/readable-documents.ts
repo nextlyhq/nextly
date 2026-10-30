@@ -201,20 +201,23 @@ export async function readableDocumentIds(
 
 /**
  * The documents among `entryIds` this caller may READ, each with the columns
- * `columns` names beside its id: a title to show beside a document the caller
- * chose to keep. Derived from the same read as {@link readableDocumentIds}, so
- * a document shown here is exactly one that read would call readable.
+ * `columns` names beside its id, in `locale` (the default language when it
+ * names none): a title to show beside a document the caller chose to keep or
+ * saved in that language. Derived from the same read as
+ * {@link readableDocumentIds}, so a document shown here is exactly one that
+ * read would call readable, in that language.
  */
 export async function readableDocumentColumns(
   collection: string,
   entryIds: readonly string[],
   caller: ReadCaller,
-  columns: readonly string[]
+  columns: readonly string[],
+  locale?: string | null
 ): Promise<Map<string, Record<string, unknown>>> {
   return documentsReturnedBy(
     collection,
     entryIds,
-    undefined,
+    locale,
     { overrideAccess: false, caller },
     columns
   );

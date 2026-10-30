@@ -199,14 +199,26 @@ function pinRef(pin: ShownPin): DocumentRef {
   };
 }
 
-/** The document a save names. */
-function editRef(edit: RecentEdit): DocumentRef {
+/**
+ * The document a save names, in no particular language: what a pin names and
+ * what each tab lists once, whatever language it was saved in.
+ */
+function documentOf(edit: RecentEdit): DocumentRef {
   const kind = edit.subjectKind === "single" ? "single" : "collection";
   return {
     kind,
     slug: edit.collection,
     entryId: kind === "single" ? "" : (edit.entryId ?? ""),
   };
+}
+
+/**
+ * The document a save names in the language it was saved in, as its heading
+ * is read: the row links to that language, so its title, status and update
+ * time are that language's too.
+ */
+function editRef(edit: RecentEdit): DocumentRef {
+  return { ...documentOf(edit), locale: edit.locale };
 }
 
 /** A pin as a row: its heading as read now, edited when the document last was. */
@@ -236,7 +248,7 @@ function editRow(
   heading: DocumentHeading,
   pinned: boolean
 ): ContinueRow {
-  const ref = editRef(edit);
+  const ref = documentOf(edit);
   return {
     id: edit.id,
     entryId: edit.entryId ?? "",
@@ -278,8 +290,9 @@ async function recentEdits(
 }
 
 /**
- * The saves as rows, each under its heading read now as the reader; a save
- * whose document they may not read now, or that is gone, is left out.
+ * The saves as rows, each under its heading read now as the reader in the
+ * language it was saved in; a save whose document they may not read now in
+ * that language, or that is gone, is left out.
  */
 async function editRows(
   edits: readonly RecentEdit[],
@@ -292,11 +305,10 @@ async function editRows(
     bootedHeadingRegistries()
   );
   return edits.flatMap(edit => {
-    const key = headingKey(editRef(edit));
-    const heading = headings.get(key);
+    const heading = headings.get(headingKey(editRef(edit)));
     return heading === undefined
       ? []
-      : [editRow(edit, heading, pinned.has(key))];
+      : [editRow(edit, heading, pinned.has(headingKey(documentOf(edit))))];
   });
 }
 
@@ -328,7 +340,7 @@ async function mineRows(
     savedBy: person,
   });
   const saved = await editRows(
-    edits.filter(edit => !pinned.has(headingKey(editRef(edit)))),
+    edits.filter(edit => !pinned.has(headingKey(documentOf(edit)))),
     caller,
     pinned
   );
