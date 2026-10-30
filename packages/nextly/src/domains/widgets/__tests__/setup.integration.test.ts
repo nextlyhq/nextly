@@ -399,9 +399,8 @@ describe.each(getConfiguredTestDialects())(
       const editor = await account(h.t, "editor@su.test");
 
       expect(await setupShownTo(h.owner)).toBe(true);
-      expect(await setupShownTo({ user: { id: editor, roles: [] } })).toBe(
-        false
-      );
+      // Left out where the audience is decided, before any card's own `shows`: the editor's
+      // layout never places it, so their dashboard never draws it.
       expect(await dashboardOf(h.ownerId)).toContain(SETUP);
       expect(await dashboardOf(editor)).not.toContain(SETUP);
       // The editor may not read or change the card's state either.

@@ -48,13 +48,16 @@ vi.mock("../di", () => ({ container: { get: containerGet } }));
 // `authorizationGroups` stays REAL: it is a pure function of a slug list and
 // the concurrency bound, so a stand-in would make the batching assert against
 // the test's own arithmetic rather than the bound the product enforces.
-const { callerHoldsPermission } = vi.hoisted(() => ({
+// `callerIsSuperAdmin` is the one super-admin decision the audience asks, once a
+// widget only a super-admin is told exists is registered.
+const { callerHoldsPermission, callerIsSuperAdmin } = vi.hoisted(() => ({
   callerHoldsPermission: vi.fn(),
+  callerIsSuperAdmin: vi.fn(),
 }));
 vi.mock("../auth/entity-read-access", async importOriginal => {
   const actual =
     await importOriginal<typeof import("../auth/entity-read-access")>();
-  return { ...actual, callerHoldsPermission };
+  return { ...actual, callerHoldsPermission, callerIsSuperAdmin };
 });
 
 import { requireAuthentication } from "../auth/middleware";
@@ -262,6 +265,7 @@ beforeEach(() => {
   });
   readCaller.mockResolvedValue({ user: { id: "user-1", roles: ["editor"] } });
   callerHoldsPermission.mockResolvedValue(true);
+  callerIsSuperAdmin.mockResolvedValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "widgetLayoutService") return fakeService;
     throw new Error(`unexpected container.get("${name}") in this test`);
@@ -2271,6 +2275,20 @@ describe("the setup card in the layout read", () => {
   beforeEach(() => {
     registerWidget(widget({ id: SETUP, defaultOrder: 0 }));
     registerWidget(widget({ id: "core/upcoming-releases", defaultOrder: 10 }));
+  });
+
+  it("is never placed for a reader who is not a super-admin, decided before any card loads", async () => {
+    // The must-differ half: the same read for a super-admin places it.
+    const admin = await bodyOf(await getWidgetLayout(getReq()));
+    expect(admin.placements?.map(p => p.widgetId)).toContain(SETUP);
+
+    callerIsSuperAdmin.mockResolvedValue(false);
+    const editor = await bodyOf(await getWidgetLayout(getReq()));
+    // Neither placed nor offered, and the editor's other cards still are.
+    expect(editor.placements?.map(p => p.widgetId)).toEqual([
+      "core/upcoming-releases",
+    ]);
+    expect(JSON.stringify(editor)).not.toContain(SETUP);
   });
 
   it("is placed in the default like any card, and the read carries no steps of its own", async () => {

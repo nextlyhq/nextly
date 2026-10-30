@@ -66,6 +66,7 @@ export const CORE_WIDGET_IDS = [
  * audience asks it without loading any card.
  */
 export const SUPER_ADMIN_WIDGET_IDS: ReadonlySet<string> = new Set<string>([
+  CORE_WIDGET_ID.setup,
   CORE_WIDGET_ID.systemHealth,
 ]);
 

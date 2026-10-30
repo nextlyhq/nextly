@@ -43,6 +43,7 @@ import type { ReadCaller } from "../../../services/dashboard/readable-resources"
 import { setupWidget } from "../core-widgets/setup";
 import {
   changeSetupState,
+  isSetupReader,
   registerSetupCard,
   setupCardData,
   setupShownTo,
@@ -84,10 +85,10 @@ beforeEach(() => {
 });
 
 describe("who the card shows to", () => {
-  it("shows only to a super-admin person", async () => {
-    expect(await setupShownTo(person)).toBe(true);
+  it("shows to a person, and asks no role: who is a super-admin is the audience's to decide", async () => {
     superAdmin.mockResolvedValue(false);
-    expect(await setupShownTo(person)).toBe(false);
+    expect(await setupShownTo(person)).toBe(true);
+    expect(superAdmin).not.toHaveBeenCalled();
   });
 
   it("never shows to an API key, whoever made it, and asks no role for one", async () => {
@@ -95,16 +96,25 @@ describe("who the card shows to", () => {
     expect(superAdmin).not.toHaveBeenCalled();
   });
 
-  it("refuses rather than shows when the roles cannot be read", async () => {
-    superAdmin.mockRejectedValue(new Error("roles unreadable"));
-    await expect(setupShownTo(person)).rejects.toThrow();
-  });
-
   it("is left out once its reader dismissed it, and back once they resume", async () => {
     await changeSetupState("ana", { dismissed: true });
     expect(await setupShownTo(person)).toBe(false);
     await changeSetupState("ana", { dismissed: false });
     expect(await setupShownTo(person)).toBe(true);
+  });
+});
+
+describe("who may read and change the card's state", () => {
+  it("is a super-admin person, and no one else", async () => {
+    expect(await isSetupReader(person)).toBe(true);
+    superAdmin.mockResolvedValue(false);
+    expect(await isSetupReader(person)).toBe(false);
+    expect(await isSetupReader(key)).toBe(false);
+  });
+
+  it("refuses rather than allows when the roles cannot be read", async () => {
+    superAdmin.mockRejectedValue(new Error("roles unreadable"));
+    await expect(isSetupReader(person)).rejects.toThrow();
   });
 });
 

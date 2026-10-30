@@ -49,12 +49,19 @@ export async function isSetupReader(caller: ReadCaller): Promise<boolean> {
 }
 
 /**
- * Whether the card shows for this caller: a super-admin person who has
- * neither dismissed it nor been told "You're all set". Judged before the card
- * loads, so a reader it does not show for has nothing fetched for it.
+ * Whether the card shows for this reader: a person, as the card is a person's
+ * own, who has neither dismissed it nor been told "You're all set". Judged
+ * before the card loads, so a reader it does not show for has nothing fetched
+ * for it.
+ *
+ * Only what is this reader's own. That the card is a super-admin's is decided
+ * earlier, where the dashboard's audience is (`SUPER_ADMIN_WIDGET_IDS` in
+ * `widgetAudience`), so nobody else is placed it, offered it or handed it,
+ * and their dashboard never draws it while this is asked. A super-admin's API
+ * key passes that decision, and is left out here.
  */
 export async function setupShownTo(caller: ReadCaller): Promise<boolean> {
-  if (!(await isSetupReader(caller))) return false;
+  if (caller.authenticatedScope?.actorType === "apiKey") return false;
   const state = await readSetupState(caller.user.id);
   return !state.dismissed && state.retiredAt === undefined;
 }

@@ -7,9 +7,11 @@
  * the site's data (`domains/widgets/setup`): start with sample content, create
  * a collection, add a first entry, fill in the Singles, invite a teammate.
  *
- * - `shows` leaves it out for anyone but a super-admin person, and for one who
- *   dismissed it or was already told "You're all set", so nothing is fetched
- *   for them.
+ * - Only a super-admin is told it exists: its id is in `SUPER_ADMIN_WIDGET_IDS`,
+ *   which the dashboard's audience reads (`widgetAudience`), so nobody else is
+ *   placed it, offered it or handed it.
+ * - `shows` leaves it out for an API key, and for a reader who dismissed it or
+ *   was already told "You're all set", so nothing is fetched for them.
  * - `load` answers the steps with the reader's skips, whether they collapsed
  *   it, and whether every step is done; that last answer is said once and
  *   recorded, so the next load leaves the card out.
