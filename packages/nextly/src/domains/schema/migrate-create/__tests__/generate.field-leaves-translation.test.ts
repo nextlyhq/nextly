@@ -591,6 +591,30 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       }
     );
 
+    it("does not take the companion of a slug's earlier table as its own when it returns at another", async () => {
+      // docs was translated at dc_docs, then removed; it returns at dc_documents, translated with
+      // no translated field. The companion its history made is dc_docs_locales, not this table's.
+      const returned = (
+        fields: MinimalConfigEntity["fields"]
+      ): MinimalConfigEntity => ({
+        ...TRANSLATED,
+        tableName: "dc_documents",
+        fields,
+      });
+      const dir = await projectAfter(dialect, [
+        { collections: [TRANSLATED, NOTES] },
+        { collections: [NOTES] },
+        { collections: [NOTES, returned([{ name: "price", type: "number" }])] },
+      ]);
+
+      expect(
+        await filesOfRun(dialect, dir, [NOTES, returned(TRANSLATED.fields)])
+      ).toEqual([
+        expect.stringMatching(/_next\.sql$/),
+        expect.stringMatching(/_create_localization_docs\.sql$/),
+      ]);
+    });
+
     it("moves a field back into the companion its last translated field left, with no file that made it", async () => {
       // As `migrate:baseline` leaves a project: no localization file made the companion. Then its
       // last translated field becomes shared, which empties the companion and keeps it.

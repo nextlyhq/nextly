@@ -25,12 +25,17 @@ import type { I18nTransitionKind } from "./transition-state";
 import type { LocalizedColumnSpec } from "./types";
 import { LOCALIZATION_MIGRATION_MARKER } from "./write-migration-file";
 
-/** The key an entity's companion is recorded under: its kind and its slug. */
+/**
+ * The key an entity's companion is recorded under: its kind, its slug and its main table. The table
+ * is part of it because a slug can come back at another table (a removed entity added again under
+ * another `dbName`), and the history of the companion beside the old table is not the new one's.
+ */
 export function companionHistoryKey(
   entity: I18nTransitionKind,
-  slug: string
+  slug: string,
+  mainTable: string
 ): string {
-  return `${entity}:${slug}`;
+  return `${entity}:${slug}:${mainTable}`;
 }
 
 /** What the companion files say about each entity's companion, by `companionHistoryKey`. */
@@ -54,7 +59,7 @@ export interface CompanionHistory {
    * create may have had its companion made outside the files, as `db:sync` or a development sync
    * makes one.
    */
-  describes(kind: I18nTransitionKind, slug: string): boolean;
+  describes(kind: I18nTransitionKind, slug: string, mainTable: string): boolean;
   /**
    * The files this build cannot read that may be about this entity: those whose header names its
    * slug, and those that name no entity or cannot be opened, which may be anyone's.
@@ -160,7 +165,11 @@ function replayIntent(
   replay: Replay,
   intent: LocalizationMigrationIntent
 ): void {
-  const key = companionHistoryKey(intent.entity, intent.spec.collection);
+  const key = companionHistoryKey(
+    intent.entity,
+    intent.spec.collection,
+    intent.spec.mainTable
+  );
   if (!replay.columns.has(key) && MAKES_COMPANION.has(intent.kind)) {
     replay.founded.add(key);
   }
@@ -229,8 +238,8 @@ function historyOf(replay: Replay): CompanionHistory {
   return {
     columns: replay.columns,
     present: replay.present,
-    describes: (kind, slug) =>
-      replay.founded.has(companionHistoryKey(kind, slug)) &&
+    describes: (kind, slug, mainTable) =>
+      replay.founded.has(companionHistoryKey(kind, slug, mainTable)) &&
       unreadFor(slug).length === 0,
     unreadable: (_kind, slug) => unreadFor(slug).map(u => u.name),
     anyFile: replay.columns.size > 0 || replay.unread.length > 0,

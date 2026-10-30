@@ -1259,7 +1259,7 @@ function planFieldsLeavingTranslation(
     // The companion's columns as the migration files left them: the only record of the shape a
     // translated field's values sit in, which the snapshot does not keep.
     const previousColumns = history.columns.get(
-      companionHistoryKey(kind, c.slug)
+      companionHistoryKey(kind, c.slug, c.tableName)
     );
     warnOfUnknownShapes(c.slug, leaving, previousColumns, warn);
     const desiredMain = desiredSnapshot.tables.find(
@@ -1512,7 +1512,7 @@ function previousTranslation(
   previousSnapshot: NextlySchemaSnapshot,
   history: TranslationRecords
 ): PreviousTranslation | undefined {
-  const key = companionHistoryKey(kind, c.slug);
+  const key = companionHistoryKey(kind, c.slug, c.tableName);
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
   if (!prevMain) return NOT_TRANSLATED;
   if (prevMain.localized === true) {
@@ -1523,7 +1523,7 @@ function previousTranslation(
     };
   }
   if (history.snapshotRecords) return NOT_TRANSLATED;
-  if (!history.describes(kind, c.slug)) return undefined;
+  if (!history.describes(kind, c.slug, c.tableName)) return undefined;
   return {
     columns: new Set(history.columns.get(key)?.keys() ?? []),
     companion: history.present.has(key),
