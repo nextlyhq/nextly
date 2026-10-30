@@ -77,7 +77,10 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
-import { setPerLanguageStorage } from "../domains/i18n/per-language-storage";
+import {
+  setPerLanguageStorage,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
 import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
@@ -3016,13 +3019,15 @@ async function initializeSchemaRegistry(
         "../services/field-groups/field-group-schema-service"
       );
       const compSchemaService = new FieldGroupSchemaService(dialect);
+      // Where the component's translatable columns live, for its table and its companion alike.
+      const perLanguage = storesPerLanguage({ localized });
       const runtimeTable = compSchemaService.generateRuntimeSchema(
         tableName,
         fields,
-        { localized, typeColumn }
+        { localized: perLanguage, typeColumn }
       );
       registry.registerDynamicSchema(tableName, runtimeTable);
-      if (localized) {
+      if (perLanguage) {
         const { ensureCompanionTable } = await import(
           "../domains/i18n/runtime/companion-io"
         );
@@ -3613,7 +3618,8 @@ async function syncCodeFirstCollections(
           // table descriptor matches what the pipeline applied — the main table
           // omits translatable columns (they live in the companion), keeping config
           // and runtime in lockstep.
-          const localized = desired.localized === true;
+          // Where the translatable columns live, for the table and its companion alike.
+          const localized = storesPerLanguage(desired);
           const { table: runtimeTable } = generateRuntimeSchema(
             tableName,
             fields,

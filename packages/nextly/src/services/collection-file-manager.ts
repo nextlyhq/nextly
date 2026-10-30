@@ -5,6 +5,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
 import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import type { CompanionSchema } from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
@@ -238,7 +239,7 @@ export class CollectionFileManager {
             // `select().from(schema)` would reference columns that no longer exist.
             {
               status: metadata.status === true,
-              localized: metadata.localized === true,
+              localized: storesPerLanguage(metadata),
             }
           );
 
@@ -294,7 +295,8 @@ export class CollectionFileManager {
   ): Promise<CompanionSchema | null> {
     if (!this.adapter || !this.metadataFetcher) return null;
     const metadata = await this.metadataFetcher(collectionName, executor);
-    if (!metadata || metadata.localized !== true) return null;
+    // Only a collection whose translatable values live in a companion has one to load.
+    if (!metadata || !storesPerLanguage(metadata)) return null;
 
     const tableName =
       metadata.tableName || `dc_${collectionName.replace(/-/g, "_")}`;

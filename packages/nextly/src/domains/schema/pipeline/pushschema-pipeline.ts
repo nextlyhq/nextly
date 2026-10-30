@@ -38,6 +38,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { consoleLogger } from "../../../shared/types";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
@@ -1729,7 +1730,8 @@ export class PushSchemaPipeline {
           // builder that made the table has to be named.
           builtBy: builtByFor("collection", c.builderOwned),
           status: c.status === true,
-          localized: (c as { localized?: boolean }).localized === true,
+          // Where its translatable columns live (`storesPerLanguage`), not only its own flag.
+          localized: storesPerLanguage(c),
           // The keys the diff compared, so a table drizzle-kit rebuilds on
           // SQLite keeps them and the kit sees no key it would drop. Read on
           // SQLite only; the other dialects add keys with statements.
@@ -1754,7 +1756,7 @@ export class PushSchemaPipeline {
           // Rendered as DDL by drizzle-kit, so the builder that made it is named here too.
           builtBy: builtByFor("single", s.builderOwned),
           status: s.status === true,
-          localized: (s as { localized?: boolean }).localized === true,
+          localized: storesPerLanguage(s),
           uniqueColumns: uniqueColumnsFor(s.tableName),
         }
       );
@@ -1774,7 +1776,7 @@ export class PushSchemaPipeline {
         c.tableName,
         c.fields,
         {
-          localized: (c as { localized?: boolean }).localized === true,
+          localized: storesPerLanguage(c),
           // 🔴 The discriminator is a SYSTEM column whose name no user ever
           // chooses: the only two spellings are the two storage generations,
           // and which one a table carries is a fact of that table rather than a
