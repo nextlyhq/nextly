@@ -59,7 +59,6 @@ describe("DocumentPanel", () => {
       />
     );
 
-    expect(screen.getByText("Document")).toBeInTheDocument();
     expect(screen.getByText("ID")).toBeInTheDocument();
     expect(screen.getByText("Created")).toBeInTheDocument();
     expect(screen.getByText("Updated")).toBeInTheDocument();
@@ -69,22 +68,19 @@ describe("DocumentPanel", () => {
     expect(screen.queryByText("Status")).not.toBeInTheDocument();
   });
 
-  it("draws no status of its own, even for a document with one", () => {
-    // The document bar's pill is the one place the status is said, read
-    // from the language being edited. A pill here read the main row instead,
-    // so beside a translation the two could disagree. The panel's Modified,
-    // Changed, Draft and Published pills went with it; local unsaved edits
-    // are the bar's save state to report.
+  it("says the status as a sentence, never as a second pill", () => {
+    // The document bar's pill is the one pill, read from the language being
+    // edited. The panel's Status section says the same status in words, from
+    // the status the editor hands it, so the two cannot disagree.
     render(
       <DocumentPanel
         mode="edit"
         entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+        documentStatus={{ status: "published", hasWorkingDraft: true }}
         hasStatus
       />
     );
-    // The control: the panel itself is drawn.
-    expect(screen.getByText("Document")).toBeInTheDocument();
-    expect(screen.queryByText("Status")).not.toBeInTheDocument();
+    expect(screen.getByText("Status")).toBeInTheDocument();
     for (const word of ["Published", "Changed", "Modified", "Draft"]) {
       expect(screen.queryByText(word)).not.toBeInTheDocument();
     }

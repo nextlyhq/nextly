@@ -35,6 +35,7 @@ import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import { pluginSettingsSecrets } from "../../domains/plugins/settings-service";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
+import { createReleaseNoticeEmailJob } from "../../domains/releases/release-notice-email";
 import { createReleasesDrainJob } from "../../domains/releases/releases-drain-job";
 import {
   IN_PASS_DRAIN_BOUNDS,
@@ -193,6 +194,16 @@ export function registerJobServices(ctx: RegistrationContext): void {
         runAs: databaseRunAs(adapter),
         onOutcome: result => reportReleasesOutcome(logger, result),
       })
+    );
+    // A release notice's email: handed on in the notice's own transaction, and
+    // queued through core's queued send once that has committed.
+    registry.register(
+      createReleaseNoticeEmailJob(() => ({
+        db: adapter,
+        email: container.has("emailService")
+          ? container.get<EmailService>("emailService")
+          : null,
+      }))
     );
 
     // Advisory document locks. A lapsed row is already ignored by every

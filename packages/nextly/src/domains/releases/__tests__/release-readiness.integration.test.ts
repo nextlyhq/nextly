@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -726,7 +726,7 @@ describe.each(getConfiguredTestDialects())(
       // A raw registry write is a change made outside this process, which
       // readers see once the cached registry row's second is up; clearing the
       // cache is that change being seen now, without waiting the second out.
-      clearCollectionRowCache();
+      clearRegistryRowCache();
       // The write itself now refuses the document-wide move.
       const written = await (
         t.getService("collectionsHandler") as CollectionsHandler

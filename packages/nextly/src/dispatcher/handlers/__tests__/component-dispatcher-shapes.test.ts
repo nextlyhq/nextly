@@ -36,6 +36,7 @@ type Registry = {
   listComponents: ReturnType<typeof vi.fn>;
   registerComponent: ReturnType<typeof vi.fn>;
   getComponent: ReturnType<typeof vi.fn>;
+  getComponentForWrite: ReturnType<typeof vi.fn>;
   updateComponent: ReturnType<typeof vi.fn>;
   deleteComponent: ReturnType<typeof vi.fn>;
   getComponentBySlug: ReturnType<typeof vi.fn>;
@@ -48,6 +49,8 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     listComponents: vi.fn(),
     registerComponent: vi.fn(),
     getComponent: vi.fn(),
+    // An update reads the component as stored, past the registry row cache.
+    getComponentForWrite: vi.fn(),
     updateComponent: vi.fn(),
     deleteComponent: vi.fn(),
     // Answers "no such slug" so a create reaches the path under test. The handler asks before it
@@ -269,7 +272,7 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
     const updated = { ...existing, label: "Hero (renamed)" };
     const registry = makeRegistry({
       isLocked: vi.fn().mockResolvedValue(false),
-      getComponent: vi.fn().mockResolvedValue(existing),
+      getComponentForWrite: vi.fn().mockResolvedValue(existing),
       updateComponent: vi.fn().mockResolvedValue(updated),
     });
     const service = wireRegistry(registry);
@@ -327,7 +330,7 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
     };
     const registry = makeRegistry({
       isLocked: vi.fn().mockResolvedValue(false),
-      getComponent: vi.fn().mockResolvedValue(existing),
+      getComponentForWrite: vi.fn().mockResolvedValue(existing),
       updateComponent: vi.fn().mockResolvedValue(existing),
     });
     wireRegistry(registry);
@@ -359,7 +362,7 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
     };
     const registry = makeRegistry({
       isLocked: vi.fn().mockResolvedValue(false),
-      getComponent: vi.fn().mockResolvedValue(existing),
+      getComponentForWrite: vi.fn().mockResolvedValue(existing),
       updateComponent: vi.fn().mockResolvedValue(existing),
     });
     wireRegistry(registry);
