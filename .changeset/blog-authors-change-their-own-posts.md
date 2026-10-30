@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The blog template lets an author edit and delete only the posts they wrote, while anyone who may publish posts changes every post.
+The blog template lets an author edit and delete only the posts they wrote, while anyone who may publish posts changes every post. A blog scaffolded with the visual approach has no such rule, so its seed gives authors no delete permission on posts.
