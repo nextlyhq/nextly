@@ -54,7 +54,7 @@ import { toDbError } from "../../../database/errors";
 // CollectionEntryService facade and CollectionBulkService still consume it;
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
-import { NextlyError } from "../../../errors";
+import { NEXTLY_ERROR_STATUS, NextlyError } from "../../../errors";
 import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
@@ -365,6 +365,27 @@ function emitCollectionEvent(
   }
 }
 
+/** A write's words for an entry that is not there, naming it in a batch item. */
+function missingEntryMessage(entryId: string, identify: boolean): string {
+  return identify ? `Entry not found: ${entryId}` : "Entry not found";
+}
+
+/**
+ * A batch item's refusal answered as missing, in the words its missing entry
+ * gets, so an entry the caller may not read cannot be told apart from one
+ * that is not there. Any other refusal is returned as it is.
+ */
+function asMissingItem<T>(
+  refused: CollectionServiceResult<T>,
+  entryId: string,
+  identify: boolean
+): CollectionServiceResult<T> {
+  if (!identify || refused.statusCode !== NEXTLY_ERROR_STATUS.NOT_FOUND) {
+    return refused;
+  }
+  return { ...refused, message: missingEntryMessage(entryId, identify) };
+}
+
 /**
  * Convert any thrown error into the legacy CollectionServiceResult shape.
  *
@@ -555,9 +576,19 @@ interface DeleteEntryWriteParams {
 }
 
 /** The only things that differ between the two delete entry points. */
+/**
+ * A batch's delete gate, asked once before its transaction opened, where its
+ * rule answered a filter: each row is matched against it under its lock.
+ */
+export interface DeleteRowFilter {
+  readonly denied: null;
+  readonly filter: RuleFilter;
+  readonly read?: ReadReach;
+}
+
 interface DeleteEntryWriteOptions {
   /** Which shape of the row gate to apply — see the comment at its use. */
-  rowGate: "access-service" | "batch-hoisted";
+  rowGate: "access-service" | "batch-hoisted" | DeleteRowFilter;
   /** Run user hooks. Access and recording are NOT hooks and always run. */
   runHooks: boolean;
   /** Name the missing id in a 404, so a failing batch item is identifiable. */
@@ -13401,7 +13432,9 @@ export class CollectionMutationService extends BaseService {
         // may also name are never stored, and no hook is handed a value sent by
         // a caller judged without update.
         if (gate !== "update") body = { status: body.status };
-        if (denied) return denied;
+        if (denied) {
+          return asMissingItem(denied, entryId, options.identifyMissingEntry);
+        }
         if (gate !== "update") rowAllowed = gate;
       }
 
@@ -13427,9 +13460,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -13440,7 +13471,9 @@ export class CollectionMutationService extends BaseService {
           rowFilter.access,
           filteredWrites
         );
-        if (outside) return outside;
+        if (outside) {
+          return asMissingItem(outside, entryId, options.identifyMissingEntry);
+        }
       }
 
       let currentData: Record<string, unknown> = { ...body };
@@ -13961,9 +13994,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14663,9 +14694,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14676,8 +14705,8 @@ export class CollectionMutationService extends BaseService {
 
       if (options.rowGate === "batch-hoisted") {
         // Nothing to re-check per row: the batch caller hoists the
-        // collection-level delete gate out of its loop, and no row-ownership
-        // rule remains for a safety net to compare against.
+        // collection-level delete gate out of its loop, and its rule answered
+        // no filter to match the row against.
       } else {
         // The transaction API asks the access service for the whole verdict,
         // with the caller's `overrideAccess` as the create and update paths
@@ -14693,11 +14722,20 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),
         };
-        const access = await this.accessService.checkCollectionWrite<{
-          deleted: boolean;
-        }>(accessParams);
+        // A batch asked its gate before its transaction opened and hands each
+        // row the filter it answered; anything else asks here.
+        const access =
+          options.rowGate === "access-service"
+            ? await this.accessService.checkCollectionWrite<{
+                deleted: boolean;
+              }>(accessParams)
+            : options.rowGate;
         if (access.denied) {
-          return access.denied;
+          return asMissingItem(
+            access.denied,
+            entryId,
+            options.identifyMissingEntry
+          );
         }
         // A delete rule's filter allows only the entries it matches. Matched on
         // the caller's transaction under the row lock, before any hook runs.
@@ -14705,7 +14743,13 @@ export class CollectionMutationService extends BaseService {
           const refused = await this.refusalOutsideFilterInTransaction<{
             deleted: boolean;
           }>(tx, tableName, entryId, access, accessParams);
-          if (refused) return refused;
+          if (refused) {
+            return asMissingItem(
+              refused,
+              entryId,
+              options.identifyMissingEntry
+            );
+          }
         }
       }
 
@@ -14802,9 +14846,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14846,9 +14888,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -15154,11 +15194,12 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     params: DeleteEntryWriteParams,
     entryId: string,
-    skipHooks: boolean
+    skipHooks: boolean,
+    rowGate: "batch-hoisted" | DeleteRowFilter = "batch-hoisted"
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.deleteEntryWrite(tx, params, entryId, {
-        rowGate: "batch-hoisted",
+        rowGate,
         runHooks: !skipHooks,
         identifyMissingEntry: true,
         failureMessage: "Failed to delete entry",
