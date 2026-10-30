@@ -545,7 +545,7 @@ function batchDeleteRowGate(
   | DeleteRowFilter
   | DeleteRowLanguages
   | { refused: CollectionServiceResult<BatchOperationResult> } {
-  if ("byLanguage" in gate) return gate;
+  if ("bySet" in gate) return gate;
   if (gate.denied) {
     return {
       refused: gate.denied as CollectionServiceResult<BatchOperationResult>,

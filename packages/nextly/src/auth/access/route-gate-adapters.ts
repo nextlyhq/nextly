@@ -500,6 +500,8 @@ async function entityCapabilities(
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
     const answered: Record<string, boolean> = {};
     for (const action of actions) {
+      // A collection's delete is answered once, below, in each language.
+      if (kind === "collection" && action === "delete") continue;
       answered[action] = await withRuleLanguage(
         languageOf(OPERATION_OF[kind][action] ?? action, "as-asked"),
         () => capability(caller, action, slug, rules)

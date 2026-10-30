@@ -456,15 +456,16 @@ describe.each(getConfiguredTestDialects())(
         ).toEqual([true, false]);
       });
 
-      it("refuses deleting an entry with German content while the companion's readiness is not yet known", async () => {
+      it("refuses a delete in a transaction while the companion's readiness is not yet known", async () => {
         const t = await boot(dialect);
         const { withGerman } = await seed(t, NOT_GERMAN);
         // As after a restart, or once a companion is replaced: nothing is
-        // remembered about the translation table, so the delete must read
-        // the entry's languages rather than take none.
+        // remembered about the translation table, and inside a transaction
+        // it cannot be looked for, so the entry's languages are not known
+        // and the delete is refused (409) rather than judged by a guess.
         forgetCompanionReadiness(t.adapter);
 
-        expect(await deletedInTransaction(t, NOT_GERMAN, withGerman)).toBe(403);
+        expect(await deletedInTransaction(t, NOT_GERMAN, withGerman)).toBe(409);
         expect(await stillThere(t, NOT_GERMAN, withGerman)).toBe(true);
       });
     });
