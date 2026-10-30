@@ -32,7 +32,13 @@ afterEach(async () => {
 
 const SLUG = "preferences";
 
-async function boot(dialect: TestDialect): Promise<SingleEntryService> {
+async function boot(
+  dialect: TestDialect,
+  locales: Parameters<typeof createTestNextly>[0]["localization"] = {
+    locales: ["en", "de", "fr", "es"],
+    defaultLocale: "en",
+  }
+): Promise<SingleEntryService> {
   current = await createTestNextly({
     dialect,
     singles: [
@@ -54,7 +60,7 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
         ],
       }),
     ],
-    localization: { locales: ["en", "de", "fr", "es"], defaultLocale: "en" },
+    localization: locales,
   });
   return current.getService("singleEntryService");
 }
@@ -117,6 +123,34 @@ describe.each(getConfiguredTestDialects())(
       expect(await siteNameIn(singles, "de")).toBe("Hallo");
       expect(await siteNameIn(singles, "fr")).toBe("Bonjour");
       expect(await siteNameIn(singles, "es")).toBe("Hello again");
+    });
+
+    it("names the fallback a language shows once the pending changes are live", async () => {
+      // Spanish falls back to French before English.
+      const singles = await boot(dialect, {
+        locales: ["en", "fr", { code: "es", fallbackLocale: "fr" }],
+        defaultLocale: "en",
+      });
+      await save(singles, "en", { siteName: "Hello", status: "published" });
+      // French is live with nothing of its own, then its first translation is
+      // held as a pending change.
+      await save(singles, "fr", { siteName: "", status: "published" });
+      await save(singles, "fr", { siteName: "Bonjour" });
+
+      const preview = await singles.previewPublishAllLocales(SLUG, {
+        overrideAccess: true,
+      });
+      expect(preview.data?.languages).toEqual([
+        { locale: "en", outcome: "stays-published" },
+        { locale: "fr", outcome: "goes-live-with-pending-change" },
+        { locale: "es", outcome: "shows-fallback", fallback: "fr" },
+      ]);
+
+      const published = await singles.publishAllLocales(SLUG, {
+        overrideAccess: true,
+      });
+      expect(published.data?.languages).toEqual(preview.data?.languages);
+      expect(await siteNameIn(singles, "es")).toBe("Bonjour");
     });
 
     it("names the out-of-date fields the publish refuses over, and counts the ones the caller can't read", async () => {

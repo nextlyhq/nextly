@@ -226,6 +226,61 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(told);
     });
 
+    it("tells a language whose pending change creates its translation row what a publish of that language alone tells it", async () => {
+      const singles = await boot(dialect);
+      for (const slug of [ONE, EVERY]) {
+        // Live through its shared values alone: no language has a
+        // translation row of its own yet.
+        const live = await singles.update(
+          slug,
+          { tagline: "Shared", status: "published" },
+          { overrideAccess: true }
+        );
+        expect(live.success, JSON.stringify(live)).toBe(true);
+        // As on an install whose document was live before it was translated:
+        // no translation row of its own for the default language.
+        await current!.adapter.delete(
+          `single_${slug.replaceAll("-", "_")}_locales`,
+          { and: [{ column: "_locale", op: "=", value: "en" }] }
+        );
+        // English's first translated value, held as a pending change.
+        const held = await singles.update(
+          slug,
+          { siteName: "Hello" },
+          { locale: "en", overrideAccess: true }
+        );
+        expect(held.success, JSON.stringify(held)).toBe(true);
+      }
+      const rows = await current!.adapter.select<{ _locale: string }>(
+        "single_preferences_every_locales"
+      );
+      expect(rows.map(row => row._locale)).not.toContain("en");
+      const before = await eventIds();
+
+      const alone = await singles.update(
+        ONE,
+        { status: "published" },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(alone.success, JSON.stringify(alone)).toBe(true);
+      const every = await singles.publishAllLocales(EVERY, {
+        overrideAccess: true,
+      });
+      expect(every.success, JSON.stringify(every)).toBe(true);
+
+      const told = (await eventsSince(before, ONE)).filter(
+        event => event.locale !== undefined
+      );
+      expect(told).toContainEqual(
+        expect.objectContaining({ locale: "en", data: "Hello" })
+      );
+      expect(
+        (await eventsSince(before, EVERY)).filter(
+          event => event.locale !== undefined
+        )
+      ).toEqual(told);
+    });
+
     it("reports the shared value a pending change put live, in its events and in the published version", async () => {
       const singles = await boot(dialect);
       for (const [locale, data] of [

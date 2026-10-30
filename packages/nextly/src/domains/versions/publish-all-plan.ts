@@ -327,6 +327,25 @@ export async function nameVerdict(
 }
 
 /**
+ * A language's status before a publish of every language: its translation
+ * row's, or, for the default language with no row of its own, the document's,
+ * which the default language shows. Undefined for any other language with no
+ * row: it has never been published. What the outcomes report and what the
+ * events record both read this, so the two agree on which language was live.
+ */
+export function languageStatusBefore(
+  locale: string,
+  args: {
+    defaultLocale: string;
+    prior: ReadonlyMap<string, string | null>;
+    mainStatus: unknown;
+  }
+): unknown {
+  if (args.prior.has(locale)) return args.prior.get(locale);
+  return locale === args.defaultLocale ? args.mainStatus : undefined;
+}
+
+/**
  * Each configured language's outcome, in the order the app configures them.
  *
  * What is kept under no language (a pending change, or its verdict) is the
@@ -361,11 +380,7 @@ export function languageOutcomes(args: {
     if (pending.has(locale)) {
       return { locale, outcome: "goes-live-with-pending-change" };
     }
-    const status = args.prior.has(locale)
-      ? args.prior.get(locale)
-      : locale === args.defaultLocale
-        ? args.mainStatus
-        : undefined;
+    const status = languageStatusBefore(locale, args);
     if (status === "published") return { locale, outcome: "stays-published" };
     if (args.hasOwnContent(locale)) return { locale, outcome: "goes-live" };
     const fallback =

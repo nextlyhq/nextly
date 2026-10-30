@@ -53,6 +53,7 @@ import {
   type FieldGroupWriteAccess,
 } from "../../field-groups/services/field-group-mutation-service";
 import {
+  isBlank,
   populateTranslationStatus,
   readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
@@ -88,6 +89,7 @@ import {
   judgeSharedValues,
   type LanguageOutcome,
   languageOutcomes,
+  languageStatusBefore,
   languagesGoingLiveAsStored,
   type LiveSharedDocument,
   type NamedVerdict,
@@ -104,6 +106,7 @@ import {
   readableFieldNames,
   releaseAllSharedBases,
   sharedValuesConflict,
+  snapshotRecord,
 } from "../../versions/shared-publish-base";
 import {
   type ComponentFieldResolver,
@@ -1553,6 +1556,21 @@ export class SinglePublishAllService extends BaseService {
       string,
       { translated?: boolean } | undefined
     >;
+    // Content of its own as the publish leaves it: a language whose pending
+    // change goes live has what that change holds, by the overview's rule (a
+    // translated value that isn't blank); every other one keeps what it has.
+    const pendingContent = new Map(
+      stored.flatMap(draft => {
+        if (draft.locale === null) return [];
+        const values = snapshotRecord(draft.snapshot);
+        return [
+          [
+            draft.locale,
+            companion.localizedFields.some(f => !isBlank(values[f.name])),
+          ] as const,
+        ];
+      })
+    );
     return languageOutcomes({
       configured,
       defaultLocale: localization.defaultLocale,
@@ -1560,7 +1578,9 @@ export class SinglePublishAllService extends BaseService {
       outOfDate,
       prior,
       mainStatus,
-      hasOwnContent: locale => overview[locale]?.translated === true,
+      hasOwnContent: locale =>
+        locale === localization.defaultLocale ||
+        (pendingContent.get(locale) ?? overview[locale]?.translated === true),
       // The chain a read of the language resolves through, so the language
       // named is the one its readers see.
       fallbackChain: locale =>
@@ -2055,12 +2075,35 @@ export class SinglePublishAllService extends BaseService {
     let recorded = false;
 
     // The languages this publish tells: those that went live, and those
-    // already live whose pending change went live.
-    const told = [...priorCompanionStatuses].filter(
-      ([locale, priorStatus]) =>
-        (configuredLocales.size === 0 || configuredLocales.has(locale)) &&
-        (priorStatus !== "published" || args.promotedLocales.has(locale))
-    );
+    // already live whose pending change went live, a change that creates the
+    // language's translation row included. Each one's status before is read
+    // as the outcomes read it.
+    const defaultLocale = this.localization?.defaultLocale ?? "";
+    const candidates = new Set([
+      ...priorCompanionStatuses.keys(),
+      ...[...args.promotedLocales].filter(
+        (locale): locale is string => locale !== null
+      ),
+    ]);
+    const told = [...candidates]
+      .filter(
+        locale => configuredLocales.size === 0 || configuredLocales.has(locale)
+      )
+      .map(
+        locale =>
+          [
+            locale,
+            languageStatusBefore(locale, {
+              defaultLocale,
+              prior: priorCompanionStatuses,
+              mainStatus: lockedRow.status,
+            }),
+          ] as const
+      )
+      .filter(
+        ([locale, priorStatus]) =>
+          priorStatus !== "published" || args.promotedLocales.has(locale)
+      );
     // Each language's translated values as the publish left them, in one read
     // for all of them: it runs while this publish holds the row's lock. As
     // they stood before it, the promotion rewrote them where a pending change
@@ -2091,7 +2134,7 @@ export class SinglePublishAllService extends BaseService {
         lockedRow,
         args.priorCompanionValues.get(locale) ?? localeValues,
         locale,
-        priorStatus ?? undefined,
+        typeof priorStatus === "string" ? priorStatus : undefined,
         args.priorComponents.get(locale)
       );
       // What a publish of this one language records: the write, and, where
