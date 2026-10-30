@@ -108,10 +108,20 @@ function PublishingBody({
 }
 
 /**
+ * What a stopped release still holding this document means for it: nothing
+ * happens until somebody fixes it. Said without naming the change, as the
+ * scheduled-release banner says it, because the release's own description
+ * ("cannot go live") reads as a failed publish beside a stopped unpublish.
+ */
+const STOPPED =
+  "Stopped. It will not change this document until somebody fixes it.";
+
+/**
  * When the release changes this document, and how. A stopped release says
  * so rather than a time, since it will not happen on its own.
  */
 function whenItHappens(release: Release): string {
+  if (release.state === "blocked") return STOPPED;
   if (release.state !== "scheduled") return describeRelease(release);
   const at = formatScheduledAt(release);
   const consequence =

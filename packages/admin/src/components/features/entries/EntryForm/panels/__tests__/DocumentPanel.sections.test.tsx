@@ -236,9 +236,21 @@ describe("the Publishing section", () => {
     panel();
     const section = screen.getByRole("region", { name: "Publishing" });
     expect(section).toHaveTextContent(
-      /cannot go live until something is fixed/
+      "Stopped. It will not change this document until somebody fixes it."
     );
     expect(section).not.toHaveTextContent(/Goes live/);
+  });
+
+  it("does not call a stopped unpublish a publish that failed", () => {
+    // The release was going to take the document down: "cannot go live"
+    // would tell the author the opposite of what stopped.
+    releases.current.data = {
+      items: [release({ state: "blocked", memberAction: "unpublish" })],
+    };
+    panel();
+    const section = screen.getByRole("region", { name: "Publishing" });
+    expect(section).not.toHaveTextContent(/go live/i);
+    expect(section).toHaveTextContent(/Stopped/);
   });
 
   it("does not call a failed lookup an empty schedule", () => {
