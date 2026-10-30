@@ -34,6 +34,31 @@ describe("singles publish-all route", () => {
     }
   });
 
+  it("parses GET as the preview of the publish, a one-document read", () => {
+    expect(
+      parseRestRoute(["singles", "homepage", "publish-all"], "GET")
+    ).toMatchObject({
+      service: "singles",
+      // A one-document read, as the Single's own GET is.
+      operation: "single",
+      method: "previewPublishAllSingleLocales",
+      routeParams: { slug: "homepage" },
+    });
+  });
+
+  it("previews only on GET", () => {
+    // A preview answering a write verb would let a request that meant to
+    // change something be told it succeeded having changed nothing.
+    for (const verb of ["POST", "PATCH", "DELETE", "PUT"]) {
+      expect(
+        parseRestRoute(["singles", "homepage", "publish-all"], verb).method
+      ).not.toBe("previewPublishAllSingleLocales");
+    }
+    expect(
+      parseRestRoute(["singles", "homepage", "publish-all", "de"], "GET").method
+    ).not.toBe("previewPublishAllSingleLocales");
+  });
+
   it("claims nothing deeper than the sub-resource", () => {
     expect(
       parseRestRoute(["singles", "homepage", "publish-all", "de"], "POST")

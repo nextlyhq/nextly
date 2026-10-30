@@ -47,6 +47,7 @@ import type {
 import { SingleMutationService } from "./single-mutation-service";
 import {
   SinglePublishAllService,
+  type PublishAllSinglePreview,
   type PublishAllSingleResult,
 } from "./single-publish-all";
 import { SingleQueryService } from "./single-query-service";
@@ -326,6 +327,20 @@ export class SingleEntryService extends BaseService {
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;
+  }
+
+  /**
+   * What publishing every language of a Single would do, language by
+   * language, without doing it. Asked in every language, as the publish is,
+   * and writing nothing, so it owes none of a write's side effects.
+   */
+  previewPublishAllLocales(
+    slug: string,
+    options?: PublishAllSingleLocalesOptions
+  ): Promise<SingleResult<PublishAllSinglePreview>> {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.publishAllService.previewPublishAllLocales(slug, options)
+    );
   }
 
   /**

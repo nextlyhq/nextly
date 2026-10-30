@@ -831,6 +831,30 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     },
   },
 
+  previewPublishAllSingleLocales: {
+    // What publishing every language would do, language by language, without
+    // doing it. Asked as the publish is: the service judges the publish
+    // permission and rule in each language it would put live, and names only
+    // the fields the caller may read.
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const result = await svc.entry.previewPublishAllLocales(slug, {
+        user: readAuthenticatedUser(),
+        overrideAccess: false,
+        // The route admitted this read on the `publish-{slug}` grant alone,
+        // so it attests no gate, as the publish's route attests none.
+        routeAuthorized: false,
+        authenticatedScope: readAuthenticatedScope(),
+      });
+      const preview = unwrapServiceResult<{
+        id: string;
+        languages: unknown[];
+        blockers: unknown[];
+      }>(result, { slug });
+      return respondData({ slug, ...preview });
+    },
+  },
+
   deleteSingle: {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");

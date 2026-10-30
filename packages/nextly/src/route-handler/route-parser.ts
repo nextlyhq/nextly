@@ -1444,6 +1444,20 @@ function parseSingleRoutes(
     };
   }
 
+  // GET /api/singles/[slug]/publish-all → what publishing every language
+  // would do, language by language, without doing it. A read, admitted on
+  // `publish-{slug}` as the POST is: a caller who may not publish is not told
+  // what a publish would do.
+  if (id && subresource === "publish-all" && !subId && httpMethod === "GET") {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "previewPublishAllSingleLocales",
+      routeParams,
+    };
+  }
+
   // GET /api/singles/[slug]/schema → get Single schema/metadata
   if (id && subresource === "schema" && httpMethod === "GET") {
     routeParams.slug = id;
