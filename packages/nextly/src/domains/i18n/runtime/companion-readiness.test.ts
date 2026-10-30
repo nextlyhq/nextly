@@ -196,6 +196,18 @@ describe("companionFoundMissing", () => {
     expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
   });
 
+  it("leaves a missing table whose name only begins with the companion's alone", async () => {
+    const adapter = await readyAdapter();
+    const error = driverError(
+      'relation "dc_posts_locales_audit" does not exist',
+      "42P01"
+    );
+    expect(
+      companionFoundMissing(adapter, "postgresql", "dc_posts_locales", error)
+    ).toBe(false);
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
+  });
+
   it("leaves any other failure on the companion alone", async () => {
     // A missing column names the table too, and is no missing table.
     const adapter = await readyAdapter();

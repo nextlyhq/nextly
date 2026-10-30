@@ -6340,6 +6340,23 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     } catch (error: unknown) {
+      // A translation table dropped after its `ready` verdict was remembered,
+      // answered as the update answers it: only for a create that did not
+      // commit.
+      const companionGone = committedWrite
+        ? undefined
+        : await this.companionGoneRefusal(
+            params.collectionName,
+            params.locale,
+            error
+          );
+      if (companionGone) {
+        return errorToServiceResult(
+          companionGone,
+          { defaultMessage: "Failed to create entry" },
+          this.dialect
+        );
+      }
       // Legacy per-kind override messages ("Duplicate value: ...",
       // "Missing required field", etc.) are dropped: the new mapping uses
       // the §13.8-compliant generic strings from fromDatabaseError so the

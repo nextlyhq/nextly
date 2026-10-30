@@ -1281,6 +1281,19 @@ describe.each(getConfiguredTestDialects())(
       expect((await publishEvery()).statusCode).toBe(409);
     });
 
+    it("answers an entry's create as not ready when its translations table is dropped after boot", async () => {
+      const t = await boot(dialect);
+      await t.adapter.executeQuery(
+        `DROP TABLE IF EXISTS dc_${ARTICLES}_locales`
+      );
+      const created = await handlerOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        { heading: "en", status: "draft" }
+      );
+      expect(created.success).toBe(false);
+      expect(created.statusCode).toBe(409);
+    });
+
     /** An entry with an English draft, and a spy on the publish-only work. */
     async function beforePublishWork(
       dialect: TestDialect,

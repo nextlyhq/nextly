@@ -303,9 +303,23 @@ export function companionFoundMissing(
 ): boolean {
   const missing = missingTableLink(error, dialect);
   if (!(missing instanceof Error)) return false;
-  if (!missing.message.includes(companionTableName)) return false;
+  if (missingTableName(missing.message) !== companionTableName) return false;
   forgetCompanionReadiness(scope, companionTableName);
   return true;
+}
+
+/**
+ * The table a missing-table message names, without the schema or database it is qualified
+ * by, in each dialect's own wording: PostgreSQL `relation "x" does not exist`, MySQL
+ * `Table 'db.x' doesn't exist`, SQLite `no such table: x`. Read whole, so a table whose name
+ * merely starts or ends with another's is never taken for it. `undefined` for any other words.
+ */
+function missingTableName(message: string): string | undefined {
+  const named =
+    /relation "([^"]+)" does not exist/.exec(message)?.[1] ??
+    /Table '([^']+)' doesn't exist/.exec(message)?.[1] ??
+    /no such table: ([^\s]+)/.exec(message)?.[1];
+  return named?.split(".").pop();
 }
 
 /**
