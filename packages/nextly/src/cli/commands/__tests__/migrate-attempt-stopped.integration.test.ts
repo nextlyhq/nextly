@@ -326,6 +326,45 @@ describe.each(LOCK_DIALECTS)(
       }, 120_000);
     });
 
+    describe("a DOWN stopped between its rollback row and retiring the applied row", () => {
+      const one = `${P}_one`;
+      const two = `${P}_two`;
+
+      /** Applies the file, then kills `migrate:down` between its two ledger writes. */
+      async function killedBetweenLedgerWrites(marked: boolean) {
+        writeFile(
+          [
+            `CREATE TABLE ${one} (id integer)`,
+            `CREATE TABLE ${two} (id integer)`,
+          ],
+          [`DROP TABLE ${two}`, `DROP TABLE ${one}`],
+          marked
+        );
+        expect((await migrate()).applied).toBe(1);
+        await kill(await runUntil("down", "before", "@supersede"));
+        // Every statement of the DOWN ran before its rollback was recorded.
+        expect(
+          Object.keys((await databaseState()).tables).filter(t =>
+            t.startsWith(P)
+          )
+        ).toEqual([]);
+        return fileRows();
+      }
+
+      // Where those writes commit on their own: outside a transaction on
+      // every dialect, and on MySQL inside one too, whose schema statements
+      // end the transaction they ran in.
+      for (const marked of dialect === "mysql" ? [true, false] : [true]) {
+        it(`the rollback row alone records it rolled back (marked to run outside a transaction: ${String(marked)})`, async () => {
+          // Read as a cleared attempt, the rollback would leave the migration
+          // applied, and the next `migrate:down` would run its DOWN again.
+          const rows = await killedBetweenLedgerWrites(marked);
+          expect(migrationState(rows)).toBe("rolled_back");
+          expect(hasUnresolvedAttempt(rows)).toBe(false);
+        }, 180_000);
+      }
+    });
+
     describe("a file whose statements commit as they run", () => {
       const one = `${P}_one`;
       const two = `${P}_two`;

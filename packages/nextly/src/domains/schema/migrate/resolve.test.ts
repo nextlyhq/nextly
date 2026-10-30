@@ -389,6 +389,41 @@ describe("resolveMigration", () => {
       expect(rows.some(x => x.status === "applied")).toBe(false);
     });
 
+    it("writes the rollback as one from its first write, before retiring the applied row", async () => {
+      // Outside a transaction a stop can fall between the rollback row and
+      // retiring the applied row. The row must already say what it retires,
+      // or it reads as a cleared attempt and the migration as still applied.
+      const { repo, base } = makeDeps(testDb);
+      const file = "001_add_posts.sql";
+      const applied = await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(1),
+      });
+      const stopsBeforeRetiring = {
+        findFileApplies: (f: string) => repo.findFileApplies(f),
+        insertEvent: (values: Record<string, unknown>) =>
+          repo.insertEvent(values),
+        markRolledBack: (id: string, input?: { note?: string | null }) =>
+          repo.markRolledBack(id, input),
+        supersede: () => Promise.reject(new Error("process stopped")),
+      };
+      await expect(
+        resolveMigration({
+          mode: "rolled-back",
+          filename: file,
+          ...base,
+          repo: stopsBeforeRetiring,
+        })
+      ).rejects.toThrow("process stopped");
+      const rows = await repo.findFileApplies(file);
+      const rollback = rows.find(row => row.status === "rolled_back");
+      expect(rollback?.supersededEventIds).toEqual([applied]);
+      expect(await repo.isFileApplied(file)).toBe(false);
+    });
+
     it("records a plugin module's rollback under its qualified key", async () => {
       // A plugin module's ledger key is `plugin:<name>/<module>`, with no
       // extension. Recorded under any other spelling, the rollback finds no

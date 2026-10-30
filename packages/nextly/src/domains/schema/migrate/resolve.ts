@@ -288,6 +288,14 @@ async function resolveRolledBack(
   // event, in the same transaction. Without this, the partial unique index
   // (filename WHERE status='applied') still sees a live applied row and the
   // next `migrate` re-apply fails with a UNIQUE constraint violation.
+  //
+  // The rollback row names what it retires in its own insert, so it is a
+  // rollback from its first write. Outside a transaction (a DOWN marked to
+  // run outside one, or on MySQL, whose schema statements end the
+  // transaction they ran in) a stop can fall between this insert and
+  // retiring the applied rows; a row retiring nothing would read as a
+  // cleared attempt (`isOutcome`), and the migration as still applied.
+  const retired = appliedRows.map(r => r.id);
   const eventId = await writeLedger(args, async repo => {
     const id = await repo.insertEvent({
       eventType: "file_apply",
@@ -296,9 +304,10 @@ async function resolveRolledBack(
       filename,
       endedAt: new Date(),
       note: NOTE,
+      supersededEventIds: retired,
     });
     await repo.supersede({
-      supersededEventIds: appliedRows.map(r => r.id),
+      supersededEventIds: retired,
       byEventId: id,
     });
     return id;

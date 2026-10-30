@@ -16,6 +16,10 @@
  *   connection is dropped by the suite, from outside), and prints `dropped`;
  * - `continue` goes on from where it stopped.
  *
+ * The watched statement `@supersede` stops instead inside the ledger's `supersede`, between a
+ * rollback row and its retiring the applied row: the two ledger writes `migrate:down` makes once
+ * a DOWN has run.
+ *
  * When the command ends it prints `ended ok`, or `ended error <code>` and exits with 1.
  */
 import { readFileSync } from "node:fs";
@@ -29,6 +33,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { ensureSchemaEventsTable } from "../../../../domains/schema/events/schema-events-ddl";
+import { SchemaEventsRepository } from "../../../../domains/schema/events/schema-events-repository";
 import { marksNoTransaction } from "../../../../domains/schema/migrate/split-sql";
 import { withMigrateLock } from "../../../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -91,6 +96,18 @@ async function watch<T>(statement: unknown, run: () => Promise<T>): Promise<T> {
   const result = await run();
   if (isWatched && when === "after") await pause();
   return result;
+}
+
+// Between the two ledger writes, rather than at a statement of the unit.
+if (watched === "@supersede") {
+  const supersede = SchemaEventsRepository.prototype.supersede;
+  SchemaEventsRepository.prototype.supersede = async function (
+    this: SchemaEventsRepository,
+    args: Parameters<SchemaEventsRepository["supersede"]>[0]
+  ): Promise<void> {
+    if (!paused) await pause();
+    return supersede.call(this, args);
+  };
 }
 
 /** `target` with `method` sent through `watch`; every other member as it is. */
