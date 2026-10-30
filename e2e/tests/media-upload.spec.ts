@@ -8,7 +8,7 @@
  */
 import { expect } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { dropFiles, pngBuffer } from "./support/media-files";
 
@@ -39,7 +39,9 @@ test("a batch with one oversized file uploads the rest and reports the failure p
 
   // The failed row carries human copy with the limit, not raw byte counts.
   await expect(page.getByText("File is too large (max 10 MB)")).toBeVisible();
-  await expect(page.getByText(/larger than \d+ bytes/)).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByText(/larger than \d+ bytes/)
+  ).toHaveCount(0);
 
   // The successes really landed: the grid shows the uploaded files.
   await expect(
@@ -65,6 +67,8 @@ test("a batch of more than ten files uploads every one", async ({ page }) => {
   ).toContainText("Upload finished. 12 uploaded.", {
     timeout: 60_000,
   });
-  await expect(page.getByText(/^Skipped/)).toHaveCount(0);
-  await expect(page.getByText("Too many files")).toHaveCount(0);
+  await expect(includingHidden(page).getByText(/^Skipped/)).toHaveCount(0);
+  await expect(includingHidden(page).getByText("Too many files")).toHaveCount(
+    0
+  );
 });
