@@ -12,6 +12,7 @@ import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-co
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
+import { collectionMetadataFetcher } from "../domains/dynamic-collections/services/collection-metadata-fetcher";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import {
@@ -177,47 +178,7 @@ export class CollectionsHandler {
     // This allows UI-created collections to work without pre-compiled TypeScript schemas
     this.fileManager.setAdapter(adapter);
     this.fileManager.setMetadataFetcher(
-      async (collectionName: string, executor?: unknown) => {
-        try {
-          // Runs on the caller's transaction connection when supplied so an
-          // uncached runtime-schema load inside a transaction stays on it.
-          const result = await adapter.selectOne<{
-            fields: string;
-            tableName: string;
-            status: boolean | number | null;
-            localized: boolean | number | null;
-          }>(
-            "dynamic_collections",
-            {
-              where: {
-                and: [{ column: "slug", op: "=", value: collectionName }],
-              },
-            },
-            executor
-          );
-
-          if (result) {
-            const fields =
-              typeof result.fields === "string"
-                ? JSON.parse(result.fields)
-                : result.fields;
-            return {
-              fields,
-              tableName: result.tableName,
-              // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
-              status: result.status === true || result.status === 1,
-              // i18n M4: forward the localized flag so loadCompanionSchema builds the companion.
-              localized: result.localized === true || result.localized === 1,
-            };
-          }
-        } catch (error) {
-          this.logger.error(
-            "[CollectionsHandler] Failed to fetch collection metadata",
-            { error: error }
-          );
-        }
-        return null;
-      }
+      collectionMetadataFetcher(adapter, logger)
     );
 
     this.relationshipService = new CollectionRelationshipService(

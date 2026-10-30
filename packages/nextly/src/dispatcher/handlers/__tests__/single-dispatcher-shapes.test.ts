@@ -82,6 +82,7 @@ type Registry = {
   registerSingle: ReturnType<typeof vi.fn>;
   updateMigrationStatus: ReturnType<typeof vi.fn>;
   getSingleBySlug: ReturnType<typeof vi.fn>;
+  getSingleForWrite: ReturnType<typeof vi.fn>;
   getAllSingles: ReturnType<typeof vi.fn>;
   updateSingle: ReturnType<typeof vi.fn>;
   deleteSingle: ReturnType<typeof vi.fn>;
@@ -99,6 +100,8 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     // double without it fails the request rather than the assertion under test.
     updateMigrationStatus: vi.fn(),
     getSingleBySlug: vi.fn(),
+    // A schema save or delete reads the Single as stored, past the registry row cache.
+    getSingleForWrite: vi.fn(),
     // Answers "no single owns that table" so a create reaches the path under test. The handler
     // asks before it emits any DDL, so a double that cannot answer fails the request instead.
     getAllSingles: vi.fn().mockResolvedValue([]),
@@ -461,7 +464,7 @@ describe("dispatchSingles, mutations (respondMutation)", () => {
     };
     const updated = { ...existing, label: "Site (renamed)" };
     const registry = makeRegistry({
-      getSingleBySlug: vi.fn().mockResolvedValue(existing),
+      getSingleForWrite: vi.fn().mockResolvedValue(existing),
       updateSingle: vi.fn().mockResolvedValue(updated),
     });
     wireDi(registry, makeEntry());
@@ -495,7 +498,7 @@ describe("dispatchSingles, actions (respondAction)", () => {
       migrationStatus: "applied" as const,
     };
     const registry = makeRegistry({
-      getSingleBySlug: vi.fn().mockResolvedValue(existing),
+      getSingleForWrite: vi.fn().mockResolvedValue(existing),
       deleteSingle: vi.fn().mockResolvedValue(undefined),
     });
     wireDi(registry, makeEntry());

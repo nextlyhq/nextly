@@ -280,6 +280,20 @@ HAVING COUNT(*) > 1;
 Column order matters. Only `(country, city)` serves a lookup on `country`
 alone.
 
+For one field, `index: true` on the field does the same. A relationship to one
+collection is indexed without it, so a filter on `author` is already served:
+
+```ts
+defineCollection({
+  slug: "posts",
+  fields: [
+    // Indexed on its own, as every relationship to one collection is.
+    relationship({ name: "author", relationTo: "users" }),
+    text({ name: "team", index: true }),
+  ],
+});
+```
+
 ## The escape hatch
 
 When you need something the neutral model has no word for — a `bigint`, a

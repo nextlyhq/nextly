@@ -101,6 +101,7 @@ import {
   resolveComponentTableName,
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import { addressRefusalsError } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import {
   type CliError,
@@ -458,10 +459,11 @@ export async function runChecks(args: {
   // Addresses, by the one address rule, before the drift a new entity also
   // shows. A new one the rule refuses fails the check; one an entity already
   // has (its table is in the latest snapshot) keeps working, and is reported
-  // once as a warning naming the address and the reason.
-  if (!reportMigrationAddresses(args.entities, latest, logger)) {
-    process.exit(1);
-    return;
+  // once as a warning naming the address and the reason. A refusal ends in the
+  // CLI's error shape, as every other failed check here does.
+  const refused = reportMigrationAddresses(args.entities, latest, logger);
+  if (refused.length > 0) {
+    return exitWithError(logger, addressRefusalsError(refused));
   }
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);

@@ -481,8 +481,9 @@ describe("a create whose generated names would not fit is refused", () => {
 /**
  * A registry that returns a stored field group, so an UPDATE can be driven through the service.
  *
- * `getComponent` is what the update re-reads inside the exclusion to re-establish its preconditions,
- * so it decides both the old field set the diff is taken against and whether the group is localized.
+ * `getComponentForWrite` is what the update re-reads inside the exclusion to re-establish its
+ * preconditions, so it decides both the old field set the diff is taken against and whether the
+ * group is localized.
  */
 function registryWithGroup(args: {
   fields: { name: string; type: string; localized?: boolean }[];
@@ -499,7 +500,7 @@ function registryWithGroup(args: {
   return {
     getAllComponents: vi.fn().mockResolvedValue([]),
     registerComponent: vi.fn(async (row: unknown) => row),
-    getComponent: vi.fn().mockResolvedValue(record),
+    getComponentForWrite: vi.fn().mockResolvedValue(record),
     updateComponent: vi.fn(async () => record),
   };
 }
@@ -1104,7 +1105,7 @@ describe("an update whose row write fails after the tables moved", () => {
       record,
       getAllComponents: vi.fn().mockResolvedValue([]),
       registerComponent: vi.fn(async (row: unknown) => row),
-      getComponent: vi.fn().mockResolvedValue(record),
+      getComponentForWrite: vi.fn().mockResolvedValue(record),
       // Fails the real write and accepts the narrow status mark that follows it, which is the whole
       // reason the mark is worth attempting: a single-column update survives the failures that
       // realistically break a full row write.
@@ -1250,7 +1251,7 @@ describe("an update whose row write fails after the tables moved", () => {
         { name: "subheading", type: "text", localized: true },
       ] as never);
     })();
-    registry.getComponent = vi.fn().mockResolvedValue({
+    registry.getComponentForWrite = vi.fn().mockResolvedValue({
       ...registry.record,
       schemaHash: settledHash,
     });
@@ -1322,7 +1323,7 @@ describe("an update whose row write fails after the tables moved", () => {
     // cannot settle the question; read 3 (after the conditional write answered "advanced") sees
     // the row the committed write left. That ordering is the scenario, not an artefact.
     let reads = 0;
-    registry.getComponent = vi.fn(async () => {
+    registry.getComponentForWrite = vi.fn(async () => {
       reads += 1;
       return reads >= 3
         ? { ...registry.record, schemaVersion: 2, schemaHash: settledHash }
@@ -1392,7 +1393,7 @@ describe("an update whose row write fails after the tables moved", () => {
   // have — the exact retry this state exists to declare unsafe.
   it("refuses a schema edit on a field group already marked diverged", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi
+    registry.getComponentForWrite = vi
       .fn()
       .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
     const adapter = adapterDouble(async () => true);
@@ -1427,7 +1428,7 @@ describe("an update whose row write fails after the tables moved", () => {
   // so locking it out would make a diverged field group harder to reconcile rather than safer.
   it("still allows a metadata-only edit while diverged", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi
+    registry.getComponentForWrite = vi
       .fn()
       .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
     registry.updateComponent = vi.fn(
@@ -1459,7 +1460,7 @@ describe("an update whose row write fails after the tables moved", () => {
    */
   it("allows a metadata edit that resends the current localized value", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi.fn().mockResolvedValue({
+    registry.getComponentForWrite = vi.fn().mockResolvedValue({
       ...registry.record,
       localized: false,
       migrationStatus: "diverged",
@@ -1489,7 +1490,7 @@ describe("an update whose row write fails after the tables moved", () => {
    */
   it("still refuses a localization toggle while diverged", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi.fn().mockResolvedValue({
+    registry.getComponentForWrite = vi.fn().mockResolvedValue({
       ...registry.record,
       localized: false,
       migrationStatus: "diverged",

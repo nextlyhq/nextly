@@ -36,6 +36,7 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
@@ -829,7 +830,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
 
       // Code-first Singles are locked and cannot be deleted via API.
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const single = await svc.registry.getSingleForWrite(slug);
       consoleLogger.info(`[deleteSingle] getSingleBySlug returned`, {
         detail: single ? `found (tableName: ${single.tableName})` : "null",
       });
@@ -959,7 +961,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!b) throw new Error("Update data is required");
 
-      const existing = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const existing = await svc.registry.getSingleForWrite(slug);
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
@@ -1148,7 +1151,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   applySingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: its schema version is checked and advanced below.
+      const single = await svc.registry.getSingleForWrite(slug);
       if (!single) throw new Error("Single not found");
       refuseChangeDefinedInCode(single, "Single", slug);
 
@@ -1350,6 +1354,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
+        // Written past the registry service, so the cached registry row is cleared here.
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);

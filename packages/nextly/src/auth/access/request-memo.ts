@@ -304,6 +304,35 @@ export function onceForRequest<T>(subject: object, ask: () => T): T {
 }
 
 /**
+ * What each request has answered about a named subject, such as one API key
+ * however many scopes the request builds for it, kept beside
+ * {@link keptAboutObjects} and dropped with the request.
+ */
+const keptAboutNames = new WeakMap<
+  Map<string, KeptForUser>,
+  Map<string, unknown>
+>();
+
+/**
+ * {@link onceForRequest} for a subject named by a string rather than held as
+ * one object: the first answer about `name` in the request is the answer to
+ * every later question about it there.
+ */
+export function onceForRequestAbout<T>(name: string, ask: () => T): T {
+  const memo = lookups.getStore();
+  if (!memo) return ask();
+  let kept = keptAboutNames.get(memo);
+  if (!kept) {
+    kept = new Map();
+    keptAboutNames.set(memo, kept);
+  }
+  if (kept.has(name)) return kept.get(name) as T;
+  const answer = ask();
+  kept.set(name, answer);
+  return answer;
+}
+
+/**
  * Forgets every lookup the request has kept. Called when the request writes a
  * role, a permission or a role assignment, so a later ask sees the change.
  */
