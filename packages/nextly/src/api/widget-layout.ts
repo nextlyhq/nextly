@@ -51,15 +51,9 @@ import {
 } from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import { CORE_WIDGET_ID } from "../domains/widgets/core-widgets/ids";
 import { staleFieldSettings } from "../domains/widgets/declaration/card-settings";
 import { defaultLayoutPlacements } from "../domains/widgets/default-layout";
-import {
-  getStartedDrawn,
-  getStartedPlacement,
-  getStartedView,
-  withoutDormantCard,
-} from "../domains/widgets/get-started-card";
-import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
 import {
   LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
@@ -398,8 +392,7 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * decides what this reader may be told exists; the second decides which
  * transient cards are worth showing now, and a lapsed card is not a refusal.
  *
- * The probe the conditions read through is returned, so the Get started steps
- * share its reads rather than resolving the same collections again.
+ * The probe the conditions read through is returned with them.
  */
 async function visibleWidgets(auth: AuthContext) {
   const reader = await readCaller(auth);
@@ -601,38 +594,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   const arranged =
     stored.layout !== undefined && layoutIsArranged(stored.layout);
   const notShown = arranged ? NOTHING_WITHHELD : judged.forReader;
-  const arrangement = visibleArrangement(stored.layout, view, notShown);
-  // The Get started card is drawn or left dormant from its step answer and its
-  // own settings, which is why this is decided here, after the row is read,
-  // and not by a condition before it. `?getStarted=1` asks for the answer of a
-  // removed card, which the admin needs as it restores one.
-  const searchParams = new URL(req.url).searchParams;
-  const askedForSteps = searchParams.get("getStarted") === "1";
-  const getStarted = await getStartedView(
-    view.probe,
-    getStartedPlacement(arrangement),
-    askedForSteps
-  );
-  const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
+  const placements = visibleArrangement(stored.layout, view, notShown);
   // Which cards that hide while empty this reader's dashboard is drawn
   // without, and which leave by their own answer (`whileEmpty`).
   const emptyCards = await whileEmpty(auth, view, placements, {
     signal: req.signal,
-    searchParams,
+    searchParams: new URL(req.url).searchParams,
   });
-  // The default as a reader following it would be handed it: their card has
-  // no settings yet, so it is drawn from the answer alone. The steps are
-  // worked out when this read worked them out, or when the admin asks
-  // (`?getStarted=1`), as it does before staging a reset: an arrangement with
-  // no card of its own still resets onto a default that may draw one.
-  const steps =
-    getStarted.answer === null && !askedForSteps
-      ? null
-      : await view.probe.getStarted();
-  const defaults = withoutDormantCard(
-    visibleArrangement(undefined, view, judged.inDefault),
-    card => steps !== null && getStartedDrawn(steps, card.config)
-  );
+  // The default as a reader following it would be handed it, without the
+  // cards its own rules (`shows`) leave out for them, the setup card among
+  // them once it is dismissed or done.
+  const defaults = visibleArrangement(undefined, view, judged.inDefault);
   const sizes = sizesOf(view.widgets);
 
   // Widgets this caller may see and may still add. A saved arrangement is a
@@ -646,13 +618,14 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
   //
-  // Never Get started: it is offered back only from Removed, as the card the
-  // reader removed, with its progress and skips.
+  // Never the setup card: it comes and goes on its own, from the site's
+  // state and the reader's own choices (`domains/widgets/setup-card`), and a
+  // card removed in customise mode is offered back only from Removed.
   const placed = new Set(placements.map(placement => placement.widgetId));
   const available = inAddPanelOrder(
     view.widgets.filter(
       widget =>
-        widget.id !== GET_STARTED_WIDGET_ID &&
+        widget.id !== CORE_WIDGET_ID.setup &&
         (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
     )
   ).map(widget => widget.id);
@@ -675,9 +648,6 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
       audience: view.audience.token,
-      // The Get started steps, from the computation that decided whether the
-      // card is drawn, so the card and its steps cannot disagree.
-      getStarted,
       ...emptyCards,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
@@ -1158,23 +1128,6 @@ function refuseUnconfirmedReplacement(
   });
 }
 
-/**
- * The widget ids a save replaces, as opposed to carries.
- *
- * Every visible widget, except a Get started card the submission does not
- * hold: a dormant card is never handed to the reader, so their save cannot
- * hold it, and replacing it would delete it with its skips. Carried instead,
- * in place, as a card the reader could not see is. A submission that holds
- * the card replaces it as usual.
- */
-function carriedUnlessSubmitted(
-  submitted: readonly WidgetPlacement[],
-  visibleIds: ReadonlySet<string>
-): ReadonlySet<string> {
-  if (getStartedPlacement(submitted) !== undefined) return visibleIds;
-  return new Set([...visibleIds].filter(id => id !== GET_STARTED_WIDGET_ID));
-}
-
 export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const auth = await authenticateLayoutWrite(req, "write");
 
@@ -1263,7 +1216,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const saved = mergePreservingHidden(
     submitted,
     wholeArrangement(stored.layout),
-    carriedUnlessSubmitted(submitted, view.visibleIds),
+    view.visibleIds,
     withheldFrom(stored.layout, view, notShown)
   );
   const version = await service.saveLayout(

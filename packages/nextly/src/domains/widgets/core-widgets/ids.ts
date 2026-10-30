@@ -16,7 +16,7 @@ import type { DefaultLayoutCard } from "../declaration/dashboard";
 
 /** Each core widget's id, by name. */
 export const CORE_WIDGET_ID = {
-  getStarted: "core/get-started",
+  setup: "core/setup",
   content: "core/content",
   quickCreate: "core/quick-create",
   team: "core/team",
@@ -40,7 +40,7 @@ export type CoreWidgetId = (typeof CORE_WIDGET_ID)[keyof typeof CORE_WIDGET_ID];
  * sorts. Which of them the default dashboard holds is `CORE_DEFAULT_LAYOUT`.
  */
 export const CORE_WIDGET_IDS = [
-  CORE_WIDGET_ID.getStarted,
+  CORE_WIDGET_ID.setup,
   CORE_WIDGET_ID.content,
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.team,
@@ -67,7 +67,7 @@ void everyIdOrdered;
 
 /**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
- * there is one path to the default whoever wrote it: the onboarding card, then
+ * there is one path to the default whoever wrote it: the setup card, then
  * Needs attention, Create, Continue where you left off, Team activity,
  * Content and Upcoming releases, each at its widget's starting size. The
  * cards that share a row share a height, so the default dashboard tiles: Needs
@@ -81,7 +81,7 @@ void everyIdOrdered;
  * and the default's builder read it without loading every core card.
  */
 export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
-  CORE_WIDGET_ID.getStarted,
+  CORE_WIDGET_ID.setup,
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.continue,

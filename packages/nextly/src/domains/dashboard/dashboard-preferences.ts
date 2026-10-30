@@ -28,8 +28,17 @@ import {
   tablePresence,
 } from "./table-presence";
 
-/** The keys a dashboard remembers, each owned by the feature that reads it. */
-export type DashboardPreferenceKey = "new-type" | "setup-collapsed";
+/**
+ * The keys a dashboard remembers, each owned by the feature that reads it:
+ * the New type, and the setup card's four (`domains/widgets/setup-card`):
+ * collapsed, dismissed, the steps skipped, and when it said "You're all set".
+ */
+export type DashboardPreferenceKey =
+  | "new-type"
+  | "setup-collapsed"
+  | "setup-dismissed"
+  | "setup-skipped"
+  | "setup-retired";
 
 /** The database surface the repository reads and writes through. */
 export interface DashboardPreferencesDb extends TableProbe {

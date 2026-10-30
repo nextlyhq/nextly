@@ -14,7 +14,6 @@
  * @module domains/widgets/conditions
  */
 
-import { getService } from "../../di";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
 import { conditionProbe, type ConditionProbe } from "./condition-probe";
@@ -23,18 +22,17 @@ import {
   isWidgetCondition,
   type WidgetCondition,
 } from "./lifecycle";
-import { onboardingIsIncomplete } from "./onboarding";
 import { queryableSlugs } from "./reader-content";
 
 /**
  * Whether this reader can see any content at all.
  *
  * DERIVED from {@link readerHasContent} rather than counting here, because the
- * onboarding steps ask the same question of the same rows. Counted in both
+ * setup steps ask the same question of the same rows. Counted in both
  * places the two would agree on the day they were written and drift after:
  * one counting drafts and the other not, or one reading the source registry
  * and the other the collections registry, produces a dashboard that offers an
- * onboarding card while telling the reader their install has content.
+ * setup card while telling the reader their install has content.
  *
  * The scoping, the short-circuit and the `status: "all"` reasoning now live
  * with the counting, in `reader-content.ts`.
@@ -47,30 +45,18 @@ async function contentIsEmpty(probe: ConditionProbe): Promise<boolean> {
 }
 
 /**
- * Whether the offer of demo content is still open.
+ * Whether the offer of sample content is still open: nobody has loaded or
+ * declined it.
  *
- * Reads the two flags the seed card already writes, and takes NO caller: the
- * answer is a property of the install rather than of the reader. That is the
- * one place this file departs from `content:empty`'s reader-scoping, and it is
- * deliberate — whether a project accepted demo data is recorded once, and a
- * second admin arriving after the first declined should not be offered it
- * again. Nothing about rows is disclosed by it, only that a setup question was
- * answered.
- *
- * Either flag settles it. `completedAt` and `skippedAt` are the two ways the
- * offer stops being open, and a card asking this wants to know whether to make
- * the offer, not which way it went.
+ * Takes NO caller: the answer is a property of the install rather than of the
+ * reader, recorded once for everyone, so a second admin arriving after the
+ * first declined is not offered it again. Nothing about rows is disclosed by
+ * it, only that a setup question was answered. Read from the probe, the one
+ * read the setup card's sample step takes too; a record that cannot be read
+ * rejects, which leaves this condition unanswered and its card hidden.
  */
-async function seedIsUnanswered(): Promise<boolean> {
-  // Reached through the container rather than the Direct API: `meta` lives on
-  // the INSTANCE, and `requireNextly()` answers with the Direct API's own
-  // `Nextly` -- a different type of the same name, which has no meta accessor.
-  const meta = getService("metaService");
-  const [completedAt, skippedAt] = await Promise.all([
-    meta.get<string>("seed.completedAt"),
-    meta.get<string>("seed.skippedAt"),
-  ]);
-  return !completedAt && !skippedAt;
+async function seedIsUnanswered(probe: ConditionProbe): Promise<boolean> {
+  return !(await probe.sampleAnswered());
 }
 
 /**
@@ -152,7 +138,11 @@ function releasesArePresent(probe: ConditionProbe): Promise<boolean> {
 }
 
 /**
- * Whether setup is left to do, answering "yes" when the check itself failed.
+ * Whether setup is left to do, answering "yes" when it is not known.
+ *
+ * DERIVED from the setup card's own answer (`probe.setup`), so a card naming
+ * this condition is offered exactly while that card has a step open or could
+ * not check one.
  *
  * 🔴 The one condition that fails VISIBLE. Every other evaluator that throws
  * is left unanswered, which hides its card; that is right for a card that is
@@ -162,7 +152,8 @@ function releasesArePresent(probe: ConditionProbe): Promise<boolean> {
  */
 async function setupNotKnownToBeDone(probe: ConditionProbe): Promise<boolean> {
   try {
-    return await onboardingIsIncomplete(probe);
+    const answer = await probe.setup();
+    return !answer.known || answer.steps.some(step => step.status === "open");
   } catch {
     return true;
   }

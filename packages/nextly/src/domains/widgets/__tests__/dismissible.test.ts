@@ -26,6 +26,16 @@ beforeEach(() => {
   clearSystemResolvers();
   registerContinueWidgetSource();
   for (const definition of CORE_WIDGETS) registerWidget(definition);
+  // No core card declares the frame's dismissal now, so a plugin's stands in.
+  registerWidget({
+    id: "acme/welcome",
+    title: "Welcome",
+    description: "A card its reader may send away.",
+    archetype: "custom",
+    component: "acme#Welcome",
+    size: { default: { w: 12, h: 2 } },
+    dismissible: true,
+  });
 });
 
 const summaryFor = (id: string) => {
@@ -38,7 +48,7 @@ describe("what the admin is told about dismissal", () => {
   it("carries the flag for a card that declares it", () => {
     // Without this the admin cannot draw the control at all: the card would be
     // declared dismissible and no reader could dismiss it.
-    expect(summaryFor("core/get-started").dismissible).toBe(true);
+    expect(summaryFor("acme/welcome").dismissible).toBe(true);
   });
 
   it("says nothing for a card that does not", () => {
@@ -50,10 +60,10 @@ describe("what the admin is told about dismissal", () => {
 
   it("travels beside a lifecycle without being implied by it", () => {
     // 🔴 Neither implies the other, in either direction. A summary that tied
-    // them would take a card away for the wrong reason: Get started is
+    // them would take a card away for the wrong reason: a card may be
     // dismissible with no condition, and Content is conditional and not
     // dismissible.
-    const started = summaryFor("core/get-started");
+    const started = summaryFor("acme/welcome");
     expect(started).not.toHaveProperty("visibleWhen");
     expect(started.dismissible).toBe(true);
 
