@@ -1250,6 +1250,52 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.statusCode).toBe(403);
     });
 
+    it("answers an entry's publish of every language as not ready when its translations table is dropped after boot", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      // Dropped once the boot has resolved the table as ready, as a tool
+      // outside the app drops it while the app runs.
+      await t.adapter.executeQuery(
+        `DROP TABLE IF EXISTS dc_${ARTICLES}_locales`
+      );
+      const publishEvery = () =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: ARTICLES,
+            entryId: id,
+            overrideAccess: true,
+            locale: "*",
+          },
+          { status: "published" }
+        );
+      const first = await publishEvery();
+      expect(first.success).toBe(false);
+      expect(first.statusCode).toBe(409);
+      // Asked again, it is still refused as not ready, never as a server
+      // error. That the verdict itself is forgotten is pinned by the readiness
+      // unit tests (`companionFoundMissing`).
+      expect((await publishEvery()).statusCode).toBe(409);
+    });
+
+    it("answers an entry's create as not ready when its translations table is dropped after boot", async () => {
+      const t = await boot(dialect);
+      await t.adapter.executeQuery(
+        `DROP TABLE IF EXISTS dc_${ARTICLES}_locales`
+      );
+      const created = await handlerOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        { heading: "en", status: "draft" }
+      );
+      expect(created.success).toBe(false);
+      expect(created.statusCode).toBe(409);
+    });
+
     /** An entry with an English draft, and a spy on the publish-only work. */
     async function beforePublishWork(
       dialect: TestDialect,
