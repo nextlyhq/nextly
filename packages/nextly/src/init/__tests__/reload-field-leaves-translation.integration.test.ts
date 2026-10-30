@@ -31,24 +31,39 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => ({
 const SLUG = "rlleaves";
 const TABLE = `dc_${SLUG}`;
 const COMPANION = `${TABLE}_locales`;
+/** A second collection, for a reload that moves fields of two at once. */
+const OTHER = "rlleavesb";
+const OTHER_TABLE = `dc_${OTHER}`;
 
 /** The collection, translated, with `body` translated or shared and its settings. */
-const configWith = (body: {
+type Body = {
   localized: boolean;
   required?: boolean;
   unique?: boolean;
-}) =>
+  type?: string;
+  /** A shared field beside it, for a reload that changes something else too. */
+  summary?: true;
+};
+
+/** A translated collection whose `body` is translated or shared, with its settings. */
+const collectionWith = (slug: string, { summary, ...body }: Body) =>
+  defineCollection({
+    slug,
+    localized: true,
+    fields: [
+      { name: "title", type: "text", localized: false },
+      { name: "body", type: "text", ...body },
+      ...(summary ? [{ name: "summary", type: "text", localized: false }] : []),
+    ] as never,
+  });
+
+/** The collection, and `other` beside it when given. */
+const configWith = (body: Body, other?: Body) =>
   defineConfig({
     localization: { locales: ["en", "es"], defaultLocale: "en" },
     collections: [
-      defineCollection({
-        slug: SLUG,
-        localized: true,
-        fields: [
-          { name: "title", type: "text", localized: false },
-          { name: "body", type: "text", ...body },
-        ] as never,
-      }),
+      collectionWith(SLUG, body),
+      ...(other ? [collectionWith(OTHER, other)] : []),
     ],
   });
 
@@ -81,15 +96,16 @@ describe.each(getConfiguredTestDialects())(
 
     /** Entries with their values of `body` by language; a language left out has no row. */
     async function seed(
-      entries: Record<string, { en?: string; es?: string }>
+      entries: Record<string, { en?: string; es?: string }>,
+      table = TABLE
     ): Promise<void> {
       for (const [id, values] of Object.entries(entries)) {
         await handle.adapter.executeQuery(
-          `INSERT INTO ${q(TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('${id}', '${id}', '${id}')`
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('${id}', '${id}', '${id}')`
         );
         for (const [locale, value] of Object.entries(values)) {
           await handle.adapter.executeQuery(
-            `INSERT INTO ${q(COMPANION)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('${id}', '${locale}', '${value}')`
+            `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('${id}', '${locale}', '${value}')`
           );
         }
       }
@@ -106,9 +122,11 @@ describe.each(getConfiguredTestDialects())(
       return rows.map(row => row.name);
     }
 
-    async function mainBodies(): Promise<Record<string, string | null>> {
+    async function mainBodies(
+      table = TABLE
+    ): Promise<Record<string, string | null>> {
       const rows = (await handle.adapter.executeQuery(
-        `SELECT ${q("id")} AS id, ${q("body")} AS body FROM ${q(TABLE)} ORDER BY ${q("id")}`
+        `SELECT ${q("id")} AS id, ${q("body")} AS body FROM ${q(table)} ORDER BY ${q("id")}`
       )) as { id: string; body: string | null }[];
       return Object.fromEntries(rows.map(row => [row.id, row.body]));
     }
@@ -177,6 +195,73 @@ describe.each(getConfiguredTestDialects())(
           `UPDATE ${q(TABLE)} SET ${q("body")} = 'A' WHERE ${q("id")} = 'e2'`
         )
       ).rejects.toThrow();
+    });
+
+    it("moves Required fields of two collections in one reload, each required once its values are copied", async () => {
+      loaded.config = configWith({ localized: true }, { localized: true });
+      await reloadNextlyConfig();
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+      await seed({ f1: { en: "Bye", es: "Adiós" } }, OTHER_TABLE);
+
+      loaded.config = configWith(
+        { localized: false, required: true },
+        { localized: false, required: true }
+      );
+      await reloadNextlyConfig();
+
+      expect(await mainBodies()).toEqual({ e1: "Hello" });
+      expect(await mainBodies(OTHER_TABLE)).toEqual({ f1: "Bye" });
+      expect(await columnsOf(COMPANION)).not.toContain("body");
+      expect(await columnsOf(`${OTHER_TABLE}_locales`)).not.toContain("body");
+    });
+
+    it("leaves a translations column the registry never recorded as the field's, and the main value", async () => {
+      // The field has been shared since the last reload; a column of the same name is left in the
+      // translations table, from before.
+      loaded.config = configWith({ localized: false });
+      await reloadNextlyConfig();
+      await handle.adapter.executeQuery(
+        `INSERT INTO ${q(TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) VALUES ('e1', 'e1', 'e1', 'Fresh')`
+      );
+      await handle.adapter.executeQuery(
+        `ALTER TABLE ${q(COMPANION)} ADD COLUMN ${q("body")} TEXT`
+      );
+      await handle.adapter.executeQuery(
+        `INSERT INTO ${q(COMPANION)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e1', 'en', 'Stale')`
+      );
+
+      // A reload that changes something else, so it applies and reaches the move.
+      loaded.config = configWith({ localized: false, summary: true });
+      await reloadNextlyConfig();
+
+      expect(await mainBodies()).toEqual({ e1: "Fresh" });
+      expect(await columnsOf(COMPANION)).toContain("body");
+    });
+
+    it("refuses a field that changes how it is stored as it leaves translation, changing nothing", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+
+      loaded.config = configWith({ localized: false, type: "number" });
+      await reloadNextlyConfig();
+
+      expect(told()).toMatch(/"rlleaves".*body/s);
+      expect(await columnsOf(TABLE)).not.toContain("body");
+      expect(await columnsOf(COMPANION)).toContain("body");
+      expect(await archived()).toEqual([]);
+    });
+
+    it("finishes a move an earlier reload stopped after adding the main column", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+      // What the first apply of a stopped move leaves: the main column, nullable and empty.
+      await handle.adapter.executeQuery(
+        `ALTER TABLE ${q(TABLE)} ADD COLUMN ${q("body")} TEXT`
+      );
+
+      loaded.config = configWith({ localized: false, required: true });
+      await reloadNextlyConfig();
+
+      expect(await mainBodies()).toEqual({ e1: "Hello" });
+      expect(await columnsOf(COMPANION)).not.toContain("body");
     });
 
     it("refuses a Unique field while two entries share an English value, changing nothing", async () => {
