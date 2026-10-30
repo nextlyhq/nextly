@@ -21,13 +21,14 @@
  *   lists what remains.
  * - `other`: anything else (an attempt to apply a drop that stopped part way,
  *   a main table lost outside a migration, a table back after an applied
- *   drop). The admin still marks the entity and says it left the
- *   configuration; it names no step it cannot vouch for.
+ *   drop), and every entity while the migrations folder cannot be read. The
+ *   admin still marks the entity and says it left the configuration; it names
+ *   no step it cannot vouch for.
  *
  * @module domains/dynamic-collections/services/removed-from-code-state
  */
 
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -59,6 +60,13 @@ export interface DroppingMigration {
 
 /** Everything {@link removedFromCodeState} decides from. */
 export interface RetirementEvidence {
+  /**
+   * Whether the app's migrations folder was read. A server bundle can leave
+   * it out (a standalone build or a serverless function traces only what the
+   * code imports), and then `drops` is empty because nothing was seen, not
+   * because nothing drops the table.
+   */
+  migrationsRead: boolean;
   mainTablePresent: boolean;
   /** The files dropping the main table, oldest first. */
   drops: readonly DroppingMigration[];
@@ -71,7 +79,10 @@ export interface RetirementEvidence {
 export function removedFromCodeState(
   evidence: RetirementEvidence
 ): RemovedFromCodeState {
-  const { mainTablePresent, drops } = evidence;
+  const { migrationsRead, mainTablePresent, drops } = evidence;
+  // Unread files may hold a drop, applied or not: every step would be a guess,
+  // and `migrate:create` beside an existing drop writes a second one.
+  if (!migrationsRead) return { state: "other" };
   // A stopped attempt is resolved with `migrate:resolve` before anything else
   // can move, whatever the table says.
   if (drops.some(drop => drop.ledger === "stopped")) return { state: "other" };
@@ -160,6 +171,20 @@ async function migrationDrops(
 }
 
 /**
+ * Whether `dir` is a folder this process can list. The discovery answers an
+ * empty list for a folder it cannot read, which is not the same as a folder
+ * with no migrations in it.
+ */
+async function folderReadable(dir: string): Promise<boolean> {
+  try {
+    await readdir(dir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The app's migrations' ledger state, by ledger filename, by the rule every
  * app reader of the ledger shares (`standingsByFilename`): applied by its
  * latest outcome alone, and stopped while an attempt is unresolved. A
@@ -212,8 +237,11 @@ export async function readRemovedFromCodeStates(args: {
 }): Promise<Map<string, RemovedFromCodeState>> {
   const states = new Map<string, RemovedFromCodeState>();
   if (args.entities.length === 0) return states;
+  const migrationsRead = await folderReadable(args.migrationsDir);
   const [files, ledger] = await Promise.all([
-    migrationDrops(args.migrationsDir, args.adapter.dialect),
+    migrationsRead
+      ? migrationDrops(args.migrationsDir, args.adapter.dialect)
+      : [],
     ledgerStates(args.adapter),
   ]);
   for (const entity of args.entities) {
@@ -227,6 +255,7 @@ export async function readRemovedFromCodeStates(args: {
     states.set(
       removedEntityKey(entity.kind, entity.slug),
       removedFromCodeState({
+        migrationsRead,
         mainTablePresent: await args.adapter.tableExists(entity.tableName),
         drops,
       })
