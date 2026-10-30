@@ -38,10 +38,15 @@ import {
 import { existingDocumentIds } from "../lib/readable-documents";
 import type { Logger } from "../shared";
 
-import { activityMetadataOf, isContentSave } from "./activity-changes";
+import {
+  activityEventOf,
+  activityMetadataOf,
+  isContentSave,
+  isSettingsNamespace,
+  type ActivityEvent,
+} from "./activity-changes";
 import {
   afterRun,
-  isSettingsNamespace,
   runKeyOf,
   runsOf,
   type ActivityRun,
@@ -78,6 +83,15 @@ export interface ActivityLogEntry {
   /** NULL once the actor's account was deleted and their identity erased. */
   userEmail: string | null;
   action: ActivityLogAction;
+  /**
+   * What the row says happened, as a reader is told it (`activityEventOf`):
+   * created, saved, published, unpublished or deleted. Absent from a
+   * settings change, and from an update whose record leaves open what it did:
+   * one written before its changed fields were recorded, or one of a document
+   * that no longer exists, whose marks were dropped with its title (see
+   * `historyOfRemovedDocuments`). Such a row says no more than its action.
+   */
+  event?: ActivityEvent;
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
@@ -365,6 +379,48 @@ function collectionsKeptOffClause(
   };
 }
 
+/**
+ * The conditions that keep the saves of one person (`savedBy`) or every save
+ * but theirs (`notSavedBy`), from one statement of what "a person's save" is,
+ * so the two are exact complements: a row written before the kind was
+ * recorded is a person's; an API key's save is never one, whatever its id.
+ */
+function saverConditions(
+  options: Pick<RecentEditsOptions, "savedBy" | "notSavedBy">
+): WhereClause[] {
+  const conditions: WhereClause[] = [];
+  const byPerson = (id: string): WhereClause => ({
+    and: [
+      { column: "userId", op: "=", value: id },
+      {
+        or: [
+          { column: "actorType", op: "IS NULL" },
+          { column: "actorType", op: "=", value: "user" },
+        ],
+      },
+    ],
+  });
+  if (options.savedBy !== undefined) {
+    conditions.push(byPerson(options.savedBy));
+  }
+  if (options.notSavedBy !== undefined) {
+    // NOT of the person's condition, spelled out: a NULL `userId` is nobody's.
+    conditions.push({
+      or: [
+        { column: "userId", op: "IS NULL" },
+        { column: "userId", op: "!=", value: options.notSavedBy },
+        {
+          and: [
+            { column: "actorType", op: "IS NOT NULL" },
+            { column: "actorType", op: "!=", value: "user" },
+          ],
+        },
+      ],
+    });
+  }
+  return conditions;
+}
+
 /** Options for the documents most recently saved; see `getRecentEdits`. */
 export interface RecentEditsOptions {
   /** How many documents the card shows; clamped as every widget query is. */
@@ -382,6 +438,11 @@ export interface RecentEditsOptions {
    * key never matches it, though a key's id and a person's could be equal.
    */
   savedBy?: string;
+  /**
+   * Only saves this person did NOT make: every other person's, and every API
+   * key's, whatever its id. The exact complement of `savedBy` for the same id.
+   */
+  notSavedBy?: string;
 }
 
 /**
@@ -1031,6 +1092,20 @@ function instantText(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
+/** The event a row names, as `ActivityLogEntry.event` describes it, or nothing. */
+function eventOf(
+  row: Record<string, unknown>,
+  metadata: Record<string, unknown> | null
+): { event?: ActivityEvent } {
+  const event = activityEventOf({
+    action: row.action,
+    metadata,
+    subjectKind: row.subjectKind,
+    collection: row.collection,
+  });
+  return event === undefined ? {} : { event };
+}
+
 /**
  * Safely convert an unknown driver-returned value to a nullable string.
  * Avoids `Object.toString()` fallthrough that triggers no-base-to-string.
@@ -1357,18 +1432,7 @@ export class ActivityLogService extends BaseService {
                 ],
               },
             ]),
-        ...(options.savedBy === undefined
-          ? []
-          : [
-              { column: "userId", op: "=" as const, value: options.savedBy },
-              // A row written before the kind was recorded is a person's.
-              {
-                or: [
-                  { column: "actorType", op: "IS NULL" as const },
-                  { column: "actorType", op: "=" as const, value: "user" },
-                ],
-              },
-            ]),
+        ...saverConditions(options),
       ],
     };
     try {
@@ -1782,6 +1846,10 @@ export class ActivityLogService extends BaseService {
       userName: toNullableString(row.userName),
       userEmail: toNullableString(row.userEmail),
       action: String(row.action) as ActivityLogAction,
+      // Named from the marks this row still carries, by the rule the runs read
+      // it by: an update that carries none, a removed document's among them,
+      // names none rather than calling its publish or unpublish a save.
+      ...eventOf(row, metadata),
       collection: String(row.collection),
       // Type-narrow before stringification so we don't fall through to
       // Object#toString for non-primitive driver values.

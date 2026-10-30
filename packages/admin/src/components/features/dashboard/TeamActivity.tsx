@@ -1,9 +1,12 @@
 /**
- * Who changed what, most recent first.
+ * Who changed what, most recent first: each row says who created, saved,
+ * published, unpublished or deleted which entry or Single.
  *
- * Drawn as the dashboard card `core/recent-activity`, inside the dashboard's
+ * Drawn as the dashboard card `core/team-activity`, inside the dashboard's
  * frame, which draws its heading and every state; this component draws the
  * rows, and reports an empty feed or an unreadable answer for the frame to say.
+ * The server answers only events about what the reader may read, so every row
+ * drawn, and every row counted towards "more", is one they may see.
  *
  * ## It shows a fixed page and offers no way past it
  *
@@ -23,11 +26,11 @@
  * pagination affordance is the shape nothing else ships and the missing page is
  * a feature to decide on, not a link to point somewhere plausible.
  *
- * @module components/features/dashboard/RecentActivity
+ * @module components/features/dashboard/TeamActivity
  */
 
 import { Avatar, AvatarFallback, AvatarImage } from "@nextlyhq/ui";
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { ActivityEvent, WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { answerTotal } from "@admin/components/features/widgets/archetypes/tiered-rows";
@@ -44,6 +47,29 @@ import {
 } from "@admin/hooks/queries/useRecentActivity";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 import type { Activity } from "@admin/types/dashboard/activity";
+
+/**
+ * The verb each event the source names is told in, one for every event of the server's closed
+ * set: an event added to it fails to compile here until it has its words. The source names it
+ * from the trail's own record of the change, so a publish reads as one and not as a save.
+ */
+const EVENT_VERBS = {
+  created: "created",
+  saved: "saved",
+  published: "published",
+  unpublished: "unpublished",
+  deleted: "deleted",
+} as const satisfies Record<ActivityEvent, string>;
+
+/**
+ * The row's verb: the event the source names, or, for a row that names none, the verb its
+ * action reads as.
+ */
+function verbOf(activity: Activity): string {
+  return activity.event === undefined
+    ? activity.action
+    : EVENT_VERBS[activity.event];
+}
 
 /** One feed row: the activity it reads as, and where it leads, if anywhere. */
 interface ActivityRow {
@@ -150,7 +176,7 @@ const EmptyState: React.FC = () => (
 );
 
 /**
- * The dashboard's Recent activity card, answered by `system:activity` in the
+ * The dashboard's Team activity card, answered by `system:activity` in the
  * dashboard's batch: framed, so the heading and the size are the card's.
  *
  * It draws the rows its body holds, at most the "Number of items" its reader
@@ -162,7 +188,7 @@ const EmptyState: React.FC = () => (
  * The frame draws every state; what this card's own answer says beyond its
  * rows (still loading, an unreadable answer, or an empty feed) it reports.
  */
-export const RecentActivityCard: React.FC<WidgetComponentProps> = props => {
+export const TeamActivityCard: React.FC<WidgetComponentProps> = props => {
   // A relative time is read again as time passes: the clock ticks.
   const { tier, drawn, density, now, read } = useListCard(props);
   const labelOf = useCollectionLabel();
@@ -171,11 +197,13 @@ export const RecentActivityCard: React.FC<WidgetComponentProps> = props => {
   const rows = read.list.items.flatMap(row => {
     const activity = activityFromRow(row);
     if (!activity) return [];
-    // The feed names a collection by its slug; the row names it as the reader is shown it.
+    // The feed names a collection by its slug; the row names it as the reader is shown it, and
+    // says what happened in the event's own verb.
+    const told = { ...activity, action: verbOf(activity) };
     const named =
-      activity.collectionLabel === undefined
-        ? activity
-        : { ...activity, collectionLabel: labelOf(activity.collectionLabel) };
+      told.collectionLabel === undefined
+        ? told
+        : { ...told, collectionLabel: labelOf(told.collectionLabel) };
     return [{ activity: named, href: activityHref(row) }];
   });
   if (rows.length === 0) return <EmptyState />;
@@ -191,4 +219,4 @@ export const RecentActivityCard: React.FC<WidgetComponentProps> = props => {
   );
 };
 
-RecentActivityCard.displayName = "RecentActivityCard";
+TeamActivityCard.displayName = "TeamActivityCard";

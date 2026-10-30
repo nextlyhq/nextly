@@ -161,7 +161,7 @@ describe("what the site config keeps off the dashboard", () => {
   it("is visible to nobody: a hidden widget, a built-in an alternative replaces, and an alternative no replace names", async () => {
     for (const id of [
       "core/team",
-      "core/recently-edited",
+      "core/continue",
       "acme/recent-orders",
       "acme/other-alternative",
       "acme/kept",
@@ -171,7 +171,7 @@ describe("what the site config keeps off the dashboard", () => {
     setSiteDashboardRules({
       ...NO_SITE_RULES,
       hidden: new Set(["core/team"]),
-      replaced: new Map([["core/recently-edited", "acme/recent-orders"]]),
+      replaced: new Map([["core/continue", "acme/recent-orders"]]),
       alternatives: new Set(["acme/recent-orders", "acme/other-alternative"]),
     });
 

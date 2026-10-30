@@ -18,6 +18,25 @@ import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
+ * What an activity row says happened, as a reader is told it: an entry or
+ * Single was created, saved, published, unpublished or deleted.
+ *
+ * The `event` of a `system:activity` row and of a `GET /dashboard/activity`
+ * row, published here beside the rows' other wire types so a consumer can
+ * switch on it exhaustively. A closed set: the server names an event only by
+ * one of these (`activityEventOf`), and leaves it out of a row it cannot name
+ * one for.
+ *
+ * @experimental
+ */
+export type ActivityEvent =
+  | "created"
+  | "saved"
+  | "published"
+  | "unpublished"
+  | "deleted";
+
+/**
  * One column of a list result, as the admin needs to head it.
  *
  * Carried on the RESULT rather than published as source metadata, and the
