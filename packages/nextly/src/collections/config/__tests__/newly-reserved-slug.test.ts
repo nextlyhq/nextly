@@ -12,6 +12,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { judgeAddress } from "../../../shared/address-rule";
+
 import { NEWLY_RESERVED_SLUG_NOTES } from "../../../schemas/_zod/rbac";
 import { validateSingleConfig } from "../../../singles/config/validate-single";
 import type { SingleConfig } from "../../../singles/config/define-single";
@@ -61,9 +63,8 @@ describe("a slug that became reserved in this version", () => {
     } as unknown as CollectionConfig);
 
     const message = reservedError(result.errors.map(e => e.message));
-    expect(message).toBe(
-      "Collection slug 'users' is reserved and cannot be used"
-    );
+    expect(message).toBe(judgeAddress("collection", "users")?.message);
+    expect(message).not.toContain("must rename it");
   });
 
   it("tells a `background-jobs` owner the rule changed too", () => {
