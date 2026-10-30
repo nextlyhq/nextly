@@ -9,13 +9,16 @@
  * recorded, the second is not. So each case asks both what came back and
  * what was recorded.
  *
- * Asked as a visitor, so no stored role is needed: a visitor's read of a
- * related row is judged by the target's read rule alone.
+ * Asked as a visitor, judged by the Public role: its read of the target
+ * first, which a site admin grants here since a rule answering a filter is
+ * not one boot grants, then the target's read rule, whose filter population
+ * applies to the related rows it reads.
  *
  * @module domains/collections/__tests__/read-rule-filter-limits-population.integration.test
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { defineCollection, relationship, text } from "../../../config";
 import {
   createTestNextly,
@@ -40,8 +43,12 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(): Promise<TestNextly> {
+async function boot({
+  publicReads = true,
+}: { publicReads?: boolean } = {}): Promise<TestNextly> {
   current = await createTestNextly({
+    // The boot's seeding, which makes the Public role a visitor is judged by.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: TEAMS,
@@ -64,6 +71,10 @@ async function boot(): Promise<TestNextly> {
       }),
     ],
   });
+  // Granted as a site admin would: the targets' rules answer a filter, so
+  // boot grants Public no read of them.
+  if (publicReads)
+    await grantPublic(current, [`read-${TEAMS}`, `read-${VANISHED}`]);
   return current;
 }
 
@@ -110,6 +121,14 @@ describe("populating a relationship under a read rule that answers a filter", ()
       name: null,
       withheld: true,
     });
+  });
+
+  it("withholds even a row the filter matches where the Public role holds no read", async () => {
+    // The permission comes before the rule: without Public's read of the
+    // target, the filter is never reached.
+    const t = await boot({ publicReads: false });
+    const open = await made(t, TEAMS, { name: "public" });
+    expect((await fetchAsVisitor(t, TEAMS, open)).name).toBeNull();
   });
 
   it("does not record a reference that points at nothing", async () => {

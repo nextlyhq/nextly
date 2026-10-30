@@ -82,6 +82,7 @@ interface Fixture {
   refId: string;
   pageId: string;
   noteId: string;
+  memoId: string;
   /** The rule on `blobs`, which throws: called only if a caller reaches it. */
   blobRule: ReturnType<typeof vi.fn>;
   /**
@@ -112,14 +113,24 @@ interface Caller {
  * `pages`. `refs` relates to all of them, to `users` and to media, nested in a
  * group and a repeater too, and to a page that does not exist. `refs` admits
  * every reader itself, since the parent is not what is being judged.
+ *
+ * `seedPublic` runs the boot's seeding, for a case read as a visitor: a
+ * visitor holds what the Public role grants, which boot makes and grants the
+ * read of each collection whose rule admits everyone (`refs`, `memos`,
+ * `chains`) and media. Off otherwise, since seeding asks every rule, the
+ * throwing one on `blobs` included, which a case asserts is never reached.
  */
-async function boot(dialect: TestDialect): Promise<Fixture> {
+async function boot(
+  dialect: TestDialect,
+  options: { seedPublic?: boolean } = {}
+): Promise<Fixture> {
   const blobRule = vi.fn(() => {
     throw new Error("the blobs rule ran");
   });
   const title = text({ name: "title" });
   current = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    seedPublic: options.seedPublic === true,
     // A component that relates to `users`, so a read holding several of its
     // instances asks about that target from inside each one.
     fieldGroups: [
@@ -366,7 +377,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
       { overrideAccess: true }
     );
 
-  return { ...fx, refId, pageId, noteId };
+  return { ...fx, refId, pageId, noteId, memoId };
 }
 
 /** A user caller, as the route that served the parent authorized them. */
@@ -776,12 +787,21 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("gives a visitor what their direct read gives, and keeps trusted reads trusted", async () => {
-        const fx = await boot(dialect);
+        const fx = await boot(dialect, { seedPublic: true });
         const visitor = await readRef(fx, VISITOR);
-        // A collection with no rule is public to a visitor's direct read.
-        expect(await readsDirectly(fx, VISITOR, "pages", fx.pageId)).toBe(true);
-        expect(shows(visitor.plain, TITLE.page)).toBe(true);
-        // One whose rule refuses is not.
+        // A collection whose rule admits everyone is read by the Public role's
+        // grant, directly and through the relationship: the pairing that
+        // fails an expansion withholding everything from a visitor.
+        expect(await readsDirectly(fx, VISITOR, "memos", fx.memoId)).toBe(true);
+        expect(shows(visitor.memo, TITLE.memo)).toBe(true);
+        // A collection with no rule is refused to a visitor's direct read,
+        // since boot grants Public no read where no rule admits everyone,
+        // and so withheld.
+        expect(await readsDirectly(fx, VISITOR, "pages", fx.pageId)).toBe(
+          false
+        );
+        expect(shows(visitor.plain, TITLE.page)).toBe(false);
+        // One whose rule refuses is not read either.
         expect(await readsDirectly(fx, VISITOR, "notes", fx.noteId)).toBe(
           false
         );
@@ -902,7 +922,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("populates a target for a visitor where its rule admits visitors", async () => {
-        const fx = await boot(dialect);
+        // A visitor reads by the Public role a real boot makes, which reads
+        // `refs` and `memos` by their rules.
+        const fx = await boot(dialect, { seedPublic: true });
         expect(shows((await readRef(fx, VISITOR)).memo, TITLE.memo)).toBe(true);
       });
 
@@ -921,8 +943,9 @@ describe.each(getConfiguredTestDialects())(
       it("leaves a visitor the related media, and withholds a related user", async () => {
         // Pages served to the public embed the images they reference, so a
         // visitor keeps media. No visitor reads a user row directly, and a
-        // user row carries a person's address, so it is withheld.
-        const fx = await boot(dialect);
+        // user row carries a person's address, so it is withheld. The visitor
+        // reads `refs` by the Public role a real boot makes.
+        const fx = await boot(dialect, { seedPublic: true });
         const visitor = await readRef(fx, VISITOR);
         expect(shows(visitor.image, TITLE.media)).toBe(true);
         expect(shows(visitor.author, TITLE.user)).toBe(false);

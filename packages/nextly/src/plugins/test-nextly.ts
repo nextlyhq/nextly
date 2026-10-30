@@ -54,6 +54,7 @@ import {
   clearCachedSnapshot,
   clearLiveSnapshots,
 } from "../init/schema-snapshot-cache";
+import { seedPermissionsAndRolePresets } from "../init/seed-permissions";
 import { resetDispatcherForTests } from "../route-handler/auth-handler";
 import type { Logger } from "../services/shared";
 import { _resetEnvCache } from "../shared/lib/env";
@@ -297,6 +298,16 @@ export interface CreateTestNextlyOptions {
   security?: SecurityConfig;
   /** An app's password hasher, as `getNextly()` takes it. */
   passwordHasher?: NextlyServiceConfig["passwordHasher"];
+  /**
+   * Run the seeding a real boot runs once its services are registered, as
+   * `getNextly()` runs it: every permission the config's collections, Singles
+   * and plugins declare, the preset roles, the Public role and what boot
+   * grants it, plugins' `publicGrants` included. For a test that needs the
+   * Public role a real boot makes, since a visitor holds what that role
+   * grants and nothing without it. Off by default, so a test that makes its
+   * own roles meets no preset of the same slug.
+   */
+  seedPublic?: boolean;
 }
 
 export interface TestNextly {
@@ -750,6 +761,10 @@ async function bootServices(
   // Physical tables for code-first + plugin-contributed collections are created
   // non-interactively by the runtime auto-sync during registerServices (the
   // applyDesiredSchema add_table fast-path), so no harness-side DDL is needed.
+
+  // The boot's seeding, where the test asks for it (`seedPublic`). Each step
+  // logs its own failure, as at boot.
+  if (opts.seedPublic === true) await seedPermissionsAndRolePresets();
 
   // A handle a caller assigned over `nextly`. The property was a plain data
   // property before it became lazy, and `TestNextly.nextly` is not declared
