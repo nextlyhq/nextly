@@ -1,0 +1,24 @@
+---
+title: PLUGIN_HAS_DEPENDENTS
+description: "Another configured plugin depends on the plugin to uninstall."
+---
+
+## Cause
+
+Another configured plugin depends on the plugin to uninstall.
+
+A plugin whose `dependsOn` names this one reads its tables. Uninstalling this one first would leave that plugin reading tables that are no longer there. Nothing was changed.
+
+## Fix
+
+- Uninstall the plugin the What line names first, or remove it from `nextly.config.ts`.
+- Then run this uninstall again.
+
+## Example
+
+```text
+✗ "@acme/seo" cannot be uninstalled while "@acme/sitemap" depends on it.
+  Why:  Removing it would leave the plugin that depends on it reading tables that are no longer there. Nothing was changed.
+  Next: Uninstall it first, or remove it from the config.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-has-dependents  (PLUGIN_HAS_DEPENDENTS)
+```

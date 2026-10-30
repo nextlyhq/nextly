@@ -591,6 +591,47 @@ describe("contributed widgets are validated at boot", () => {
     ).toThrow(NextlyError);
   });
 
+  it("refuses a setting's own editor, naming the widget and the setting", () => {
+    // Only a defineWidget declaration's editors reach the generated component
+    // map, so one contributed here would be drawn "unavailable" for everyone.
+    let thrown: unknown;
+    try {
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/goal",
+          component: "@acme/p/admin#Goal",
+          settings: [
+            {
+              name: "goal",
+              label: "Goal",
+              type: "number",
+              editor: { component: "@acme/p/admin#GoalEditor" },
+            },
+          ],
+        }),
+      ]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    const logged = (thrown as NextlyError).logMessage;
+    expect(logged).toContain('admin widget "acme/goal"');
+    expect(logged).toContain(
+      'setting "goal" declares an editor: custom setting editors need a defineWidget declaration'
+    );
+
+    // The must-differ half: the same widget, its setting drawn by its own field.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/goal",
+          component: "@acme/p/admin#Goal",
+          settings: [{ name: "goal", label: "Goal", type: "number" }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("names the plugin and the widget in the shape failure too", () => {
     // The same diagnostic the JSON refusal gives, so an author reading a boot
     // failure can find the entry whichever way it was malformed.

@@ -35,6 +35,7 @@ vi.mock("../../../di", () => ({
   }),
 }));
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { UserContext } from "../../singles/types";
 import { discardWorkingDraft } from "../discard-working-draft";
@@ -51,6 +52,13 @@ function buildEntryErrorEnvelope(error: Error) {
 
 const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
 
+// The scope the route authorized the discard under. A value of its own, not
+// left out, so the handler is seen to receive this one: an absent scope would
+// read the same as one the discard dropped.
+const authenticatedScope = {
+  kind: "staff",
+} as unknown as AuthenticatedScope;
+
 const args = {
   // The kind is explicit now that one function serves both: a discard for a
   // Single reads and deletes through different services.
@@ -58,6 +66,7 @@ const args = {
   slug: "posts",
   entryId: "e1",
   user,
+  authenticatedScope,
 };
 
 describe("discardWorkingDraft", () => {
@@ -87,6 +96,9 @@ describe("discardWorkingDraft", () => {
       // Who discarded it, for the document's history.
       actor: undefined,
       user: { id: "u1", roles: ["editor"] },
+      // The update the discard was authorized for, asked again under the
+      // lock the delete holds, with the scope the route authorized.
+      updateUnderLock: { authenticatedScope },
     });
     expect(unlockedDeleteSpy).not.toHaveBeenCalled();
     // The live read precedes the deletion, so a read failure can leave the draft
@@ -114,6 +126,9 @@ describe("discardWorkingDraft", () => {
       // Who discarded it, for the document's history.
       actor: undefined,
       user: { id: "u1", roles: ["editor"] },
+      // The update the discard was authorized for, asked again under the
+      // lock the delete holds, with the scope the route authorized.
+      updateUnderLock: { authenticatedScope },
     });
     expect(getEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({ locale: "es" })

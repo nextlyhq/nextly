@@ -41,14 +41,24 @@ import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
-import {
-  assertPluginFieldDeclarations,
-  describeDeclarationFailure,
-} from "../../shared/lib/assert-plugin-field-declarations";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { generatedZodDir } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import { assertValidSingleConfig } from "../../singles/config/validate-single";
+import {
+  configDeclarationError,
+  exitWithError,
+  type CliError,
+} from "../errors";
+import {
+  buildDeclarationsInvalid,
+  buildFailed,
+  buildGenerationFailed,
+  buildMigrationsNotApplied,
+  buildStrictWarnings,
+  type BuildDeclarationIssue,
+} from "../errors/areas/commands";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -57,7 +67,8 @@ import {
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { loadConfigOrExit } from "../utils/command-prerequisites";
+import type { LoadConfigResult } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
 import {
@@ -229,17 +240,14 @@ export async function runBuild(
   // Step 1: Load configuration
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
   // first moment an unknown field type can be told apart from one a plugin had
@@ -257,8 +265,7 @@ export async function runBuild(
   } catch (error) {
     // Reported and exited rather than thrown, so an invalid declaration reads
     // like every other build failure instead of an unhandled crash.
-    logger.error(describeDeclarationFailure(error));
-    process.exit(1);
+    exitWithError(logger, configDeclarationError(error) ?? error);
   }
 
   // A workflow that cannot be attached fails the build rather than the
@@ -293,12 +300,12 @@ export async function runBuild(
 
   if (!hasSchema) {
     if (entityValidation.errors.length > 0) {
-      reportDeclarationErrors(entityValidation.errors, context);
       result.success = false;
       result.durationMs = Date.now() - startTime;
-      logger.error(`Build failed in ${formatDuration(result.durationMs)}`);
-      logger.info("Fix the errors above and run `nextly build` again.");
-      process.exit(1);
+      exitWithError(
+        logger,
+        buildDeclarationsInvalid(declarationIssues(entityValidation.errors))
+      );
     }
     logger.warn("No schema defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
@@ -332,9 +339,15 @@ export async function runBuild(
     ...entityValidation.errors,
   ];
 
+  // Each step that fails the build adds its reason here, and the build ends with them in the
+  // error shape once every step that runs has run, so each reason is printed once, at the end.
+  const failures: CliError[] = [];
+
   if (declarationErrors.length > 0) {
     result.success = false;
-    reportDeclarationErrors(declarationErrors, context);
+    failures.push(
+      buildDeclarationsInvalid(declarationIssues(declarationErrors))
+    );
   } else {
     logger.success(
       `Validated ${formatCount(collectionCount, "collection")} successfully`
@@ -342,14 +355,15 @@ export async function runBuild(
   }
 
   if (validationResult.warnings.length > 0) {
-    logger.warn(`${validationResult.warnings.length} warning(s):`);
-    for (const warning of validationResult.warnings) {
-      logger.item(warning, 1);
-    }
-
     if (options.strict) {
+      // Under `--strict` the warnings are the failure, so they are listed in it.
       result.success = false;
-      logger.error("Build failed due to warnings (--strict mode)");
+      failures.push(buildStrictWarnings(validationResult.warnings));
+    } else {
+      logger.warn(`${validationResult.warnings.length} warning(s):`);
+      for (const warning of validationResult.warnings) {
+        logger.item(warning, 1);
+      }
     }
   }
 
@@ -382,7 +396,7 @@ export async function runBuild(
       }
     } catch (error) {
       result.success = false;
-      logger.error(`File generation failed: ${describeError(error)}`);
+      failures.push(buildGenerationFailed(error));
     }
   }
 
@@ -411,9 +425,9 @@ export async function runBuild(
         const message = `Migration issues: ${issues.join(", ")}`;
 
         if (options.strict) {
+          // Under `--strict` the migrations are the failure, so they are named in it.
           result.success = false;
-          logger.error(message);
-          logger.info("Run `nextly migrate` to apply pending migrations.");
+          failures.push(buildMigrationsNotApplied(migrationResult));
         } else {
           logger.warn(message);
           logger.info(
@@ -430,8 +444,8 @@ export async function runBuild(
           }
         }
 
-        // Show failed migrations
-        if (migrationResult.failedMigrations.length > 0) {
+        // Show failed migrations; under `--strict` the failure names them.
+        if (!options.strict && migrationResult.failedMigrations.length > 0) {
           logger.error("Failed migrations:");
           for (const name of migrationResult.failedMigrations) {
             logger.error(`  - ${name}`);
@@ -481,9 +495,7 @@ export async function runBuild(
       );
     }
   } else {
-    logger.error(`Build failed in ${formatDuration(result.durationMs)}`);
-    logger.info("Fix the errors above and run `nextly build` again.");
-    process.exit(1);
+    exitWithError(logger, buildFailed(failures));
   }
 }
 
@@ -538,19 +550,14 @@ function validateAllCollections(
   return { errors, warnings };
 }
 
-/** Print declaration errors, naming the entity and field each belongs to. */
-function reportDeclarationErrors(
-  errors: BuildError[],
-  context: CommandContext
-): void {
-  const { logger } = context;
-  logger.error(`Validation failed with ${formatCount(errors.length, "error")}`);
-  for (const error of errors) {
-    const location = error.field
+/** Declaration errors as the build's failure lists them, by the entity and field each belongs to. */
+function declarationIssues(errors: BuildError[]): BuildDeclarationIssue[] {
+  return errors.map(error => ({
+    location: error.field
       ? `${error.collection}.${error.field}`
-      : error.collection;
-    logger.item(`${location}: ${error.message}`, 1);
-  }
+      : error.collection,
+    message: error.message,
+  }));
 }
 
 /**
@@ -1007,8 +1014,7 @@ export function registerBuildCommand(program: Command): void {
       try {
         await runBuild(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }
