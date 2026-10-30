@@ -563,6 +563,101 @@ describe("credentials anywhere in a log value", () => {
         "\\'2fa_token\\'=Bearer [redacted],url-secret-11: [redacted]"
       );
     });
+
+    describe("a long JSON name with spaces or escapes", () => {
+      // JSON names are written as JSON writes them, once for a body and twice
+      // for a body quoted inside a message, so each name's escapes are exact.
+      const json: Record<string, (fields: Record<string, string>) => string> = {
+        "a JSON name": fields => `upstream said ${JSON.stringify(fields)}`,
+        "an escaped JSON name": fields =>
+          `upstream said ${JSON.stringify(JSON.stringify(fields)).slice(1, -1)}`,
+      };
+      // Too long to be read forwards, and not all word characters, so only
+      // a read of the whole quoted name back from its separator judges it.
+      const credentials: Record<string, string> = {
+        "words ending in a credential": `${"a".repeat(260)} access token`,
+        "many short words before one": `${"word ".repeat(60)}token`,
+        "an escaped quote before one": `${"a".repeat(260)} "api" token`,
+        "an escaped quote after one": `${"a".repeat(260)} token for "api"`,
+        "a credential's word at its start": `password ${"x".repeat(300)}`,
+        "one long word ending in one": `${"a".repeat(260)}token`,
+      };
+      const kept: Record<string, string> = {
+        "words saying nothing": `${"a".repeat(260)} display name`,
+        "one long word saying nothing": `${"a".repeat(260)}name`,
+        "an escaped quote saying nothing": `${"a".repeat(260)} display "name"`,
+      };
+
+      it.each(
+        Object.entries(credentials).flatMap(([shape, name]) =>
+          Object.entries(json).map(
+            ([form, write]): [string, string, string] => [
+              `${shape}, as ${form}`,
+              write({ [name]: "long-quoted-secret", page: "2" }),
+              write({ [name]: "[redacted]", page: "2" }),
+            ]
+          )
+        )
+      )("takes the value out after %s", (_, text, expected) => {
+        expect(noteAsLogged(text)).toBe(expected);
+      });
+
+      it.each(
+        Object.entries(kept).flatMap(([shape, name]) =>
+          Object.entries(json).map(([form, write]): [string, string] => [
+            `${shape}, as ${form}`,
+            write({ [name]: "kept-value", page: "2" }),
+          ])
+        )
+      )("keeps the value after %s", (_, text) => {
+        expect(noteAsLogged(text)).toBe(text);
+      });
+
+      it("costs a long line about its length", () => {
+        // Every kind of long name, then one unbroken stretch of escaped
+        // quotes with spaces between them. A long name is read back from its
+        // closing quote over its own text only; read forwards from every
+        // quote with no bound, the stretch would be read from each of its
+        // quotes to its end, and cost its length squared.
+        const unit = [
+          JSON.stringify({
+            [`${"a ".repeat(150)}access token`]: "unit-secret",
+            [`${"c ".repeat(150)}display name`]: "kept",
+          }),
+          JSON.stringify(
+            JSON.stringify({
+              [`${"b ".repeat(150)}token for "api"`]: "unit-secret",
+            })
+          ).slice(1, -1),
+        ].join(" ");
+        const line = (units: number) =>
+          `${Array(units).fill(unit).join(" ")} ${'\\" '.repeat(units * 20)}`;
+        /** The fastest of three runs, in milliseconds, and the last output. */
+        const timed = (text: string): [number, string] => {
+          let best = Infinity;
+          let out = "";
+          for (let run = 0; run < 3; run++) {
+            const start = performance.now();
+            out = String(noteAsLogged(text));
+            best = Math.min(best, performance.now() - start);
+          }
+          return [best, out];
+        };
+        const [small] = timed(line(500));
+        const big = line(4_000);
+        const [large, out] = timed(big);
+        // The population control: the line is about 4 MB, and every
+        // credential in it was found and every other value kept.
+        expect(big.length).toBeGreaterThan(4_000_000);
+        expect(out.split("[redacted]").length - 1).toBe(8_000);
+        expect(out.split('"kept"').length - 1).toBe(4_000);
+        expect(out).not.toContain("unit-secret");
+        // Eight times the line costs about eight times as long. The bound is
+        // generous so a busy machine's timing noise can't fail it, while a
+        // cost of the length squared, sixty-four times, still does.
+        expect(large / small).toBeLessThan(20);
+      }, 120_000);
+    });
   });
 
   it.each([
