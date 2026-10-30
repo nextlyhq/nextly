@@ -222,7 +222,8 @@ allows it: a delete is asked in each language its entry holds, and a delete or a
 delete of several entries judges each entry by its own languages. Where the rule answers
 a filter in each language, the entry must match each language's filter. An update by query
 writes the default language, so it is asked in that language. A collection that keeps no
-languages is asked once.
+languages is asked once. In a collection with localized field groups, a delete asks every
+configured language.
 
 ```ts
 import { defineCollection, text } from "nextly/config";

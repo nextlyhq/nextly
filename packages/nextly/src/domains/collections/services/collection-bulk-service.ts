@@ -2015,11 +2015,14 @@ export class CollectionBulkService extends BaseService {
     // language the collection keeps. Each row is judged per entry when it is
     // fetched, by the answers of the languages it holds.
     const rowGate = batchDeleteRowGate(
-      await this.mutationService.deleteBatchGate({
-        collectionName: params.collectionName,
-        operation: "delete",
-        user: params.user,
-      })
+      await this.mutationService.deleteBatchGate(
+        {
+          collectionName: params.collectionName,
+          operation: "delete",
+          user: params.user,
+        },
+        ids
+      )
     );
     if (typeof rowGate === "object" && "refused" in rowGate) {
       return everyItemRefused(rowGate.refused, ids.length);
@@ -2184,6 +2187,7 @@ export class CollectionBulkService extends BaseService {
           user: params.user,
           executor: tx.getDrizzle(),
         },
+        ids,
         tx
       )
     );

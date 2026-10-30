@@ -598,6 +598,8 @@ type DeleteGateAnswer = Awaited<
  */
 export interface DeleteRowLanguages {
   readonly byLanguage: ReadonlyMap<string, DeleteGateAnswer>;
+  /** The answer for an entry holding no row in any language, asked once. */
+  readonly once: DeleteGateAnswer;
 }
 
 interface DeleteEntryWriteOptions {
@@ -11790,9 +11792,13 @@ export class CollectionMutationService extends BaseService {
   /**
    * The languages a delete of `entryId` removes, which its rule is asked in:
    * each language the entry holds a row in, and every configured language
-   * where the content reaches a localized field group, which keeps its own
-   * rows per language. None for a collection that keeps no languages, whose
-   * rule is asked once. Read on `tx` where one is given.
+   * where its rows cannot be read yet, or where the content reaches a
+   * localized field group. A field group keeps its own rows per language,
+   * and nothing here reads them per language yet, so each configured
+   * language is asked: that refuses where any of them is refused, which can
+   * only refuse more than the entry's own languages would. None for an entry
+   * holding no row in any language, as for a collection that keeps none,
+   * whose rule is asked once. Read on `tx` where one is given.
    */
   private async languagesToDelete(args: {
     collectionName: string;
@@ -11800,13 +11806,15 @@ export class CollectionMutationService extends BaseService {
     fields: readonly { type: string; name?: string }[];
     tx?: TransactionContext;
   }): Promise<string[]> {
+    const configured =
+      this.localization?.locales.map(locale => locale.code) ?? [];
     const held = await this.languagesWithRows(
       args.collectionName,
-      args.entryId,
+      [args.entryId],
       args.tx
     );
-    return languagesToAsk(held, {
-      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+    return languagesToAsk(held ?? configured, {
+      configured,
       reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
         args.fields,
         args.tx
@@ -11815,28 +11823,29 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The languages `entryId` holds a translation row in: none where the
-   * collection keeps no companion, or where the companion is not yet ready,
-   * as no read of it is made before it is. The locale alone is read, which
-   * every companion has, whether or not it keeps a status per language. Read
-   * on `tx` where one is given.
+   * The languages `entryIds` hold a translation row in: none where the
+   * collection keeps no companion, and `undefined`, not known, where the
+   * companion is not yet ready, as no read of it is made before it is. The
+   * locale alone is read, which every companion has, whether or not it
+   * keeps a status per language. Read on `tx` where one is given.
    */
   private async languagesWithRows(
     collectionName: string,
-    entryId: string,
+    entryIds: readonly string[],
     tx?: TransactionContext
-  ): Promise<string[]> {
+  ): Promise<string[] | undefined> {
     const companion = await this.fileManager.loadCompanionSchema(
       collectionName,
       tx?.getDrizzle()
     );
+    if (!companion) return [];
     if (
-      !companion ||
       cachedCompanionReadiness(this.adapter, companion.companionTableName) !==
-        "ready"
+      "ready"
     ) {
-      return [];
+      return undefined;
     }
+    if (entryIds.length === 0) return [];
     const table = companion.table as Record<string, unknown>;
     const db = (tx?.getDrizzle() ?? this.db) as Parameters<
       typeof readCompanionLocaleStatusAll
@@ -11844,7 +11853,7 @@ export class CollectionMutationService extends BaseService {
     const rows = await db
       .select({ locale: table._locale })
       .from(companion.table)
-      .where(eq(table._parent as never, entryId));
+      .where(inArray(table._parent as never, [...entryIds]));
     return [
       ...new Set(
         rows
@@ -11896,6 +11905,7 @@ export class CollectionMutationService extends BaseService {
    */
   async deleteBatchGate(
     gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0],
+    ids: readonly string[],
     tx?: TransactionContext
   ): Promise<DeleteGateAnswer | DeleteRowLanguages> {
     const collection = await this.collectionService.getCollection(
@@ -11914,16 +11924,32 @@ export class CollectionMutationService extends BaseService {
           tx
         )));
     if (!keepsLanguages) return this.accessService.checkCollectionWrite(gate);
+    // Read on the pool only before a transaction is open; inside one the
+    // companion is read as already resolved.
+    if (!tx) await this.warmLocalizedReadiness(gate.collectionName);
+    // Each configured language, and each the batch's entries hold a row in
+    // that is no longer configured, so every language a row holds is asked.
+    const asked = [
+      ...new Set([
+        ...configured,
+        ...((await this.languagesWithRows(gate.collectionName, ids, tx)) ?? []),
+      ]),
+    ];
     const byLanguage = new Map<string, DeleteGateAnswer>();
-    for (const locale of configured) {
+    for (const locale of asked) {
       byLanguage.set(
         locale,
-        await withRuleLanguage({ locale, locales: configured }, () =>
+        await withRuleLanguage({ locale, locales: asked }, () =>
           this.accessService.checkCollectionWrite(gate)
         )
       );
     }
-    return { byLanguage };
+    // For an entry holding no row in any language, judged as a delete of
+    // one is: asked once, in the operation's languages.
+    return {
+      byLanguage,
+      once: await this.accessService.checkCollectionWrite(gate),
+    };
   }
 
   /**
@@ -11957,22 +11983,19 @@ export class CollectionMutationService extends BaseService {
       fields: args.fields,
       tx,
     });
-    // An entry holding no row of its own in any language is judged by every
-    // language the batch was asked in.
-    const languages =
-      held.length > 0
-        ? held
-        : typeof rowGate === "object"
-          ? [...rowGate.byLanguage.keys()]
-          : [];
-    if (languages.length === 0) {
+    // An entry holding no row in any language is judged as a delete of one
+    // is: by the gate asked once, in the operation's languages.
+    if (held.length === 0) {
       return this.deleteRowRefusalIn(
         tx,
         args,
-        await this.accessService.checkCollectionWrite(args.accessParams),
+        typeof rowGate === "object"
+          ? rowGate.once
+          : await this.accessService.checkCollectionWrite(args.accessParams),
         undefined
       );
     }
+    const languages = held;
     for (const locale of languages) {
       const access =
         typeof rowGate === "object"

@@ -67,9 +67,6 @@ const notIn =
   (context: AccessControlContext): boolean =>
     context.locale !== refused;
 
-const ownEntries = (context: AccessControlContext) =>
-  ({ owner: { equals: context.user?.id ?? "" } }) as unknown as boolean;
-
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   // `owner` is translated, so an entry can be the author's in one language
   // and another's in the other.
@@ -91,7 +88,16 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       collection(NOT_GERMAN, notIn("de")),
       collection(NOT_ENGLISH, notIn("en")),
       collection(ANY_LANGUAGE, () => true),
-      collection(OWN, ownEntries),
+      defineCollection({
+        slug: OWN,
+        localized: true,
+        access: {
+          read: () => true,
+          update: ({ user }) => ({ owner: { equals: user?.id ?? "" } }),
+          delete: ({ user }) => ({ owner: { equals: user?.id ?? "" } }),
+        },
+        fields,
+      }),
     ],
   });
   await userWhoMay(current, AUTHOR, "read", SLUGS);
