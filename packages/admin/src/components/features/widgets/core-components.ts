@@ -24,7 +24,6 @@ import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedC
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
 import { NoteCard } from "@admin/components/features/dashboard/NoteCard";
 import { OverTimeCard } from "@admin/components/features/dashboard/OverTimeCard";
-import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentEntriesCard } from "@admin/components/features/dashboard/RecentEntriesCard";
 import { RecentlyEdited } from "@admin/components/features/dashboard/RecentlyEdited";
 import { TeamActivityCard } from "@admin/components/features/dashboard/TeamActivity";
@@ -43,7 +42,6 @@ import { registerCoreComponent } from "@admin/lib/plugins/component-registry-int
 export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#GetStartedCard", GetStartedCard);
   registerCoreComponent("core#CollectionQuickLinks", CollectionQuickLinks);
-  registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#NeedsAttention", NeedsAttention);
   registerCoreComponent("core#TeamActivity", TeamActivityCard);

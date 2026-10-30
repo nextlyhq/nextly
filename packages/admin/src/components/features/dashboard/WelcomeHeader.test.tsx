@@ -18,6 +18,12 @@ import type { SeedResult } from "@admin/services/seedApi";
 import type { DashboardSummary } from "@admin/types/dashboard/summary";
 
 let seedStatus: SeedStatus = { kind: "loading" };
+// The New button reads collections and permissions of its own; the header's
+// tests are about where it stands, so it is a marker here.
+vi.mock("./header/NewSplitButton", () => ({
+  NewSplitButton: () => <div data-testid="dashboard-new" />,
+}));
+
 vi.mock("@admin/hooks/queries/useSeedStatus", () => ({
   useSeedStatus: () => ({
     status: seedStatus,
@@ -260,6 +266,23 @@ describe("the dashboard header", () => {
     cleanup();
     renderHeader({ customizable: true, writing: true });
     expect(screen.getByTestId("dashboard-edit-begin")).toBeDisabled();
+  });
+
+  it("offers New after Customize, and neither while customising", () => {
+    renderHeader({ customizable: true });
+    const customize = screen.getByTestId("dashboard-edit-begin");
+    const create = screen.getByTestId("dashboard-new");
+    expect(
+      customize.compareDocumentPosition(create) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    cleanup();
+    // A reader who may not customise still creates.
+    renderHeader({ customizable: false });
+    expect(screen.getByTestId("dashboard-new")).toBeInTheDocument();
+    cleanup();
+    renderHeader({ customizable: true, editing: true });
+    expect(screen.queryByTestId("dashboard-new")).toBeNull();
   });
 
   it("says all caught up only when every part was read, and nothing when a part failed", () => {

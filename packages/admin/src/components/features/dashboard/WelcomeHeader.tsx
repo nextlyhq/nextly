@@ -10,6 +10,7 @@ import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useDashboardChrome } from "./header/dashboard-chrome";
 import { EnvironmentBadge } from "./header/EnvironmentBadge";
 import { Freshness } from "./header/Freshness";
+import { NewSplitButton } from "./header/NewSplitButton";
 import { SummaryLine } from "./header/SummaryLine";
 
 /**
@@ -111,28 +112,33 @@ export function WelcomeHeader(): JSX.Element {
           onRefresh={() => chrome?.refresh()}
         />
       </div>
-      {chrome?.customizable && !chrome.editing ? (
-        <div className="flex gap-2" data-testid="dashboard-edit-offer">
-          <Button
-            ref={chrome.customizeRef}
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={chrome.begin}
-            // 🔴 Beginning an edit is not itself a write, and it still has to
-            // wait for one: the draft is seeded with the version it will be
-            // saved against, so one opened while a write settles would carry a
-            // guard about to go stale.
-            disabled={chrome.writing}
-            data-testid="dashboard-edit-begin"
-          >
-            {/* "Customize", the word every message about this mode uses: the
-                unreadable-layout notice tells the reader to save "from
-                Customize", so the control has to be called that. */}
-            Customize
-          </Button>
-        </div>
-      ) : null}
+      {/* The header's actions, Customize then New, as the approved design
+          places them; both give way to customise mode's own bar. */}
+      <div className="flex items-center gap-2">
+        {chrome?.customizable && !chrome.editing ? (
+          <div className="flex gap-2" data-testid="dashboard-edit-offer">
+            <Button
+              ref={chrome.customizeRef}
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={chrome.begin}
+              // 🔴 Beginning an edit is not itself a write, and it still has to
+              // wait for one: the draft is seeded with the version it will be
+              // saved against, so one opened while a write settles would carry a
+              // guard about to go stale.
+              disabled={chrome.writing}
+              data-testid="dashboard-edit-begin"
+            >
+              {/* "Customize", the word every message about this mode uses: the
+                  unreadable-layout notice tells the reader to save "from
+                  Customize", so the control has to be called that. */}
+              Customize
+            </Button>
+          </div>
+        ) : null}
+        {chrome?.editing ? null : <NewSplitButton />}
+      </div>
     </header>
   );
 }

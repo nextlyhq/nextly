@@ -41,8 +41,8 @@ import { setDefaultLayoutPlan } from "../default-layout";
  * person it is offered to.
  */
 const AGREED = [
-  ["core/needs-attention", "8x4"],
-  ["core/quick-create", "4x4"],
+  // The full row, as an interim until the approved default layout.
+  ["core/needs-attention", "12x4"],
   ["core/recently-edited", "6x5"],
   ["core/team-activity", "6x5"],
   ["core/content", "12x4"],
@@ -177,9 +177,9 @@ describe.each(getConfiguredTestDialects())(
         ["core/team-activity", "6x5"],
       ]);
 
-      // One collection to read and none to write in: Needs attention and Content, never Create.
+      // One collection to read and none to write in: Needs attention and Content.
       expect(await defaultFor(readerId)).toEqual([
-        ["core/needs-attention", "8x4"],
+        ["core/needs-attention", "12x4"],
         ["core/recently-edited", "6x5"],
         ["core/team-activity", "6x5"],
         ["core/content", "12x4"],
@@ -261,7 +261,7 @@ describe.each(getConfiguredTestDialects())(
       const admin = await account(current, "admin@example.com");
       await refreshContentSources();
       expect(await defaultFor(admin)).toEqual(
-        without("core/content", "core/quick-create", "core/upcoming-releases")
+        without("core/content", "core/upcoming-releases")
       );
     });
   }
