@@ -56,6 +56,7 @@
     "test:ui": "turbo run test:ui",
     "test:unit": "node scripts/bounded.mjs --vitest-workers turbo run test",
     "test:scripts": "node scripts/bounded.mjs --vitest-workers vitest run --dir scripts",
+    "test:fixture-consumer-bundle": "pnpm --filter @nextlyhq/admin check:consumer-bundle",
     "test:integration": "node scripts/bounded.mjs --vitest-workers turbo run test:integration",
     "test:integration:postgres15": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5434/${NEXTLY_TEST_DB:-nextly_test} node scripts/bounded.mjs --vitest-workers turbo run test:integration",
     "test:integration:postgres17": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5435/${NEXTLY_TEST_DB:-nextly_test} node scripts/bounded.mjs --vitest-workers turbo run test:integration",
