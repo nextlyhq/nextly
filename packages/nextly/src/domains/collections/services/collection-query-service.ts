@@ -316,7 +316,7 @@ function namesHiddenColumn(tableName: string, path: string): boolean {
  * single place because three callers agreeing today is not three callers that
  * stay agreed.
  */
-function fieldTrustOf(params: {
+export function fieldTrustOf(params: {
   overrideAccess?: boolean;
   enforceFieldAccess?: boolean;
 }): boolean {
@@ -3634,7 +3634,9 @@ export class CollectionQueryService extends BaseService {
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
-        collectionNotMigrated(this.collectionService, params.collectionName)
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
       );
       // Determine appropriate status code based on error type
       const message =
@@ -4045,7 +4047,7 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
-      return this.countFailed(params.collectionName, error);
+      return this.countFailed(params.collectionName, error, params);
     }
   }
 
@@ -4055,12 +4057,15 @@ export class CollectionQueryService extends BaseService {
    */
   private async countFailed(
     collectionName: string,
-    caught: unknown
+    caught: unknown,
+    caller: { overrideAccess?: boolean; enforceFieldAccess?: boolean } = {}
   ): Promise<CollectionServiceResult<never>> {
     // A count the database is not migrated for answers as such, not as a 500.
     const error = await asNotMigrated(
       caught,
-      collectionNotMigrated(this.collectionService, collectionName)
+      collectionNotMigrated(this.collectionService, collectionName, {
+        trusted: fieldTrustOf(caller),
+      })
     );
     const message =
       error instanceof Error ? error.message : "Failed to count entries";
@@ -4129,7 +4134,7 @@ export class CollectionQueryService extends BaseService {
       };
     } catch (error: unknown) {
       // Reported as `countEntries` reports it, so a refusal stays a typed 403.
-      return this.countFailed(params.collectionName, error);
+      return this.countFailed(params.collectionName, error, params);
     }
   }
 
@@ -4223,7 +4228,9 @@ export class CollectionQueryService extends BaseService {
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
-        collectionNotMigrated(this.collectionService, params.collectionName)
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
       );
       const message =
         error instanceof Error ? error.message : "Failed to group entries";
@@ -4372,7 +4379,9 @@ export class CollectionQueryService extends BaseService {
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
-        collectionNotMigrated(this.collectionService, params.collectionName)
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
       );
       const message =
         error instanceof Error ? error.message : "Failed to build timeseries";
@@ -5146,7 +5155,9 @@ export class CollectionQueryService extends BaseService {
       // A read the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
-        collectionNotMigrated(this.collectionService, params.collectionName)
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
       );
       return {
         success: false,

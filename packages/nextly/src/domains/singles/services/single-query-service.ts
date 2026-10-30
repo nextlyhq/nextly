@@ -114,6 +114,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
@@ -1357,7 +1358,9 @@ export class SingleQueryService extends BaseService {
       return buildSingleErrorResult(
         await asNotMigrated(
           error,
-          singleNotMigrated(this.singleRegistryService, slug)
+          singleNotMigrated(this.singleRegistryService, slug, {
+            trusted: fieldTrustOf(options),
+          })
         ),
         "Failed to get Single document"
       );

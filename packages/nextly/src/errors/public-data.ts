@@ -109,18 +109,18 @@ export type RemovedFromCodePublicData = {
 
 /**
  * Which entity an `ENTITY_NOT_MIGRATED` answer is about and what the database
- * lacks for it: a field's column (`field` names it), the entity's table, or
- * any registration in this running instance. Enough for a client to point at
- * the entity and say what to run, and no SQL and no driver text.
+ * lacks for it: a field's column, the entity's table, or any registration in
+ * this running instance. The kind and slug are the caller's own; `field` and
+ * `table` appear only for trusted server code, since both come from the
+ * registry rather than the request. No SQL and no driver text.
  */
 export type NotMigratedPublicData = {
   kind: "collection" | "single";
   slug: string;
-  table: string;
-} & (
-  | { reason: "column"; field: string }
-  | { reason: "table" | "unregistered" }
-);
+  reason: "column" | "table" | "unregistered";
+  field?: string;
+  table?: string;
+};
 
 export type PublicData =
   | ValidationPublicData

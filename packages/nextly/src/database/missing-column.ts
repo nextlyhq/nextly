@@ -330,7 +330,8 @@ export function tableOfMissingColumn(
 ): string | undefined {
   const at = identifierAt(text, column);
   if (at > 0 && text[at - 1] === ".") {
-    return /([A-Za-z0-9_$]+)["`]?$/.exec(text.slice(0, at - 1))?.[1];
+    // A dashed `dbName` (`dc_legacy-posts`) is one identifier too.
+    return /([A-Za-z0-9_$-]+)["`]?$/.exec(text.slice(0, at - 1))?.[1];
   }
   return (
     /of relation "([^"]+)"/i.exec(text)?.[1] ??
@@ -340,7 +341,7 @@ export function tableOfMissingColumn(
 
 /** A statement's target table: what follows `from`, `into` or `update`. */
 const STATEMENT_TARGET =
-  /^\s*(?:select\b[\s\S]*?\bfrom|insert into|update|delete from)\s+[`"]?([A-Za-z0-9_$]+)/i;
+  /^\s*(?:select\b[\s\S]*?\bfrom|insert into|update|delete from)\s+[`"]?([A-Za-z0-9_$-]+)/i;
 
 /**
  * The table the failed statement was written against, or undefined when

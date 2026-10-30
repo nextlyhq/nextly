@@ -313,6 +313,7 @@ import type {
   QueryDatabaseParams,
 } from "./collection-hook-service";
 import { collectionDbOptions, resolveEntryId } from "./collection-id";
+import { fieldTrustOf } from "./collection-query-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
   toCamelCase,
@@ -4077,42 +4078,53 @@ export class CollectionMutationService extends BaseService {
     );
     const tableName = collectionTableName(collection, params.collectionName);
     // The drafts it removed, counted by the delete made under the lock.
-    return this.adapter.transaction(async tx => {
-      // Serialize with concurrent draft-save upserts, which lock this same parent
-      // row before writing the sidecar.
-      await tx.lockRow(tableName, params.entryId);
-      const draftLocale = workingDraftLocale({
-        documentLocalized:
-          (collection as { localized?: boolean }).localized === true,
-        requestLocale: params.locale ?? null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      });
-      const discardedRef = {
-        scopeKind: "collection" as const,
-        scopeSlug: params.collectionName,
-        entryId: params.entryId,
-      };
-      const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-        discardedRef,
-        draftLocale
-      );
-      await releaseSharedBase(tx, discardedRef, draftLocale);
-      // In the document's history only when there was a draft to discard.
-      if (removed > 0) {
-        await this.recordHistoryEvent(
-          tx,
-          params.collectionName,
-          params.entryId,
-          {
-            kind: "draftDiscarded",
-            actor: actorForWrite(params.actor, params.user),
-            personName: params.user?.name ?? null,
-            ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
-          }
+    return this.adapter
+      .transaction(async tx => {
+        // Serialize with concurrent draft-save upserts, which lock this same parent
+        // row before writing the sidecar.
+        await tx.lockRow(tableName, params.entryId);
+        const draftLocale = workingDraftLocale({
+          documentLocalized:
+            (collection as { localized?: boolean }).localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
+        const discardedRef = {
+          scopeKind: "collection" as const,
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        };
+        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
+          discardedRef,
+          draftLocale
         );
-      }
-      return removed;
-    });
+        await releaseSharedBase(tx, discardedRef, draftLocale);
+        // In the document's history only when there was a draft to discard.
+        if (removed > 0) {
+          await this.recordHistoryEvent(
+            tx,
+            params.collectionName,
+            params.entryId,
+            {
+              kind: "draftDiscarded",
+              actor: actorForWrite(params.actor, params.user),
+              personName: params.user?.name ?? null,
+              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+            }
+          );
+        }
+        return removed;
+      })
+      .catch(async (error: unknown) => {
+        // A discard the database is not migrated for answers as such. Its
+        // transaction rolls back whole, so a failure never follows a kept write.
+        throw await asNotMigrated(
+          error,
+          // No caller trust to judge: a discard takes no `overrideAccess`, so it
+          // is told the collection alone.
+          collectionRowNotMigrated(params.collectionName, collection)
+        );
+      });
   }
 
   /**
@@ -4209,7 +4221,9 @@ export class CollectionMutationService extends BaseService {
         // A write the database is not migrated for answers as such.
         await asNotMigrated(
           error,
-          collectionNotMigrated(this.collectionService, params.collectionName)
+          collectionNotMigrated(this.collectionService, params.collectionName, {
+            trusted: fieldTrustOf(params),
+          })
         ),
         { defaultMessage: "Failed to take the live values" },
         this.dialect
@@ -6253,7 +6267,8 @@ export class CollectionMutationService extends BaseService {
             error,
             collectionNotMigrated(
               this.collectionService,
-              params.collectionName
+              params.collectionName,
+              { trusted: fieldTrustOf(params) }
             ),
             { written: committedWrite }
           ),
@@ -7491,7 +7506,9 @@ export class CollectionMutationService extends BaseService {
       // A publish the database is not migrated for answers as such.
       const thrown = await asNotMigrated(
         publishRefused ?? error,
-        collectionNotMigrated(this.collectionService, params.collectionName),
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        }),
         { written: committedWrite }
       );
       return {
@@ -11634,7 +11651,8 @@ export class CollectionMutationService extends BaseService {
             error,
             collectionNotMigrated(
               this.collectionService,
-              params.collectionName
+              params.collectionName,
+              { trusted: fieldTrustOf(params) }
             ),
             { written: committedWrite }
           ),
@@ -12609,7 +12627,9 @@ export class CollectionMutationService extends BaseService {
       // A delete the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
-        collectionNotMigrated(this.collectionService, params.collectionName),
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        }),
         { written: committedWrite }
       );
       return {
@@ -12701,6 +12721,10 @@ export class CollectionMutationService extends BaseService {
     // The registry row this write read, kept for the catch: a failed statement
     // can leave the transaction unable to read it again (PostgreSQL aborts it).
     let writeRow: Record<string, unknown> | undefined;
+    // Whether this write's row was written, set on the line after the statement
+    // that writes it: a failure from then on is answered as it was, never as a
+    // database to migrate, whose remedy (send it again) would repeat it.
+    let rowWritten = false;
     try {
       // A direct caller runs this inside its own transaction, so every metadata
       // and access read below is bound to that transaction's connection — a
@@ -13048,6 +13072,7 @@ export class CollectionMutationService extends BaseService {
       const entry = await tx.insert<unknown>(tableName, entryData, {
         returning: "*",
       });
+      rowWritten = true;
 
       // The companion row for this write's locale, on the same transaction, so
       // it rolls back with the main row. A brand-new parent has no row to
@@ -13199,9 +13224,10 @@ export class CollectionMutationService extends BaseService {
           // from the row read before the failed statement.
           await asNotMigrated(
             error,
-            collectionRowNotMigrated(params.collectionName, writeRow),
-            // Set only once the row was written.
-            { written: revalidationIntent !== undefined }
+            collectionRowNotMigrated(params.collectionName, writeRow, {
+              trusted: fieldTrustOf(params),
+            }),
+            { written: rowWritten }
           ),
           { defaultMessage: options.failureMessage },
           this.dialect
@@ -13294,6 +13320,10 @@ export class CollectionMutationService extends BaseService {
     // The registry row this write read, kept for the catch: a failed statement
     // can leave the transaction unable to read it again (PostgreSQL aborts it).
     let writeRow: Record<string, unknown> | undefined;
+    // Whether this write's row was written, set on the line after the statement
+    // that writes it: a failure from then on is answered as it was, never as a
+    // database to migrate, whose remedy (send it again) would repeat it.
+    let rowWritten = false;
     // The filters this write was judged by, where a rule answered one: the
     // written row is matched against each again before the write may stand.
     const filteredWrites: FilteredTransactionWrite[] = [];
@@ -13899,6 +13929,7 @@ export class CollectionMutationService extends BaseService {
             this.whereEq("id", entryId),
             { returning: "*" }
           );
+      rowWritten = true;
 
       if (!updated) {
         return {
@@ -14502,9 +14533,10 @@ export class CollectionMutationService extends BaseService {
           // from the row read before the failed statement.
           await asNotMigrated(
             error,
-            collectionRowNotMigrated(params.collectionName, writeRow),
-            // Set only once the row was written.
-            { written: revalidationIntent !== undefined }
+            collectionRowNotMigrated(params.collectionName, writeRow, {
+              trusted: fieldTrustOf(params),
+            }),
+            { written: rowWritten }
           ),
           { defaultMessage: options.failureMessage },
           this.dialect
@@ -14592,6 +14624,10 @@ export class CollectionMutationService extends BaseService {
     // The registry row this write read, kept for the catch: a failed statement
     // can leave the transaction unable to read it again (PostgreSQL aborts it).
     let writeRow: Record<string, unknown> | undefined;
+    // Whether this write's row was written, set on the line after the statement
+    // that writes it: a failure from then on is answered as it was, never as a
+    // database to migrate, whose remedy (send it again) would repeat it.
+    let rowWritten = false;
     try {
       // Get collection metadata early. Runs on the caller's transaction
       // connection so this read does not re-enter the pool from inside the
@@ -14795,6 +14831,7 @@ export class CollectionMutationService extends BaseService {
         tableName,
         this.whereEq("id", entryId)
       );
+      rowWritten = deletedCount > 0;
 
       if (deletedCount === 0) {
         return {
@@ -14946,9 +14983,10 @@ export class CollectionMutationService extends BaseService {
       // the row read before the failed statement.
       const error = await asNotMigrated(
         caught,
-        collectionRowNotMigrated(params.collectionName, writeRow),
-        // Set only once the row was deleted.
-        { written: revalidationIntent !== undefined }
+        collectionRowNotMigrated(params.collectionName, writeRow, {
+          trusted: fieldTrustOf(params),
+        }),
+        { written: rowWritten }
       );
       return {
         success: false,

@@ -58,14 +58,34 @@ export interface NotMigratedEntity {
    * one of its fields, whose column the database has not been given.
    */
   declaredFields?: () => unknown;
+  /**
+   * Who the answer goes to. The field and table are named only to trusted
+   * server code; anyone else, or no caller at all, is told the entity alone.
+   * The log has both either way.
+   */
+  caller?: NotMigratedCaller;
+}
+
+/**
+ * The caller of a failed read or write, as far as trust goes: `trusted` is
+ * what the read's own field trust rule (`fieldTrustOf`) answers for it.
+ */
+export interface NotMigratedCaller {
+  trusted: boolean;
 }
 
 /** A collection, read from the registry service its entry services hold. */
 export function collectionNotMigrated(
   registry: { getCollection(slug: string): Promise<RegistryRowShape | null> },
-  slug: string
+  slug: string,
+  caller?: NotMigratedCaller
 ): NotMigratedEntity {
-  return { kind: "collection", slug, load: () => registry.getCollection(slug) };
+  return {
+    kind: "collection",
+    slug,
+    load: () => registry.getCollection(slug),
+    caller,
+  };
 }
 
 /**
@@ -77,9 +97,15 @@ export function collectionNotMigrated(
  */
 export function collectionRowNotMigrated(
   slug: string,
-  row: RegistryRowShape | undefined
+  row: RegistryRowShape | undefined,
+  caller?: NotMigratedCaller
 ): NotMigratedEntity {
-  return { kind: "collection", slug, load: () => Promise.resolve(row) };
+  return {
+    kind: "collection",
+    slug,
+    load: () => Promise.resolve(row),
+    caller,
+  };
 }
 
 /** A Single, read from the registry service its document services hold. */
@@ -88,13 +114,15 @@ export function singleNotMigrated(
     getSingleBySlug(slug: string): Promise<RegistryRowShape | null>;
     getCodeFirstFields?(slug: string): unknown;
   },
-  slug: string
+  slug: string,
+  caller?: NotMigratedCaller
 ): NotMigratedEntity {
   return {
     kind: "single",
     slug,
     load: () => registry.getSingleBySlug(slug),
     declaredFields: () => registry.getCodeFirstFields?.(slug),
+    caller,
   };
 }
 
@@ -133,15 +161,10 @@ export async function asNotMigrated(
   const row = await entity.load().catch(() => null);
   const table = row?.tableName;
   if (typeof table !== "string" || table.length === 0) return error;
-  const subject = {
-    kind: entity.kind,
-    slug: entity.slug,
-    table,
-    cause: error instanceof Error ? error : undefined,
-  };
+  const cause = error instanceof Error ? error : undefined;
   if (report.object !== "column") {
     return firstIdentifierNamed(report.text, [table]) === table
-      ? NextlyError.notMigrated({ ...subject, reason: report.object })
+      ? answerFor(entity, { reason: report.object, table, cause })
       : error;
   }
   const field = fieldWhoseColumnIsNamed(report.text, [
@@ -156,12 +179,37 @@ export async function asNotMigrated(
       : (tableOfMissingColumn(report.text, field.column) ??
         statementTableOf(error));
   return field !== undefined && isEntityTable(owner, table)
-    ? NextlyError.notMigrated({
-        ...subject,
-        reason: "column",
-        field: field.name,
-      })
+    ? answerFor(entity, { reason: "column", table, field: field.name, cause })
     : error;
+}
+
+/**
+ * The ENTITY_NOT_MIGRATED answer for `entity`, naming the field and table only
+ * to trusted server code. Both come from the registry rather than the request,
+ * so a caller held to access rules is told the entity and the reason alone:
+ * judging whether it may read the field would be a second access decision,
+ * and could disagree with the read's own. The log context carries both.
+ */
+function answerFor(
+  entity: NotMigratedEntity,
+  missing: {
+    reason: "column" | "table" | "unregistered";
+    table: string;
+    field?: string;
+    cause: Error | undefined;
+  }
+): NextlyError {
+  // Judged by each catch through the read's own field trust rule.
+  const trusted = entity.caller?.trusted === true;
+  return NextlyError.notMigrated({
+    kind: entity.kind,
+    slug: entity.slug,
+    reason: missing.reason,
+    ...(trusted && missing.field !== undefined ? { field: missing.field } : {}),
+    ...(trusted ? { table: missing.table } : {}),
+    logContext: { table: missing.table, field: missing.field },
+    cause: missing.cause,
+  });
 }
 
 /**

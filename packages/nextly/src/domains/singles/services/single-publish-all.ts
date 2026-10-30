@@ -51,6 +51,7 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -357,7 +358,9 @@ export class SinglePublishAllService extends BaseService {
       if (refused.denied) return refused.denied;
       throw await publishAllFailure(
         error,
-        singleNotMigrated(this.singleRegistryService, slug)
+        singleNotMigrated(this.singleRegistryService, slug, {
+          trusted: fieldTrustOf(options),
+        })
       );
     }
   }

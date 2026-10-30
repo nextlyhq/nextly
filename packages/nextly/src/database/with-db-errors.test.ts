@@ -87,10 +87,12 @@ describe("asNotMigrated", () => {
       { name: "body", type: "component" },
     ],
   };
+  /** Answered to trusted server code, which is told the field and table. */
   const entity = (row: unknown = posts) => ({
     kind: "collection" as const,
     slug: "posts",
     load: () => Promise.resolve(row as typeof posts),
+    caller: { trusted: true },
   });
   const driver = (message: string, code: string) =>
     Object.assign(new Error(message), { code });
@@ -328,6 +330,7 @@ describe("asNotMigrated", () => {
     // configuration declares it, and the database has no column for it.
     const served = {
       kind: "single" as const,
+      caller: { trusted: true },
       slug: "banner",
       load: () =>
         Promise.resolve({
@@ -360,7 +363,8 @@ describe("asNotMigrated", () => {
           Promise.resolve({ tableName: "single_banner", fields: [] }),
         getCodeFirstFields: () => [{ name: "subtitle", type: "text" }],
       },
-      "banner"
+      "banner",
+      { trusted: true }
     );
     expect(
       await asNotMigrated(
@@ -371,6 +375,79 @@ describe("asNotMigrated", () => {
         entity
       )
     ).toMatchObject({ publicData: { field: "subtitle" } });
+  });
+
+  it("names the field and table only to a caller entitled to them, and always in the log", async () => {
+    // Both come from the registry rather than the request, so a reader is not
+    // told the schema's physical names unless they may know them.
+    const error = wrapped(
+      driver('column "hero_image" does not exist', "42703")
+    );
+    const unknownCaller = (await asNotMigrated(error, {
+      ...entity(),
+      caller: undefined,
+    })) as NextlyError;
+    expect(unknownCaller.publicData).toEqual({
+      reason: "column",
+      kind: "collection",
+      slug: "posts",
+    });
+    expect(unknownCaller.publicMessage).toBe(
+      'The database has not been migrated for a field of the collection "posts". Run `nextly migrate`.'
+    );
+    expect(unknownCaller.logContext).toMatchObject({
+      table: "dc_posts",
+      field: "heroImage",
+    });
+    // A caller held to access rules is told neither.
+    for (const caller of [{ trusted: false }, undefined]) {
+      const held = (await asNotMigrated(error, {
+        ...entity(),
+        caller,
+      })) as NextlyError;
+      expect(held.publicData).toEqual({
+        reason: "column",
+        kind: "collection",
+        slug: "posts",
+      });
+      expect(held.logContext).toMatchObject({
+        table: "dc_posts",
+        field: "heroImage",
+      });
+    }
+    const missingTable = (await asNotMigrated(
+      wrapped(driver("no such table: dc_posts", "SQLITE_ERROR")),
+      { ...entity(), caller: { trusted: false } }
+    )) as NextlyError;
+    expect(missingTable.publicMessage).toBe(
+      'The database has not been migrated for the collection "posts": its table does not exist. Run `nextly migrate`.'
+    );
+    expect(missingTable.publicData).not.toHaveProperty("table");
+  });
+
+  it("reads a dashed table name as one identifier", async () => {
+    // A collection's `dbName` may contain a dash.
+    expect(
+      await asNotMigrated(
+        driver("column dc_legacy-posts.title does not exist", "42703"),
+        entity({ tableName: "dc_legacy-posts", fields: posts.fields })
+      )
+    ).toMatchObject({
+      publicData: {
+        reason: "column",
+        field: "title",
+        table: "dc_legacy-posts",
+      },
+    });
+    expect(
+      await asNotMigrated(
+        Object.assign(
+          driver("Unknown column 'title' in 'field list'", "1054"),
+          { sql: "SELECT `title` FROM `dc_legacy-posts`" }
+        ),
+        entity({ tableName: "dc_legacy-posts", fields: posts.fields })
+      )
+    ).toMatchObject({ publicData: { field: "title" } });
   });
 
   it("leaves a NextlyError as it was", async () => {

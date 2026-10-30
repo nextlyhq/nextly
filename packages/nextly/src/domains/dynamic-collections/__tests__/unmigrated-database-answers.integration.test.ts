@@ -19,7 +19,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runWithRequestCaller } from "../../../auth/caller-scope";
 import { defineCollection, defineSingle, text } from "../../../config";
@@ -34,6 +34,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { DynamicCollectionService } from "../services/dynamic-collection-service";
 import { ServiceContainer } from "../../../services/index";
 
 const POSTS = "um_posts";
@@ -104,7 +105,12 @@ async function boot(dialect: TestDialect): Promise<{
     collections: [
       defineCollection({
         slug: POSTS,
-        fields: [text({ name: "title" }), text({ name: "subtitle" })],
+        fields: [
+          text({ name: "title" }),
+          // Readable only by trusted server code, so a REST caller is never
+          // told its name.
+          text({ name: "subtitle", access: { read: () => false } }),
+        ],
       }),
       defineCollection({
         slug: PUB,
@@ -116,7 +122,12 @@ async function boot(dialect: TestDialect): Promise<{
     singles: [
       defineSingle({
         slug: BANNER,
-        fields: [text({ name: "title" }), text({ name: "subtitle" })],
+        fields: [
+          text({ name: "title" }),
+          // Readable only by trusted server code, so a REST caller is never
+          // told its name.
+          text({ name: "subtitle", access: { read: () => false } }),
+        ],
       }),
       defineSingle({
         slug: PUB_BANNER,
@@ -441,7 +452,35 @@ async function expectEveryAnswer(
 ): Promise<void> {
   for (const operation of operations) {
     const answer = await operation.run(target.key, target.id);
-    const want = expected(operation);
+    let want = expected(operation);
+    // REST callers are held to access rules: never told the table, and not
+    // the field either, since `subtitle`'s read rule denies them. The Direct
+    // API runs as trusted server code and is told both.
+    if (operation.name.startsWith("REST")) {
+      const { table, field, ...shown } = want.data;
+      want = {
+        data: shown,
+        names: want.names.filter(
+          name => name !== `"${String(table)}"` && name !== `"${String(field)}"`
+        ),
+      };
+      expect
+        .soft(answer.data, `${operation.name} withholds the table`)
+        .not.toHaveProperty("table");
+      expect
+        .soft(answer.data, `${operation.name} withholds the field`)
+        .not.toHaveProperty("field");
+      for (const hidden of [table, field]) {
+        if (typeof hidden === "string") {
+          expect
+            .soft(
+              answer.message,
+              `${operation.name}'s message withholds ${hidden}`
+            )
+            .not.toContain(`"${hidden}"`);
+        }
+      }
+    }
     expect
       .soft(answer, `${operation.name} answers ENTITY_NOT_MIGRATED`)
       .toMatchObject({
@@ -487,6 +526,41 @@ describe.each(getConfiguredTestDialects())(
           names: [`"${slug}"`, `"subtitle"`, "not been migrated"],
         };
       });
+      // Neither name for a read that enforces field rules though it overrides
+      // document access (a preview link's), nor for a super-admin over REST:
+      // only trusted server code is told the schema's physical names.
+      const withheld = [
+        await viaDirect(() =>
+          direct().findByID({
+            collection: POSTS,
+            id: target.id,
+            overrideAccess: true,
+            enforceFieldAccess: true,
+          })
+        ),
+        await viaDirect(() =>
+          asOwner(target.owner, () =>
+            dispatchCollections(
+              new ServiceContainer(t().adapter),
+              "listEntries",
+              { collectionName: POSTS } as never,
+              undefined
+            )
+          )
+        ),
+      ];
+      for (const [i, answer] of withheld.entries()) {
+        expect.soft(answer, `withheld answer ${i}`).toMatchObject({
+          code: "ENTITY_NOT_MIGRATED",
+          data: { reason: "column", kind: "collection", slug: POSTS },
+        });
+        expect
+          .soft(answer.data, `withheld answer ${i}`)
+          .not.toHaveProperty("field");
+        expect
+          .soft(answer.data, `withheld answer ${i}`)
+          .not.toHaveProperty("table");
+      }
     }, 120_000);
 
     it("names the entity and its table when its table is missing", async () => {
@@ -549,8 +623,22 @@ describe.each(getConfiguredTestDialects())(
               }),
           ],
         ];
+        // A registry read on the pool while the caller's transaction holds a
+        // connection could wait forever on a small pool: the answer comes
+        // from the row the write read on its own transaction.
+        const registryReads = vi.spyOn(
+          DynamicCollectionService.prototype,
+          "getCollection"
+        );
         for (const [name, write] of writes) {
+          registryReads.mockClear();
           const result = await inTransaction(write);
+          expect
+            .soft(
+              registryReads.mock.calls.filter(call => call[1] === undefined),
+              `${name} reads no registry row on the pool`
+            )
+            .toEqual([]);
           expect
             .soft(
               result,
@@ -568,6 +656,59 @@ describe.each(getConfiguredTestDialects())(
       },
       120_000
     );
+
+    it("names the entity when discarding a working draft finds its table missing", async () => {
+      // The root-exported discards, called directly: their own transaction
+      // meets the missing table first. Not trusted server code, so the table
+      // is not named.
+      const target = await boot(dialect);
+      for (const table of [POSTS_TABLE, BANNER_TABLE]) {
+        await execute(`DROP TABLE ${quoted(dialect, table)}`);
+      }
+      const discards: Array<[string, string, string, () => Promise<unknown>]> =
+        [
+          [
+            "collection discard",
+            "collection",
+            POSTS,
+            () =>
+              (
+                t().getService("collectionsHandler") as unknown as {
+                  discardWorkingDraft(
+                    p: Record<string, unknown>
+                  ): Promise<void>;
+                }
+              ).discardWorkingDraft({
+                collectionName: POSTS,
+                entryId: target.id,
+              }),
+          ],
+          [
+            "Single discard",
+            "single",
+            BANNER,
+            () =>
+              (
+                t().getService("singleEntryService") as unknown as {
+                  discardWorkingDraft(
+                    p: Record<string, unknown>
+                  ): Promise<void>;
+                }
+              ).discardWorkingDraft({ slug: BANNER }),
+          ],
+        ];
+      for (const [name, kind, slug, run] of discards) {
+        const answer = await viaDirect(run);
+        expect.soft(answer, name).toMatchObject({
+          status: 409,
+          code: "ENTITY_NOT_MIGRATED",
+          data: { reason: "table", kind, slug },
+        });
+        expect
+          .soft(answer.data, `${name} withholds the table`)
+          .not.toHaveProperty("table");
+      }
+    }, 120_000);
 
     it("names the entity and its table when publishing every language finds its table missing", async () => {
       const target = await boot(dialect);
@@ -613,16 +754,16 @@ describe.each(getConfiguredTestDialects())(
         ];
       for (const [name, kind, slug, run] of publishes) {
         const answer = await viaDirect(run);
+        // Through the REST dispatcher, held to access rules: the entity, and
+        // not its table.
         expect.soft(answer, name).toMatchObject({
           status: 409,
           code: "ENTITY_NOT_MIGRATED",
-          data: {
-            reason: "table",
-            kind,
-            slug,
-            table: kind === "single" ? `single_${slug}` : `dc_${slug}`,
-          },
+          data: { reason: "table", kind, slug },
         });
+        expect
+          .soft((answer as Answer).data, `${name} withholds the table`)
+          .not.toHaveProperty("table");
       }
     }, 120_000);
 

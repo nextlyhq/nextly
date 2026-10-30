@@ -465,12 +465,20 @@ export class NextlyError extends Error {
   ): NextlyError {
     const { cause, logContext, ...publicData } = opts;
     const entity = `${publicData.kind === "single" ? "Single" : "collection"} "${publicData.slug}"`;
+    // A field or table is named only when the caller passed it in, that is,
+    // only to a caller who may know it; the log always has both.
+    const field =
+      publicData.field === undefined
+        ? "a field"
+        : `the field "${publicData.field}"`;
+    const table =
+      publicData.table === undefined ? "" : ` "${publicData.table}"`;
     const publicMessage =
       publicData.reason === "column"
-        ? `The database has not been migrated for the field "${publicData.field}" of the ${entity}. Run \`nextly migrate\`.`
+        ? `The database has not been migrated for ${field} of the ${entity}. Run \`nextly migrate\`.`
         : publicData.reason === "table"
-          ? `The database has not been migrated for the ${entity}: its table "${publicData.table}" does not exist. Run \`nextly migrate\`.`
-          : `The ${entity} (table "${publicData.table}") is not registered in this running instance. Run \`nextly migrate\`, then restart the server.`;
+          ? `The database has not been migrated for the ${entity}: its table${table} does not exist. Run \`nextly migrate\`.`
+          : `The ${entity}${publicData.table === undefined ? "" : ` (table "${publicData.table}")`} is not registered in this running instance. Run \`nextly migrate\`, then restart the server.`;
     return new NextlyError({
       code: "ENTITY_NOT_MIGRATED",
       publicMessage,
