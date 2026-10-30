@@ -1720,6 +1720,15 @@ describe.each(getConfiguredTestDialects())(
       expect(new Set(documents.map(document => document?.entryId))).toEqual(
         new Set(entries)
       );
+      // Each stored as a JSON document, not as a JSON string holding one: the
+      // adapter hands a stored document back as a value on every dialect, so
+      // a string read back here is a value written twice-encoded.
+      for (const row of events) {
+        expect([String(row.id), typeof row.payload]).toEqual([
+          String(row.id),
+          "object",
+        ]);
+      }
       // The events about no document keep their payloads as they were
       // written: JSON text on SQLite, a value elsewhere.
       const others = events

@@ -416,8 +416,13 @@ async function followRename(
  * Write the derived rows' new slug and values. Rows are written many to a
  * statement, each column's value chosen per row by id, so a table with a row
  * per person and document moves in a bounded number of statements rather than
- * one per row. A JSON column's value is bound as that column stores it
- * ({@link jsonValue}).
+ * one per row.
+ *
+ * A JSON column is the exception, and rows deriving one are written one
+ * statement each. The one such declaration, events not yet fanned out, keeps
+ * a whole delivery envelope per row, document and all, so a statement of many
+ * could pass a server's packet limit; it holds only what the delivery drain
+ * has yet to reach.
  */
 async function writeDerived(
   tx: TransactionContext,
@@ -434,7 +439,14 @@ async function writeDerived(
     derived,
     sqlColumns: columnsBySqlName(declared.table),
   };
-  await writeDerivedBatched(tx, target, rows, move);
+  const writesJson = derived.columns.some(name =>
+    target.sqlColumns.get(name)?.dataType.split(" ").includes("json")
+  );
+  if (writesJson) {
+    await writeDerivedEach(tx, target, rows, move);
+  } else {
+    await writeDerivedBatched(tx, target, rows, move);
+  }
 }
 
 /** Where derived rows are written: the declared table and its declaration. */
@@ -453,6 +465,32 @@ function columnsBySqlName(table: Table): ReadonlyMap<string, Column> {
       sqlColumn,
     ])
   );
+}
+
+/** Write each derived row in a statement of its own. */
+async function writeDerivedEach(
+  tx: TransactionContext,
+  { properties, column, derived }: DerivedTarget,
+  rows: readonly DerivedRow[],
+  move: EntitySlugMove
+): Promise<void> {
+  const rowIdProperty = property(properties, column, derived.rowId);
+  for (const row of rows) {
+    await tx.update(
+      column.table,
+      {
+        [property(properties, column, column.slugColumn)]: move.to,
+        // Only the columns the declaration derived again: one it left out
+        // holds a value someone chose, and keeps it.
+        ...Object.fromEntries(
+          derived.columns
+            .filter(name => name in row.values)
+            .map(name => [property(properties, column, name), row.values[name]])
+        ),
+      },
+      { and: [{ column: rowIdProperty, op: "=", value: row.id }] }
+    );
+  }
 }
 
 /** A declared table's Drizzle column, refusing a declaration it lacks. */
@@ -485,7 +523,7 @@ function rowIdColumn({ column, derived, sqlColumns }: DerivedTarget): Column {
  * out for keeps its value.
  */
 function batchAssignments(
-  { dialect, properties, column, derived, sqlColumns }: DerivedTarget,
+  { properties, column, derived, sqlColumns }: DerivedTarget,
   rowId: Column,
   batch: readonly DerivedRow[],
   move: EntitySlugMove
@@ -497,12 +535,8 @@ function batchAssignments(
     const sqlColumn = sqlColumns.get(name);
     const chosen = batch.filter(row => name in row.values);
     if (sqlColumn === undefined || chosen.length === 0) continue;
-    const valueOf = (row: DerivedRow) =>
-      holdsJson(sqlColumn)
-        ? jsonValue(dialect, sqlColumn, row.values[name])
-        : row.values[name];
     values[property(properties, column, name)] = sql`CASE ${rowId} ${sql.join(
-      chosen.map(row => sql`WHEN ${row.id} THEN ${valueOf(row)}`),
+      chosen.map(row => sql`WHEN ${row.id} THEN ${row.values[name]}`),
       sql` `
     )} ELSE ${sqlColumn} END`;
   }
@@ -689,30 +723,45 @@ async function rewriteJson(
   }
 }
 
-/** Whether a Drizzle column holds JSON, as its data type says. */
-function holdsJson(sqlColumn: Column): boolean {
-  return sqlColumn.dataType.split(" ").includes("json");
-}
-
 /**
  * A JSON value as the column stores it, bound as a parameter: encoded by the
  * column itself, as any write through it is, and cast to the column's JSON
  * type where the dialect has one. A bare parameter is text to PostgreSQL,
- * which will not assign text to a `jsonb` column, and a string to MySQL,
- * which would store it as a JSON string rather than the document; SQLite
- * keeps JSON as text.
+ * which will not assign text to `jsonb`, and a string to MySQL, which would
+ * store it as a JSON string rather than the document; SQLite keeps JSON as
+ * text. A declaration's JSON column holds JSON on every dialect.
  */
 function jsonValue(
   dialect: SupportedDialect,
   valueColumn: Column,
   value: unknown
 ): SQL {
-  const encoded = sql.param(value, valueColumn);
-  if (dialect === "sqlite" || !holdsJson(valueColumn)) return sql`${encoded}`;
-  const type = valueColumn.getSQLType();
-  return dialect === "postgresql"
-    ? sql`CAST(${encoded} AS ${sql.raw(type)})`
-    : sql`CAST(${encoded} AS JSON)`;
+  const encoded = sql.param(unserialized(value), valueColumn);
+  switch (dialect) {
+    case "postgresql":
+      return valueColumn.getSQLType() === "json"
+        ? sql`CAST(${encoded} AS json)`
+        : sql`CAST(${encoded} AS jsonb)`;
+    case "mysql":
+      return sql`CAST(${encoded} AS JSON)`;
+    case "sqlite":
+      return sql`${encoded}`;
+  }
+}
+
+/**
+ * A value read back as its JSON text, as SQLite returns one, parsed first:
+ * the column's encoder serializes whatever it is handed, so text would be
+ * serialized twice. The adapter's own writes to a JSON column do the same;
+ * text that does not parse is written as it is.
+ */
+function unserialized(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
 }
 
 /** A row id as a statement parameter, refusing a row read without one. */
