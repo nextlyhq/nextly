@@ -8,7 +8,9 @@
  * The same rule on a plain select is the control: it admits the entry whose
  * value differs, so the refusal is the structured field's, not the rule's.
  *
- * Asked as a visitor, whose read is judged by the collection's rule alone.
+ * Asked as a visitor, whom the Public role grants the read, so the
+ * collection's rule is what narrows it; on each configured database, since
+ * the column a structured field is stored in differs by dialect.
  *
  * A delete rule's filter is refused the same way: applied as written, the
  * entry whose list holds `a` would be deleted. Asked as a signed-in user
@@ -22,10 +24,13 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
 import { defineCollection, option, select, text } from "../../../config";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { consoleLogger } from "../../../shared/types";
@@ -50,9 +55,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function boot(): Promise<TestNextly> {
+async function boot(dialect: TestDialect): Promise<TestNextly> {
   const options = [option("a"), option("b")];
   current = await createTestNextly({
+    dialect,
+    // The cases read as a visitor, judged by the Public role a real boot
+    // makes. Each read rule answers a filter rather than `true`, so boot
+    // grants Public no read of them; it is granted below, as a site admin
+    // would, so the filter is what decides which entries a visitor sees.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: TAGGED,
@@ -88,6 +99,7 @@ async function boot(): Promise<TestNextly> {
       }),
     ],
   });
+  await grantPublic(current, [`read-${TAGGED}`, `read-${SORTED}`]);
   // A code rule only narrows a permission, so the author holds both.
   const deletable = [TAGGED_DELETES, SORTED_DELETES];
   await userWhoMay(current, AUTHOR, "read", deletable);
@@ -100,88 +112,98 @@ const asVisitor = { overrideAccess: false } as const;
 const titles = (items: readonly unknown[]) =>
   items.map(item => (item as { title?: unknown }).title).sort();
 
-describe("a read rule's filter on a field stored as JSON", () => {
-  it("matches no entry, and the rule is reported", async () => {
-    const t = await boot();
-    await t.nextly.create({
-      collection: TAGGED,
-      data: { title: "holds-a", tags: ["a"] },
+describe.each(getConfiguredTestDialects())(
+  "a read rule's filter on a field stored as JSON (%s)",
+  dialect => {
+    it("matches no entry, and the rule is reported", async () => {
+      const t = await boot(dialect);
+      await t.nextly.create({
+        collection: TAGGED,
+        data: { title: "holds-a", tags: ["a"] },
+      });
+      await t.nextly.create({
+        collection: TAGGED,
+        data: { title: "holds-b", tags: ["b"] },
+      });
+      await t.nextly.create({
+        collection: SORTED,
+        data: { title: "is-a", tag: "a" },
+      });
+      await t.nextly.create({
+        collection: SORTED,
+        data: { title: "is-b", tag: "b" },
+      });
+      const errors = vi.spyOn(consoleLogger, "error");
+
+      // The control: on a plain select the rule admits the entry it does not
+      // name, so the filter is applied.
+      const sorted = await t.nextly.find({ collection: SORTED, ...asVisitor });
+      expect(titles(sorted.items)).toEqual(["is-b"]);
+
+      const tagged = await t.nextly.find({ collection: TAGGED, ...asVisitor });
+      expect(titles(tagged.items)).toEqual([]);
+      expect(
+        (await t.nextly.count({ collection: TAGGED, ...asVisitor })).total
+      ).toBe(0);
+      expect(
+        errors.mock.calls.some(([message]) =>
+          String(message).includes(`"${TAGGED}"`)
+        )
+      ).toBe(true);
     });
-    await t.nextly.create({
-      collection: TAGGED,
-      data: { title: "holds-b", tags: ["b"] },
-    });
-    await t.nextly.create({
-      collection: SORTED,
-      data: { title: "is-a", tag: "a" },
-    });
-    await t.nextly.create({
-      collection: SORTED,
-      data: { title: "is-b", tag: "b" },
-    });
-    const errors = vi.spyOn(consoleLogger, "error");
+  }
+);
 
-    // The control: on a plain select the rule admits the entry it does not
-    // name, so the filter is applied.
-    const sorted = await t.nextly.find({ collection: SORTED, ...asVisitor });
-    expect(titles(sorted.items)).toEqual(["is-b"]);
+describe.each(getConfiguredTestDialects())(
+  "a delete rule's filter on a field stored as JSON (%s)",
+  dialect => {
+    const asAuthor = { overrideAccess: false, user: { id: AUTHOR } } as const;
+    const stillThere = async (t: TestNextly, collection: string, id: string) =>
+      (await t.nextly.find({ collection, where: { id: { equals: id } } })).items
+        .length === 1;
 
-    const tagged = await t.nextly.find({ collection: TAGGED, ...asVisitor });
-    expect(titles(tagged.items)).toEqual([]);
-    expect(
-      (await t.nextly.count({ collection: TAGGED, ...asVisitor })).total
-    ).toBe(0);
-    expect(
-      errors.mock.calls.some(([message]) =>
-        String(message).includes(`"${TAGGED}"`)
-      )
-    ).toBe(true);
-  });
-});
-
-describe("a delete rule's filter on a field stored as JSON", () => {
-  const asAuthor = { overrideAccess: false, user: { id: AUTHOR } } as const;
-  const stillThere = async (t: TestNextly, collection: string, id: string) =>
-    (await t.nextly.find({ collection, where: { id: { equals: id } } })).items
-      .length === 1;
-
-  it("deletes nothing, the entry the rule meant to refuse included, and the rule is reported", async () => {
-    const t = await boot();
-    const holdsA = String(
-      (
-        await t.nextly.create({
-          collection: TAGGED_DELETES,
-          data: { title: "holds-a", tags: ["a"] },
-        })
-      ).item.id
-    );
-    const isB = String(
-      (
-        await t.nextly.create({
-          collection: SORTED_DELETES,
-          data: { title: "is-b", tag: "b" },
-        })
-      ).item.id
-    );
-    const errors = vi.spyOn(consoleLogger, "error");
-
-    // The control: on a plain select the rule deletes the entry it does not
-    // name, so the filter is applied.
-    await t.nextly.delete({ collection: SORTED_DELETES, id: isB, ...asAuthor });
-    expect(await stillThere(t, SORTED_DELETES, isB)).toBe(false);
-
-    const refused = await t.nextly
-      .delete({ collection: TAGGED_DELETES, id: holdsA, ...asAuthor })
-      .then(
-        () => undefined,
-        (error: unknown) => error
+    it("deletes nothing, the entry the rule meant to refuse included, and the rule is reported", async () => {
+      const t = await boot(dialect);
+      const holdsA = String(
+        (
+          await t.nextly.create({
+            collection: TAGGED_DELETES,
+            data: { title: "holds-a", tags: ["a"] },
+          })
+        ).item.id
       );
-    expect(refused).toBeDefined();
-    expect(await stillThere(t, TAGGED_DELETES, holdsA)).toBe(true);
-    expect(
-      errors.mock.calls.some(([message]) =>
-        String(message).includes(`"${TAGGED_DELETES}"`)
-      )
-    ).toBe(true);
-  });
-});
+      const isB = String(
+        (
+          await t.nextly.create({
+            collection: SORTED_DELETES,
+            data: { title: "is-b", tag: "b" },
+          })
+        ).item.id
+      );
+      const errors = vi.spyOn(consoleLogger, "error");
+
+      // The control: on a plain select the rule deletes the entry it does
+      // not name, so the filter is applied.
+      await t.nextly.delete({
+        collection: SORTED_DELETES,
+        id: isB,
+        ...asAuthor,
+      });
+      expect(await stillThere(t, SORTED_DELETES, isB)).toBe(false);
+
+      const refused = await t.nextly
+        .delete({ collection: TAGGED_DELETES, id: holdsA, ...asAuthor })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      expect(refused).toBeDefined();
+      expect(await stillThere(t, TAGGED_DELETES, holdsA)).toBe(true);
+      expect(
+        errors.mock.calls.some(([message]) =>
+          String(message).includes(`"${TAGGED_DELETES}"`)
+        )
+      ).toBe(true);
+    });
+  }
+);
