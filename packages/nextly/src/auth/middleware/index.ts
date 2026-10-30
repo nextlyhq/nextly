@@ -779,8 +779,9 @@ type OperationLanguage =
  *   `_translated` filter, is told every language; see `readLanguagesFor`.
  * - `write`: a write of one language's content, `?locale=` (every language
  *   for `*`) or the default.
- * - `as-named`: an autosave, discarding a working draft, or sharing a preview
- *   link to one language, which keep the language as the request names it: a
+ * - `as-named`: an autosave, discarding a working draft, taking the live
+ *   values into one, or sharing a preview link to one language, which keep
+ *   the language as the request names it: a
  *   language the site does not configure is told every language, not the
  *   default a write resolves it to. A preview link naming no language is
  *   shared with no operation named, so it is told every language.
@@ -803,6 +804,7 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["createEntry", "write"],
   ["updateEntry", "write"],
   ["discardWorkingDraft", "as-named"],
+  ["takeLiveSharedValues", "as-named"],
   ["autosaveEntry", "as-named"],
   ["updateSingleDocument", "write"],
   ["autosaveSingle", "as-named"],
