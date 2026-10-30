@@ -69,27 +69,47 @@ export function readsAsPostgresJson(text: string): boolean {
   return escapesReadAsJsonb(text);
 }
 
+/** Which half of a UTF-16 surrogate pair a code unit is, or null when it is neither. */
+function surrogateHalf(unit: number): "high" | "low" | null {
+  if (unit >= 0xd800 && unit <= 0xdbff) return "high";
+  if (unit >= 0xdc00 && unit <= 0xdfff) return "low";
+  return null;
+}
+
 /**
- * Whether every `\u` escape in a parsed JSON text is one `jsonb` accepts.
+ * Each `\u` escape in a JSON text: its code unit, where it starts and where it ends.
  *
- * The scan consumes each escape whole, so `\\u0000`, an escaped backslash followed by the letters
+ * The scan consumes every escape whole, so `\\u0000`, an escaped backslash followed by the letters
  * `u0000`, is read as the text it is and not as an escape.
  */
-function escapesReadAsJsonb(text: string): boolean {
+function* unicodeEscapes(
+  text: string
+): Generator<{ unit: number; start: number; end: number }> {
   const escapes = /\\(?:u([0-9a-fA-F]{4})|.)/g;
+  for (let match = escapes.exec(text); match; match = escapes.exec(text)) {
+    if (match[1] !== undefined) {
+      yield {
+        unit: parseInt(match[1], 16),
+        start: match.index,
+        end: escapes.lastIndex,
+      };
+    }
+  }
+}
+
+/** Whether every `\u` escape in a parsed JSON text is one `jsonb` accepts. */
+function escapesReadAsJsonb(text: string): boolean {
   // Where the escape after a high half must start for the two to pair, or -1 when none waits.
   let highEnd = -1;
-  for (let match = escapes.exec(text); match; match = escapes.exec(text)) {
-    const unit = match[1] === undefined ? undefined : parseInt(match[1], 16);
-    const isLow = unit !== undefined && unit >= 0xdc00 && unit <= 0xdfff;
+  for (const { unit, start, end } of unicodeEscapes(text)) {
+    const half = surrogateHalf(unit);
     if (highEnd !== -1) {
-      if (!isLow || match.index !== highEnd) return false;
+      if (half !== "low" || start !== highEnd) return false;
       highEnd = -1;
-      continue;
-    }
-    if (unit === 0 || isLow) return false;
-    if (unit !== undefined && unit >= 0xd800 && unit <= 0xdbff) {
-      highEnd = escapes.lastIndex;
+    } else if (unit === 0 || half === "low") {
+      return false;
+    } else if (half === "high") {
+      highEnd = end;
     }
   }
   return highEnd === -1;
@@ -98,6 +118,13 @@ function escapesReadAsJsonb(text: string): boolean {
 /** Whether `c` is a space as PostgreSQL's array reader skips it. */
 function isArraySpace(c: string): boolean {
   return /\s/.test(c);
+}
+
+/** The first position at or after `i` that is not a space. */
+function skipSpaces(body: string, i: number): number {
+  let at = i;
+  while (at < body.length && isArraySpace(body.charAt(at))) at += 1;
+  return at;
 }
 
 /**
@@ -114,11 +141,9 @@ export function readsAsPostgresTextArray(text: string): boolean {
   if (body.trim() === "") return true;
   let i = 0;
   for (;;) {
-    while (i < body.length && isArraySpace(body.charAt(i))) i += 1;
-    const end = readArrayElement(body, i);
+    const end = readArrayElement(body, skipSpaces(body, i));
     if (end === null) return false;
-    i = end;
-    while (i < body.length && isArraySpace(body.charAt(i))) i += 1;
+    i = skipSpaces(body, end);
     if (i === body.length) return true;
     if (body.charAt(i) !== ",") return false;
     i += 1;
@@ -127,28 +152,36 @@ export function readsAsPostgresTextArray(text: string): boolean {
 
 /** Where one array element starting at `start` ends, or null when it is not one PostgreSQL reads. */
 function readArrayElement(body: string, start: number): number | null {
-  if (body.charAt(start) === '"') {
-    for (let i = start + 1; i < body.length; i += 1) {
-      const c = body.charAt(i);
-      if (c === "\\") i += 1;
-      else if (c === '"') return i + 1;
-    }
-    return null;
+  return body.charAt(start) === '"'
+    ? readQuotedElement(body, start)
+    : readUnquotedElement(body, start);
+}
+
+/** A quoted element: up to its closing quote, a backslash taking the next character as it is. */
+function readQuotedElement(body: string, start: number): number | null {
+  for (let i = start + 1; i < body.length; i += 1) {
+    const c = body.charAt(i);
+    if (c === "\\") i += 1;
+    else if (c === '"') return i + 1;
   }
+  return null;
+}
+
+/** Characters an unquoted element cannot hold: they open or close a dimension or a quoted element. */
+const ARRAY_DELIMITERS = new Set(["{", "}", '"']);
+
+/** An unquoted element: up to the next comma, holding at least one character that is not a space. */
+function readUnquotedElement(body: string, start: number): number | null {
   let i = start;
   let read = false;
-  while (i < body.length) {
+  while (i < body.length && body.charAt(i) !== ",") {
     const c = body.charAt(i);
-    if (c === ",") break;
-    if (c === "{" || c === "}" || c === '"') return null;
-    if (c === "\\") {
-      if (i + 1 >= body.length) return null;
-      i += 2;
-      read = true;
-      continue;
-    }
-    if (!isArraySpace(c)) read = true;
-    i += 1;
+    if (ARRAY_DELIMITERS.has(c)) return null;
+    // A backslash takes the next character as it is, so the two are read together.
+    const width = c === "\\" ? 2 : 1;
+    if (i + width > body.length) return null;
+    if (width === 2 || !isArraySpace(c)) read = true;
+    i += width;
   }
   return read ? i : null;
 }
@@ -186,45 +219,57 @@ function asReal(text: string): number | null {
   return DECIMAL_LITERAL.test(text) ? Number(text) : null;
 }
 
+/** A number rendered as text, as a TEXT column stores it; anything else as it was. */
+function storedAsText(value: SqliteValue): SqliteValue {
+  return value.storage === "integer" || value.storage === "real"
+    ? { storage: "text", text: value.text }
+    : value;
+}
+
 /**
- * The value a rebuilt SQLite column stores when `value` is copied into a column of `affinity`.
- *
- * SQLite's datatype rules: a TEXT column renders a number as text; a NUMERIC or INTEGER column makes
- * a text that is an integer literal an INTEGER, any other number literal a REAL, and a REAL with no
- * fraction an INTEGER; a REAL column makes an integer or a number literal a REAL. Anything else is
- * stored as it was. A number's text is the one `CAST(... AS TEXT)` gives, which is what the reader
- * reads, so a TEXT column stores exactly the text the judgement was handed.
+ * A NUMERIC or INTEGER column's value: a text that is an integer literal becomes an INTEGER, any
+ * other number literal a REAL, and a REAL with no fraction an INTEGER.
+ */
+function storedAsNumeric(value: SqliteValue): SqliteValue {
+  if (value.storage === "real")
+    return realAsInteger(Number(value.text)) ?? value;
+  if (value.storage !== "text") return value;
+  const trimmed = value.text.trim();
+  const real = asReal(trimmed);
+  if (real === null) return value;
+  return (
+    asInteger(trimmed) ??
+    realAsInteger(real) ?? { storage: "real", text: String(real) }
+  );
+}
+
+/** A REAL column's value: an integer or a text that is a number literal becomes a REAL. */
+function storedAsReal(value: SqliteValue): SqliteValue {
+  if (value.storage === "integer") {
+    return { storage: "real", text: String(Number(BigInt(value.text))) };
+  }
+  if (value.storage !== "text") return value;
+  const real = asReal(value.text.trim());
+  return real === null ? value : { storage: "real", text: String(real) };
+}
+
+const STORED_AS: Record<SqliteAffinity, (value: SqliteValue) => SqliteValue> = {
+  TEXT: storedAsText,
+  NUMERIC: storedAsNumeric,
+  INTEGER: storedAsNumeric,
+  REAL: storedAsReal,
+  BLOB: value => value,
+};
+
+/**
+ * The value a rebuilt SQLite column stores when `value` is copied into a column of `affinity`, by
+ * SQLite's datatype rules. Anything a rule does not name is stored as it was. A number's text is the
+ * one `CAST(... AS TEXT)` gives, which is what the reader reads, so a TEXT column stores exactly the
+ * text the judgement was handed.
  */
 export function sqliteStores(
   value: SqliteValue,
   affinity: SqliteAffinity
 ): SqliteValue {
-  const { storage, text } = value;
-  if (affinity === "TEXT") {
-    return storage === "integer" || storage === "real"
-      ? { storage: "text", text }
-      : value;
-  }
-  if (affinity === "NUMERIC" || affinity === "INTEGER") {
-    if (storage === "text") {
-      const trimmed = text.trim();
-      const integer = asInteger(trimmed);
-      if (integer) return integer;
-      const real = asReal(trimmed);
-      if (real === null) return value;
-      return realAsInteger(real) ?? { storage: "real", text: String(real) };
-    }
-    if (storage === "real") return realAsInteger(Number(text)) ?? value;
-    return value;
-  }
-  if (affinity === "REAL") {
-    if (storage === "integer") {
-      return { storage: "real", text: String(Number(BigInt(text))) };
-    }
-    if (storage === "text") {
-      const real = asReal(text.trim());
-      return real === null ? value : { storage: "real", text: String(real) };
-    }
-  }
-  return value;
+  return STORED_AS[affinity](value);
 }

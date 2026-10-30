@@ -263,13 +263,22 @@ describe("judgeColumn", () => {
       await expect(
         judgeColumn(toJsonb, rows('{ "b": 2,   "a": 1 }'))
       ).resolves.toEqual({ class: "safe", reasons: [] });
-      // JSON that JavaScript accepts and jsonb refuses: a NUL escape and a lone surrogate.
+      // JSON that JavaScript accepts and jsonb refuses: a NUL escape, a lone surrogate, and a high
+      // half whose low half does not follow it at once. A pair, and an escaped backslash before the
+      // letters u0000, are read.
       const refused = await judgeColumn(
         toJsonb,
-        rows('"\\u0000"', '"\\ud800"', '"ok"')
+        rows(
+          '"\\u0000"',
+          '"\\ud800"',
+          '"ok"',
+          '"\\ud800x\\udc00"',
+          '"\\ud83d\\ude00"',
+          '"\\\\u0000"'
+        )
       );
       expect(refused.class).toBe("lossy");
-      expect(idsOf(refused, "not-json")).toEqual(["1", "2"]);
+      expect(idsOf(refused, "not-json")).toEqual(["1", "2", "4"]);
     });
 
     it("a 64-bit integer to a double: an integer a double holds exactly keeps, a larger one is stored differently", async () => {

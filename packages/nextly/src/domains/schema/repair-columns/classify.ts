@@ -60,7 +60,7 @@ export interface DifferenceToClass {
  * A field group's many-to-many keeps its references on the row as a JSON list, and such a column
  * is converted by reading each stored value as a list of references, never as JSON text.
  */
-export function conversionFor(
+function conversionFor(
   difference: DifferenceToClass,
   dialect: SupportedDialect
 ): ColumnConversion {
