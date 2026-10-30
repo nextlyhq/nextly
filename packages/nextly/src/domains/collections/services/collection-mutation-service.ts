@@ -979,6 +979,48 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The caller's grants resolver for the field rules this service judges
+   * (see `callerAccessGrants`), a visitor's read from the Public role this
+   * service's collection gate reads: every pass builds it here, so none is
+   * handed another database's Public role.
+   */
+  private callerGrants(
+    user: Record<string, unknown> | undefined,
+    authenticatedScope?: AuthenticatedScope,
+    executor?: unknown
+  ): () => Promise<CallerGrants> {
+    return callerAccessGrants(
+      user,
+      authenticatedScope,
+      executor,
+      this.accessService.fieldRuleVisitor
+    );
+  }
+
+  /** {@link callerGrants}, resolved now (see `resolvedCallerGrants`). */
+  private resolvedGrants(
+    user: Record<string, unknown> | undefined,
+    authenticatedScope?: AuthenticatedScope
+  ): Promise<() => Promise<CallerGrants>> {
+    return resolvedCallerGrants(
+      user,
+      authenticatedScope,
+      this.accessService.fieldRuleVisitor
+    );
+  }
+
+  /**
+   * The access a field-group save made as `caller` is handed, its visitor
+   * judged by the same Public role as {@link callerGrants}.
+   */
+  private fieldGroupAccess(
+    caller: Parameters<typeof fieldGroupWriteAccessOf>[0]
+  ): FieldGroupWriteAccess {
+    // Through the one builder, which carries the service's visitor loader.
+    return fieldGroupWriteAccessOf(caller, this.accessService.fieldRuleVisitor);
+  }
+
+  /**
    * Stateless version-capture service. Records a durable version snapshot
    * inside the write transaction when the collection opts into versioning, so
    * the version commits atomically with the content write.
@@ -2275,7 +2317,7 @@ export class CollectionMutationService extends BaseService {
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       operation: "create",
-      access: { ...fieldGroupWriteAccessOf(args.params), grants: args.grants },
+      access: { ...this.fieldGroupAccess(args.params), grants: args.grants },
       executor: args.executor,
     });
   }
@@ -2421,12 +2463,12 @@ export class CollectionMutationService extends BaseService {
     // One resolver for the entry's rules and the field groups', read on the
     // write's own connection: inside a transaction, the pool's would wait on
     // the connection the transaction holds and miss its writes.
-    const grants = callerAccessGrants(
+    const grants = this.callerGrants(
       args.params.user,
       args.params.authenticatedScope,
       args.executor
     );
-    const access = { ...fieldGroupWriteAccessOf(args.params), grants };
+    const access = { ...this.fieldGroupAccess(args.params), grants };
     // The parent row alone carries no field-group instance, so what an update
     // removes is read here or judged against nothing: in the write's own
     // language, and in each other one, since a removal removes them all.
@@ -2855,7 +2897,7 @@ export class CollectionMutationService extends BaseService {
     // The author's grants, once for the batch, where a field rule could ask:
     // as the write resolves them, and only where it would.
     const grants = this.promotionRulesCanAsk(params.collectionName)
-      ? await resolvedCallerGrants(params.user, undefined)
+      ? await this.resolvedGrants(params.user, undefined)
       : null;
     const reads = await this.goingLiveReadsOf(params.collectionName, [
       ...rows.keys(),
@@ -4191,7 +4233,7 @@ export class CollectionMutationService extends BaseService {
         });
       }
       // Resolved before the transaction: they take a pooled connection.
-      const grants = await resolvedCallerGrants(
+      const grants = await this.resolvedGrants(
         params.user,
         params.authenticatedScope
       );
@@ -4954,7 +4996,7 @@ export class CollectionMutationService extends BaseService {
     // travel on its scope and are read from nowhere, so they are not shared.
     const userId = typeof params.user?.id === "string" ? params.user.id : "";
     const makeGrants = () =>
-      callerAccessGrants(params.user, params.authenticatedScope, executor);
+      this.callerGrants(params.user, params.authenticatedScope, executor);
     const grants =
       params.authenticatedScope?.actorType === "apiKey"
         ? makeGrants()
@@ -5395,7 +5437,7 @@ export class CollectionMutationService extends BaseService {
       // One resolver for both write-access passes over this record, so the
       // caller's roles and permissions are read once and both judge with one
       // authority.
-      const writeGrants = callerAccessGrants(
+      const writeGrants = this.callerGrants(
         params.user,
         params.authenticatedScope
       );
@@ -5856,7 +5898,7 @@ export class CollectionMutationService extends BaseService {
             req: params.user ? { user: params.user } : {},
             // Who the write is made as, for each instance's own field rules: the
             // caller and trust the entry's own fields are judged with.
-            access: fieldGroupWriteAccessOf(params),
+            access: this.fieldGroupAccess(params),
           });
         }
 
@@ -7667,6 +7709,12 @@ export class CollectionMutationService extends BaseService {
      * super-admin-owned key when this gate authorizes a version-label edit.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The language the caller's write acts in: a filter on a translated field
+     * is matched in it, so an autosave in German is held to the German
+     * entry. The default language where it names none.
+     */
+    locale?: string;
   }): Promise<boolean> {
     // Loaded because the hooks below are shown the row as it stands, and a
     // write to a row that is not there is a not-found rather than a refusal.
@@ -7680,19 +7728,22 @@ export class CollectionMutationService extends BaseService {
     // the difference between them be probed.
     if (!existingEntry) return false;
 
-    const denied = await this.refusalOfStoredUpdate({
-      collectionName: params.collectionName,
-      operation: "update",
-      entryId: params.entryId,
-      user: params.user,
-      // Never overridden: this exists to APPLY the document's rules, so a
-      // caller that could opt out of them would defeat the point.
-      overrideAccess: false,
-      routeAuthorized: params.routeAuthorized,
-      // A scoped API key is judged on its own update grant, so the session
-      // super-admin bypass does not apply to a super-admin-owned key here.
-      authenticatedScope: params.authenticatedScope,
-    });
+    const denied = await this.refusalOfStoredUpdate(
+      {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.user,
+        // Never overridden: this exists to APPLY the document's rules, so a
+        // caller that could opt out of them would defeat the point.
+        overrideAccess: false,
+        routeAuthorized: params.routeAuthorized,
+        // A scoped API key is judged on its own update grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        authenticatedScope: params.authenticatedScope,
+      },
+      params.locale
+    );
     return denied === null;
   }
 
@@ -7873,7 +7924,7 @@ export class CollectionMutationService extends BaseService {
           fieldGroupFields: {
             get: slug => args.componentSchemas?.get(slug)?.fields,
           },
-          access: { ...fieldGroupWriteAccessOf(args), grants: args.grants },
+          access: { ...this.fieldGroupAccess(args), grants: args.grants },
           live: args.live,
         });
       },
@@ -8585,7 +8636,7 @@ export class CollectionMutationService extends BaseService {
       req: params.user ? { user: params.user } : {},
       // Who the write is made as, for each instance's own field rules: the
       // caller and trust the entry's own fields are judged with.
-      access: fieldGroupWriteAccessOf(params),
+      access: this.fieldGroupAccess(params),
     });
   }
 
@@ -8603,9 +8654,9 @@ export class CollectionMutationService extends BaseService {
   ): Promise<void> {
     const { params, splitComponentSchemas } = ctx;
     const access = {
-      ...fieldGroupWriteAccessOf(params),
+      ...this.fieldGroupAccess(params),
       // Still inside the write's transaction.
-      grants: callerAccessGrants(
+      grants: this.callerGrants(
         params.user,
         params.authenticatedScope,
         tx.getDrizzle()
@@ -9683,7 +9734,7 @@ export class CollectionMutationService extends BaseService {
         params.overrideAccess !== true &&
         this.promotionRulesCanAsk(params.collectionName);
       const promoteGrants = promoteRulesCouldRun
-        ? await resolvedCallerGrants(params.user, params.authenticatedScope)
+        ? await this.resolvedGrants(params.user, params.authenticatedScope)
         : undefined;
       const promoteRestoreCtx = promotePossible
         ? promoteRestoreContext({
@@ -10637,7 +10688,7 @@ export class CollectionMutationService extends BaseService {
                 req: params.user ? { user: params.user } : {},
                 // Who the write is made as, for each instance's own field rules: the
                 // caller and trust the entry's own fields are judged with.
-                access: fieldGroupWriteAccessOf(params),
+                access: this.fieldGroupAccess(params),
               }
             );
           }
@@ -12905,7 +12956,7 @@ export class CollectionMutationService extends BaseService {
       // stripped (Payload parity); a system write (no user) or an
       // explicit override bypasses. One resolver for this pass and the
       // field groups', read on the caller-owned transaction.
-      const writeGrants = callerAccessGrants(
+      const writeGrants = this.callerGrants(
         params.user,
         params.authenticatedScope,
         tx.getDrizzle()
@@ -13134,7 +13185,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         data: componentFieldData,
         user: params.user,
-        access: fieldGroupWriteAccessOf(params),
+        access: this.fieldGroupAccess(params),
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -14231,7 +14282,7 @@ export class CollectionMutationService extends BaseService {
           fields,
           data: componentFieldData,
           user: params.user,
-          access: fieldGroupWriteAccessOf(params),
+          access: this.fieldGroupAccess(params),
         });
       }
 

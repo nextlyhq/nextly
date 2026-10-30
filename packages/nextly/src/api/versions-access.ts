@@ -428,7 +428,10 @@ export async function assertDocumentUpdatable(
   // The caller's authenticated scope. A version-label edit is a route-authorized
   // `update`, so a scoped API key is judged on its OWN update grant here and a
   // super-admin-owned key does not skip stored owner/role update rules.
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  // The language the write acts in, which a collection rule's filter is
+  // matched in; the default where it names none.
+  locale?: string
 ): Promise<void> {
   const allowed =
     scopeKind === "single"
@@ -442,6 +445,7 @@ export async function assertDocumentUpdatable(
           // this gate exists for still run.
           routeAuthorized: true,
           authenticatedScope,
+          locale,
         });
 
   if (!allowed) {

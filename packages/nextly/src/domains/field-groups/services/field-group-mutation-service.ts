@@ -30,6 +30,7 @@ import {
   callerAccessGrants,
   getFieldFunctions,
   type CallerGrants,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -108,21 +109,35 @@ export interface FieldGroupWriteAccess {
   authenticatedScope?: AuthenticatedScope;
   /** The parent write's grants resolver, shared so roles are read once. */
   grants?: () => Promise<CallerGrants>;
+  /**
+   * Where a visitor's Public grants are read when no `grants` is handed in:
+   * the parent service's, so its gate and these rules read one Public role.
+   */
+  visitor?: VisitorGrantsLoader;
 }
 
 /**
  * The access a write made as `caller` hands its field-group save: the one
  * spelling of it, so every door states trust, user and key scope alike.
+ *
+ * `visitor` is the writing service's own Public-grants loader. A service over
+ * a database of its own passes it, so a visitor's field-group rules read the
+ * Public role that database records, as its gate does, rather than the
+ * process's, which may be unset or another instance's.
  */
-export function fieldGroupWriteAccessOf(caller: {
-  overrideAccess?: boolean;
-  user?: Record<string, unknown>;
-  authenticatedScope?: AuthenticatedScope;
-}): FieldGroupWriteAccess {
+export function fieldGroupWriteAccessOf(
+  caller: {
+    overrideAccess?: boolean;
+    user?: Record<string, unknown>;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  visitor?: VisitorGrantsLoader
+): FieldGroupWriteAccess {
   return {
     overrideAccess: caller.overrideAccess === true,
     user: caller.user,
     authenticatedScope: caller.authenticatedScope,
+    visitor,
   };
 }
 
@@ -220,7 +235,12 @@ function newWriteScope(
   // every instance it judges reads the caller's roles once.
   const grants =
     access.grants ??
-    callerAccessGrants(access.user, access.authenticatedScope, executor);
+    callerAccessGrants(
+      access.user,
+      access.authenticatedScope,
+      executor,
+      access.visitor
+    );
   return {
     executor,
     access: { ...access, grants },

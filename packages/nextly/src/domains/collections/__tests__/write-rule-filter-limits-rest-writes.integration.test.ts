@@ -494,6 +494,90 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(403);
     });
 
+    it("matches an autosave against the filter in the language it saves", async () => {
+      const SLUG = "restfilter_autosave_language";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const id = await ownedInEnglishOnly(t, SLUG);
+      const autosave = (query: string) =>
+        rest(
+          "PUT",
+          [...entry(SLUG, id), "versions", "autosave"],
+          { title: "typed" },
+          query
+        );
+
+      // The author's in English, another's in German.
+      expect(await autosave("?locale=en")).toBe(200);
+      expect(await autosave("?locale=de")).toBe(403);
+    });
+
+    it("matches a discard of the held edit against the filter in its language", async () => {
+      const SLUG = "restfilter_discard_language";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      // Another's in English, the author's in German, with a held edit in each.
+      const made = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "theirs", owner: OTHER, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "meins", owner: AUTHOR, status: "published" },
+      } as never);
+      for (const locale of ["en", "de"]) {
+        await t.nextly.update({
+          collection: SLUG,
+          id,
+          locale,
+          data: { title: "held" },
+        } as never);
+      }
+      const discard = (query: string) =>
+        rest(
+          "DELETE",
+          [...entry(SLUG, id), "versions", "working-draft"],
+          undefined,
+          query
+        );
+
+      expect(await discard("?locale=en")).toBe(403);
+      expect(await discard("?locale=de")).toBe(200);
+    });
+
     it("takes the live values into a held edit the filter matches in its language", async () => {
       const SLUG = "restfilter_take_matched";
       current = await createTestNextly({
