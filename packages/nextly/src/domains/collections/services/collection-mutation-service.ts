@@ -7894,6 +7894,203 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Fold one language's pending change into a write: the document the
+   * promotion persists, judged against the caller's field write access, split
+   * into the parts the write stores. One implementation for a publish of one
+   * language (`updateEntry`) and a publish of every language, so a pending
+   * change goes live the same way whichever publishes it.
+   *
+   * The snapshot is stored read-shaped, so buildRestorePayload turns it into a
+   * safe update input (immutable ids stripped, removed columns and password
+   * fields dropped, component subtrees whose schema no longer resolves
+   * reported rather than written blind). Shaping that input through the SAME
+   * pure pass the caller's input took yields matching column and relation
+   * parts, so merging the caller over the draft (caller wins per key,
+   * including the published/draft `status`) makes the write persist the
+   * promoted content with no separate code path.
+   */
+  private async foldWorkingDraft(
+    tx: TransactionContext,
+    args: {
+      snapshot: unknown;
+      /** The caller's shaped payload, after its translated values were split off. */
+      finalData: Record<string, unknown>;
+      componentFieldData: Record<string, unknown>;
+      manyToManyData: Record<string, string[]>;
+      /** The document as it stands before the write, read on this transaction. */
+      live: Record<string, unknown>;
+      collection: unknown;
+      collectionName: string;
+      storedId: string;
+      fields: FieldDefinition[];
+      manyToManyFields: FieldDefinition[];
+      componentSchemas: ComponentSchemas | null;
+      restoreContext: RestoreSchemaContext;
+      /** The slot the pending change is kept under. */
+      draftLocale: string | null;
+      /** The language the write's request names. */
+      requestLocale: string | undefined;
+      user: UserContext | undefined;
+      authenticatedScope?: AuthenticatedScope;
+      overrideAccess?: boolean;
+      grants?: () => Promise<CallerGrants>;
+    }
+  ) {
+    const {
+      fields,
+      manyToManyFields,
+      componentSchemas,
+      finalData,
+      componentFieldData,
+      manyToManyData,
+    } = args;
+    const { payload: draftInput } = buildRestorePayload(
+      args.snapshot,
+      fields as unknown as FieldConfig[],
+      args.restoreContext
+    );
+    // Assemble the full document the promotion persists (the locked draft,
+    // the caller's scalars overlaid, the caller's single-component patches
+    // merged onto the draft's components, and the caller's m2m), then judge it
+    // against the current field-level write access. A rule that depends on a
+    // sibling the publish patch supplies (e.g. a field writable only when
+    // `approved` is true, where the publish sets it false) is judged on the
+    // real final values, at any depth, for column, component, and m2m fields
+    // alike. The write parts are re-extracted from the RESOLVED document, so a
+    // denied component or m2m value is written at what the row already holds.
+    // Logical, for the same reason as the check before the transaction:
+    // `finalData` is already column-encoded, and a group left as its string is
+    // one leaf to the resolver, so a denied field inside it is never found and
+    // an untouched group compares unequal to the parsed live row. The write
+    // encodes it again, once.
+    const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
+      this.assemblePromotedDocument(
+        draftInput,
+        finalData,
+        componentFieldData,
+        manyToManyData,
+        fields,
+        manyToManyFields,
+        componentSchemas
+      ),
+      fields
+    );
+    // The caller's own contribution, from the payload the field gate has
+    // ALREADY judged, never the raw request. Read from the request, it would
+    // credit the publisher with the pending change's edit whenever they echo
+    // the same path: the gate drops their value, the merged document still
+    // holds the draft's, the resolver treats that edit as theirs and restores
+    // live, and the publish consumes the draft. The gate keeps a protected
+    // child of a group they sent at its stored value rather than dropping it,
+    // so the resolver credits them only with what the rules let them send, and
+    // judges the rest as the pending change holds it. Logical, through the
+    // same conversion as the document it is compared against.
+    const callerContribution = this.deserializeJsonFieldsForSnapshot(
+      this.assemblePromotedDocument(
+        {},
+        finalData,
+        componentFieldData,
+        manyToManyData,
+        fields,
+        manyToManyFields,
+        componentSchemas
+      ),
+      fields
+    );
+    // The locked draft on its own, through the same conversion: the field gate
+    // keeps a protected child of a group the caller sent at its LIVE value, so
+    // where that group replaced the draft's, only the draft still says what
+    // its author changed there.
+    const pendingDocument = this.deserializeJsonFieldsForSnapshot(
+      this.assemblePromotedDocument(
+        draftInput,
+        {},
+        {},
+        {},
+        fields,
+        manyToManyFields,
+        componentSchemas
+      ),
+      fields
+    );
+    // One call decides the refusal AND returns what to write, so the document
+    // that was judged is the document that lands. A denied field comes back at
+    // its LIVE value rather than removed: taking the rules' own output would
+    // serialize a partial group over the whole JSON column and clear a
+    // protected value nobody touched.
+    const promotedDocument = await this.judgePromotionAccess({
+      before: mergedPromoteData,
+      live: args.live,
+      callerSupplied: callerContribution,
+      pending: pendingDocument,
+      collectionName: args.collectionName,
+      storedId: args.storedId,
+      user: args.user,
+      authenticatedScope: args.authenticatedScope,
+      overrideAccess: args.overrideAccess,
+      grants: args.grants,
+      fields,
+      locale: args.draftLocale ?? args.requestLocale ?? null,
+      componentSchemas,
+    });
+    const draftParts = this.shapeWriteParts(
+      promotedDocument,
+      fields,
+      manyToManyFields,
+      args.collection
+    );
+    // Rebuild the companion payload from the promoted document, and do it
+    // BEFORE the main-row payload is taken: the split moves a localized field
+    // out of the document and into the companion, so taking the main payload
+    // first would carry translated values to the main table, which has no
+    // column for them.
+    //
+    // The caller's own split was taken from a patch that carries no content of
+    // a pending change, so without this the draft's translated values never
+    // reach the language's row at all and the translation publishes unchanged.
+    //
+    // Bound to this transaction's executor: the companion metadata read would
+    // otherwise take a second pooled connection that this open transaction is
+    // holding.
+    const localizedUpdate = await this.splitLocalizedWriteData(
+      args.collectionName,
+      promotedDocument,
+      args.draftLocale ?? args.requestLocale,
+      false,
+      tx.getDrizzle()
+    );
+    // Whether the caller's write moves the document off the draft it promotes:
+    // the merged document, before access is judged, against the draft alone
+    // assembled by the same pass, so a component patch counts merged and an
+    // echo of the draft, a junction's ids in another order, or a system field
+    // the write ignores, is no edit.
+    const carriesContent = editsOver({
+      entity: "collection",
+      draft: this.deserializeJsonFieldsForSnapshot(
+        this.assemblePromotedDocument(
+          draftInput,
+          {},
+          {},
+          {},
+          fields,
+          manyToManyFields,
+          componentSchemas
+        ),
+        fields
+      ),
+      promoted: mergedPromoteData,
+      views: new Map(manyToManyFields.map(field => [field.name, asIdSet])),
+    });
+    return {
+      finalData: promotedDocument,
+      componentFieldData: draftParts.componentFieldData,
+      manyToManyData: draftParts.manyToManyData,
+      localizedUpdate,
+      carriesContent,
+    };
+  }
+
+  /**
    * The document a promotion may write, judged by the field rules of the
    * person publishing: every field they may write as the promotion has it,
    * every field they may not at its live value — or a refusal naming each
@@ -10292,136 +10489,32 @@ export class CollectionMutationService extends BaseService {
                   throw new SharedValuesOutOfDateError();
                 }
               }
-              // The snapshot is stored read-shaped, so buildRestorePayload turns
-              // it into a safe update input (immutable ids stripped, removed
-              // columns and password fields dropped, component subtrees whose
-              // schema no longer resolves reported rather than written blind).
-              // Shaping that input through the SAME pure pass the caller's input
-              // took yields matching column and relation parts, so merging the
-              // caller over the draft (caller wins per key, including the
-              // published/draft `status`) and rebinding makes the writes below
-              // persist the promoted content with no separate code path.
-              const { payload: draftInput } = buildRestorePayload(
-                workingDraft.snapshot,
-                fields as unknown as FieldConfig[],
-                promoteRestoreCtx
-              );
-              // Assemble the full document the promotion persists (the locked
-              // draft, the caller's scalars overlaid, the caller's single-component
-              // patches merged onto the draft's components, and the caller's m2m),
-              // then judge it against the current field-level write access. A rule
-              // that depends on a sibling the publish patch supplies (e.g. a field
-              // writable only when `approved` is true, where the publish sets it
-              // false) is judged on the real final values, at any depth, for column,
-              // component, and m2m fields alike. The write parts are re-extracted
-              // from the RESOLVED document, so a denied component or m2m value is
-              // written at what the row already holds.
-              // Logical, for the same reason as the check before the
-              // transaction: `finalData` is already column-encoded, and a group
-              // left as its string is one leaf to the resolver, so a denied field
-              // inside it is never found and an untouched group compares unequal
-              // to the parsed live row. The write below encodes it again, once.
-              const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
-                this.assemblePromotedDocument(
-                  draftInput,
-                  finalData,
-                  componentFieldData,
-                  manyToManyData,
-                  fields,
-                  manyToManyFields,
-                  splitComponentSchemas
-                ),
-                fields
-              );
-              // The caller's own contribution, from the payload the field gate
-              // has ALREADY judged, never the raw request. Read from the request,
-              // it would credit the publisher with the pending change's edit
-              // whenever they echo the same path: the gate drops their value, the
-              // merged document still holds the draft's, the resolver treats that
-              // edit as theirs and restores live, and the publish consumes the
-              // draft. The gate keeps a protected child of a group they sent at
-              // its stored value rather than dropping it, so the resolver credits
-              // them only with what the rules let them send, and judges the rest
-              // as the pending change holds it. Logical, through the same
-              // conversion as the document it is compared against.
-              const callerContribution = this.deserializeJsonFieldsForSnapshot(
-                this.assemblePromotedDocument(
-                  {},
-                  finalData,
-                  componentFieldData,
-                  manyToManyData,
-                  fields,
-                  manyToManyFields,
-                  splitComponentSchemas
-                ),
-                fields
-              );
-              // The locked draft on its own, through the same conversion: the
-              // field gate keeps a protected child of a group the caller sent
-              // at its LIVE value, so where that group replaced the draft's,
-              // only the draft still says what its author changed there.
-              const pendingDocument = this.deserializeJsonFieldsForSnapshot(
-                this.assemblePromotedDocument(
-                  draftInput,
-                  {},
-                  {},
-                  {},
-                  fields,
-                  manyToManyFields,
-                  splitComponentSchemas
-                ),
-                fields
-              );
-              // One call decides the refusal AND returns what to write, so the
-              // document that was judged is the document that lands. A denied
-              // field comes back at its LIVE value rather than removed: taking
-              // the rules' own output would serialize a partial group over the
-              // whole JSON column and clear a protected value nobody touched.
-              const promotedDocument = await this.judgePromotionAccess({
-                before: mergedPromoteData,
+              // Fold the pending change into this write, judged against the
+              // caller's field write access, as every publish folds one.
+              const folded = await this.foldWorkingDraft(tx, {
+                snapshot: workingDraft.snapshot,
+                finalData,
+                componentFieldData,
+                manyToManyData,
                 live: previousDocument ?? {},
-                callerSupplied: callerContribution,
-                pending: pendingDocument,
+                collection,
                 collectionName: params.collectionName,
                 storedId: String(existingEntry.id),
+                fields,
+                manyToManyFields,
+                componentSchemas: splitComponentSchemas,
+                restoreContext: promoteRestoreCtx,
+                draftLocale: draftLocaleKey,
+                requestLocale: params.locale,
                 user: params.user,
                 authenticatedScope: params.authenticatedScope,
                 overrideAccess: params.overrideAccess,
                 grants: promoteGrants,
-                fields,
-                locale: draftLocaleKey ?? params.locale ?? null,
-                componentSchemas: splitComponentSchemas,
               });
-              const draftParts = this.shapeWriteParts(
-                promotedDocument,
-                fields,
-                manyToManyFields,
-                collection
-              );
-              finalData = promotedDocument;
-              componentFieldData = draftParts.componentFieldData;
-              manyToManyData = draftParts.manyToManyData;
-              // Rebuild the companion payload from the promoted document, and
-              // do it BEFORE the main-row payload is taken: the split moves a
-              // localized field out of the document and into the companion, so
-              // taking the main payload first would carry translated values to
-              // the main table, which has no column for them.
-              //
-              // It was originally split from the CALLER's patch before this
-              // transaction, and a publish carries no content of its own — so
-              // without this the draft's translated values never reach the
-              // language's row at all and the translation publishes unchanged.
-              //
-              // Bound to this transaction's executor: the companion metadata
-              // read would otherwise take a second pooled connection that this
-              // open transaction is holding.
-              localizedUpdate = await this.splitLocalizedWriteData(
-                params.collectionName,
-                finalData,
-                draftLocaleKey ?? params.locale,
-                false,
-                tx.getDrizzle()
-              );
+              finalData = folded.finalData;
+              componentFieldData = folded.componentFieldData;
+              manyToManyData = folded.manyToManyData;
+              localizedUpdate = folded.localizedUpdate;
               updatePayload = {
                 ...stripImmutableSystemFields(
                   finalData,
@@ -10432,31 +10525,7 @@ export class CollectionMutationService extends BaseService {
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
-              // Whether the caller's write moves the document off the draft it
-              // promotes: the merged document, before access is judged,
-              // against the draft alone assembled by the same pass, so a
-              // component patch counts merged and an echo of the draft, a
-              // junction's ids in another order, or a system field the write
-              // ignores, is no edit.
-              promotionCarriesContent = editsOver({
-                entity: "collection",
-                draft: this.deserializeJsonFieldsForSnapshot(
-                  this.assemblePromotedDocument(
-                    draftInput,
-                    {},
-                    {},
-                    {},
-                    fields,
-                    manyToManyFields,
-                    splitComponentSchemas
-                  ),
-                  fields
-                ),
-                promoted: mergedPromoteData,
-                views: new Map(
-                  manyToManyFields.map(field => [field.name, asIdSet])
-                ),
-              });
+              promotionCarriesContent = folded.carriesContent;
             }
           }
 
