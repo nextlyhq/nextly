@@ -147,12 +147,14 @@ async function placeGetStartedCard(page: Page): Promise<void> {
   });
 }
 
-/** The page's level-one headings: exactly one, visible, with a name. */
+/** The page's level-one headings: exactly one, visible, named for the project. */
 async function expectOneMainHeading(page: Page): Promise<void> {
   const mains = page.getByRole("heading", { level: 1 });
   await expect(mains).toHaveCount(1);
   await expect(mains).toBeVisible();
-  await expect(mains).toHaveAccessibleName(/^Welcome/);
+  // The playground's branding name (`admin.branding.logoText`), which the
+  // header draws as the page's heading in every state.
+  await expect(mains).toHaveAccessibleName("Nextly Playground");
 }
 
 test.describe("the dashboard's main heading", () => {

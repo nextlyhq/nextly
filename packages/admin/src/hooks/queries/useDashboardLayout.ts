@@ -48,6 +48,8 @@ import type {
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
 
+import { DASHBOARD_SUMMARY_KEY } from "./useDashboardSummary";
+
 /** The one query key this feature owns, so a save can invalidate exactly it. */
 export const DASHBOARD_LAYOUT_KEY = ["dashboard", "layout"] as const;
 
@@ -294,10 +296,15 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     refetchOnWindowFocus: true,
   });
 
-  const invalidate = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY }),
-    [queryClient]
-  );
+  // Every write and every reload re-reads the header's summary with the
+  // layout: a part counts for a card on the dashboard, so a card added,
+  // removed, dismissed or reset moves the summary as it moves the layout.
+  // Fired rather than returned, so a write is held only until its own layout
+  // re-read lands, never behind a summary part still being counted.
+  const invalidate = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: DASHBOARD_SUMMARY_KEY });
+    return queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
+  }, [queryClient]);
 
   // 🔴 The workspace payload is held fresh for minutes, and it is built for
   // one audience -- the cards this reader may see and the shortcut gates

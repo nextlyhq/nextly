@@ -358,8 +358,11 @@ export interface SettingEditorProps<Value> {
   label: string;
   /** Its value in the sheet; `undefined` while none is chosen. */
   value: Value | undefined;
-  /** Sets its value in the sheet. */
-  onChange: (value: Value) => void;
+  /**
+   * Sets its value in the sheet; `undefined` clears it, so the setting is
+   * saved unset and the card reads its default, or no value where it has none.
+   */
+  onChange: (value: Value | undefined) => void;
   /** The card's other settings, by key, as the sheet holds them now. */
   settings: Readonly<Record<string, unknown>>;
   /** True while the sheet is saving: the editor takes no input then. */
