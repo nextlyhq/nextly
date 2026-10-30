@@ -13382,10 +13382,14 @@ export class CollectionMutationService extends BaseService {
           );
           return;
         }
+        // Any change to the languages since they were asked is a conflict:
+        // one gained was not asked about, and one lost changes what every
+        // language was told, so the answers asked are not the delete's.
         const unasked = unaskedLanguages(askedLanguages, lockedLanguages);
-        if (unasked.length > 0) {
+        const lost = unaskedLanguages(lockedLanguages, askedLanguages);
+        if (unasked.length > 0 || lost.length > 0) {
           refusedUnderLock = errorToServiceResult(
-            languagesChangedConflict(unasked),
+            languagesChangedConflict([...unasked, ...lost]),
             { defaultMessage: "Failed to delete entry" },
             this.dialect
           );
