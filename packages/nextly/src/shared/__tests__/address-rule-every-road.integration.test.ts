@@ -179,12 +179,15 @@ async function stateOf(
  * its DDL before recording the collection.
  */
 async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
+  // Through `vi.stubEnv`, since `NODE_ENV` is typed read-only. Put back to the
+  // value it had rather than through `vi.unstubAllEnvs`, which would also drop
+  // the database settings this file stubs for the whole test.
   const previous = process.env.NODE_ENV;
-  process.env.NODE_ENV = "development";
+  vi.stubEnv("NODE_ENV", "development");
   try {
     return await run();
   } finally {
-    process.env.NODE_ENV = previous;
+    vi.stubEnv("NODE_ENV", previous);
   }
 }
 
