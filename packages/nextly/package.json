@@ -27,6 +27,14 @@
       "types": "./dist/runtime.d.mts",
       "import": "./dist/runtime.mjs"
     },
+    "./cache-handler": {
+      "types": "./dist/cache-handler.d.mts",
+      "import": "./dist/cache-handler.mjs"
+    },
+    "./cache-handlers": {
+      "types": "./dist/cache-handlers.d.mts",
+      "import": "./dist/cache-handlers.mjs"
+    },
     "./db-operators": {
       "types": "./dist/db-operators.d.mts",
       "import": "./dist/db-operators.mjs"

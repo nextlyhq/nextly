@@ -48,6 +48,10 @@ const serverEntries = [
   // Templates' catch-all admin route imports from
   // `nextly/runtime`. The root `.` entry must NOT pull this.
   "src/runtime.ts",
+  // The cache handlers `next.config` names by path; Next.js loads each outside
+  // the app's bundle.
+  "src/cache-handler.ts",
+  "src/cache-handlers.ts",
   "src/scripts/load-env.ts",
   "src/api/auth-state.ts",
   "src/api/health.ts",
