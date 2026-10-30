@@ -179,7 +179,12 @@ describe.each(getConfiguredTestDialects())(
 
       // A successful read first, so the companion is established as present and the failure below
       // is a genuine read fault rather than a missing table.
-      await service.get("swin_settings", { locale: "en" });
+      // As trusted server code, so the read reaches the companion rather than
+      // stopping at the read gate.
+      await service.get("swin_settings", {
+        locale: "en",
+        overrideAccess: true,
+      });
 
       // Break the companion while leaving the table in place, which is what a schema drift or a
       // permission fault looks like from the read's point of view.
@@ -188,7 +193,10 @@ describe.each(getConfiguredTestDialects())(
         `ALTER TABLE ${q("single_swin_settings_locales")} DROP COLUMN ${q("headline")}`
       );
 
-      const result = await service.get("swin_settings", { locale: "en" });
+      const result = await service.get("swin_settings", {
+        locale: "en",
+        overrideAccess: true,
+      });
 
       expect(result.success).toBe(false);
       // A declared field's column is missing, so the answer names the field and what to run;
