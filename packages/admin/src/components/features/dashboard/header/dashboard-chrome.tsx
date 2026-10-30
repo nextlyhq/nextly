@@ -40,8 +40,8 @@ export interface DashboardChromeState {
   writing: boolean;
   /** When the oldest answer a card shows arrived, in milliseconds, or none yet. */
   oldestAnswerAt: number | null;
-  /** Each widget's first card on the dashboard, its placement id by widget id. */
-  cards: Readonly<Record<string, string>>;
+  /** Each widget's cards on the dashboard, their placement ids in its order, by widget id. */
+  cards: Readonly<Record<string, readonly string[]>>;
 }
 
 /** What the grid does for the header. */

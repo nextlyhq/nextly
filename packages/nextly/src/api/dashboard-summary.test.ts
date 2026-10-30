@@ -1,18 +1,22 @@
 /**
  * The summary route's own decisions, with every read it makes stood in: that
  * each part is answered within a card's time budget, so one that never
- * settles fails alone and the line still answers; and that a widget placed
- * more than once is judged card by card until one is shown, so a hidden first
- * card does not hide the widget's part. What each source counts, and the
+ * settles fails alone and the line still answers; that the dashboard's cards
+ * are read within the same budget, so a layout that throws or stalls is one
+ * unknown part; that a widget placed more than once is judged card by card
+ * until one is shown, so a hidden first card does not hide the widget's part;
+ * and that a card that could not be judged leaves its part unknown, not
+ * hidden. What each source counts, and the
  * request path itself, are the integration test's
  * (`__tests__/dashboard-summary.integration.test.ts`).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
+import { NextlyError } from "../errors/nextly-error";
 
 import { getDashboardSummary } from "./dashboard-summary";
-import { cardIsShownTo } from "./widget-cards";
+import { cardShownTo } from "./widget-cards";
 import { askableCards } from "./widget-layout";
 import { SLOT_TIMEOUT_MS } from "./widget-slots";
 
@@ -44,7 +48,7 @@ vi.mock("../services/dashboard/attention-source", () => ({
   ]),
 }));
 vi.mock("./widget-layout", () => ({ askableCards: vi.fn() }));
-vi.mock("./widget-cards", () => ({ cardIsShownTo: vi.fn() }));
+vi.mock("./widget-cards", () => ({ cardShownTo: vi.fn() }));
 vi.mock("./widget-query", () => ({
   cardBatchFor: vi.fn(() => ({
     auth: {},
@@ -92,7 +96,7 @@ beforeEach(() => {
       summary: { label: "new submissions", count },
     },
   } as never);
-  vi.mocked(cardIsShownTo).mockResolvedValue(true);
+  vi.mocked(cardShownTo).mockResolvedValue("shown");
   count.mockResolvedValue(3);
 });
 
@@ -130,8 +134,8 @@ describe("GET /api/dashboard/summary, part by part", () => {
 
   it("counts a widget whose first card is hidden from the reader, for the card that is shown", async () => {
     placed("c1", "c2");
-    vi.mocked(cardIsShownTo).mockImplementation(
-      async (_declared, placement) => placement.id === "c2"
+    vi.mocked(cardShownTo).mockImplementation(async (_declared, placement) =>
+      placement.id === "c2" ? "shown" : "hidden"
     );
 
     const body = await (await request()).json();
@@ -163,12 +167,12 @@ describe("GET /api/dashboard/summary, part by part", () => {
         count: 3,
       },
     ]);
-    expect(vi.mocked(cardIsShownTo)).toHaveBeenCalledOnce();
+    expect(vi.mocked(cardShownTo)).toHaveBeenCalledOnce();
   });
 
   it("gives no part and no failure when no card of the widget is shown", async () => {
     placed("c1", "c2");
-    vi.mocked(cardIsShownTo).mockResolvedValue(false);
+    vi.mocked(cardShownTo).mockResolvedValue("hidden");
 
     const body = await (await request()).json();
 
@@ -177,6 +181,85 @@ describe("GET /api/dashboard/summary, part by part", () => {
     ).toBe(false);
     expect(body.failed).toBe(0);
     expect(count).not.toHaveBeenCalled();
-    expect(vi.mocked(cardIsShownTo)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(cardShownTo)).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails a widget's part when a card of it could not be judged and none is shown", async () => {
+    // The batch draws that card as failed: the part is unknown, so the line
+    // cannot say all caught up past it.
+    placed("c1", "c2");
+    vi.mocked(cardShownTo).mockImplementation(async (_declared, placement) =>
+      placement.id === "c1" ? "failed" : "hidden"
+    );
+
+    const body = await (await request()).json();
+
+    expect(
+      body.parts.some((part: { kind: string }) => part.kind === "widget")
+    ).toBe(false);
+    expect(body.failed).toBe(1);
+    expect(count).not.toHaveBeenCalled();
+  });
+
+  it("counts the card shown even when an earlier one could not be judged", async () => {
+    // The control for the case above: a failed judgement does not stand for
+    // the widget while a later card of it is shown.
+    placed("c1", "c2");
+    vi.mocked(cardShownTo).mockImplementation(async (_declared, placement) =>
+      placement.id === "c1" ? "failed" : "shown"
+    );
+
+    const body = await (await request()).json();
+
+    expect(body.parts).toContainEqual(
+      expect.objectContaining({ kind: "widget", card: "c2", count: 3 })
+    );
+    expect(body.failed).toBe(0);
+  });
+});
+
+describe("GET /api/dashboard/summary, when the dashboard's cards cannot be read", () => {
+  // One item in the digest the stand-in answers, so a count of one.
+  const attention = {
+    kind: "attention",
+    count: 1,
+    link: "releases?reason=overdue",
+  };
+
+  it("fails one part and still answers the rest when the layout throws", async () => {
+    vi.mocked(askableCards).mockRejectedValue(new Error("layout store down"));
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ parts: [attention], failed: 1 });
+  });
+
+  it("fails one part, at its budget, and still answers the rest when the layout never answers", async () => {
+    vi.useFakeTimers();
+    vi.mocked(askableCards).mockImplementation(() => new Promise(() => {}));
+    let answered = false;
+    const responding = request().then(response => {
+      answered = true;
+      return response;
+    });
+
+    await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+
+    expect(answered).toBe(true);
+    expect(await (await responding).json()).toEqual({
+      parts: [attention],
+      failed: 1,
+    });
+  });
+
+  it("gives no part and no failure for a reader the layout refuses", async () => {
+    // The control: a refusal is no dashboard to count for, not an outage.
+    vi.mocked(askableCards).mockRejectedValue(NextlyError.forbidden());
+
+    expect(await (await request()).json()).toEqual({
+      parts: [attention],
+      failed: 0,
+    });
   });
 });
