@@ -226,7 +226,11 @@ function Readback({ text }: { text: ReleaseTimeText }) {
           Goes live{" "}
           <strong className="font-medium tabular-nums">{text.local}</strong>
           {text.scheduled ? " your time" : null}
-          <span className="text-muted-foreground"> · {text.relative}</span>
+          {/* Kept whole, so a narrow dialog never leaves the dot alone at
+              the end of a line. */}{" "}
+          <span className="whitespace-nowrap text-muted-foreground">
+            · {text.relative}
+          </span>
         </p>
         {text.scheduled ? (
           <p className="mt-0.5 text-muted-foreground">
