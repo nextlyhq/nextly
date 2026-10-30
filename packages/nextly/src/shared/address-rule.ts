@@ -404,6 +404,9 @@ export function addressRefusalsError(
     logContext: {
       reason: "address-rule",
       refused: refused.map(({ entity }) => `${entity.kind}:${entity.address}`),
+      // Each refusal's own sentence, naming the address and the reason, for a
+      // road that reports the error through its log context (a CLI command).
+      refusals: refused.map(({ refusal }) => refusal.message),
     },
   });
 }

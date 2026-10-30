@@ -3,12 +3,12 @@
  *
  * `migrate:check` and `migrate:create` read the definitions (configuration and
  * the Builder's manifest) and the latest snapshot, never the database, so the
- * snapshot is what tells a new address from an existing one: an entity whose
- * table the latest snapshot records already exists and keeps its address; any
- * other is new and judged by the one address rule (`shared/address-rule`).
- * With no snapshot the two cannot be told apart, so nothing is refused and
- * every address the rule refuses is only reported: the other roads judged
- * those addresses when they were created.
+ * snapshot is what tells a new address from an existing one: an entity the
+ * latest snapshot records (by kind and address, or by its table in a snapshot
+ * written before entities were recorded) already exists and keeps its address;
+ * any other is new and judged by the one address rule (`shared/address-rule`).
+ * With no snapshot nothing is known to exist, so everything is new, as on a
+ * fresh project.
  *
  * @module domains/schema/migrate-create/addresses
  */
