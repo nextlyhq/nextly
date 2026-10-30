@@ -440,7 +440,7 @@ admin: {
     defaultLayout: [
       "core/needs-attention",
       { widget: "acme/orders-by-state", w: 6, h: 4, optional: true },
-      "core/recently-edited",
+      "core/continue",
       { widget: "core/count", settings: { collection: "posts" } },
       { widget: "core/count", id: "pages-count", settings: { collection: "pages" } },
     ],
@@ -465,7 +465,7 @@ The site config can change any widget, built-in or a plugin's, for everyone:
 admin: {
   dashboard: {
     hide: ["core/team"],
-    replace: { "core/recently-edited": "acme/recent-orders" },
+    replace: { "core/continue": "acme/recent-orders" },
     overrides: {
       "core/team-activity": {
         title: "Latest changes",
@@ -521,6 +521,29 @@ refused at startup.
   one — a plugin claiming the path would replace the body drawn for a card the
   registry still attributes to core.
 </Callout>
+
+### Items in Needs your attention
+
+A plugin adds a line to the Needs your attention card, rather than a card of its own, through
+`contributes.dashboard.attention` (**experimental**). Each item has an `id` in your plugin's
+namespace, a one-line `label`, a `count` taken as the person asking, a `link` inside the admin,
+and exactly one of `permission` or `collections` saying who sees it. An optional one-line
+`reason` is drawn under the label, saying why the item is waiting; without one, the row has no
+reason line. Plugin items rank as warnings, after core's critical items.
+
+```ts
+import { defineAttentionItem } from "@nextlyhq/plugin-sdk";
+
+export const unanswered = defineAttentionItem({
+  id: "forms/submissions",
+  label: "Form submissions",
+  reason: "Read and answer them",
+  collections: ["form-submissions"],
+  count: ({ services, signal }) =>
+    services.count("form-submissions", { signal }),
+  link: "collections/form-submissions",
+});
+```
 
 ### Draw it yourself
 

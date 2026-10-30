@@ -43,7 +43,7 @@ describe("what a retired card is told", () => {
         { slug: "home", label: "Home" },
       ])
     ).toBe(
-      "is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited)."
+      "is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue)."
     );
   });
 

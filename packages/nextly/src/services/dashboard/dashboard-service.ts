@@ -174,10 +174,11 @@ interface KeptOffRead {
  * Whether a registry record is kept off the dashboard, noting its slug in `keptOff` when it is.
  */
 function leftOut(
-  record: { slug: string; admin?: unknown },
+  kind: DashboardContentKind,
+  record: { slug: string; source?: unknown; admin?: unknown },
   keptOff: Set<string> | undefined
 ): boolean {
-  if (!keptOffDashboard(record)) return false;
+  if (!keptOffDashboard(kind, record)) return false;
   keptOff?.add(record.slug);
   return true;
 }
@@ -445,6 +446,8 @@ export class DashboardService extends BaseService {
             tableName: string;
             labels: { singular: string; plural: string };
             admin?: { useAsTitle?: string; group?: string; hidden?: boolean };
+            /** Who defines it, read with `admin` by the kept-off rule. */
+            source?: string;
             /**
              * The Draft/Published lifecycle toggle. This is a top-level
              * column on `dynamic_collections`, entirely separate from
@@ -464,7 +467,7 @@ export class DashboardService extends BaseService {
       // A collection kept off the dashboard is neither listed nor counted here, for any caller,
       // a super-admin included; see `keptOffDashboard`.
       const collections = (await registryService.getAllCollections()).filter(
-        c => !leftOut(c, keptOff?.slugs)
+        c => !leftOut("collection", c, keptOff?.slugs)
       );
       if (keptOff) keptOff.complete = true;
       const mapped = collections.map(c => ({
@@ -494,13 +497,19 @@ export class DashboardService extends BaseService {
     try {
       const singleRegistryService = container.get<{
         getAllSingles: () => Promise<
-          Array<{ slug: string; label?: string; admin?: unknown }>
+          Array<{
+            slug: string;
+            label?: string;
+            /** Who defines it, read with `admin` by the kept-off rule. */
+            source?: string;
+            admin?: unknown;
+          }>
         >;
       }>("singleRegistryService");
 
       // Kept off the dashboard, for the reason the collections above are.
       const singles = (await singleRegistryService.getAllSingles()).filter(
-        single => !leftOut(single, keptOff?.slugs)
+        single => !leftOut("single", single, keptOff?.slugs)
       );
       if (keptOff) keptOff.complete = true;
       return filterByResource(scope, singles, s => String(s.slug));

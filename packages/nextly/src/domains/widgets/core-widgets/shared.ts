@@ -12,7 +12,7 @@ import {
 } from "../declaration/setting-builders";
 import type { WidgetSetting } from "../definition";
 import { MAX_WIDGET_ROWS } from "../query-limits";
-import type { AnyWidgetSetting } from "../settings";
+import { WIDGET_TABS, type WidgetTab } from "../sources";
 
 /**
  * A list card's "Number of items", from 1 to the most rows a card draws
@@ -151,26 +151,26 @@ export const OVER_TIME_CHART_STYLE = setting.select({
   defaultValue: "line",
 });
 
-/** Recently edited's "Number of items", the same offer under the same name. */
-export const RECENTLY_EDITED_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
+/** Continue where you left off's "Number of items", the same offer under the same name. */
+export const CONTINUE_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
 
-/**
- * Recently edited's "Only mine": the reader's own saves alone. Its source
- * narrows by it (`onlyMine` among its filters), so the knob sets the query's
- * `where` rather than the card's source.
- */
-export const RECENTLY_EDITED_ONLY_MINE: WidgetSetting = {
-  name: "onlyMine",
-  ...setting.checkbox({ label: "Only mine", defaultValue: false }),
+/** What each tab is called on the card's header. */
+const TAB_LABELS: Readonly<Record<WidgetTab, string>> = {
+  mine: "Mine",
+  team: "Team",
 };
 
 /**
- * Recently edited's "Collection": one collection's saves, or every collection
- * the reader may read when none is chosen, which is the default. Its source
- * reads across collections and narrows by one, so the knob sets the query's
- * `where` and the card keeps its source.
+ * Continue where you left off's Tab, its one quick setting: the reader's own
+ * work (Mine, the default) or other people's (Team). Its source narrows by it
+ * (`tab` among its filters), so the knob sets the query's `where`. The values
+ * are the Tab filter's own (`WIDGET_TABS`).
  */
-export const RECENTLY_EDITED_COLLECTION: AnyWidgetSetting = {
-  name: "collection",
-  ...setting.collection({ label: "Collection" }),
+export const CONTINUE_TAB: WidgetSetting = {
+  name: "tab",
+  label: "Show",
+  type: "select",
+  defaultValue: "mine",
+  quick: true,
+  options: WIDGET_TABS.map(value => ({ label: TAB_LABELS[value], value })),
 };

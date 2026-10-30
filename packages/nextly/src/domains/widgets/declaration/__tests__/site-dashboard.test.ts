@@ -78,7 +78,7 @@ describe("a site config that names what exists", () => {
       resetWidgetRegistries([shop], {
         hide: ["core/team"],
         overrides: {
-          "core/recently-edited": {
+          "core/continue": {
             title: "Latest edits",
             description: "What changed most recently",
           },
@@ -88,7 +88,7 @@ describe("a site config that names what exists", () => {
           },
         },
         defaultLayout: [
-          "core/recently-edited",
+          "core/continue",
           {
             widget: "acme/orders-by-state",
             w: 4,
@@ -97,17 +97,17 @@ describe("a site config that names what exists", () => {
           },
         ],
         suggestions: false,
-        replace: { "core/recently-edited": "acme/recent-orders" },
+        replace: { "core/continue": "acme/recent-orders" },
       })
     ).not.toThrow();
     // The rules every reading of a widget takes, from the copy checked.
     const rules = siteDashboardRules();
     expect([...rules.hidden]).toEqual(["core/team"]);
     expect([...rules.replaced]).toEqual([
-      ["core/recently-edited", "acme/recent-orders"],
+      ["core/continue", "acme/recent-orders"],
     ]);
     expect([...rules.alternatives]).toEqual(["acme/recent-orders"]);
-    expect(rules.overrides.get("core/recently-edited")).toEqual({
+    expect(rules.overrides.get("core/continue")).toEqual({
       title: "Latest edits",
       description: "What changed most recently",
     });
@@ -163,7 +163,7 @@ describe("a site config that names what exists", () => {
     const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.`;
     // A Single's card is never told to pick a collection: the widgets with a
     // Collection setting offer collections only.
-    const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`;
+    const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`;
     expect(message).toContain(`hide names "single/home-card", ${toldSingle}`);
     expect(message).toContain(
       `overrides names "collection/posts-count", ${told}`
@@ -225,7 +225,7 @@ describe("a site config with faults", () => {
           },
         },
         defaultLayout: [{ widget: "acme/orders-by-state", w: 12 }],
-        replace: { "core/recently-edited": "acme/revenue" },
+        replace: { "core/continue": "acme/revenue" },
       })
     );
     for (const expected of [
@@ -236,7 +236,7 @@ describe("a site config with faults", () => {
       'the site config, widget "acme/orders-by-state": overrides.settings sets "colour", which the widget does not declare',
       'the site config, widget "acme/orders-by-state": overrides.settings: setting "top"',
       'the site config, widget "acme/orders-by-state": defaultLayout w is 12, which the widget does not allow (from 4 to 8)',
-      'the site config, widget "core/recently-edited": replace puts "acme/revenue" in place of "core/recently-edited", and no plugin offers it as an alternative to "core/recently-edited"',
+      'the site config, widget "core/continue": replace puts "acme/revenue" in place of "core/continue", and no plugin offers it as an alternative to "core/continue"',
     ]) {
       expect(message).toContain(expected);
     }
@@ -268,14 +268,14 @@ describe("a site config with faults", () => {
       resetWidgetRegistries([shop], {
         hide: ["acme/recent-orders"],
         defaultLayout: ["acme/recent-orders"],
-        replace: { "core/recently-edited": "acme/recent-orders" },
+        replace: { "core/continue": "acme/recent-orders" },
       })
     );
     expect(message).toContain(
       'defaultLayout places "acme/recent-orders", which hide hides'
     );
     expect(message).toContain(
-      'replace puts "acme/recent-orders" in place of "core/recently-edited", and hide hides it'
+      'replace puts "acme/recent-orders" in place of "core/continue", and hide hides it'
     );
   });
 
@@ -559,7 +559,7 @@ describe("a plugin's suggestions and alternatives", () => {
           widgets: [{ ...revenue, id: "other/revenue" }],
           suggest: ["acme/revenue"],
           alternatives: {
-            "acme/recent-orders": "core/recently-edited",
+            "acme/recent-orders": "core/continue",
             "other/revenue": "core/nothing",
           },
         }),

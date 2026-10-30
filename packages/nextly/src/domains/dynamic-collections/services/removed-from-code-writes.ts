@@ -128,16 +128,37 @@ export async function entityRemovedFromCode(
   slug: string,
   options: { executor?: unknown; lookup?: RegistryLookup } = {}
 ): Promise<boolean> {
-  const declared = globalForDeclared.__nextly_declaredEntities;
-  if (declared === undefined) return false;
-  const slugs = kind === "single" ? declared.singles : declared.collections;
-  if (slugs.has(slug)) return false;
+  const slugs = declaredOfKind(kind);
+  if (slugs === undefined || slugs.has(slug)) return false;
   const row = await (options.lookup ?? readRegistryRow)(
     kind,
     slug,
     options.executor
   );
   return row !== null && isRemovedFromCode(row, slugs);
+}
+
+/**
+ * Whether a registry row the caller already holds is of an entity removed
+ * from code: the decision {@link entityRemovedFromCode} makes, for a caller
+ * that read the rows itself and must not read each one again. `false` while
+ * no configuration is published, as there.
+ */
+export function rowRemovedFromCode(
+  kind: RemovableEntityKind,
+  row: { slug?: string | null; source?: string | null }
+): boolean {
+  const slugs = declaredOfKind(kind);
+  return slugs !== undefined && isRemovedFromCode(row, slugs);
+}
+
+/** The slugs of `kind` the published configuration declares, or `undefined` while none is published. */
+function declaredOfKind(
+  kind: RemovableEntityKind
+): ReadonlySet<string> | undefined {
+  const declared = globalForDeclared.__nextly_declaredEntities;
+  if (declared === undefined) return undefined;
+  return kind === "single" ? declared.singles : declared.collections;
 }
 
 /**

@@ -87,7 +87,7 @@ import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
-import { registerRecentEditsWidgetSource } from "../../services/dashboard/recent-edits-widget-source";
+import { registerContinueWidgetSource } from "../../services/dashboard/continue-widget-source";
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
 
 export function resetWidgetRegistries(
@@ -153,7 +153,7 @@ export function resetWidgetRegistries(
   // with the entry list's counts and so belongs to no one domain.
   registerAttentionWidgetSource();
   registerSummaryWidgetSources();
-  registerRecentEditsWidgetSource();
+  registerContinueWidgetSource();
 
   // Every widget, through the one call: core's own list, the plugins' widgets
   // declared with `defineWidget()`, and the site's. Each is checked together

@@ -21,7 +21,7 @@ export const CORE_WIDGET_ID = {
   quickCreate: "core/quick-create",
   team: "core/team",
   needsAttention: "core/needs-attention",
-  recentlyEdited: "core/recently-edited",
+  continue: "core/continue",
   upcomingReleases: "core/upcoming-releases",
   teamActivity: "core/team-activity",
   count: "core/count",
@@ -45,7 +45,7 @@ export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.team,
   CORE_WIDGET_ID.needsAttention,
-  CORE_WIDGET_ID.recentlyEdited,
+  CORE_WIDGET_ID.continue,
   CORE_WIDGET_ID.upcomingReleases,
   CORE_WIDGET_ID.teamActivity,
   CORE_WIDGET_ID.count,
@@ -68,11 +68,11 @@ void everyIdOrdered;
 /**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
  * there is one path to the default whoever wrote it: the onboarding card, then
- * Needs attention, Create, Recently edited, Team activity, Content and
- * Upcoming releases, each at its widget's starting size. The cards that share
- * a row share a height, so the default dashboard tiles: Needs attention and
- * Create at 4 rows, the two activity lists at 5. A site's own `defaultLayout`
- * takes its place whole.
+ * Needs attention, Create, Continue where you left off, Team activity,
+ * Content and Upcoming releases, each at its widget's starting size. The
+ * cards that share a row share a height, so the default dashboard tiles: Needs
+ * attention and Create at 4 rows, the two activity lists at 5. A site's own
+ * `defaultLayout` takes its place whole.
  *
  * Team is not on it: the card is for the people who manage the team, who add
  * it from the add panel.
@@ -84,7 +84,7 @@ export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
   CORE_WIDGET_ID.getStarted,
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.quickCreate,
-  CORE_WIDGET_ID.recentlyEdited,
+  CORE_WIDGET_ID.continue,
   CORE_WIDGET_ID.teamActivity,
   CORE_WIDGET_ID.content,
   CORE_WIDGET_ID.upcomingReleases,

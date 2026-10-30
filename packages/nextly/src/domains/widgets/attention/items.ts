@@ -87,6 +87,7 @@ function shapeProblems(given: unknown): string[] {
   return [
     idProblem(given.id),
     labelProblem(given.label),
+    reasonProblem(given.reason),
     typeof given.count === "function" ? undefined : "needs a count function",
     // The one rule the admin also asks before it draws a plugin's link.
     isAdminRelativePath(given.link)
@@ -107,13 +108,23 @@ function idProblem(id: unknown): string | undefined {
     : undefined;
 }
 
+/** Whether a value is text the card can draw on one line. */
+function isOneLine(value: unknown): boolean {
+  return (
+    typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value)
+  );
+}
+
 /** Why an item's label is unusable: it is drawn on one line of the card. */
 function labelProblem(label: unknown): string | undefined {
-  return typeof label === "string" &&
-    label.trim() !== "" &&
-    !/[\r\n]/.test(label)
+  return isOneLine(label) ? undefined : "needs a one-line label";
+}
+
+/** Why an item's reason is unusable: optional, and drawn on one line under the label. */
+function reasonProblem(reason: unknown): string | undefined {
+  return reason === undefined || isOneLine(reason)
     ? undefined
-    : "needs a one-line label";
+    : "needs a one-line reason when it gives one";
 }
 
 /**
@@ -382,6 +393,7 @@ export function pluginItemReaders(
     // A plugin's item ranks as a warning, always: only core's kinds are critical.
     severity: "warning" as const,
     link: entry.item.link,
+    ...(entry.item.reason === undefined ? {} : { reason: entry.item.reason }),
     owner: entry.owner,
     visible: () => visibleTo(entry, caller, readable),
     read: async signal => {

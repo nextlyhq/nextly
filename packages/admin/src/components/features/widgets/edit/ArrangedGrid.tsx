@@ -22,7 +22,7 @@
  * @module components/features/widgets/edit/ArrangedGrid
  */
 import type { GridSize } from "nextly/config";
-import type { JSX, RefObject } from "react";
+import { useContext, type JSX, type RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
@@ -32,6 +32,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { AnswerSize } from "../frame/tier";
+import { HiddenWhileEmptyContext } from "../hidden-while-empty";
 import {
   moveAvailability,
   type IsDrawn,
@@ -217,22 +218,38 @@ function cellSettingsWrite(
 }
 
 /**
- * Whether a card is off the dashboard: its widget's own `shows` said no for this person, or it
- * hides when empty and its answer is. Read from the outcome the renderer draws from
- * (`resolveWidgetOutcome`), so the two cannot disagree.
+ * What deciding whether a card is on show reads: the cards' answers, the cards the layout read
+ * found empty (`hidden`, held for the visit) and the widgets whose cards leave by their own
+ * answer (`hiddenWhenAnswerEmpty`), from `HiddenWhileEmptyContext`.
  */
-function hiddenWhileEmpty(
-  row: ArrangedWidget,
-  slots: Record<string, WidgetSlot>,
-  cellSlots: CellSlots
-): boolean {
+interface ShownAnswers {
+  slots: Record<string, WidgetSlot>;
+  cellSlots: CellSlots;
+  hidden: ReadonlySet<string>;
+  hiddenWhenAnswerEmpty: ReadonlySet<string>;
+}
+
+/**
+ * Whether a card is off the dashboard: its widget's own `shows` said no for this person, read
+ * from the outcome the renderer draws from (`resolveWidgetOutcome`); or it hides while empty and
+ * the layout read found it empty (`hidden`), or, for a widget the layout read cannot answer
+ * (`hiddenWhenAnswerEmpty`), its own answer is empty. Each as the card itself reads it
+ * (`useHiddenWhileEmpty`, `useHidesWhenAnswerEmpty`), so the two cannot disagree.
+ */
+function hiddenWhileEmpty(row: ArrangedWidget, answers: ShownAnswers): boolean {
+  const hides = row.widget.hidesWhenEmpty === true;
+  if (hides && answers.hidden.has(row.placementId)) return true;
   const outcome = resolveWidgetOutcome(
     row.widget,
-    slots[row.placementId],
-    key => cellSlots[row.placementId]?.[key]
+    answers.slots[row.placementId],
+    key => answers.cellSlots[row.placementId]?.[key]
   );
   if (outcome.state === "not-shown") return true;
-  return row.widget.hidesWhenEmpty === true && outcome.state === "empty";
+  return (
+    hides &&
+    answers.hiddenWhenAnswerEmpty.has(row.widget.id) &&
+    outcome.state === "empty"
+  );
 }
 
 /**
@@ -243,12 +260,10 @@ function hiddenWhileEmpty(
 function shownCount(
   rows: readonly ArrangedWidget[],
   isEditing: boolean,
-  answers: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots }
+  answers: ShownAnswers
 ): number {
   if (isEditing) return rows.length;
-  return rows.filter(
-    row => !hiddenWhileEmpty(row, answers.slots, answers.cellSlots)
-  ).length;
+  return rows.filter(row => !hiddenWhileEmpty(row, answers)).length;
 }
 
 /**
@@ -258,17 +273,15 @@ function shownCount(
  */
 function oldestAnswer(
   rows: readonly ArrangedWidget[],
-  answers: {
+  answers: ShownAnswers & {
     requested: ReadonlySet<string>;
-    slots: Record<string, WidgetSlot>;
-    cellSlots: CellSlots;
     updatedAtFor: (placementId: string) => Date | null;
   }
 ): Date | undefined {
   let oldest: Date | undefined;
   for (const row of rows) {
     if (!answers.requested.has(row.placementId)) continue;
-    if (hiddenWhileEmpty(row, answers.slots, answers.cellSlots)) continue;
+    if (hiddenWhileEmpty(row, answers)) continue;
     const at = answers.updatedAtFor(row.placementId);
     if (at !== null && (oldest === undefined || at < oldest)) oldest = at;
   }
@@ -295,10 +308,16 @@ export function ArrangedGrid({
   gridRef,
   on,
 }: ArrangedGridProps): JSX.Element {
-  const answeredAt = oldestAnswer(rows, {
-    requested,
+  const { hidden, hiddenWhenAnswerEmpty } = useContext(HiddenWhileEmptyContext);
+  const shown: ShownAnswers = {
     slots,
     cellSlots,
+    hidden,
+    hiddenWhenAnswerEmpty,
+  };
+  const answeredAt = oldestAnswer(rows, {
+    ...shown,
+    requested,
     updatedAtFor,
   });
   return (
@@ -329,7 +348,7 @@ export function ArrangedGrid({
           {announcement}
         </span>
         <EmptyArrangement
-          count={shownCount(rows, isEditing, { slots, cellSlots })}
+          count={shownCount(rows, isEditing, shown)}
           isEditing={isEditing}
         />
         <DropLineMark line={drag?.line} />

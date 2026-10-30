@@ -95,7 +95,9 @@ export async function readableCollectionSlugs(
  *
  * Less what the dashboard keeps off: a collection or Single kept off it does
  * not make a card worth offering, since the card would leave it out and draw
- * empty.
+ * empty. That includes one removed from code (`keptOffDashboard`), whose
+ * registry row can outlive its table, so no reader of this list queries a
+ * table that is gone.
  */
 export async function readableOfKind(
   caller: ReadCaller,
