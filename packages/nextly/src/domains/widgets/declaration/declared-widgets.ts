@@ -198,8 +198,11 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * named here. `serverData` says core builds the card's data, so there is no
  * query. The size is published with every end filled in (`sizeBounds`), the
  * one reading of a declared size, so no reader fills a missing end its own way.
+ *
+ * Exported for the test harness alone (`nextly/testing`), which describes a
+ * widget to a test exactly as the registry publishes it.
  */
-function toDefinition(
+export function toDefinition(
   declaration: DeclaredWidgetShape,
   owner: string
 ): WidgetDefinition {

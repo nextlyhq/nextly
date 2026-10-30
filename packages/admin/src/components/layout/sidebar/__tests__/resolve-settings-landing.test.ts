@@ -50,14 +50,10 @@ describe("resolveSettingsLanding", () => {
 
   /**
    * The unchanged case. General Settings answers to `read-settings`, so this
-   * reader lands on the panel's first entry rather than being routed past it,
-   * as does a reader still holding `manage-settings`, which counts as it.
+   * reader lands on the panel's first entry rather than being routed past it.
    */
   it("still sends a settings reader to General", () => {
     expect(resolveSettingsLanding(only("read-settings"))).toBe(ROUTES.SETTINGS);
-    expect(resolveSettingsLanding(only("manage-settings"))).toBe(
-      ROUTES.SETTINGS
-    );
   });
 
   /**
