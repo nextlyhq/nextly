@@ -27,9 +27,11 @@ import type { Permission } from "../../types/ui/form";
 import {
   levelOf,
   levelsFor,
+  MANAGE_BRIDGE_RESOURCES,
   permissionsFor,
   standardActions,
   type AccessLevel,
+  type LevelKind,
   type RowLevel,
 } from "./levels";
 
@@ -59,10 +61,13 @@ export function screenEntitiesFrom(body: unknown): ScreenEntity[] {
   return screenListSchema.parse(body).items;
 }
 
-/** One collection or Single as the roles screen shows it. */
+/**
+ * One collection, Single or built-in resource (media, settings, the Email
+ * hub's providers and templates) as the roles screen shows it.
+ */
 export interface LevelRow {
   slug: string;
-  kind: ScreenEntity["kind"];
+  kind: LevelKind;
   /** The name the row is shown by: the entity's singular label. */
   label: string;
   /** The entity's plural label, or its singular where it has none. */
@@ -104,6 +109,87 @@ export function levelRows(
   return { rows, rest };
 }
 
+/**
+ * What each built-in resource with a level row is called. Its slugs are the
+ * ones whose earlier `manage-` permission stood for the plain four, so a row
+ * reads that permission as the Can edit it gave.
+ */
+const SYSTEM_ROW_LABELS: Readonly<Record<string, string>> = {
+  media: "Media",
+  settings: "Settings",
+  "email-providers": "Email providers",
+  "email-templates": "Email templates",
+};
+
+/**
+ * The rows for the built-in resources a role is given a level on, in a fixed
+ * order, and the permissions none of them takes. A resource with no
+ * permission listed gets no row.
+ */
+export function systemLevelRows(permissions: readonly Permission[]): {
+  rows: LevelRow[];
+  rest: Permission[];
+} {
+  const bySlug = new Map<string, Permission[]>(
+    [...MANAGE_BRIDGE_RESOURCES].map(slug => [slug, []])
+  );
+  const rest: Permission[] = [];
+  for (const permission of permissions) {
+    const own = bySlug.get(permission.resource);
+    if (own) own.push(permission);
+    else rest.push(permission);
+  }
+  const rows: LevelRow[] = [];
+  for (const [slug, own] of bySlug) {
+    if (own.length === 0) continue;
+    const label = SYSTEM_ROW_LABELS[slug] ?? slug;
+    rows.push({
+      slug,
+      kind: "system",
+      label,
+      plural: label,
+      plugin: null,
+      declaredRules: [],
+      permissions: own,
+    });
+  }
+  return { rows, rest };
+}
+
+/**
+ * Every row and group the roles screen shows, from the entities and
+ * permissions it loads, each permission in exactly one place.
+ *
+ * The built-in resources are taken first. A collection or Single created
+ * before its name was reserved for one (`settings`, `media`) keeps that name,
+ * and its permissions are the built-in resource's own permissions, so it is
+ * shown as the built-in row rather than as a collection; any action of its
+ * own that no level holds, such as `publish`, sits under that row's switch.
+ * The rules its code declares still limit it, so the built-in row carries
+ * them and says so.
+ */
+export function roleScreenRows(
+  entities: readonly ScreenEntity[],
+  permissions: readonly Permission[]
+): { appRows: LevelRow[]; groups: PluginGroup[]; rest: Permission[] } {
+  const reservedRules = new Map(
+    entities
+      .filter(entity => MANAGE_BRIDGE_RESOURCES.has(entity.slug))
+      .map(entity => [entity.slug, entity.declaredRules])
+  );
+  const system = systemLevelRows(permissions);
+  const systemRows = system.rows.map(row => ({
+    ...row,
+    declaredRules: reservedRules.get(row.slug) ?? row.declaredRules,
+  }));
+  const built = levelRows(
+    entities.filter(entity => !MANAGE_BRIDGE_RESOURCES.has(entity.slug)),
+    system.rest
+  );
+  const sorted = pluginGroups(built.rows, built.rest);
+  return { ...sorted, appRows: [...sorted.appRows, ...systemRows] };
+}
+
 /** The actions `ids` hold on `row`; an id of another row is not counted. */
 function actionsHeld(row: LevelRow, ids: Iterable<string>): string[] {
   const held = new Set(ids);
@@ -115,6 +201,58 @@ function actionsHeld(row: LevelRow, ids: Iterable<string>): string[] {
 /** The level `ids` give `row`, or "custom" where they match none. */
 export function rowLevel(row: LevelRow, ids: Iterable<string>): RowLevel {
   return levelOf(row.kind, actionsHeld(row, ids), row.slug);
+}
+
+/** The schema routes ask all three of these settings actions together. */
+const SCHEMA_CHANGE_ACTIONS = ["create", "update", "delete"] as const;
+
+/**
+ * The lines a row shows under its name, from what `ids` hold on it.
+ *
+ * - A built-in resource whose role still holds its retired `manage-`
+ *   permission reads No access, as the server counts it, until `nextly
+ *   upgrade` converts it into the plain four. Saving the role converts it
+ *   too, unless the row is changed. Where the role holds it only through a
+ *   base role (`ownIds` lacks it), saving this role leaves it on the base
+ *   role, so the note says where it comes from instead.
+ * - Settings says that changing collections and Singles needs Can edit on it,
+ *   since the schema routes ask create, update and delete on settings
+ *   together; a role holding update without the other two is told it can
+ *   change settings but not the schema. Not on the Public role's rows
+ *   (`visitors`), which offer no Can edit to ask for.
+ */
+export function rowNotes(
+  row: LevelRow,
+  ids: Iterable<string>,
+  ownIds: Iterable<string>,
+  { visitors = false }: { visitors?: boolean } = {}
+): string[] {
+  if (row.kind !== "system") return [];
+  const held = new Set(actionsHeld(row, ids));
+  const notes: string[] = [];
+  if (held.has("manage")) {
+    notes.push(
+      new Set(actionsHeld(row, ownIds)).has("manage")
+        ? `This role still holds the retired manage-${row.slug} permission, ` +
+            "which gives no access until it is converted. Run nextly " +
+            "upgrade to convert this role; saving this role converts it too."
+        : `This role inherits the retired manage-${row.slug} permission ` +
+            "from a base role, which gives no access until it is converted. " +
+            "Run nextly upgrade, or save the base role, to convert it."
+    );
+  }
+  if (row.slug === "settings" && !visitors) {
+    notes.push(
+      "Changing collections and Singles needs Can edit on Settings " +
+        "(create, update and delete)."
+    );
+    // A retired `manage` gives nothing, so only the three plain actions do.
+    const schema = SCHEMA_CHANGE_ACTIONS.every(a => held.has(a));
+    if (held.has("update") && !schema) {
+      notes.push("Can change settings, but not collections or Singles.");
+    }
+  }
+  return notes;
 }
 
 /**

@@ -176,6 +176,35 @@ describe("Widget.FooterLink", () => {
       warn.mockRestore();
     }
   });
+
+  it("tells the author once per card, however often its count of FooterLinks changes", () => {
+    // 🔴 Said again on each change of the count, a body that redraws its links repeats one
+    // mistake on every render, and the console buries what else it says.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const links = (count: number) => (
+      <WidgetCard title="Orders" widgetId="acme/orders">
+        {Array.from({ length: count }, (_, index) => (
+          <Widget.FooterLink
+            key={index}
+            href={`/${index}`}
+            label={`Link ${index}`}
+          />
+        ))}
+      </WidgetCard>
+    );
+    try {
+      const { rerender } = render(links(2));
+      rerender(links(3));
+      rerender(links(2));
+      rerender(links(4));
+      const told = warn.mock.calls.filter(([message]) =>
+        String(message).includes("Widget.FooterLink")
+      );
+      expect(told).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("Widget.List", () => {

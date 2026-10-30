@@ -11,16 +11,7 @@
  */
 
 import { formatGlobalDateTime, isValidTimezone } from "@admin/lib/dates/format";
-import type { Release, ReleaseState } from "@admin/types/releases";
-
-/** What each state means to an editor, in their words rather than the schema's. */
-export const RELEASE_STATE_LABEL: Record<ReleaseState, string> = {
-  draft: "Draft",
-  scheduled: "Scheduled",
-  published: "Published",
-  cancelled: "Cancelled",
-  blocked: "Blocked",
-};
+import type { Release } from "@admin/types/releases";
 
 /**
  * The instant, rendered in the ZONE THE AUTHOR CHOSE.

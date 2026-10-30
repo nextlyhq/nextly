@@ -80,7 +80,7 @@ service none key-in-the-request
   unpublish:403 You can't unpublish home.
 service true visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service true user-with
@@ -240,7 +240,7 @@ service false key-in-the-request
   unpublish:404 Single "home" not found
 service returns-true visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service returns-true user-with
@@ -720,7 +720,7 @@ service throws key-in-the-request
   unpublish:404 Single "home" not found
 service async-true visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service async-true user-with
@@ -1200,7 +1200,7 @@ route-authorized none key-in-the-request
   unpublish:A
 route-authorized true visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 route-authorized true user-with
@@ -1360,7 +1360,7 @@ route-authorized false key-in-the-request
   unpublish:A
 route-authorized returns-true visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 route-authorized returns-true user-with
@@ -1840,7 +1840,7 @@ route-authorized throws key-in-the-request
   unpublish:A
 route-authorized async-true visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 route-authorized async-true user-with
