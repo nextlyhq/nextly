@@ -1902,9 +1902,11 @@ export async function runFileMigrations(args: {
       applied: await repo.isFileApplied(`${file.name}.sql`),
     });
   }
+  // A step of zero or less reads as no limit here, as it always has; to `filesWithinStep` it
+  // would mean no file at all.
   const within = filesWithinStep(
     listed.map(({ file, applied }) => ({ file, done: applied })),
-    args.step,
+    args.step !== undefined && args.step > 0 ? args.step : undefined,
     "up"
   );
   const runs = new Set(within.run);

@@ -13,7 +13,9 @@
  * - up, a field joining translation: from its `joins` file to the main file, which drops the main
  *   column whose value the joins file copied;
  * - down, a field leaving translation: from its `shared` file's DOWN, which puts the companion
- *   column back, to the main file's DOWN, which drops the main column.
+ *   column back, to the main file's DOWN, which drops the main column;
+ * - down, a field joining translation: from the main file's DOWN, which puts the main column back
+ *   empty, to its `joins` file's DOWN, which fills it from the companion.
  *
  * @module domains/i18n/migration/step-windows
  */
@@ -21,6 +23,7 @@ import { parseEntityHeaders } from "../../schema/migrate-create/format-file";
 
 import {
   type LocalizationMigrationIntent,
+  type LocalizationMigrationKind,
   parseLocalizationIntent,
 } from "./migration-intent";
 import { KIND_NAMES } from "./resolve-entity-table";
@@ -50,75 +53,133 @@ export function stepFileOf(content: string, filename: string): StepFile {
 
 type Direction = "up" | "down";
 
-/** The window a file opens, and the windows it closes, by key. */
-function windowsOf(
-  file: StepFile,
-  direction: Direction
-): { opens?: string; closes: string[] } {
+/** A file's part in a move: the entity it is about, and what it does to it. */
+interface Touch {
+  entity: string;
+  kind: LocalizationMigrationKind | "main";
+  intent?: LocalizationMigrationIntent;
+}
+
+/**
+ * What a file does to each entity it is about: a localization file to the one its intent names,
+ * a main file, which has no intent, to each entity its header names.
+ */
+function touchesOf(file: StepFile): Touch[] {
   const intent = file.localization;
-  const entity = (i: LocalizationMigrationIntent) =>
-    `${i.entity}:${i.spec.collection}`;
-  // A main file has no intent, and names the entities it changes in its header.
-  const named = intent
-    ? []
-    : [
-        ...file.collections.map(s => `collection:${s}`),
-        ...file.singles.map(s => `single:${s}`),
-        ...file.components.map(s => `fieldGroup:${s}`),
-      ];
-  if (direction === "up") {
-    if (intent?.kind === "archive") {
-      return { opens: `leaves:${entity(intent)}`, closes: [] };
-    }
-    if (intent?.kind === "joins") {
-      return { opens: `joins:${entity(intent)}`, closes: [] };
-    }
-    if (intent?.kind === "shared") {
-      return { closes: [`leaves:${entity(intent)}`] };
-    }
-    return { closes: named.map(e => `joins:${e}`) };
+  if (intent) {
+    const entity = `${intent.entity}:${intent.spec.collection}`;
+    return [{ entity, kind: intent.kind, intent }];
   }
-  if (intent?.kind === "shared") {
-    return { opens: `leaves:${entity(intent)}`, closes: [] };
+  return [
+    ...file.collections.map(s => `collection:${s}`),
+    ...file.singles.map(s => `single:${s}`),
+    ...file.components.map(s => `fieldGroup:${s}`),
+  ].map(entity => ({ entity, kind: "main" as const }));
+}
+
+/**
+ * The windows a run going each way must not end inside, each from a file of `from` to the
+ * entity's next file of `to`. Coming down through a field joining translation, the main file
+ * that opens the window is the one the joins file pairs with, the nearest above it: a newer main
+ * file about the entity (`stopAt`) moves nothing of it.
+ */
+const WINDOWS: Record<
+  Direction,
+  readonly { from: Touch["kind"]; to: Touch["kind"]; stopAt?: Touch["kind"] }[]
+> = {
+  up: [
+    { from: "archive", to: "shared" },
+    { from: "joins", to: "main" },
+  ],
+  down: [
+    { from: "shared", to: "main" },
+    { from: "main", to: "joins", stopAt: "main" },
+  ],
+};
+
+/** The windows a file opens, with the move each is for, and those it closes, by key. */
+interface FileWindows {
+  opens: [string, LocalizationMigrationIntent][];
+  closes: string[];
+}
+
+/** Each file's windows, in the order the run takes `files`. */
+function windowsAlong(
+  files: readonly StepFile[],
+  direction: Direction
+): FileWindows[] {
+  const touches = files.map(touchesOf);
+  const rules = WINDOWS[direction];
+  return touches.map((own, i) => ({
+    opens: own.flatMap(t =>
+      rules.flatMap((rule, r) => {
+        if (rule.from !== t.kind) return [];
+        const closer = closerOf(touches.slice(i + 1), t.entity, rule);
+        // A rollback's main file has no intent; the move is its joins file's.
+        const intent = t.intent ?? closer?.intent;
+        return closer && intent
+          ? [
+              [`${r}:${t.entity}`, intent] as [
+                string,
+                LocalizationMigrationIntent,
+              ],
+            ]
+          : [];
+      })
+    ),
+    closes: own.flatMap(t =>
+      rules.flatMap((rule, r) =>
+        rule.to === t.kind ? [`${r}:${t.entity}`] : []
+      )
+    ),
+  }));
+}
+
+/**
+ * The later file's touch that closes a window `rule` opens on `entity`, or `undefined` when none
+ * does. A window opens only when one does, so a missing file never keeps a run going.
+ */
+function closerOf(
+  later: readonly Touch[][],
+  entity: string,
+  rule: (typeof WINDOWS)[Direction][number]
+): Touch | undefined {
+  for (const touches of later) {
+    const touch = touches.find(t => t.entity === entity);
+    if (touch?.kind === rule.to) return touch;
+    if (touch !== undefined && touch.kind === rule.stopAt) return undefined;
   }
-  return { closes: named.map(e => `leaves:${e}`) };
+  return undefined;
 }
 
 /**
  * The files of `files`, in the order the run takes them, that a run with `step` takes: `step` of
- * those not `done`, or every one with no step, and past the budget on through any window the files
- * taken so far left open. A window opens only when a file later in `files` closes it, so a missing
- * one never keeps a run going. `continued` names the moves the run goes on for, for the notice the
- * run prints; the run and its dry-run preview both read this, so the preview lists what runs.
+ * those not `done` (none for a step of zero or less), or every one with no step, and past the
+ * budget on through any window the files taken so far left open. `continued` names the moves the
+ * run goes on for, for the notice the run prints; the run and its dry-run preview both read this,
+ * so the preview lists what runs.
  */
 export function filesWithinStep<T extends StepFile>(
   files: readonly { file: T; done: boolean }[],
   step: number | undefined,
   direction: Direction
 ): { run: T[]; budget: number; continued: string | undefined } {
-  const windows = files.map(f => windowsOf(f.file, direction));
+  const windows = windowsAlong(
+    files.map(f => f.file),
+    direction
+  );
   const open = new Map<string, LocalizationMigrationIntent>();
   const budget =
-    step !== undefined && step > 0 ? step : Number.POSITIVE_INFINITY;
+    step === undefined ? Number.POSITIVE_INFINITY : Math.max(0, step);
   const run: T[] = [];
   let continued: string | undefined;
   for (const [i, { file, done }] of files.entries()) {
-    if (!done) {
-      if (run.length >= budget) {
-        if (open.size === 0) break;
-        continued ??= describeMoves([...open.values()]);
-      }
-      run.push(file);
-    }
-    const { opens, closes } = windows[i] ?? { closes: [] };
-    for (const key of closes) open.delete(key);
-    if (
-      opens !== undefined &&
-      file.localization &&
-      windows.slice(i + 1).some(w => w.closes.includes(opens))
-    ) {
-      open.set(opens, file.localization);
-    }
+    const past = !done && run.length >= budget;
+    if (past && open.size === 0) break;
+    if (past) continued ??= describeMoves([...open.values()]);
+    if (!done) run.push(file);
+    for (const key of windows[i]?.closes ?? []) open.delete(key);
+    for (const [key, intent] of windows[i]?.opens ?? []) open.set(key, intent);
   }
   return { run, budget, continued };
 }

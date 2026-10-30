@@ -34,8 +34,11 @@ const companion = (
 });
 
 /** A main migration that names `slug` in its header. */
-const main = (slug: string): StepFile & { name: string } => ({
-  name: `main:${slug}`,
+const main = (
+  slug: string,
+  name = `main:${slug}`
+): StepFile & { name: string } => ({
+  name,
   ...stepFileOf(
     `${entityHeaderLine("collection", slug)}\n\n-- UP\nSELECT 1;\n`,
     "main.sql"
@@ -98,6 +101,46 @@ describe("filesWithinStep", () => {
 
     expect(names(within.run)).toEqual(["shared", "main:docs"]);
     expect(within.continued).toBe('"body" in collection "docs"');
+  });
+
+  it("rolls back through a field joining translation, from the main file to its joins file", () => {
+    // The main file's DOWN puts the main column back empty; the joins file's DOWN fills it.
+    const within = filesWithinStep(
+      pending([main("docs"), companion("joins"), main("notes")]),
+      1,
+      "down"
+    );
+
+    expect(names(within.run)).toEqual(["main:docs", "joins"]);
+    expect(within.continued).toBe('"body" in collection "docs"');
+  });
+
+  it("keeps to the step at a newer main file than the one a joins file pairs with", () => {
+    const within = filesWithinStep(
+      pending([
+        main("docs", "later"),
+        main("docs", "paired"),
+        companion("joins"),
+      ]),
+      1,
+      "down"
+    );
+
+    expect(names(within.run)).toEqual(["later"]);
+  });
+
+  it("takes nothing with a step of zero or less", () => {
+    for (const step of [0, -1]) {
+      for (const direction of ["up", "down"] as const) {
+        expect(
+          filesWithinStep(
+            pending([companion("shared"), main("docs")]),
+            step,
+            direction
+          ).run
+        ).toEqual([]);
+      }
+    }
   });
 
   it("keeps to the step outside a move, and where nothing closes the move", () => {
