@@ -33,8 +33,9 @@ test.describe.configure({ lock: [LOCK.dashboard], mode: "serial" });
 
 const API = "/admin/api";
 const CARD = "seo/issues";
-const ITEM = "seo/issues";
 const PAGES = "seo-pages";
+/** The Needs attention line of the one collection the plugin checks here. */
+const PAGES_LINE = "seo/issues-seo-pages";
 
 /** The issues a page with no SEO fields filled in has. */
 const ALL_MISSING = [
@@ -148,7 +149,7 @@ async function askDashboard(
   return results[0];
 }
 
-/** The SEO line of the attention digest `request`'s person is answered, if any. */
+/** The pages' SEO line of the attention digest `request`'s person is answered, if any. */
 async function seoLineFor(
   request: APIRequestContext
 ): Promise<DigestItem | undefined> {
@@ -159,7 +160,7 @@ async function seoLineFor(
   });
   expect(slot.ok, JSON.stringify(slot)).toBe(true);
   const items = slot.ok ? (slot.result.items ?? []) : [];
-  return items.find(item => item.id === ITEM);
+  return items.find(item => item.id === PAGES_LINE);
 }
 
 /** Write a page to the checked collection, with the SEO fields given. */
@@ -216,10 +217,10 @@ test("its issue count is a Needs attention line naming the pages it checks", asy
 
   const line = await seoLineFor(page.request);
   // The same issues the card draws, as one count, linked to the list they are
-  // fixed in.
+  // fixed in: the card reads this one collection, which has this one line.
   expect(line).toEqual(
     expect.objectContaining({
-      label: "SEO issues in published pages",
+      label: `SEO issues in ${PAGES}`,
       count: Object.values(bars).reduce((sum, n) => sum + n, 0),
       link: `collections/${PAGES}`,
     })

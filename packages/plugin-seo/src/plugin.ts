@@ -24,7 +24,7 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
-import { seoIssuesAttentionItem, seoIssuesWidget } from "./widget-card";
+import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -162,18 +162,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     extend: [{ target: targets, fields: [seoGroup] }],
   };
 
-  // The SEO issues card and its Needs attention line, both counting the issues
-  // in those same collections. Bound to `targets` rather than to every
-  // collection: a collection this plugin never extended has no `seo` group, so
-  // every one of its documents would report the full set of missing fields and
-  // drown the real answer. Each is withheld where it would have nothing to
-  // say (see `widget-card`).
+  // The SEO issues card and its Needs attention lines, one per collection,
+  // all counting the issues in those same collections. Bound to `targets`
+  // rather than to every collection: a collection this plugin never extended
+  // has no `seo` group, so every one of its documents would report the full
+  // set of missing fields and drown the real answer. Each is withheld where it
+  // would have nothing to say (see `widget-card`).
   const issuesCard = seoIssuesWidget(targets, seoFields);
-  const issuesItem = seoIssuesAttentionItem(targets, seoFields);
-  if (issuesCard || issuesItem) {
+  const issuesItems = seoIssuesAttentionItems(targets, seoFields);
+  if (issuesCard || issuesItems.length > 0) {
     contributes.dashboard = {
       ...(issuesCard ? { widgets: [issuesCard] } : {}),
-      ...(issuesItem ? { attention: [issuesItem] } : {}),
+      ...(issuesItems.length > 0 ? { attention: issuesItems } : {}),
     };
   }
 

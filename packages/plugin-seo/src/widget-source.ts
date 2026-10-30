@@ -252,6 +252,14 @@ function cursorOf(row: unknown): string | number | undefined {
  * at all while more matched leaves nothing to continue from, so the scan stops
  * there and says its counts are floors.
  *
+ * 🔴 The cursor is the id a row came back with, after the collection's
+ * `afterRead` hooks, and a read takes no offset to page by instead. A hook that
+ * rewrites ids makes it a value the stored ids do not order by, so the next
+ * page could skip rows or repeat them. Each page is therefore held to what the
+ * stored ids say (see `followsOn`) before its rows are counted, and a page that
+ * does not follow on stops the scan with its counts said to be floors: an
+ * undercount the card shows as "N+", never a wrong whole number.
+ *
  * Every row that comes back is counted: its page has already been fetched and
  * its hooks have already run, so reading all of it costs nothing further.
  */
@@ -264,17 +272,79 @@ async function scanCollection(
 ): Promise<CollectionTally> {
   let pagesUsed = 0;
   let cursor: string | number | undefined;
+  let previous: ScanPage | undefined;
+  const counted = new Set<string | number>();
 
   while (pagesUsed < pagesAllowed) {
     const page = await readPage(services, slug, cursor);
     pagesUsed += 1;
+    if (previous !== undefined && !followsOn(previous, page, counted)) {
+      return { pagesUsed, bounded: true };
+    }
     tallyRows(page.items, checks, byIssue);
+    rememberRows(page.items, counted);
 
     const step = nextStep(page);
     if (step.done) return { pagesUsed, bounded: step.bounded };
     cursor = step.cursor;
+    previous = page;
   }
   return { pagesUsed, bounded: true };
+}
+
+/**
+ * Whether `page` continues from `previous` as a page after a stored id does:
+ * fewer rows match it, by no more than one page's worth, and none of its rows
+ * was already counted.
+ *
+ * Judged by `total`, which the read counts over the stored ids before any hook
+ * runs, and by the rows' own ids, rather than by comparing ids in this process:
+ * a hook's id need not order the way the database orders the stored one, and
+ * an id compared as text here does not order as a number or a collation does
+ * there. Fewer than a page's worth less means the cursor skipped rows; no fewer
+ * means it went nowhere or back; a row seen again would be counted twice.
+ */
+function followsOn(
+  previous: ScanPage,
+  page: ScanPage,
+  counted: ReadonlySet<string | number>
+): boolean {
+  return advancedOnePage(previous, page) && !repeatsARow(page.items, counted);
+}
+
+/**
+ * Whether the rows matching `page` are fewer than `previous`'s by one to a
+ * page's worth. Not judged where either total is missing or a floor, which
+ * says nothing exact about how many rows the cursor passed.
+ */
+function advancedOnePage(previous: ScanPage, page: ScanPage): boolean {
+  const before = previous.total;
+  const after = page.total;
+  if (before === undefined || after === undefined) return true;
+  if (previous.atLeast === true || page.atLeast === true) return true;
+  return after < before && after >= before - ISSUE_SCAN_PAGE_SIZE;
+}
+
+/** Whether any of `rows` was already counted, by the id it came back with. */
+function repeatsARow(
+  rows: readonly unknown[],
+  counted: ReadonlySet<string | number>
+): boolean {
+  return rows.some(row => {
+    const id = cursorOf(row);
+    return id !== undefined && counted.has(id);
+  });
+}
+
+/** Keeps each counted row's id, so a later page cannot count it again. */
+function rememberRows(
+  rows: readonly unknown[],
+  counted: Set<string | number>
+): void {
+  for (const row of rows) {
+    const id = cursorOf(row);
+    if (id !== undefined) counted.add(id);
+  }
 }
 
 /** One page of a scan, as the read answers it. */

@@ -121,7 +121,7 @@ describe("seoPlugin", () => {
 });
 
 describe("the dashboard card the plugin contributes", () => {
-  it("declares seo/issues and its Needs attention line through contributes.dashboard", () => {
+  it("declares seo/issues and its Needs attention lines through contributes.dashboard", () => {
     const plugin = seoPlugin({
       collections: ["pages", "posts"],
       sitemap: false,
@@ -131,9 +131,15 @@ describe("the dashboard card the plugin contributes", () => {
     expect(dashboard?.widgets?.map(widget => widget.id)).toEqual([
       "seo/issues",
     ]);
-    expect(dashboard?.attention?.map(item => item.id)).toEqual(["seo/issues"]);
-    // Bound to the collections it extends, which carry the `seo` group.
-    expect(dashboard?.attention?.[0]?.collections).toEqual(["pages", "posts"]);
+    // A line per collection it extends, which carry the `seo` group.
+    expect(dashboard?.attention?.map(item => item.id)).toEqual([
+      "seo/issues-pages",
+      "seo/issues-posts",
+    ]);
+    expect(dashboard?.attention?.map(item => item.collections)).toEqual([
+      ["pages"],
+      ["posts"],
+    ]);
   });
 
   it("contributes nothing through the removed widget doors", () => {

@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { defaultSeoFields } from "../fields";
 import {
   SEO_ISSUES_WIDGET_ID,
-  seoIssuesAttentionItem,
+  seoIssuesAttentionItems,
   seoIssuesWidget,
 } from "../widget-card";
 import { ISSUE_SCAN_ROW_BUDGET } from "../widget-source";
@@ -26,8 +26,18 @@ interface Declared {
   access?: unknown;
   skeleton?: unknown;
   empty?: { message?: string };
+  preview?: readonly {
+    name: string;
+    data: { buckets: { value: string; count: number }[] };
+  }[];
   load: (input: { services: unknown }) => Promise<unknown>;
 }
+
+/** The issue each bar of the card's preview cases names, case by case. */
+const previewedIssues = (card: Declared) =>
+  (card.preview ?? []).map(sample =>
+    sample.data.buckets.map(bucket => bucket.value)
+  );
 
 function declared(card: ReturnType<typeof seoIssuesWidget>): Declared {
   if (card === undefined) throw new Error("expected a card");
@@ -47,11 +57,14 @@ function servicesHolding(rows: Record<string, Record<string, unknown>[]>) {
 function servicesPastTheBudget() {
   let next = 0;
   const find = vi.fn(async () => {
+    // How many rows match after the cursor: twice the budget, less what the
+    // pages before this one answered, as the stored ids count them.
+    const total = ISSUE_SCAN_ROW_BUDGET * 2 - next;
     const items = Array.from({ length: 50 }, () => ({
       id: `r${String(next++).padStart(6, "0")}`,
       seo: {},
     }));
-    return { items, total: ISSUE_SCAN_ROW_BUDGET * 2 };
+    return { items, total };
   });
   return { find };
 }
@@ -156,6 +169,29 @@ describe("the SEO issues card", () => {
     expect(seoIssuesWidget([], defaultSeoFields())).toBeUndefined();
   });
 
+  it("previews a bar for each check the configured fields install, and no other", () => {
+    // 🔴 The preview page draws the card from these cases, so a bar there for
+    // a field the project never installed shows a check the card can never
+    // make: a canonical-only project previews the canonical check alone.
+    expect(
+      previewedIssues(
+        declared(seoIssuesWidget(["pages"], [text({ name: "canonical" })]))
+      )
+    ).toEqual([["Missing canonical URL"]]);
+    // Every default check, in the order the card draws them.
+    expect(
+      previewedIssues(declared(seoIssuesWidget(["pages"], defaultSeoFields())))
+    ).toEqual([
+      [
+        "Hidden from search engines",
+        "Missing meta title",
+        "Missing canonical URL",
+        "Missing meta description",
+        "Missing social image",
+      ],
+    ]);
+  });
+
   it("is withheld when nothing it understands is installed", () => {
     expect(
       seoIssuesWidget(["pages"], [text({ name: "focusKeyword" })])
@@ -163,50 +199,113 @@ describe("the SEO issues card", () => {
   });
 });
 
-describe("the SEO issues line of Needs attention", () => {
-  it("names the collections it checks, which decide who sees it", () => {
-    // 🔴 Core shows an item with `collections` only to a reader of at least one
-    // of them, and limits its reads to them, as that reader.
-    const item = seoIssuesAttentionItem(["pages", "posts"], defaultSeoFields());
+/** What an item's `count` is handed, here the read services alone. */
+type CountInput = Parameters<
+  ReturnType<typeof seoIssuesAttentionItems>[number]["count"]
+>[0];
+const countWith = (services: unknown) =>
+  ({ services }) as unknown as CountInput;
 
-    expect(item).toMatchObject({
-      id: "seo/issues",
-      label: "SEO issues in published pages",
-      collections: ["pages", "posts"],
-      link: "collections/pages",
-    });
-    expect(item).not.toHaveProperty("permission");
-  });
+describe("the SEO issues lines of Needs attention", () => {
+  it("are one per configured collection, each naming, linking to and counting its own", async () => {
+    // 🔴 An item's link is one path for everyone it shows to, and core shows an
+    // item to a reader of any collection it names. One collection per item is
+    // what makes the link one every reader of the line can open.
+    const items = seoIssuesAttentionItems(
+      ["pages", "posts"],
+      defaultSeoFields()
+    );
 
-  it("counts every issue in the collections it reads", async () => {
-    const item = seoIssuesAttentionItem(["pages", "posts"], defaultSeoFields());
+    expect(
+      items.map(({ id, label, collections, link }) => ({
+        id,
+        label,
+        collections,
+        link,
+      }))
+    ).toEqual([
+      {
+        id: "seo/issues-pages",
+        label: "SEO issues in pages",
+        collections: ["pages"],
+        link: "collections/pages",
+      },
+      {
+        id: "seo/issues-posts",
+        label: "SEO issues in posts",
+        collections: ["posts"],
+        link: "collections/posts",
+      },
+    ]);
+    for (const item of items) expect(item).not.toHaveProperty("permission");
+
+    // Each counts its own collection, and reads no other.
     const services = servicesHolding({
       pages: [{ id: "a", seo: { noindex: true } }],
       posts: [{ id: "b", seo: {} }],
     });
-
-    // One hidden page, and four gaps on the other.
     expect(
-      await item?.count({ services } as unknown as Parameters<
-        NonNullable<typeof item>["count"]
-      >[0])
-    ).toBe(5);
+      await Promise.all(items.map(item => item.count(countWith(services))))
+    ).toEqual([1, 4]);
+    expect(services.find.mock.calls.map(([slug]) => slug).sort()).toEqual([
+      "pages",
+      "posts",
+    ]);
   });
 
-  it("says its count is a floor when the scan stopped at its bound", async () => {
-    const item = seoIssuesAttentionItem(["pages"], defaultSeoFields());
+  it("stay within the most core takes from one plugin, the rest sharing one line", async () => {
+    // Core refuses an eleventh item from one plugin at startup, so past ten
+    // collections the first nine keep a line each and the rest share the tenth.
+    const slugs = Array.from({ length: 12 }, (_, i) => `c${i + 1}`);
+    const items = seoIssuesAttentionItems(slugs, defaultSeoFields());
 
+    expect(items).toHaveLength(10);
+    expect(items.slice(0, 9).map(item => item.collections)).toEqual(
+      slugs.slice(0, 9).map(slug => [slug])
+    );
+    expect(items[9]).toMatchObject({
+      id: "seo/issues-others",
+      label: "SEO issues in 3 more collections",
+      collections: ["c10", "c11", "c12"],
+      link: "collections/c10",
+    });
+    expect(new Set(items.map(item => item.id)).size).toBe(10);
+
+    // Ten collections exactly still fit one line each.
     expect(
-      await item?.count({
-        services: servicesPastTheBudget(),
-      } as unknown as Parameters<NonNullable<typeof item>["count"]>[0])
-    ).toEqual({ count: ISSUE_SCAN_ROW_BUDGET * 4, atLeast: true });
+      seoIssuesAttentionItems(slugs.slice(0, 10), defaultSeoFields()).map(
+        item => item.collections
+      )
+    ).toEqual(slugs.slice(0, 10).map(slug => [slug]));
   });
 
-  it("is withheld where the card is", () => {
-    expect(seoIssuesAttentionItem([], defaultSeoFields())).toBeUndefined();
+  it("take ids core accepts, distinct even for slugs that read alike", () => {
+    // An item id holds lowercase letters, digits and dashes; a slug may not.
     expect(
-      seoIssuesAttentionItem(["pages"], [text({ name: "focusKeyword" })])
-    ).toBeUndefined();
+      seoIssuesAttentionItems(
+        ["blog_posts", "blog-posts", "News"],
+        defaultSeoFields()
+      ).map(item => item.id)
+    ).toEqual([
+      "seo/issues-blog-posts",
+      "seo/issues-blog-posts-2",
+      "seo/issues-news",
+    ]);
+  });
+
+  it("say a count is a floor when the scan stopped at its bound", async () => {
+    const [item] = seoIssuesAttentionItems(["pages"], defaultSeoFields());
+
+    expect(await item?.count(countWith(servicesPastTheBudget()))).toEqual({
+      count: ISSUE_SCAN_ROW_BUDGET * 4,
+      atLeast: true,
+    });
+  });
+
+  it("are withheld where the card is", () => {
+    expect(seoIssuesAttentionItems([], defaultSeoFields())).toEqual([]);
+    expect(
+      seoIssuesAttentionItems(["pages"], [text({ name: "focusKeyword" })])
+    ).toEqual([]);
   });
 });

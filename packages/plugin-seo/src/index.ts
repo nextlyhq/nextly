@@ -32,6 +32,6 @@ export type {
   EntriesQuery,
 } from "./collection-reads";
 // The dashboard card's id, for a site's `admin.dashboard` (`defaultLayout`,
-// `hide`, `overrides`). The card and its Needs attention line reach the
-// dashboard through `seoPlugin`, so neither declaration is exported.
+// `hide`, `overrides`). The card and its Needs attention lines reach the
+// dashboard through `seoPlugin`, so no declaration is exported.
 export { SEO_ISSUES_WIDGET_ID } from "./widget-card";

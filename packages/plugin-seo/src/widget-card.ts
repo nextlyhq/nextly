@@ -37,6 +37,7 @@ import {
   checksFor,
   reportableIssues,
   tallyIssues,
+  type IssueChecks,
   type IssueTally,
 } from "./widget-source";
 
@@ -44,10 +45,11 @@ import {
 export const SEO_ISSUES_WIDGET_ID = "seo/issues";
 
 /**
- * The Needs attention item's id. The same words as the card's, in the items'
- * own registry: both say "this plugin's SEO issues".
+ * The most Needs attention items core takes from one plugin. Core's own bound,
+ * restated because the SDK does not publish it; a plugin past it is refused at
+ * startup, so the items below are built to stay within it.
  */
-const SEO_ISSUES_ATTENTION_ID = "seo/issues";
+const MAX_ATTENTION_ITEMS = 10;
 
 /**
  * A widget as `contributes.dashboard.widgets` holds it, named from the SDK's
@@ -83,6 +85,23 @@ function issueBuckets(
     }))
     .filter(bucket => bucket.count > 0);
   return tally.bounded ? { buckets, atLeast: true } : { buckets };
+}
+
+/**
+ * A tally for the preview page to draw: each issue the configured fields can
+ * report, with a sample count, fewer for each issue further down the order.
+ *
+ * Built from the same `issues` the card's `load` draws, and drawn through the
+ * same `issueBuckets`, so the preview offers a bar only for a check the project
+ * installed, in the order the card draws them.
+ */
+function sampleTally(issues: readonly { label: string }[]): IssueTally {
+  return {
+    byIssue: new Map(
+      issues.map(({ label }, index) => [label, (issues.length - index) * 3])
+    ),
+    bounded: false,
+  };
 }
 
 /** Every issue in a tally, as one count, said as a floor when the scan was. */
@@ -136,47 +155,89 @@ export function seoIssuesWidget(
     preview: [
       {
         name: "Some pages need work",
-        data: {
-          buckets: [
-            { value: "Missing meta title", count: 11 },
-            { value: "Missing meta description", count: 7 },
-            { value: "Missing social image", count: 3 },
-          ],
-        },
+        data: issueBuckets(sampleTally(issues), issues),
       },
     ],
   });
 }
 
 /**
- * The card's issue count, as a line of the Needs attention card, or nothing
- * when the card would have nothing to say (see {@link seoIssuesWidget}).
+ * The card's issue count, as lines of the Needs attention card: one per
+ * configured collection, each naming that collection alone, linking to its
+ * list and counting its issues; none when the card would have nothing to say
+ * (see {@link seoIssuesWidget}).
  *
- * 🔴 It names the collections it checks, and that is what decides who sees it
- * and what it counts: core shows it only to a reader of at least one of them,
- * hands its `count` reads bound to that reader and limited to those
- * collections, and answers a declared collection the reader may not read as
- * empty. So a reader of some of them is shown the issues in those alone, with
- * no filtering written here.
+ * 🔴 One per collection, because an item's link is one path for every reader
+ * it shows to. Core shows an item naming one collection only to a reader of
+ * it, and reads its count as that reader, so every line a reader is shown
+ * links to a list they can open and counts what they may read there.
  *
- * It links to the first of them, the list the issues are fixed in.
+ * Past the most items core takes from one plugin, the collections beyond the
+ * first nine share one more line, which names all of them, counts the issues
+ * in those its reader may read, and links to the first of them.
  */
-export function seoIssuesAttentionItem(
+export function seoIssuesAttentionItems(
   collections: readonly string[],
   installed: readonly FieldConfig[]
-): AttentionItem | undefined {
+): AttentionItem[] {
   const checks = checksFor(installed);
-  const [first, ...rest] = collections;
-  if (reportableIssues(checks).length === 0 || first === undefined) {
-    return undefined;
-  }
+  if (reportableIssues(checks).length === 0) return [];
 
+  const fitsOnePerCollection = collections.length <= MAX_ATTENTION_ITEMS;
+  const own = fitsOnePerCollection
+    ? collections
+    : collections.slice(0, MAX_ATTENTION_ITEMS - 1);
+  const shared = fitsOnePerCollection
+    ? []
+    : collections.slice(MAX_ATTENTION_ITEMS - 1);
+  const ids = attentionIds([...own, ...(shared.length > 0 ? ["others"] : [])]);
+
+  const items = own.map((slug, index) =>
+    issuesItem(ids[index], `SEO issues in ${slug}`, [slug], checks)
+  );
+  const [firstShared, ...restShared] = shared;
+  if (firstShared !== undefined) {
+    items.push(
+      issuesItem(
+        ids[own.length],
+        `SEO issues in ${shared.length} more collections`,
+        [firstShared, ...restShared],
+        checks
+      )
+    );
+  }
+  return items;
+}
+
+/** One line counting the issues in `collections`, linked to the first's list. */
+function issuesItem(
+  id: string,
+  label: string,
+  collections: readonly [string, ...string[]],
+  checks: IssueChecks
+): AttentionItem {
   return defineAttentionItem({
-    id: SEO_ISSUES_ATTENTION_ID,
-    label: "SEO issues in published pages",
-    collections: [first, ...rest],
+    id,
+    label,
+    collections,
     count: async ({ services }) =>
       issueCount(await tallyIssues(services, collections, checks)),
-    link: `collections/${first}`,
+    link: `collections/${collections[0]}`,
+  });
+}
+
+/**
+ * An item id for each name, `seo/issues-<name>`: lowercase letters, digits and
+ * dashes, which is all an item id may hold, and each one distinct, a repeat
+ * taking its position, so two slugs that read alike (`blog_posts`,
+ * `blog-posts`) cannot become one id, which core would refuse at startup.
+ */
+function attentionIds(names: readonly string[]): string[] {
+  const taken = new Set<string>();
+  return names.map((name, index) => {
+    const base = `seo/issues-${name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`;
+    const id = taken.has(base) ? `${base}-${index + 1}` : base;
+    taken.add(id);
+    return id;
   });
 }

@@ -46,6 +46,11 @@ import { ISSUE_SCAN_PAGE_SIZE } from "../widget-source";
 const PAGES = "seoi_pages";
 const POSTS = "seoi_posts";
 const COLLECTIONS = [PAGES, POSTS];
+/** Each collection's Needs attention line, by the id the plugin gives it. */
+const PAGES_LINE = "seo/issues-seoi-pages";
+const POSTS_LINE = "seo/issues-seoi-posts";
+/** A collection whose `afterRead` hook rewrites the id of every row it answers. */
+const HOOKED = "seoi_hooked";
 
 /** The card, as the plugin booted below declares it. */
 const card = theCard();
@@ -100,12 +105,14 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     /**
      * Readers by what they may read: everything (the owner, a super-admin),
-     * both collections, pages alone, neither. None but the owner may read media.
+     * both collections, pages alone, posts alone, neither. None but the owner
+     * may read media.
      */
     interface Readers {
       owner: string;
       both: string;
       pagesOnly: string;
+      postsOnly: string;
       neither: string;
     }
 
@@ -136,6 +143,7 @@ describe.each(getConfiguredTestDialects())(
           owner,
           both: await userWith(t, "both", COLLECTIONS),
           pagesOnly: await userWith(t, "pages-only", [PAGES]),
+          postsOnly: await userWith(t, "posts-only", [POSTS]),
           neither: await userWith(t, "neither", []),
         },
       };
@@ -248,12 +256,13 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** The SEO line of `userId`'s digest, or `undefined` when they are shown none. */
-    async function seoItemFor(
+    /** The SEO lines of `userId`'s digest, in the digest's order. */
+    async function seoLinesFor(
       t: TestNextly,
       userId: string
-    ): Promise<DigestItem | undefined> {
-      return (await digestFor(t, userId)).find(
-        item => item.id === "seo/issues"
+    ): Promise<DigestItem[]> {
+      return (await digestFor(t, userId)).filter(item =>
+        item.id.startsWith("seo/issues-")
       );
     }
 
@@ -333,7 +342,7 @@ describe.each(getConfiguredTestDialects())(
         await runWidgetLoad(t, card, { as: { id: readers.both } })
       ).toMatchObject({ data: { buckets: [] } });
       // A zero adds no line: the digest leaves out what needs nobody.
-      expect(await seoItemFor(t, readers.both)).toBeUndefined();
+      expect(await seoLinesFor(t, readers.both)).toEqual([]);
     });
 
     it("counts a social image by the id it stores, the same for a reader who may not read media", async () => {
@@ -359,30 +368,86 @@ describe.each(getConfiguredTestDialects())(
           state: "ready",
           data: { buckets: [{ value: "Missing social image", count: 1 }] },
         });
-        expect(await seoItemFor(t, id)).toMatchObject({ count: 1 });
+        expect(await seoLinesFor(t, id)).toEqual([
+          expect.objectContaining({ id: PAGES_LINE, count: 1 }),
+        ]);
       }
     });
 
-    it("counts the line as each reader reads the collections it names", async () => {
+    it("gives each reader a line for each collection they read, linked to that collection", async () => {
       const { t, readers } = await boot();
+      // Pages: one bare row, four gaps. Posts: one titled row, three gaps.
       await write(t, PAGES);
       await write(t, POSTS, { metaTitle: "Titled" });
+      const lines = async (id: string) =>
+        (await seoLinesFor(t, id))
+          .map(({ id: line, count, link }) => ({ line, count, link }))
+          .sort((a, b) => a.line.localeCompare(b.line));
 
-      expect(await seoItemFor(t, readers.both)).toMatchObject({
-        id: "seo/issues",
-        label: "SEO issues in published pages",
-        count: 7,
-        link: `collections/${PAGES}`,
+      expect(await lines(readers.both)).toEqual([
+        { line: PAGES_LINE, count: 4, link: `collections/${PAGES}` },
+        { line: POSTS_LINE, count: 3, link: `collections/${POSTS}` },
+      ]);
+      // 🔴 A reader of the second collection alone is shown its line alone,
+      // linked to the list they may open, never to the first's.
+      expect(await lines(readers.postsOnly)).toEqual([
+        { line: POSTS_LINE, count: 3, link: `collections/${POSTS}` },
+      ]);
+      expect(await lines(readers.pagesOnly)).toEqual([
+        { line: PAGES_LINE, count: 4, link: `collections/${PAGES}` },
+      ]);
+      // A reader of neither is shown no line at all, not even its label.
+      expect(await lines(readers.neither)).toEqual([]);
+    });
+
+    it("says its counts are floors, never a wrong whole number, when a hook rewrites the ids it answers", async () => {
+      // 🔴 The scan continues from the id a row came back with. Rewritten to
+      // one past every stored id, the next page matches nothing: read as the
+      // end, the first page would be reported as the whole collection.
+      const hooked = defineCollection({
+        slug: HOOKED,
+        fields: [text({ name: "title" })],
+        hooks: {
+          // A list read hands the hook every row at once, and what it answers
+          // replaces them; one row's read hands it that row.
+          afterRead: [
+            ({ data }: { data?: unknown }) => {
+              const rewrite = (row: Record<string, unknown>) => ({
+                ...row,
+                id: `z-${String(row.id)}`,
+              });
+              if (Array.isArray(data)) return data.map(rewrite);
+              return data === undefined || data === null
+                ? data
+                : rewrite(data as Record<string, unknown>);
+            },
+          ],
+        },
       });
-      // 🔴 The must-differ half: a reader of pages alone is counted pages' four
-      // gaps, never posts' three. A count reading as the system answers 7 here.
-      expect(await seoItemFor(t, readers.pagesOnly)).toMatchObject({
-        id: "seo/issues",
-        count: 4,
+      const t = await createTestNextly({
+        dialect,
+        collections: [hooked],
+        plugins: [seoPlugin({ collections: [HOOKED], sitemap: false })],
       });
-      // A reader of neither collection the line names is shown no line at all,
-      // not even its label.
-      expect(await seoItemFor(t, readers.neither)).toBeUndefined();
+      current = t;
+      const owner = await userWith(t, "owner", []);
+      const rows = ISSUE_SCAN_PAGE_SIZE * 2 + 5;
+      for (let i = 0; i < rows; i++) {
+        await write(t, HOOKED, { metaDescription: "D", canonical: "C" });
+      }
+
+      const answer = await runWidgetLoad(t, card, { as: { id: owner } });
+
+      expect(answer).toMatchObject({ state: "ready", data: { atLeast: true } });
+      const { buckets } = (
+        answer as { data: { buckets: { value: string; count: number }[] } }
+      ).data;
+      expect(buckets.map(bucket => bucket.value)).toEqual([
+        "Missing meta title",
+        "Missing social image",
+      ]);
+      for (const bucket of buckets)
+        expect(bucket.count).toBeLessThanOrEqual(rows);
     });
   }
 );

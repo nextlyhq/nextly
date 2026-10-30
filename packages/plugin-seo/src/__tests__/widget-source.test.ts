@@ -53,6 +53,11 @@ function servicesWith(
     survivingPerPage?: number;
     /** Collections whose every read fails. */
     broken?: string[];
+    /**
+     * An `afterRead` hook's id for each row it answers. The `where` and the
+     * `total` still read the stored ids, as the database does.
+     */
+    rewriteId?: (stored: string) => string;
   } = {}
 ) {
   const withIds = Object.fromEntries(
@@ -72,10 +77,15 @@ function servicesWith(
     );
     const limit = Math.min(opts.limit ?? 5, CORE_READ_CAP);
     const fetched = matched.slice(0, limit);
-    const items =
+    const survived =
       options.survivingPerPage === undefined
         ? fetched
         : fetched.slice(0, options.survivingPerPage);
+    const { rewriteId } = options;
+    const items =
+      rewriteId === undefined
+        ? survived
+        : survived.map(row => ({ ...row, id: rewriteId(row.id) }));
     return {
       items,
       ...(opts.total === true ? { total: matched.length } : {}),
@@ -324,6 +334,53 @@ describe("what the scan reads", () => {
       bounded: true,
     });
     expect(services.find).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a hook that rewrites the ids it answers", () => {
+  // 🔴 The cursor is the id a row came back with, and the next page asks for
+  // the stored ids after it. Rewritten, it can pass every stored id or none.
+  const rows = ISSUE_SCAN_PAGE_SIZE * 2 + 7;
+
+  it("stops with floors when the rewritten cursor passes every stored id", async () => {
+    // "z" sorts after every stored id, so the next page matches nothing: read
+    // as the end, the scan reports the first page as the whole collection.
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { rewriteId: stored => `z${stored}` }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": ISSUE_SCAN_PAGE_SIZE },
+      bounded: true,
+    });
+  });
+
+  it("stops with floors, counting no row twice, when the rewritten cursor passes none", async () => {
+    // "a" sorts before every stored id, so each page would be the first again:
+    // read on, the scan counts the same rows until its budget runs out.
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { rewriteId: stored => `a${stored}` }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": ISSUE_SCAN_PAGE_SIZE },
+      bounded: true,
+    });
+    expect(services.find).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads every row when the hook leaves the ids as stored, the control", async () => {
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { rewriteId: stored => stored }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": rows },
+      bounded: false,
+    });
   });
 });
 
