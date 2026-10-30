@@ -50,8 +50,9 @@ type StepAnswer = SetupStep | undefined | NotKnown;
  * "Start with sample content": done once anyone loaded or declined it, which
  * is recorded for the whole site. Open only while nobody has answered and the
  * site holds no entry (`dashboard-layout` R-18), so an established site is not
- * offered it. When the site's answer cannot be read the step is not offered at
- * all, never shown as waiting, and "Add your first entry" stands alone.
+ * offered it. When the site's answer cannot be read, setup is not known as a
+ * whole, as for every other check: dropping the step instead could let the
+ * remaining steps finish setup and retire the card for good over an outage.
  *
  * Whether the project provides the route, and whether it would let this
  * reader load, only the route can say: the admin asks it, and drops the step
@@ -62,7 +63,7 @@ async function sampleStep(probe: ConditionProbe): Promise<StepAnswer> {
   try {
     answered = await probe.sampleAnswered();
   } catch {
-    return undefined;
+    return NOT_KNOWN;
   }
   if (answered) return { kind: "sample", status: "done" };
   const content = await probe.hasContent();

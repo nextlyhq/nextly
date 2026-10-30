@@ -68,7 +68,7 @@ interface World {
   firstCreatable?: string;
   /**
    * Whether sample content was loaded or declined; "fails" when that cannot
-   * be read, which leaves the step out. Out of the way unless a case names it.
+   * be read, which leaves setup not known. Out of the way unless a case names it.
    */
   sample?: boolean | "fails";
 }
@@ -90,7 +90,7 @@ function probeOf(world: World): ConditionProbe {
     releasesExist: async () => false,
     firstCreatableCollection: async () => world.firstCreatable,
     sampleAnswered: async () => {
-      const sample = world.sample ?? "fails";
+      const sample = world.sample ?? true;
       if (sample === "fails") throw new Error("meta down");
       return sample;
     },
@@ -156,16 +156,21 @@ describe("starting with sample content", () => {
     expect(byKind).not.toHaveProperty("sample");
   });
 
-  it("is not offered, never shown waiting, when the site's answer cannot be read, and the rest still answers", async () => {
-    const { answer, byKind } = await stepsFor({
-      sample: "fails",
-      content: false,
-      firstCreatable: "posts",
+  it("makes the whole answer not known when the site's answer cannot be read, even with every other step done", async () => {
+    // Every other step done: dropped instead, the sample step would let setup read as finished
+    // and the card retire for good over an outage.
+    const done = {
+      content: true,
+      collections: { slugs: ["posts"], reachable: true },
+    };
+    // The must-differ half: with the answer read, the same site is known and finished.
+    const read = await stepsFor({ sample: true, ...done });
+    expect(read.answer.known && read.answer.done === read.answer.total).toBe(
+      true
+    );
+    expect((await stepsFor({ sample: "fails", ...done })).answer).toEqual({
+      known: false,
     });
-    expect(answer.known).toBe(true);
-    expect(byKind).not.toHaveProperty("sample");
-    // "Add your first entry" alone.
-    expect(byKind.entry?.status).toBe("open");
   });
 });
 
@@ -256,7 +261,9 @@ describe("filling in the Singles", () => {
 
   it("is ONE step for every Single the reader may update, in registry order", async () => {
     const { answer, byKind } = await stepsFor({ singles });
+    // Sample content answered by the site, and the Singles one step after it.
     expect(answer.known && answer.steps.map(step => step.kind)).toEqual([
+      "sample",
       "singles",
     ]);
     expect(byKind.singles?.singles.map(single => single.slug)).toEqual([
