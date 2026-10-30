@@ -230,14 +230,21 @@ export const Articles = defineCollection({
   status: true,
   fields: [text({ name: "title" })],
   access: {
-    // Editors see drafts; everyone else sees only what is published, even with status: "all".
-    read: ({ permissions }) =>
-      permissions.includes("update-articles")
+    // A visitor reads only what is published anyway, and editors see drafts;
+    // any other signed-in reader sees only what is published, even with
+    // status: "all".
+    read: ({ user, permissions }) =>
+      !user || permissions.includes("update-articles")
         ? true
         : { status: { equals: "published" } },
   },
 });
 ```
+
+The rule answers a visitor `true` rather than the filter. The Public role is granted a
+collection's read at boot only where its read rule answers a visitor exactly `true`. A rule
+that answers a visitor a filter leaves Public without `read-articles`, and a visitor is then
+refused before any filter applies.
 
 A published entry with an edit held for review is still `"published"`. A reader the filter admits
 gets the published version, not the held edit.
