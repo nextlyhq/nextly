@@ -5,8 +5,9 @@
  * `public: true` waives the route's own authentication, and `{ as: "public" }`
  * keeps access in force for a caller with no session: the visitor holds what
  * the Public role grants, and a rule only narrows that. Boot grants Public no
- * write, so a create, an update or a delete is refused and the table is left
- * as it was, even where the collection's author wrote a rule that answers
+ * write, so a create, an update or a delete is refused, answered 401 as a
+ * caller asked to sign in, since Public lacks the permission, and the table
+ * is left as it was, even where the collection's author wrote a rule that answers
  * `true`, as a public form's submissions do with `create`; once a site admin
  * grants Public that create, the write goes through. A visitor's read of a
  * collection with no read rule is refused until Public holds the read, and
@@ -172,22 +173,23 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a create on a collection with no rule naming it, and writes nothing", async () => {
       const before = await titles(OPEN);
-      expect(await ask(OPEN, "create")).toEqual({ ok: false, status: 403 });
+      // Public lacks the create, so the visitor is asked to sign in.
+      expect(await ask(OPEN, "create")).toEqual({ ok: false, status: 401 });
       expect(await titles(OPEN)).toEqual(before);
     });
 
     it("refuses an update and a delete with no rule naming them, and leaves the entry", async () => {
       const id = await seeded(OPEN, "kept");
-      expect(await ask(OPEN, "update", id)).toEqual({ ok: false, status: 403 });
-      expect(await ask(OPEN, "delete", id)).toEqual({ ok: false, status: 403 });
+      expect(await ask(OPEN, "update", id)).toEqual({ ok: false, status: 401 });
+      expect(await ask(OPEN, "delete", id)).toEqual({ ok: false, status: 401 });
       expect(await titles(OPEN)).toContain("kept");
     });
 
     it("allows a create where the collection's rule answers true once Public holds it, and the entry is stored", async () => {
       // A rule answering `true` only narrows the permission: until Public
       // holds the create, which boot never grants, the visitor is refused and
-      // nothing is stored.
-      expect(await ask(FORM, "create")).toEqual({ ok: false, status: 403 });
+      // nothing is stored. Public lacks the permission, so the answer is 401.
+      expect(await ask(FORM, "create")).toEqual({ ok: false, status: 401 });
       expect(await titles(FORM)).not.toContain("from a visitor");
       // Granted as a site admin would grant it. The control for the refusals
       // above: the same route and the same anonymous caller, so only what
@@ -199,8 +201,9 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses the writes that collection's rule does not name", async () => {
       const id = await seeded(FORM, "submitted");
-      expect(await ask(FORM, "update", id)).toEqual({ ok: false, status: 403 });
-      expect(await ask(FORM, "delete", id)).toEqual({ ok: false, status: 403 });
+      // Public holds neither write, so each is answered 401.
+      expect(await ask(FORM, "update", id)).toEqual({ ok: false, status: 401 });
+      expect(await ask(FORM, "delete", id)).toEqual({ ok: false, status: 401 });
       expect(await titles(FORM)).toContain("submitted");
     });
 
@@ -208,8 +211,9 @@ describe.each(getConfiguredTestDialects())(
       const id = await seeded(OPEN, "readable");
       const read = () =>
         t.nextly.findByID({ collection: OPEN, id, overrideAccess: false });
-      // With no read rule there is no public default: the visitor is refused.
-      await expect(read()).rejects.toMatchObject({ statusCode: 403 });
+      // With no read rule there is no public default: the visitor is refused,
+      // asked to sign in, as Public lacks the read.
+      await expect(read()).rejects.toMatchObject({ statusCode: 401 });
       // The control: the same read once a site admin grants Public it, so
       // the refusal above is Public's missing read and nothing else.
       await grantPublic(t, [`read-${OPEN}`]);
@@ -260,6 +264,7 @@ describe.each(getConfiguredTestDialects())(
       const c = services!;
       const asPublic = { as: "public" } as const;
       const id = await seeded(OPEN, "kept in a transaction");
+      // Public lacks both writes, so each is answered 401.
       const refusal = async (work: () => Promise<unknown>) => {
         try {
           await work();
@@ -274,14 +279,14 @@ describe.each(getConfiguredTestDialects())(
             c.createEntryInTransaction(tx, OPEN, { title: "tx" }, asPublic)
           )
         )
-      ).toBe(403);
+      ).toBe(401);
       expect(
         await refusal(() =>
           c.withTransaction(tx =>
             c.deleteEntryInTransaction(tx, OPEN, id, asPublic)
           )
         )
-      ).toBe(403);
+      ).toBe(401);
       expect(await titles(OPEN)).toContain("kept in a transaction");
     });
 

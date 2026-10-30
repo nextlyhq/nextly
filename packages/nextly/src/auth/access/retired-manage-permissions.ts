@@ -68,7 +68,8 @@ type PermissionRow = { id: unknown; action: string; resource: string };
 function wholeFour(rows: readonly PermissionRow[], resource: string): string[] {
   const four = rows.filter(
     row =>
-      row.resource === resource && RETIRED_MANAGE_PLAIN_ACTIONS.includes(row.action)
+      row.resource === resource &&
+      RETIRED_MANAGE_PLAIN_ACTIONS.includes(row.action)
   );
   return RETIRED_MANAGE_PLAIN_ACTIONS.every(action =>
     four.some(row => row.action === action)
@@ -94,7 +95,11 @@ export async function plainFourOnLocked(
     forUpdate: true,
     where: {
       and: [
-        { column: "action", op: "IN", value: [...RETIRED_MANAGE_PLAIN_ACTIONS] },
+        {
+          column: "action",
+          op: "IN",
+          value: [...RETIRED_MANAGE_PLAIN_ACTIONS],
+        },
         { column: "resource", op: "=", value: resource },
       ],
     },
@@ -146,7 +151,11 @@ export async function storedAsPlain(
     ...locking,
     where: {
       and: [
-        { column: "action", op: "IN", value: [...RETIRED_MANAGE_PLAIN_ACTIONS] },
+        {
+          column: "action",
+          op: "IN",
+          value: [...RETIRED_MANAGE_PLAIN_ACTIONS],
+        },
         { column: "resource", op: "IN", value: resources },
       ],
     },
