@@ -220,6 +220,18 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect(found.items.find(role => role.slug === "super-admin")?.builtIn).toBe(
       "super-admin"
     );
+    // An ordinary role has no `builtIn` at all, not one left undefined, so
+    // `"builtIn" in role` reads it as the REST answer's JSON does.
+    const ordinary = found.items.filter(
+      role => role.slug !== PUBLIC_ROLE_SLUG && role.slug !== "super-admin"
+    );
+    expect(ordinary).not.toEqual([]);
+    expect(ordinary.filter(role => "builtIn" in role)).toEqual([]);
+    expect(
+      "builtIn" in (await nextly.nextly.roles.findByID({ id: ordinary[0].id }))
+    ).toBe(false);
+    expect(others.filter(role => "builtIn" in role)).toEqual([]);
+    expect("builtIn" in (await roles.getRoleById(others[0].id))).toBe(false);
   });
 
   it("can't be deleted or renamed", async () => {

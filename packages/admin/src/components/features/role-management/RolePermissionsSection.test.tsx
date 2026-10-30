@@ -1,7 +1,7 @@
 /**
  * The Public role's permissions section offers visitors no publish, in the
  * table of the permissions that have no level row as in the rows: a visitor
- * never publishes.
+ * never publishes. A write held there is warned of, as in the rows.
  */
 import { FormProvider, useForm } from "react-hook-form";
 import { describe, expect, it } from "vitest";
@@ -20,6 +20,12 @@ const OTHER: Permission[] = [
     action: "read",
   },
   {
+    id: "update-releases",
+    name: "Update releases",
+    resource: "content-releases",
+    action: "update",
+  },
+  {
     id: "publish-releases",
     name: "Publish releases",
     resource: "content-releases",
@@ -27,9 +33,15 @@ const OTHER: Permission[] = [
   },
 ];
 
-function Section({ visitors }: { visitors: boolean }) {
+function Section({
+  visitors,
+  held = [],
+}: {
+  visitors: boolean;
+  held?: string[];
+}) {
   const form = useForm<RoleFormValuesType>({
-    defaultValues: { permissions: [] } as unknown as RoleFormValuesType,
+    defaultValues: { permissions: held } as unknown as RoleFormValuesType,
   });
   return (
     <FormProvider {...form}>
@@ -62,5 +74,19 @@ describe("RolePermissionsSection", () => {
     expect(
       screen.queryAllByRole("checkbox", { name: /read/i }).length
     ).toBeGreaterThan(0);
+  });
+
+  it("warns that visitors can change entries where the table gives them a write", () => {
+    const warning = /Visitors who aren't signed in can change/;
+    const { unmount } = render(<Section visitors held={["update-releases"]} />);
+    expect(screen.getByText(warning)).toBeInTheDocument();
+    unmount();
+
+    // CONTROLS: a read alone, or a write held by a signed-in role, is not.
+    const read = render(<Section visitors held={["read-releases"]} />);
+    expect(screen.queryByText(warning)).toBeNull();
+    read.unmount();
+    render(<Section visitors={false} held={["update-releases"]} />);
+    expect(screen.queryByText(warning)).toBeNull();
   });
 });
