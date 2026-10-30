@@ -108,6 +108,14 @@ export { rowsThatFit } from "nextly";
  */
 export { defineAttentionItem } from "nextly";
 export type { AttentionCount, AttentionItem } from "nextly";
+/**
+ * `MAX_ATTENTION_ITEMS_PER_PLUGIN` — the most Needs attention items one plugin
+ * may declare; startup refuses a plugin that declares more. Published so a
+ * plugin with a line per something it reads builds no more than this, rather
+ * than restating the number. Intended to be stable: core's own bound, which
+ * changes only with a release that says so.
+ */
+export { MAX_ATTENTION_ITEMS_PER_PLUGIN } from "nextly";
 
 /**
  * @experimental `collectionDraftSplit` — whether a collection stores a working

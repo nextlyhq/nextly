@@ -407,6 +407,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "LimitTarget (type)",
   "ListQueryFilterContext (type)",
   "ListQueryWhere (type)",
+  "MAX_ATTENTION_ITEMS_PER_PLUGIN (value)",
   "MAX_EMAIL_PROVIDER_TYPE_LENGTH (value)",
   "MAX_JOB_SLUG_LENGTH (value)",
   "MediaEventName (type)",
