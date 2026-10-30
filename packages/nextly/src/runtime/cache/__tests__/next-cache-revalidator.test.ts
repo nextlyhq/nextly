@@ -87,9 +87,9 @@ describe("NextCacheRevalidator", () => {
 
   it("keeps a committed write when next/cache keeps throwing, and hands the tags off", async () => {
     const next = fakeNextCache();
-    // revalidateTag throws outside a request scope (a CLI/background write).
+    // revalidateTag keeps failing inside a request (its cache handler refuses).
     next.revalidateTag.mockImplementation(() => {
-      throw new Error("static generation store missing");
+      throw new Error("cache handler unavailable");
     });
     const handoff = { handOff: vi.fn() };
     const revalidator = new NextCacheRevalidator(
@@ -103,7 +103,7 @@ describe("NextCacheRevalidator", () => {
     expect(outcome).toEqual({ deferredTags: ["a", "b"] });
     expect(handoff.handOff).toHaveBeenCalledWith(
       ["a", "b"],
-      "static generation store missing"
+      "cache handler unavailable"
     );
   });
 
@@ -569,5 +569,63 @@ describe("NextCacheRevalidator, reporting only this write's tags", () => {
       () => ({ handOff: vi.fn() })
     ).flush([{ tags: ["nextly:pages"] }]);
     expect(outcome).toEqual({ deferredTags: ["nextly:pages"] });
+  });
+});
+
+describe("a write outside any request", () => {
+  /** Next.js's answer to an expiry with no request to make it in. */
+  const NO_REQUEST =
+    "Invariant: static generation store missing in revalidateTag";
+
+  it("tries one tag per write and logs at most once, however many writes wait", async () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error(NO_REQUEST);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const revalidator = new NextCacheRevalidator(() => next);
+    const writes = 200;
+
+    for (let i = 0; i < writes; i++) {
+      await revalidator.flush([{ tags: [`nextly:posts:id:${i}`] }]);
+    }
+
+    // One probe per write, never the tags already waiting behind it: retaking
+    // and retrying every pending tag would make this writes² attempts.
+    expect(next.revalidateTag).toHaveBeenCalledTimes(writes);
+    expect(
+      warn.mock.calls.length + error.mock.calls.length
+    ).toBeLessThanOrEqual(1);
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it("expires each waiting tag exactly once at the next write inside a request", async () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error(NO_REQUEST);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const revalidator = new NextCacheRevalidator(() => next);
+    const waiting = Array.from(
+      { length: 30 },
+      (_, i) => `nextly:posts:id:${i}`
+    );
+    for (const tag of waiting) await revalidator.flush([{ tags: [tag] }]);
+
+    // Now inside a request: every expiry succeeds.
+    next.revalidateTag.mockReset();
+    await revalidator.flush([{ tags: ["nextly:posts:id:fresh"] }]);
+
+    const expired = next.revalidateTag.mock.calls.map(([tag]) => tag);
+    for (const tag of [...waiting, "nextly:posts:id:fresh"]) {
+      expect(
+        expired.filter(t => t === tag),
+        tag
+      ).toHaveLength(1);
+    }
+    expect(expired).toHaveLength(waiting.length + 1);
+    warn.mockRestore();
   });
 });

@@ -83,18 +83,22 @@ describe("canReadSystemResource — API keys", () => {
     ).resolves.toBe(true);
   });
 
-  it("counts a key's stored manage slug as its read, where its scope carries no rows", async () => {
-    // A scope of slugs alone is judged by its stored slugs, and
-    // `manage-media` still counts as read on media there as at every gate.
+  it("counts a key's stored retired manage slug for nothing, where its scope carries no rows", async () => {
+    // A scope of slugs alone is judged by its stored slugs, and the retired
+    // `manage-media` is no read of media there, as at every gate.
     const scope = apiKeyScopeFrom({ permissions: ["manage-media"] });
 
     await expect(
       canReadSystemResource("media", "owner-1", scope)
-    ).resolves.toBe(true);
-    // The control: it counts on media alone.
-    await expect(
-      canReadSystemResource("users", "owner-1", scope)
     ).resolves.toBe(false);
+    // The control: the plain slug is the read.
+    await expect(
+      canReadSystemResource(
+        "media",
+        "owner-1",
+        apiKeyScopeFrom({ permissions: ["read-media"] })
+      )
+    ).resolves.toBe(true);
   });
 });
 
@@ -114,26 +118,25 @@ describe("canReadSystemResource — the decision", () => {
     );
   });
 
-  it("counts a manage permission on the resource as its read, as the decision does", async () => {
-    // `manage-media` still counts as read on media, so the reader answers as
-    // the decision does, and nothing deviates.
+  it("counts a retired manage permission on the resource for nothing, as the decision does", async () => {
+    // The retired `manage-media` is no read of media, so the reader refuses
+    // as the decision does, and nothing deviates.
     grantsSpy.mockResolvedValue([grant("manage", "media")]);
 
     const { result, deviations } = await recordingDeviations(() =>
       canReadSystemResource("media", "u1", undefined)
     );
 
-    expect(result).toBe(true);
+    expect(result).toBe(false);
     expect(deviations).toEqual([]);
   });
 
-  it("does not count a manage permission on another resource", async () => {
-    // The control: `manage-settings` counts on settings alone, so a read of
-    // media is still refused.
-    grantsSpy.mockResolvedValue([grant("manage", "settings")]);
+  it("counts the plain read permission on the resource", async () => {
+    // The control: the same caller holding `read-media` reads it.
+    grantsSpy.mockResolvedValue([grant("read", "media")]);
 
     await expect(canReadSystemResource("media", "u1", undefined)).resolves.toBe(
-      false
+      true
     );
   });
 });

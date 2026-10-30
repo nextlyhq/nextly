@@ -18,6 +18,8 @@ const registered = {
   "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
   "@/plugins/widget-kit-fixture/admin#KitCard": _p2.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
   "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p2.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
+  "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard":
+    _p2.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p3.BlocksField,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p3.PageBuilderView,
 } satisfies DeclaredComponentMap<typeof siteConfig>;

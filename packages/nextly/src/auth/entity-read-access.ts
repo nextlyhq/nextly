@@ -21,7 +21,11 @@ import { rememberRouteVerdict } from "./access/request-memo";
 import { holdsPermissionAnswer } from "./access/route-gate-adapters";
 import { readOf, type FilteredRead } from "./access/rule-answer";
 import { currentRuleLanguage } from "./access/rule-language";
-import { apiKeyScopeFrom, scopeGrants } from "./authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  scopeGrants,
+  scopeHoldsSuperAdmin,
+} from "./authenticated-scope";
 import {
   codeAccessAllows,
   getRBACService,
@@ -68,6 +72,9 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
       // on its owner's roles is the same defect as one judged on its owner's
       // permissions, in the direction that denies.
       roles: [...(scope.roles ?? caller.user.roles ?? [])],
+      // Present only where the key carries it, so every other key's caller
+      // is as it was.
+      ...(scopeHoldsSuperAdmin(scope) ? { keyHoldsSuperAdmin: true } : {}),
     };
   }
   return {

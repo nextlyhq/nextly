@@ -194,3 +194,41 @@ test("marks a collection whose code narrows it, naming what the code limits", as
       .getByText("Narrowed in code")
   ).toHaveCount(0);
 });
+
+test("folds a plugin under its name and saves its collections' levels and its own permission", async ({
+  page,
+}) => {
+  // The form builder contributes forms and submissions, and declares an
+  // export permission of its own, outside both collections.
+  const roleId = await roleHolding(["read-forms", "read-form-submissions"]);
+
+  await gotoAdmin(page, `/security/roles/edit/${roleId}`);
+  const plugins = page.getByRole("region", { name: "Plugins" });
+  const fold = plugins.getByRole("button", { name: /^Forms/ });
+  // Folded, the group says in one word what the role holds across it.
+  await expect(fold).toHaveAttribute("aria-expanded", "false");
+  await expect(fold).toContainText("Can view");
+
+  await editAndSave(page, roleId, async () => {
+    await page
+      .getByRole("region", { name: "Plugins" })
+      .getByRole("button", { name: /^Forms/ })
+      .click();
+    await page
+      .getByRole("radiogroup", { name: "Form (forms) level" })
+      .getByRole("radio", { name: "Can edit" })
+      .click();
+    await page
+      .getByRole("switch", { name: "Forms: Export Submissions" })
+      .click();
+  });
+
+  expect(await storedActions(roleId, "forms")).toEqual([
+    "create",
+    "delete",
+    "read",
+    "update",
+  ]);
+  expect(await storedActions(roleId, "form-submissions")).toEqual(["read"]);
+  expect(await storedActions(roleId, "submissions")).toEqual(["export"]);
+});

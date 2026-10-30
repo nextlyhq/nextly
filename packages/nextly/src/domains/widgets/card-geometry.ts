@@ -135,6 +135,10 @@ export function rowsInBody(bodyHeight: number, density: ListDensity): number {
  * a list card's Density setting: `"default"`, or `"compact"`, whose shorter
  * rows let the same card hold more.
  *
+ * `0` for a card too short to hold one whole row, such as one two rows high at
+ * the default density, whose frame then draws no row; `find` asked a limit of
+ * `0` answers none, so the read and the card agree.
+ *
  * @experimental
  */
 export function rowsThatFit(
