@@ -52,7 +52,7 @@ import {
   prunePreviewLinks,
 } from "../../auth/preview/preview-link-records";
 import {
-  createTagExpiryLedger,
+  ledgerFor,
   LEDGER_PRUNE_INTERVAL_MS,
   LEDGER_RETENTION_MS,
   type TagExpiryLedgerAdapter,
@@ -683,18 +683,22 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         }
       }
 
-      // The cache tag expiry ledger, last. Bounded by batches rather than the
-      // deadline: each batch is one indexed delete of a bounded number of rows,
-      // so a large ledger costs a few short statements, never one long lock,
-      // and what is left waits for the next interval.
+      // The cache tag expiry ledger, last. Bounded twice: by batches, each one
+      // indexed delete of a bounded number of rows, so a large ledger costs a
+      // few short statements, never one long lock; and by the drain's
+      // deadline, checked between them. What is left waits for the next turn.
       if (cacheTagsTurn && !deadlineSpent()) {
         // The ledger is made inside the `try` too: whatever fails, building it
         // or pruning, a drain whose deliveries succeeded must not reject.
         try {
-          result.pruned.cacheTagExpiries = await createTagExpiryLedger(
+          result.pruned.cacheTagExpiries = await ledgerFor(
             retention.prune.adapter
           ).prune(LEDGER_RETENTION_MS, {
             maxBatches: DRAIN_LEDGER_PRUNE_BATCHES,
+            // Stopped between batches at the drain's budget, as the sweeps
+            // above are: a slow database must not carry the drain past it.
+            deadline: deadline?.getTime(),
+            clock: () => now().getTime(),
           });
         } catch (error) {
           // Quietly, as the sweeps above.

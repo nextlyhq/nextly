@@ -22,7 +22,7 @@ import {
   type OneTimeSecretsPruneAdapter,
 } from "../../plugins/security/one-time-secrets-prune";
 import {
-  createTagExpiryLedger,
+  ledgerFor,
   LEDGER_PRUNE_INTERVAL_MS,
   LEDGER_RETENTION_MS,
   type TagExpiryLedgerAdapter,
@@ -275,12 +275,9 @@ export function buildRetentionPasses(
       intervalMs: () => LEDGER_PRUNE_INTERVAL_MS,
       run: async maxBatches => {
         try {
-          await createTagExpiryLedger(input.adapter).prune(
-            LEDGER_RETENTION_MS,
-            {
-              maxBatches,
-            }
-          );
+          await ledgerFor(input.adapter).prune(LEDGER_RETENTION_MS, {
+            maxBatches,
+          });
         } catch (error) {
           // Quietly, for the reason the secrets pass is: a failure here must
           // never reach the write that offered the pass.

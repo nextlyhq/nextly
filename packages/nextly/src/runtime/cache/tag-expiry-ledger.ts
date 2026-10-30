@@ -6,12 +6,18 @@
  * serves it. A write made anywhere else (a job, the CLI, a script, a hand-off
  * from a request whose own expiry failed) records its tags here instead, and
  * so does a write made inside a request, so that other instances learn of it.
- * nextly's cache handlers read the rows that changed since their last look and
- * stop serving an entry stored before one of its tags expired.
+ * Before serving an entry, nextly's cache handlers ask for the expiries of the
+ * tags it carries, by key, and stop serving it if one of them expired after it
+ * was stored. Asking by key reads each tag's current row, whatever order the
+ * writes committed in, so a late commit can cost a refresh but never a stale
+ * read; a cursor over rows "newer than the last look" could pass over one.
  *
  * Times are the database's clock (`databaseNowMs`), never an instance's: two
  * instances whose clocks differ still agree on whether an entry predates an
- * expiry, because every snapshot hands back the database's time with its rows.
+ * expiry, because every lookup hands back the database's time with its rows.
+ * A tag's time is taken when its row is written, after the content write it
+ * follows has committed, so an entry made from that content is never older
+ * than the expiry that judges it.
  *
  * A database that has not run `nextly migrate` since the table was added has
  * no table yet. The ledger then reports itself unavailable, warning once,
@@ -22,7 +28,7 @@
 import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, asc, count, gt, inArray, lt, sql, type SQL } from "drizzle-orm";
+import { and, asc, inArray, lt, sql, type SQL } from "drizzle-orm";
 
 import { tablePresence } from "../../domains/dashboard/table-presence";
 import { databaseNowMs } from "../../domains/limits/store-clock";
@@ -32,14 +38,6 @@ import {
   cacheTagExpiriesTables,
 } from "../../schemas/cache-tag-expiries";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
-
-/**
- * How far back each snapshot reads before the previous one's time. A writer's
- * statement takes the database's time before it commits, so a row can become
- * visible after a snapshot that read a later time; reading back over this
- * window sees it on the next snapshot. Reading a row twice is harmless.
- */
-const LEDGER_READ_OVERLAP_MS = 10_000;
 
 /**
  * How long a tag's last expiry is kept. nextly's cache handlers serve no
@@ -56,14 +54,18 @@ export const LEDGER_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const PRUNE_BATCH = 1000;
 const PRUNE_MAX_BATCHES = 100;
 
-/** What the ledger has seen since a cursor, and where to read from next. */
-export interface LedgerChanges {
-  /** The database's time when this was read, in milliseconds. */
-  readonly now: number;
-  /** Each tag that expired since the cursor, with when it expired. */
+/** Tags asked for per statement, so one lookup's key list stays bounded. */
+const LOOKUP_BATCH = 500;
+
+/** The expiries of the tags a lookup asked for. */
+export interface TagExpiries {
+  /**
+   * The database's time when the rows were read, in milliseconds; absent when
+   * none of the tags has ever expired, since no row came back to carry it.
+   */
+  readonly now?: number;
+  /** Each asked-for tag that has expired, with when it last did. */
   readonly expired: ReadonlyMap<string, number>;
-  /** The cursor to pass next time: `now`, less the read overlap. */
-  readonly next: number;
 }
 
 export interface TagExpiryLedger {
@@ -73,13 +75,20 @@ export interface TagExpiryLedger {
    * caller that must not lose the tags can keep them.
    */
   record(tags: readonly string[]): Promise<boolean>;
-  /** The tags that expired after `cursor`, or `undefined` while there is no table. */
-  changesSince(cursor: number): Promise<LedgerChanges | undefined>;
+  /**
+   * When each of `tags` last expired, read by key, or `undefined` while there
+   * is no table.
+   */
+  expiriesOf(tags: readonly string[]): Promise<TagExpiries | undefined>;
   /**
    * Remove rows that expired more than `maxAgeMs` ago on the database's clock,
-   * at most `maxBatches` statements of rows; returns how many.
+   * at most `maxBatches` batches of rows and none once `clock()` reaches
+   * `deadline`; returns how many.
    */
-  prune(maxAgeMs: number, options?: { maxBatches?: number }): Promise<number>;
+  prune(
+    maxAgeMs: number,
+    options?: { maxBatches?: number; deadline?: number; clock?: () => number }
+  ): Promise<number>;
 }
 
 /**
@@ -101,6 +110,7 @@ export function tagExpiryId(tag: string): string {
 interface LedgerRow {
   tag: string;
   expiredAt: number;
+  now: number;
 }
 
 /** The query builder surface the ledger uses, whatever the dialect. */
@@ -119,6 +129,22 @@ interface LedgerDb {
     };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+}
+
+/**
+ * One ledger per adapter, made on first use: a ledger remembers whether its
+ * table exists and that it warned, so every caller sharing it (each retention
+ * pass, each scheduled drain) leaves the missing-table warning once-only.
+ */
+const ledgers = new WeakMap<TagExpiryLedgerAdapter, TagExpiryLedger>();
+
+export function ledgerFor(adapter: TagExpiryLedgerAdapter): TagExpiryLedger {
+  let ledger = ledgers.get(adapter);
+  if (ledger === undefined) {
+    ledger = createTagExpiryLedger(adapter);
+    ledgers.set(adapter, ledger);
+  }
+  return ledger;
 }
 
 /** The ledger kept in `adapter`'s database. */
@@ -167,22 +193,33 @@ export function createTagExpiryLedger(
       return true;
     },
 
-    async changesSince(cursor) {
+    async expiriesOf(tags) {
+      const unique = [...new Set(tags)];
+      if (unique.length === 0) return { expired: new Map() };
       if (!(await present())) return undefined;
-      // The clock first, beside an aggregate so the statement answers one row
-      // even on an empty table. A row committed between the two reads is
-      // either in this snapshot or within the next one's overlap.
-      const [clock] = await db()
-        .select<{ now: number; rows: number }>({ now, rows: count() })
-        .from(table);
-      const rows = await db()
-        .select<LedgerRow>({ tag: table.tag, expiredAt: table.expiredAt })
-        .from(table)
-        .where(gt(table.expiredAt, cursor));
-      const read = Number(clock?.now);
       const expired = new Map<string, number>();
-      for (const row of rows) expired.set(row.tag, Number(row.expiredAt));
-      return { now: read, expired, next: read - LEDGER_READ_OVERLAP_MS };
+      let read: number | undefined;
+      for (let i = 0; i < unique.length; i += LOOKUP_BATCH) {
+        // By primary key, with the database's clock in the same statement.
+        const rows = await db()
+          .select<LedgerRow>({
+            tag: table.tag,
+            expiredAt: table.expiredAt,
+            now,
+          })
+          .from(table)
+          .where(
+            inArray(
+              table.id,
+              unique.slice(i, i + LOOKUP_BATCH).map(tagExpiryId)
+            )
+          );
+        for (const row of rows) {
+          expired.set(row.tag, Number(row.expiredAt));
+          read = Number(row.now);
+        }
+      }
+      return { now: read, expired };
     },
 
     async prune(maxAgeMs, options) {
@@ -190,8 +227,14 @@ export function createTagExpiryLedger(
       // On the database's clock, as every row's time is.
       const cutoff = sql<number>`${now} - ${maxAgeMs}`;
       const maxBatches = options?.maxBatches ?? PRUNE_MAX_BATCHES;
+      const clock = options?.clock ?? Date.now;
       let removed = 0;
       for (let batch = 0; batch < maxBatches; batch += 1) {
+        // Between batches, never inside one: a caller's budget (the scheduled
+        // drain's) is not carried past by a whole prune.
+        if (options?.deadline !== undefined && clock() >= options.deadline) {
+          break;
+        }
         // Found through the `expired_at` index, oldest first.
         const ids = (
           await db()

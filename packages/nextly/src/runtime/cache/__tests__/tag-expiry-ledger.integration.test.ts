@@ -1,8 +1,8 @@
 /**
- * The cache tag expiry ledger on every dialect: a recorded tag is read back
- * with the database's time, an expiry again moves its one row forward, a
- * snapshot reads only what expired after its cursor, the clock is read even
- * from an empty table, and a prune removes only rows older than its cutoff.
+ * The cache tag expiry ledger on every dialect: a recorded tag is read back by
+ * key with the database's time, an expiry again moves its one row forward, a
+ * lookup of many tags is answered in batches, and a prune removes only rows
+ * older than its age, keeping one whose tag expired again meanwhile.
  */
 import { count } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -47,46 +47,40 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
     await db().delete(table());
   });
 
-  it("reads a recorded tag back with when it expired, on the database's clock", async () => {
-    const before = await ledger.changesSince(0);
-    expect(Number.isFinite(before?.now)).toBe(true);
+  it("reads a recorded tag back by key, with when it expired on the database's clock", async () => {
+    const before = await ledger.expiriesOf(["posts"]);
+    expect(before?.expired.size).toBe(0);
 
     expect(await ledger.record(["posts", "posts:hello", "posts"])).toBe(true);
-    const after = await ledger.changesSince(0);
+    const after = await ledger.expiriesOf(["posts", "posts:hello", "never"]);
 
     expect([...(after?.expired.keys() ?? [])].sort()).toEqual([
       "posts",
       "posts:hello",
     ]);
-    const expiredAt = after?.expired.get("posts") ?? 0;
-    expect(expiredAt).toBeGreaterThanOrEqual(before?.now ?? Infinity);
-    expect(expiredAt).toBeLessThanOrEqual(after?.now ?? -Infinity);
+    expect(Number.isFinite(after?.now)).toBe(true);
+    expect(after?.expired.get("posts")).toBeLessThanOrEqual(after?.now ?? -1);
     expect(await rowCount()).toBe(2);
   });
 
-  it("moves a tag's one row forward when it expires again", async () => {
+  it("moves a tag's one row forward when it expires again, and reads its current row", async () => {
     await ledger.record(["posts"]);
-    const first = (await ledger.changesSince(0))?.expired.get("posts") ?? 0;
+    const first =
+      (await ledger.expiriesOf(["posts"]))?.expired.get("posts") ?? 0;
     await pause(30);
     await ledger.record(["posts"]);
-    const second = (await ledger.changesSince(0))?.expired.get("posts") ?? 0;
+    const second =
+      (await ledger.expiriesOf(["posts"]))?.expired.get("posts") ?? 0;
 
     expect(second).toBeGreaterThan(first);
     expect(await rowCount()).toBe(1);
   });
 
-  it("reads only what expired after its cursor", async () => {
-    await ledger.record(["before"]);
-    await pause(30);
-    const snapshot = await ledger.changesSince(0);
-    await pause(30);
-    await ledger.record(["after"]);
-
-    const later = await ledger.changesSince(snapshot?.now ?? 0);
-    expect([...(later?.expired.keys() ?? [])]).toEqual(["after"]);
-    // The next cursor reads back over the overlap, so a row committed late
-    // is seen on the following snapshot.
-    expect(later?.next).toBeLessThan(later?.now ?? 0);
+  it("answers a lookup of more tags than one statement asks for", async () => {
+    const tags = Array.from({ length: 1200 }, (_, i) => `tag-${i}`);
+    await ledger.record(tags);
+    const found = await ledger.expiriesOf(tags);
+    expect(found?.expired.size).toBe(1200);
   });
 
   it("keeps a row whose tag expired again after the prune found it", async () => {
@@ -119,15 +113,17 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
     });
 
     expect(await racing.prune(750)).toBe(1);
-    expect([...((await ledger.changesSince(0))?.expired.keys() ?? [])]).toEqual(
-      ["old-a"]
-    );
+    expect([
+      ...((await ledger.expiriesOf(["old-a", "old-b"]))?.expired.keys() ?? []),
+    ]).toEqual(["old-a"]);
   });
 
   it("keeps a tag of the longest length Next.js assigns", async () => {
     const longest = "t".repeat(256);
     await ledger.record([longest]);
-    expect((await ledger.changesSince(0))?.expired.has(longest)).toBe(true);
+    expect((await ledger.expiriesOf([longest]))?.expired.has(longest)).toBe(
+      true
+    );
   });
 
   it("prunes only the rows older than its age, on the database's clock", async () => {
@@ -137,9 +133,11 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
 
     // The old rows are 1.5 s old, the new one a few milliseconds.
     expect(await ledger.prune(750)).toBe(2);
-    expect([...((await ledger.changesSince(0))?.expired.keys() ?? [])]).toEqual(
-      ["new"]
-    );
+    expect([
+      ...((
+        await ledger.expiriesOf(["old-a", "old-b", "new"])
+      )?.expired.keys() ?? []),
+    ]).toEqual(["new"]);
   });
 });
 
