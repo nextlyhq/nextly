@@ -83,7 +83,7 @@ test("rows for stopped and overdue releases, each with its reason and Review; no
       await gotoAdmin(theirs, "");
       // Their dashboard has drawn: a card every reader is shown is there.
       await expect(
-        theirs.getByTestId("widget-cell-core/recently-edited")
+        theirs.getByTestId("widget-cell-core/continue")
       ).toBeVisible();
       await expect(theirs.getByTestId(`widget-cell-${CARD}`)).toBeHidden();
       await expect(theirs.getByText("All clear")).toHaveCount(0);
@@ -237,9 +237,7 @@ test("a return that finds new work waiting shows the card, and says so", async (
       .getByTestId(`widget-cell-${CARD}`)
       .filter({ visible: true });
     await expect(
-      page
-        .getByTestId("widget-cell-core/recently-edited")
-        .filter({ visible: true })
+      page.getByTestId("widget-cell-core/continue").filter({ visible: true })
     ).toBeVisible();
     // Hidden, not absent: the page keeps the card's cell, undrawn.
     await expect(card).toBeHidden();
