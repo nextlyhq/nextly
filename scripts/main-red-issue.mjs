@@ -38,6 +38,7 @@ export const ADVISORY = {
   "cache-components": "Playground builds and serves under Cache Components",
   "scaffold-smoke": "Scaffold smoke",
   "dev-script-smoke": "Dev script starts every watcher",
+  "scaffold-build": "Scaffold build",
 };
 
 /** The one label that marks the issue, and how a second is never opened. */
