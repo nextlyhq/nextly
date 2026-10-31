@@ -166,6 +166,9 @@ describe("the derived policy list", () => {
     const keys = passes.map(pass => pass.key).sort();
     expect(keys).toEqual([
       "audit.retention.lastPassAt",
+      // The cache tag expiry ledger, pruned past the age the cache handlers
+      // serve entries for, with nothing to configure either.
+      "cache-tags.retention.lastPassAt",
       // A deleted subject's content events are kept for the activity log's
       // window too, so the audit policy brings their pass as well.
       "content-events.retention.lastPassAt",
