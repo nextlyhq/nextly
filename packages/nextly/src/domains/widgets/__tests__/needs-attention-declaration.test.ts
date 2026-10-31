@@ -13,7 +13,7 @@ import { resetWidgetRegistries } from "../../../di/registrations/register-widget
 import * as loggerModule from "../../../observability/logger";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import type { AttentionDigestItem } from "../attention/digest-item";
-import { allWidgets, placedByDefault } from "../canonical";
+import { allWidgets } from "../canonical";
 import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
 import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import {
@@ -178,12 +178,10 @@ describe("core's Needs your attention, declared", () => {
       widget => widget.id === "core/needs-attention"
     );
     expect(canonical).toBeDefined();
-    // Placed by core's own default, where it is the first card after setup:
-    // `placedByDefault` is the rule for a widget placed by being declared,
-    // which a declaration never is.
+    // Placed by core's own default, where it is the first card after setup: the default is
+    // the one way a card is placed.
     expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).toContain(
       "core/needs-attention"
     );
-    if (canonical !== undefined) expect(placedByDefault(canonical)).toBe(false);
   });
 });

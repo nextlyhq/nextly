@@ -93,26 +93,45 @@ const everyIdOrdered: Exclude<
 void everyIdOrdered;
 
 /**
+ * The form-builder plugin's New form submissions card: the one widget not
+ * core's own that core's default names. Spelled here because core cannot
+ * import the plugin; its entry is `optional`, so a site without the plugin
+ * leaves the card out and starts with no fault.
+ */
+const FORM_SUBMISSIONS_WIDGET_ID = "form-builder/new-submissions";
+
+/**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
- * there is one path to the default whoever wrote it: the setup card, then
- * Needs attention, Create, Continue where you left off, Team activity,
- * Content and Upcoming releases, each at its widget's starting size. The
- * cards that share a row share a height, so the default dashboard tiles: Needs
- * attention and Create at 4 rows, the two activity lists at 5. A site's own
- * `defaultLayout` takes its place whole.
+ * there is one path to the default whoever wrote it. In grid order, twelve
+ * columns to a row:
  *
- * Team is not on it: the card is for the people who manage the team, who add
- * it from the add panel.
+ * 1. Set up your project, across the row;
+ * 2. Needs attention (8) beside Upcoming releases (4): the near future in one
+ *    band. When only one of the two is on show, the admin draws it across the
+ *    whole row, never storing that width;
+ * 3. Continue where you left off (6) beside Content (6);
+ * 4. New form submissions (6) beside Team activity (6).
+ *
+ * Each entry states its size, so the default does not move when a widget's
+ * own starting size (what the add panel places) changes. The cards that share
+ * a row share a height, so the default tiles: two rows for the setup card, its
+ * one row of steps, and four for every other row, the least Upcoming releases
+ * and Team activity allow. Every size lies
+ * within its widget's bounds, so none is clamped where it is placed.
+ *
+ * Team and Create are not on it: Team is for the people who manage the team,
+ * who add it from the add panel. A site's own `defaultLayout` takes this
+ * one's place whole.
  *
  * Here, beside the ids and importing no widget, so the site dashboard's check
  * and the default's builder read it without loading every core card.
  */
 export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
-  CORE_WIDGET_ID.setup,
-  CORE_WIDGET_ID.needsAttention,
-  CORE_WIDGET_ID.quickCreate,
-  CORE_WIDGET_ID.continue,
-  CORE_WIDGET_ID.teamActivity,
-  CORE_WIDGET_ID.contentTable,
-  CORE_WIDGET_ID.upcomingReleases,
-].map(widget => ({ widget }));
+  { widget: CORE_WIDGET_ID.setup, w: 12, h: 2 },
+  { widget: CORE_WIDGET_ID.needsAttention, w: 8, h: 4 },
+  { widget: CORE_WIDGET_ID.upcomingReleases, w: 4, h: 4 },
+  { widget: CORE_WIDGET_ID.continue, w: 6, h: 4 },
+  { widget: CORE_WIDGET_ID.contentTable, w: 6, h: 4 },
+  { widget: FORM_SUBMISSIONS_WIDGET_ID, w: 6, h: 4, optional: true },
+  { widget: CORE_WIDGET_ID.teamActivity, w: 6, h: 4 },
+];

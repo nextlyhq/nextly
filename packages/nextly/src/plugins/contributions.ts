@@ -773,10 +773,11 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * @experimental The plugin's dashboard: widgets declared with
    * `defineWidget()`, which core checks at startup with every other
    * declaration, keeps on the server with their data code, and publishes to
-   * the admin as data. `suggest` and `alternatives` ask for places on the
-   * default dashboard; core and the site config decide. The one way a plugin
-   * adds a widget: startup refuses a plugin that still carries
-   * `admin.widgets` or `widgetSources`, the older keys, naming this one.
+   * the admin as data. The add panel offers its widgets, none is placed on a
+   * dashboard on its own, and `alternatives` offers one in a built-in's
+   * place, which the site config decides. The one way a plugin adds a widget:
+   * startup refuses a plugin that still carries `admin.widgets` or
+   * `widgetSources`, the older keys, naming this one.
    */
   dashboard?: DashboardContribution<W>;
   /**
