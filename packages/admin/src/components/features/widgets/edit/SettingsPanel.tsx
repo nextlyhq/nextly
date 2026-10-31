@@ -68,6 +68,7 @@ import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import * as Icons from "@admin/components/icons";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
@@ -83,6 +84,7 @@ import {
   type SettingSection,
 } from "./content-settings";
 import { ContentSettingControl } from "./ContentSettingControl";
+import { closeFocusTo } from "./panel-close-focus";
 import {
   initialValues,
   resetToDefaults,
@@ -142,6 +144,12 @@ export interface SettingsPanelProps {
    * the panel then installs no prompt of its own, so a leave is asked about once.
    */
   defersLeave?: boolean;
+  /**
+   * Whether a dashboard write is on its way, such as the dashboard's Save carrying this panel's
+   * staged change: the panel is frozen as while its own Done saves, so nothing is changed after
+   * the values the write carries were taken.
+   */
+  dashboardWriting?: boolean;
   /**
    * The control focus goes back to when the panel closes: the one the reader opened it from.
    * The panel is opened from a popover or a menu that is gone by then, so it cannot be left to
@@ -664,16 +672,41 @@ function SectionHeading({
   label,
   saving,
   onReset,
+  folding,
 }: {
   id: string;
   label: string;
   saving: boolean;
   onReset: () => void;
+  /**
+   * Advanced's way to fold: its heading is then the trigger, named as the others' are, with a
+   * chevron that turns as it opens. The heading's id goes on the trigger, which names the section.
+   */
+  folding?: { open: boolean };
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <h3 id={id} className="text-sm font-semibold text-foreground">
-        {label}
+    <div className="flex items-center justify-between gap-2">
+      <h3
+        {...(folding ? {} : { id })}
+        className="text-sm font-semibold text-foreground"
+      >
+        {folding ? (
+          <CollapsibleTrigger asChild>
+            <button
+              id={id}
+              type="button"
+              className="inline-flex items-center gap-1 rounded-sm text-sm font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {label}
+              <Icons.ChevronDown
+                aria-hidden
+                className={`size-4 text-muted-foreground transition-transform motion-reduce:transition-none ${folding.open ? "rotate-180" : ""}`}
+              />
+            </button>
+          </CollapsibleTrigger>
+        ) : (
+          label
+        )}
       </h3>
       <Button
         type="button"
@@ -725,31 +758,12 @@ function PanelSection({
       onOpenChange={advanced.onOpenChange}
     >
       <section aria-labelledby={id} className="flex flex-col gap-4">
-        <CollapsibleTrigger asChild>
-          <Button
-            id={id}
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="justify-start px-0 font-semibold"
-          >
-            {label}
-          </Button>
-        </CollapsibleTrigger>
+        {/* Headed as Data and Display are, on one row with its Reset, so the three line up. */}
+        <SectionHeading
+          {...{ id, label, saving, onReset }}
+          folding={{ open: advanced.open }}
+        />
         <CollapsibleContent className="flex flex-col gap-4">
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              className="h-auto p-0"
-              disabled={saving}
-              aria-label={`Reset ${label} to defaults`}
-              onClick={onReset}
-            >
-              Reset to defaults
-            </Button>
-          </div>
           {children}
         </CollapsibleContent>
       </section>
@@ -768,7 +782,9 @@ function PanelActions({
   onCancel: () => void;
 }) {
   return (
-    <SheetFooter className="mt-auto flex-row justify-end gap-2 px-0">
+    // Held to the panel's foot while the form above it scrolls, on the panel's own surface so the
+    // fields pass under it, and padded apart from them, so Cancel and Done are always in reach.
+    <SheetFooter className="sticky bottom-0 z-10 -mx-4 mt-auto flex-row justify-end gap-2 border-t border-border bg-background px-4 py-3">
       <Button
         type="button"
         variant="outline"
@@ -790,12 +806,7 @@ function panelFocus(
   fieldsRef: RefObject<HTMLFieldSetElement | null>
 ) {
   return {
-    onCloseAutoFocus: (event: Event) => {
-      const target = props.returnFocusTo?.();
-      if (!target) return;
-      event.preventDefault();
-      target.focus();
-    },
+    onCloseAutoFocus: closeFocusTo(props.returnFocusTo),
     ...(props.focusFirstField
       ? {
           onOpenAutoFocus: (event: Event) => {
@@ -1104,6 +1115,8 @@ function usePanelState(props: SettingsPanelProps) {
     draft,
     own,
     ...doneState,
+    // Frozen while Done saves, or while a dashboard write carries what the panel staged.
+    saving: doneState.saving || props.dashboardWriting === true,
     kept,
     holdsChanges,
     reportPendingRow: pendingRows.report,

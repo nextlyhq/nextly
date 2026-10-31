@@ -47,6 +47,7 @@ function cellProps(): CellSettingsProps {
     size,
     returnFocusTo: () => null,
     isEditing: false,
+    isWriting: false,
   };
 }
 

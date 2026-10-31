@@ -726,6 +726,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       {sheet.everOpened ? (
         <LazyWidgetSettingsSheet
           {...{ row, widget, data, done, size, isEditing }}
+          isWriting={props.isWriting}
           open={sheet.settingsOpen}
           onOpenChange={sheet.changeSettingsOpen}
           focusFirstField={sheet.focusFirstField}

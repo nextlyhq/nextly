@@ -8,6 +8,8 @@
  * test sees the dashboard as it stands on a slow connection.
  */
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
@@ -55,10 +57,45 @@ function cellProps(): CellSettingsProps {
     size,
     returnFocusTo: () => null,
     isEditing: false,
+    isWriting: false,
   };
 }
 
 describe("the card settings sheet while its code loads", () => {
+  // First, while the panel's code is still held back.
+  it("hands focus back to the control it was opened from when closed before its code arrives", async () => {
+    function Opened() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button type="button">Card menu for Notes</button>
+          <LazyWidgetSettingsSheet
+            {...cellProps()}
+            open={open}
+            onOpenChange={setOpen}
+            returnFocusTo={() =>
+              screen.getByRole("button", { name: "Card menu for Notes" })
+            }
+          />
+        </>
+      );
+    }
+    render(<Opened />);
+    const panel = await screen.findByRole("dialog", { name: "Notes settings" });
+    await waitFor(() =>
+      expect(panel).toContainElement(document.activeElement as HTMLElement)
+    );
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Notes settings" })
+      ).toBeNull()
+    );
+    expect(
+      screen.getByRole("button", { name: "Card menu for Notes" })
+    ).toHaveFocus();
+  });
+
   it("opens a panel named for the card, takes focus into it, says it is loading, then gives way to the sheet", async () => {
     render(<LazyWidgetSettingsSheet {...cellProps()} />);
 

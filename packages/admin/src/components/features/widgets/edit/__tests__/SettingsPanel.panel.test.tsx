@@ -127,6 +127,55 @@ describe("the panel's sections", () => {
     expect(screen.getByText("Density")).toBeTruthy();
   });
 
+  it("heads Advanced as Data and Display are headed: a heading, with its Reset on the same row", () => {
+    panel({ collection: "posts" });
+    const advanced = screen.getByRole("button", { name: "Advanced" });
+    // A heading like the others', its trigger inside it, so the outline lists all three.
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Advanced" })
+    ).toContainElement(advanced);
+    const reset = screen.getByRole("button", {
+      name: "Reset Advanced to defaults",
+    });
+    const display = screen.getByRole("button", {
+      name: "Reset Display to defaults",
+    });
+    // One row: the heading and its Reset share a parent, as Display's do.
+    expect(reset.parentElement).toBe(
+      advanced.closest("h3")?.parentElement ?? null
+    );
+    expect(display.parentElement).toBe(
+      screen.getByRole("heading", { level: 3, name: "Display" }).parentElement
+    );
+  });
+
+  it("says whether Advanced is open on its trigger, and turns its chevron with it", async () => {
+    panel({ collection: "posts" });
+    const advanced = screen.getByRole("button", { name: "Advanced" });
+    const chevron = advanced.querySelector("svg");
+    expect(chevron).not.toBeNull();
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    expect(chevron).not.toHaveClass("rotate-180");
+    await userEvent.click(advanced);
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(chevron).toHaveClass("rotate-180");
+    await userEvent.click(advanced);
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    expect(chevron).not.toHaveClass("rotate-180");
+    expect(screen.queryByText("Density")).toBeNull();
+  });
+
+  it("keeps Cancel and Done in a footer held to the panel's foot while the form scrolls", () => {
+    panel({ collection: "posts" });
+    const done = screen.getByRole("button", { name: "Done" });
+    const footer = done.parentElement;
+    // jsdom lays nothing out, so the rule that holds it there is what is checked: sticky at the
+    // bottom of the scrolling form, on the panel's own surface so fields pass under it unseen.
+    expect(footer).toHaveClass("sticky", "bottom-0", "bg-background");
+    expect(footer?.parentElement?.tagName).toBe("FORM");
+    expect(footer?.parentElement).toHaveClass("overflow-y-auto");
+  });
+
   it("draws only what the widget declares: no Data or Advanced for a card with neither", () => {
     panel(undefined, [
       {

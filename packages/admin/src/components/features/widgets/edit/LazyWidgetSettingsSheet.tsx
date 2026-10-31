@@ -30,6 +30,7 @@ import type { JSX } from "react";
 import { useRetryableModule } from "@admin/hooks/useRetryableModule";
 
 import type { CellSettingsProps } from "./CellSettings";
+import { closeFocusTo } from "./panel-close-focus";
 import { settingsSheetModule } from "./settings-sheet-code";
 
 /**
@@ -46,8 +47,9 @@ function SheetLoading({
   open,
   onOpenChange,
   title,
+  returnFocusTo,
   failure,
-}: Pick<CellSettingsProps, "open" | "onOpenChange"> & {
+}: Pick<CellSettingsProps, "open" | "onOpenChange" | "returnFocusTo"> & {
   /** The card's title, which names the panel as the loaded one names it. */
   title: string;
   /**
@@ -65,6 +67,8 @@ function SheetLoading({
         // The loaded panel's width, so it does not jump once the form arrives.
         className="flex w-full flex-col overflow-hidden sm:w-[520px] sm:min-w-[480px] sm:max-w-[560px]"
         onInteractOutside={event => event.preventDefault()}
+        // Closed before the code arrives, focus goes back where the loaded panel's would.
+        onCloseAutoFocus={closeFocusTo(returnFocusTo)}
       >
         <SheetHeader>
           <SheetTitle>{title} settings</SheetTitle>
@@ -124,6 +128,7 @@ export function LazyWidgetSettingsSheet(props: CellSettingsProps): JSX.Element {
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={props.widget.title}
+      returnFocusTo={props.returnFocusTo}
       {...(state.status === "error"
         ? { failure: { exhausted: attempt > 0, onRetry: retry } }
         : {})}

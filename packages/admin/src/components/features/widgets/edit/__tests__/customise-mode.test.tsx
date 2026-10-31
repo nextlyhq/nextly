@@ -906,6 +906,23 @@ describe("leaving with unsaved changes", () => {
     expect(api.put).not.toHaveBeenCalled();
   });
 
+  it("freezes a settings panel while the dashboard's Save is on its way, so nothing is changed after it was staged", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    // The write is held, so the save is on its way while the panel is checked.
+    api.put.mockReturnValue(new Promise(() => {}));
+    await user.click(saveButton());
+    await waitFor(() =>
+      expect(within(panel).getByLabelText(/Heading/)).toBeDisabled()
+    );
+    // Done says the save is on its way, as it does for the panel's own.
+    expect(
+      within(panel).getByRole("button", { name: "Saving…" })
+    ).toBeDisabled();
+  });
+
   it("the bar's Cancel discards a settings panel's change too: it closes, and nothing is left to keep", async () => {
     renderDashboard();
     const user = await beginEditing();

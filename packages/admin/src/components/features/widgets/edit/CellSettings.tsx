@@ -32,6 +32,8 @@ export interface CellSettingsProps {
   size: GridSize;
   returnFocusTo: () => HTMLElement | null;
   isEditing: boolean;
+  /** Whether a layout write is on its way anywhere on the dashboard. */
+  isWriting: boolean;
 }
 
 /**
@@ -50,6 +52,7 @@ export default function CellSettings({
   size,
   returnFocusTo,
   isEditing,
+  isWriting,
 }: CellSettingsProps): JSX.Element {
   // The card's width on the dashboard, from the dashboard's own and the card's span, the rule
   // its first query is sized by: the width it has once the panel closes.
@@ -67,6 +70,8 @@ export default function CellSettings({
       returnFocusTo={returnFocusTo}
       // While customising, the dashboard's own leave prompt asks for the panel too.
       defersLeave={isEditing}
+      // A dashboard write may be carrying this panel's staged change: frozen until it lands.
+      dashboardWriting={isWriting}
       title={widget.title}
       settings={widget.settings ?? []}
       // The declaration, not the card as asked: each candidate collection is
