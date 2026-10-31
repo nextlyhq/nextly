@@ -14,6 +14,7 @@ import type { LanguageRegistry } from "../../domains/i18n/language-registry";
 import { loadNextModule, requireNextApi } from "../next-api";
 
 import { readTags } from "./nextly-tags";
+import { readThroughRegistered, registeredCachedRead } from "./registered-read";
 
 /** The subset of `unstable_cache` this helper uses. */
 export type UnstableCache = <T>(
@@ -140,6 +141,19 @@ export function applyCache<T>(
   reader: () => Promise<T>,
   options: CachedFindOptions
 ): Promise<T> {
+  // Under Cache Components, through the app's `"use cache"` function when it
+  // registered one: `unstable_cache` is the model Cache Components replaces,
+  // and a page read right after a write can be served its previous entry once.
+  const cachedRead = registeredCachedRead();
+  if (cachedRead) {
+    return readThroughRegistered(
+      cachedRead,
+      JSON.stringify(options.keyParts),
+      afterLanguagesRead(reader),
+      readTags(options.tags),
+      options.revalidate ?? false
+    );
+  }
   if (!unstableCache) return reader();
   const cached = unstableCache(afterLanguagesRead(reader), options.keyParts, {
     // Each once, none longer than Next.js accepts, and no more than it keeps,
