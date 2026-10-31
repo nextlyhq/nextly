@@ -21,10 +21,13 @@
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
-import type { GridSize, WidgetSizeBounds } from "nextly/config";
+import type {
+  GridSize,
+  PublishedContentSource,
+  WidgetSizeBounds,
+} from "nextly/config";
 import type { JSX, RefObject } from "react";
 
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
 import type {
@@ -77,6 +80,11 @@ export interface ArrangedGridProps {
   writes: {
     /** Whether a layout write is in flight anywhere on this dashboard. */
     isWriting: boolean;
+    /**
+     * The reader's collections, as the server published them: what a card is titled by, and so
+     * what a write or a removal names it by (`shownTitleOf`).
+     */
+    sources?: readonly PublishedContentSource[] | undefined;
     /** Why a single-card write is unavailable right now, when it is. */
     singleCardWriteBlocked?: string | undefined;
     /**
@@ -292,6 +300,17 @@ function oldestAnswer(
   return oldest;
 }
 
+/**
+ * The title a card is drawn under, as its cell draws it (`titleAsAsked`): what a write or a
+ * removal says names the card by it, so two copies of one widget are told apart.
+ */
+function shownTitleOf(
+  row: ArrangedWidget,
+  sources: ArrangedGridProps["writes"]["sources"]
+): string {
+  return titleAsAsked(row.widget, row.config, sources, row.ownTitle).title;
+}
+
 export function ArrangedGrid({
   rows,
   placements,
@@ -312,11 +331,6 @@ export function ArrangedGrid({
   gridRef,
   on,
 }: ArrangedGridProps): JSX.Element {
-  // The title each card is drawn under, as its cell draws it (`titleAsAsked`): what a write or
-  // a removal says names the card by it, so two copies of one widget are told apart.
-  const sources = useBranding().widgetSources;
-  const shownTitle = (row: ArrangedWidget) =>
-    titleAsAsked(row.widget, row.config, sources, row.ownTitle).title;
   // The cards that reported themselves off the dashboard, each as it is drawn.
   const { placements: hidden, report: reportHidden } = useReportedPlacements();
   const answeredAt = oldestAnswer(rows, { hidden, requested, updatedAtFor });
@@ -363,7 +377,11 @@ export function ArrangedGrid({
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
-            {...cellSettingsWrite(writes.settings, row, shownTitle(row))}
+            {...cellSettingsWrite(
+              writes.settings,
+              row,
+              shownTitleOf(row, writes.sources)
+            )}
             reportHidden={reportHidden}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
@@ -397,7 +415,10 @@ export function ArrangedGrid({
               ...(on.dismiss
                 ? {
                     dismiss: () =>
-                      on.dismiss?.(row.placementId, shownTitle(row)),
+                      on.dismiss?.(
+                        row.placementId,
+                        shownTitleOf(row, writes.sources)
+                      ),
                   }
                 : {}),
               saveSettings: (config, ownTitle) =>

@@ -721,6 +721,7 @@ export function WidgetGrid(): JSX.Element {
                   isEditing={editor.isEditing}
                   writes={{
                     isWriting: editor.isWriting,
+                    sources: branding?.widgetSources,
                     singleCardWriteBlocked: singleCardWriteBlocked(
                       layout.isUnreadable
                     ),
