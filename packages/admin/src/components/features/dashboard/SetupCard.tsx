@@ -605,6 +605,26 @@ function AllSet({ write }: { write: SetupStateWrite }) {
   );
 }
 
+/**
+ * "You're all set", once any sample-content outcome waiting on the person has been seen: a load
+ * that finished setup keeps its outcome on the card until they continue.
+ */
+function AllSetAfterOutcome({
+  sample,
+  write,
+  retry,
+}: {
+  sample: ReturnType<typeof useSampleRun>;
+  write: SetupStateWrite;
+  retry: () => void;
+}) {
+  return sample.awaitingContinue ? (
+    <SampleContentPanel sample={sample} retry={retry} />
+  ) : (
+    <AllSet write={write} />
+  );
+}
+
 /** A known answer, as the card draws its tiles from. */
 type CountedSetup = Extract<SetupAnswer, { known: true }>;
 
@@ -850,11 +870,9 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   );
 
   if (!card.setup.known) return <NotKnown retry={retry} />;
-  // A load's outcome stays until the person continues, though the site is all set by it.
-  if (allSet && sample.awaitingContinue) {
-    return <SampleContentPanel sample={sample} retry={retry} />;
+  if (allSet) {
+    return <AllSetAfterOutcome sample={sample} write={write} retry={retry} />;
   }
-  if (allSet) return <AllSet write={write} />;
   if (counted === undefined || progress === undefined) return null;
   const controls = (
     <CardControls collapsed={collapsed} write={write} onToggle={toggle} />
