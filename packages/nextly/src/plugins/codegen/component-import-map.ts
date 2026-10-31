@@ -34,6 +34,7 @@ import type {
 import { pluginOwner } from "../dashboard-declarations";
 import { collectDeclarations } from "../declarations";
 import type { PluginDefinition } from "../plugin-context";
+import { carriedRemovedKey } from "../removed-widget-keys";
 
 import { isPageBuilderActive, PAGE_BUILDER_PLUGIN } from "./block-manifest";
 
@@ -154,7 +155,11 @@ export function collectAdminComponentEntries(
   if (plugin.enabled === false) return fieldTypes;
   return [
     ...fieldTypes,
-    ...collectAdminEntries(plugin.contributes?.admin, owner),
+    ...collectAdminEntries(
+      plugin.contributes?.admin,
+      carriedRemovedKey(plugin, "admin.widgets"),
+      owner
+    ),
     ...collectDeclaredWidgetEntries(plugin.contributes?.dashboard, owner),
   ];
 }
@@ -174,9 +179,14 @@ const entry = (
   use: ComponentMapUse
 ): ComponentMapEntry => ({ path, owner, use });
 
-/** Every component an enabled plugin's `contributes.admin` names. */
+/**
+ * Every component an enabled plugin's `contributes.admin` names, with the
+ * widgets it carries under `admin.widgets`, a key no field of the type
+ * declares, handed in as the plugin carries them.
+ */
 function collectAdminEntries(
   admin: PluginAdminContributions | undefined,
+  widgets: unknown,
   owner: string
 ): ComponentMapEntry[] {
   if (!admin) return [];
@@ -192,7 +202,7 @@ function collectAdminEntries(
     ...(admin.documentViews ?? []).map(view =>
       entry(view.component, owner, "document view")
     ),
-    ...collectWidgetEntries(admin.widgets, owner),
+    ...collectWidgetEntries(widgets, owner),
     ...collectAdminSlotPaths(admin).map(tagged("slot")),
   ];
 }
@@ -316,16 +326,25 @@ function collectCollectionViewPaths(
  * documented contract never asked it to do.
  */
 function collectWidgetEntries(
-  widgets: PluginAdminContributions["widgets"],
+  widgets: unknown,
   owner: string
 ): ComponentMapEntry[] {
+  if (!Array.isArray(widgets)) return [];
   // Optional now: a declarative widget names an archetype and a query and ships
   // no component at all, so only the ones that HAVE a path contribute one.
-  return (widgets ?? []).flatMap((widget): ComponentMapEntry[] =>
-    widget.component
-      ? [{ path: widget.component, owner, use: "widget", widget: widget.id }]
-      : []
-  );
+  return widgets.flatMap((widget: unknown): ComponentMapEntry[] => {
+    const component = isRecord(widget) ? widget.component : undefined;
+    if (typeof component !== "string" || component === "") return [];
+    const id = isRecord(widget) ? widget.id : undefined;
+    return [
+      {
+        path: component,
+        owner,
+        use: "widget",
+        ...(typeof id === "string" ? { widget: id } : {}),
+      },
+    ];
+  });
 }
 
 /**

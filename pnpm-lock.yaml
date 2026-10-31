@@ -390,6 +390,9 @@ importers:
       '@nextlyhq/plugin-sdk':
         specifier: workspace:^
         version: link:../../packages/plugin-sdk
+      '@nextlyhq/plugin-seo':
+        specifier: workspace:^
+        version: link:../../packages/plugin-seo
       '@nextlyhq/ui':
         specifier: workspace:^
         version: link:../../packages/ui
@@ -1235,6 +1238,9 @@ importers:
 
   packages/nextly:
     dependencies:
+      '@babel/parser':
+        specifier: ^7.29.7
+        version: 7.29.7
       '@clack/prompts':
         specifier: ^1.1.0
         version: 1.1.0

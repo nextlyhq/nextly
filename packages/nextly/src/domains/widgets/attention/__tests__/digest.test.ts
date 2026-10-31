@@ -73,6 +73,22 @@ describe("what leaves an item", () => {
     expect(items.map(item => item.id)).toEqual(["w/one"]);
   });
 
+  it("carries a reader's link onto its item, and no link for a reader with none", async () => {
+    const unlinked: DigestReader = {
+      id: "w/nowhere",
+      kind: "plugin",
+      label: "w/nowhere",
+      severity: "warning",
+      owner: 'plugin "test"',
+      read: answers(1),
+    };
+    const items = await runDigest([reader("w/linked", answers(1)), unlinked]);
+    expect(items.find(item => item.id === "w/linked")?.link).toBe("w/linked");
+    expect(items.find(item => item.id === "w/nowhere")).not.toHaveProperty(
+      "link"
+    );
+  });
+
   it("keeps a zero that is a floor, since lists went unread", async () => {
     const [item] = await runDigest([
       reader("w/floor", answers({ count: 0, atLeast: true })),
@@ -276,5 +292,32 @@ describe("a count read back", () => {
     });
     expect(parseAttentionCount(Number.NaN)).toBeUndefined();
     expect(parseAttentionCount(null)).toBeUndefined();
+  });
+});
+
+describe("an item's reason", () => {
+  it("is carried onto its item as its reader gave it, failed or not, and absent when none was given", async () => {
+    const items = await runDigest([
+      reader("w/why", answers(3), { reason: "Pages with no description" }),
+      reader("w/broken", () => Promise.reject(new Error("boom")), {
+        reason: "Orders not yet shipped",
+      }),
+      reader("w/plain", answers(1)),
+    ]);
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: "w/why",
+        reason: "Pages with no description",
+      }),
+      expect.objectContaining({ id: "w/plain" }),
+      expect.objectContaining({
+        id: "w/broken",
+        failed: true,
+        reason: "Orders not yet shipped",
+      }),
+    ]);
+    expect(items.find(item => item.id === "w/plain")).not.toHaveProperty(
+      "reason"
+    );
   });
 });

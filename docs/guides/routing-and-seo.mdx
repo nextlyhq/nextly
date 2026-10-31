@@ -370,6 +370,18 @@ The blocks page helpers in `@nextlyhq/blocks-react/next` (`createBlocksPage`,
 `createSinglePage` and their public versions) provide this boundary themselves,
 so their pages are exported as they are.
 
+A page that isn't there (an unknown slug, or an entry that is unpublished or
+the visitor may not read) renders your not-found page with
+`<meta name="robots" content="noindex">`. Under Cache Components the static
+shell is sent before the route knows the entry is missing, so the HTTP status
+is already 200. A route that reads with access enforced, such as
+`createContentRoute` or `createBlocksPage`, decides on every request, so it
+answers 200 with `noindex` every time, crawlers included. Next.js answers a
+real 404 only where it can keep the finished not-found render, which needs a
+cached existence check; see its
+[streaming guide](https://nextjs.org/docs/app/guides/streaming). Without Cache
+Components, a missing page answers 404.
+
 Not every blog needs this: if you already have typed per-type routes
 (`/blog/[slug]`, `/authors/[slug]`), keep them and use `resolveContent` +
 `buildMetadata` inside each — `createContentRoute` is for the single-catch-all

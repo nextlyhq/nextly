@@ -51,17 +51,22 @@ export const DASHBOARD_FULL_MESSAGE =
  * The payload written into the `layout` column.
  *
  * `arranged` defaults to TRUE: a caller that says nothing is making the
- * ordinary kind of write, a save from customise mode. Generic over the
- * placement so this module needs no import of the placement type's module.
+ * ordinary kind of write, a save from customise mode. `sized` is the cards of
+ * an unarranged row whose size the reader chose (`StoredLayout.sized`), written
+ * only when there is one, and never for an arranged row, whose sizes are all
+ * the reader's. Generic over the placement so this module needs no import of
+ * the placement type's module.
  */
 export function serializeLayout<Placement extends object>(
   placements: readonly Placement[],
-  arranged = true
+  arranged = true,
+  sized: readonly string[] = []
 ): string {
   return JSON.stringify({
     schemaVersion: LAYOUT_SCHEMA_VERSION,
     placements,
     ...(arranged ? {} : { unarranged: true }),
+    ...(arranged || sized.length === 0 ? {} : { sized }),
   });
 }
 

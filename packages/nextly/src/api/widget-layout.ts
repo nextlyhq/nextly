@@ -31,6 +31,8 @@
  * @module api/widget-layout
  */
 
+import { z } from "zod";
+
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
@@ -49,19 +51,15 @@ import {
 } from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import { CORE_WIDGET_ID } from "../domains/widgets/core-widgets/ids";
 import { staleFieldSettings } from "../domains/widgets/declaration/card-settings";
 import { defaultLayoutPlacements } from "../domains/widgets/default-layout";
-import {
-  getStartedDrawn,
-  getStartedPlacement,
-  getStartedView,
-  withoutDormantCard,
-} from "../domains/widgets/get-started-card";
-import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
+import { sizeWithinBounds } from "../domains/widgets/grid-size";
 import {
   LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
+  chosenSizeIds,
   dismissalsApplied,
   layoutIsArranged,
   resolvePlacementIds,
@@ -150,12 +148,22 @@ type LayoutSource = "own" | "default" | "unreadable";
  * the cards a caller may see and the ones they may not keep one order between
  * them, and two people's defaults differ only by the cards each may not see.
  *
- * A row nobody arranged contributes its removals and nothing else, applied to
- * the WHOLE materialization, so a card this caller cannot see keeps the
- * removal it was given, and comes back removed the day they can.
+ * A row nobody arranged contributes its choices about the default's cards
+ * (removals, settings, and the sizes the reader chose, each held to its
+ * widget's bounds) and nothing else, applied to the WHOLE materialization, so a
+ * card this caller cannot see keeps the removal it was given, and comes back
+ * removed the day they can.
  */
 function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
-  return dismissalsApplied(defaultLayoutPlacements(allWidgets()), unarranged);
+  const widgets = allWidgets();
+  const bounds = new Map(
+    widgets.map(widget => [widget.id, sizeFacts(widget).size])
+  );
+  return dismissalsApplied(
+    defaultLayoutPlacements(widgets),
+    unarranged,
+    widgetId => bounds.get(widgetId)
+  );
 }
 
 /**
@@ -396,8 +404,7 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * decides what this reader may be told exists; the second decides which
  * transient cards are worth showing now, and a lapsed card is not a refusal.
  *
- * The probe the conditions read through is returned, so the Get started steps
- * share its reads rather than resolving the same collections again.
+ * The probe the conditions read through is returned with them.
  */
 async function visibleWidgets(auth: AuthContext) {
   const reader = await readCaller(auth);
@@ -488,6 +495,89 @@ function mayWriteLayout(auth: AuthContext): boolean {
 }
 
 /**
+ * The widest dashboard the layout read takes a width for, in pixels: past any
+ * screen a dashboard is drawn on, so a width this read is sent is either one
+ * the admin measured or none.
+ */
+const MAX_DASHBOARD_WIDTH_PX = 16_384;
+
+/**
+ * The `width` the admin sends with the layout read: the dashboard's width in
+ * pixels, as it measured it (`useDashboardWidth`), a number above zero and no
+ * wider than {@link MAX_DASHBOARD_WIDTH_PX}.
+ */
+const DASHBOARD_WIDTH = z
+  .string()
+  .max(32)
+  .transform(Number)
+  .pipe(z.number().positive().max(MAX_DASHBOARD_WIDTH_PX));
+
+/**
+ * The dashboard's width the layout read was asked at, or `undefined` when it
+ * was sent none, or one that is not a width. Outside input, so parsed here and
+ * trusted for one thing only: the tier a card that hides while empty is judged
+ * at (`cardsAnsweredEmpty`), which decides how much its load reads for this
+ * reader, never what they may read. A width that is not one is no width, as a
+ * request from before the admin sent it is: no card is judged ahead, and the
+ * dashboard is drawn with every card, so no read is refused for the shape of a
+ * hint.
+ */
+function dashboardWidthOf(searchParams: URLSearchParams): number | undefined {
+  const parsed = DASHBOARD_WIDTH.safeParse(
+    searchParams.get("width") ?? undefined
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * What the layout read says of the cards that hide while empty, outside the
+ * scope token: what a card answers changes with the content, and a save must
+ * not conflict because a card emptied.
+ *
+ * - `hiddenWhileEmpty`: the cards judged ahead that are empty for this reader
+ *   now (`cardsAnsweredEmpty`), so the admin draws its first paint without
+ *   them rather than drawing them and taking them out. Judged only at a
+ *   dashboard width the admin sent, at the tier each card is drawn at there;
+ *   with none, absent, which the admin reads as no verdict at all: it hides
+ *   nothing and reveals nothing.
+ * - `hiddenWhenAnswerEmpty`: the widgets whose cards leave the dashboard by
+ *   their own answer, as drawn, since this read cannot answer them.
+ * - `readAheadToken`: this read's own dashboard load. What is read ahead here
+ *   is left for the batch that sends this token back, and for no other load,
+ *   a second tab of the same reader's included. It differs on every read.
+ */
+async function whileEmpty(
+  auth: AuthContext,
+  view: { reader: ReadCaller; widgets: readonly CanonicalWidget[] },
+  placements: readonly WidgetPlacement[],
+  request: { signal: AbortSignal; searchParams: URLSearchParams }
+): Promise<{
+  hiddenWhileEmpty?: readonly string[];
+  hiddenWhenAnswerEmpty: readonly string[];
+  readAheadToken: string;
+}> {
+  const readAheadToken = crypto.randomUUID();
+  const dashboardWidth = dashboardWidthOf(request.searchParams);
+  const { cardsAnsweredEmpty, hiddenWhenAnswerEmpty } = await import(
+    "./cards-answered-empty"
+  );
+  const ownAnswer = hiddenWhenAnswerEmpty(view.widgets);
+  if (dashboardWidth === undefined) {
+    return { hiddenWhenAnswerEmpty: ownAnswer, readAheadToken };
+  }
+  return {
+    hiddenWhileEmpty: await cardsAnsweredEmpty(auth, view.reader, placements, {
+      widgets: view.widgets,
+      dashboardWidth,
+      signal: request.signal,
+      readAheadToken,
+    }),
+    hiddenWhenAnswerEmpty: ownAnswer,
+    readAheadToken,
+  };
+}
+
+/**
  * The version the client must echo back.
  *
  * An unreadable row keeps its real version rather than reporting 0, and so
@@ -516,31 +606,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   const arranged =
     stored.layout !== undefined && layoutIsArranged(stored.layout);
   const notShown = arranged ? NOTHING_WITHHELD : judged.forReader;
-  const arrangement = visibleArrangement(stored.layout, view, notShown);
-  // The Get started card is drawn or left dormant from its step answer and its
-  // own settings, which is why this is decided here, after the row is read,
-  // and not by a condition before it. `?getStarted=1` asks for the answer of a
-  // removed card, which the admin needs as it restores one.
-  const askedForSteps = new URL(req.url).searchParams.get("getStarted") === "1";
-  const getStarted = await getStartedView(
-    view.probe,
-    getStartedPlacement(arrangement),
-    askedForSteps
-  );
-  const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
-  // The default as a reader following it would be handed it: their card has
-  // no settings yet, so it is drawn from the answer alone. The steps are
-  // worked out when this read worked them out, or when the admin asks
-  // (`?getStarted=1`), as it does before staging a reset: an arrangement with
-  // no card of its own still resets onto a default that may draw one.
-  const steps =
-    getStarted.answer === null && !askedForSteps
-      ? null
-      : await view.probe.getStarted();
-  const defaults = withoutDormantCard(
-    visibleArrangement(undefined, view, judged.inDefault),
-    card => steps !== null && getStartedDrawn(steps, card.config)
-  );
+  const placements = visibleArrangement(stored.layout, view, notShown);
+  // Which cards that hide while empty this reader's dashboard is drawn
+  // without, and which leave by their own answer (`whileEmpty`).
+  const emptyCards = await whileEmpty(auth, view, placements, {
+    signal: req.signal,
+    searchParams: new URL(req.url).searchParams,
+  });
+  // The default as a reader following it would be handed it, without the
+  // cards its own rules (`shows`) leave out for them, the setup card among
+  // them once it is dismissed or done.
+  const defaults = visibleArrangement(undefined, view, judged.inDefault);
   const sizes = sizesOf(view.widgets);
 
   // Widgets this caller may see and may still add. A saved arrangement is a
@@ -554,13 +630,14 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
   //
-  // Never Get started: it is offered back only from Removed, as the card the
-  // reader removed, with its progress and skips.
+  // Never the setup card: it comes and goes on its own, from the site's
+  // state and the reader's own choices (`domains/widgets/setup-card`), and a
+  // card removed in customise mode is offered back only from Removed.
   const placed = new Set(placements.map(placement => placement.widgetId));
   const available = inAddPanelOrder(
     view.widgets.filter(
       widget =>
-        widget.id !== GET_STARTED_WIDGET_ID &&
+        widget.id !== CORE_WIDGET_ID.setup &&
         (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
     )
   ).map(widget => widget.id);
@@ -576,6 +653,9 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       available,
       version: stored.version,
       source,
+      // Whether the reader has arranged this dashboard, not merely dismissed a card or saved a
+      // setting on one: a card is then removed from the row they arranged rather than hidden.
+      arranged,
       // Over the cards withheld from what they were handed, so a save staged
       // before one of those verdicts changed is refused rather than dropping
       // a card it never held.
@@ -583,9 +663,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
       audience: view.audience.token,
-      // The Get started steps, from the computation that decided whether the
-      // card is drawn, so the card and its steps cannot disagree.
-      getStarted,
+      ...emptyCards,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
@@ -1036,6 +1114,44 @@ function refuseExtraCards(
 }
 
 /**
+ * The cards of an unarranged write whose size the reader chose, refusing one whose chosen size
+ * lies outside its widget's bounds: a size chosen outside customise mode is one the card menu
+ * offered, inside them, and is judged in the write that stores it. `stored` is the row the write
+ * replaces, whose chosen sizes stay chosen while the write leaves them as stored.
+ */
+function chosenSizesWithinBounds(
+  saved: readonly WidgetPlacement[],
+  submitted: readonly WidgetPlacement[],
+  sizes: Readonly<Record<string, WidgetSizeFacts>>,
+  stored: StoredLayout | undefined
+): string[] {
+  const chosen = chosenSizeIds(
+    defaultLayoutPlacements(allWidgets()),
+    saved,
+    stored
+  );
+  const own = new Map(submitted.map(placement => [placement.id, placement]));
+  for (const id of chosen) {
+    const placement = own.get(id);
+    const bounds =
+      placement === undefined ? undefined : sizes[placement.widgetId]?.size;
+    if (placement === undefined || bounds === undefined) continue;
+    if (!sizeWithinBounds({ w: placement.w, h: placement.h }, bounds)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "placements",
+            code: "INVALID_VALUE",
+            message: `"${placement.widgetId}" cannot be ${placement.w} by ${placement.h}.`,
+          },
+        ],
+      });
+    }
+  }
+  return chosen;
+}
+
+/**
  * Refuses a write that would replace an arrangement the server could not read,
  * unless the person confirmed exactly that.
  *
@@ -1063,23 +1179,6 @@ function refuseUnconfirmedReplacement(
       ? "Your saved dashboard could not be loaded. Saving replaces it; confirm to save."
       : "Your saved dashboard could not be loaded. Save it from customise mode first.",
   });
-}
-
-/**
- * The widget ids a save replaces, as opposed to carries.
- *
- * Every visible widget, except a Get started card the submission does not
- * hold: a dormant card is never handed to the reader, so their save cannot
- * hold it, and replacing it would delete it with its skips. Carried instead,
- * in place, as a card the reader could not see is. A submission that holds
- * the card replaces it as usual.
- */
-function carriedUnlessSubmitted(
-  submitted: readonly WidgetPlacement[],
-  visibleIds: ReadonlySet<string>
-): ReadonlySet<string> {
-  if (getStartedPlacement(submitted) !== undefined) return visibleIds;
-  return new Set([...visibleIds].filter(id => id !== GET_STARTED_WIDGET_ID));
 }
 
 export const putWidgetLayout = withErrorHandler(async (req: Request) => {
@@ -1170,15 +1269,26 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const saved = mergePreservingHidden(
     submitted,
     wholeArrangement(stored.layout),
-    carriedUnlessSubmitted(submitted, view.visibleIds),
+    view.visibleIds,
     withheldFrom(stored.layout, view, notShown)
   );
+  // A row that still follows the default keeps only the sizes its reader chose; an arranged
+  // row's sizes are all theirs.
+  const sized = arranged
+    ? []
+    : chosenSizesWithinBounds(
+        saved,
+        submitted,
+        sizesOf(view.widgets),
+        stored.layout
+      );
   const version = await service.saveLayout(
     SCOPE_KIND,
     view.caller.userId,
     saved,
     expectedVersion,
-    arranged
+    arranged,
+    sized
   );
 
   // `respondMutation`, not `respondData`: every write in this package answers
@@ -1204,6 +1314,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
                 schemaVersion: LAYOUT_SCHEMA_VERSION,
                 placements: saved,
                 unarranged: true,
+                ...(sized.length === 0 ? {} : { sized }),
               },
               req.signal
             )

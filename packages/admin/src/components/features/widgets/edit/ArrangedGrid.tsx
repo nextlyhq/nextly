@@ -21,7 +21,7 @@
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
-import type { GridSize } from "nextly/config";
+import type { GridSize, WidgetSizeBounds } from "nextly/config";
 import type { JSX, RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
@@ -37,10 +37,10 @@ import {
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
-import { resolveWidgetOutcome } from "../outcome";
+import { useReportedPlacements } from "../reported-placements";
 import { cardRowStyle, GRID_CLASS } from "../sizes";
 
-import { ArrangedCell } from "./ArrangedCell";
+import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CellDrag } from "./DraggableWidgetCell";
@@ -89,8 +89,24 @@ export interface ArrangedGridProps {
             config: Record<string, unknown>,
             callbacks: CardSettingsWriteCallbacks
           ) => void;
+          /**
+           * Save a card's size at once: the card menu's and the quick popover's Size. Absent
+           * where only a card's settings are written, as a card body's own controls write them.
+           */
+          resize?: (
+            placementId: string,
+            title: string,
+            size: GridSize,
+            /** The card's widget's bounds, which the size is held to. */
+            bounds: WidgetSizeBounds,
+            callbacks: CardSettingsWriteCallbacks
+          ) => void;
           isWriting: boolean;
           unavailable?: string;
+          /**
+           * Say a setting changed, in the grid's live region: for a card body's own controls,
+           * which offer no Undo. A quick setting says its change in the toast that offers one.
+           */
           announce: (
             title: string,
             setting: string,
@@ -105,6 +121,8 @@ export interface ArrangedGridProps {
   requested: ReadonlySet<string>;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
+  answeredAtFor: (placementId: string) => Date | null;
   /** The size the answer one card shows was fetched at. */
   fetchedSizeFor: (placementId: string) => AnswerSize | undefined;
   /** The placements whose OWN request is still in flight. */
@@ -189,7 +207,7 @@ function cellDragFor(
 }
 
 /**
- * The grid's settings write, bound to one card: its placement, and its title to announce by. No
+ * The grid's settings write, bound to one card: its placement, its title and its bounds. No
  * prop at all while the grid has none, so the cell draws no control that could not save.
  */
 function cellSettingsWrite(
@@ -197,6 +215,7 @@ function cellSettingsWrite(
   row: ArrangedWidget
 ): { settingsWrite?: CellSettingsWrite } {
   if (!settingsWrite) return {};
+  const { resize } = settingsWrite;
   return {
     settingsWrite: {
       write: (config, callbacks) =>
@@ -206,73 +225,96 @@ function cellSettingsWrite(
           config,
           callbacks
         ),
+      ...(resize === undefined
+        ? {}
+        : {
+            resize: (size: GridSize, callbacks: CardSettingsWriteCallbacks) =>
+              resize(
+                row.placementId,
+                row.widget.title,
+                size,
+                row.widget.size,
+                callbacks
+              ),
+          }),
       isWriting: settingsWrite.isWriting,
       ...(settingsWrite.unavailable === undefined
         ? {}
         : { unavailable: settingsWrite.unavailable }),
-      announce: (setting, value, shown) =>
-        settingsWrite.announce(row.widget.title, setting, value, shown),
     },
   };
 }
 
 /**
- * Whether a card is off the dashboard: its widget's own `shows` said no for this person, or it
- * hides when empty and its answer is. Read from the outcome the renderer draws from
- * (`resolveWidgetOutcome`), so the two cannot disagree.
- */
-function hiddenWhileEmpty(
-  row: ArrangedWidget,
-  slots: Record<string, WidgetSlot>,
-  cellSlots: CellSlots
-): boolean {
-  const outcome = resolveWidgetOutcome(
-    row.widget,
-    slots[row.placementId],
-    key => cellSlots[row.placementId]?.[key]
-  );
-  if (outcome.state === "not-shown") return true;
-  return row.widget.hidesWhenEmpty === true && outcome.state === "empty";
-}
-
-/**
  * How many cards are on show: every one while customising, where a hidden card is shown marked;
- * at rest, those not taken off the dashboard (`hiddenWhileEmpty`), so a dashboard whose every
- * card is hidden says it is empty rather than drawing nothing.
+ * at rest, those whose card has not reported itself off the dashboard (`hidden`), so a dashboard
+ * whose every card is hidden says it is empty rather than drawing nothing. Counted from the cards'
+ * own reports (`useReportCardHidden`), the decision each card is drawn by, its body's reported
+ * state included; a card that reports nothing is on show.
  */
 function shownCount(
   rows: readonly ArrangedWidget[],
   isEditing: boolean,
-  answers: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots }
+  hidden: ReadonlySet<string>
 ): number {
   if (isEditing) return rows.length;
-  return rows.filter(
-    row => !hiddenWhileEmpty(row, answers.slots, answers.cellSlots)
-  ).length;
+  return rows.filter(row => !hidden.has(row.placementId)).length;
 }
 
 /**
  * When the OLDEST answer on show arrived, or `undefined` before any has: the time the page's one
  * freshness line is true of, since every card on show is at least that fresh. Only a card that
- * asked and is drawn counts: a card hidden while its answer is empty is not on show.
+ * asked and is drawn counts: a card that reported itself off the dashboard (`hidden`) is not on
+ * show.
  */
 function oldestAnswer(
   rows: readonly ArrangedWidget[],
   answers: {
+    hidden: ReadonlySet<string>;
     requested: ReadonlySet<string>;
-    slots: Record<string, WidgetSlot>;
-    cellSlots: CellSlots;
     updatedAtFor: (placementId: string) => Date | null;
   }
 ): Date | undefined {
   let oldest: Date | undefined;
   for (const row of rows) {
     if (!answers.requested.has(row.placementId)) continue;
-    if (hiddenWhileEmpty(row, answers.slots, answers.cellSlots)) continue;
+    if (answers.hidden.has(row.placementId)) continue;
     const at = answers.updatedAtFor(row.placementId);
     if (at !== null && (oldest === undefined || at < oldest)) oldest = at;
   }
   return oldest;
+}
+
+/** What the batch answered for one card, as its cell draws it (`ArrangedCellProps.data`). */
+function cellData(
+  placementId: string,
+  answers: Pick<
+    ArrangedGridProps,
+    | "slots"
+    | "cellSlots"
+    | "requested"
+    | "answeredAtFor"
+    | "fetchingPlacementIds"
+    | "fetchedSizeFor"
+    | "retry"
+  >
+): ArrangedCellProps["data"] {
+  const asked = answers.requested.has(placementId);
+  return {
+    slot: answers.slots[placementId],
+    // This card's own answers, by cell key.
+    slotFor: key => answers.cellSlots[placementId]?.[key],
+    // Only a card that actually ASKED can be waiting on an answer. Its own answer's time, not
+    // the page's oldest: its quick change is said once its own answer is in.
+    updatedAt: asked ? answers.answeredAtFor(placementId) : null,
+    // 🔴 This card's own request, not the batch's: partitions settle independently, and a
+    // settled card must not dim.
+    isFetching: answers.fetchingPlacementIds.has(placementId),
+    answerSize: answers.fetchedSizeFor(placementId),
+    // Retry only for a card in the batch: one rejected before it was asked has no question to
+    // ask again, so the button could change nothing.
+    onRetry: asked ? () => answers.retry(placementId) : undefined,
+  };
 }
 
 export function ArrangedGrid({
@@ -283,24 +325,16 @@ export function ArrangedGrid({
   highlightedId = null,
   drag,
   writes,
-  slots,
-  cellSlots,
-  requested,
-  updatedAtFor,
-  fetchedSizeFor,
-  fetchingPlacementIds,
-  retry,
   announcement,
   focus,
   gridRef,
   on,
+  // What the batch answered, handed to each card as one (`cellData`).
+  ...answers
 }: ArrangedGridProps): JSX.Element {
-  const answeredAt = oldestAnswer(rows, {
-    requested,
-    slots,
-    cellSlots,
-    updatedAtFor,
-  });
+  // The cards that reported themselves off the dashboard, each as it is drawn.
+  const { placements: hidden, report: reportHidden } = useReportedPlacements();
+  const answeredAt = oldestAnswer(rows, { hidden, ...answers });
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -329,7 +363,7 @@ export function ArrangedGrid({
           {announcement}
         </span>
         <EmptyArrangement
-          count={shownCount(rows, isEditing, { slots, cellSlots })}
+          count={shownCount(rows, isEditing, hidden)}
           isEditing={isEditing}
         />
         <DropLineMark line={drag?.line} />
@@ -345,27 +379,11 @@ export function ArrangedGrid({
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
             {...cellSettingsWrite(writes.settings, row)}
+            reportHidden={reportHidden}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}
-            data={{
-              slot: slots[row.placementId],
-              // This card's own answers, by cell key.
-              slotFor: key => cellSlots[row.placementId]?.[key],
-              // Only a card that actually ASKED can be waiting on an answer.
-              updatedAt: requested.has(row.placementId)
-                ? updatedAtFor(row.placementId)
-                : null,
-              // 🔴 This card's own request, not the batch's: partitions
-              // settle independently, and a settled card must not dim.
-              isFetching: fetchingPlacementIds.has(row.placementId),
-              answerSize: fetchedSizeFor(row.placementId),
-              // Retry only for a card in the batch: one rejected before it was asked has no
-              // question to ask again, so the button could change nothing.
-              onRetry: requested.has(row.placementId)
-                ? () => retry(row.placementId)
-                : undefined,
-            }}
+            data={cellData(row.placementId, answers)}
             refs={{
               menu: focus.menuRef(row.placementId),
               dismiss: focus.dismissRef(row.placementId),

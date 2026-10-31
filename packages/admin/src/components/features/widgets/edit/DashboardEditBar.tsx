@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * The dashboard's customise controls: enter, add, reset, abandon, commit.
+ * The dashboard's customise controls: add, reset, abandon, commit. Entering is
+ * the page header's Customize.
  *
  * One bar rather than controls scattered across the cards, because entering and
  * leaving customise mode is a decision about the WHOLE arrangement — and
@@ -44,7 +45,6 @@ export interface DashboardEditBarProps {
   isWriting: boolean;
   /** Whether the reader has an arrangement of their own to reset. */
   canReset: boolean;
-  onBegin: () => void;
   onSave: () => void;
   onCancel: () => void;
   onReset: () => void;
@@ -54,8 +54,6 @@ export interface DashboardEditBarProps {
   addWidgetRef?: Register;
   /** Registers the bar, where focus lands as customise mode opens. */
   barRef: Register;
-  /** Registers the Customize button, where focus returns as it closes. */
-  customizeRef: Register;
   /**
    * What the bar says under its controls: why the last save did not land.
    * Inside the bar, so the reason stays in view with the controls that act on
@@ -146,47 +144,17 @@ export function DashboardEditBar({
   isSaving,
   isWriting,
   canReset,
-  onBegin,
   onSave,
   onCancel,
   onReset,
   onAddWidget,
   addWidgetRef,
   barRef,
-  customizeRef,
   children,
 }: DashboardEditBarProps): JSX.Element {
-  if (!isEditing) {
-    return (
-      <>
-        {/* Offered at every width: on one column the card menu does everything a drag does. */}
-        <div className="flex justify-end" data-testid="dashboard-edit-offer">
-          <Button
-            ref={customizeRef}
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onBegin}
-            // 🔴 Beginning an edit is not itself a write, and it still has to
-            // wait for one. The draft is seeded from the arrangement in hand,
-            // including the VERSION it will later be saved against -- so a
-            // draft opened while a dismissal is settling carries a guard that
-            // is about to go stale, and the reader's own Save comes back as a
-            // conflict somebody else caused.
-            disabled={isWriting}
-            data-testid="dashboard-edit-begin"
-          >
-            <Icons.Pencil aria-hidden className="mr-2 size-4" />
-            {/* "Customize", the word every message about this mode uses: the
-                unreadable-layout notice tells the reader to save "from
-                Customize", so the control has to be called that. */}
-            Customize
-          </Button>
-        </div>
-        {children}
-      </>
-    );
-  }
+  // At rest the bar draws only what it says under its controls (why the last save did not
+  // land); Customize, which opens it, is the page header's.
+  if (!isEditing) return <>{children}</>;
 
   return (
     // A labelled group that takes focus as customise mode opens, so a

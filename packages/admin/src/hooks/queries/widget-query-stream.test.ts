@@ -77,6 +77,28 @@ describe("fetchWidgetBatch", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ queries: [count, count] });
   });
 
+  it("sends the layout read's token beside the queries when it has one, and no field when it has none", async () => {
+    const answer = () =>
+      Response.json({
+        results: [{ ok: true, result: { op: "count", total: 4 } }],
+      });
+    fetched.mockResolvedValueOnce(answer()).mockResolvedValueOnce(answer());
+
+    await fetchWidgetBatch([count], {
+      onSlots: vi.fn(),
+      readAheadToken: "load-1",
+    });
+    await fetchWidgetBatch([count], { onSlots: vi.fn() });
+
+    const [named, unnamed] = fetched.mock.calls.map(([, init]) =>
+      JSON.parse(String(init?.body))
+    );
+    expect(named).toEqual({ queries: [count], readAheadToken: "load-1" });
+    // No layout read to name: the body is the queries alone, as an older
+    // server reads it.
+    expect(unnamed).toEqual({ queries: [count] });
+  });
+
   it("reads a line split across two chunks as one line", async () => {
     const stream = streamedResponse();
     fetched.mockResolvedValue(stream.response);

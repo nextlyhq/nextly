@@ -6,6 +6,34 @@ description: Put the numbers your team actually checks on the admin dashboard.
 The admin dashboard is built from widgets. Each one declares what it wants to know, and the
 system runs that query on its behalf, scoped to the permissions of whoever is looking.
 
+## Quick start
+
+From your app's root, or your plugin's:
+
+```bash
+npx nextly generate:widget open-orders
+```
+
+It writes a working widget and its test, and lists the widget where yours are listed: a site's
+in `admin.dashboard.widgets`, a plugin's in its `contributes.dashboard.widgets`. Choose how it
+shows its data with `--view figure` (the default), `list`, `table`, `bars`, `series` or
+`component`, which writes a component of your own. `--collection` makes it read from a
+collection the reader chooses. On a terminal it asks for anything you leave out.
+
+- A site's widgets are named `site/<name>`, and a plugin's are named under the plugin's own name.
+- It never writes over a file that exists, unless you pass `--force`. Generating a widget again
+  with `--force` leaves it listed once. It will not switch a widget between a component of its
+  own and a core view: it names the files to remove first.
+- The test imports `@nextlyhq/plugin-sdk` and boots on `@nextlyhq/adapter-sqlite`, so a project
+  without them gets them added to its `devDependencies`, at your `nextly` version; run your
+  package manager's install afterwards.
+- With `nextly -c <path> generate:widget`, it lists the widget in the config that path names.
+- `--dry-run` shows the files and the config edit without writing them.
+- When it cannot edit your config safely, it leaves the file as it was and prints the line to add.
+
+Then open `/admin/dev/widget-previews` on your dev server to see the card before it has data,
+and run its test with `npx vitest run`.
+
 ## Availability
 
 |                            |                                                                                                                                   |
@@ -233,10 +261,12 @@ for `setting.number`, a picker for `setting.collection`. Where none of those fit
 name a component of your own with `editor` (**experimental**), drawn in the sheet in its place.
 The component is handed `SettingEditorProps` of the setting's value: the value, an `onChange`, the
 card's other settings as the sheet holds them now, and whether the sheet is saving. A setting with
-no value is handed `undefined`. A change is held to the setting's own rules (its type, `min` and
-`max`, its options, and for a Field setting the fields its collection offers the reader) and saved
-with the rest of the settings when the reader saves; a value that breaks them is named under the
-editor, and the server refuses it too.
+no value is handed `undefined`, and an editor clears a setting by calling `onChange(undefined)`:
+the setting is saved unset, so the card reads its default, or no value where it has none. A change
+is held to the setting's own rules (its type, `min` and `max`, its options, and for a Field
+setting the fields its collection offers the reader) and saved with the rest of the settings when
+the reader saves; a value that breaks them is named under the editor, and the server refuses it
+too.
 
 ```ts
 import { defineWidget, setting } from "@nextlyhq/plugin-sdk";
@@ -270,15 +300,14 @@ export function GoalEditor({
   onChange,
   disabled,
 }: SettingEditorProps<number>) {
-  // ...draw the value, and call onChange with a number
+  // ...draw the value, and call onChange with a number, or with undefined to clear it
 }
 ```
 
 The editor is registered like the widget's own component, from your admin entry, and the
 component map holds it to the setting's value: an editor written for another setting's value
-fails to compile. Startup refuses an `editor` that names no component, one component used both
-as a widget's view and as a setting's editor, and an `editor` on a widget given to `registerWidget`
-or `contributes.admin.widgets`: custom setting editors need a `defineWidget` declaration.
+fails to compile. Startup refuses an `editor` that names no component, and one component used both
+as a widget's view and as a setting's editor.
 
 ## Testing a widget
 
@@ -298,7 +327,7 @@ it("counts the open orders for the instance's administrator", async () => {
   const admin = await t.nextly.users.create({
     email: "admin@example.com",
     password: "Password123!",
-    data: { isActive: true },
+    data: { name: "Admin", isActive: true },
   });
   await t.nextly.create({ collection: "orders", data: { state: "open" } });
   const answer = await runWidgetLoad(t, openOrders, {

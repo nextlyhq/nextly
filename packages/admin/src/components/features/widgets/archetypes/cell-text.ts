@@ -9,6 +9,8 @@
  * @module components/features/widgets/archetypes/cell-text
  */
 
+import { answerHasNothing } from "nextly/widget-result";
+
 import {
   formatGlobalDateTime,
   getGlobalDateTimeConfig,
@@ -261,7 +263,7 @@ export function rowsOrInstead(
       message: `"${title}" expected ${words.expected}, but the query returned a ${result.op}.`,
     };
   }
-  if (result.items.length === 0) {
+  if (answerHasNothing(result)) {
     // The frame's one empty state, worded for what the display lists. Source-neutral: the card
     // may read any collection's, system's or plugin's data, so it names no kind of row it
     // cannot know.

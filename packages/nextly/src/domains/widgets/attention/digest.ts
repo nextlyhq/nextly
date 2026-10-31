@@ -32,6 +32,12 @@
 import { getNextlyLogger } from "../../../observability/logger";
 import type { AttentionCount } from "../declaration/dashboard";
 
+import type {
+  AttentionDigestItem,
+  AttentionDigestKind,
+  AttentionSeverity,
+} from "./digest-item";
+
 /**
  * How long one item may take to count. Past it, the item is failed and every
  * other item is still answered.
@@ -45,36 +51,16 @@ export const ATTENTION_ITEM_BUDGET_MS = 10_000;
  */
 const ATTENTION_ITEM_COUNT_CAP = 99;
 
-/** How urgent an item is: critical items rank before every warning. */
-export type AttentionSeverity = "critical" | "warning";
-
-/** What an item counts: a core release kind, or a plugin's item. */
-export type AttentionDigestKind = "stopped" | "overdue" | "plugin";
-
-/** One item of the digest, as the card, the header and any inbox read it. */
-export interface AttentionDigestItem {
-  /** Stable across reads: core's `core/<kind>`, or the plugin item's own id. */
-  id: string;
-  kind: AttentionDigestKind;
-  label: string;
-  /** Zero only on a failed item, whose count is unknown. */
-  count: number;
-  /** The count is a floor: counting stopped at a bound. */
-  atLeast?: true;
-  severity: AttentionSeverity;
-  /** Where the reader goes about it: a path relative to the admin, which the admin resolves. */
-  link: string;
-  /** The count could not be read: it failed, timed out or was not a count. */
-  failed?: true;
-}
-
 /** One item's reader and what the item is, apart from its count. */
 export interface DigestReader {
   id: string;
   kind: AttentionDigestKind;
   label: string;
   severity: AttentionSeverity;
-  link: string;
+  /** Where the reader goes about it; absent when no admin page is the place to act. */
+  link?: string;
+  /** One line saying why it is waiting, carried onto its item as it is. */
+  reason?: string;
   /** Who declared it, named in the log when it fails: core, or a plugin. */
   owner: string;
   /**
@@ -224,6 +210,25 @@ export async function runDigest(
 }
 
 /**
+ * What a reader's item is, whatever its count: the same on a failed item, so
+ * a reader is told which item went unchecked and why it would matter. A link
+ * or a reason the reader did not give is left out, not carried as undefined.
+ */
+function itemIdentity(
+  reader: DigestReader
+): Omit<AttentionDigestItem, "count" | "atLeast" | "failed"> {
+  const { id, kind, label, severity, link, reason } = reader;
+  return {
+    id,
+    kind,
+    label,
+    severity,
+    ...(link === undefined ? {} : { link }),
+    ...(reason === undefined ? {} : { reason }),
+  };
+}
+
+/**
  * One reader's item as the digest draws it, or none: hidden from this reader,
  * or nothing waiting. A failed item is drawn as failed and logged, so the
  * others are still answered; a count past the cap is drawn as a floor.
@@ -232,29 +237,25 @@ function digestItem(
   reader: DigestReader,
   answer: ReaderAnswer
 ): AttentionDigestItem[] {
-  const { id, kind, label, severity, link } = reader;
   if (answer === null) return [];
+  const shown = itemIdentity(reader);
   if ("failure" in answer) {
     getNextlyLogger().warn({
       kind: "attention-item-failed",
       owner: reader.owner,
-      item: id,
+      item: reader.id,
       reason: answer.failure,
       ...(answer.error instanceof Error ? { error: answer.error.message } : {}),
     });
-    return [{ id, kind, label, count: 0, severity, link, failed: true }];
+    return [{ ...shown, count: 0, failed: true }];
   }
   if (answer.count === 0 && !answer.atLeast) return [];
   const capped = answer.count > ATTENTION_ITEM_COUNT_CAP;
   return [
     {
-      id,
-      kind,
-      label,
+      ...shown,
       count: capped ? ATTENTION_ITEM_COUNT_CAP : answer.count,
       ...(capped || answer.atLeast ? { atLeast: true as const } : {}),
-      severity,
-      link,
     },
   ];
 }

@@ -134,7 +134,7 @@ describe("a widget on the preview page", () => {
 
   it("never mounts a self-drawn card for a state it draws itself, and says so in its place", () => {
     const content: DashboardWidget = {
-      id: "core/content",
+      id: "core/content-table",
       title: "Content",
       archetype: "custom",
       component: "core#Content",
