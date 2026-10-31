@@ -308,17 +308,21 @@ describe.each(availableDialects())(
           dialect,
           setRetiredSizes("item-kept", JSON.stringify(sizes))
         );
-        // A core table missing, so the reconcile has a change to apply and
-        // runs the push, which must plan nothing against the kept column.
+        // An index of the media table missing, so the reconcile has a change
+        // to apply to that very table and runs the push, which must plan
+        // nothing against the kept column.
+        // One no foreign key needs, which MySQL refuses to drop.
+        const index = "media_mime_type_idx";
+        expect(await fresh.indexesOf("media")).toContain(index);
         await fresh.exec(
           dialect === "mysql"
-            ? "DROP TABLE `nextly_meta`"
-            : 'DROP TABLE "nextly_meta"'
+            ? `DROP INDEX \`${index}\` ON \`media\``
+            : `DROP INDEX "${index}"`
         );
 
         await migrate(fresh, false);
 
-        expect(await fresh.columnsOf("nextly_meta")).not.toEqual([]);
+        expect(await fresh.indexesOf("media")).toContain(index);
         expect(await retiredSizesOn(fresh.db, dialect, "item-kept")).toEqual(
           sizes
         );
