@@ -1120,7 +1120,7 @@ jobs:
           import { seed } from "../src/endpoints/seed";
 
           const nextly = await getNextly({ config });
-          const result = await seed({ nextly });
+          const result = await seed({ nextly, config });
           console.log(JSON.stringify(result.summary));
           process.exit(0);
           TS

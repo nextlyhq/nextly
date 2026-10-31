@@ -49,6 +49,23 @@ describe("readTags", () => {
     );
   });
 
+  it("leaves out tags too long for Next.js before counting, so they cannot crowd out a valid one", () => {
+    vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as never);
+    // Each one over the 256 characters Next.js accepts on a tag.
+    const overlong = Array.from(
+      { length: 200 },
+      (_, i) => `app:${"x".repeat(256)}-${i}`
+    );
+    const tags = readTags(["nextly:posts"], [...overlong, "app:valid"]);
+
+    expect(tags).toEqual(["nextly:posts", "app:valid"]);
+  });
+
   it("keeps exactly the limit untouched", () => {
     const tags = readTags(["nextly:posts"], extra(MAX_TAGS_PER_READ - 1));
     expect(tags).toHaveLength(MAX_TAGS_PER_READ);

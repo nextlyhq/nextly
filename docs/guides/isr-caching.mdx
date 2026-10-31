@@ -243,8 +243,9 @@ unaffected); it just does not bust any cache tags.
   the same code works in tests and non-Next callers.
 - Add `revalidate: <seconds>` to `cachedFind` for a time-based safety net on top
   of tag-based busting.
-- Next.js keeps at most 128 tags on one cached read. The routes Nextly provides
-  put their own collection's or Single's tag first, then the tags you pass,
-  each once, and leave off the rest with a warning logged once. A read that
+- Next.js keeps at most 128 tags on one cached read and drops any tag longer
+  than 256 characters. The routes Nextly provides leave out the over-long
+  tags, put their own collection's or Single's tag first, then the tags you
+  pass, each once, and leave off the rest with a warning logged once. A read that
   lists many related collections still expires whenever its own content
   changes.
