@@ -227,14 +227,24 @@ export async function awaitBootSeeding(): Promise<void> {
 async function seedEverything(): Promise<void> {
   // Whether this site is told once which reads its visitors lost to the
   // Public role: decided before anything is seeded, the one time a site an
-  // earlier release ran on can be told from a new install.
-  await seedingStep("public read notice", () =>
-    recordPublicReadNotice({
-      meta: getService("metaService"),
-      publicRoleMade: () => publicRoleMade(getService("metaService")),
-      seededBefore: presetRoleExists,
-    })
-  );
+  // earlier release ran on can be told from a new install. The Public role
+  // waits for it: made first, it would leave such a site recorded as not due
+  // at the next boot, and never told. Tried again in a while, as a failure to
+  // make the role is.
+  const noticeRecorded = await seedingStep("public read notice", async () => {
+    try {
+      await recordPublicReadNotice({
+        meta: getService("metaService"),
+        publicRoleMade: () => publicRoleMade(getService("metaService")),
+        seededBefore: presetRoleExists,
+      });
+    } catch (error) {
+      if (!isMissingTableOnThisDatabase(error)) {
+        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+      }
+      throw error;
+    }
+  });
   const permissionsSeeded = await seedingStep(
     "permissions",
     seedAllPermissions
@@ -244,43 +254,45 @@ async function seedEverything(): Promise<void> {
   );
   // The role visitors are judged by. Made once and then left to the owner,
   // unlike a preset: only its permissions change after it exists.
-  const publicRoleSeeded = await seedingStep("public role", async () => {
-    const roles = new RoleMutationService(
-      getService("adapter"),
-      getService("logger")
-    );
-    const config = getService("config");
-    // The names roles the app and its plugins declare go by, which the
-    // built-in role leaves to them though they are made after it.
-    const declaredNames = [
-      ...(config.roles ?? []),
-      ...(config.plugins ?? []).flatMap(
-        plugin => plugin.contributes?.roles ?? []
-      ),
-    ].map(role => role.name);
-    try {
-      const seeded = await seedPublicRole({
-        publicSlugHolder: () => roles.publicSlugHolder(),
-        moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
-        ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
-        unlinkPublicRole: async () => {
-          const holder = await roles.publicSlugHolder();
-          if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
-        },
-        meta: getService("metaService"),
-        logger: getService("logger"),
-      });
-      if (!seeded.made) retrySeedingAt(seeded.retryAt);
-    } catch (error) {
-      // Not left unmade until the next start: tried again in a while, as
-      // when another boot holds the claim. A table not created yet is the
-      // migrations' to make, not this retry's.
-      if (!isMissingTableOnThisDatabase(error)) {
-        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+  const publicRoleSeeded =
+    noticeRecorded &&
+    (await seedingStep("public role", async () => {
+      const roles = new RoleMutationService(
+        getService("adapter"),
+        getService("logger")
+      );
+      const config = getService("config");
+      // The names roles the app and its plugins declare go by, which the
+      // built-in role leaves to them though they are made after it.
+      const declaredNames = [
+        ...(config.roles ?? []),
+        ...(config.plugins ?? []).flatMap(
+          plugin => plugin.contributes?.roles ?? []
+        ),
+      ].map(role => role.name);
+      try {
+        const seeded = await seedPublicRole({
+          publicSlugHolder: () => roles.publicSlugHolder(),
+          moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
+          ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
+          unlinkPublicRole: async () => {
+            const holder = await roles.publicSlugHolder();
+            if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
+          },
+          meta: getService("metaService"),
+          logger: getService("logger"),
+        });
+        if (!seeded.made) retrySeedingAt(seeded.retryAt);
+      } catch (error) {
+        // Not left unmade until the next start: tried again in a while, as
+        // when another boot holds the claim. A table not created yet is the
+        // migrations' to make, not this retry's.
+        if (!isMissingTableOnThisDatabase(error)) {
+          retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    }));
   // Public's read where code lets anyone read, and what plugins declare for
   // it, each granted once so an owner's change to it stands, and the startup
   // listing of what it lacks. Only after every permission seeded: a grant
