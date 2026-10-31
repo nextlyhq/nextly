@@ -91,126 +91,82 @@ describe("seedApi", () => {
     });
   });
 
-  describe("runSeed", () => {
-    it("returns the parsed SeedResult on success", async () => {
-      const result = {
-        message: "Demo content seeded.",
-        summary: {
-          rolesCreated: 3,
-          usersCreated: 3,
-          categoriesCreated: 5,
-          tagsCreated: 8,
-          postsCreated: 12,
-          mediaUploaded: 14,
-          mediaSkipped: 0,
-          collectionsRegistered: 0,
-          singlesRegistered: 0,
-          permissionsSynced: 0,
-        },
-        warnings: [],
-      };
-      global.fetch = vi.fn(
-        async () => new Response(JSON.stringify(result), { status: 200 })
-      ) as unknown as typeof fetch;
-      expect(await seedApi.runSeed()).toEqual(result);
-    });
+  describe("start", () => {
+    const answer = (status: number, body: unknown) =>
+      vi.fn(async () => Response.json(body, { status }));
 
-    it("throws with the server-supplied message on error", async () => {
-      global.fetch = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({ errors: [{ message: "Permission sync failed" }] }),
-            { status: 500 }
-          )
-      ) as unknown as typeof fetch;
-      await expect(seedApi.runSeed()).rejects.toThrow("Permission sync failed");
-    });
-
-    it("throws a status-coded fallback if no error body", async () => {
-      global.fetch = vi.fn(
-        async () => new Response(null, { status: 500 })
-      ) as unknown as typeof fetch;
-      await expect(seedApi.runSeed()).rejects.toThrow(/Seed failed.*500/);
-    });
-  });
-
-  describe("getStatus", () => {
-    it("returns the parsed status when ok", async () => {
-      global.fetch = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              completedAt: "2026-05-04T00:00:00Z",
-              skippedAt: null,
-            }),
-            { status: 200 }
-          )
-      ) as unknown as typeof fetch;
-      const status = await seedApi.getStatus();
-      expect(status.completedAt).toBe("2026-05-04T00:00:00Z");
-      expect(status.skippedAt).toBeNull();
-    });
-
-    it("returns null fields on non-ok response", async () => {
-      global.fetch = vi.fn(
-        async () => new Response(null, { status: 500 })
-      ) as unknown as typeof fetch;
-      expect(await seedApi.getStatus()).toEqual({
-        completedAt: null,
-        skippedAt: null,
-      });
-    });
-
-    it("returns null fields when body is malformed", async () => {
-      global.fetch = vi.fn(
-        async () => new Response("not json", { status: 200 })
-      ) as unknown as typeof fetch;
-      expect(await seedApi.getStatus()).toEqual({
-        completedAt: null,
-        skippedAt: null,
-      });
-    });
-  });
-
-  describe("setSkipped", () => {
-    it("sends a PUT with skippedAt", async () => {
-      const fetchMock = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ message: "ok" }), { status: 200 })
-      );
+    it("posts no body for a first start, and the confirmation only when asked", async () => {
+      const fetchMock = answer(200, { outcome: "loaded", result: {} });
       global.fetch = fetchMock as unknown as typeof fetch;
-      await seedApi.setSkipped();
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/admin/api/meta/seed-status",
-        expect.objectContaining({ method: "PUT" })
-      );
-      const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      const init = call[1];
-      const body = JSON.parse(init.body as string) as { skippedAt: string };
-      expect(typeof body.skippedAt).toBe("string");
-      expect(body.skippedAt.length).toBeGreaterThan(0);
+      await seedApi.start(false);
+      await seedApi.start(true);
+      const [first, second] = fetchMock.mock.calls as unknown as Array<
+        [string, RequestInit]
+      >;
+      expect(first?.[1]).not.toHaveProperty("body");
+      expect(second?.[1].body).toBe(JSON.stringify({ confirm: true }));
     });
 
-    it("throws when the route does not confirm the decline", async () => {
-      global.fetch = vi.fn(
-        async () => new Response(null, { status: 403 })
-      ) as unknown as typeof fetch;
-      await expect(seedApi.setSkipped()).rejects.toThrow(
-        "Decline failed (403)"
-      );
+    it("reads loaded, loaded but not recorded, and a route older than the runner", async () => {
+      global.fetch = answer(200, {
+        outcome: "unrecorded",
+        run: "run-1",
+        startedAt: "2026-10-31T09:00:00.000Z",
+      }) as unknown as typeof fetch;
+      expect(await seedApi.start(false)).toEqual({
+        outcome: "unrecorded",
+        run: "run-1",
+        startedAt: "2026-10-31T09:00:00.000Z",
+      });
+      // An older route answers its SeedResult alone, having recorded it itself.
+      const result = { message: "ok", summary: {}, warnings: [] };
+      global.fetch = answer(200, result) as unknown as typeof fetch;
+      expect(await seedApi.start(false)).toEqual({
+        outcome: "loaded",
+        result,
+      });
     });
 
-    it("throws with the route's own message when it gives one", async () => {
-      global.fetch = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({ errors: [{ message: "Nextly is not ready." }] }),
-            { status: 503 }
-          )
-      ) as unknown as typeof fetch;
-      await expect(seedApi.setSkipped()).rejects.toThrow(
-        "Nextly is not ready."
-      );
+    it("reads a refusal's reason and words, and anything else failed as what failed", async () => {
+      global.fetch = answer(409, {
+        outcome: "refused",
+        reason: "in-progress",
+        errors: [{ message: "A sample-content load is already in progress." }],
+      }) as unknown as typeof fetch;
+      expect(await seedApi.start(false)).toEqual({
+        outcome: "refused",
+        reason: "in-progress",
+        message: "A sample-content load is already in progress.",
+      });
+      global.fetch = answer(500, {
+        outcome: "failed",
+        failure: "post hello: boom",
+        startedAt: "2026-10-31T09:00:00.000Z",
+      }) as unknown as typeof fetch;
+      expect(await seedApi.start(false)).toEqual({
+        outcome: "failed",
+        failure: "post hello: boom",
+        startedAt: "2026-10-31T09:00:00.000Z",
+      });
+      global.fetch = answer(403, {
+        errors: [{ message: "You don't have permission." }],
+      }) as unknown as typeof fetch;
+      expect(await seedApi.start(false)).toEqual({
+        outcome: "failed",
+        failure: "You don't have permission.",
+      });
+    });
+
+    it("answers a request that never reached the server as failed, asked once", async () => {
+      const fetchMock = vi.fn(async () => {
+        throw new Error("network");
+      });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      expect(await seedApi.start(false)).toEqual({
+        outcome: "failed",
+        failure: "The server could not be reached.",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 });

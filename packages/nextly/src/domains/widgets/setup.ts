@@ -18,6 +18,7 @@
 
 import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import { authorizationGroups } from "../../auth/entity-read-access";
+import type { SampleContentState } from "../../database/seeders/sample-content";
 import { getService } from "../../di";
 import { isBuilderEnabled } from "../../shared/builder-access";
 
@@ -52,26 +53,43 @@ type StepAnswer = SetupStep | undefined | NotKnown;
 
 /**
  * "Start with sample content": done once anyone loaded or declined it, which
- * is recorded for the whole site. Open only while nobody has answered and the
- * site holds no entry (`dashboard-layout` R-18), so an established site is not
- * offered it. When the site's answer cannot be read, setup is not known as a
- * whole, as for every other check: dropping the step instead could let the
- * remaining steps finish setup and retire the card for good over an outage.
+ * is recorded for the whole site. Open while nobody has answered and the site
+ * holds no entry (`dashboard-layout` R-18), so an established site is not
+ * offered it.
+ *
+ * A load the site started and nobody has seen through keeps the step open
+ * with that load, whatever the site holds since: a load creates entries as it
+ * runs, and its outcome stays until somebody acts on it (R-19), so neither an
+ * unfinished nor a failed run may drop the step and let setup finish over it.
+ *
+ * When the site's answer cannot be read, the step is open with nothing to
+ * offer where the site holds no entry, so "Add your first entry" is shown and
+ * no load; elsewhere setup is not known as a whole, as for every other check:
+ * dropping the step instead could let the remaining steps finish setup and
+ * retire the card for good over an outage.
  *
  * Whether the project provides the route, and whether it would let this
  * reader load, only the route can say: the admin asks it, and drops the step
  * when it refuses.
  */
 async function sampleStep(probe: ConditionProbe): Promise<StepAnswer> {
-  let answered: boolean;
+  let state: SampleContentState | undefined;
   try {
-    answered = await probe.sampleAnswered();
+    state = await probe.sampleContent();
   } catch {
-    return NOT_KNOWN;
+    state = undefined;
   }
-  if (answered) return { kind: "sample", status: "done" };
+  if (state?.answer !== undefined) return { kind: "sample", status: "done" };
+  if (state?.run !== undefined) {
+    return { kind: "sample", status: "open", run: state.run };
+  }
   const content = await probe.hasContent();
   if (content === "unknown") return NOT_KNOWN;
+  if (state === undefined) {
+    return content
+      ? NOT_KNOWN
+      : { kind: "sample", status: "open", unreadable: true };
+  }
   return content ? undefined : { kind: "sample", status: "open" };
 }
 

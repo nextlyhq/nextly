@@ -3,7 +3,7 @@
  * remembers for them, and the changes they make to it.
  *
  *   GET /api/dashboard/setup   `{ collapsed, dismissed, skipped, resumable }`
- *   PUT /api/dashboard/setup   `{ collapsed?, dismissed?, skip?, retire? }`, one or more
+ *   PUT /api/dashboard/setup   `{ collapsed?, dismissed?, skip?, retire?, sample? }`, one or more
  *
  * The reader is ALWAYS the signed-in person, never a parameter. An API key is
  * refused, as a person's own dashboard is not a key's; so is anyone but a
@@ -18,6 +18,15 @@
  * done; a reader can retire only their own card. When it is not recorded the
  * request is refused as a conflict; any other change sent with it still holds.
  *
+ * `sample` answers sample content for the whole site, not for the reader:
+ * `"decline"` declines it, and `{ record: <run> }` records a load that loaded
+ * but could not be recorded, without loading again
+ * (`database/seeders/sample-content`). Both live here rather than in the
+ * project's sample-content route, so neither can reach a route that loads. A
+ * decline or record the site's answer has moved past is refused as a conflict
+ * saying why; a record that fails again is an error, and the run stays as it
+ * was. The answer carries the site's answer after the change.
+ *
  * Internal to the admin, not published API.
  *
  * @module api/dashboard-setup
@@ -25,6 +34,15 @@
  */
 import { z } from "zod";
 
+import {
+  declineSampleContent,
+  readSampleContent,
+  recordSampleContent,
+  SAMPLE_REFUSAL_MESSAGE,
+  type SampleContentState,
+  type SampleRefusal,
+} from "../database/seeders/sample-content";
+import { getService } from "../di";
 import {
   changeSetupState,
   isSetupReader,
@@ -60,6 +78,13 @@ const setupChange = z
       .strict()
       .optional(),
     retire: z.object({ sampleRefused: z.boolean() }).strict().optional(),
+    sample: z
+      .union([
+        z.literal("decline"),
+        // A run is a random token: nothing longer is one.
+        z.object({ record: z.string().min(1).max(100) }).strict(),
+      ])
+      .optional(),
   })
   .strict()
   .refine(
@@ -67,9 +92,49 @@ const setupChange = z
       change.collapsed !== undefined ||
       change.dismissed !== undefined ||
       change.skip !== undefined ||
-      change.retire !== undefined,
-    { message: "Name at least one of collapsed, dismissed, skip or retire." }
+      change.retire !== undefined ||
+      change.sample !== undefined,
+    {
+      message:
+        "Name at least one of collapsed, dismissed, skip, retire or sample.",
+    }
   );
+
+/** A sample-content answer the site has moved past: refused, saying why. */
+function sampleRefused(refusal: SampleRefusal): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message: SAMPLE_REFUSAL_MESSAGE[refusal.reason],
+    logContext: { sample: refusal.reason },
+  });
+}
+
+/**
+ * Applies a sample-content answer for the whole site, as `by`, and answers
+ * the site's answer after it. A refusal or a record that failed again throws.
+ */
+async function answerSample(
+  sample: "decline" | { record: string },
+  by: string
+): Promise<SampleContentState> {
+  const store = getService("metaService");
+  if (sample === "decline") {
+    const declined = await declineSampleContent(store, { by });
+    if (declined.outcome === "refused") throw sampleRefused(declined);
+    return readSampleContent(store);
+  }
+  const recorded = await recordSampleContent(store, { run: sample.record });
+  if (recorded.outcome === "refused") throw sampleRefused(recorded);
+  if (recorded.outcome === "unrecorded") {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "sample-content-unrecorded",
+        failure: recorded.failure,
+      },
+    });
+  }
+  return readSampleContent(store);
+}
 
 /**
  * The signed-in super-admin behind the request, or a refusal: an API key as
@@ -118,10 +183,15 @@ export const putDashboardSetup = withErrorHandler(async (req: Request) => {
   if (!parsed.success) {
     throw NextlyError.invalidInput({
       message:
-        "The body must name at least one of `collapsed` or `dismissed` (true or false), `skip: { kind, skipped }` with a kind that may be skipped, or `retire: { sampleRefused }`.",
+        'The body must name at least one of `collapsed` or `dismissed` (true or false), `skip: { kind, skipped }` with a kind that may be skipped, `retire: { sampleRefused }`, or `sample` as `"decline"` or `{ record }`.',
     });
   }
-  const { collapsed, dismissed, skip, retire } = parsed.data;
+  const { collapsed, dismissed, skip, retire, sample } = parsed.data;
+  // First, so a retirement sent with it is judged with the site's answer.
+  const answered =
+    sample === undefined
+      ? undefined
+      : await answerSample(sample, caller.user.id);
   let state = await changeSetupState(caller.user.id, {
     ...(collapsed === undefined ? {} : { collapsed }),
     ...(dismissed === undefined ? {} : { dismissed }),
@@ -144,5 +214,8 @@ export const putDashboardSetup = withErrorHandler(async (req: Request) => {
       });
     }
   }
-  return respondMutation("Saved.", stateView(state));
+  return respondMutation("Saved.", {
+    ...stateView(state),
+    ...(answered === undefined ? {} : { sample: answered }),
+  });
 });

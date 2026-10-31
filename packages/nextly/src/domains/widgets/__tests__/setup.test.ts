@@ -58,6 +58,7 @@ import {
   writtenSinceCreated,
 } from "../setup";
 import {
+  type SampleRun,
   SETUP_SKIPPABLE_KINDS,
   SETUP_STEP_KINDS,
   type SetupAnswer,
@@ -80,6 +81,8 @@ interface World {
    * be read, which leaves setup not known. Out of the way unless a case names it.
    */
   sample?: boolean | "fails";
+  /** A load the site started and nobody has seen through, while nobody answered. */
+  run?: SampleRun;
 }
 
 function probeOf(world: World): ConditionProbe {
@@ -102,6 +105,12 @@ function probeOf(world: World): ConditionProbe {
       const sample = world.sample ?? true;
       if (sample === "fails") throw new Error("meta down");
       return sample;
+    },
+    sampleContent: async () => {
+      const sample = world.sample ?? true;
+      if (sample === "fails") throw new Error("meta down");
+      if (sample) return { answer: "loaded" };
+      return world.run === undefined ? {} : { run: world.run };
     },
     setup: () => {
       throw new Error("not under test");
@@ -182,6 +191,49 @@ describe("starting with sample content", () => {
       known: false,
     });
   });
+
+  it("offers no load where the site's answer cannot be read and the site holds no entry, and keeps the step open", async () => {
+    // Open, so setup cannot finish over the outage; with nothing to offer, so the card shows
+    // "Add your first entry" and no load.
+    const { answer, byKind } = await stepsFor({
+      sample: "fails",
+      content: false,
+    });
+    expect(answer.known).toBe(true);
+    expect(byKind.sample).toEqual({
+      kind: "sample",
+      status: "open",
+      unreadable: true,
+    });
+    // The must-differ half: read, the same site is offered the load.
+    expect(
+      (await stepsFor({ sample: false, content: false })).byKind.sample
+    ).toEqual({ kind: "sample", status: "open" });
+  });
+
+  it.each<[string, SampleRun]>([
+    ["unfinished", { state: "unfinished", startedAt: "2026-01-01T00:00:00Z" }],
+    [
+      "failed",
+      {
+        state: "failed",
+        startedAt: "2026-01-01T00:00:00Z",
+        failure: "post: boom",
+      },
+    ],
+    [
+      "unrecorded",
+      { state: "unrecorded", startedAt: "2026-01-01T00:00:00Z", run: "r1" },
+    ],
+  ])(
+    "keeps a %s load open with its run, though the site now holds entries",
+    async (_name, run) => {
+      // A load creates entries as it runs: read as an offer, the step would be dropped mid-run
+      // and setup could finish over it.
+      const { byKind } = await stepsFor({ sample: false, content: true, run });
+      expect(byKind.sample).toEqual({ kind: "sample", status: "open", run });
+    }
+  );
 });
 
 describe("creating a collection", () => {

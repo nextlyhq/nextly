@@ -55,9 +55,40 @@ export interface SetupSingle {
   filledIn: boolean;
 }
 
+/**
+ * A sample-content load the site has started and nobody has seen through: kept
+ * for the whole site (`database/seeders/sample-content`), so every tab, session
+ * and person reads the same one.
+ *
+ * - `unfinished`: started, and has reported neither success nor failure. It is
+ *   never taken as ended, however long ago it started, since it may still be
+ *   running, and no other load starts while it stands.
+ * - `failed`: the load failed, with what failed. Another load starts only once
+ *   a person confirms it, as some of the content may already be there.
+ * - `unrecorded`: the content loaded, but recording that failed. `run` names
+ *   the load, which recording on its own takes, without loading again.
+ */
+export type SampleRun =
+  | { state: "unfinished"; startedAt: string }
+  | { state: "failed"; startedAt: string; failure: string }
+  | { state: "unrecorded"; startedAt: string; run: string };
+
+/**
+ * "Start with sample content", as the host answers it. Open with a `run` while
+ * a load the site started stands unanswered; open with `unreadable` where the
+ * site's answer could not be read but the site holds no entry, so the card
+ * offers no load and shows "Add your first entry" beside it.
+ */
+export interface SampleSetupStep {
+  kind: "sample";
+  status: SetupStepStatus;
+  run?: SampleRun;
+  unreadable?: true;
+}
+
 /** One step, as the host answers it: copy and links are the admin's. */
 export type SetupStep =
-  | { kind: "sample"; status: SetupStepStatus }
+  | SampleSetupStep
   | { kind: "collection"; status: SetupStepStatus }
   | {
       kind: "entry";

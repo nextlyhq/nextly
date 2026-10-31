@@ -1,11 +1,15 @@
 /**
- * seedApi — thin client for the setup card's sample-content step.
+ * seedApi — thin client for the setup card's sample-content step, over the
+ * project's own route:
+ * - HEAD /admin/api/seed — the probe: may THIS person load sample content?
+ * - POST /admin/api/seed — start the site's one load, `{ confirm: true }` to
+ *   load again after a failed one; refused with 409 when another load or an
+ *   answer got there first.
  *
- * Wraps three project-local routes:
- * - HEAD /admin/api/seed                — probe (is seeding available?)
- * - POST /admin/api/seed                — run the seed, returns SeedResult
- * - GET  /admin/api/meta/seed-status    — has it been seeded/skipped?
- * - PUT  /admin/api/meta/seed-status    — record skip
+ * Whether the site has answered, and a load nobody has seen through, come
+ * with the setup card's own data; declining and recording a load on its own
+ * are core's (`PUT /api/dashboard/setup`), so neither reaches a route that
+ * loads.
  *
  * Bypasses the central `fetcher` utility because these routes return
  * raw bodies (not the `{success, data}` envelope that fetcher expects).
@@ -34,13 +38,25 @@ export type SeedProbeResult =
   | { available: false }
   | { available: true; template: { slug: string; label: string } };
 
-export interface SeedStatus {
-  completedAt: string | null;
-  skippedAt: string | null;
-}
+/**
+ * What starting a load came to, as this person is told it. Never a throw: a
+ * load that could not be asked for is `failed` with why, so the card says so
+ * and starts nothing on its own.
+ */
+export type SampleStartAnswer =
+  /** Loaded and recorded; `result` is absent from a project route older than the runner. */
+  | { outcome: "loaded"; result?: SeedResult }
+  /** Loaded, but recording that failed: `run` records it on its own. */
+  | { outcome: "unrecorded"; run: string; startedAt: string }
+  | { outcome: "failed"; failure: string; startedAt?: string }
+  /** Refused with nothing loaded: another load or an answer got there first. */
+  | {
+      outcome: "refused";
+      reason: "answered" | "in-progress" | "unrecorded" | "confirm" | "other";
+      message: string;
+    };
 
 const SEED_PATH = "/admin/api/seed";
-const META_STATUS_PATH = "/admin/api/meta/seed-status";
 
 async function probe(): Promise<SeedProbeResult> {
   let res: Response;
@@ -64,63 +80,95 @@ async function probe(): Promise<SeedProbeResult> {
   return { available: true, template: { slug, label } };
 }
 
-async function runSeed(): Promise<SeedResult> {
-  const res = await fetch(SEED_PATH, {
-    method: "POST",
-    credentials: "include",
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as {
-      errors?: Array<{ message?: string }>;
-    } | null;
-    const message = body?.errors?.[0]?.message ?? `Seed failed (${res.status})`;
-    throw new Error(message);
-  }
-  return (await res.json()) as SeedResult;
+/** The first error message a failed answer carries, or `fallback`. */
+function messageIn(body: unknown, fallback: string): string {
+  const errors = (body as { errors?: Array<{ message?: unknown }> } | null)
+    ?.errors;
+  const message = errors?.[0]?.message;
+  return typeof message === "string" && message !== "" ? message : fallback;
 }
 
-async function getStatus(): Promise<SeedStatus> {
-  const res = await fetch(META_STATUS_PATH, {
-    method: "GET",
-    credentials: "include",
-  });
-  if (!res.ok) return { completedAt: null, skippedAt: null };
-  const body = (await res
-    .json()
-    .catch(() => null)) as Partial<SeedStatus> | null;
-  return {
-    completedAt: body?.completedAt ?? null,
-    skippedAt: body?.skippedAt ?? null,
-  };
+const REFUSALS = ["answered", "in-progress", "unrecorded", "confirm"] as const;
+
+/** A refusal's reason, as the route names it, or `other` for one it does not. */
+function refusalReason(
+  body: unknown
+): Extract<SampleStartAnswer, { outcome: "refused" }>["reason"] {
+  const reason = (body as { reason?: unknown } | null)?.reason;
+  return REFUSALS.find(known => known === reason) ?? "other";
 }
 
 /**
- * Records the decline. Resolves only once the route confirms it: a refusal or
- * a failure throws, so nothing is drawn declined that the site still offers.
+ * Starts the site's one load. Asked once: nothing here retries, as a second
+ * request could start a second load.
  */
-async function setSkipped(): Promise<void> {
-  const res = await fetch(META_STATUS_PATH, {
-    method: "PUT",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ skippedAt: new Date().toISOString() }),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as {
-      errors?: Array<{ message?: string }>;
-    } | null;
-    throw new Error(
-      body?.errors?.[0]?.message ?? `Decline failed (${res.status})`
-    );
+async function start(confirm: boolean): Promise<SampleStartAnswer> {
+  let res: Response;
+  try {
+    res = await fetch(SEED_PATH, {
+      method: "POST",
+      credentials: "include",
+      ...(confirm
+        ? {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm: true }),
+          }
+        : {}),
+    });
+  } catch {
+    return {
+      outcome: "failed",
+      failure: "The server could not be reached.",
+    };
   }
+  const body: unknown = await res.json().catch(() => null);
+  const answer = body as {
+    outcome?: unknown;
+    run?: unknown;
+    startedAt?: unknown;
+    failure?: unknown;
+    result?: SeedResult;
+  } | null;
+  if (res.status === 409) {
+    return {
+      outcome: "refused",
+      reason: refusalReason(body),
+      message: messageIn(body, "Sample content could not be loaded now."),
+    };
+  }
+  if (!res.ok) {
+    return {
+      outcome: "failed",
+      failure:
+        typeof answer?.failure === "string"
+          ? answer.failure
+          : messageIn(body, `Loading failed (${res.status}).`),
+      ...(typeof answer?.startedAt === "string"
+        ? { startedAt: answer.startedAt }
+        : {}),
+    };
+  }
+  if (
+    answer?.outcome === "unrecorded" &&
+    typeof answer.run === "string" &&
+    typeof answer.startedAt === "string"
+  ) {
+    return {
+      outcome: "unrecorded",
+      run: answer.run,
+      startedAt: answer.startedAt,
+    };
+  }
+  // A route older than the runner answers its result alone, having recorded it itself.
+  const result =
+    answer?.outcome === "loaded" ? answer.result : (body as SeedResult | null);
+  return result ? { outcome: "loaded", result } : { outcome: "loaded" };
 }
 
 /** The type of {@link seedApi}. */
 type SeedApiType = {
   probe: typeof probe;
-  runSeed: typeof runSeed;
-  getStatus: typeof getStatus;
-  setSkipped: typeof setSkipped;
+  start: typeof start;
 };
 
-export const seedApi: SeedApiType = { probe, runSeed, getStatus, setSkipped };
+export const seedApi: SeedApiType = { probe, start };
