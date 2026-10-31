@@ -538,24 +538,18 @@ export class MediaService {
     this.ensureStorageConfigured();
     const validated = await this.checkedFile(input, context, "replace");
     // Loaded when a file is replaced, not with the service.
-    const [
-      { replaceMediaFile },
-      { container },
-      { getMediaStorage },
-      { bootedAddressPaths },
-    ] = await Promise.all([
-      import("../replace-media-file"),
-      import("../../../di/container"),
-      import("../../../storage/storage"),
-      import("../usage/media-uses-source"),
-    ]);
+    const [{ replaceMediaFile }, { container }, { getMediaStorage }] =
+      await Promise.all([
+        import("../replace-media-file"),
+        import("../../../di/container"),
+        import("../../../storage/storage"),
+      ]);
     const replaced = await replaceMediaFile(
       {
         adapter: container.get<DrizzleAdapter>("adapter"),
         storage: getMediaStorage(),
         images: this.imageProcessor,
         logger: this.logger,
-        addressPaths: bootedAddressPaths(),
         addressHolders: address =>
           this.legacyMediaService.addressHolderCount(address),
       },

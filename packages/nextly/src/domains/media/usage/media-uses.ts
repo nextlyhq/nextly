@@ -8,13 +8,13 @@
  * query on the item's index. Which of them the reader may read, and what each
  * is called, is asked of the ordinary read path as the reader
  * (`readableHeadings`) for collection entries and Singles, and of the
- * `read-email-templates` grant for email templates. Nothing here decides
- * access itself.
+ * `read-email-templates` grant for email templates, in each language whose
+ * value uses the item, so a translation the reader may not read gives away
+ * neither its fields nor its language. Nothing here decides access itself.
  *
  * @module domains/media/usage/media-uses
  */
 
-import { addressUseRows, type AddressPaths } from "./address-uses";
 import type { IdentifiedUsageRow, UsageSubjectKind } from "./media-usage-store";
 
 /** One field of a document that uses the item. */
@@ -22,18 +22,19 @@ export interface MediaUseField {
   /** The field's path, as the record holds it: `hero.image`. */
   path: string;
   /**
-   * The languages whose values use the item, sorted. Empty when a value every
-   * language shares uses it, so no language needs naming.
+   * The languages whose values use the item that the reader may read, sorted.
+   * Empty when a value every language shares uses it, so no language needs
+   * naming.
    */
   locales: string[];
   /**
-   * Whether the field names the item by its address (rich text, an email
-   * template's image) rather than its id.
+   * Whether the field names the item by its address (rich text, a JSON
+   * value's `src`, an email template's image) rather than its id.
    */
   byAddress: boolean;
   /**
    * Whether the field still shows the file the item had before its file was
-   * replaced: an address use whose content has not changed since.
+   * replaced: it names an address whose file a Replace kept.
    */
   showsPreviousFile: boolean;
 }
@@ -86,30 +87,36 @@ export interface MediaUseDocument {
   documentId: string;
 }
 
+/**
+ * One document read in one language: `locale`, or its default language when
+ * `null`. A localized document has a lifecycle and access per language, so
+ * whether the reader may read it is asked per language.
+ */
+export interface MediaUseRead extends MediaUseDocument {
+  locale: string | null;
+}
+
 /** What answering needs: the record, and the reader's view of documents. */
 export interface MediaUsesSource {
   /** Every row of the record for the item, with its id. */
   rows(mediaId: string): Promise<IdentifiedUsageRow[]>;
-  /** Which fields of each kind of document name an item by its address. */
-  addressPaths: AddressPaths;
   /**
-   * The rows that still named the item's old address when its file was last
-   * replaced, and have not been written since: none for an item never
-   * replaced.
+   * The addresses whose files a Replace kept for the item: a use naming one
+   * still shows the previous file. None for an item never replaced.
    */
-  previousRows(mediaId: string): Promise<ReadonlySet<string>>;
+  keptAddresses(mediaId: string): Promise<ReadonlySet<string>>;
   /**
-   * The heading of each document the reader may read, by
-   * {@link mediaUseDocumentKey}. One absent is one they may not read.
+   * The heading of each read the reader may make, by {@link mediaUseReadKey}.
+   * One absent is a document they may not read in that language.
    */
   headings(
-    documents: readonly MediaUseDocument[]
+    reads: readonly MediaUseRead[]
   ): Promise<ReadonlyMap<string, MediaUseHeading>>;
 }
 
-/** The key a document is filed under, in the record and in its heading. */
-export function mediaUseDocumentKey(document: MediaUseDocument): string {
-  return JSON.stringify([document.kind, document.slug, document.documentId]);
+/** The key a read of a document is filed under, in its heading. */
+export function mediaUseReadKey(read: MediaUseRead): string {
+  return JSON.stringify([read.kind, read.slug, read.documentId, read.locale]);
 }
 
 /** One field as it is gathered: its languages, and how it names the item. */
@@ -130,8 +137,7 @@ interface GatheredDocument extends MediaUseDocument {
  */
 function gathered(
   rows: readonly IdentifiedUsageRow[],
-  address: ReadonlySet<IdentifiedUsageRow>,
-  previous: ReadonlySet<string>
+  kept: ReadonlySet<string>
 ): GatheredDocument[] {
   const documents = new Map<string, GatheredDocument>();
   for (const row of rows) {
@@ -140,27 +146,102 @@ function gathered(
       slug: row.subjectSlug,
       documentId: row.documentId,
     };
-    const key = mediaUseDocumentKey(document);
+    const key = JSON.stringify([
+      document.kind,
+      document.slug,
+      document.documentId,
+    ]);
     const found = documents.get(key) ?? { ...document, fields: new Map() };
     const field = found.fields.get(row.fieldPath) ?? {
       locales: new Set<string>(),
-      byAddress: address.has(row),
+      byAddress: false,
       showsPreviousFile: false,
     };
     field.locales.add(row.locale);
-    if (previous.has(row.id)) field.showsPreviousFile = true;
+    if (row.address !== null) field.byAddress = true;
+    if (row.address !== null && kept.has(row.address)) {
+      field.showsPreviousFile = true;
+    }
     found.fields.set(row.fieldPath, field);
     documents.set(key, found);
   }
   return [...documents.values()];
 }
 
+/** The languages a document's rows name, sorted, and whether a shared value does. */
+function languagesOf(document: GatheredDocument): {
+  named: string[];
+  shared: boolean;
+} {
+  const all = new Set<string>();
+  for (const field of document.fields.values()) {
+    for (const locale of field.locales) all.add(locale);
+  }
+  return {
+    named: [...all].filter(locale => locale !== "").sort(),
+    shared: all.has(""),
+  };
+}
+
 /**
- * A field's languages as the reader is told them: none when a shared value
- * ("") uses the item, since every language then does.
+ * The reads that decide what the reader is told of a document: one in each
+ * language whose value uses the item, and one in the default language when a
+ * shared value does. An email template has no languages.
  */
-function namedLocales(locales: ReadonlySet<string>): string[] {
-  return locales.has("") ? [] : [...locales].sort();
+function readsOf(document: GatheredDocument): MediaUseRead[] {
+  const { kind, slug, documentId } = document;
+  if (kind === "email-template") {
+    return [{ kind, slug, documentId, locale: null }];
+  }
+  const { named, shared } = languagesOf(document);
+  return [
+    ...(shared ? [{ kind, slug, documentId, locale: null }] : []),
+    ...named.map(locale => ({ kind, slug, documentId, locale })),
+  ];
+}
+
+/**
+ * What the reader is told of one document, or `null` when nothing: each
+ * field's languages cut to those the reader may read the document in; a
+ * shared value, which every language reads, told when they may read it in
+ * any. The title is the default language's, else the first readable one's.
+ */
+function toldOf(
+  document: GatheredDocument,
+  headings: ReadonlyMap<string, MediaUseHeading>
+): MediaUse | null {
+  const reads = readsOf(document);
+  const headingIn = (locale: string | null) =>
+    headings.get(mediaUseReadKey({ ...document, locale }));
+  const readable = reads.filter(read => headingIn(read.locale) !== undefined);
+  if (readable.length === 0) return null;
+  const fields: MediaUseField[] = [];
+  for (const [path, field] of document.fields) {
+    const locales = field.locales.has("")
+      ? []
+      : [...field.locales]
+          .filter(locale => headingIn(locale) !== undefined)
+          .sort();
+    // A field used only in languages the reader may not read is not told.
+    if (!field.locales.has("") && locales.length === 0) continue;
+    fields.push({
+      path,
+      locales,
+      byAddress: field.byAddress,
+      showsPreviousFile: field.showsPreviousFile,
+    });
+  }
+  if (fields.length === 0) return null;
+  const heading = headingIn(null) ?? headingIn(readable[0].locale);
+  if (heading === undefined) return null;
+  return {
+    kind: document.kind,
+    slug: document.slug,
+    documentId: document.documentId,
+    title: heading.title,
+    owner: heading.owner,
+    fields,
+  };
 }
 
 /** Which uses to tell: every one, or only those naming the item by address. */
@@ -175,47 +256,32 @@ export async function mediaUsesOf(
   query: MediaUsesQuery = {}
 ): Promise<MediaUses> {
   const rows = await source.rows(mediaId);
-  const address = new Set(await addressUseRows(rows, source.addressPaths));
   const told = query.byAddressOnly
-    ? rows.filter(row => address.has(row))
+    ? rows.filter(row => row.address !== null)
     : rows;
-  const previous = told.some(row => address.has(row))
-    ? await source.previousRows(mediaId)
+  const kept = told.some(row => row.address !== null)
+    ? await source.keptAddresses(mediaId)
     : new Set<string>();
-  const documents = gathered(told, address, previous);
+  const documents = gathered(told, kept);
   if (documents.length === 0) return { items: [], hidden: [] };
-  const headings = await source.headings(
-    documents.map(({ kind, slug, documentId }) => ({ kind, slug, documentId }))
-  );
+  const headings = await source.headings(documents.flatMap(readsOf));
   const items: MediaUse[] = [];
   const hidden = new Map<string, HiddenMediaUses>();
   for (const document of documents) {
-    const heading = headings.get(mediaUseDocumentKey(document));
-    if (!heading) {
-      // Counted under its scope and named nowhere.
-      const scope = JSON.stringify([document.kind, document.slug]);
-      const counted = hidden.get(scope) ?? {
-        scopeKind: document.kind,
-        scopeSlug: document.slug,
-        count: 0,
-      };
-      counted.count += 1;
-      hidden.set(scope, counted);
+    const use = toldOf(document, headings);
+    if (use) {
+      items.push(use);
       continue;
     }
-    items.push({
-      kind: document.kind,
-      slug: document.slug,
-      documentId: document.documentId,
-      title: heading.title,
-      owner: heading.owner,
-      fields: [...document.fields].map(([path, field]) => ({
-        path,
-        locales: namedLocales(field.locales),
-        byAddress: field.byAddress,
-        showsPreviousFile: field.showsPreviousFile,
-      })),
-    });
+    // Counted under its scope and named nowhere.
+    const scope = JSON.stringify([document.kind, document.slug]);
+    const counted = hidden.get(scope) ?? {
+      scopeKind: document.kind,
+      scopeSlug: document.slug,
+      count: 0,
+    };
+    counted.count += 1;
+    hidden.set(scope, counted);
   }
   return { items, hidden: [...hidden.values()] };
 }

@@ -20,7 +20,13 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
-import { defineCollection, richText, text, upload } from "../../../config";
+import {
+  defineCollection,
+  json,
+  richText,
+  text,
+  upload,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -198,6 +204,7 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "title" }),
               upload({ name: "cover", relationTo: "media" }),
               richText({ name: "body" }),
+              json({ name: "extra" }),
             ],
           }),
         ],
@@ -577,6 +584,103 @@ describe.each(getConfiguredTestDialects())(
         (await usageOf(editor, image.id, "?byAddress=true")).meta
       ).toMatchObject({ heldByAddress: 0, usageRecorded: true });
       expect(await oldFileServedAfterReplace(image.id)).toBe(false);
+    });
+
+    it("keeps the old file while a JSON value names the item by its address", async () => {
+      const image = await looseImage();
+      const oldPath = String((await row(image.id))!.filename);
+      await t
+        .getService("collectionsHandler")
+        .createEntry(
+          { collectionName: "replaceposts", overrideAccess: true },
+          { title: "Settings", extra: { hero: { src: image.url } } }
+        );
+      // The use is recorded as one by address, from the reference itself.
+      const asked = await usageOf(editor, image.id, "?byAddress=true");
+      expect((asked.items as Doc[]).map(item => item.slug)).toEqual([
+        "replaceposts",
+      ]);
+
+      expect(await oldFileServedAfterReplace(image.id)).toBe(true);
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+    });
+
+    it("still counts a use by the old address once its document is saved again unchanged", async () => {
+      const image = await looseImage();
+      const reader = await keyWith(t, [
+        "read-media",
+        "update-media",
+        "read-replaceposts",
+      ]);
+      const handler = t.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "replaceposts", overrideAccess: true },
+        { title: "Story", body: imageText(image.url) }
+      );
+      const storyId = String((created.data as { id?: unknown }).id);
+      expect(await oldFileServedAfterReplace(image.id)).toBe(true);
+
+      // Saved again, still naming the old address.
+      await handler.updateEntry(
+        {
+          collectionName: "replaceposts",
+          entryId: storyId,
+          overrideAccess: true,
+        },
+        { title: "Story, edited" }
+      );
+
+      const used = (await usageOf(reader, image.id)).items as Array<{
+        documentId: string;
+        fields: Array<{ path: string; showsPreviousFile: boolean }>;
+      }>;
+      expect(used).toEqual([
+        expect.objectContaining({
+          documentId: storyId,
+          fields: [
+            expect.objectContaining({ path: "body", showsPreviousFile: true }),
+          ],
+        }),
+      ]);
+      const unused = await createMediaHandlers({ requireAuth: true }).GET(
+        new Request("http://localhost/admin/api/media?limit=100&view=unused", {
+          headers: { authorization: `Bearer ${reader}` },
+        }),
+        { params: Promise.resolve({ path: [] }) }
+      );
+      const unusedIds = (((await unused.json()) as Doc).items as Doc[]).map(
+        item => item.id
+      );
+      expect(unusedIds).not.toContain(image.id);
+      // POSITIVE CONTROL: the view lists an item nothing uses.
+      const loose = await looseImage();
+      const again = await createMediaHandlers({ requireAuth: true }).GET(
+        new Request("http://localhost/admin/api/media?limit=100&view=unused", {
+          headers: { authorization: `Bearer ${reader}` },
+        }),
+        { params: Promise.resolve({ path: [] }) }
+      );
+      expect(
+        (((await again.json()) as Doc).items as Doc[]).map(item => item.id)
+      ).toContain(loose.id);
+    });
+
+    it("says on every usage answer whether the usage record is built", async () => {
+      const image = await looseImage();
+      expect((await usageOf(editor, image.id)).meta).toMatchObject({
+        usageRecorded: true,
+      });
+      const meta = t.getService("metaService");
+      await meta.delete(MEDIA_USAGE_RECORDED_KEY);
+      try {
+        expect((await usageOf(editor, image.id)).meta).toMatchObject({
+          usageRecorded: false,
+        });
+      } finally {
+        await meta.set(MEDIA_USAGE_RECORDED_KEY, {
+          rebuiltAt: new Date().toISOString(),
+        });
+      }
     });
 
     it("keeps the old file, and records it kept, while the usage record is still being built", async () => {

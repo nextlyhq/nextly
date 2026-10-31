@@ -308,6 +308,128 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
+    // First, so no other delete's timer runs while this one is waited for.
+    it("finishes every item of a delete larger than one sweep from that delete's own timer, rows and files", async () => {
+      const files: Array<{ id: string; filename: string }> = [];
+      for (let made = 0; made < 60; made += 1) {
+        const id = await unusedFile();
+        files.push({ id, filename: String((await row(id))?.filename) });
+      }
+      const ids = files.map(file => file.id);
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids },
+      });
+      expect(deleted.status).toBe(200);
+
+      // No library read runs meanwhile: only the delete's timer finishes it.
+      const left = async () =>
+        (
+          await t.adapter.select<Doc>("media", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "IN", value: ids }] },
+          })
+        ).length;
+      await expect
+        .poll(left, {
+          timeout: PENDING_DELETE_WINDOW_MS + 15_000,
+          interval: 500,
+        })
+        .toBe(0);
+      const stored = await Promise.all(
+        files.map(file => getMediaStorage().exists(file.filename, "media"))
+      );
+      expect(stored.filter(Boolean)).toEqual([]);
+    }, 90_000);
+
+    it("answers a delete of an item already marked with the standing mark's deadline", async () => {
+      const file = await unusedFile();
+      // Whole seconds, which every dialect stores a mark's time in.
+      const first = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const at = (time: Date) =>
+        new PendingMediaDeletes({
+          db: t.adapter,
+          deleteItem: async () => undefined,
+          now: () => time,
+        });
+
+      const marked = await at(first).mark([file]);
+      const again = await at(new Date(first.getTime() + 5_000)).mark([file]);
+
+      const deadline = new Date(
+        first.getTime() + PENDING_DELETE_WINDOW_MS
+      ).toISOString();
+      expect(marked.deleteAfter).toBe(deadline);
+      expect(again.deleteAfter).toBe(deadline);
+      await at(first).undo([file]);
+    });
+
+    it("undoes none of a batch when taking any one of its marks fails", async () => {
+      const files = [
+        await unusedFile(),
+        await unusedFile(),
+        await unusedFile(),
+      ];
+      await api(editor, "POST", ["deletions"], { body: { ids: files } });
+      const failOn = pendingDeleteKey(files[2]!);
+      type Where = Parameters<TestNextly["adapter"]["delete"]>[1];
+      const names = (where: Where) =>
+        JSON.stringify(where).includes(JSON.stringify(failOn));
+      // The adapter, failing the third item's Undo whether it is taken on the
+      // pool or inside a transaction.
+      const failing = {
+        select: t.adapter.select.bind(t.adapter),
+        insert: t.adapter.insert.bind(t.adapter),
+        delete: (table: string, where: Where) =>
+          names(where)
+            ? Promise.reject(new Error("the third Undo is refused"))
+            : t.adapter.delete(table, where),
+        transaction: (work: (tx: object) => Promise<unknown>) =>
+          t.adapter.transaction(tx =>
+            work(
+              new Proxy(tx, {
+                get(target, property, receiver) {
+                  if (property === "delete") {
+                    return (table: string, where: Where) =>
+                      names(where)
+                        ? Promise.reject(new Error("the third Undo is refused"))
+                        : target.delete(table, where);
+                  }
+                  const value: unknown = Reflect.get(
+                    target,
+                    property,
+                    receiver
+                  );
+                  return typeof value === "function"
+                    ? value.bind(target)
+                    : value;
+                },
+              })
+            )
+          ),
+      } as unknown as PendingDeleteDb;
+      const pending = new PendingMediaDeletes({
+        db: failing,
+        deleteItem: async () => undefined,
+      });
+
+      await expect(pending.undo(files)).rejects.toThrow();
+
+      // Every mark still stands, so none of the batch came back.
+      const marks = await t.adapter.select<Doc>("nextly_meta", {
+        where: {
+          and: [
+            { column: "key", op: "IN", value: files.map(pendingDeleteKey) },
+          ],
+        },
+      });
+      expect(marks).toHaveLength(3);
+      // POSITIVE CONTROL: the same Undo, nothing failing, brings all back.
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: files },
+      });
+      expect(undone.json).toMatchObject({ restored: files, gone: [] });
+    });
+
     it("takes a deleted item out of every library read and count at once, and the counts agree with the lists", async () => {
       const image = await usedImage();
       const file = await unusedFile();

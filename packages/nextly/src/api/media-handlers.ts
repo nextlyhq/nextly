@@ -863,13 +863,19 @@ async function pendingDeletes(): Promise<PendingMediaDeletes> {
 }
 
 /**
- * Finish the deletes whose window has ended. A read never fails for it: what
- * is left is tried again by the next.
+ * Finish the deletes whose window has ended: every one of `ids` when a
+ * delete's timer names the items it marked, however many, else one bounded
+ * sweep of any that are due. Never fails its caller: what is left is tried
+ * again by the next library read.
  */
-async function sweepPendingDeletes(): Promise<void> {
+async function sweepPendingDeletes(ids?: readonly string[]): Promise<void> {
   try {
     const pending = await pendingDeletes();
-    await pending.finalizeDue();
+    if (ids) {
+      await pending.finalizeMarked(ids);
+    } else {
+      await pending.finalizeDue();
+    }
   } catch (error) {
     getNextlyLogger().warn({
       kind: "media-delete-sweep-failed",
@@ -898,11 +904,12 @@ async function handleDeleteMediaLater(
   const { PENDING_DELETE_WINDOW_MS } = await import(
     "../domains/media/pending-delete"
   );
-  // A moment after the window, so the marks are due when it runs. Unref'd:
-  // a waiting delete never keeps a process alive, and the sweep covers one
-  // that exits first.
+  // A moment after the window, so the marks are due when it runs; it
+  // finishes every item this delete marked, however many. Unref'd: a waiting
+  // delete never keeps a process alive, and the sweep covers one that exits
+  // first.
   setTimeout(() => {
-    void sweepPendingDeletes();
+    void sweepPendingDeletes(marked.ids);
   }, PENDING_DELETE_WINDOW_MS + 500).unref?.();
   return respondAction("Media deleted.", {
     ids: marked.ids,
@@ -927,25 +934,19 @@ async function handleUndoDeleteMedia(request: Request): Promise<Response> {
 }
 
 /**
- * What else a Replace keeps the old file for, beside the documents naming
- * the item by address: how many avatars and logos keep its address, and
- * whether the usage record has been built, without which the old file is
- * kept whatever the record lists.
+ * Whether the usage record has been built for content written before it
+ * existed. Until it has, a use the record lacks may still be in some
+ * document, so an item listing no use is not known to be unused, and a
+ * Replace keeps the old file whatever the record lists.
  */
-async function addressUseMeta(
-  mediaService: MediaService,
-  address: string | undefined
-): Promise<{ heldByAddress: number; usageRecorded: boolean }> {
+async function usageRecordBuilt(): Promise<boolean> {
   const { mediaUsagePresent, mediaUsageRecorded } = await import(
     "../domains/media/usage/media-usage-store"
   );
   const adapter = getService("adapter");
-  const usageRecorded =
-    (await mediaUsagePresent(adapter)) && (await mediaUsageRecorded(adapter));
-  return {
-    heldByAddress: address ? await mediaService.addressHolderCount(address) : 0,
-    usageRecorded,
-  };
+  return (
+    (await mediaUsagePresent(adapter)) && (await mediaUsageRecorded(adapter))
+  );
 }
 
 /**
@@ -954,9 +955,10 @@ async function addressUseMeta(
  * gated mount, since it names documents: the public mount answers it as an
  * unknown path. Per caller, so it is never cached for another.
  *
- * Asked for the uses by address, it also says what else keeps the old file
- * on a Replace: `meta.heldByAddress` avatars and logos, and
- * `meta.usageRecorded` false while the record is still being built.
+ * `meta.usageRecorded` is false while the record is still being built, when
+ * the list may lack uses in older content. Asked for the uses by address, it
+ * also says what else keeps the old file on a Replace: `meta.heldByAddress`
+ * avatars and logos.
  */
 async function handleMediaUsage(
   request: Request,
@@ -986,6 +988,18 @@ async function handleMediaUsage(
     source.bootedMediaUsesSource(getService("adapter"), await readCaller(auth)),
     { byAddressOnly: byAddress }
   );
+  // Said of every answer: whether the record is built. Of the uses by
+  // address, also how many avatars and logos keep the item's address.
+  const recordMeta = {
+    usageRecorded: await usageRecordBuilt(),
+    ...(byAddress
+      ? {
+          heldByAddress: item.url
+            ? await mediaService.addressHolderCount(item.url)
+            : 0,
+        }
+      : {}),
+  };
   return respondList(
     uses.items,
     {
@@ -996,7 +1010,7 @@ async function handleMediaUsage(
       hasNext: false,
       hasPrev: false,
       ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
-      ...(byAddress ? await addressUseMeta(mediaService, item.url) : {}),
+      ...recordMeta,
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );

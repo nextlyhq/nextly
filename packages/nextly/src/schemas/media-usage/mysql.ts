@@ -15,7 +15,7 @@
 // functions are distinct, so the declarations cannot be shared, and the
 // parity test is what holds them in step.
 // fallow-ignore-file code-duplication
-import { mysqlTable, varchar } from "drizzle-orm/mysql-core";
+import { mysqlTable, text, varchar } from "drizzle-orm/mysql-core";
 
 import { MEDIA_USAGE_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
 import { media } from "../media/mysql";
@@ -48,6 +48,11 @@ export const nextlyMediaUsageMysql = mysqlTable(
     // 3072-byte key limit: (16 + 191 + 191 + 255 + 35 + 36) characters at
     // four bytes each.
     locale: varchar("locale", { length: 35 }).notNull(),
+    // The address the field names the item by, as the library gave it out:
+    // the item's own when the content was saved, or an earlier one a Replace
+    // kept the file of. NULL when the field names the item by its id, so a
+    // Replace knows which uses go on showing the previous file.
+    address: text("address"),
   },
   // The indexes are declared once, in `core-indexes`, for every dialect.
   table => mysqlIndexes(MEDIA_USAGE_INDEXES, table)

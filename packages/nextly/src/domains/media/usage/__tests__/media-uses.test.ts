@@ -9,65 +9,69 @@ import { describe, expect, it } from "vitest";
 
 import type { IdentifiedUsageRow } from "../media-usage-store";
 import {
-  mediaUseDocumentKey,
+  mediaUseReadKey,
   mediaUsesOf,
   type MediaUseDocument,
   type MediaUseHeading,
+  type MediaUseRead,
   type MediaUsesSource,
 } from "../media-uses";
 
 const ITEM = "item-1";
 
+/** One row of the record; `address` set for a field naming the item by it. */
 function row(
   subjectKind: IdentifiedUsageRow["subjectKind"],
   subjectSlug: string,
   documentId: string,
   fieldPath: string,
   locale = "",
-  id = `${subjectSlug}-${documentId}-${fieldPath}-${locale}`
+  address: string | null = null
 ): IdentifiedUsageRow {
   return {
-    id,
+    id: `${subjectSlug}-${documentId}-${fieldPath}-${locale}`,
     mediaId: ITEM,
     subjectKind,
     subjectSlug,
     documentId,
     fieldPath,
     locale,
+    address,
   };
 }
 
 /**
- * A source over these rows, where the reader may read `readable`, rich text
- * (`body`) and a template's HTML name items by address, and `previous` are
- * the rows that stood when the item's file was last replaced.
+ * A source over these rows, where the reader may read each of `readable` in
+ * its language (`null` the default one), and `kept` are the addresses whose
+ * files the item's last Replace kept.
  */
 function source(
   rows: IdentifiedUsageRow[],
-  readable: Array<[MediaUseDocument, MediaUseHeading]>,
-  previous: string[] = []
-): MediaUsesSource & { asked: MediaUseDocument[][] } {
-  const asked: MediaUseDocument[][] = [];
+  readable: Array<[MediaUseRead, MediaUseHeading]>,
+  kept: string[] = []
+): MediaUsesSource & { asked: MediaUseRead[][] } {
+  const asked: MediaUseRead[][] = [];
   return {
     asked,
     rows: () => Promise.resolve(rows),
-    addressPaths: kind =>
-      Promise.resolve(
-        new Set(kind === "email-template" ? ["htmlContent"] : ["body"])
-      ),
-    previousRows: () => Promise.resolve(new Set(previous)),
-    headings: documents => {
-      asked.push([...documents]);
+    keptAddresses: () => Promise.resolve(new Set(kept)),
+    headings: reads => {
+      asked.push([...reads]);
       return Promise.resolve(
         new Map(
-          readable.map(([document, heading]) => [
-            mediaUseDocumentKey(document),
-            heading,
-          ])
+          readable.map(([read, heading]) => [mediaUseReadKey(read), heading])
         )
       );
     },
   };
+}
+
+/** `document` read in `locale`, the default language when `null`. */
+function readIn(
+  document: MediaUseDocument,
+  locale: string | null = null
+): MediaUseRead {
+  return { ...document, locale };
 }
 
 const post = {
@@ -93,8 +97,8 @@ describe("mediaUsesOf", () => {
       ITEM,
       source(
         [
-          row("collection", "posts", "p1", "body", "en"),
-          row("collection", "posts", "p1", "body", "es"),
+          row("collection", "posts", "p1", "body", "en", "/a.png"),
+          row("collection", "posts", "p1", "body", "es", "/a.png"),
           row("collection", "posts", "p1", "cover"),
           row("collection", "posts", "p1", "gallery", "fr"),
           row("collection", "posts", "p1", "gallery"),
@@ -102,9 +106,12 @@ describe("mediaUsesOf", () => {
           row("email-template", "", "t1", "attachments"),
         ],
         [
-          [post, { title: "Hello", owner: "Posts" }],
-          [site, { title: "Site", owner: "Site" }],
-          [welcome, { title: "Welcome", owner: "Email templates" }],
+          [readIn(post), { title: "Hello", owner: "Posts" }],
+          [readIn(post, "en"), { title: "Hello", owner: "Posts" }],
+          [readIn(post, "es"), { title: "Hola", owner: "Posts" }],
+          [readIn(post, "fr"), { title: "Salut", owner: "Posts" }],
+          [readIn(site), { title: "Site", owner: "Site" }],
+          [readIn(welcome), { title: "Welcome", owner: "Email templates" }],
         ]
       )
     );
@@ -178,7 +185,7 @@ describe("mediaUsesOf", () => {
         row("collection", "secrets", "s2", "cover"),
         row("email-template", "", "t1", "html"),
       ],
-      [[post, { title: "Hello", owner: "Posts" }]]
+      [[readIn(post), { title: "Hello", owner: "Posts" }]]
     );
     const answer = await mediaUsesOf(ITEM, read);
 
@@ -189,13 +196,15 @@ describe("mediaUsesOf", () => {
       { scopeKind: "email-template", scopeSlug: "", count: 1 },
     ]);
     expect(JSON.stringify(answer)).not.toContain("s1");
-    // Every document is asked about once, in one call.
+    // Every document is asked about once in each language its rows name,
+    // the default one for a shared value, all in one call.
     expect(read.asked).toEqual([
       [
-        post,
-        secret,
-        { ...secret, documentId: "s2" },
-        { kind: "email-template", slug: "", documentId: "t1" },
+        readIn(post),
+        readIn(secret),
+        readIn(secret, "en"),
+        readIn({ ...secret, documentId: "s2" }),
+        readIn({ kind: "email-template", slug: "", documentId: "t1" }),
       ],
     ]);
   });
@@ -211,16 +220,18 @@ describe("mediaUsesOf", () => {
       ITEM,
       source(
         [
-          row("collection", "posts", "p1", "body", "en", "kept-row"),
+          // Names an address whose file the Replace kept.
+          row("collection", "posts", "p1", "body", "en", "/old.png"),
           row("collection", "posts", "p1", "cover"),
-          row("email-template", "", "t1", "htmlContent", "", "rewritten-row"),
+          // Saved since with the item's address now.
+          row("email-template", "", "t1", "htmlContent", "", "/new.png"),
         ],
         [
-          [post, { title: "Hello", owner: "Posts" }],
-          [welcome, { title: "Welcome", owner: "Email templates" }],
+          [readIn(post), { title: "Hello", owner: "Posts" }],
+          [readIn(post, "en"), { title: "Hello", owner: "Posts" }],
+          [readIn(welcome), { title: "Welcome", owner: "Email templates" }],
         ],
-        // The post's row stood at the Replace; the template was saved since.
-        ["kept-row", "row-gone-since"]
+        ["/old.png"]
       )
     );
 
@@ -250,16 +261,75 @@ describe("mediaUsesOf", () => {
     ]);
   });
 
+  it("names a translation's use only where the reader may read the document in that language", async () => {
+    const answer = await mediaUsesOf(
+      ITEM,
+      source(
+        [
+          row("collection", "posts", "p1", "body", "en", "/a.png"),
+          row("collection", "posts", "p1", "body", "es", "/a.png"),
+          row("collection", "posts", "p1", "summary", "es", "/a.png"),
+          // Used in Spanish alone, which the reader may not read.
+          row("collection", "posts", "p2", "body", "es", "/a.png"),
+          // Used in Spanish alone, readable there though not by default.
+          row("collection", "posts", "p3", "body", "es", "/a.png"),
+        ],
+        [
+          [readIn(post, "en"), { title: "Hello", owner: "Posts" }],
+          [
+            readIn({ ...post, documentId: "p3" }, "es"),
+            { title: "Hola", owner: "Posts" },
+          ],
+        ]
+      )
+    );
+
+    expect(answer.items).toEqual([
+      {
+        ...post,
+        title: "Hello",
+        owner: "Posts",
+        // Neither the Spanish language nor the field only it uses is named.
+        fields: [
+          {
+            path: "body",
+            locales: ["en"],
+            byAddress: true,
+            showsPreviousFile: false,
+          },
+        ],
+      },
+      {
+        ...post,
+        documentId: "p3",
+        title: "Hola",
+        owner: "Posts",
+        fields: [
+          {
+            path: "body",
+            locales: ["es"],
+            byAddress: true,
+            showsPreviousFile: false,
+          },
+        ],
+      },
+    ]);
+    expect(answer.hidden).toEqual([
+      { scopeKind: "collection", scopeSlug: "posts", count: 1 },
+    ]);
+    expect(JSON.stringify(answer)).not.toContain("summary");
+  });
+
   it("tells only the uses naming the item by address when asked, counting the unreadable ones", async () => {
     const answer = await mediaUsesOf(
       ITEM,
       source(
         [
           row("collection", "posts", "p1", "cover"),
-          row("collection", "secrets", "s1", "body", "en"),
-          row("email-template", "", "t1", "htmlContent"),
+          row("collection", "secrets", "s1", "body", "en", "/a.png"),
+          row("email-template", "", "t1", "htmlContent", "", "/a.png"),
         ],
-        [[welcome, { title: "Welcome", owner: "Email templates" }]]
+        [[readIn(welcome), { title: "Welcome", owner: "Email templates" }]]
       ),
       { byAddressOnly: true }
     );

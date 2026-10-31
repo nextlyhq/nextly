@@ -62,7 +62,7 @@ function parsedList(value: unknown): unknown[] {
 }
 
 /** The template field whose images name an item by its address. */
-export const TEMPLATE_ADDRESS_FIELD = "htmlContent";
+const TEMPLATE_ADDRESS_FIELD = "htmlContent";
 
 /** The references a stored template row makes, by the field that makes each. */
 export function emailTemplateReferences(

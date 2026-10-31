@@ -30,6 +30,7 @@ import {
 } from "../../dashboard/table-presence";
 import { boundedValue } from "../../schema/services/index-name";
 
+import { findKeptAddresses } from "./kept-addresses";
 import type { MediaReference } from "./media-references";
 
 /** What kind of document uses an item. */
@@ -59,6 +60,13 @@ export interface MediaUsageRow {
   documentId: string;
   fieldPath: string;
   locale: string;
+  /**
+   * The address the field names the item by, as the library gave it out,
+   * or `null` when it names the item by its id. Taken from the reference the
+   * field made (`collectMediaReferences`), so there is no second account of
+   * which fields name items by address.
+   */
+  address: string | null;
 }
 
 /** The statements the record runs: a transaction's, or the adapter's own. */
@@ -149,33 +157,39 @@ function addressForms(url: string): string[] {
   return [...new Set([url, path, decoded])];
 }
 
+/** An item an address names, and the address it is known by. */
+interface AddressMatch {
+  mediaId: string;
+  /** The item's own address, or an earlier one whose file a Replace kept. */
+  address: string;
+  /** Whether it is the item's address now, not a kept earlier one. */
+  current: boolean;
+}
+
+/** What the references resolve to: the ids found, and each address's items. */
+interface ResolvedItems {
+  ids: Set<string>;
+  byUrl: Map<string, AddressMatch[]>;
+}
+
 /**
  * Which of the ids and addresses name a media item, and which item each
  * names: the ids found, and each address's items, in any of its forms
- * (`addressForms`). A reference to something that is not an item, or no
- * longer is, records nothing.
+ * (`addressForms`). A form no item has now is looked up among the addresses
+ * a Replace kept (`kept-addresses`), so content still naming an item's
+ * earlier address goes on counting as the item's use. A reference to
+ * something that is not an item, or no longer is, records nothing.
  */
 async function resolveItems(
   db: UsageDb,
   refs: readonly MediaReference[],
   maxParams: number
-): Promise<{ ids: Set<string>; byUrl: Map<string, string[]> }> {
-  const wantedIds = [
-    ...new Set(refs.flatMap(r => (r.mediaId ? [r.mediaId] : []))),
-  ];
+): Promise<ResolvedItems> {
   const wantedUrls = [
     ...new Set(refs.flatMap(r => (r.url ? addressForms(r.url) : []))),
   ];
-  const ids = new Set<string>();
-  const byUrl = new Map<string, string[]>();
+  const byUrl = new Map<string, AddressMatch[]>();
   // Each id or address is one bound value.
-  for (const part of chunks(wantedIds, maxParams)) {
-    const rows = await db.select<Record<string, unknown>>("media", {
-      columns: ["id"],
-      where: { and: [{ column: "id", op: "IN", value: part }] },
-    });
-    for (const row of rows) ids.add(columnOf(row, "id", "id"));
-  }
   for (const part of chunks(wantedUrls, maxParams)) {
     const rows = await db.select<Record<string, unknown>>("media", {
       columns: ["id", "url"],
@@ -184,11 +198,68 @@ async function resolveItems(
     for (const row of rows) {
       const url = columnOf(row, "url", "url");
       const list = byUrl.get(url) ?? [];
-      list.push(columnOf(row, "id", "id"));
+      list.push({
+        mediaId: columnOf(row, "id", "id"),
+        address: url,
+        current: true,
+      });
       byUrl.set(url, list);
     }
   }
+  const kept = await findKeptAddresses(
+    db,
+    wantedUrls.filter(url => !byUrl.has(url)),
+    maxParams
+  );
+  const wantedIds = [
+    ...new Set([
+      ...refs.flatMap(r => (r.mediaId ? [r.mediaId] : [])),
+      ...[...kept.values()].map(found => found.mediaId),
+    ]),
+  ];
+  const ids = new Set<string>();
+  for (const part of chunks(wantedIds, maxParams)) {
+    const rows = await db.select<Record<string, unknown>>("media", {
+      columns: ["id"],
+      where: { and: [{ column: "id", op: "IN", value: part }] },
+    });
+    for (const row of rows) ids.add(columnOf(row, "id", "id"));
+  }
+  // A kept address counts only while its item is still there.
+  for (const [url, found] of kept) {
+    if (ids.has(found.mediaId)) {
+      byUrl.set(url, [
+        { mediaId: found.mediaId, address: found.url, current: false },
+      ]);
+    }
+  }
   return { ids, byUrl };
+}
+
+/** The items one reference names, with the address each is named by. */
+function itemsOf(
+  ref: MediaReference,
+  resolved: ResolvedItems
+): Array<{ mediaId: string; address: string | null; current: boolean }> {
+  if (ref.mediaId) {
+    return resolved.ids.has(ref.mediaId)
+      ? [{ mediaId: ref.mediaId, address: null, current: true }]
+      : [];
+  }
+  return addressForms(ref.url ?? "").flatMap(
+    form => resolved.byUrl.get(form) ?? []
+  );
+}
+
+/**
+ * Which of two ways one field names one item its row keeps: by the item's
+ * address now over a kept earlier one, and either over its id. A field that
+ * names the item at its current address is one a Replace must keep the file
+ * for; one naming a kept address is already kept for.
+ */
+function rank(found: { address: string | null; current: boolean }): number {
+  if (found.address === null) return 0;
+  return found.current ? 2 : 1;
 }
 
 /**
@@ -212,33 +283,36 @@ export async function replaceDocumentUsage(
   refs: readonly LocatedMediaReference[],
   maxParams: number
 ): Promise<void> {
-  const { ids, byUrl } =
+  const resolved: ResolvedItems =
     refs.length > 0
       ? await resolveItems(db, refs, maxParams)
-      : { ids: new Set<string>(), byUrl: new Map<string, string[]>() };
-  const rows = new Map<string, Record<string, unknown>>();
+      : { ids: new Set<string>(), byUrl: new Map<string, AddressMatch[]>() };
+  const rows = new Map<
+    string,
+    { row: Record<string, unknown>; rank: number }
+  >();
   for (const ref of refs) {
-    const items = ref.mediaId
-      ? ids.has(ref.mediaId)
-        ? [ref.mediaId]
-        : []
-      : addressForms(ref.url ?? "").flatMap(form => byUrl.get(form) ?? []);
-    for (const mediaId of items) {
-      const key = JSON.stringify([ref.fieldPath, ref.locale, mediaId]);
-      if (rows.has(key)) continue;
+    for (const found of itemsOf(ref, resolved)) {
+      const key = JSON.stringify([ref.fieldPath, ref.locale, found.mediaId]);
+      const standing = rows.get(key);
+      if (standing && standing.rank >= rank(found)) continue;
       rows.set(key, {
-        id: uuidV7(),
-        mediaId,
-        subjectKind: subject.kind,
-        subjectSlug: subject.slug,
-        documentId: subject.documentId,
-        fieldPath: storedFieldPath(ref.fieldPath),
-        locale: ref.locale,
+        rank: rank(found),
+        row: {
+          id: uuidV7(),
+          mediaId: found.mediaId,
+          subjectKind: subject.kind,
+          subjectSlug: subject.slug,
+          documentId: subject.documentId,
+          fieldPath: storedFieldPath(ref.fieldPath),
+          locale: ref.locale,
+          address: found.address,
+        },
       });
     }
   }
   await db.delete(MEDIA_USAGE_TABLE, subjectWhere(subject));
-  const values = [...rows.values()];
+  const values = [...rows.values()].map(entry => entry.row);
   // Every row binds one value for each of its columns.
   const perRow = values.length > 0 ? Object.keys(values[0]).length : 1;
   for (const part of chunks(values, maxParams / perRow)) {
@@ -311,6 +385,7 @@ export async function listIdentifiedMediaUsage(
       "documentId",
       "fieldPath",
       "locale",
+      "address",
     ],
     where: { and: [{ column: "mediaId", op: "=", value: mediaId }] },
     orderBy: [
@@ -333,6 +408,7 @@ export async function listIdentifiedMediaUsage(
     documentId: columnOf(row, "documentId", "document_id"),
     fieldPath: columnOf(row, "fieldPath", "field_path"),
     locale: columnOf(row, "locale", "locale"),
+    address: typeof row.address === "string" ? row.address : null,
   }));
 }
 

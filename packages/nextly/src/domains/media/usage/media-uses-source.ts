@@ -13,8 +13,8 @@ import {
   callerHoldsPermission,
   readAccessCaller,
 } from "../../../auth/entity-read-access";
-import type { FieldConfig } from "../../../collections/fields/types";
 import { container } from "../../../di/container";
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   bootedHeadingRegistries,
   headingKey,
@@ -23,16 +23,13 @@ import {
 } from "../../../services/dashboard/readable-headings";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 
-import {
-  addressPathsFrom,
-  readReplacedRecord,
-  type AddressPaths,
-} from "./address-uses";
+import { keptAddresses } from "./address-uses";
 import { listIdentifiedMediaUsage } from "./media-usage-store";
 import {
-  mediaUseDocumentKey,
+  mediaUseReadKey,
   type MediaUseDocument,
   type MediaUseHeading,
+  type MediaUseRead,
   type MediaUsesSource,
 } from "./media-uses";
 
@@ -90,7 +87,12 @@ async function templateHeadings(
     const id = typeof row.id === "string" ? row.id : String(row.id);
     const name = typeof row.name === "string" && row.name ? row.name : id;
     headings.set(
-      mediaUseDocumentKey({ kind: "email-template", slug: "", documentId: id }),
+      mediaUseReadKey({
+        kind: "email-template",
+        slug: "",
+        documentId: id,
+        locale: null,
+      }),
       { title: name, owner: TEMPLATES_OWNER }
     );
   }
@@ -111,46 +113,53 @@ function memoized<T>(
 }
 
 /** A collection entry or a Single: a document the read path judges. */
-function isContentDocument(
-  document: MediaUseDocument
-): document is MediaUseDocument & { kind: DocumentRef["kind"] } {
-  return document.kind !== "email-template";
-}
-
-/** A registry that answers with a document's fields. */
-interface FieldsRegistry {
-  getCollectionBySlug?(slug: string): Promise<{ fields?: unknown } | null>;
-  getSingleBySlug?(slug: string): Promise<{ fields?: unknown } | null>;
-}
-
-/** The fields a registry answers with, when it answers with a list. */
-function fieldsOf(
-  found: { fields?: unknown } | null
-): FieldConfig[] | undefined {
-  return Array.isArray(found?.fields)
-    ? (found.fields as FieldConfig[])
-    : undefined;
+function isContentRead(
+  read: MediaUseRead
+): read is MediaUseRead & { kind: DocumentRef["kind"] } {
+  return read.kind !== "email-template";
 }
 
 /**
- * Which fields of each kind of document name an item by its address, read
- * from the booted instance's registries.
+ * The headings of `refs`, all in one language, as the reader may read them.
+ * A language the read path refuses as a request (one no longer active, say)
+ * is one the reader is told nothing in, rather than a failure of the whole
+ * answer; any other failure is a real one and is thrown.
  */
-export function bootedAddressPaths(): AddressPaths {
-  return addressPathsFrom({
-    collectionFields: async slug =>
-      fieldsOf(
-        (await container
-          .get<FieldsRegistry>("collectionRegistryService")
-          .getCollectionBySlug?.(slug)) ?? null
-      ),
-    singleFields: async slug =>
-      fieldsOf(
-        (await container
-          .get<FieldsRegistry>("singleRegistryService")
-          .getSingleBySlug?.(slug)) ?? null
-      ),
-  });
+async function headingsInOneLanguage(
+  refs: readonly DocumentRef[],
+  caller: ReadCaller
+): Promise<Map<string, { title: string }>> {
+  try {
+    return await readableHeadings(refs, caller, bootedHeadingRegistries());
+  } catch (error) {
+    if (NextlyError.isValidation(error)) return new Map();
+    throw error;
+  }
+}
+
+/**
+ * The headings of the entries and Singles among `reads`, each read as the
+ * reader in its own language, by {@link headingKey}.
+ */
+async function contentHeadings(
+  reads: ReadonlyArray<MediaUseRead & { kind: DocumentRef["kind"] }>,
+  caller: ReadCaller
+): Promise<Map<string, { title: string }>> {
+  const byLanguage = new Map<string | null, DocumentRef[]>();
+  for (const read of reads) {
+    const refs = byLanguage.get(read.locale) ?? [];
+    refs.push({
+      kind: read.kind,
+      slug: read.slug,
+      entryId: read.documentId,
+      locale: read.locale,
+    });
+    byLanguage.set(read.locale, refs);
+  }
+  const answers = await Promise.all(
+    [...byLanguage.values()].map(refs => headingsInOneLanguage(refs, caller))
+  );
+  return new Map(answers.flatMap(answer => [...answer]));
 }
 
 /** The usage of items, as `caller` may be told it, on this instance. */
@@ -160,15 +169,12 @@ export function bootedMediaUsesSource(
 ): MediaUsesSource {
   return {
     rows: mediaId => listIdentifiedMediaUsage(adapter, mediaId),
-    addressPaths: bootedAddressPaths(),
-    // The rows recorded at the last Replace that are still there unchanged.
-    previousRows: async mediaId =>
-      new Set((await readReplacedRecord(adapter, mediaId))?.rows ?? []),
-    headings: async documents => {
-      const content = documents.filter(isContentDocument);
-      const templates = documents
-        .filter(document => document.kind === "email-template")
-        .map(document => document.documentId);
+    keptAddresses: mediaId => keptAddresses(adapter, mediaId),
+    headings: async reads => {
+      const content = reads.filter(isContentRead);
+      const templates = reads
+        .filter(read => read.kind === "email-template")
+        .map(read => read.documentId);
       const owners: OwnerRegistries = {
         getCollectionBySlug: slug =>
           container
@@ -180,15 +186,7 @@ export function bootedMediaUsesSource(
             .getSingleBySlug(slug),
       };
       const [read, named] = await Promise.all([
-        readableHeadings(
-          content.map(document => ({
-            kind: document.kind,
-            slug: document.slug,
-            entryId: document.documentId,
-          })),
-          caller,
-          bootedHeadingRegistries()
-        ),
+        contentHeadings(content, caller),
         templateHeadings(adapter, templates, caller),
       ]);
       // Each collection's or Single's name is read once, however many of its
@@ -200,10 +198,11 @@ export function bootedMediaUsesSource(
             kind: document.kind,
             slug: document.slug,
             entryId: document.documentId,
+            locale: document.locale,
           })
         );
         if (!heading) continue;
-        named.set(mediaUseDocumentKey(document), {
+        named.set(mediaUseReadKey(document), {
           title: heading.title,
           owner: await memoized(
             ownerNames,
