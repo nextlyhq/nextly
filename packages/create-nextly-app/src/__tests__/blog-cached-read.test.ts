@@ -1,9 +1,9 @@
 /**
  * The blog template's Cache Components read function, as an app runs it: the
  * lifetime it gives each read, the tags, the key, and its registration. The
- * file ships as `.txt` beside the stub it replaces, so it is copied into a
- * temporary directory as TypeScript, its `next/cache` and `nextly/runtime`
- * imports pointed at stand-ins that record what they are called with.
+ * file is copied into a temporary directory, its `next/cache` and
+ * `nextly/runtime` imports pointed at stand-ins that record what they are
+ * called with.
  *
  * The guide prints the same function for apps made before it shipped, so the
  * last case holds the guide's copy to the template's.
@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const TEMPLATE = join(
   __dirname,
-  "../../../../templates/blog/src/nextly/cached-read.cache-components.txt"
+  "../../../../templates/blog/src/nextly/cached-read.ts"
 );
 const GUIDE = join(__dirname, "../../../../docs/guides/isr-caching.mdx");
 

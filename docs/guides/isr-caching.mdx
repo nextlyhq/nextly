@@ -256,16 +256,20 @@ unaffected); it just does not bust any cache tags.
 
 ## Cache Components
 
-Nextly builds apps with Cache Components off by default. To turn it on, make
-three changes; with only some of them, a page read right after a write can
-still show the previous version.
+Nextly runs with Cache Components and Partial Prefetching on. An app made by
+`create-nextly-app` has both, and so does one it joins, unless that app's
+config can't be changed safely: then the report prints the lines to add
+([Installation](/docs/getting-started/installation#cache-components)). Three
+things keep its cached reads fresh; with only some of them, a page read right
+after a write can still show the previous version. A new blog has all three. An
+app made by an earlier Nextly release, which turned Cache Components off, needs
+each of them.
 
 1. **Read through the app's own `"use cache"` function.** Once Cache Components
    is on, Next.js caches non-fetch reads with `"use cache"` and `cacheTag`, and
    the directive works only in code Next.js compiles. A scaffolded blog keeps
-   that function in `src/nextly/cached-read.ts`: with Cache Components off it is
-   a stub that registers nothing. Replace it with the contents of
-   `src/nextly/cached-read.cache-components.txt` beside it:
+   that function in `src/nextly/cached-read.ts`. In a blog made by an earlier
+   release that file is a stub that registers nothing: replace it with this.
 
    ```ts
    // src/nextly/cached-read.ts
@@ -314,12 +318,15 @@ still show the previous version.
    cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
    ```
 3. **Keep `createRegister`'s `cacheComponents` value** in `instrumentation.ts`
-   (`process.env.__NEXT_CACHE_COMPONENTS`). With Cache Components on and no read
-   function registered, Nextly warns at the first cached read and keeps using
-   `unstable_cache`.
+   (`process.env.__NEXT_CACHE_COMPONENTS`). Nextly, loaded from
+   `node_modules`, learns the setting only from it: with it off, Nextly warns
+   once at start; with it on and no read function registered, Nextly warns at
+   the first cached read and keeps using `unstable_cache`.
 
-With Cache Components off, nothing here applies: the stub registers nothing
-and reads are cached with `unstable_cache` as before.
+With Cache Components off, which Nextly does not support, Next.js refuses to
+build a `"use cache"` function, so a blog with it off needs the stub that
+registers nothing (`export {};`) in place of this file, and its reads are
+cached with `unstable_cache`.
 
 ## Notes
 

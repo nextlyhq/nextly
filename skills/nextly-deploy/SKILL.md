@@ -244,5 +244,7 @@ could then pick their own address.
 - **Sign-in fails with `CSRF_FAILED` behind a proxy:** add the public origin
   to `NEXTLY_ALLOWED_ORIGINS`.
 - **`next build` fails on a page reading content:** in an app with
-  `cacheComponents: true`, wrap the read in `cachedFind` (the
-  `nextly-collections` skill) or render it inside `<Suspense>`.
+  `cacheComponents: true`, the Nextly default, wrap the read in `cachedFind`
+  (the `nextly-collections` skill) or render it inside `<Suspense>`. An app
+  made by an earlier release may have it off: check `next.config` first, and
+  turn it on as the installation guide describes.
