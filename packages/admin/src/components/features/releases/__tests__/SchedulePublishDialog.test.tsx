@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
 
+import { SCHEDULE_OUTCOME_ATTRIBUTE } from "../dialog-opener";
 import { instantFor, readerZone, wallTimeIn } from "../release-timezone";
 import { defaultScheduleWall } from "../schedule-publish";
 import { SchedulePublishDialog } from "../SchedulePublishDialog";
@@ -345,5 +346,66 @@ describe("focus on close", () => {
     );
     await waitFor(() => expect(document.activeElement).toBe(opener));
     opener.remove();
+  });
+
+  /** An opener inside the section that shows a schedule's outcome. */
+  function openerInOutcome() {
+    const section = document.createElement("section");
+    section.tabIndex = -1;
+    section.setAttribute(SCHEDULE_OUTCOME_ATTRIBUTE, "");
+    const opener = document.createElement("button");
+    opener.textContent = "Schedule publish…";
+    section.append(opener);
+    document.body.append(section);
+    return { section, opener };
+  }
+
+  /** Sends, waits for the failure, then closes the dialog with Cancel. */
+  async function failThenClose(
+    opener: HTMLElement,
+    whileOpen: () => void = () => undefined
+  ) {
+    const onOpenChange = vi.fn();
+    const dialog = (open: boolean) => (
+      <SchedulePublishDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        document={DOCUMENT}
+        documentTitle="Spring launch"
+        opener={opener}
+      />
+    );
+    const { rerender } = render(dialog(true));
+    await userEvent.click(submit());
+    await screen.findByRole("alert");
+    whileOpen();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    rerender(dialog(false));
+  }
+
+  it("goes where the outcome shows when no answer came back, as the opener may have gone", async () => {
+    // The request may have landed: the releases are read again, and the
+    // section's offer goes with "Not scheduled." while the dialog still
+    // says what happened.
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    const { section, opener } = openerInOutcome();
+    await failThenClose(opener, () => opener.remove());
+
+    await waitFor(() => expect(document.activeElement).toBe(section));
+    section.remove();
+  });
+
+  it("goes back to the opener after a refusal, which changed nothing", async () => {
+    // The control: a refusal leaves the offer where it was, so focus goes
+    // back to it for another try, not to the section around it.
+    fetchMock.mockResolvedValue(
+      answer(409, { error: { code: "CONFLICT", message: "Refused." } })
+    );
+    const { section, opener } = openerInOutcome();
+    await failThenClose(opener);
+
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    section.remove();
   });
 });

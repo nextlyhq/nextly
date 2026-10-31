@@ -231,7 +231,7 @@ function useSchedulingRequest({
   // section and the banner both read releases.
   const canReadReleases = useCan("read-content-releases");
   // Where focus goes when the dialog closes: the opener, or after a
-  // schedule lands, where its outcome is shown.
+  // schedule lands or may have landed, where its outcome is shown.
   const returnTo = useRef(opener);
   const schedule = useScheduleDocument();
 
@@ -267,6 +267,14 @@ function useSchedulingRequest({
         onSuccess: () => {
           returnTo.current = focusAfterScheduling(opener);
           onOpenChange(false);
+        },
+        // A lost answer may still have scheduled it: the releases are read
+        // again and the offer can go while this says so, so focus goes where
+        // the outcome shows. A refusal changed nothing and keeps the opener.
+        onError: error => {
+          if (!isDefiniteRefusal(error)) {
+            returnTo.current = focusAfterScheduling(opener);
+          }
         },
       }
     );
