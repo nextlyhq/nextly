@@ -44,7 +44,6 @@ import {
   clearAttentionItems,
   registerAttentionItems,
 } from "../../domains/widgets/attention/items";
-import { setContributedWidgets } from "../../domains/widgets/canonical";
 import {
   CORE_DECLARATIONS,
   CORE_WIDGET_IDS,
@@ -54,10 +53,8 @@ import { setAdminComponentPlugins } from "../../domains/widgets/declaration/comp
 import {
   clearDeclaredWidgets,
   CORE_OWNER,
-  NEXTLY_STARTUP_LOGGER,
   registerDashboardWidgets,
   type DeclaredWidgetGroup,
-  type StartupLogger,
 } from "../../domains/widgets/declaration/declared-widgets";
 import {
   SITE_CONFIG,
@@ -79,13 +76,11 @@ import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import {
   pluginAlternatives,
   pluginDashboardSnapshots,
-  pluginLegacyWidgetIds,
   pluginSuggestionFaults,
   pluginSuggestions,
   pluginWidgetDeclarationGroups,
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
-import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
 import { registerContinueWidgetSource } from "../../services/dashboard/continue-widget-source";
@@ -95,9 +90,7 @@ import { registerSystemHealthSource } from "../../services/dashboard/system-heal
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = [],
   // The site config's `admin.dashboard`, as given: startup checks it.
-  dashboard?: unknown,
-  // The registration's logger, which every startup warning here goes through.
-  logger: StartupLogger = NEXTLY_STARTUP_LOGGER
+  dashboard?: unknown
 ): void {
   clearWidgets();
   // Cleared with the registry it publishes into, so a reload's declarations
@@ -128,13 +121,6 @@ export function resetWidgetRegistries(
   // the pass that earns the right to, and retains it when the sync fails. See
   // `publishBootDeferrals` in `di/register`.
 
-  // The OTHER channel a widget arrives by. A contribution never passes through
-  // `registerWidget`, so without this the server's canonical set holds core's
-  // cards alone -- and every server-side question about which widgets exist
-  // answers differently from the grid, which has always resolved both.
-  // Replaced rather than merged, for the same reason the registry is cleared
-  // above: a hot reload must not accumulate the previous boot's plugins.
-  setContributedWidgets(contributedWidgetSummaries(plugins));
   // The resolved list the admin's component-map check reads, so it judges
   // the generated map against the plugins this boot runs, and the dashboard
   // as registered here, a widget a plugin's setup() adds included.
@@ -165,8 +151,7 @@ export function resetWidgetRegistries(
   // declared with `defineWidget()`, and the site's. Each is checked together
   // with everything that names one (the site config's dashboard, the plugins'
   // suggestions and alternatives), and startup stops on any fault of any owner,
-  // all of them reported at once, before any widget is kept; today's shape is
-  // passed for the id rules it still keeps (`declared-widgets.ts`). Each
+  // all of them reported at once, before any widget is kept. Each
   // plugin's contribution and the site config are read once, here, and every
   // check reads the copy. The site's own widgets are checked with the plugins'
   // but not registered yet. Core's ids are derived ONCE, here, and handed to
@@ -184,7 +169,6 @@ export function resetWidgetRegistries(
       // The site's own widgets last, kept and published as a plugin's are.
       ...siteWidgetGroup(site),
     ],
-    legacy: pluginLegacyWidgetIds(plugins),
     references: (declared, groups) => [
       ...pluginSuggestionFaults(dashboards, groups, coreIds),
       ...attentionItemFaults(dashboards),
@@ -193,7 +177,6 @@ export function resetWidgetRegistries(
         siteDashboardContext(declared, pluginAlternatives(dashboards), coreIds)
       ),
     ],
-    logger,
   });
   // Only once the check above found no fault, so every item kept is whole.
   registerAttentionItems(dashboards);

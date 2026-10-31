@@ -188,11 +188,8 @@ import {
 } from "./middleware/rest-limit-gate";
 import { createRestLimits, restLimitCounts } from "./middleware/rest-limits";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
-import type { PluginAdminWidget } from "./plugins/admin-contributions";
-import {
-  buildPluginAdminMeta,
-  type PluginAdminMeta,
-} from "./plugins/admin-meta";
+import { buildPluginAdminMeta } from "./plugins/admin-meta";
+import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
   restLimitTargetOf,
@@ -205,7 +202,6 @@ import {
   pluginRouteBootDecision,
 } from "./plugins/routes/should-register";
 import { settingsWritePermission } from "./plugins/settings-permission";
-import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import { assertDocumentViews } from "./plugins/validate-document-views";
 import {
@@ -2102,43 +2098,6 @@ function emptyForAudience<E extends { message?: string; action?: object }>(
 }
 
 /**
- * One plugin's projection with the widgets this reader may not see withheld.
- *
- * 🔴 Withheld HERE, on the server, because a contributed widget is its whole
- * declaration: a `text` widget carries its prose and an `actions` widget its
- * links. The browser applies the same gate before drawing, and that is not a
- * control -- the payload is JSON, and reading it is the bypass. The key is
- * dropped rather than left as an empty array, which is the shape the
- * projection gives a plugin that contributed none.
- *
- * 🔴 And ONLY the declaration that won its id. Two plugins may contribute the
- * same id; `canonicalWidgets` and the admin's resolver both keep the FIRST,
- * so the first is the one the reader's verdict is about -- and a later
- * duplicate, gated on something the reader lacks and carrying its own prose,
- * would ship under the winner's clearance if the payload were filtered by id
- * alone. `shipped` runs across the plugins in the order they were declared,
- * which is the order both resolvers walk.
- */
-function widgetsForAudience(
-  plugin: PluginAdminMeta,
-  audience: WidgetAudience,
-  readable: ReadonlySet<string>,
-  shipped: Set<string>
-): PluginAdminMeta {
-  if (plugin.widgets === undefined) return plugin;
-  const { widgets, ...rest } = plugin;
-  const visible: PluginAdminWidget[] = [];
-  for (const widget of widgets) {
-    if (!audience.declared.has(widget.id) || shipped.has(widget.id)) continue;
-    shipped.add(widget.id);
-    visible.push(
-      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
-    );
-  }
-  return visible.length > 0 ? { ...rest, widgets: visible } : rest;
-}
-
-/**
  * Whether THIS process is serving a development server, from the runtime
  * environment.
  *
@@ -2254,15 +2213,11 @@ async function buildAdminMeta(
   // Collect plugin metadata from registered plugins with host override
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
-  const shipped = new Set<string>();
   // The collections this reader may read, as the layout judges them: a widget
-  // declaration below ships its Collection setting's default only when it
-  // names one of them (`collectionDefaultForReader`).
+  // below ships its Collection setting's default only when it names one of
+  // them (`collectionDefaultForReader`).
   const readable = audience.readableCollections;
-  const plugins = buildPluginAdminMeta(
-    config?.plugins ?? [],
-    pluginOverrides
-  ).map(plugin => widgetsForAudience(plugin, audience, readable, shipped));
+  const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -2292,26 +2247,17 @@ async function buildAdminMeta(
     }
   }
 
-  // The widget REGISTRY, beside the contributions above. The two are different
-  // channels to the same grid and neither subsumes the other: a contribution is
-  // DECLARED in `contributes.admin.widgets` and travels with the plugin's
-  // config, while a registration is an imperative `registerWidget` call made
-  // during boot. Serializing only the first left an app that used the public
-  // registration API invisible to the renderer built around that registry --
-  // its card never drew and its query never entered the batch.
+  // The widget registry: every widget core, a plugin's
+  // `contributes.dashboard.widgets` or the site config declared, as published.
   //
   // Only this half of the payload can carry it. The registry is populated
   // during boot, and `handleAdminMetaWorkspaceRequest` is the caller that
   // awaits `ensureServicesInitialized()` first; the public branding route is
-  // served without it and would answer from an empty store. That the workspace
-  // half already describes the RUNNING installation rather than the configured
-  // one -- `showBuilder` from the live resolver, `customGroups` from the
-  // database -- is the same property this relies on.
+  // served without it and would answer from an empty store.
   //
-  // 🔴 Filtered for the reader, like the contributions above. A registration
-  // is a whole declaration -- a `text` widget's prose, an `actions` widget's
-  // links -- so shipping every one and leaving the browser to hide the gated
-  // cards hands a reader the contents of a card they may not see.
+  // 🔴 Filtered for the reader: shipping every widget and leaving the browser
+  // to hide the gated cards hands a reader the declaration of a card they may
+  // not see, and an empty state's action they may not take.
   const widgets = publishableWidgets()
     .filter(widget => audience.declared.has(widget.id))
     .map(widget =>
@@ -2326,7 +2272,7 @@ async function buildAdminMeta(
   if (widgetSources.length > 0) {
     workspace.widgetSources = widgetSources;
   }
-  // The audience both widget channels above were filtered for, as the layout
+  // The audience the widgets above were filtered for, as the layout
   // read also reports it: the admin compares the two to learn that a payload
   // it has held for minutes was built for a different reader than the layout
   // in front of it -- a grant, a role change -- and reads it again.
@@ -2770,11 +2716,9 @@ export function createDynamicHandlers(options?: {
     // instead of at startup. This module runs when the route file is imported,
     // which is the earliest deterministic point the config exists.
     assertClientConfigs(options.config.plugins ?? []);
-    // And the widgets beside it. `/api/admin-meta/workspace` serializes both
-    // halves through one `JSON.stringify`, so a widget carrying a bigint takes
-    // the whole authenticated workspace payload down for every admin -- a
-    // wider failure than a bad `clientConfig`, reached the same way.
-    assertAdminWidgets(options.config.plugins ?? []);
+    // And a plugin still adding widgets through a key Nextly no longer reads,
+    // refused at the same point and for the same reason.
+    assertNoRemovedWidgetKeys(options.config.plugins ?? []);
     // And the document views: two screens claiming one address on one
     // document would leave the admin drawing whichever it reached first.
     assertDocumentViews(options.config.plugins ?? []);

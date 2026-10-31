@@ -22,8 +22,6 @@
  * @module domains/widgets/declaration/declared-widgets
  */
 
-import { getNextlyLogger } from "../../../observability/logger";
-import type { Logger } from "../../../shared/types";
 import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
 // The registry's own gate shape, which this file maps the declaration's
 // `WidgetAccessGate` (of `define-widget.ts`) onto.
@@ -56,6 +54,11 @@ import {
 export interface DeclaredWidgetGroup extends WidgetDeclarationGroup {
   /** Declared slug to the slug the site uses, for the owner's collections. */
   readonly collections?: Readonly<Record<string, string>>;
+  /**
+   * The plugin that declared these widgets, by its name, which the add panel
+   * lists them under; absent for core's and the site's.
+   */
+  readonly plugin?: string;
 }
 
 /** A declaration as startup kept it, with who declared it. */
@@ -67,6 +70,8 @@ export interface DeclaredWidget {
   readonly display: WidgetDisplay;
   /** The owner's renamed collections, as its group carried them. */
   readonly collections?: Readonly<Record<string, string>>;
+  /** The plugin that declared it, by its name, as its group carried it. */
+  readonly plugin?: string;
 }
 
 /** A declaration as its author writes it (`defineWidget`), checked at startup. */
@@ -320,12 +325,6 @@ function requiredPermissionOf(
   return undefined;
 }
 
-/** The ids one owner declares in today's shape. */
-export interface LegacyWidgetIds {
-  readonly owner: string;
-  readonly ids: readonly string[];
-}
-
 const STORE_KEY = "__nextly_declared_widgets";
 
 /**
@@ -339,47 +338,6 @@ function store(): Map<string, DeclaredWidget> {
   >;
   holder[STORE_KEY] ??= new Map();
   return holder[STORE_KEY];
-}
-
-/**
- * The old-shape ids a declared widget also takes, as faults against the
- * declared one, naming the plugin that uses the old shape.
- */
-function sharedWithLegacy(
-  groups: readonly WidgetDeclarationGroup[],
-  legacy: readonly LegacyWidgetIds[]
-): WidgetDeclarationFault[] {
-  const oldOwners = new Map<string, string>();
-  for (const { owner, ids } of legacy) {
-    for (const id of ids) if (!oldOwners.has(id)) oldOwners.set(id, owner);
-  }
-  return groups.flatMap(({ owner, declarations }) =>
-    (Array.isArray(declarations) ? declarations : []).flatMap(declaration => {
-      // An entry that is not an object is a fault already; it has no id here.
-      const id = isRecord(declaration) ? declaration.id : undefined;
-      const oldOwner = typeof id === "string" ? oldOwners.get(id) : undefined;
-      if (oldOwner === undefined) return [];
-      // 🔴 One id has one owner. An id core declares is core's, so the plugin
-      // using it in the old shape is the one to change, and the fault is filed
-      // under that plugin with what to do instead.
-      if (owner === CORE_OWNER) {
-        return [
-          {
-            owner: oldOwner,
-            widget: String(id),
-            problem: `${oldOwner} contributes ${String(id)} through contributes.admin.widgets; core owns that id. Remove it, or contribute your own id through contributes.dashboard.`,
-          },
-        ];
-      }
-      return [
-        {
-          owner,
-          widget: String(id),
-          problem: `id "${String(id)}" is already used by ${oldOwner}, which declares it in the old shape`,
-        },
-      ];
-    })
-  );
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -407,54 +365,6 @@ function snapshot(group: DeclaredWidgetGroup): DeclaredWidgetGroup {
   };
 }
 
-/**
- * What startup says its warnings through: the logger the app's registration
- * was given, so they reach the same place as the rest of its boot.
- */
-export type StartupLogger = Pick<Logger, "warn">;
-
-/**
- * The process-wide logger, as a startup logger: where startup's warnings go
- * when the caller hands none.
- */
-export const NEXTLY_STARTUP_LOGGER: StartupLogger = {
-  warn: (message, meta) => getNextlyLogger().warn({ ...meta, message }),
-};
-
-const WARNED_LEGACY_IDS = new Set<string>();
-
-/** Forgets which shared old-shape ids were warned about, for tests. */
-export function resetLegacyIdWarnings(): void {
-  WARNED_LEGACY_IDS.clear();
-}
-
-/**
- * Warns, once per process for each id, that old-shape plugins share it.
- *
- * Today's rule is kept, the first plugin winning, because widgets in that
- * shape must keep working as they do; the warning is what tells their authors
- * that the new shape refuses this.
- */
-function warnSharedLegacyIds(
-  legacy: readonly LegacyWidgetIds[],
-  logger: StartupLogger
-): void {
-  const owners = new Map<string, string[]>();
-  for (const { owner, ids } of legacy) {
-    for (const id of ids) owners.set(id, [...(owners.get(id) ?? []), owner]);
-  }
-  for (const [id, plugins] of owners) {
-    if (plugins.length < 2 || WARNED_LEGACY_IDS.has(id)) continue;
-    WARNED_LEGACY_IDS.add(id);
-    logger.warn(
-      `${plugins.join(" and ")} each declare a widget "${id}" in the old ` +
-        `shape. The first one is used, as before. Widgets declared with ` +
-        `defineWidget() may not share an id: rename one before moving it.`,
-      { kind: "widget-id-shared-old-shape", widget: id, plugins }
-    );
-  }
-}
-
 /** The owner core's own widgets are reported and registered under. */
 export const CORE_OWNER = "core";
 
@@ -467,8 +377,6 @@ export interface DashboardWidgets {
   core?: readonly WidgetDefinition[];
   /** Each plugin's declarations, kept and published. */
   groups?: readonly DeclaredWidgetGroup[];
-  /** The ids each plugin declares in today's shape. */
-  legacy?: readonly LegacyWidgetIds[];
   /**
    * What names these widgets (the site config's dashboard, a plugin's
    * suggestions), handed each well-formed declaration as the definition it
@@ -480,8 +388,6 @@ export interface DashboardWidgets {
     declared: ReadonlyMap<string, WidgetDefinition>,
     groups: readonly DeclaredWidgetGroup[]
   ) => readonly WidgetDeclarationFault[];
-  /** Where startup's warnings go: the registration's logger, or the process-wide one. */
-  logger?: StartupLogger;
 }
 
 /**
@@ -496,15 +402,12 @@ export interface DashboardWidgets {
 export function registerDashboardWidgets({
   core = [],
   groups: given = [],
-  legacy = [],
   references,
-  logger = NEXTLY_STARTUP_LOGGER,
 }: DashboardWidgets): void {
   const groups = given.map(snapshot);
   const faults = [
     ...coreWidgetFaults(core),
     ...collectWidgetDeclarationFaults(groups),
-    ...sharedWithLegacy(groups, legacy),
   ];
   if (references !== undefined) {
     // Core's widgets among them: nothing is kept until every check has passed,
@@ -516,13 +419,12 @@ export function registerDashboardWidgets({
     faults.push(...references(declared, groups));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
-  warnSharedLegacyIds(legacy, logger);
 
   for (const definition of core) {
     registerWidget(definition, { source: CORE_OWNER });
   }
 
-  for (const { owner, declarations, collections } of groups) {
+  for (const { owner, declarations, collections, plugin } of groups) {
     // Every group is a list by now: one that was not is a fault, refused above.
     for (const raw of declarations as readonly unknown[]) {
       const declaration = raw as DeclaredWidgetShape;
@@ -531,6 +433,7 @@ export function registerDashboardWidgets({
         declaration,
         display: displayOfView(declaration.view),
         ...(collections === undefined ? {} : { collections }),
+        ...(plugin === undefined ? {} : { plugin }),
       });
       // Published as it is kept, so every declared widget the admin is offered
       // has a declaration here to answer its cards from. One drawn by its own
