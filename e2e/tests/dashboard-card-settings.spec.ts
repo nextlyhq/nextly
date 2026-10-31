@@ -2,8 +2,9 @@
  * A card's settings in a browser: the quick setting on the card, saved at once for the reader
  * and announced, at each reference width; the quick popover, opened from the card's title,
  * applying a change at once with Undo; the card menu at rest, with Settings, Size, Refresh and
- * Remove; and the settings sheet, opened through the popover's More settings, beside a live
- * preview, saving on Done at rest, restoring on Cancel, and holding its change with the
+ * Remove; and the More settings panel, opened through the popover's More settings, beside a
+ * dashboard that stays usable, with a live preview at the card's own tier, saving on Done at
+ * rest (the card's own title with it), restoring on Cancel, and holding its change with the
  * dashboard's other unsaved changes while customising.
  *
  * Drawn with the style fixture's settings card (`style-fixture/recent`), which the suite's
@@ -19,7 +20,7 @@ import {
 } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { fileAccount, test } from "./support/test";
+import { ownSeat, test } from "./support/test";
 import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
@@ -39,6 +40,7 @@ interface Layout {
     h: number;
     removed?: boolean;
     config?: Record<string, unknown>;
+    title?: string;
   }>;
 }
 
@@ -157,26 +159,9 @@ function queriesAfterWrite(sent: readonly Request[]): Request[] {
   return write === -1 ? [] : sent.slice(write + 1).filter(isQuery);
 }
 
-/**
- * Gives the tests of the group it is called in a further seat of this file's account
- * (`fileAccount`): an account of their own, with a REST budget of its own.
- *
- * The REST limit gives each signed-in user 500 reads a minute, and a test here spends about fifty:
- * two dashboard loads, and the layout reads around them. On a production server the file's
- * sixteen tests run in well under a minute, so through one account they spent past 500 by the
- * last group, and whichever test was running then met a 429 and an admin that could not reach
- * the server. Each group reads through a seat of its own instead, as a seeder spreads its writes
- * over further seats, so no account spends more than about 300 of its 500. The first group, the
- * quick setting at each width, keeps the file's own account, seat 0.
- */
-function ownSeat(seat: number): void {
-  test.use({
-    storageState: async ({ baseURL }, use, testInfo) => {
-      if (!baseURL) throw new Error("[e2e] No baseURL configured.");
-      await use(await fileAccount(baseURL, testInfo, seat));
-    },
-  });
-}
+// A test here spends about fifty REST reads (two dashboard loads, and the layout reads around
+// them), so the file's sixteen run through four seats (`ownSeat`), none spending more than about
+// 300 of its 500 a minute. The first group, the quick setting at each width, keeps seat 0.
 
 test.beforeEach(async ({ page }) => {
   await gotoAdmin(page, "/");
@@ -413,7 +398,57 @@ test.describe("the settings sheet", () => {
     await field.press("Tab");
   }
 
-  test("shows the card beside the form, as the form's values would draw it", async ({
+  test("leaves the dashboard usable beside it, and previews the card at the tier its width gives it", async ({
+    page,
+  }) => {
+    const sheet = await openSettings(page);
+    const box = await sheet.boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(480);
+    expect(box?.width).toBeLessThanOrEqual(560);
+    // The card is as wide as it may be on a 1,440 px dashboard: drawn large, scaled to fit.
+    const card = cell(page).locator("[data-tier]").first();
+    await expect(card).toHaveAttribute("data-tier", "large");
+    const preview = sheet.getByTestId("settings-preview");
+    await expect(preview.locator("[data-tier]").first()).toHaveAttribute(
+      "data-tier",
+      "large"
+    );
+    expect(Number(await preview.getAttribute("data-scale"))).toBeLessThan(1);
+    // Not modal: a card beside it can still be reached, and reaching it keeps the panel open.
+    // This card is full width, so its own menu sits under the panel: the first card menu clear
+    // of the panel's box is used, found by its test id, not its name, which follows the title.
+    const menus = await page.getByTestId("card-menu").all();
+    let reachable: (typeof menus)[number] | undefined;
+    for (const menu of menus) {
+      const at = await menu.boundingBox();
+      if (at && box && at.width > 0 && at.x + at.width < box.x) {
+        reachable = menu;
+        break;
+      }
+    }
+    if (reachable === undefined)
+      throw new Error("no card menu clear of the panel");
+    await reachable.click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeVisible();
+  });
+
+  test("keeps the card's own title on Done, and draws the card under it", async ({
+    page,
+  }) => {
+    const sheet = await openSettings(page);
+    await sheet.getByLabel("Title").fill("  Posts to review ");
+    await sheet.getByRole("button", { name: "Done" }).click();
+    await expect(sheet).toBeHidden();
+    // The card's own region, found within its cell, is now named by the reader's title.
+    await expect(cell(page).getByRole("region").first()).toHaveAccessibleName(
+      /^Posts to review/
+    );
+    expect((await storedCard(page))?.title).toBe("Posts to review");
+  });
+
+  test("shows the card at the top of the panel, as the panel's values would draw it", async ({
     page,
   }) => {
     const sheet = await openSettings(page);
@@ -442,21 +477,22 @@ test.describe("the settings sheet", () => {
   }) => {
     // 🔴 The sheet's base is not a flex box, so the area below its header took its own height and
     // ran past the screen with nothing to scroll: on a phone the footer, Done included, was off
-    // the bottom and out of reach. The area now scrolls inside the sheet, so Done can be brought
-    // into view, and pressing it keeps the change.
+    // the bottom and out of reach. The area now scrolls inside the sheet, with Cancel and Done
+    // held at its foot, so Done is in reach however far the form runs, and pressing it keeps
+    // the change.
     await page.setViewportSize({ width: 390, height: 400 });
     await page.reload();
     await expect(rows(page)).toHaveCount(3);
     const sheet = await openSettings(page);
-    await chooseRows(sheet, 2);
+    // Guards the guard: the form must be taller than the room it is given, or Done is in reach
+    // whatever the sheet's layout does, and this test would pass on the old one.
+    const overflows = await sheet
+      .locator("form")
+      .evaluate(form => form.scrollHeight > form.clientHeight);
+    expect(overflows, "the form must be taller than its room").toBe(true);
     const done = sheet.getByRole("button", { name: "Done" });
-    // Guards the guard: Done must start below the screen, or it is in view whatever the sheet's
-    // layout does, and this test would pass on the old one.
-    const startsBelow = await done.evaluate(
-      element => element.getBoundingClientRect().bottom > window.innerHeight
-    );
-    expect(startsBelow, "Done must start below the screen").toBe(true);
-    await done.scrollIntoViewIfNeeded();
+    await expect(done).toBeInViewport();
+    await chooseRows(sheet, 2);
     await expect(done).toBeInViewport();
     await done.click();
     await expect(sheet).toBeHidden();

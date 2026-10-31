@@ -10,9 +10,9 @@ A plugin can extend the Nextly admin in two complementary ways:
 - **`admin`** (on the plugin definition) — _placement & appearance_: where the
   plugin's items sit in the sidebar and how they look (D20).
 
-Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
-on the admin dashboard today, but the contract remains
-[`@experimental`](/docs/plugins/stability) while its shape settles.
+Both are `@public`. Admin **dashboard widgets** are declared with `defineWidget` under
+`contributes.dashboard`, and are rendered on the admin dashboard today, but the contract
+remains [`@experimental`](/docs/plugins/stability) while its shape settles.
 
 ## Component paths
 
@@ -233,7 +233,7 @@ contributes: {
 }
 ```
 
-`menu`/`pages`/`widgets` honour `requiredPermission` for client-side gating (see
+`menu` and `pages` honour `requiredPermission` for client-side gating (see
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
 
@@ -333,76 +333,75 @@ Startup is refused, naming the plugins involved, when a view's `path`:
 
 ## Dashboard widgets
 
-A widget is drawn one of two ways, and you pick by what you declare.
+A plugin adds dashboard widgets under `contributes.dashboard.widgets`, each declared with
+`defineWidget` from `@nextlyhq/plugin-sdk` (**experimental**). A declaration says what the
+widget is (`id`, `title`, `description`, `size`), who is offered it (`access`), where its data
+comes from (`load`, run on the server for each card, as the person viewing it) and how it is
+drawn (`view`): one of core's views, or a component of your own. Startup checks every
+declaration with the rest of the config.
+
+```ts
+import { definePlugin, defineWidget } from "@nextlyhq/plugin-sdk";
+
+export const publishedReports = defineWidget({
+  id: "reports/published",
+  title: "Reports",
+  description: "How many reports there are.",
+  size: { default: { w: 3, h: 2 } }, // 12-column grid units: w 1–12, h 2–12
+  access: "read-reports", // decided on the server, before the card is offered
+  view: "figure",
+  load: async ({ services }) => ({
+    total: await services.count("reports"),
+  }),
+});
+
+export const reports = definePlugin({
+  name: "@acme/nextly-plugin-reports",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard: { widgets: [publishedReports] } },
+});
+```
+
+`access` is a permission spelled as stored (`"read-reports"`), `{ anyOf }` or `{ allOf }` of
+several, `{ collections }` (the reader must be able to read each), or a function of the person.
+Without it, everyone who can open the dashboard is offered the widget. `load` reads through the
+`services` it is handed, bound to the viewer, so a card only ever counts and lists what that
+person may read. Settings, sizes, what a load can read, and testing a widget are on
+[Dashboard Widgets](/docs/widgets).
 
 ### Let the host draw it
 
-Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
-runs the query for the signed-in user and renders the card.
+Name one of core's views and ship no UI code. Core draws the card from what `load` returns, and
+the answer's shape is checked against the view twice: when the declaration compiles, and when
+an answer arrives.
 
-> **What the host draws: `metric`, `list`, `table`, `stats`, `bars`, `timeseries`,
-> `actions` and `text`.** A `text` widget is drawn from the markdown `content` it
-> declares.
->
-> A `list` widget draws one row per result. Its query's `select` decides what each
-> row shows, in order: the first field is the row's label and the second, if there
-> is one, is the muted line under it.
->
-> A `table` widget draws a column per selected field, headed by that field's label
-> from your collection — so a heading reads "Published at", not `publishedAt`. The
-> columns come from what the SERVER returned, not from `select`: a field carrying
-> an `access.read` rule that denies the viewer is absent from their rows, and its
-> column and heading are absent with it.
->
-> A `list` or `table` that selects nothing says so rather than guessing at a field,
-> and says it without running a query.
->
-> An `actions` widget is a short column of shortcuts, declared rather than
-> queried:
->
-> ```ts
-> {
->   id: "acme/shortcuts",
->   title: "Shortcuts",
->   archetype: "actions",
->   size: { default: { w: 3, h: 3 } },
->   actions: [
->     { label: "New post", href: "/admin/collections/posts/create" },
->     { label: "Invite user", href: "/admin/users/create", requiredPermission: "create-users" },
->     { label: "Docs", href: "https://nextly.dev/docs", external: true },
->   ],
-> }
-> ```
->
-> Each item is gated on its own `requiredPermission`: a reader who may not use a
-> shortcut does not see it, while the card itself stays. That is separate from
-> the widget's own `requiredPermission`, which decides whether the card appears
-> at all. `external: true` opens the destination in a new tab and says so to a
-> screen reader. A card shows at most six shortcuts and counts the rest.
+| `view`     | Draws              | `load` returns                                        |
+| ---------- | ------------------ | ----------------------------------------------------- |
+| `"figure"` | One number         | `{ total }`, with `atLeast: true` for a floor         |
+| `"list"`   | One line per row   | `{ items }`, with `fields` and `total` if it has them |
+| `"table"`  | A column per field | `{ items }`, with `fields` and `total` if it has them |
+| `"bars"`   | A bar per group    | `{ buckets: [{ value, count }] }`                     |
+| `"series"` | Counts over time   | `{ points: [{ start, count }], interval }`            |
 
-```ts
-contributes: {
-  admin: {
-    widgets: [
-      {
-        id: "reports-summary",
-        title: "Published reports",
-        archetype: "metric",                 // metric | list | table | stats | bars | timeseries | actions | text
-        size: { default: { w: 3, h: 2 } },   // 12-column grid units: w 1–12, h 2–12
-        query: { source: "collection:reports", op: "count" },
-        requiredPermission: "read-reports",  // client-gated
-        defaultOrder: 40,                    // optional; orders the suggested cards
-      },
-    ],
-  },
-}
-```
+> A `list` draws one line per row. Its fields are the answer's `fields`, in order, or the first
+> row's keys when it names none: the first titles the row, a field of choices (a status) sits
+> at its end, and up to three others join the line under the title. On a large card the rows
+> become a table with every field.
+>
+> A `table` draws a column per field, headed by the `label` its entry in `fields` gives, so a
+> heading reads "Published at", not `publishedAt`. A load that reads through its `services`
+> reads as the viewer, so a field they may not read is absent from their rows, and its column
+> with it.
+>
+> A list or table whose rows carry no field to draw says so on the card rather than guessing.
+>
+> `total` is how many rows the read matched in all, for the card's "View all (N)" link.
 
-`text`, `actions` and `stats` take no top-level `query` — declaring one is a type error,
-and boot refuses it. Every other archetype requires it. A `text` widget declares its
-prose as `content` (markdown) instead. A `stats` widget declares `cells`, one per number,
-each with its own count query and an optional link:
-`cells: [{ key: "open", label: "Open", query: { source: "collection:reports", op: "count" } }]`.
+There is no core view for a column of shortcuts, for prose, or for several numbers in one card,
+which the older contribution shape drew as its `actions`, `text` and `stats` archetypes. A
+declared widget draws one of those with its own component, below. `access` gates the whole
+card: nothing in a declaration gates one item inside it.
 
 ### Where a card sits
 
@@ -411,21 +410,21 @@ one: the site's `admin.dashboard.defaultLayout`, or core's own when the site giv
 Everyone gets the same default, less the cards they may not see: a widget whose permission or
 `access` refuses them, or whose `shows` answers no.
 
-A plugin asks for a place on it with `suggest`, naming its own widgets. Core places them after
-the default's own cards, in the order the site lists its plugins, unless the site turns
-suggestions off:
+Core's own default holds, in order: Set up your project across the row; Needs attention beside
+Upcoming releases; Continue where you left off beside Content; then the form builder's new
+submissions card, where the form-builder plugin is installed, beside Team activity. While only
+one of Needs attention and Upcoming releases is on show, it is drawn across the whole row; its
+saved size does not change.
 
-```ts
-contributes: {
-  dashboard: {
-    widgets: [ordersByState, revenue],
-    suggest: ["acme/orders-by-state"],
-  },
-}
-```
+No widget a plugin declares with `defineWidget` is placed on any dashboard on its own: the add
+panel offers it, and a reader adds it from there. A site that wants a plugin's widget on its
+default names it in `defaultLayout`, as below, marked `optional` where the plugin may be absent.
 
-A suggestion never reaches a dashboard someone has saved: there, the add panel offers the
-widget instead. A widget nobody suggests is offered and never placed.
+`contributes.dashboard.suggest` is deprecated: it is still checked at startup (each id must be
+one of the plugin's own widgets), and it places nothing. A plugin that used it to put a card on
+the default dashboard should say in its README which `defaultLayout` entry a site adds for it.
+The site's `admin.dashboard.suggestions` is deprecated for the same reason: it is still checked
+(`true` or `false`) and changes nothing, since no card follows the default to turn off.
 
 A site writes its own default as widget ids, or as cards with a size in grid units and
 starting settings. An entry marked `optional` is left out where its widget is not installed,
@@ -444,7 +443,6 @@ admin: {
       { widget: "core/count", settings: { collection: "posts" } },
       { widget: "core/count", id: "pages-count", settings: { collection: "pages" } },
     ],
-    suggestions: false,
   },
 }
 ```
@@ -548,80 +546,77 @@ export const unanswered = defineAttentionItem({
 
 ### Draw it yourself
 
-Ship a `component` and the host gives you the card's frame — header, footer, loading and
-error states — while you draw the body:
+Name a component path as the `view`, and register the component from your plugin's `/admin`
+entry, as every admin component is (see [Component paths](#component-paths)). The host still
+draws the card's frame: the header, the footer link, and the loading, not-available and error
+states. Your component draws the body:
 
 ```ts
-contributes: {
-  admin: {
-    widgets: [
-      {
-        id: "reports-chart",
-        component: "@acme/nextly-plugin-reports/admin#ChartWidget",
-        size: { default: { w: 6, h: 4 } },   // 12-column grid units: w 1–12, h 2–12
-        requiredPermission: "read-reports",  // client-gated
-      },
-    ],
+import { defineWidget } from "@nextlyhq/plugin-sdk";
+
+export const recentReports = defineWidget({
+  id: "reports/recent",
+  title: "Recent reports",
+  description: "The latest reports, newest first.",
+  size: { default: { w: 6, h: 4 } }, // 12-column grid units: w 1–12, h 2–12
+  access: "read-reports",
+  view: { component: "@acme/nextly-plugin-reports/admin#RecentReports" },
+  load: async ({ services }) => {
+    const { items } = await services.find("reports", {
+      sort: "-createdAt",
+      limit: 8,
+    });
+    return { items };
   },
+  // Required for a component of your own: only you can tell when its data is empty.
+  isEmpty: data => data.items.length === 0,
+});
+```
+
+The component is handed `WidgetProps<typeof recentReports>`, typed from the declaration, so its
+`data` is what that `load` returns:
+
+```tsx
+import type { WidgetProps } from "@nextlyhq/plugin-sdk/widgets";
+
+import type { recentReports } from "./widgets";
+
+export function RecentReports({
+  data,
+  size,
+  refreshing,
+}: WidgetProps<typeof recentReports>) {
+  const shown = size.tier === "large" ? data.items : data.items.slice(0, 4);
+  return (
+    <ul aria-busy={refreshing}>
+      {shown.map((report: Record<string, unknown>, index: number) => (
+        <li key={index}>{String(report.title)}</li>
+      ))}
+    </ul>
+  );
 }
 ```
 
-A component-drawn widget may ALSO declare a `query`: the host runs it in the same batch
-and hands your component the result, so you do not fetch it again.
+| Prop          | What it is                                                                                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `widgetId`    | The widget's id.                                                                                                                                                  |
+| `placementId` | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card, its settings and its answer, is keyed by this, not by `widgetId`. |
+| `settings`    | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else, typed from the declaration.     |
+| `size`        | The card's `w` and `h` in grid units, and its `tier`: `"small"`, `"medium"` or `"large"`.                                                                         |
+| `data`        | The card's answer, always present: the frame draws loading, not available and error itself, and calls your component only once there is data.                     |
+| `refreshing`  | Whether a newer answer is on its way; `data` is the last one until it lands.                                                                                      |
+| `retry`       | Asks for the card's data again.                                                                                                                                   |
 
-Your component receives five props, and you can name their types:
+A `load` that throws fails its own card, which shows the frame's error with Retry, while every
+other card keeps its answer. The types come from `@nextlyhq/plugin-sdk/widgets`, which carries
+no runtime code, so importing them adds nothing to your bundle.
 
-```ts
-import type { WidgetComponentProps } from "@nextlyhq/plugin-sdk/widgets";
+Widgets are drawn on the admin dashboard by `WidgetGrid`, in a 12-column grid that collapses to
+one column on small screens, and every card on the page is answered in one batched request. A
+widget its reader may not be offered (`access`) is neither drawn nor answered for them.
 
-export function ChartWidget({ slot, isFetching }: WidgetComponentProps) {
-  // `slot` is undefined in TWO cases, and `isFetching` tells them apart:
-  // the first request is still running, or this widget declared no query.
-  if (!slot) return isFetching ? <Skeleton /> : null;
-  if (!slot.ok) return <p>{slot.error}</p>;
-  if (slot.result.op !== "list") return null;
-  return <Chart rows={slot.result.items} busy={isFetching} />;
-}
-```
-
-| Prop          | Type                      | What it is                                                                                                                                                          |
-| ------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `widgetId`    | `string`                  | The id you registered the widget under.                                                                                                                             |
-| `placementId` | `string`                  | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
-| `settings`    | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else.                                   |
-| `slot`        | `WidgetSlot \| undefined` | This card's answer. `undefined` means either that the first request is still in flight **or** that the widget declared no query — see below.                        |
-| `isFetching`  | `boolean`                 | Whether this card's query is in flight, the first request included. Always `false` for a widget with no query.                                                      |
-
-An absent `slot` has two causes and they need different UI: `isFetching` is `true` only
-for a card whose query is in the batch, so `slot === undefined && isFetching` is the
-first load — draw a skeleton — while `slot === undefined && !isFetching` means no answer
-is ever coming. Treating them alike draws an empty state over a running request.
-
-`slot` is a discriminated union — `{ ok: true, result }` or `{ ok: false, error }` — so
-narrowing on `slot.ok` gives you a typed `result`. A failing query is a value, not a
-thrown error: the batch answers with every other widget's data intact, so one query
-failing colours one card rather than blanking the dashboard.
-
-These types come from `@nextlyhq/plugin-sdk/widgets`, which carries no runtime code —
-importing them adds nothing to your bundle.
-
-Widgets are rendered on the admin dashboard by `WidgetGrid`, in a 12-column grid that
-collapses to one column on small screens, and are hidden from users who lack
-`requiredPermission`. Every widget on the page is fetched in a single batched request.
-
-An archetype this version of Nextly does not draw reports itself in that card and leaves
-the rest of the dashboard alone — whether it is one of the four above or a name from a
-newer core this admin has never heard of. A plugin ahead of its host degrades one card
-rather than breaking the admin.
-
-The contract is still `@experimental` and is expected to grow: charts, and richer
-archetypes. Per-widget settings and saved layouts have since shipped — a widget declares
-`settings`, the reader edits them per card, and your component is handed the resolved
-values. Pin your Nextly version while it settles.
-
-`requiredPermission` gates whether the widget renders. It does **not** constrain the data
-your widget reads — fetch through the access-controlled API so a viewer only ever sees
-rows they may read.
+The contract is still `@experimental` and is expected to grow. Pin your Nextly version while it
+settles.
 
 Everything else on this page is `@public` today.
 

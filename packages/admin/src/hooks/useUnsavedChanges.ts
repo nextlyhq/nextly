@@ -371,6 +371,11 @@ function holder(track: {
 
 /** What a history-write interceptor reads, from the hook. */
 interface WriteTrack {
+  /**
+   * Whether the guard that put this interceptor up is still on. Set false as it comes down: an
+   * interceptor another guard has since wrapped stays in the chain, and passes every write on.
+   */
+  live: { current: boolean };
   isDirty: boolean;
   isNavigating: { current: boolean };
   fields: { current: readonly object[] | undefined };
@@ -390,12 +395,17 @@ function writeInterceptor(
   kind: "pushState" | "replaceState",
   track: WriteTrack
 ): History["pushState"] {
-  return function (
+  const intercept = function (
     this: History,
     data: unknown,
     unused: string,
     url?: string | URL | null
   ): void {
+    // A guard that has come down holds nothing: passed on as written.
+    if (!track.live.current) {
+      write.apply(this, [data, unused, url]);
+      return;
+    }
     // Let through: nothing unsaved, a write the guard is making itself, or
     // one that stays put (a hash, or a rewrite of the same address).
     if (
@@ -410,6 +420,38 @@ function writeInterceptor(
     // Held, and asked about; never written.
     track.hold({ type: kind, args: [data, unused, url] });
   };
+  interceptors.set(intercept, { live: track.live, original: write });
+  return intercept;
+}
+
+/**
+ * Every interceptor a guard has put up, with whether its guard is still on and the write it
+ * wraps. Guards and the router do not come and go as a stack: under Activity a page's guard is
+ * put up before the router that wraps it, and two guards on one page change in whatever order
+ * the page does. So a guard coming down cannot count on its interceptor being the outermost,
+ * nor on what it wrapped still being on; it unwinds instead (`unwindGuardsGone`).
+ */
+const interceptors = new WeakMap<
+  object,
+  { live: { current: boolean }; original: History["pushState"] }
+>();
+
+/**
+ * Take every interceptor whose guard has come down off the top of `history[kind]`, down to the
+ * first that is still on, the router's own patch, or the browser's method. Read and written
+ * through `Reflect`, as the property it is, since the method is only ever compared and put
+ * back here, never called.
+ */
+function unwindGuardsGone(kind: "pushState" | "replaceState"): void {
+  const top: unknown = Reflect.get(window.history, kind);
+  if (typeof top !== "function") return;
+  let current: object = top;
+  let found = interceptors.get(current);
+  while (found !== undefined && !found.live.current) {
+    current = found.original;
+    found = interceptors.get(current);
+  }
+  if (current !== top) Reflect.set(window.history, kind, current);
 }
 
 /**
@@ -754,7 +796,10 @@ export function useUnsavedChanges({
       },
     });
 
+    // This effect's interceptors are on until its cleanup.
+    const live = { current: true };
     const writes = {
+      live,
       isDirty,
       isNavigating,
       fields: fieldsRef,
@@ -815,13 +860,14 @@ export function useUnsavedChanges({
 
     // Cleanup
     return () => {
-      // Restore original methods
-      if (originalPushState.current) {
-        window.history.pushState = originalPushState.current;
-      }
-      if (originalReplaceState.current) {
-        window.history.replaceState = originalReplaceState.current;
-      }
+      // Not the original put back as it was found: by now another guard, or the router, may
+      // wrap this interceptor, and putting back what it wrapped would take that one down too,
+      // or bring back a guard that has gone. This one is marked gone instead, which makes it
+      // pass every write on wherever it sits, and the outermost write loses every gone
+      // interceptor at its top, this one with it when it is there (`unwindGuardsGone`).
+      live.current = false;
+      unwindGuardsGone("pushState");
+      unwindGuardsGone("replaceState");
       const at = guards.indexOf(handlePopState);
       if (at !== -1) guards.splice(at, 1);
       navigation?.removeEventListener("navigate", handleNavigate);

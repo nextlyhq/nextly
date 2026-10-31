@@ -1,20 +1,19 @@
 /**
- * One answer to "which widgets exist", across two channels that do not share a
- * shape.
+ * One answer to "which widgets exist": every published widget, as layout
+ * resolution reads it.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  allWidgets,
-  canonicalWidgets,
-  placedByDefault,
-  sizeFacts,
-  type CanonicalWidget,
-} from "../canonical";
+import { allWidgets, sizeFacts, type CanonicalWidget } from "../canonical";
 import {
   collectionWidgets,
   unreadableCollectionCard,
 } from "../collection-cards";
+import {
+  clearDeclaredWidgets,
+  registerDashboardWidgets,
+} from "../declaration/declared-widgets";
+import { defineWidget } from "../declaration/define-widget";
 import type { WidgetDefinition } from "../definition";
 import { sizeBounds } from "../grid-size";
 import { clearWidgets, registerWidget } from "../registry";
@@ -43,264 +42,15 @@ function withoutUndefined<T extends object>(value: T): Partial<T> {
   ) as Partial<T>;
 }
 
-beforeEach(() => clearWidgets());
+beforeEach(() => {
+  clearWidgets();
+  clearDeclaredWidgets();
+});
 
 describe("the canonical widget set", () => {
-  it("includes a widget that only CONTRIBUTED", () => {
-    // 🔴 The defect. `listWidgets()` answers the imperative registry alone, so
-    // a plugin using the documented `contributes.admin.widgets` surface was
-    // absent from the default arrangement and from `available`, and every write
-    // naming it was refused as unavailable — a card that renders and can never
-    // be arranged.
-    const contributed: CanonicalWidget[] = [{ id: "forms/latest" }];
-    expect(canonicalWidgets(contributed).map(w => w.id)).toEqual([
-      "forms/latest",
-    ]);
-  });
-
-  it("includes widgets from both channels", () => {
-    registerWidget(registered({ id: "core/team" }));
-    expect(
-      canonicalWidgets([{ id: "forms/latest" }])
-        .map(w => w.id)
-        .sort()
-    ).toEqual(["core/team", "forms/latest"]);
-  });
-
-  it("lets a REGISTRATION win a collision, matching the admin's resolver", () => {
-    // The two must agree. If the server ordered a card by the contribution
-    // while the admin drew it from the registration, the arrangement would
-    // order one declaration and render another, and nothing would look wrong.
-    registerWidget(registered({ id: "dup/one", defaultOrder: 5 }));
-    const merged = canonicalWidgets([{ id: "dup/one", defaultOrder: 99 }]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].defaultOrder).toBe(5);
-  });
-
-  it("keeps a CONTRIBUTED order the registration did not state", () => {
-    // 🔴 A collision was resolved by wholesale replacement, which the admin
-    // does not do: `resolve-widgets.ts` reads
-    // `registration.defaultOrder ?? contribution.defaultOrder`. So a
-    // registration that stated no order dropped the contributed one here and
-    // kept it there -- the server building the default arrangement from one
-    // declaration while the grid drew it from another, with a card sorted into
-    // a position the reader never sees.
-    registerWidget(registered({ id: "dup/one" }));
-    const merged = canonicalWidgets([{ id: "dup/one", defaultOrder: 99 }]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].defaultOrder).toBe(99);
-  });
-
-  it("keeps a CONTRIBUTED dismissible the registration did not state", () => {
-    // 🔴 The same field-by-field rebuild one field along, and the admin's own
-    // `mergeCollision` already falls back to the contribution here. Dropped on
-    // this side, the browser draws a card its reader can send away while the
-    // server's canonical copy of the same declaration says nothing about it --
-    // and the two implementations of one merge have come apart, which is the
-    // divergence this whole path exists to prevent.
-    registerWidget(registered({ id: "dup/one" }));
-    expect(
-      canonicalWidgets([{ id: "dup/one", dismissible: true }])[0]
-    ).toHaveProperty("dismissible", true);
-  });
-
-  it("keeps a CONTRIBUTED plugin, description and category the registration did not state", () => {
-    // 🔴 The same rebuild again: dropped here, a registration overriding a plugin's widget moved
-    // it out of that plugin's group in the add panel and lost the words a search finds it by.
-    registerWidget(registered({ id: "dup/one" }));
-    expect(
-      canonicalWidgets([
-        {
-          id: "dup/one",
-          plugin: "@acme/forms",
-          description: "The newest submissions.",
-          category: "Forms",
-        },
-      ])[0]
-    ).toMatchObject({
-      plugin: "@acme/forms",
-      description: "The newest submissions.",
-      category: "Forms",
-    });
-  });
-
-  it("lets a REGISTRATION state its own description and category over a contribution's", () => {
-    // The control: the fallback is a fallback, not a merge that always prefers the plugin.
-    registerWidget(
-      registered({
-        id: "dup/one",
-        description: "Mine.",
-        category: "Ours",
-      })
-    );
-    expect(
-      canonicalWidgets([
-        {
-          id: "dup/one",
-          plugin: "@acme/forms",
-          description: "The newest submissions.",
-          category: "Forms",
-        },
-      ])[0]
-    ).toMatchObject({
-      plugin: "@acme/forms",
-      description: "Mine.",
-      category: "Ours",
-    });
-  });
-
-  it("lets a REGISTRATION state dismissible over a contribution's", () => {
-    // The control: the fallback must not become a merge that always prefers the
-    // contribution. A registration IS the override channel, so where it states
-    // the field its answer stands -- and without this, a merge hard-coded to
-    // the contribution's value would satisfy the case above.
-    registerWidget(registered({ id: "dup/one", dismissible: false }));
-    expect(
-      canonicalWidgets([{ id: "dup/one", dismissible: true }])[0]
-    ).toHaveProperty("dismissible", false);
-  });
-
-  it("keeps a CONTRIBUTED lifecycle the registration did not state", () => {
-    // 🔴 The collision path dropped it. A registration that says nothing about
-    // the lifecycle contributes no such fields, and the merge then returned the
-    // registration's summary alone -- so a contributed conditional card became
-    // permanent here and was offered forever, which is the one behaviour the
-    // lifecycle exists to remove.
-    registerWidget(registered({ id: "dup/one" }));
-    const merged = canonicalWidgets([
-      {
-        id: "dup/one",
-        lifecycle: "conditional",
-        visibleWhen: "content:empty",
-      },
-    ]);
-    expect(merged[0]).toHaveProperty("lifecycle", "conditional");
-    expect(merged[0]).toHaveProperty("visibleWhen", "content:empty");
-  });
-
-  it("lets a registration OVERRIDE a contributed lifecycle, condition and all", () => {
-    // The pair moves together. A registration stating `"always"` has decided
-    // the question, and keeping the contributed condition beside it would leave
-    // a `visibleWhen` on a permanent card -- a field nothing reads, describing
-    // a rule that no longer applies.
-    registerWidget(registered({ id: "dup/one", lifecycle: "always" }));
-    const merged = canonicalWidgets([
-      {
-        id: "dup/one",
-        lifecycle: "conditional",
-        visibleWhen: "content:empty",
-      },
-    ]);
-    expect(merged[0]).toHaveProperty("lifecycle", "always");
-    expect(merged[0]).not.toHaveProperty("visibleWhen");
-  });
-
-  it("takes a Collection setting only from the declaration whose settings win", () => {
-    // 🔴 The admin draws the registration's whole settings list wherever it
-    // states one, so a registration stating settings without a Collection
-    // setting draws a widget with none -- and its cards must not be judged by
-    // the contribution's.
-    const contributed: CanonicalWidget = {
-      id: "dup/one",
-      textBounds: [],
-      collectionSetting: { name: "source", type: "collection" },
-    };
-    registerWidget(
-      registered({
-        id: "dup/one",
-        settings: [{ name: "limit", type: "number", defaultValue: 5 }],
-      })
-    );
-    const merged = canonicalWidgets([contributed])[0];
-    expect(merged.collectionSetting).toBeUndefined();
-    expect(merged.textBounds).toEqual([]);
-
-    // The must-differ half: a registration stating no settings keeps the
-    // contribution's, as the admin draws them.
-    clearWidgets();
-    registerWidget(registered({ id: "dup/one" }));
-    expect(canonicalWidgets([contributed])[0].collectionSetting?.name).toBe(
-      "source"
-    );
-  });
-
-  it("takes the registration's queries on a collision, as the admin draws its query", () => {
-    registerWidget(
-      registered({
-        id: "dup/one",
-        archetype: "metric",
-        component: undefined,
-        query: { source: "single:homepage", op: "count" },
-      })
-    );
-    const merged = canonicalWidgets([
-      {
-        id: "dup/one",
-        knobQueries: [{ source: "collection:posts", op: "count" }],
-      },
-    ])[0];
-    expect(merged.knobQueries).toEqual([
-      { source: "single:homepage", op: "count" },
-    ]);
-  });
-
-  it("asks nothing on a collision whose registration declares no query, as the admin draws it", () => {
-    // 🔴 The admin's merge takes the registration's query, here none: the
-    // contribution's query is not asked, so its Collection setting names no
-    // collection the card reads.
-    registerWidget(registered({ id: "dup/one" }));
-    const merged = canonicalWidgets([
-      {
-        id: "dup/one",
-        knobQueries: [{ source: "collection:posts", op: "count" }],
-      },
-    ])[0];
-    expect(merged.knobQueries).toEqual([]);
-  });
-
-  it("does NOT inherit a contributed permission, matching the admin", () => {
-    // The asymmetry is deliberate. The registry is the override channel, so a
-    // registration that states no permission has stated that, and
-    // `mergeCollision` reads it exactly that way. Falling back here would gate
-    // a card the admin renders ungated -- the reader sees it and every write
-    // naming it is refused, which is the same disagreement inverted.
-    registerWidget(registered({ id: "dup/one" }));
-    const merged = canonicalWidgets([
-      { id: "dup/one", requiredPermission: "read-forms" },
-    ]);
-    expect(merged[0]).not.toHaveProperty("requiredPermission");
-  });
-
-  it("takes a registration only as the admin may RECEIVE it", () => {
-    // 🔴 A registration JSON cannot carry never reaches the browser -- the
-    // workspace payload skips it -- so it must not win a collision here
-    // either. Taken from the raw registry, an ungated registration the admin
-    // would never see merged over a gated contribution, the verdict became
-    // the registration's, and the contribution's declaration shipped to every
-    // reader under a clearance nothing the reader could see had granted.
-    registerWidget(
-      registered({
-        id: "dup/one",
-        archetype: "metric",
-        component: undefined,
-        query: {
-          source: "collection:posts",
-          op: "count",
-          where: { views: { greater_than: 10n } },
-        },
-      } as Partial<WidgetDefinition>)
-    );
-    const merged = canonicalWidgets([
-      { id: "dup/one", requiredPermission: "read-forms" },
-    ]);
-    expect(merged).toHaveLength(1);
-    // The contribution stands alone, gated as it declared.
-    expect(merged[0].requiredPermission).toBe("read-forms");
-  });
-
-  it("has no entry at all for a lone registration the admin cannot receive", () => {
-    // The control for the collision above, and a property of its own: a
-    // card the grid can never draw is not one the layout may place.
+  it("has no entry at all for a registration the admin cannot receive", () => {
+    // A card the grid can never draw is not one the layout may place: a
+    // registration JSON cannot carry never reaches the browser.
     registerWidget(
       registered({
         id: "core/heavy",
@@ -314,27 +64,10 @@ describe("the canonical widget set", () => {
       } as Partial<WidgetDefinition>)
     );
     registerWidget(registered({ id: "core/light" }));
-    expect(canonicalWidgets([]).map(widget => widget.id)).toEqual([
-      "core/light",
-    ]);
+    expect(allWidgets().map(widget => widget.id)).toEqual(["core/light"]);
   });
 
-  it("keeps the FIRST of two contributions sharing an id", () => {
-    // 🔴 Widget ids are plugin-local, so two enabled plugins can ship the same
-    // one. `resolveDashboardWidgets` walks declarations in order and keeps the
-    // first renderable; this kept the LAST, so the layout endpoint placed one
-    // plugin's widget while the grid drew the other's -- a card wearing another
-    // plugin's geometry, or filtered away by a permission it never declared.
-    const merged = canonicalWidgets([
-      { id: "dup/two", defaultOrder: 1, requiredPermission: "read-a" },
-      { id: "dup/two", defaultOrder: 99, requiredPermission: "read-b" },
-    ]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].defaultOrder).toBe(1);
-    expect(merged[0].requiredPermission).toBe("read-a");
-  });
-
-  it("carries the fields placement reads, from a registration", () => {
+  it("carries the fields placement reads", () => {
     registerWidget(
       registered({
         id: "core/team",
@@ -343,7 +76,7 @@ describe("the canonical widget set", () => {
         defaultOrder: 20,
       })
     );
-    expect(canonicalWidgets([])[0]).toEqual({
+    expect(allWidgets()[0]).toEqual({
       id: "core/team",
       requiredPermission: "read-users",
       size: { default: { w: 4, h: 4 }, max: { w: 6, h: 4 } },
@@ -357,12 +90,11 @@ describe("the canonical widget set", () => {
     });
   });
 
-  it("carries the gate of every action, from both channels of a colliding id", () => {
+  it("carries the gate of every action, verbatim", () => {
     // 🔴 An `actions` widget's shortcuts each carry a gate of their own, and
     // the workspace payload withholds a shortcut on it before the declaration
-    // ships. Both copies of a colliding id ship, so both copies' gates are
-    // carried -- verbatim, including the absent ones, so the count matches
-    // the actions.
+    // ships: verbatim, including the absent ones, so the count matches the
+    // actions.
     registerWidget(
       registered({
         id: "acme/links",
@@ -374,37 +106,46 @@ describe("the canonical widget set", () => {
         ],
       })
     );
-    const [widget] = canonicalWidgets([
-      { id: "acme/links", actionGates: ["export-notes"] },
-    ]);
-    expect(widget.actionGates).toEqual([
-      "export-notes",
-      undefined,
-      "purge-notes",
-    ]);
+    expect(allWidgets()[0]?.actionGates).toEqual([undefined, "purge-notes"]);
   });
 
   it("omits what a declaration did not state", () => {
     registerWidget(registered({ id: "core/team" }));
-    const [widget] = canonicalWidgets([]);
+    const [widget] = allWidgets();
     expect(widget).not.toHaveProperty("requiredPermission");
     expect(widget).not.toHaveProperty("defaultOrder");
+    expect(widget).not.toHaveProperty("plugin");
   });
 
-  it("carries a contributed size as the contribution states it", () => {
-    const size = { default: { w: 6, h: 3 } };
-    expect(canonicalWidgets([{ id: "p/w", size }])[0]).toEqual({
-      id: "p/w",
-      size,
+  it("names the plugin that declared a widget, which the add panel lists it under", () => {
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: 'plugin "@acme/forms"',
+          plugin: "@acme/forms",
+          declarations: [
+            defineWidget({
+              id: "forms/latest",
+              title: "Latest",
+              description: "The newest submissions.",
+              size: { default: { w: 6, h: 4 } },
+              load: () => Promise.resolve({ items: [] }),
+              view: { component: "@acme/forms/admin#Latest" },
+              isEmpty: () => false,
+            }),
+          ],
+        },
+      ],
     });
+    // The control: core's registration names no plugin.
+    registerWidget(registered({ id: "core/team" }));
+    const byId = new Map(allWidgets().map(widget => [widget.id, widget]));
+    expect(byId.get("forms/latest")?.plugin).toBe("@acme/forms");
+    expect(byId.get("core/team")).not.toHaveProperty("plugin");
   });
 
-  it("drops a contribution with no usable id", () => {
-    expect(canonicalWidgets([{ id: "" }])).toEqual([]);
-  });
-
-  it("is empty when neither channel has anything", () => {
-    expect(canonicalWidgets([])).toEqual([]);
+  it("is empty when nothing is declared", () => {
+    expect(allWidgets()).toEqual([]);
   });
 });
 
@@ -417,19 +158,25 @@ describe("a widget the site config overrides", () => {
       overrides: new Map([["acme/pinned", { settings: { source: "secret" } }]]),
     });
     try {
-      // Contributed, so the canonical summary's own copy of the setting is
-      // the one withholding and the token read.
-      const listed = canonicalWidgets([
-        {
+      // The canonical summary's own copy of the setting is the one
+      // withholding and the token read.
+      registerWidget(
+        registered({
           id: "acme/pinned",
-          collectionSetting: {
-            name: "source",
-            type: "collection",
-            label: "Collection",
-            defaultValue: "posts",
-          },
-        },
-      ]);
+          archetype: "metric",
+          component: undefined,
+          query: { source: "collection:posts", op: "count" },
+          settings: [
+            {
+              name: "source",
+              type: "collection",
+              label: "Collection",
+              defaultValue: "posts",
+            },
+          ],
+        })
+      );
+      const listed = allWidgets();
       const withheld = unreadableCollectionCard(
         collectionWidgets(listed),
         new Set(["posts"])
@@ -454,7 +201,7 @@ describe("a widget the site config overrides", () => {
     }
   });
 
-  it("is listed as the override changes it, whichever channel supplied it", () => {
+  it("is listed as the override changes it", () => {
     setSiteDashboardRules({
       hidden: new Set(),
       replaced: new Map(),
@@ -464,14 +211,14 @@ describe("a widget the site config overrides", () => {
       ]),
     });
     try {
-      // Contributed, so only the canonical list's own reading applies it.
-      const [stats] = canonicalWidgets([
-        {
+      registerWidget(
+        registered({
           id: "acme/stats",
           description: "Theirs",
           size: { default: { w: 4, h: 3 }, max: { w: 12, h: 6 } },
-        },
-      ]);
+        })
+      );
+      const [stats] = allWidgets();
       expect(stats.description).toBe("Ours");
       expect(stats.size).toEqual({
         default: { w: 4, h: 3 },
@@ -521,7 +268,7 @@ describe("a widget's size", () => {
   });
 
   it("reads a widget that states no size as the unstated size, as the admin does", () => {
-    // 🔴 One answer for a contribution with no size: the same constant the
+    // 🔴 One answer for a summary with no size: the same constant the
     // admin reads through `nextly/config`, so the server's default placement
     // and the grid cannot start the card at two sizes.
     expect(sizeFacts({ id: "w/a" }).size).toEqual(
@@ -539,23 +286,6 @@ describe("a widget's size", () => {
       h: 3,
     });
   });
-
-  it("takes a colliding id's size from the registration whole, never mixing in a contributed bound", () => {
-    registerWidget(
-      registered({ id: "dup/one", size: { default: { w: 6, h: 4 } } })
-    );
-    const [merged] = canonicalWidgets([
-      {
-        id: "dup/one",
-        size: { default: { w: 3, h: 2 }, min: { w: 3, h: 2 } },
-        allowsSeveral: true,
-      },
-    ]);
-    expect(merged?.size).toEqual({ default: { w: 6, h: 4 } });
-    // The contribution's `allowsSeveral` still stands where the registration
-    // states none.
-    expect(merged?.allowsSeveral).toBe(true);
-  });
 });
 
 describe("a widget offered per collection", () => {
@@ -563,11 +293,6 @@ describe("a widget offered per collection", () => {
     id: "core/count",
     offered: "per-collection" as const,
   };
-
-  it("stays off the default dashboard, where every other widget is placed", () => {
-    expect(placedByDefault(perCollection)).toBe(false);
-    expect(placedByDefault({ id: "core/team" })).toBe(true);
-  });
 
   it("allows several cards, one per collection, unless it says otherwise", () => {
     expect(sizeFacts(perCollection).allowsSeveral).toBe(true);

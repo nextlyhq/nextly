@@ -10,7 +10,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
@@ -27,6 +35,7 @@ import {
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -150,6 +159,7 @@ function followedDefault(
       h: choice.h,
       removed: choice.removed,
       ...(choice.config === undefined ? {} : { config: choice.config }),
+      ...(choice.title === undefined ? {} : { title: choice.title }),
     };
   });
 }
@@ -247,6 +257,14 @@ function pressUndo() {
   if (options?.action?.label !== "Undo") throw new Error("no Undo offered");
   options.action.onClick();
 }
+
+// The settings panel's code loads apart from the dashboard's, ahead of its opening, as a pointer
+// over the card's menu fetches it. Fetched once here, so a test opening the panel meets the panel
+// rather than its loading screen.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../CellSettings");
+});
 
 beforeEach(() => {
   stubDashboardWidth();
@@ -383,5 +401,158 @@ describe("the quick popover at rest", () => {
     expect(
       await screen.findByRole("dialog", { name: "Quick settings for Styled" })
     ).toBeInTheDocument();
+  });
+});
+
+describe("what a card's own write says it is", () => {
+  it("names the card by the title its reader gave it, as the card shows it", async () => {
+    // Two copies of one widget are told apart by their own titles: so is what a write says.
+    layoutResponse = {
+      ...layout(),
+      placements: [
+        layout().placements[0]!,
+        { ...DEFAULTS[1]!, title: "Drafts board" },
+      ],
+    };
+    // The write fails, so what is said comes from the write itself.
+    api.put.mockRejectedValue(new Error("network down"));
+    renderGrid();
+    const user = userEvent.setup();
+    await chooseWidthAtRest(user, "Drafts board", "Half width, 6 columns");
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toast.error.mock.calls.at(-1)?.[0]).toMatch(
+      /^Could not save Drafts board's size/
+    );
+  });
+});
+
+describe("Settings for a card whose widget declares none", () => {
+  it("opens the card's settings panel, where its own title is set", async () => {
+    // Every card has a title its reader can give it, so every card has Settings.
+    renderGrid();
+    const user = userEvent.setup();
+    const menu = await openMenu(user, "Plain");
+    await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+    // Its popover holds its Size, and More settings leads on to the panel.
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Plain",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: "Plain settings" });
+    expect(within(panel).getByLabelText("Title")).toBeInTheDocument();
+  });
+
+  it("opens the panel straight from Settings where there is no popover, and hands focus back to the menu", async () => {
+    // A card of one size and no settings has no popover: Settings opens its panel itself.
+    const fixed = { w: 4, h: 3 };
+    const branded = branding();
+    mockBranding = {
+      ...branded,
+      widgets: [
+        ...(branded.widgets ?? []),
+        {
+          id: "core/fixed",
+          title: "Fixed",
+          archetype: "custom",
+          size: { default: fixed, min: fixed, max: fixed },
+          component: "core#AtRestBody",
+        },
+      ],
+    } as AdminBranding;
+    layoutResponse = {
+      ...layout(),
+      placements: [
+        ...layout().placements,
+        { id: "p3", widgetId: "core/fixed", ...fixed, removed: false },
+      ],
+    };
+    renderGrid();
+    const user = userEvent.setup();
+    const menu = await openMenu(user, "Fixed");
+    await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+    const panel = await screen.findByRole("dialog", { name: "Fixed settings" });
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Card menu for Fixed" })
+      ).toHaveFocus()
+    );
+  });
+});
+
+describe("Size at rest on the lone card of the pair, drawn across its row", () => {
+  /** Needs attention on a default that pairs it with Upcoming releases, which this reader is not handed. */
+  function pairBranding(): AdminBranding {
+    return {
+      widgets: [
+        {
+          id: "core/needs-attention",
+          title: "Needs attention",
+          archetype: "custom",
+          size: RESIZABLE,
+          component: "core#AtRestBody",
+        },
+      ],
+    } as unknown as AdminBranding;
+  }
+  const ATTENTION: WidgetPlacement = {
+    id: "core/needs-attention",
+    widgetId: "core/needs-attention",
+    w: 8,
+    h: 3,
+    removed: false,
+  };
+
+  it("saves its stored width with a new height, and Undo restores the stored size", async () => {
+    mockBranding = pairBranding();
+    layoutResponse = {
+      ...layout(),
+      placements: [ATTENTION],
+      defaultPlacements: [ATTENTION],
+      // The default as configured gives the pair a row of their own.
+      pairedRow: true,
+    };
+    // The server's answer to a write, for this one card: what was written, the next version.
+    api.put.mockImplementation((_path: string, body: unknown) => {
+      const write = body as { placements: WidgetPlacement[] };
+      const before = layoutResponse as DashboardLayoutResponse;
+      layoutResponse = {
+        ...before,
+        placements: write.placements,
+        version: before.version + 1,
+      };
+      return Promise.resolve({ message: "ok", item: {} });
+    });
+    renderGrid();
+    const user = userEvent.setup();
+    // The precondition: drawn across the row, its stored width eight.
+    const cell = await screen.findByTestId("widget-cell-core/needs-attention");
+    await waitFor(() => expect(cell).toHaveClass("col-span-12"));
+    expect(cell).not.toHaveClass("@min-[1024px]/dashboard:col-span-8");
+
+    const menu = await openMenu(user, "Needs attention");
+    await user.click(within(menu).getByRole("menuitem", { name: /Height/ }));
+    const heights = await waitFor(() => {
+      const menus = screen.getAllByRole("menu");
+      expect(menus.length).toBe(2);
+      return menus[1];
+    });
+    within(heights).getByRole("menuitemradio", { name: "4 rows" }).focus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    // 🔴 The stored width, never the twelve it is drawn at.
+    expect(
+      sent(0)?.placements.find(p => p.id === "core/needs-attention")
+    ).toMatchObject({ w: 8, h: 4 });
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    pressUndo();
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
+    expect(
+      sent(1)?.placements.find(p => p.id === "core/needs-attention")
+    ).toMatchObject({ w: 8, h: 3 });
   });
 });

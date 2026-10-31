@@ -14,15 +14,20 @@ import {
   mkdir,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 import { parse } from "@babel/parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { registrationEdit } from "../generate-widget/config-edit";
+import { adminExportEdit } from "../generate-widget/admin-export";
+import {
+  registrationEdit,
+  slashRelative,
+} from "../generate-widget/config-edit";
 import { testSource } from "../generate-widget/files";
 import { widgetId, type WidgetTarget } from "../generate-widget/id";
 import { runGenerateWidget, type WidgetPrompter } from "../generate-widget/run";
@@ -243,9 +248,144 @@ describe("the registration edit", () => {
     });
   });
 
+  it("leaves a config that declares the widget's name itself as it was", () => {
+    for (const text of [
+      "const openOrders = defineCollection({ slug: 'orders' });\ndefineConfig({ collections: [openOrders] })",
+      "export const openOrders = 1;\ndefineConfig({})",
+      "const { openOrders } = presets;\ndefineConfig({})",
+      "const [, { list: [openOrders] }] = presets;\ndefineConfig({})",
+      "function openOrders() {}\ndefineConfig({})",
+      "type openOrders = string;\ndefineConfig({})",
+    ]) {
+      expect(edit(text), text).toEqual({
+        kind: "manual",
+        instructions: expect.stringContaining(
+          "openOrders is already declared, so it was left as it was. Import the widget under another name:"
+        ),
+      });
+    }
+    // A reference is not a declaration: the config is edited as usual.
+    expect(after("defineConfig({});\nexport default openOrders;")).toContain(
+      IMPORT
+    );
+  });
+
+  it("reuses only the named import the generated declaration has, never a default or an alias of it", () => {
+    for (const binding of [
+      "openOrders",
+      "{ legacyOrders as openOrders }",
+      "* as openOrders",
+      "type { openOrders }",
+      "{ type openOrders }",
+    ]) {
+      const text = `import ${binding} from "./src/dashboard/open-orders.widget";\ndefineConfig({ admin: { dashboard: { widgets: [openOrders] } } })`;
+      expect(edit(text), text).toEqual({
+        kind: "manual",
+        instructions: expect.stringContaining(
+          `openOrders is imported from "./src/dashboard/open-orders.widget", but not as the named export openOrders the generated declaration has, so it was left as it was. Import it by that name instead:\n  ${IMPORT}`
+        ),
+      });
+    }
+    // The named import itself, aliased to its own name, is the one it needs.
+    const own = `import { openOrders as openOrders } from "./src/dashboard/open-orders.widget";\ndefineConfig({ admin: { dashboard: { widgets: [openOrders] } } })`;
+    expect(after(own)).toBe(own);
+  });
+
   it("adds the import once, however often it runs", () => {
     const once = after("defineConfig({})");
     expect(once.split(IMPORT).length - 1).toBe(1);
+  });
+});
+
+describe("the admin entry's export of a plugin's card", () => {
+  const FILE = "/plugin/src/admin/index.ts";
+  const LINE = 'export { OpenOrdersCard } from "./open-orders-card";';
+  const exportEdit = (text: string) =>
+    adminExportEdit({
+      file: FILE,
+      text,
+      parser: parse,
+      exportName: "OpenOrdersCard",
+      componentPath: "/plugin/src/admin/open-orders-card.tsx",
+    });
+
+  it("adds the export to an entry without it", () => {
+    expect(exportEdit("export {};\n")).toEqual({
+      kind: "edit",
+      edit: {
+        path: FILE,
+        before: "export {};\n",
+        after: `export {};\n${LINE}\n`,
+      },
+    });
+  });
+
+  it("keeps the card's export however it is written", () => {
+    for (const text of [
+      LINE,
+      "export { OpenOrdersCard } from './open-orders-card.js';\n",
+      "export {\n  NotesCard,\n  OpenOrdersCard,\n} from './open-orders-card'\n",
+    ]) {
+      const answer = exportEdit(text);
+      expect(answer, text).toEqual({
+        kind: "edit",
+        edit: { path: FILE, before: text, after: text },
+      });
+    }
+  });
+
+  it("leaves an entry that exports the name from anything else as it was, and says why", () => {
+    for (const [text, from] of [
+      [
+        'export { OpenOrdersCard } from "./legacy-card";\n',
+        'from "./legacy-card"',
+      ],
+      [
+        'export { Old as OpenOrdersCard } from "./open-orders-card";\n',
+        'from "./open-orders-card"',
+      ],
+      [
+        'export * as OpenOrdersCard from "./open-orders-card";\n',
+        'from "./open-orders-card"',
+      ],
+      [
+        "export const OpenOrdersCard = () => null;\n",
+        "by a declaration of its own",
+      ],
+      [
+        'import { Card } from "./card";\nexport { Card as OpenOrdersCard };\n',
+        "by the file itself",
+      ],
+    ] as const) {
+      expect(exportEdit(text), text).toEqual({
+        kind: "manual",
+        instructions: `In ${FILE}, OpenOrdersCard is already exported ${from}, so it was left as it was. The dashboard loads the card by that name: free it, then add\n  ${LINE}`,
+      });
+    }
+  });
+});
+
+describe("the project paths it prints and writes", () => {
+  it("spells them with forward slashes on Windows too", () => {
+    // Windows' own path syntax, so the separator it prints is tested here.
+    expect(
+      slashRelative(
+        "C:\\app",
+        "C:\\app\\src\\dashboard\\open-orders.widget.test.ts",
+        win32
+      )
+    ).toBe("src/dashboard/open-orders.widget.test.ts");
+    expect(
+      slashRelative(
+        "C:\\plugin\\src\\admin",
+        "C:\\plugin\\src\\widgets\\open-orders.widget.ts",
+        win32
+      )
+    ).toBe("../widgets/open-orders.widget.ts");
+    // And this system's, which the command uses when given none.
+    expect(
+      slashRelative("/app", "/app/src/dashboard/open-orders.widget.ts")
+    ).toBe("src/dashboard/open-orders.widget.ts");
   });
 });
 
@@ -414,6 +554,50 @@ describe("running the command", () => {
     });
   });
 
+  it("refuses a --config outside the project, through a link or not, and writes nothing", async () => {
+    await asSite();
+    const outside = await mkdtemp(
+      join(tmpdir(), "nextly-generate-widget-other-")
+    );
+    try {
+      await writeFile(join(outside, "nextly.config.ts"), CONFIG);
+      await symlink(
+        join(outside, "nextly.config.ts"),
+        join(dir, "linked.config.ts")
+      );
+      for (const configPath of [
+        join(outside, "nextly.config.ts"),
+        "linked.config.ts",
+      ]) {
+        expect(
+          await runGenerateWidget(dir, { id: "open-orders", configPath }),
+          configPath
+        ).toEqual({
+          ok: false,
+          reason: expect.stringContaining(
+            `which is outside this project (${dir})`
+          ),
+        });
+      }
+      expect(await readFile(join(outside, "nextly.config.ts"), "utf8")).toBe(
+        CONFIG
+      );
+      expect(await exists(join(outside, "src"))).toBe(false);
+      expect(await exists(join(dir, "src"))).toBe(false);
+      expect(await readFile(join(dir, "package.json"), "utf8")).toBe(MANIFEST);
+      // A link that stays inside the project is followed.
+      await symlink(join(dir, "nextly.config.ts"), join(dir, "here.config.ts"));
+      expect(
+        await runGenerateWidget(dir, {
+          id: "open-orders",
+          configPath: "here.config.ts",
+        })
+      ).toMatchObject({ ok: true });
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("refuses to switch a widget between its own component and a core view with --force, naming what to remove", async () => {
     await asPlugin();
     await runGenerateWidget(dir, { id: "open-orders", view: "component" });
@@ -534,6 +718,21 @@ describe("running the command", () => {
     await expect(readFile(declaration(), "utf8")).rejects.toThrow();
   });
 
+  it("on a dry run, says what it would add to package.json rather than to install what it added", async () => {
+    await asSite();
+    await writeFile(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    const result = await runGenerateWidget(dir, {
+      id: "open-orders",
+      dryRun: true,
+    });
+    if (!result.ok) throw new Error(result.reason);
+    expect(await readFile(join(dir, "package.json"), "utf8")).toBe(MANIFEST);
+    expect(result.nextSteps[0]).toBe(
+      "Run it without --dry-run to add @nextlyhq/plugin-sdk, @nextlyhq/adapter-sqlite to package.json, then install them: pnpm install"
+    );
+    expect(result.nextSteps.join("\n")).not.toContain("Install what it added");
+  });
+
   it("asks for what the flags left out on a terminal, and only then", async () => {
     await asSite();
     const prompter: WidgetPrompter = {
@@ -631,6 +830,39 @@ describe("running the command", () => {
     expect(await readFile(join(dir, "src", "plugin.ts"), "utf8")).toContain(
       "dashboard: { widgets: [openOrders] },"
     );
+  });
+
+  it("generates a component again with --force over an admin entry its formatter rewrote, adding nothing", async () => {
+    await asPlugin();
+    await runGenerateWidget(dir, { id: "open-orders", view: "component" });
+    const index = join(dir, "src", "admin", "index.ts");
+    const formatted = (await readFile(index, "utf8")).replaceAll('"', "'");
+    await writeFile(index, formatted);
+    const again = await runGenerateWidget(dir, {
+      id: "open-orders",
+      view: "component",
+      force: true,
+    });
+    expect(again).toMatchObject({ ok: true, edits: [], manual: [] });
+    expect(await readFile(index, "utf8")).toBe(formatted);
+  });
+
+  it("leaves an admin entry exporting the card's name from another module as it was, and says what to do", async () => {
+    await asPlugin();
+    const index = join(dir, "src", "admin", "index.ts");
+    const taken = 'export { OpenOrdersCard } from "./legacy-card";\n';
+    await writeFile(index, taken);
+    const result = await runGenerateWidget(dir, {
+      id: "open-orders",
+      view: "component",
+    });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.manual).toEqual([
+      expect.stringContaining(
+        'OpenOrdersCard is already exported from "./legacy-card", so it was left as it was.'
+      ),
+    ]);
+    expect(await readFile(index, "utf8")).toBe(taken);
   });
 
   it("never names a plugin's component after a module beside it", async () => {

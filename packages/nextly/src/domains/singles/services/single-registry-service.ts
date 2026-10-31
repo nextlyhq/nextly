@@ -891,28 +891,16 @@ export class SingleRegistryService extends BaseRegistryService<
         flushContentChange(expire, this.logger, "a Single was deleted")
       );
 
-      if (this.permissionSeedService) {
-        try {
-          const permissionResult =
-            await this.permissionSeedService.deletePermissionsForResource(slug);
-
-          if (permissionResult.created > 0) {
-            this.logger.info(
-              `Deleted ${permissionResult.created} permission(s) for single "${slug}"`
-            );
-          }
-
-          if (permissionResult.skipped > 0) {
-            this.logger.warn(
-              `${permissionResult.skipped} permission(s) for "${slug}" could not be deleted (may be assigned to roles)`
-            );
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to cleanup permissions for single "${slug}": ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
+      // Loaded when a delete runs, not with the registry.
+      const { deleteResourcePermissions } = await import(
+        "../../collections/services/delete-resource-permissions"
+      );
+      await deleteResourcePermissions({
+        service: this.permissionSeedService,
+        slug,
+        kind: "single",
+        logger: this.logger,
+      });
     } catch (error) {
       // Preserve already-mapped NextlyErrors (the notFound above, forbidden
       // above). Raw DB errors map via fromDatabaseError per spec §8.2.

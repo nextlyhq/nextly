@@ -9,6 +9,7 @@
     "auth-setup": 4720,
     "auth-signup": 4397,
     "auth-verify-email": 1457,
+    "CellSettings": 139955,
     "CodeInput": 920,
     "CodeMirrorEditor": 246349,
     "groups-drawing": 2169,
@@ -58,9 +59,6 @@
     "page.dashboard.settings.api-keys.edit._id_": 4090,
     "page.dashboard.settings.api-keys.index": 5981,
     "page.dashboard.settings.background-jobs.index": 3965,
-    "page.dashboard.settings.image-sizes.create": 4068,
-    "page.dashboard.settings.image-sizes.edit._id_": 4762,
-    "page.dashboard.settings.image-sizes.index": 6948,
     "page.dashboard.settings.index": 4297,
     "page.dashboard.settings.permissions.index": 3199,
     "page.dashboard.settings.webhooks._id_.deliveries._deliveryId_": 3568,
@@ -87,7 +85,6 @@
     "RichTextInput": 203674,
     "SchedulePublishDialog": 83978,
     "TextMarkdown": 158087,
-    "UploadTray": 1710,
-    "WidgetSettingsSheet": 80159
+    "UploadTray": 1710
   }
 }

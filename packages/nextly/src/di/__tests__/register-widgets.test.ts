@@ -15,14 +15,12 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  canonicalWidgets,
-  placedByDefault,
-} from "../../domains/widgets/canonical";
+import { allWidgets } from "../../domains/widgets/canonical";
 import {
   CORE_WIDGET_IDS,
   CORE_WIDGETS,
 } from "../../domains/widgets/core-widgets";
+import { defaultLayoutPlacements } from "../../domains/widgets/default-layout";
 import {
   deferredEntities,
   setDeferredEntities,
@@ -53,6 +51,7 @@ import {
   CONTINUE_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
+import { defineWidget } from "../../domains/widgets/declaration/define-widget";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
 
 beforeEach(() => {
@@ -143,16 +142,11 @@ describe("resetWidgetRegistries", () => {
     expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
   });
 
-  it("does NOT register a plugin's contributed source, which needs a context this runs before", () => {
-    // 🔴 An ordering fact, not a preference. This function runs before
-    // `initializePlugins` has built any plugin context, and a contributed
-    // resolver without its context can answer nothing -- a plugin's data
-    // services are reachable through nothing else. Registering here would
-    // publish a source whose resolver could only return constants.
-    //
-    // They register from `initializePlugins`, each bound to its own plugin's
-    // context, which `plugin-widget-source.integration.test.ts` exercises
-    // through a real boot.
+  it("registers nothing a plugin carries under contributes.widgetSources", () => {
+    // Nextly no longer reads the key: plugin resolution refuses a plugin that
+    // carries it before this reset runs, and nothing here registers what it
+    // holds, so a plugin reaching here around that refusal still adds no
+    // source.
     resetWidgetRegistries([
       {
         name: "@acme/stripe",
@@ -178,6 +172,39 @@ describe("resetWidgetRegistries", () => {
     // The control: core's own sources DID register in the same call, so this
     // cannot pass by registering nothing at all.
     expect(getSource(RELEASES_SOURCE_ID)).toBeDefined();
+  });
+
+  it("lists a plugin's declared widget under that plugin, by its name", () => {
+    // The add panel lists a plugin's widgets under the plugin that declared
+    // them: the name travels from the plugin, through its dashboard, to the
+    // widget's summary.
+    resetWidgetRegistries([
+      {
+        name: "@acme/forms",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: {
+          dashboard: {
+            widgets: [
+              defineWidget({
+                id: "forms/latest",
+                title: "Latest",
+                description: "The newest submissions.",
+                size: { default: { w: 6, h: 4 } },
+                load: () => Promise.resolve({ items: [] }),
+                view: { component: "@acme/forms/admin#Latest" },
+                isEmpty: () => false,
+              }),
+            ],
+          },
+        },
+      } as never,
+    ]);
+    const byId = new Map(allWidgets().map(card => [card.id, card]));
+    expect(byId.get("forms/latest")?.plugin).toBe("@acme/forms");
+    // The control: core's own widgets name no plugin.
+    expect(byId.get(CORE_WIDGET_IDS[0])).toBeDefined();
+    expect(byId.get(CORE_WIDGET_IDS[0])).not.toHaveProperty("plugin");
   });
 
   it("leaves the deferral store alone, because it has not synced anything yet", () => {
@@ -307,13 +334,15 @@ function asksOf(card: AskingCard): { source?: unknown }[] {
   ];
 }
 
-/** Whether core places each of its cards on a new dashboard, by the one rule. */
+/**
+ * Whether core places each of its cards on a new dashboard: read from the default the layout
+ * builds (`defaultLayoutPlacements`), the one rule, over core's cards.
+ */
 function placedById(): (id: string) => boolean {
-  const canonical = new Map(canonicalWidgets([]).map(card => [card.id, card]));
-  return id => {
-    const card = canonical.get(id);
-    return card !== undefined && placedByDefault(card);
-  };
+  const placed = new Set(
+    defaultLayoutPlacements(allWidgets()).map(card => card.widgetId)
+  );
+  return id => placed.has(id);
 }
 
 /**

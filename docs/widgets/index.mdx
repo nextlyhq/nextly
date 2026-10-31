@@ -3,8 +3,9 @@ title: Dashboard Widgets
 description: Put the numbers your team actually checks on the admin dashboard.
 ---
 
-The admin dashboard is built from widgets. Each one declares what it wants to know, and the
-system runs that query on its behalf, scoped to the permissions of whoever is looking.
+The admin dashboard is built from widgets. Each one is a single declaration, written with
+`defineWidget`: what it is, who is offered it, how its data is loaded on the server as the
+person looking, and how it is drawn. Core's own widgets are declared the same way.
 
 ## Quick start
 
@@ -36,52 +37,49 @@ and run its test with `npx vitest run`.
 
 ## Availability
 
-|                            |                                                                                                                                   |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Built in                   | The widget system, the built-in sources and admin rendering all ship                                                              |
-| Plugin-contributed widgets | **Experimental.** They render, but the contribution shape is still settling — see the [stability ladder](/docs/plugins/stability) |
-| Permission                 | A widget's query runs scoped to the viewer, so two people can see the same dashboard and different numbers                        |
+|                            |                                                                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Built in                   | The widget system, core's widgets and admin rendering all ship                                                                           |
+| Plugin-contributed widgets | **Experimental.** They render, but `defineWidget` and its shape are still settling — see the [stability ladder](/docs/plugins/stability) |
+| Permission                 | A widget's `load` reads as the viewer, so two people can see the same dashboard and different numbers                                    |
 
-## Archetypes
+## Declaring a widget
 
-A widget declares an archetype rather than drawing itself, so dashboards stay visually
-consistent no matter who contributed the widget:
-
-| Archetype | Shows                                          |
-| --------- | ---------------------------------------------- |
-| `metric`  | One number                                     |
-| `stats`   | Several labelled, clickable numbers            |
-| `table`   | Rows and columns                               |
-| `list`    | An ordered list of items                       |
-| `actions` | Buttons for things to do                       |
-| `text`    | Prose you wrote, as markdown                   |
-| `custom`  | Your own component, when none of the above fit |
-
-A `text` widget is its prose. It declares `content` instead of a query, and the host draws
-it: headings, paragraphs, lists, emphasis, inline code, block quotes and links.
+A plugin declares its widgets under `contributes.dashboard.widgets`, with `defineWidget` from
+`@nextlyhq/plugin-sdk`, the only surface a plugin imports from. A site declares its own under its
+config's `admin.dashboard.widgets`, and there `defineWidget` may also come from `nextly`. Startup
+checks every declaration with the rest of the config, and names every fault it finds in one
+message.
 
 ```ts
-{
-  id: "acme/release-notes",
-  title: "Before you release",
-  archetype: "text",
-  size: { default: { w: 4, h: 3 } },
-  content: [
-    "## Checklist",
-    "",
-    "Drain the queue, then read [the runbook](https://example.com/runbook).",
-  ].join("\n"),
+contributes: {
+  dashboard: { widgets: [ordersThisMonth, recentOrders] },
 }
 ```
 
-Three things the markdown cannot do, by design. Raw HTML is shown as the text it is. A link
-may point at `http`, `https`, `mailto`, `tel`, or a path on this site written as `/...`,
-`./...` or `#...`; a link to anything else — a bare `posts?status=draft`, an address with no
-scheme, or a path a browser would read as another site, such as `/\example.com` — is left on
-screen as the markdown you wrote it in, so you can see it was refused. And the
-content is bounded — it travels inside every dashboard load for every reader who is offered
-the card, so it is for notes and a pointer to a runbook, not for the runbook itself. An
-external link opens in a new tab.
+A widget is drawn one of two ways. It can name one of core's views and ship no UI code: core
+draws the card from what `load` returns, and the answer's shape is checked against the view
+twice, when the declaration compiles and when an answer arrives.
+
+| `view`     | Draws              | `load` returns                                        |
+| ---------- | ------------------ | ----------------------------------------------------- |
+| `"figure"` | One number         | `{ total }`, with `atLeast: true` for a floor         |
+| `"list"`   | One line per row   | `{ items }`, with `fields` and `total` if it has them |
+| `"table"`  | A column per field | `{ items }`, with `fields` and `total` if it has them |
+| `"bars"`   | A bar per group    | `{ buckets: [{ value, count }] }`                     |
+| `"series"` | Counts over time   | `{ points: [{ start, count }], interval }`            |
+
+Or it can name a component of its own, `view: { component: "<package>/admin#Name" }`, which the
+admin draws inside the card's frame; such a widget also says, with `isEmpty`, when its data is
+empty, since core cannot tell that for a component it does not draw. The frame draws every
+state but ready either way: loading, empty, not available and error. See
+[Plugin admin UI](/docs/plugins/admin-ui#dashboard-widgets) for both, and for the props a
+component is handed.
+
+There is no core view for a column of shortcuts, for prose, or for several numbers in one card,
+which the older contribution shape drew as its `actions`, `text` and `stats` archetypes. A
+declared widget draws one of those with its own component. `access` gates the whole card:
+nothing in a declaration gates one item inside it.
 
 A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
 from 1 to 12 columns and `h` from 2 to 12 rows. It declares the size a card starts at and, if it
@@ -98,35 +96,23 @@ keyboard, and a line shows where it will land; below 640 pixels, where every car
 cards are moved, resized and removed from their menu instead. The arrangement applies at every
 width.
 
-## Declared, not fetched
+## Loaded as the viewer
 
-A widget does not run its own database query. It **declares** one, and the system executes
-it. That is what makes permission scoping reliable rather than something each widget author
-has to remember: a widget cannot read what its viewer could not have read directly.
+A widget does not reach the database itself. Its `load` runs on the server for each card, and
+reads through the `services` it is handed, already bound to the person viewing the card: they
+take no user and no option to read past access, so a card only ever counts and lists what that
+person could have read directly. That is what makes permission scoping reliable rather than
+something each widget author has to remember.
 
-It also means most widgets need no data-fetching code at all.
-
-### Sources
-
-A query names a source, and the source decides what the query may ask:
-
-| Source              | Reads                                                                                                       | Supports                                                                                                                                  |
-| ------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `collection:<slug>` | The collection's entries, through the same access-controlled read as the API                                | `count`, `list`, `groupBy`, and `timeseries` where the collection has a usable date                                                       |
-| `single:<slug>`     | The single's one document, as a list of one row                                                             | `list` only — a single answers a fixed question, so a `where`, a `sort`, a `count` or a bucketing over it is refused rather than answered |
-| `system:…`          | A core service — versions, releases, activity and the like — each answering through its own service's rules | Whatever that source declares                                                                                                             |
-
-Every collection and every single the install has is published as a source, and the dashboard
-offers a card derived from each: a count, a recent list, a table and a health breakdown per
-collection, and one status card per single showing whether it is published and when it last
-changed. Offered, never placed — nobody's dashboard gains a card because a collection was
-created — and only to a reader who may read that collection or single.
+Core's Count, Breakdown, Over time and Recent entries are declared this way too, each with a
+Collection setting: the add panel offers each once per collection the reader may read, set to
+that collection. Offered, never placed — nobody's dashboard gains a card because a collection
+was created — and a new collection needs no new widget.
 
 <Callout type="warn">
-  Contributing a widget from a plugin works today, but `PluginAdminWidget` is
-  marked `@experimental` and its shape may change before it settles. Building on
-  it is reasonable; depending on it in something you cannot easily update is
-  not.
+  Contributing a widget from a plugin works today, but `defineWidget` is marked
+  `@experimental` and its shape may change before it settles. Building on it is
+  reasonable; depending on it in something you cannot easily update is not.
 </Callout>
 
 ## A site's own widgets
@@ -208,8 +194,8 @@ answers. A widget's `shows` function gets the same `size`.
 
 ### What a load can read
 
-The `services` a `load` is handed read as the person viewing the card, with the same checks a
-card's own query gets. Beside `count`, `find`, `groupBy` and `timeseries`, they answer:
+The `services` a `load` is handed read as the person viewing the card, with the same access
+checks as every other read of their content. Beside `count`, `find`, `groupBy` and `timeseries`, they answer:
 
 ```ts
 import { defineWidget } from "@nextlyhq/plugin-sdk";
@@ -256,7 +242,7 @@ All of these are experimental.
 
 ## A setting's own editor
 
-A setting is drawn in the card's settings sheet by the field its builder names: a number input
+A setting is drawn in the card's settings panel by the field its builder names: a number input
 for `setting.number`, a picker for `setting.collection`. Where none of those fits, a setting can
 name a component of your own with `editor` (**experimental**), drawn in the sheet in its place.
 The component is handed `SettingEditorProps` of the setting's value: the value, an `onChange`, the
@@ -368,7 +354,29 @@ it("draws the count in the dark scheme", () => {
 Both helpers are for tests and stay out of a production build. They are experimental, and their
 shape may change.
 
+## Where a setting is drawn
+
+A card's More settings panel draws its settings in three sections: **Data**, what the card reads;
+**Display**, how it shows it (every card's title is there too); and **Advanced**, folded until a
+reader opens it. Name a setting's section with `section`:
+
+```ts
+density: setting.select({
+  label: "Density",
+  options: [
+    { label: "Default", value: "default" },
+    { label: "Compact", value: "compact" },
+  ],
+  defaultValue: "default",
+  section: "advanced",
+}),
+```
+
+Without one, a Collection, Filter, Sort, Group by or Field setting and a `setting.dateRange` are
+drawn under Data, and every other setting under Display. A setting is folded under Advanced only
+when it says so. Startup refuses a `section` other than `"data"`, `"display"` or `"advanced"`.
+
 ## Related
 
-- [Plugin admin UI](/docs/plugins/admin-ui) — contributing admin surfaces
+- [Plugin admin UI](/docs/plugins/admin-ui) — contributing admin surfaces, and drawing a widget with your own component
 - [Plugin stability](/docs/plugins/stability) — what is settled and what is not

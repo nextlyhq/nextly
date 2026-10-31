@@ -246,16 +246,37 @@ export function collectionLabel(
 }
 
 /**
- * The title a card is drawn under, and the subtitle beneath it. A card whose Collection setting
- * names a collection is titled by its SUBJECT, that collection ("Posts"), with its widget's name
- * as the subtitle ("Count"), so two of a widget's cards for different collections are told apart
- * by sight and by the region's name alike, and read subject first. A card set to none is titled
- * as its widget, with no subtitle.
+ * The title a card is drawn under, and the subtitle beneath it: the one reading of both.
+ *
+ * A card whose Collection setting names a collection is titled AUTOMATICALLY by its subject,
+ * that collection, and the choice its quick select holds where it has one ("Posts · last 30
+ * days"), with its widget's name as the subtitle ("Over time"). So two of a widget's cards for
+ * different collections are told apart by sight and by the region's name alike, and read subject
+ * first. A card set to none is titled as its widget, with no subtitle.
+ *
+ * A title the reader gave the card (`ownTitle`, the placement's) replaces the title and keeps the
+ * widget's name beneath it, unless the two are the same words.
  */
 export function titleAsAsked(
   widget: DashboardWidget,
   config: Record<string, unknown> | undefined,
-  sources?: readonly PublishedContentSource[]
+  sources?: readonly PublishedContentSource[],
+  ownTitle?: string
+): { title: string; subtitle?: string } {
+  const own = ownTitle?.trim();
+  if (own !== undefined && own !== "") {
+    return own === widget.title
+      ? { title: own }
+      : { title: own, subtitle: widget.title };
+  }
+  return automaticTitle(widget, config, sources);
+}
+
+/** A card's title as its widget and settings give it, when its reader gave it none. */
+function automaticTitle(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined,
+  sources: readonly PublishedContentSource[] | undefined
 ): { title: string; subtitle?: string } {
   const name = widget.settings?.find(
     setting => setting.type === "collection"
@@ -263,18 +284,18 @@ export function titleAsAsked(
   const values = effectiveWidgetSettings(widget.settings, config);
   const collection = name === undefined ? undefined : values[name];
   if (typeof collection !== "string") return { title: widget.title };
+  const subject = collectionLabel(collection, sources);
   const choice = quickChoiceOf(widget, values);
   return {
-    title: collectionLabel(collection, sources),
-    subtitle:
-      choice === undefined ? widget.title : `${widget.title} · ${choice}`,
+    title: choice === undefined ? subject : `${subject} · ${choice}`,
+    subtitle: widget.title,
   };
 }
 
 /**
- * The option a card's quick select is set to, as its subtitle names it ("Over time · last 30
- * days"), so the subtitle says what the quick control changed; nothing for a toggle, whose On
- * or Off says nothing on its own, or for a widget with no quick select.
+ * The option a card's quick select is set to, as its automatic title names it ("Posts · last 30
+ * days"), so the title says what the quick control changed; nothing for a toggle, whose On or
+ * Off says nothing on its own, or for a widget with no quick select.
  */
 function quickChoiceOf(
   widget: DashboardWidget,
@@ -283,7 +304,7 @@ function quickChoiceOf(
   const quick = quickSettingOf(widget.settings);
   if (quick?.type !== "select") return undefined;
   const label = quickValueLabel(quick, values[quick.name]);
-  // Lowercased to sit inside the subtitle, unless it starts as an acronym does ("UTC day").
+  // Lowercased to sit inside the title, unless it starts as an acronym does ("UTC day").
   return /[A-Z]/.test(label.charAt(1))
     ? label
     : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;

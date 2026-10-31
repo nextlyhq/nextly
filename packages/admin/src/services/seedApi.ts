@@ -20,13 +20,14 @@ import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { refreshAccessToken } from "@admin/lib/api/refreshInterceptor";
 import type { MutationResponse } from "@admin/lib/api/response-types";
+import { debugLog } from "@admin/lib/debug";
 
 /**
  * The probe's answer. `available: false` alone is a definitive no: the route
- * refuses this person (401, 403) or the project ships none (404). With
- * `unknown`, the route could not say (a 5xx while it starts, a network
- * failure): nothing is offered, but setup is not judged on it, and the probe
- * is asked again.
+ * refuses this person (401, 403), or the project has no such route (404, and
+ * the answers below that say the same). With `unknown`, the route could not
+ * say (a 5xx while it starts, any other 4xx, a network failure): nothing is
+ * offered, but setup is not judged on it, and the probe is asked again.
  */
 export type SeedProbeResult =
   | { available: false; unknown?: true }
@@ -34,6 +35,17 @@ export type SeedProbeResult =
 
 /** The answers that say no for good: no session, refused, or no sample content at all. */
 const DEFINITIVE_NO = new Set([401, 403, 404]);
+
+/**
+ * Answers outside the route's contract that still say the project has no
+ * route here: not served at this method (405), gone (410), not implemented
+ * (501), and 400, which Nextly's admin API catch-all answered for a path it
+ * does not serve before it answered 404 at this one. A HEAD carries no body
+ * to tell that 400 from another, so every 400 is read as it. Any other 4xx
+ * (408, 409, 425, 429, ...) may not hold on the next ask, so it stays "not
+ * known" and is asked again.
+ */
+const NO_ROUTE = new Set([400, 405, 410, 501]);
 
 /**
  * What starting a load came to, as this person is told it. Never a throw: a
@@ -59,9 +71,36 @@ export type SampleStartAnswer =
 const PROBE_PATH = "/admin/api/seed";
 const SEED_PATH = "/seed";
 
-/** The probe itself: a HEAD, which carries no body to say why it was refused. */
+/**
+ * A failed probe's answer. Read as "not known", a project with no route here
+ * that answers one of `NO_ROUTE` held the step open as unreadable and asked
+ * the probe again on every read of the card. Not the route's contract, so it
+ * is said at debug level, once per load: unlike "not known", a no is not
+ * asked again.
+ */
+function failedProbe(status: number): SeedProbeResult {
+  if (DEFINITIVE_NO.has(status)) return { available: false };
+  if (NO_ROUTE.has(status)) {
+    debugLog(
+      "seedApi",
+      `HEAD ${PROBE_PATH} answered ${status}: read as no sample content.`
+    );
+    return { available: false };
+  }
+  return { available: false, unknown: true };
+}
+
+/**
+ * The probe itself: a HEAD, which carries no body to say why it was refused.
+ * Never answered from a cache: an answer kept from before the project added
+ * its route, or before this person was allowed to load, would hide the offer.
+ */
 function headProbe(): Promise<Response> {
-  return fetch(PROBE_PATH, { method: "HEAD", credentials: "include" });
+  return fetch(PROBE_PATH, {
+    method: "HEAD",
+    credentials: "include",
+    cache: "no-store",
+  });
 }
 
 /**
@@ -95,12 +134,8 @@ async function probe(): Promise<SeedProbeResult> {
   // starting. Read as "the endpoint exists", a refusal drew a button whose
   // every press fails, in place of an action the person could take. Every
   // other failure fails closed too: no answer is never a yes. But it is not a
-  // no either: only a refusal or a missing route is.
-  if (!res.ok) {
-    return DEFINITIVE_NO.has(res.status)
-      ? { available: false }
-      : { available: false, unknown: true };
-  }
+  // no either: only a refusal or a missing route is (`failedProbe`).
+  if (!res.ok) return failedProbe(res.status);
   // Template metadata from headers, so the offer names the template without
   // hardcoding it.
   const slug = res.headers.get("x-nextly-seed-template") ?? "unknown";

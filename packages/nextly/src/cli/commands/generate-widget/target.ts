@@ -9,8 +9,8 @@
  *
  * @module cli/commands/generate-widget/target
  */
-import { access, readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { findConfigFile } from "../../../shared/lib/config-file";
 
@@ -38,9 +38,18 @@ async function pluginPackage(root: string): Promise<string | undefined> {
     : undefined;
 }
 
+/** Whether `path` is inside the folder `root`, both already resolved through their links. */
+function isInside(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
 /**
  * The site whose config the root CLI's `--config` names: that file, relative to
- * `cwd`, wherever it is, rather than the ones `findConfigFile` looks for.
+ * `cwd`, rather than the ones `findConfigFile` looks for. It has to be inside
+ * `cwd`, the project whose manifest and package manager the command uses, once
+ * every link on the way is followed: a config of another project would get its
+ * widget files and its edit while this one got the dependencies.
  */
 async function siteAt(
   cwd: string,
@@ -54,13 +63,17 @@ async function siteAt(
     };
   }
   const path = resolve(cwd, configPath);
-  const found = await access(path).then(
-    () => true,
-    () => false
-  );
-  return found
-    ? { ok: true, target: { kind: "site", root: cwd, configPath: path } }
-    : { ok: false, reason: `no config at ${path}, which --config names` };
+  const real = await realpath(path).catch(() => undefined);
+  if (real === undefined) {
+    return { ok: false, reason: `no config at ${path}, which --config names` };
+  }
+  if (!isInside(await realpath(cwd), real)) {
+    return {
+      ok: false,
+      reason: `--config names ${real}, which is outside this project (${cwd}); run it from the root of the project that config belongs to`,
+    };
+  }
+  return { ok: true, target: { kind: "site", root: cwd, configPath: path } };
 }
 
 /**

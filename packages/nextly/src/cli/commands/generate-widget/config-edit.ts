@@ -10,13 +10,18 @@
  * else (a second call, a level held in a variable, a spread or a computed key
  * that could carry the level, a file that does not parse) leaves the file byte
  * for byte as it was, and the edit is printed for the author to make. A widget
- * already in the list is left there, so generating it again lists it once.
+ * already in the list is left there, so generating it again lists it once. So
+ * is a file that holds the widget's name some other way (a declaration of its
+ * own, or an import that is not the generated named export): a second binding
+ * of one name would not compile.
  *
  * @module cli/commands/generate-widget/config-edit
  */
-import { dirname, relative } from "node:path";
+import { dirname, relative, sep } from "node:path";
 
 import type { parse } from "@babel/parser";
+
+import { declaredNames, isNode, nameOf } from "./bindings";
 
 /** An edit to one file: the whole text before it, and after it. */
 export interface FileEdit {
@@ -72,13 +77,6 @@ function isCallTo(node: unknown, callee: string): node is CallExpression {
   );
 }
 
-const isNode = (
-  value: unknown
-): value is { type: string; [key: string]: unknown } =>
-  typeof value === "object" &&
-  value !== null &&
-  typeof (value as { type?: unknown }).type === "string";
-
 /** Every call to `callee` in `node` and below it. */
 function callsTo(
   node: unknown,
@@ -98,11 +96,12 @@ function callsTo(
   return found;
 }
 
-type Program = ReturnType<ConfigParser>["program"];
+export type Program = ReturnType<ConfigParser>["program"];
 type ImportDeclaration = Extract<Statement, { type: "ImportDeclaration" }>;
+type ImportBinding = ImportDeclaration["specifiers"][number];
 
 /** The file's syntax tree, or why it could not be read. */
-function readProgram(
+export function readProgram(
   text: string,
   parser: ConfigParser
 ): Program | { unread: string } {
@@ -128,48 +127,101 @@ function rootObject(
 }
 
 /** A module specifier without its extension, so `./a.widget.js` and `./a.widget` are one module. */
-const moduleOf = (specifier: string): string =>
+export const moduleOf = (specifier: string): string =>
   specifier.replace(/\.[cm]?[jt]sx?$/, "");
 
-/** Whether `declaration` binds `name` as a value, not only as a type. */
-function bindsValue(declaration: ImportDeclaration, name: string): boolean {
-  if (declaration.importKind === "type") return false;
-  return declaration.specifiers.some(
-    specifier =>
-      specifier.local.name === name &&
-      !("importKind" in specifier && specifier.importKind === "type")
-  );
+/** The import that binds `name` in the file, with the declaration it is in. */
+function importBinding(
+  imports: readonly ImportDeclaration[],
+  name: string
+): { declaration: ImportDeclaration; binding: ImportBinding } | undefined {
+  for (const declaration of imports) {
+    const binding = declaration.specifiers.find(
+      each => each.local.name === name
+    );
+    if (binding !== undefined) return { declaration, binding };
+  }
+  return undefined;
 }
 
 /**
- * How the file already imports the widget's name, read from its syntax, so
- * quotes and formatting do not matter: from the declaration's module
- * (`same`), from another module or only as a type (`other`), or not at all
- * (`none`, with where a new import goes: after the last one, or at the top).
+ * Whether an import is the one the generated declaration needs: its named
+ * export, by its own name, as a value, from its module. A default import, an
+ * alias (`{ other as openOrders }`) or a type-only one shares the local name
+ * and nothing else: the generated file exports `openOrders` and no default.
+ */
+function isGeneratedImport(
+  declaration: ImportDeclaration,
+  binding: ImportBinding,
+  name: string,
+  specifier: string
+): boolean {
+  if (declaration.importKind === "type") return false;
+  if (moduleOf(declaration.source.value) !== moduleOf(specifier)) return false;
+  return (
+    binding.type === "ImportSpecifier" &&
+    binding.importKind !== "type" &&
+    nameOf(binding.imported) === name
+  );
+}
+
+/** Why the widget's name cannot be imported here, and what the author does instead. */
+interface NameClash {
+  kind: "clash";
+  problem: string;
+  remedy: string;
+}
+
+/** Imported under another name: the remedy when the file holds the name otherwise. */
+const RENAME = "Import the widget under another name:";
+
+/**
+ * How the file already holds the widget's name, read from its syntax, so
+ * quotes and formatting do not matter: imported as the generated declaration
+ * exports it (`same`), held by anything else (`clash`: a declaration of its
+ * own, an import from another module, or a default, aliased or type-only
+ * import from this one), or not at all (`none`, with where a new import goes:
+ * after the last one, or at the top).
  */
 function importOf(
   program: Program,
   name: string,
   specifier: string
-):
-  | { kind: "same" }
-  | { kind: "other"; source: string }
-  | { kind: "none"; after: number } {
+): { kind: "same" } | NameClash | { kind: "none"; after: number } {
+  const declared = program.body.some(
+    node =>
+      node.type !== "ImportDeclaration" && declaredNames(node).includes(name)
+  );
+  if (declared) {
+    return {
+      kind: "clash",
+      problem: `${name} is already declared`,
+      remedy: RENAME,
+    };
+  }
   const imports = program.body.filter(
     (node): node is ImportDeclaration => node.type === "ImportDeclaration"
   );
-  const binding = imports.find(declaration =>
-    declaration.specifiers.some(each => each.local.name === name)
-  );
-  if (binding === undefined) {
+  const found = importBinding(imports, name);
+  if (found === undefined) {
     return { kind: "none", after: imports.at(-1)?.end ?? 0 };
   }
-  const same =
-    moduleOf(binding.source.value) === moduleOf(specifier) &&
-    bindsValue(binding, name);
-  return same
-    ? { kind: "same" }
-    : { kind: "other", source: binding.source.value };
+  const { declaration, binding } = found;
+  const source = declaration.source.value;
+  if (isGeneratedImport(declaration, binding, name, specifier)) {
+    return { kind: "same" };
+  }
+  return moduleOf(source) === moduleOf(specifier)
+    ? {
+        kind: "clash",
+        problem: `${name} is imported from "${source}", but not as the named export ${name} the generated declaration has`,
+        remedy: "Import it by that name instead:",
+      }
+    : {
+        kind: "clash",
+        problem: `${name} is already imported from "${source}"`,
+        remedy: RENAME,
+      };
 }
 
 /** A property's key as written, when it is a plain name or a string. */
@@ -294,12 +346,27 @@ function entryInsertion(
 const importInsertion = (after: number, line: string): Insertion =>
   after > 0 ? { at: after, text: `\n${line}` } : { at: 0, text: `${line}\n` };
 
+/** How a system spells paths: its `relative` and its separator. */
+type PathSyntax = { relative: typeof relative; sep: string };
+
+/**
+ * The path from `from` to `to` with forward slashes, on every system: the one
+ * spelling of a project path the command prints (a next step, the test to
+ * run) or writes into a file (an import). Windows separates with `\`, which
+ * a module specifier does not accept and a printed command should not differ
+ * by. `syntax` is the system's own unless given another.
+ */
+export function slashRelative(
+  from: string,
+  to: string,
+  syntax: PathSyntax = { relative, sep }
+): string {
+  return syntax.relative(from, to).split(syntax.sep).join("/");
+}
+
 /** A relative module specifier from one file to another, without its extension. */
-function specifierFrom(fromFile: string, toFile: string): string {
-  const path = relative(dirname(fromFile), toFile)
-    .split("\\")
-    .join("/")
-    .replace(/\.tsx?$/, "");
+export function specifierFrom(fromFile: string, toFile: string): string {
+  const path = slashRelative(dirname(fromFile), toFile).replace(/\.tsx?$/, "");
   return path.startsWith(".") ? path : `./${path}`;
 }
 
@@ -347,8 +414,8 @@ export function registrationEdit(input: RegistrationInput): RegistrationEdit {
   const root = rootObject(program, owner.callee);
   const place = root && placement(root, owner.keys, input.exportName);
   const imported = importOf(program, input.exportName, specifier);
-  if (imported.kind === "other") {
-    const why = `In ${input.file}, ${input.exportName} is already imported from "${imported.source}", so it was left as it was. Import the widget under another name:`;
+  if (imported.kind === "clash") {
+    const why = `In ${input.file}, ${imported.problem}, so it was left as it was. ${imported.remedy}`;
     return manual(why, importLine, input);
   }
   if (!place) return manual(`In ${input.file}, add`, importLine, input);
@@ -363,27 +430,4 @@ export function registrationEdit(input: RegistrationInput): RegistrationEdit {
     edits: [{ path: input.file, before: input.text, after }],
     summary: `listed ${input.exportName} in ${owner.keys.join(".")} in ${input.file}`,
   };
-}
-
-/** The line that exports a plugin's widget component from its admin entry. */
-export function adminExportLine(
-  adminIndex: string,
-  exportName: string,
-  componentPath: string
-): string {
-  return `export { ${exportName} } from "${specifierFrom(adminIndex, componentPath)}";`;
-}
-
-/** The edit adding that line to the admin entry, unless it is there already. */
-export function adminExportEdit(
-  adminIndex: string,
-  text: string,
-  exportName: string,
-  componentPath: string
-): FileEdit {
-  const line = adminExportLine(adminIndex, exportName, componentPath);
-  const after = text.includes(line)
-    ? text
-    : `${text.replace(/\n*$/, "\n")}${line}\n`;
-  return { path: adminIndex, before: text, after };
 }

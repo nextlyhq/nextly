@@ -57,6 +57,11 @@ export const continueWidget = {
   // Asked like core's own lists: the rows its size draws and one more, so the
   // card can say more exist at every size.
   sizedQuery: true,
+  // Offered only while the reader may read a collection or a Single the
+  // dashboard lists: with none, nobody's saves could reach a row, and the card
+  // would only ever say so.
+  lifecycle: "conditional",
+  visibleWhen: "content:present",
   // The tab is the header's one quick control; the number of rows and their
   // density are the card's display settings.
   settings: [CONTINUE_TAB, CONTINUE_ITEMS, LIST_DENSITY],
