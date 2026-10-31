@@ -6,14 +6,13 @@
  * `specs/dashboard-experience` R-6 gives the card (12 × 2), a 46 px body (`cardBodyHeightPx(2)`).
  * The count, "N of M done", is in the frame's header beside the title, so the body holds nothing
  * else. Each tile is two lines, its label and a one-line hint carrying its actions, in a fixed
- * height. The tiles are one row only where the body gives each tile room to read in full
- * (`SETUP_TILE_MIN_PX`); narrower, they wrap into two columns, and only then does the card grow
- * to hold them.
+ * height. The tiles are one row at every width (`SETUP_ROW`), so the body is this height whatever
+ * the card's width, and the card is drawn at its stored rows from its first paint: where the body
+ * is too narrow for every tile to read in full, the row scrolls sideways inside the card rather
+ * than wrapping into rows the card would have to grow to hold.
  *
  * @module components/features/dashboard/setup/measures
  */
-
-import { cn } from "@admin/lib/utils";
 
 /** The progress bar: a thin line. */
 export const SETUP_BAR = { className: "h-1", px: 4 } as const;
@@ -37,33 +36,27 @@ export const SETUP_TILE_LINES = {
 export const SETUP_ROW_BODY_PX = SETUP_BAR.px + SETUP_GAP.px + SETUP_TILE.px;
 
 /**
- * The least width a tile takes in the one row: its longest name ("Add your first entry", 113 px
- * of ink at the label's size) and the Singles' hint ("2 of 5 · Open · Skip") read in full beside
- * its mark, with the tile's padding.
+ * The tiles' row, one tile high at every width, so the card's body never needs more than
+ * `SETUP_ROW_BODY_PX` whatever the card's width or the number of steps:
+ * - one column per tile, flowing along the row (`grid-flow-col`), never wrapping;
+ * - each column shares the row equally where the body has room, and is never narrower than its
+ *   own tile's name and actions (`minmax(max-content, 1fr)`): only a step's detail words, which
+ *   take no width of their own (`SETUP_TILE_DETAIL`), are cut short;
+ * - where the body is narrower than the tiles at that width, a phone's or a narrow card's, the row
+ *   scrolls sideways inside the card, a tile at a time, the next one cut by the card's edge to
+ *   show there is more. Its scrollbar is not drawn, since the row has no height to spare for one:
+ *   a tile's links and buttons scroll it into view as they take focus, and a touch or a trackpad
+ *   scrolls it directly.
  */
-const SETUP_TILE_MIN_PX = 160;
+export const SETUP_ROW = {
+  className:
+    "grid-flow-col auto-cols-[minmax(max-content,1fr)] overflow-x-auto overscroll-x-contain snap-x snap-proximity [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+  tile: "snap-start",
+} as const;
 
 /**
- * The classes that lay `count` tiles out as one row where the body (an `@container`) is at least
- * `count` tiles of `SETUP_TILE_MIN_PX` and the gaps between them wide, over two columns
- * (`grid-cols-2`) where it is not. Written out whole, one entry per count, so the stylesheet keeps
- * every class; a count past the last is drawn in two columns.
+ * A step's detail words in its tile's hint line, which give the tile none of its width
+ * (`contain: inline-size`): a tile is as wide as its name and its actions, and its detail fills
+ * what is left, cut short with its whole words on hover.
  */
-const SETUP_ONE_ROW_AT: Readonly<Record<number, string>> = {
-  1: "@min-[160px]:grid-flow-col @min-[160px]:auto-cols-fr @min-[160px]:grid-cols-none",
-  2: "@min-[324px]:grid-flow-col @min-[324px]:auto-cols-fr @min-[324px]:grid-cols-none",
-  3: "@min-[488px]:grid-flow-col @min-[488px]:auto-cols-fr @min-[488px]:grid-cols-none",
-  4: "@min-[652px]:grid-flow-col @min-[652px]:auto-cols-fr @min-[652px]:grid-cols-none",
-  5: "@min-[816px]:grid-flow-col @min-[816px]:auto-cols-fr @min-[816px]:grid-cols-none",
-  6: "@min-[980px]:grid-flow-col @min-[980px]:auto-cols-fr @min-[980px]:grid-cols-none",
-};
-
-/** The width at which `count` tiles fit one row: each `SETUP_TILE_MIN_PX`, `SETUP_GAP` between. */
-export function setupOneRowPx(count: number): number {
-  return count * SETUP_TILE_MIN_PX + (count - 1) * SETUP_GAP.px;
-}
-
-/** The tiles' grid classes for `count` tiles: one row where they fit, two columns elsewhere. */
-export function setupRowClass(count: number): string {
-  return cn("grid-cols-2", SETUP_ONE_ROW_AT[count]);
-}
+export const SETUP_TILE_DETAIL = "[contain:inline-size]";

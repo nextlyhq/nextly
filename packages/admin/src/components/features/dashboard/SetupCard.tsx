@@ -13,10 +13,10 @@
  *   and Dismiss beside the card's menu, the whole card one grid row tall (`frame/collapse`), kept
  *   per reader on the server;
  * - the steps: "N of M done" in the frame's header beside the title, and in the body a thin
- *   progress bar over one row of compact tiles, in two columns where the body is too narrow for
- *   each to read in full (`setupRowClass`). At the card's size,
- *   12 × 2, that is all the body holds (`setup/measures`), so the dashboard loads with nothing
- *   moving.
+ *   progress bar over one row of compact tiles at every width, scrolling sideways inside the card
+ *   where the body is too narrow for each to read in full (`SETUP_ROW`). At the card's size,
+ *   12 × 2, that is all the body holds (`setup/measures`), at any width, so the card is drawn at
+ *   its stored rows from its first paint and the dashboard loads with nothing moving.
  *
  * Each tile is a step: its number or a tick, its name, and one hint line holding what the reader
  * can do about it ("Add", "2 of 5 · Open · Skip", "Invite · Skip"), its words short so a tile
@@ -24,7 +24,7 @@
  * Skip is offered on "Fill in your Singles" and "Invite a teammate" only, and Restore on a step
  * skipped. The Singles are one tile;
  * choosing it opens a short list of them, each with its state and link, and only then, the
- * reader's own action, does the card grow in place, as it does where the tiles wrap. Sample content
+ * reader's own action, does the card grow in place. Sample content
  * is the first tile, with its load and decline in its hint line and a load's progress and outcome
  * in full under the tiles (`setup/SampleContentStep`), and is left out where the project's
  * sample-content route says it cannot be loaded by this reader.
@@ -73,15 +73,14 @@ import { FrameState } from "../widgets/frame/card-state";
 import { useCardCollapsed } from "../widgets/frame/collapse";
 import { CardGrowContext } from "../widgets/frame/grow";
 import { CardHeaderContent } from "../widgets/frame/header-slot";
-import { cardBodyHeightPx } from "../widgets/frame/measures";
-import { CardHeightContext } from "../widgets/frame/tier";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 
 import {
   SETUP_GAP,
+  SETUP_ROW,
   SETUP_TILE,
+  SETUP_TILE_DETAIL,
   SETUP_TILE_LINES,
-  setupRowClass,
 } from "./setup/measures";
 import { useRetirementRefusals } from "./setup/retirement-refusals";
 import {
@@ -472,8 +471,12 @@ function HintText({
   }
   if (words === undefined) return null;
   return (
-    // Its whole words on hover, as a narrow tile may cut them short.
-    <span className="min-w-0 truncate" title={words.spoken}>
+    // Its whole words on hover, as a narrow tile may cut them short: they give the tile none of
+    // its width, so a tile is as wide as its name and its actions (`SETUP_TILE_DETAIL`).
+    <span
+      className={cn("min-w-0 truncate", SETUP_TILE_DETAIL)}
+      title={words.spoken}
+    >
       {words.shown === words.spoken ? (
         words.shown
       ) : (
@@ -544,6 +547,7 @@ function StepTile({
       data-status={step.status}
       className={cn(
         SETUP_TILE.className,
+        SETUP_ROW.tile,
         "flex min-w-0 items-center gap-1 overflow-hidden rounded-md border border-border px-1.5 py-0.5",
         step.status === "done" && "border-success bg-success/5"
       )}
@@ -637,40 +641,22 @@ function SinglesList({
 }
 
 /**
- * Asks the frame to grow the card only when its steps do not fit its rows: while the reader has
- * the Singles' list open, which is their own action, or where the tiles wrap into two columns
- * (`setupRowClass`). At rest in one row the steps fit 12 × 2 (`SETUP_ROW_BODY_PX`), so the card is
- * drawn at its own rows and nothing moves as the dashboard loads. Measured after every draw; drawn
- * at its own rows again once the list closes or the steps are not drawn.
+ * Asks the frame to grow the card only while the reader has asked to see more of it: the Singles'
+ * list open, which is their own action, or a sample-content load's progress or outcome on show
+ * under the tiles. At rest the steps are one row at every width (`SETUP_ROW`), which fits 12 × 2
+ * (`SETUP_ROW_BODY_PX`), so the card asks for nothing and is drawn at its own rows from its first
+ * paint: a card that grew at rest would be painted at its rows first and grow a frame later,
+ * moving every card under it. Measured after every draw; drawn at its own rows again once the list
+ * closes or the steps are not drawn.
  */
-/**
- * The body height to ask the frame for, of steps drawn `needed` tall: all of it while the
- * Singles' list is open, or where it overflows the card's own rows; none otherwise.
- */
-function heightToAsk(
-  needed: number | undefined,
-  rows: number | undefined,
-  singlesOpen: boolean
-): number | undefined {
-  if (needed === undefined) return undefined;
-  if (singlesOpen) return needed;
-  const holds = rows === undefined ? undefined : cardBodyHeightPx(rows);
-  return holds !== undefined && needed > holds ? needed : undefined;
-}
-
 function useGrowToFit(
   drawn: boolean,
-  singlesOpen: boolean,
+  showingMore: boolean,
   content: React.RefObject<HTMLDivElement | null>
 ): void {
   const report = useContext(CardGrowContext);
-  const rows = useContext(CardHeightContext);
   useLayoutEffect(() => {
-    report?.(
-      drawn
-        ? heightToAsk(content.current?.offsetHeight, rows, singlesOpen)
-        : undefined
-    );
+    report?.(drawn && showingMore ? content.current?.offsetHeight : undefined);
   });
   useEffect(() => () => report?.(undefined), [report]);
 }
@@ -813,21 +799,17 @@ function ExpandedSetup({
   return (
     <div
       ref={content}
-      // The container the tiles' row is judged by: the body's own width, whatever the viewport.
+      // Its width is the card's, whatever its tiles' widths: the row scrolls inside it.
       className={cn("@container grid", SETUP_GAP.className)}
       data-testid="setup-card"
     >
       <CardHeaderContent>{controls}</CardHeaderContent>
       <ProgressBar done={counted.done} total={counted.total} />
       {failure}
-      {/* One row of tiles across the body's whole width where each reads in full there, two
-          columns where the body is narrower (the body is the `@container` it is judged by). */}
+      {/* One row of tiles across the body's whole width, at every width: sharing it where each
+          reads in full, scrolling sideways inside the card where the body is narrower. */}
       <ol
-        className={cn(
-          "grid min-w-0",
-          setupRowClass(counted.steps.length),
-          SETUP_GAP.className
-        )}
+        className={cn("grid min-w-0", SETUP_ROW.className, SETUP_GAP.className)}
         aria-label="Setup steps"
       >
         {counted.steps.map((step, index) => (
@@ -897,14 +879,15 @@ function useCollapsedHere(
 /**
  * The card in its frame: "N of M done" in the header beside the title, so the body holds the bar
  * and the tiles alone (a change that could not be saved says so there instead, where it is seen);
- * grown only when its steps do not fit; and one grid row while collapsed, whose line is then the
- * whole card. Answers the count's words while steps are drawn.
+ * grown only while the reader is shown more than the steps (`showingMore`); and one grid row
+ * while collapsed, whose line is then the whole card. Answers the count's words while steps are
+ * drawn.
  */
 function useSetupInFrame(
   counted: CountedSetup | undefined,
   collapsed: boolean,
   failed: string | undefined,
-  singlesOpen: boolean,
+  showingMore: boolean,
   content: React.RefObject<HTMLDivElement | null>
 ): string | undefined {
   const progress =
@@ -913,7 +896,7 @@ function useSetupInFrame(
       : progressText(counted.done, counted.total);
   const drawn = progress !== undefined;
   useCardTitleCount(failed ?? progress);
-  useGrowToFit(drawn && !collapsed, singlesOpen, content);
+  useGrowToFit(drawn && !collapsed, showingMore, content);
   useCardCollapsed(drawn && collapsed);
   return progress;
 }
