@@ -60,6 +60,8 @@ const KEPT_SETUP_KEY = ["dashboard", "setup", "kept"] as const;
  */
 type SampleLocal =
   | { phase: "running" }
+  /** A load this tab started, answered as held but not finished. */
+  | { phase: "unfinished"; startedAt: string }
   | { phase: "loaded" }
   /** Continue was chosen: the outcome stays until the card's data shows the load. */
   | { phase: "continuing" }
@@ -182,6 +184,7 @@ type LocalView<P extends SampleLocal["phase"]> = (
 /** What each of this tab's phases shows; a refusal shows the site's state, with its notice. */
 const LOCAL_VIEWS: { [P in SampleLocal["phase"]]: LocalView<P> } = {
   running: () => ({ kind: "running" }),
+  unfinished: local => ({ kind: "unfinished", startedAt: local.startedAt }),
   declining: () => ({ kind: "declining" }),
   loaded: () => ({ kind: "loaded", continuing: false }),
   continuing: () => ({ kind: "loaded", continuing: true }),
@@ -257,6 +260,15 @@ const PANEL_VIEWS: ReadonlySet<SampleView["kind"]> = new Set([
   "loaded",
 ]);
 
+/** Each client's latest start, so an answer to an older one is set aside. */
+const latestStart = new WeakMap<QueryClient, number>();
+
+function nextStart(client: QueryClient): number {
+  const next = (latestStart.get(client) ?? 0) + 1;
+  latestStart.set(client, next);
+  return next;
+}
+
 /** The cache entry this tab's own state is kept in. */
 function writeLocal(client: QueryClient, next: SampleCache): void {
   client.setQueryData<SampleCache>(SAMPLE_RUN_KEY, next);
@@ -268,9 +280,23 @@ function writeLocal(client: QueryClient, next: SampleCache): void {
  * again reads the same state, and its answer lands though no card is drawn.
  */
 async function startLoad(client: QueryClient, confirm: boolean): Promise<void> {
+  // One at a time from this tab: a second press while one is on its way asks nothing.
+  if (client.getQueryData<SampleCache>(SAMPLE_RUN_KEY)?.phase === "running") {
+    return;
+  }
+  const asked = nextStart(client);
   writeLocal(client, { phase: "running" });
   const answer = await seedApi.start(confirm);
+  // An answer to a start that a newer one has replaced never overwrites the newer one's.
+  if (asked !== latestStart.get(client)) return;
   switch (answer.outcome) {
+    case "unfinished":
+      writeLocal(client, {
+        phase: "unfinished",
+        startedAt: answer.startedAt,
+        refresh: true,
+      });
+      return;
     case "loaded":
       // Nothing is read again yet: the outcome stays until the person continues, and a read now
       // could find setup all set and retire the card under it. Continue reads the layout again.
@@ -457,6 +483,7 @@ function useLocal(): SampleCache {
 
 /** Phases that end once the card's data shows the site's answer as it is now. */
 const ENDS_ON_ANSWER: ReadonlySet<SampleLocal["phase"]> = new Set([
+  "unfinished",
   "continuing",
   "answered",
   "refused",
@@ -490,10 +517,14 @@ function useSettleLocal(
     latestCard.setup.known &&
     (latestStep === undefined || latestStep.status === "done");
   const phase = local?.phase;
+  // A load held as not finished gives way too once the site's answer holds a load of its own.
+  const latestHoldsRun = latestStep?.run !== undefined;
   useEffect(() => {
-    if (refreshing || !latestAnswered || phase === undefined) return;
-    if (ENDS_ON_ANSWER.has(phase)) writeLocal(client, null);
-  }, [refreshing, latestAnswered, phase, client]);
+    if (refreshing || phase === undefined) return;
+    const settled =
+      latestAnswered || (phase === "unfinished" && latestHoldsRun);
+    if (settled && ENDS_ON_ANSWER.has(phase)) writeLocal(client, null);
+  }, [refreshing, latestAnswered, latestHoldsRun, phase, client]);
 }
 
 /** The step's actions, each writing this tab's state to the cache. */

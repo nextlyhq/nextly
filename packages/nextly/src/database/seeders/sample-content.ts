@@ -137,6 +137,12 @@ export type SampleStart<Result> =
       failure: string;
     }
   | { outcome: "failed"; failure: string; startedAt: string }
+  /**
+   * Claimed, but what came of it could not be written or confirmed: the site
+   * holds it as a load that has not finished, and so does this answer. Never
+   * taken as ended, as every unfinished load is not.
+   */
+  | { outcome: "unfinished"; startedAt: string }
   | SampleRefusal;
 
 /** Why a start, a decline or a record was refused, with the site's answer now. */
@@ -327,7 +333,9 @@ async function claim(
   store: SampleContentStore,
   latest: LatestRun | undefined,
   start: Omit<RunRecord, "generation">
-): Promise<RunRecord | undefined> {
+): Promise<
+  { claimed: RunRecord } | { lost: true } | { unverified: RunRecord }
+> {
   const record: RunRecord = {
     generation: (latest?.record.generation ?? 0) + 1,
     ...start,
@@ -335,16 +343,33 @@ async function claim(
   let won: boolean;
   if (latest === undefined) {
     await store.insertIfAbsent(CURRENT_KEY, record);
-    const held = await store.getEntry(CURRENT_KEY);
+    let held: Awaited<ReturnType<SampleContentStore["getEntry"]>>;
+    try {
+      held = await again(() => store.getEntry(CURRENT_KEY));
+    } catch {
+      // Inserted, perhaps, and not confirmed: what the site holds may be this
+      // claim, which nobody would ever finish. Nothing is loaded on it, and it
+      // is answered as the site would read it then, a load not finished.
+      return { unverified: record };
+    }
     // The whole record, not a field of it: the row this request inserted, and
     // no other, holds every one of its values.
     won = held.present && JSON.stringify(held.value) === JSON.stringify(record);
   } else {
     won = await store.compareAndSet(CURRENT_KEY, latest.stored, record);
   }
-  if (!won) return undefined;
+  if (!won) return { lost: true };
   await keepCopy(store, record);
-  return record;
+  return { claimed: record };
+}
+
+/** `work`, asked once more if it throws: a read or write that may fail for a moment. */
+async function again<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch {
+    return work();
+  }
 }
 
 /**
@@ -358,7 +383,9 @@ async function writeOutcome(
   finished: RunRecord
 ): Promise<boolean> {
   try {
-    const written = await store.compareAndSet(CURRENT_KEY, claimed, finished);
+    const written = await again(() =>
+      store.compareAndSet(CURRENT_KEY, claimed, finished)
+    );
     if (written) await keepCopy(store, finished);
     return written;
   } catch {
@@ -452,7 +479,7 @@ export async function startSampleContent<Result>(
   const reason = blocked(state, options.confirm === true);
   if (reason !== undefined) return { outcome: "refused", reason, state };
 
-  const claimed = await claim(store, latest, {
+  const claiming = await claim(store, latest, {
     // Minted here for each start, never named by a caller: two starts can
     // never claim with the same one.
     token: crypto.randomUUID(),
@@ -460,7 +487,11 @@ export async function startSampleContent<Result>(
     startedAt: now().toISOString(),
     startedBy: options.by,
   });
-  if (claimed === undefined) return lostClaim(store);
+  if ("lost" in claiming) return lostClaim(store);
+  if ("unverified" in claiming) {
+    return { outcome: "unfinished", startedAt: claiming.unverified.startedAt };
+  }
+  const claimed = claiming.claimed;
 
   let result: Result;
   try {
@@ -471,16 +502,19 @@ export async function startSampleContent<Result>(
       "sample-content-load-failed",
       LOAD_FAILED
     );
-    // Not written, the load reads as unfinished: it starts nothing else, as
-    // nobody can tell it apart from one still running.
-    await writeOutcome(store, claimed, {
+    const written = await writeOutcome(store, claimed, {
       ...claimed,
       outcome: "failed",
       failureCode: "load-failed",
       failure,
       finishedAt: now().toISOString(),
     });
-    return { outcome: "failed", failure, startedAt: claimed.startedAt };
+    // Not written, the site holds the load as unfinished, and starts nothing
+    // else, as nobody can tell it apart from one still running: answered as it
+    // is held, so the card offers nothing the server would refuse.
+    return written
+      ? { outcome: "failed", failure, startedAt: claimed.startedAt }
+      : { outcome: "unfinished", startedAt: claimed.startedAt };
   }
 
   const recorded = await recordLoaded(store, claimed, now);
@@ -555,7 +589,8 @@ export async function declineSampleContent(
     startedAt: at,
     startedBy: options.by,
   });
-  if (claimed === undefined) {
+  if (!("claimed" in claimed)) {
+    // Lost, or not confirmed: answered from the site's answer as it reads now.
     const lost = await lostClaim(store);
     return lost.state.answer === "declined" ? { outcome: "declined" } : lost;
   }
@@ -611,6 +646,11 @@ function startAnswer<Result>(start: SampleStart<Result>): Response {
     case "unrecorded":
       return respondMutation(
         "Sample content loaded, but recording that failed.",
+        start
+      );
+    case "unfinished":
+      return respondMutation(
+        "A sample-content load started and has not finished.",
         start
       );
     case "failed":

@@ -369,6 +369,84 @@ describe("a load and its outcome", () => {
     expect(posts).toHaveLength(1);
   });
 
+  it("asks one load for two presses before the first is answered", async () => {
+    let land: (res: Response) => void = () => undefined;
+    const posts = route(
+      allowed,
+      () =>
+        new Promise<Response>(resolve => {
+          land = resolve;
+        })
+    );
+    render(card(dataOf(OPEN)));
+    const load = await within(sampleTile()!).findByRole("button", {
+      name: "Load",
+    });
+    fireEvent.click(load);
+    fireEvent.click(load);
+    await act(async () => land(loadedAnswer()));
+    await panelSays("status", "Sample content loaded.");
+    expect(posts).toHaveLength(1);
+  });
+
+  it("never lets an older start's late answer overwrite a newer one's", async () => {
+    let refuseFirst: (res: Response) => void = () => undefined;
+    route(
+      allowed,
+      () =>
+        new Promise<Response>(resolve => {
+          refuseFirst = resolve;
+        }),
+      loadedAnswer
+    );
+    const queryClient = createTestQueryClient();
+    render(card(dataOf(OPEN)), { queryClient });
+    fireEvent.click(
+      await within(sampleTile()!).findByRole("button", { name: "Load" })
+    );
+    await panelSays("status", "Loading sample content");
+    // This tab's state set aside (as nothing in the card does), and a second start made.
+    act(() => {
+      queryClient.setQueryData(["dashboard", "setup", "sample-run"], null);
+    });
+    fireEvent.click(
+      await within(sampleTile()!).findByRole("button", { name: "Load" })
+    );
+    await panelSays("status", "Sample content loaded.");
+    // The first start's refusal lands late, and changes nothing.
+    await act(async () =>
+      refuseFirst(
+        errorAnswer(
+          409,
+          "CONFLICT",
+          "A sample-content load is already in progress.",
+          {
+            reason: "in-progress",
+          }
+        )
+      )
+    );
+    await panelSays("status", "Sample content loaded.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a start the server holds as not finished as such, offering nothing it would refuse", async () => {
+    route(allowed, () =>
+      Response.json({
+        message: "A sample-content load started and has not finished.",
+        item: { outcome: "unfinished", startedAt: STARTED },
+      })
+    );
+    render(card(dataOf(OPEN)));
+    fireEvent.click(
+      await within(sampleTile()!).findByRole("button", { name: "Load" })
+    );
+    await panelSays("status", /A load started at .+ has not finished/);
+    for (const name of ["Load", "Try again", "Decline sample content"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
   it("makes exactly one request for a failed load, says what failed, and offers Add your first entry", async () => {
     const posts = route(allowed, () =>
       errorAnswer(500, "INTERNAL_ERROR", "Loading sample content failed.", {

@@ -233,6 +233,111 @@ describe("starting a load", () => {
   });
 });
 
+describe("a claim or an outcome that cannot be confirmed", () => {
+  /** Makes the next `times` calls of one store method throw, then lets them through. */
+  function failNext<K extends "getEntry" | "compareAndSet">(
+    store: SampleContentStore,
+    method: K,
+    times: number,
+    only?: (key: string) => boolean
+  ) {
+    const real = store[method].bind(store) as (...args: unknown[]) => unknown;
+    let left = times;
+    (store as unknown as Record<string, unknown>)[method] = async (
+      ...args: unknown[]
+    ) => {
+      if (left > 0 && (only === undefined || only(String(args[0])))) {
+        left -= 1;
+        throw new Error(`${method} unavailable`);
+      }
+      return real(...args);
+    };
+  }
+
+  it("answers a claim it could not confirm as a load not finished, and loads nothing on it", async () => {
+    const store = memoryStore();
+    const load = vi.fn(async () => "ok");
+    // The read-back after the first insert fails, and its one retry too.
+    let reads = 0;
+    const realGet = store.getEntry.bind(store);
+    store.getEntry = async <T>(key: string) => {
+      if (key === "seed.current" && store.rows.has(key)) {
+        reads += 1;
+        if (reads <= 2) throw new Error("read unavailable");
+      }
+      return realGet<T>(key);
+    };
+    const start = await startSampleContent(store, {
+      by: "a",
+      load,
+      now: at("2026-10-31T09:00:00.000Z"),
+    });
+    expect(start).toEqual({
+      outcome: "unfinished",
+      startedAt: "2026-10-31T09:00:00.000Z",
+    });
+    expect(load).not.toHaveBeenCalled();
+    // The site holds the same: a load started at that time that has not finished.
+    expect(await readSampleContent(store)).toEqual({
+      run: { state: "unfinished", startedAt: "2026-10-31T09:00:00.000Z" },
+    });
+  });
+
+  it("asks a failed confirmation read once more, and claims when it answers", async () => {
+    const store = memoryStore();
+    let reads = 0;
+    const realGet = store.getEntry.bind(store);
+    store.getEntry = async <T>(key: string) => {
+      if (key === "seed.current" && store.rows.has(key)) {
+        reads += 1;
+        if (reads === 1) throw new Error("read unavailable");
+      }
+      return realGet<T>(key);
+    };
+    const load = vi.fn(async () => "ok");
+    expect(await startSampleContent(store, { by: "a", load })).toEqual({
+      outcome: "loaded",
+      result: "ok",
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a failed load whose outcome could not be written as not finished, as the site holds it", async () => {
+    const store = memoryStore();
+    failNext(store, "compareAndSet", 2);
+    const start = await startSampleContent(store, {
+      by: "a",
+      now: at("2026-10-31T09:00:00.000Z"),
+      load: async () => {
+        throw new Error("boom");
+      },
+    });
+    expect(start).toEqual({
+      outcome: "unfinished",
+      startedAt: "2026-10-31T09:00:00.000Z",
+    });
+    expect(await readSampleContent(store)).toEqual({
+      run: { state: "unfinished", startedAt: "2026-10-31T09:00:00.000Z" },
+    });
+  });
+
+  it("writes a failed outcome on its one retry", async () => {
+    const store = memoryStore();
+    failNext(store, "compareAndSet", 1);
+    expect(
+      await startSampleContent(store, {
+        by: "a",
+        load: async () => {
+          throw new Error("boom");
+        },
+      })
+    ).toMatchObject({ outcome: "failed" });
+    expect(await readSampleContent(store)).toMatchObject({
+      run: { state: "failed" },
+    });
+  });
+});
+
 describe("the site's answer after many loads", () => {
   it("reads three rows however many loads failed and were tried again, and keeps the last three copies", async () => {
     const store = memoryStore();

@@ -45,6 +45,8 @@ type SampleStartAnswer =
   | { outcome: "loaded" }
   /** Loaded, but recording that failed: `run` records it on its own. */
   | { outcome: "unrecorded"; run: string; startedAt: string }
+  /** Claimed, but what came of it could not be confirmed: held as not finished. */
+  | { outcome: "unfinished"; startedAt: string }
   | { outcome: "failed"; failure: string; startedAt?: string }
   /** Refused with nothing loaded: another load or an answer got there first. */
   | {
@@ -149,6 +151,9 @@ function started(item: StartItem | undefined): SampleStartAnswer {
     typeof item.startedAt === "string"
   ) {
     return { outcome: "unrecorded", run: item.run, startedAt: item.startedAt };
+  }
+  if (item?.outcome === "unfinished" && typeof item.startedAt === "string") {
+    return { outcome: "unfinished", startedAt: item.startedAt };
   }
   return { outcome: "loaded" };
 }
