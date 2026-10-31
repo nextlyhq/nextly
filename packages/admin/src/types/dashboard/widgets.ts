@@ -284,6 +284,12 @@ export interface DashboardLayoutResponse {
    */
   source: DashboardLayoutSource;
   /**
+   * Whether the reader has arranged this dashboard. `false` for a reader with no row, and for
+   * one whose row holds only what they chose about the default's cards (a dismissal, a setting):
+   * `source` says `"own"` for both of those rows, so it cannot tell them apart.
+   */
+  arranged: boolean;
+  /**
    * An opaque token for the set of widgets this reader could see when the
    * arrangement was read. Echoed back on write; a mismatch is a 409.
    */

@@ -94,6 +94,12 @@ These are thrown to the plugin code that made the call, not at boot.
 | `NEXTLY_ROUTE_COLLISION`    | 409    | Two routes share the same `(method, full path)` after namespacing under `/plugins/<name>`. | Give each route a distinct method/path.   |
 | `NEXTLY_ROUTE_INVALID_PATH` | 400    | A route `path` does not start with `/`.                                                    | Start the path with `/` (e.g. `/export`). |
 
+## Dashboard widgets
+
+| Code | Status | Cause | Fix |
+| --- | --- | --- | --- |
+| `NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL` | 500 | A plugin, enabled or not, carries `contributes.admin.widgets` or `contributes.widgetSources`, which Nextly no longer reads. `logContext.plugin` names the plugin and `logContext.key` the key. | Declare each widget with `defineWidget` under `contributes.dashboard.widgets`, and read its data in that widget's `load`. |
+
 ## Requests
 
 | Code               | Status | Cause                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Fix                                           |

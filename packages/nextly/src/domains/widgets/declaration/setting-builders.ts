@@ -67,7 +67,10 @@ export interface SettingDeclaration<
   readonly defaultValue?: Value;
   /** The setting this one depends on, and is reset with. */
   readonly of?: On;
-  /** Whether it sits on the card's header (at most one per widget). */
+  /**
+   * Whether it is changed on the card itself: in its quick popover, which holds
+   * at most three per widget, and on its header, which draws the first.
+   */
   readonly quick?: boolean;
   /**
    * The component the settings sheet draws in place of the setting's own

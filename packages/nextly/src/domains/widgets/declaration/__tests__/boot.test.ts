@@ -13,6 +13,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
+import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { getWidget, widgetSource } from "../../registry";
 import {
   clearDeclaredWidgets,
@@ -41,6 +42,19 @@ function plugin(
  */
 const untyped = (widgets: unknown): PluginContributions["dashboard"] =>
   ({ widgets }) as unknown as PluginContributions["dashboard"];
+
+/**
+ * A plugin carrying widgets under `contributes.admin.widgets`, as plain
+ * JavaScript hands it over: the key is no field of the contributions type, and
+ * plugin resolution refuses it before this reset runs.
+ */
+const olderShape = (name: string, widgets: unknown): PluginDefinition =>
+  ({
+    name,
+    version: "1.0.0",
+    nextly: "*",
+    contributes: { admin: { widgets } },
+  }) as unknown as PluginDefinition;
 
 /** The startup error's detail, or a failure when startup did not stop. */
 function refusal(run: () => void): string {
@@ -170,17 +184,13 @@ describe("startup with plugins that declare widgets", () => {
   it("stops when a declared widget takes an id another plugin uses in today's shape", () => {
     const message = refusal(() =>
       resetWidgetRegistries([
-        plugin("@old/stats", {
-          admin: {
-            widgets: [
-              {
-                id: "acme/revenue",
-                title: "Revenue",
-                component: "@old/stats/admin#Revenue",
-              },
-            ],
+        olderShape("@old/stats", [
+          {
+            id: "acme/revenue",
+            title: "Revenue",
+            component: "@old/stats/admin#Revenue",
           },
-        }),
+        ]),
         plugin("@acme/shop", { dashboard: { widgets: [revenue] } }),
       ])
     );
@@ -194,17 +204,13 @@ describe("startup with plugins that declare widgets", () => {
     // in the old shape is told to remove it or contribute an id of its own.
     const message = refusal(() =>
       resetWidgetRegistries([
-        plugin("@old/notes", {
-          admin: {
-            widgets: [
-              {
-                id: "core/note",
-                title: "Note",
-                component: "@old/notes/admin#Note",
-              },
-            ],
+        olderShape("@old/notes", [
+          {
+            id: "core/note",
+            title: "Note",
+            component: "@old/notes/admin#Note",
           },
-        }),
+        ]),
       ])
     );
     expect(message).toContain(

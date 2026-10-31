@@ -703,18 +703,19 @@ export type {
   WidgetsOf,
 } from "./plugins/declared-widgets";
 
-// The widget domain's public surface: the registry every core and
+// The widget domain's public surface: reads of the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and
 // the validated query shape itself.
+// Nothing here adds, changes or removes a widget or a source. A widget reaches
+// the registry only from a plugin's `contributes.dashboard.widgets`, the site
+// config's `admin.dashboard.widgets`, or core's own list, all through one
+// internal call; the registry's writers stay internal to the widgets domain.
 // Every contract a published shape NAMES is published beside it. There is no
 // `nextly/widgets` subpath, so this is the only place a plugin author can
 // reach them, and a public property whose type has no public name can be
 // inferred but never annotated: `WidgetDefinition.size` is a
 // `WidgetSizeDeclaration` of `GridSize`s, and `WidgetSource` is built out of
 // `WidgetSourceField`, `WidgetSourceKind` and `WidgetOp`.
-// The last three are the data SOURCE contract that `contributes.widgetSources`
-// names: inference covers a resolver written inline, and these are what let an
-// author declare one as a named function instead.
 export {
   WIDGET_ARCHETYPES,
   GRID_COLUMNS,
@@ -725,13 +726,8 @@ export {
   WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
-  registerWidget,
-  overrideWidget,
-  extendWidget,
-  deregisterWidget,
   getWidget,
   listWidgets,
-  registerSource,
   listSources,
   validateWidgetQuery,
   MAX_WIDGET_LIMIT,
@@ -760,11 +756,8 @@ export {
   type WidgetCondition,
   callerReadOptions,
   type WidgetSourceResolver,
-  type PluginSourceResolver,
-  type PluginManySourceResolver,
   type ResolverOptions,
   type WidgetScope,
-  type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";
 

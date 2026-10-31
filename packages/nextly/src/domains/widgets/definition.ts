@@ -419,18 +419,10 @@ export interface WidgetDefinition {
   /**
    * Whether a reader may send this card away themselves.
    *
-   * 🔴 Dismissal is HIDING, not deleting, and deliberately so: the placement
-   * stays in the reader's layout marked hidden, which is what lets them put it
-   * back from the same panel every other hidden card is restored from. A
-   * separate "dismissed" store would be a second way to make a card disappear,
-   * and the reader would have two places to look for it.
-   *
-   * Independent of {@link WidgetDefinition.lifecycle}. A CONDITIONAL card stops
-   * being offered when its condition lapses, which is the install's decision; a
-   * DISMISSIBLE one can be sent away while the condition still holds, which is
-   * the reader's. An onboarding checklist wants both -- it goes when the work is
-   * done, and a reader who does not want it now should not have to finish the
-   * work to be rid of it.
+   * @deprecated Has no effect: every card's "…" menu offers Remove, whatever
+   * its widget declares, so a reader may send any card away. Still accepted, so
+   * a declaration that sets it starts as before, and removed with the legacy
+   * definition fields.
    */
   dismissible?: boolean;
   /**
