@@ -49,7 +49,6 @@ import {
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
-  getDashboardOnboarding,
   getDashboardStats,
   getDashboardRecentEntries,
   getDashboardActivity,
@@ -59,6 +58,7 @@ import {
   getDashboardPins,
   postDashboardPin,
 } from "./api/dashboard-pins";
+import { getDashboardSetup, putDashboardSetup } from "./api/dashboard-setup";
 import { getDashboardSummary } from "./api/dashboard-summary";
 import {
   acquireLock,
@@ -509,7 +509,7 @@ async function handleGeneralSettingsRequest(
  * Delegate a dashboard request directly to the named handler.
  *
  * Dashboard handlers manage their own auth (requireAuthentication) and read
- * their own bodies (the layout's and a pin's). Intercepting here — before
+ * their own bodies (the layout's, a pin's and the setup card's). Intercepting here — before
  * req.text() — keeps the pattern consistent with API keys and general settings.
  */
 async function handleDashboardRequest(
@@ -519,8 +519,6 @@ async function handleDashboardRequest(
   switch (method) {
     case "getDashboardStats":
       return getDashboardStats(req);
-    case "getDashboardOnboarding":
-      return getDashboardOnboarding(req);
     case "getDashboardRecentEntries":
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
@@ -541,6 +539,10 @@ async function handleDashboardRequest(
       return postDashboardPin(req);
     case "deleteDashboardPin":
       return deleteDashboardPin(req);
+    case "getDashboardSetup":
+      return getDashboardSetup(req);
+    case "putDashboardSetup":
+      return putDashboardSetup(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -1054,7 +1056,7 @@ async function resolveAuthorization(
     }
     // Definition mutations (create/update/delete collection). The grant is
     // declared once, in `auth/collection-definition-policy`, because the
-    // onboarding checklist asks the same question to decide whether to OFFER
+    // setup card asks the same question to decide whether to OFFER
     // the step -- and a copy there would go on asking for a grant this route
     // had stopped requiring.
     return requireAllPermissions(req, COLLECTION_DEFINITION_PERMISSIONS);

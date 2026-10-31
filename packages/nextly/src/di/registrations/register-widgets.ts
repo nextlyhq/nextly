@@ -69,6 +69,7 @@ import {
 } from "../../domains/widgets/declaration/site-dashboard";
 import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
 import { clearWidgets } from "../../domains/widgets/registry";
+import { registerSetupCard } from "../../domains/widgets/setup-card";
 import {
   clearSiteDashboardRules,
   setSiteDashboardRules,
@@ -153,6 +154,8 @@ export function resetWidgetRegistries(
   // Needs attention's source, which combines the releases' and versions' reads
   // with the entry list's counts and so belongs to no one domain.
   registerAttentionWidgetSource();
+  // The setup card's reads, which reach the permission and database graph.
+  registerSetupCard();
   // System health's read, which the card and the attention digest share.
   registerSystemHealthSource();
   registerSummaryWidgetSources();
