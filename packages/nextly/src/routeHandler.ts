@@ -744,13 +744,16 @@ const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The writes whose route asks the grant alone: a restore, which writes the
- * restored version's language, known only once the version is read. The
- * update it makes asks the rule in that language, before it writes.
+ * The writes whose route asks the grant alone, as their languages are known
+ * only once their entries are read: a restore, which writes the restored
+ * version's language, and a delete, which removes each language its entry
+ * holds. The write asks the rule in those languages, before it writes.
  */
 const GRANT_ONLY_WRITE_METHODS: ReadonlySet<string> = new Set([
   "restoreEntryVersion",
   "restoreSingleVersion",
+  "deleteEntry",
+  "bulkDeleteEntries",
 ]);
 
 export const COLLECTION_ENTRY_METHODS = new Set([

@@ -43,6 +43,7 @@ import type { CollectionAccessService } from "./collection-access-service";
 import type {
   CollectionMutationService,
   DeleteRowFilter,
+  DeleteRowLanguages,
   RowVerdict,
 } from "./collection-mutation-service";
 import { isWriteIntegrityFailure } from "./collection-mutation-service";
@@ -529,6 +530,28 @@ function deleteRowGate(access: {
     filter: access.filter,
     ...(access.read === undefined ? {} : { read: access.read }),
   };
+}
+
+/**
+ * How each row of a delete batch is gated, from the batch's gate: the
+ * answers of each language its collection keeps, for each row to be judged
+ * by those it holds; otherwise as its one answer decides (see
+ * `deleteRowGate`), or every row refused.
+ */
+function batchDeleteRowGate(
+  gate: Awaited<ReturnType<CollectionMutationService["deleteBatchGate"]>>
+):
+  | "batch-hoisted"
+  | DeleteRowFilter
+  | DeleteRowLanguages
+  | { refused: CollectionServiceResult<BatchOperationResult> } {
+  if ("bySet" in gate) return gate;
+  if (gate.denied) {
+    return {
+      refused: gate.denied as CollectionServiceResult<BatchOperationResult>,
+    };
+  }
+  return deleteRowGate(gate);
 }
 
 export class CollectionBulkService extends BaseService {
@@ -1988,17 +2011,22 @@ export class CollectionBulkService extends BaseService {
 
     const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
-    // 1. Check collection-level access FIRST (once for all entries)
-    // Note: For delete, we check access without document since we don't have it yet
-    // Owner-only checks will be done per-entry when we fetch the document
-    const access =
-      await this.accessService.checkCollectionWrite<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "delete",
-        user: params.user,
-      });
-    if (access.denied) return everyItemRefused(access.denied, ids.length);
-    const rowGate = deleteRowGate(access);
+    // 1. Check collection-level access FIRST (once for all entries), in each
+    // language the collection keeps. Each row is judged per entry when it is
+    // fetched, by the answers of the languages it holds.
+    const rowGate = batchDeleteRowGate(
+      await this.mutationService.deleteBatchGate(
+        {
+          collectionName: params.collectionName,
+          operation: "delete",
+          user: params.user,
+        },
+        ids
+      )
+    );
+    if (typeof rowGate === "object" && "refused" in rowGate) {
+      return everyItemRefused(rowGate.refused, ids.length);
+    }
 
     // Every companion verdict the batch needs, resolved on the pool before the shared
     // transaction opens. Inside it they can only be READ: resolving issues a query, and a query
@@ -2151,14 +2179,21 @@ export class CollectionBulkService extends BaseService {
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
-    const access =
-      await this.accessService.checkCollectionWrite<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "delete",
-        user: params.user,
-        executor: tx.getDrizzle(),
-      });
-    if (access.denied) return everyItemRefused(access.denied, ids.length);
+    const rowGate = batchDeleteRowGate(
+      await this.mutationService.deleteBatchGate(
+        {
+          collectionName: params.collectionName,
+          operation: "delete",
+          user: params.user,
+          executor: tx.getDrizzle(),
+        },
+        ids,
+        tx
+      )
+    );
+    if (typeof rowGate === "object" && "refused" in rowGate) {
+      return everyItemRefused(rowGate.refused, ids.length);
+    }
 
     // The shared batch loop. The intents and outbox signal it accumulates are
     // surfaced on the result for the CALLER to flush after ITS commit — this
@@ -2168,7 +2203,7 @@ export class CollectionBulkService extends BaseService {
       tx,
       params,
       ids,
-      { batchSize, stopOnError, skipHooks, rowGate: deleteRowGate(access) },
+      { batchSize, stopOnError, skipHooks, rowGate },
       state
     );
     // Unlike the self-transaction twin, a caller-owned batch reports the
@@ -2402,7 +2437,7 @@ export class CollectionBulkService extends BaseService {
       batchSize: number;
       stopOnError: boolean;
       skipHooks: boolean;
-      rowGate: "batch-hoisted" | DeleteRowFilter;
+      rowGate: "batch-hoisted" | DeleteRowFilter | DeleteRowLanguages;
     },
     state: LegacyBatchState
   ): Promise<void> {
