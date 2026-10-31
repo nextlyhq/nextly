@@ -54,7 +54,7 @@ export { apiKeys } from "../api-keys/sqlite";
 
 export { auditLog, activityLog } from "../audit/sqlite";
 
-export { media, mediaFolders, imageSizes } from "../media/sqlite";
+export { media, mediaFolders } from "../media/sqlite";
 
 export { nextlyMeta } from "../nextly-meta/sqlite";
 

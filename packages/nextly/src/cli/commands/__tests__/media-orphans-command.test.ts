@@ -45,6 +45,10 @@ vi.mock("../../utils/adapter", () => ({
   }),
   createCliAdapter: async () => ({
     getCapabilities: () => ({ dialect: "sqlite" }),
+    // The media table these tests read holds no rows, so the retired sizes
+    // of no item are asked for and this handle is never queried.
+    dialect: "sqlite",
+    getDrizzle: () => ({}),
     setTableResolver: (resolver: { getTable: (name: string) => unknown }) => {
       seen.calls.push("setTableResolver");
       seen.resolver = resolver;

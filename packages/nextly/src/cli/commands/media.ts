@@ -2,6 +2,7 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { Command } from "commander";
 import { config as loadEnvFile } from "dotenv";
 
@@ -20,6 +21,7 @@ import {
   errorForLog,
   storedPathForLog,
 } from "../../domains/media/remove-stored-files";
+import { storedSizesOf } from "../../domains/media/retired-image-sizes-store";
 import {
   storedFilesOf,
   type MediaFilesRecord,
@@ -55,7 +57,7 @@ export type { MediaReferences };
  * there, whose thumbnail would read as left behind.
  */
 export async function referencedStoredPaths(
-  adapter: Pick<DrizzleAdapter, "select">
+  adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">
 ): Promise<MediaReferences> {
   const referenced = new Set<string>();
   const unlocated: string[] = [];
@@ -72,8 +74,16 @@ export async function referencedStoredPaths(
         limit,
       }
     );
+    // The retired `sizes` column is not in the Drizzle definition the select
+    // reads through: an item's size files count as referenced while it has
+    // them, read from the column for as long as the database has it.
+    const sizes = await storedSizesOf(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      rows.map(row => row.id)
+    );
     for (const row of rows) {
-      const files = storedFilesOf(row);
+      const files = storedFilesOf({ ...row, sizes: sizes.get(row.id) });
       for (const path of files.paths) referenced.add(path);
       unlocated.push(...files.unlocated);
     }
@@ -403,6 +413,10 @@ function otherUploaders(
  * `nextly media orphans [--apply]`: finds, and with --apply removes, the
  * upload-time thumbnails deletes before this release left in the media
  * storage, still publicly served. A dry run by default.
+ *
+ * `nextly media remove-sizes [--apply]`: lists, and with --apply removes, the
+ * image size files items stored before sizes were removed, then clears each
+ * item's sizes, so `nextly migrate` can drop the column. A dry run by default.
  */
 export function createMediaCommand(): Command {
   const media = new Command("media").description(
@@ -415,61 +429,160 @@ export function createMediaCommand(): Command {
     )
     .option("--apply", "Remove the thumbnails listed", false)
     .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      let adapter: CLIDatabaseAdapter | null = null;
-      try {
-        // Resolved once, from where the command was run: a relative --cwd
-        // read again after the change would name a folder inside itself.
-        const cwd = path.resolve(context.cwd);
-        const config = await projectConfig(
-          cwd,
-          context.configPath,
-          cmdOptions.apply === true,
-          context.logger
-        );
-        const db = databaseEnvOrThrow();
-        const dialect = db.dialect;
-        // A failure here already carries its code: `createCliAdapter` gives it one.
-        adapter = await createCliAdapter({
-          dialect,
-          databaseUrl: db.databaseUrl,
-          logger: context.options.verbose ? context.logger : undefined,
-        });
-        const drizzle = adapter as unknown as DrizzleAdapter;
-        installRegistryResolver(drizzle);
-        // Local disk is where the app keeps it, `public/uploads` in the
-        // project, resolved from --cwd rather than from where this runs.
-        const mediaStorage = initializeMediaStorage({
-          plugins: config.storage,
-          local: { uploadDir: path.resolve(cwd, "public/uploads") },
-        });
-        const storage = mediaStorage.getAdapterForCollection("media");
-        const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
-        const others = otherUploaders(mediaStorage);
-        const code = await mediaOrphans({
-          storage,
-          prefix,
-          exclusive: mediaPlaceIsExclusive(
+      const apply = cmdOptions.apply === true;
+      await runMediaCommand(
+        cmd,
+        apply,
+        ({ context, drizzle, mediaStorage }) => {
+          const storage = mediaStorage.getAdapterForCollection("media");
+          const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
+          const others = otherUploaders(mediaStorage);
+          return mediaOrphans({
+            storage,
             prefix,
-            others.map(other => other.prefix)
-          ),
-          sharedWith: collectionsSharingMediaPlace(prefix, others),
-          referenced: () => referencedStoredPaths(drizzle),
-          referencedNow: referencedNowIn(drizzle),
-          apply: cmdOptions.apply === true,
+            exclusive: mediaPlaceIsExclusive(
+              prefix,
+              others.map(other => other.prefix)
+            ),
+            sharedWith: collectionsSharingMediaPlace(prefix, others),
+            referenced: () => referencedStoredPaths(drizzle),
+            referencedNow: referencedNowIn(drizzle),
+            apply,
+            say: line => console.log(line),
+            // The run's failing code is its exit status, so the reason is printed in the error
+            // shape here and the exit keeps the code `mediaOrphans` answers.
+            fail: error => {
+              printCliError(context.logger, error);
+            },
+          });
+        }
+      );
+    });
+  media
+    .command("remove-sizes")
+    .description(
+      "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply"
+    )
+    .option("--apply", "Remove the size files listed", false)
+    .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
+      const apply = cmdOptions.apply === true;
+      await runMediaCommand(cmd, apply, ({ drizzle, dialect, mediaStorage }) =>
+        runRemoveSizes({
+          db: drizzle.getDrizzle(),
+          dialect,
+          storage: mediaStorage.getAdapterForCollection("media"),
+          apply,
           say: line => console.log(line),
-          // The run's failing code is its exit status, so the reason is printed in the error
-          // shape here and the exit below keeps the code `mediaOrphans` answers.
-          fail: error => {
-            printCliError(context.logger, error);
-          },
-        });
-        await adapter.disconnect();
-        process.exit(code);
-      } catch (error) {
-        if (adapter) await adapter.disconnect();
-        exitWithError(context.logger, error);
-      }
+        })
+      );
     });
   return media;
+}
+
+/** What a `nextly media` command runs against, once the project is entered. */
+interface MediaCommandRun {
+  context: ReturnType<typeof createContext>;
+  drizzle: DrizzleAdapter;
+  dialect: SupportedDialect;
+  mediaStorage: MediaStorage;
+}
+
+/**
+ * Runs one `nextly media` command against the project: enters it from --cwd
+ * (refusing `apply` from outside it, since the database settings may then be
+ * another project's), connects to its database, sets up its media storage,
+ * and exits with the status `body` answers, disconnecting either way.
+ */
+async function runMediaCommand(
+  cmd: Command,
+  apply: boolean,
+  body: (run: MediaCommandRun) => Promise<number>
+): Promise<void> {
+  const context = createContext(cmd.optsWithGlobals());
+  let adapter: CLIDatabaseAdapter | null = null;
+  try {
+    // Resolved once, from where the command was run: a relative --cwd
+    // read again after the change would name a folder inside itself.
+    const cwd = path.resolve(context.cwd);
+    const config = await projectConfig(
+      cwd,
+      context.configPath,
+      apply,
+      context.logger
+    );
+    const db = databaseEnvOrThrow();
+    // A failure here already carries its code: `createCliAdapter` gives it one.
+    adapter = await createCliAdapter({
+      dialect: db.dialect,
+      databaseUrl: db.databaseUrl,
+      logger: context.options.verbose ? context.logger : undefined,
+    });
+    const drizzle = adapter as unknown as DrizzleAdapter;
+    installRegistryResolver(drizzle);
+    // Local disk is where the app keeps it, `public/uploads` in the
+    // project, resolved from --cwd rather than from where this runs.
+    const mediaStorage = initializeMediaStorage({
+      plugins: config.storage,
+      local: { uploadDir: path.resolve(cwd, "public/uploads") },
+    });
+    const code = await body({
+      context,
+      drizzle,
+      dialect: db.dialect,
+      mediaStorage,
+    });
+    await adapter.disconnect();
+    process.exit(code);
+  } catch (error) {
+    if (adapter) await adapter.disconnect();
+    exitWithError(context.logger, error);
+  }
+}
+
+/**
+ * `nextly media remove-sizes [--apply]` over a database: says there is
+ * nothing to do once the column is gone, and otherwise lists, or with
+ * `apply` removes, the size files its items name. Returns the exit status.
+ */
+export async function runRemoveSizes(options: {
+  db: unknown;
+  dialect: SupportedDialect;
+  storage: IStorageAdapter;
+  apply: boolean;
+  say: (line: string) => void;
+}): Promise<number> {
+  const { db, dialect, say } = options;
+  const [
+    { hasRetiredSizesColumn, retiredImageSizesTableRows, sqlRetiredSizesStore },
+    { removeStoredImageSizes, retiredObjectsLine },
+    { liveColumnsOf },
+  ] = await Promise.all([
+    import("../../domains/media/retired-image-sizes-store"),
+    import("../../domains/media/retired-image-sizes"),
+    import("../../init/retired-auth-tables"),
+  ]);
+  const objects = {
+    column: await hasRetiredSizesColumn(db, dialect),
+    tableRows: await retiredImageSizesTableRows(
+      db,
+      dialect,
+      liveColumnsOf(db, dialect)
+    ),
+  };
+  if (!objects.column) {
+    say(
+      "The media table has no sizes column: no item names an image size file, so there is nothing to remove."
+    );
+    const drops = retiredObjectsLine(objects);
+    if (drops) say(drops.replace(/^Once no item holds sizes, /, "Now "));
+    return 0;
+  }
+  const { code } = await removeStoredImageSizes({
+    store: sqlRetiredSizesStore(db, dialect),
+    storage: options.storage,
+    objects,
+    apply: options.apply,
+    say,
+  });
+  return code;
 }

@@ -60,7 +60,7 @@ export function errorForLog(error: unknown): string {
 }
 
 /** A stored file that could not be removed, by its path, so it can be found. */
-export function warnNotRemoved(
+function warnNotRemoved(
   filePath: string,
   mediaId: string,
   error: unknown
@@ -86,15 +86,24 @@ export interface StoredFileColumns {
   filename: AnyColumn;
   url: AnyColumn;
   thumbnailUrl: AnyColumn;
-  sizes: AnyColumn;
 }
 
 /** How a search for files another item refers to reads the media table. */
 export interface StoredFileSearch {
   columns: StoredFileColumns;
   dialect: "postgresql" | "mysql" | "sqlite";
-  /** The rows matching `where`, with the columns `storedFilesOf` reads. */
-  read: (where: SQL) => Promise<MediaFilesRecord[]>;
+  /**
+   * The retired `sizes` column, while the database still has it; undefined
+   * once it is gone. An item stored before image sizes were removed can name
+   * a file among its sizes until `nextly media remove-sizes` clears them, so
+   * the search reads them for as long as they can be there.
+   */
+  sizesColumn?: () => Promise<SQL | undefined>;
+  /**
+   * The rows matching `where`, with the columns `storedFilesOf` reads, the
+   * retired `sizes` among them when `sizes` names it.
+   */
+  read: (where: SQL, sizes: SQL | undefined) => Promise<MediaFilesRecord[]>;
 }
 
 /** Names searched per query, so a large folder's chunk stays one bounded statement each. */
@@ -119,16 +128,22 @@ function widenedForJson(char: string): string {
  * (`_` is a wildcard here, and a name can occur in another), never narrower,
  * which is what a search for what to keep needs; the caller decides by path.
  */
-function mayReferTo(search: StoredFileSearch, names: readonly string[]): SQL {
+function mayReferTo(
+  search: StoredFileSearch,
+  names: readonly string[],
+  sizes: SQL | undefined
+): SQL {
   const { columns, dialect } = search;
   // The sizes column is JSON on PostgreSQL and MySQL, which `like` cannot
-  // read as it is; it is read as its text.
+  // read as it is; it is read as its text. Absent once the column is gone.
   const sizesText =
-    dialect === "postgresql"
-      ? sql`${columns.sizes}::text`
-      : dialect === "mysql"
-        ? sql`cast(${columns.sizes} as char)`
-        : sql`${columns.sizes}`;
+    sizes === undefined
+      ? undefined
+      : dialect === "postgresql"
+        ? sql`${sizes}::text`
+        : dialect === "mysql"
+          ? sql`cast(${sizes} as char)`
+          : sizes;
   const conditions = names.flatMap(name => {
     // A character JSON escapes (a backslash, a double quote, a control
     // character) is written otherwise in the sizes text, and a backslash is
@@ -139,7 +154,7 @@ function mayReferTo(search: StoredFileSearch, names: readonly string[]): SQL {
       like(columns.filename, pattern),
       like(columns.url, pattern),
       like(columns.thumbnailUrl, pattern),
-      sql`${sizesText} like ${pattern}`,
+      ...(sizesText === undefined ? [] : [sql`${sizesText} like ${pattern}`]),
     ];
   });
   return or(...conditions) ?? sql`false`;
@@ -199,11 +214,14 @@ export async function filesKeptByOthers(
 ): Promise<Set<string> | null> {
   const names = [...new Set(paths.map(lastSegment).filter(Boolean))];
   try {
+    // Asked once per search, so every chunk reads the same columns.
+    const sizes = await search.sizesColumn?.();
     const rows: MediaFilesRecord[] = [];
     for (let i = 0; i < names.length; i += NAMES_PER_QUERY) {
       rows.push(
         ...(await search.read(
-          mayReferTo(search, names.slice(i, i + NAMES_PER_QUERY))
+          mayReferTo(search, names.slice(i, i + NAMES_PER_QUERY), sizes),
+          sizes
         ))
       );
     }

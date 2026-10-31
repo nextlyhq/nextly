@@ -424,6 +424,9 @@ export async function runMigrate(
         refuseBuilderFilesWithoutSnapshot: true,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
+        // The operator ran the command, so the retired image-sizes column and
+        // table go once nothing would be lost; a startup migration never asks.
+        dropRetiredImageSizes: true,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
         // A translations column already in place that cannot hold a field the config newly
@@ -712,6 +715,12 @@ export interface MigrateCoreDeps {
    * other answer.
    */
   allowDropNonEmptyRetired?: boolean;
+  /**
+   * Drop the retired image-sizes column and table once no media item names a
+   * size file. Passed by the `nextly migrate` command alone: a migration run
+   * at startup never removes them.
+   */
+  dropRetiredImageSizes?: boolean;
   ensureLedger?: () => Promise<void>;
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
@@ -886,6 +895,48 @@ export async function previewMigrate(args: {
         `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
+  }
+  await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/**
+ * What a real run would do with the retired image-sizes column and table:
+ * drop them, naming each, or keep them while items still name size files.
+ * Read with the same helpers the run decides with.
+ */
+async function previewRetiredImageSizes(
+  db: unknown,
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const [
+    { readRetiredObjects },
+    { formatRetiredImageSizesKept },
+    { liveColumnsOf },
+  ] = await Promise.all([
+    import("../../domains/media/retired-image-sizes-store"),
+    import("../../domains/media/retired-image-sizes"),
+    import("../../init/retired-auth-tables"),
+  ]);
+  const objects = await readRetiredObjects(
+    db,
+    dialect,
+    liveColumnsOf(db, dialect)
+  );
+  if (!objects.column && objects.tableRows === null) return;
+  if (objects.itemsWithSizes > 0) {
+    logger.info(`  • ${formatRetiredImageSizesKept(objects.itemsWithSizes)}`);
+    return;
+  }
+  if (objects.column) {
+    logger.info(
+      "  • would drop the retired column media.sizes (no item names a size file)"
+    );
+  }
+  if (objects.tableRows !== null) {
+    logger.info(
+      `  • would drop the retired table image_sizes (${objects.tableRows} ${objects.tableRows === 1 ? "row" : "rows"} of size definitions)`
+    );
   }
 }
 
@@ -1575,6 +1626,9 @@ export async function migrateCore(
           : {}),
         ...(deps.allowDropNonEmptyRetired === true
           ? { allowDropNonEmptyRetired: true }
+          : {}),
+        ...(deps.dropRetiredImageSizes === true
+          ? { dropRetiredImageSizes: true }
           : {}),
         // The operations the retired-table drop needs. Without them the
         // cleanup returned at its first guard, so the documented
