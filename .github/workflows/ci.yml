@@ -2417,6 +2417,8 @@ jobs:
   # it on main, so a red there went unread. It runs here for a push to main that
   # changed one of those same paths, and `main-red` reports it with the other
   # advisory jobs. Any other commit skips it, as its pull-request trigger does.
+  # `main-red` watches the scope job too: one that fails skips the build, which
+  # alone would report nothing.
   scaffold-build-scope:
     name: Decide whether this commit can affect a scaffold
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
@@ -2440,13 +2442,23 @@ jobs:
           node-version-file: .nvmrc
 
       # The commit this job last built a scaffold for, so a push after one it
-      # skipped is compared with what was actually tested.
+      # skipped is compared with what was actually tested. Every leg is named,
+      # by the name its run carries: a run where one leg was cancelled did not
+      # test that leg, though the others reached a verdict.
       - name: Ask whether a newer push already covers this one
         id: newer
         uses: ./.github/actions/superseded-on-main
         with:
           workflow: ci.yml
-          substantive-job: Scaffold build / Scaffold blog-code-first
+          substantive-job: |
+            Scaffold build / Scaffold blank
+            Scaffold build / Scaffold blank-pnpm9
+            Scaffold build / Scaffold blank-pnpm11
+            Scaffold build / Scaffold blank-bundled
+            Scaffold build / Scaffold blog-code-first
+            Scaffold build / Scaffold blog-visual
+            Scaffold build / Scaffold blog-cache-components
+            Scaffold build / Scaffold existing-create-next-app
           token: ${{ github.token }}
 
       # Everything is inert but the paths scaffold-build.yml's pull-request
@@ -2827,6 +2839,7 @@ jobs:
       - cache-components
       - scaffold-smoke
       - dev-script-smoke
+      - scaffold-build-scope
       - scaffold-build
     runs-on: ubuntu-latest
     timeout-minutes: 5
