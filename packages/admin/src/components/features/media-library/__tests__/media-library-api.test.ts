@@ -82,6 +82,7 @@ describe("a delete of more items than one request takes", () => {
       const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
       return Promise.resolve({
         ids: sent,
+        marked: sent,
         // The first batch was marked earlier, so its window ends first.
         deleteAfter: sent[0] === "m0" ? early : late,
       });
@@ -93,7 +94,11 @@ describe("a delete of more items than one request takes", () => {
       ids(150).slice(0, 100),
       ids(150).slice(100),
     ]);
-    expect(pending).toEqual({ ids: ids(150), deleteAfter: early });
+    expect(pending).toEqual({
+      ids: ids(150),
+      marked: ids(150),
+      deleteAfter: early,
+    });
   });
 
   it("brings back the batches already taken when a later one fails, and fails", async () => {
@@ -105,6 +110,7 @@ describe("a delete of more items than one request takes", () => {
       if (sent[0] === "m100") return Promise.reject(new Error("refused"));
       return Promise.resolve({
         ids: sent,
+        marked: sent,
         deleteAfter: new Date(Date.now() + 10_000).toISOString(),
       });
     });
@@ -113,6 +119,28 @@ describe("a delete of more items than one request takes", () => {
 
     expect(sentTo("/admin/api/media/deletions/undo")).toEqual([
       ids(150).slice(0, 100),
+    ]);
+  });
+
+  it("brings back only what this delete marked, leaving an item an earlier delete marked", async () => {
+    fetchJson.mockImplementation((url: string, init: RequestInit) => {
+      const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
+      if (url === "/admin/api/media/deletions/undo") {
+        return Promise.resolve({ restored: sent, gone: [] });
+      }
+      if (sent[0] === "m100") return Promise.reject(new Error("refused"));
+      return Promise.resolve({
+        ids: sent,
+        // `m5` was already waiting to be deleted, from another tab.
+        marked: sent.filter(id => id !== "m5"),
+        deleteAfter: new Date(Date.now() + 10_000).toISOString(),
+      });
+    });
+
+    await expect(deleteMediaLater(ids(150))).rejects.toThrow("refused");
+
+    expect(sentTo("/admin/api/media/deletions/undo")).toEqual([
+      ids(100).filter(id => id !== "m5"),
     ]);
   });
 
@@ -143,6 +171,7 @@ describe("a delete of more items than one request takes", () => {
     fetchJson.mockImplementation((_url: string, init: RequestInit) =>
       Promise.resolve({
         ids: (JSON.parse(String(init.body)) as { ids: string[] }).ids,
+        marked: (JSON.parse(String(init.body)) as { ids: string[] }).ids,
         deleteAfter: new Date(Date.now() + 10_000).toISOString(),
       })
     );

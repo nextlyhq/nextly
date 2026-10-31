@@ -179,12 +179,13 @@ function emptyLibraryMessage({
  */
 function unusedPendingMessage(counts: {
   isError: boolean;
+  isFetching: boolean;
   data?: { usageRecorded: boolean };
 }): string {
   if (counts.isError) {
     return "Couldn't check where items are used, so the Unused view can't list them. Reload the page to try again.";
   }
-  if (counts.data === undefined) {
+  if (counts.isFetching || counts.data === undefined) {
     return "Still counting where items are used, so the Unused view can't list them yet.";
   }
   return "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it.";
@@ -294,12 +295,18 @@ export function MediaLibrary({
   }, [activeFolderId, view, resetPage]);
 
   // Whether the usage record covers older content, asked only for the Unused
-  // view, which cannot be trusted until it does. Only an answer saying it
-  // does opens the view: while the counts load, or after they fail, it lists
-  // nothing, since the items it would list may still be used by older content.
+  // view, which cannot be trusted until it does. Only a current answer saying
+  // it does opens the view: while the counts load or are asked again, and
+  // after they fail, it lists nothing, since the items it would list may
+  // still be used by older content and an earlier answer may no longer hold.
   const usageCounts = useMediaLibraryCounts(view === "unused");
   const unusedPending =
-    view === "unused" && usageCounts.data?.usageRecorded !== true;
+    view === "unused" &&
+    !(
+      usageCounts.isSuccess &&
+      !usageCounts.isFetching &&
+      usageCounts.data.usageRecorded === true
+    );
 
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     React.useState(false);

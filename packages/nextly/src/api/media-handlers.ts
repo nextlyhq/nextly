@@ -901,18 +901,18 @@ async function handleDeleteMediaLater(
   );
   const pending = await pendingDeletes();
   const marked = await pending.mark(ids, actor);
-  const { PENDING_DELETE_WINDOW_MS } = await import(
-    "../domains/media/pending-delete"
-  );
-  // A moment after the window, so the marks are due when it runs; it
-  // finishes every item this delete marked, however many. Unref'd: a waiting
-  // delete never keeps a process alive, and the sweep covers one that exits
-  // first.
+  // A moment after the deadline this delete answers, which a mark already
+  // standing makes earlier than a fresh window, so the marks are due when it
+  // runs; it finishes every item this delete names, however many. Unref'd: a
+  // waiting delete never keeps a process alive, and the sweep covers one
+  // that exits first.
+  const due = Math.max(0, Date.parse(marked.deleteAfter) - Date.now());
   setTimeout(() => {
     void sweepPendingDeletes(marked.ids);
-  }, PENDING_DELETE_WINDOW_MS + 500).unref?.();
+  }, due + 500).unref?.();
   return respondAction("Media deleted.", {
     ids: marked.ids,
+    marked: marked.marked,
     deleteAfter: marked.deleteAfter,
   });
 }

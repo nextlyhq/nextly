@@ -696,7 +696,7 @@ describe.each(getConfiguredTestDialects())(
 
     const media = () => t.getService("mediaService");
 
-    it("counts every folder's items and each view's in one statement", async () => {
+    it("counts every folder's items and each view's in one statement, beside the record's mark", async () => {
       await t.getService("metaService").set(MEDIA_USAGE_RECORDED_KEY, {
         rebuiltAt: new Date().toISOString(),
       });
@@ -723,7 +723,9 @@ describe.each(getConfiguredTestDialects())(
         t.adapter.getDrizzle = original as typeof t.adapter.getDrizzle;
       }
 
-      expect(statements).toBe(1);
+      // One statement counts the library; the other is the record's mark,
+      // read by the one reader every caller asks whether it is built.
+      expect(statements).toBe(2);
       expect(counts).toEqual({
         all: 8,
         // The two images in no folder or the other folder with none, and the

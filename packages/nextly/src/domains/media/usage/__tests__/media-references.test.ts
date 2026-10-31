@@ -264,11 +264,10 @@ describe("mediaLibraryCountsOf", () => {
             items: "3",
             missingAlt: "1",
             unused: "2",
-            recorded: 1,
           },
-          { folderId: "f1", items: 4, missingAlt: 2, unused: 0, recorded: "1" },
+          { folderId: "f1", items: 4, missingAlt: 2, unused: 0 },
         ],
-        true
+        { present: true, recorded: true }
       )
     ).toEqual({
       all: 7,
@@ -283,18 +282,22 @@ describe("mediaLibraryCountsOf", () => {
   it("says nothing is unused, nor recorded, before the usage table exists", () => {
     expect(
       mediaLibraryCountsOf(
-        [{ folderId: null, items: 1, missingAlt: 0, unused: 0, recorded: 0 }],
-        false
+        [{ folderId: null, items: 1, missingAlt: 0, unused: 0 }],
+        { present: false, recorded: false }
       )
     ).toMatchObject({ unused: null, usageRecorded: false });
   });
 
-  it("reads the record as unbuilt when any group lacks the mark", () => {
+  it("reads the record as unbuilt without its mark, unless the library is empty", () => {
     expect(
       mediaLibraryCountsOf(
-        [{ folderId: "f1", items: 1, missingAlt: 0, unused: 1, recorded: 0 }],
-        true
+        [{ folderId: "f1", items: 1, missingAlt: 0, unused: 1 }],
+        { present: true, recorded: false }
       )
     ).toMatchObject({ usageRecorded: false });
+    // POSITIVE CONTROL: nothing to count, so nothing can be miscounted.
+    expect(
+      mediaLibraryCountsOf([], { present: true, recorded: false })
+    ).toMatchObject({ usageRecorded: true });
   });
 });

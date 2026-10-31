@@ -72,6 +72,12 @@ export interface PendingDeleteDeps {
 /** What a delete answers: the items marked, and when they go. */
 export interface MarkedDeletion {
   ids: string[];
+  /**
+   * The items this delete marked itself, the rest of `ids` having been
+   * marked already by an earlier one: what undoing only this delete takes
+   * back.
+   */
+  marked: string[];
   /** When the window ends, as an ISO instant. */
   deleteAfter: string;
 }
@@ -175,7 +181,10 @@ export class PendingMediaDeletes {
   ): Promise<MarkedDeletion> {
     const wanted = [...new Set(ids)];
     const now = this.now();
+    const fresh: string[] = [];
     const earliest = await this.deps.db.transaction(async tx => {
+      // Filled afresh on each attempt, should the transaction be retried.
+      fresh.length = 0;
       // Each item's row locked, in one order, so two deletes of the same
       // items take turns: the second finds the first's marks and keeps them.
       for (const id of [...wanted].sort()) await tx.lockRow("media", id);
@@ -206,6 +215,7 @@ export class PendingMediaDeletes {
           value: JSON.stringify(actor ? { actor } : {}),
           updated_at: now,
         });
+        fresh.push(id);
       }
       // A mark whose time cannot be read is taken as due already.
       return earliestMarkTime(
@@ -216,6 +226,7 @@ export class PendingMediaDeletes {
     });
     return {
       ids: wanted,
+      marked: fresh,
       deleteAfter: new Date(earliest.getTime() + this.windowMs).toISOString(),
     };
   }

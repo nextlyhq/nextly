@@ -100,6 +100,7 @@ beforeEach(() => {
     if (url === "/admin/api/media/deletions") {
       return Promise.resolve({
         ids: sent,
+        marked: sent,
         deleteAfter: new Date(Date.now() + 10_000).toISOString(),
       });
     }

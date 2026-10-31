@@ -341,6 +341,47 @@ describe.each(getConfiguredTestDialects())(
       expect(stored.filter(Boolean)).toEqual([]);
     }, 90_000);
 
+    it("finishes a delete of an item already marked by that mark's deadline, not a fresh window", async () => {
+      const file = await unusedFile();
+      // Marked by a delete whose timer went with its process, nine seconds
+      // into its window.
+      await t.adapter.insert("nextly_meta", {
+        key: pendingDeleteKey(file),
+        value: JSON.stringify({}),
+        updated_at: new Date(Date.now() - PENDING_DELETE_WINDOW_MS + 1_000),
+      });
+
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      expect(deleted.status).toBe(200);
+
+      // Well before a fresh window could end, with no library read.
+      await expect
+        .poll(async () => Boolean(await row(file)), {
+          timeout: 5_000,
+          interval: 250,
+        })
+        .toBe(false);
+      // The answer said this delete marked nothing itself.
+      expect(deleted.json).toMatchObject({ ids: [file], marked: [] });
+    }, 30_000);
+
+    it("says which items a delete marked itself", async () => {
+      const files = [await unusedFile(), await unusedFile()];
+      const first = await api(editor, "POST", ["deletions"], {
+        body: { ids: [files[0]] },
+      });
+      const second = await api(editor, "POST", ["deletions"], {
+        body: { ids: files },
+      });
+      expect(first.json).toMatchObject({ marked: [files[0]] });
+      expect(second.json).toMatchObject({ ids: files, marked: [files[1]] });
+      await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: files },
+      });
+    });
+
     it("answers a delete of an item already marked with the standing mark's deadline", async () => {
       const file = await unusedFile();
       // Whole seconds, which every dialect stores a mark's time in.

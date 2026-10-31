@@ -252,14 +252,16 @@ function itemsOf(
 }
 
 /**
- * Which of two ways one field names one item its row keeps: by the item's
- * address now over a kept earlier one, and either over its id. A field that
- * names the item at its current address is one a Replace must keep the file
- * for; one naming a kept address is already kept for.
+ * Which of two ways one field names one item its row keeps: a kept earlier
+ * address over the item's address now, and either over its id. A field that
+ * names a kept address anywhere still shows the previous file there, which
+ * Used in reports from the row; and a row with any address is one a Replace
+ * keeps the old files for, so preferring the kept one loses no protection
+ * for the current file.
  */
 function rank(found: { address: string | null; current: boolean }): number {
   if (found.address === null) return 0;
-  return found.current ? 2 : 1;
+  return found.current ? 1 : 2;
 }
 
 /**
@@ -428,13 +430,23 @@ export async function listMediaUsage(
  * The `nextly_meta` key whose presence says the record has been built for
  * content written before it existed: set by `nextly media reindex-usage` once
  * it has rebuilt every document, and on a new site, which has none.
+ *
+ * The key names the record's format, so a mark written for an earlier one
+ * does not count. Rows written before the record kept each use's address
+ * (`address`) read as uses by id, and a Replace trusting them would remove a
+ * file a page still shows; a record marked under the earlier key
+ * (`media.usage.recorded`) therefore reads as still being built until the
+ * rebuild writes this key. Raise the format whenever the rows gain something
+ * a reader of a complete record relies on.
  */
-export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded";
+export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded:2";
 
 /**
- * Whether the record has been built for content written before it existed:
- * its {@link MEDIA_USAGE_RECORDED_KEY} mark is there. Until it is, a use the
- * record lacks may still be in some document.
+ * Whether the record has been built for content written before it existed,
+ * in its current format: its {@link MEDIA_USAGE_RECORDED_KEY} mark is there.
+ * Until it is, a use the record lacks, or one it holds without its address,
+ * may still be in some document. The one answer to this question: a Replace,
+ * the usage answers and the library's counts all ask it here.
  */
 export async function mediaUsageRecorded(
   db: Pick<UsageDb, "select">

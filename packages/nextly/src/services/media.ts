@@ -28,7 +28,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { count, desc, asc, eq, sql } from "drizzle-orm";
+import { count, desc, asc, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -269,12 +269,12 @@ export class MediaService extends BaseService {
    * item that content uses can read as unused.
    */
   async countLibrary(): Promise<MediaLibraryCounts> {
-    const { media, nextlyMeta } = this.tables;
+    const { media } = this.tables;
     const unused = await this.unusedSources();
     // Loaded when the library is read, not with the service.
     const [
       { mediaLibraryCountsOf, missingAltText, notPendingDelete, unusedItem },
-      { MEDIA_USAGE_RECORDED_KEY },
+      { mediaUsageRecorded },
     ] = await Promise.all([
       import("../domains/media/media-library-query"),
       import("../domains/media/usage/media-usage-store"),
@@ -291,17 +291,18 @@ export class MediaService extends BaseService {
               number | string | null
             >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
           : sql<number>`0`,
-        // At most one marker row joins each item, so it multiplies nothing.
-        recorded: sql<
-          number | string | null
-        >`MAX(CASE WHEN ${nextlyMeta.key} IS NULL THEN 0 ELSE 1 END)`,
       })
       .from(media)
-      .leftJoin(nextlyMeta, eq(nextlyMeta.key, MEDIA_USAGE_RECORDED_KEY))
       // Never an item deleted inside the Undo window, as every library read.
       .where(notPendingDelete(media))
       .groupBy(media.folderId);
-    return mediaLibraryCountsOf(groups, unused !== null);
+    // Whether the record is built is asked of its one reader, so the counts
+    // and a Replace never disagree about it.
+    const present = unused !== null;
+    return mediaLibraryCountsOf(groups, {
+      present,
+      recorded: present && (await mediaUsageRecorded(this.adapter)),
+    });
   }
 
   /**

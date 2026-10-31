@@ -27,7 +27,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderWithProviders } from "@admin/__tests__/utils";
+import {
+  createTestQueryClient,
+  renderWithProviders,
+} from "@admin/__tests__/utils";
 
 const api = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
@@ -212,6 +215,7 @@ beforeEach(() => {
   library.deleteMediaLater.mockImplementation((ids: string[]) =>
     Promise.resolve({
       ids,
+      marked: ids,
       deleteAfter: new Date(Date.now() + 10_000).toISOString(),
     })
   );
@@ -352,6 +356,59 @@ describe("a view beside the folders", () => {
 
     expect(await waitFor(() => tile(1))).toBeInTheDocument();
   });
+  describe("once the counts have said the record is built", () => {
+    const built = {
+      all: 3,
+      missingAltText: 0,
+      unused: 3,
+      usageRecorded: true,
+      root: 3,
+      folders: {},
+    };
+
+    /** Unused open on a built answer, then the counts asked again. */
+    async function askedAgain(next: Promise<unknown>) {
+      const queryClient = createTestQueryClient();
+      library.fetchMediaLibraryCounts.mockResolvedValue(built);
+      api.fetchMedia.mockResolvedValue({
+        data: [item(1), item(2), item(3)],
+        meta: { total: 3, page: 1, limit: 24, totalPages: 1 },
+      });
+      act(() => setMediaLibraryView("unused"));
+      renderWithProviders(
+        <MediaProvider>
+          <MediaLibrary />
+        </MediaProvider>,
+        { queryClient }
+      );
+      // POSITIVE CONTROL: the built answer opens the view.
+      expect(await waitFor(() => tile(1))).toBeInTheDocument();
+      library.fetchMediaLibraryCounts.mockReturnValue(next);
+      act(() => {
+        void queryClient
+          .refetchQueries({ queryKey: ["media", "library-counts"] })
+          .catch(() => undefined);
+      });
+    }
+
+    it("lists nothing while the counts are asked again", async () => {
+      await askedAgain(new Promise(() => undefined));
+
+      expect(
+        await screen.findByText(/still counting where items are used/i)
+      ).toBeInTheDocument();
+      noUnusedItemsShown();
+    });
+
+    it("lists nothing when asking the counts again fails", async () => {
+      await askedAgain(Promise.reject(new Error("counts failed")));
+
+      expect(
+        await screen.findByText(/couldn't check where items are used/i)
+      ).toBeInTheDocument();
+      noUnusedItemsShown();
+    });
+  });
 });
 
 describe("Used in", () => {
@@ -471,7 +528,7 @@ describe("delete with Undo", () => {
       const deleteAfter = new Date(Date.now() + 10_000).toISOString();
       // The answer reaches the page `lateBy` after the server marked it.
       vi.setSystemTime(Date.now() + lateBy);
-      return Promise.resolve({ ids, deleteAfter });
+      return Promise.resolve({ ids, marked: ids, deleteAfter });
     });
     renderLibrary();
     const panel = await openItem(1);

@@ -119,11 +119,19 @@ export function mediaUseReadKey(read: MediaUseRead): string {
   return JSON.stringify([read.kind, read.slug, read.documentId, read.locale]);
 }
 
-/** One field as it is gathered: its languages, and how it names the item. */
-interface GatheredField {
-  locales: Set<string>;
+/** How one field names the item in one language's value. */
+interface LanguageUse {
   byAddress: boolean;
   showsPreviousFile: boolean;
+}
+
+/**
+ * One field as it is gathered: how each language's value ("" a shared one)
+ * names the item, kept apart so a language the reader may not read never
+ * colours what they are told of one they may.
+ */
+interface GatheredField {
+  locales: Map<string, LanguageUse>;
 }
 
 /** A document's fields as they are gathered, by path. */
@@ -152,16 +160,16 @@ function gathered(
       document.documentId,
     ]);
     const found = documents.get(key) ?? { ...document, fields: new Map() };
-    const field = found.fields.get(row.fieldPath) ?? {
-      locales: new Set<string>(),
+    const field = found.fields.get(row.fieldPath) ?? { locales: new Map() };
+    const use = field.locales.get(row.locale) ?? {
       byAddress: false,
       showsPreviousFile: false,
     };
-    field.locales.add(row.locale);
-    if (row.address !== null) field.byAddress = true;
+    if (row.address !== null) use.byAddress = true;
     if (row.address !== null && kept.has(row.address)) {
-      field.showsPreviousFile = true;
+      use.showsPreviousFile = true;
     }
+    field.locales.set(row.locale, use);
     found.fields.set(row.fieldPath, field);
     documents.set(key, found);
   }
@@ -175,7 +183,7 @@ function languagesOf(document: GatheredDocument): {
 } {
   const all = new Set<string>();
   for (const field of document.fields.values()) {
-    for (const locale of field.locales) all.add(locale);
+    for (const locale of field.locales.keys()) all.add(locale);
   }
   return {
     named: [...all].filter(locale => locale !== "").sort(),
@@ -204,7 +212,8 @@ function readsOf(document: GatheredDocument): MediaUseRead[] {
  * What the reader is told of one document, or `null` when nothing: each
  * field's languages cut to those the reader may read the document in; a
  * shared value, which every language reads, told when they may read it in
- * any. The title is the default language's, else the first readable one's.
+ * any. How a field names the item is taken from the told languages' values
+ * alone. The title is the default language's, else the first readable one's.
  */
 function toldOf(
   document: GatheredDocument,
@@ -215,20 +224,20 @@ function toldOf(
     headings.get(mediaUseReadKey({ ...document, locale }));
   const readable = reads.filter(read => headingIn(read.locale) !== undefined);
   if (readable.length === 0) return null;
+  // A shared value is told wherever the document is readable at all.
+  const told = (locale: string) =>
+    locale === "" || headingIn(locale) !== undefined;
   const fields: MediaUseField[] = [];
   for (const [path, field] of document.fields) {
-    const locales = field.locales.has("")
-      ? []
-      : [...field.locales]
-          .filter(locale => headingIn(locale) !== undefined)
-          .sort();
+    const uses = [...field.locales].filter(([locale]) => told(locale));
     // A field used only in languages the reader may not read is not told.
-    if (!field.locales.has("") && locales.length === 0) continue;
+    if (uses.length === 0) continue;
+    const shared = field.locales.has("");
     fields.push({
       path,
-      locales,
-      byAddress: field.byAddress,
-      showsPreviousFile: field.showsPreviousFile,
+      locales: shared ? [] : uses.map(([locale]) => locale).sort(),
+      byAddress: uses.some(([, use]) => use.byAddress),
+      showsPreviousFile: uses.some(([, use]) => use.showsPreviousFile),
     });
   }
   if (fields.length === 0) return null;

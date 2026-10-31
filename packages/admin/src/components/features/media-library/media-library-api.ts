@@ -73,6 +73,12 @@ export interface MediaUsage {
 /** A delete that can be undone, as the server took it. */
 export interface PendingMediaDelete {
   ids: string[];
+  /**
+   * The items this delete marked itself; the rest of `ids` were already
+   * waiting to be deleted by an earlier one, which this delete never takes
+   * back.
+   */
+  marked: string[];
   /** When the item is deleted for good, as an ISO instant. */
   deleteAfter: string;
 }
@@ -157,9 +163,11 @@ function deletionBatches(ids: readonly string[]): string[][] {
  * larger than one request takes is sent in batches, one after another, and
  * answered as one delete: every id, and the earliest batch's deadline, since
  * an Undo after it would find that batch already gone. When a later batch
- * fails, the batches already taken are brought back before the failure is
- * reported, so the selection is deleted whole or not at all; one that cannot
- * be brought back goes on with its window, as a delete of its own would.
+ * fails, the items the batches already taken marked are brought back before
+ * the failure is reported, so the selection is deleted whole or not at all;
+ * an item an earlier delete had marked already stays as that delete left it,
+ * and one that cannot be brought back goes on with its window, as a delete
+ * of its own would.
  */
 export async function deleteMediaLater(
   ids: readonly string[]
@@ -176,18 +184,21 @@ export async function deleteMediaLater(
     }
   } catch (error) {
     await Promise.allSettled(
-      taken.map(done =>
-        mediaJson<UndoneMediaDelete>(
-          "/deletions/undo",
-          jsonPost({ ids: done.ids })
+      taken
+        .filter(done => done.marked.length > 0)
+        .map(done =>
+          mediaJson<UndoneMediaDelete>(
+            "/deletions/undo",
+            jsonPost({ ids: done.marked })
+          )
         )
-      )
     );
     throw error;
   }
   const deadlines = taken.map(done => done.deleteAfter);
   return {
     ids: taken.flatMap(done => done.ids),
+    marked: taken.flatMap(done => done.marked),
     deleteAfter: deadlines.reduce((earliest, next) =>
       Date.parse(next) < Date.parse(earliest) ? next : earliest
     ),

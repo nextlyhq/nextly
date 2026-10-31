@@ -320,6 +320,42 @@ describe("mediaUsesOf", () => {
     expect(JSON.stringify(answer)).not.toContain("summary");
   });
 
+  it("says how a field names the item from the languages the reader may read alone", async () => {
+    const answer = await mediaUsesOf(
+      ITEM,
+      source(
+        [
+          // English names the item now, and Spanish a kept earlier address.
+          row("collection", "posts", "p1", "body", "en", "/new.png"),
+          row("collection", "posts", "p1", "body", "es", "/old.png"),
+          // English names it by id, Spanish by address.
+          row("collection", "posts", "p1", "hero", "en"),
+          row("collection", "posts", "p1", "hero", "es", "/new.png"),
+        ],
+        // Readable in English alone.
+        [[readIn(post, "en"), { title: "Hello", owner: "Posts" }]],
+        ["/old.png"]
+      )
+    );
+
+    expect(answer.items.map(item => item.fields)).toEqual([
+      [
+        {
+          path: "body",
+          locales: ["en"],
+          byAddress: true,
+          showsPreviousFile: false,
+        },
+        {
+          path: "hero",
+          locales: ["en"],
+          byAddress: false,
+          showsPreviousFile: false,
+        },
+      ],
+    ]);
+  });
+
   it("tells only the uses naming the item by address when asked, counting the unreadable ones", async () => {
     const answer = await mediaUsesOf(
       ITEM,
