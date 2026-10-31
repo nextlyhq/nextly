@@ -1657,21 +1657,9 @@ async function expireChangedContent(
   id: unknown,
   deps: PluginDatabaseDeps
 ): Promise<void> {
-  const { contentEntity, entityTable, expireContent } = deps;
-  if (!contentEntity || !entityTable || !expireContent) return;
   if (typeof id !== "string" && typeof id !== "number") return;
   try {
-    const target = await contentTarget(tableName, id, {
-      contentEntity,
-      entityTable,
-      db: deps.db,
-    });
-    if (target === undefined) return;
-    if (deps.afterCommit) {
-      deps.afterCommit(() => expireContent(target));
-      return;
-    }
-    await expireContent(target);
+    await findAndExpire(tableName, id, deps);
   } catch (error) {
     getNextlyLogger().warn({
       kind: "contributed-write-expiry-failed",
@@ -1680,6 +1668,27 @@ async function expireChangedContent(
       id: String(id),
     });
   }
+}
+
+/** Find the document a contributed write changed, and expire it or queue it. */
+async function findAndExpire(
+  tableName: string,
+  id: string | number,
+  deps: PluginDatabaseDeps
+): Promise<void> {
+  const { contentEntity, entityTable, expireContent } = deps;
+  if (!contentEntity || !entityTable || !expireContent) return;
+  const target = await contentTarget(tableName, id, {
+    contentEntity,
+    entityTable,
+    db: deps.db,
+  });
+  if (target === undefined) return;
+  if (deps.afterCommit) {
+    deps.afterCommit(() => expireContent(target));
+    return;
+  }
+  await expireContent(target);
 }
 
 async function runCommitEffects(
