@@ -1475,6 +1475,20 @@ exports[`each code, as a command ends with it > PROMOTE_COLLECTION_NOT_FOUND 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/promote-collection-not-found  (PROMOTE_COLLECTION_NOT_FOUND)"
 `;
 
+exports[`each code, as a command ends with it > RECORD_SNAPSHOT_NEEDS_APP_MIGRATION 1`] = `
+"✗ \`--record-snapshot\` can't be combined with \`--blank\` or \`--plugin\`.
+  Why:  It writes the app's migration and the snapshot that records which fields are translated, and a blank migration or a plugin module has no such snapshot.
+  Next: Run \`nextly migrate:create --record-snapshot\` on its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/record-snapshot-needs-app-migration  (RECORD_SNAPSHOT_NEEDS_APP_MIGRATION)"
+`;
+
+exports[`each code, as a command ends with it > RECORD_SNAPSHOT_STORAGE_MISSING 1`] = `
+"✗ \`--record-snapshot\` found translated fields the database holds no storage for: collection "posts" has no translations table (dc_posts_locales).
+  Why:  It records which fields are translated as the database holds them, so that no later migration is planned over a translations table that is not there. Nothing was written.
+  Next: Run it against a database that has applied every migration, with the config as it was at the last migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/record-snapshot-storage-missing  (RECORD_SNAPSHOT_STORAGE_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > REFUSED_STATEMENT 1`] = `
 "✗ \`20261029_090000_compact.sql\` was refused, and nothing in it ran.
   Why:  "VACUUM" cannot run inside a transaction, and this file runs in one. To run it as a migration, make \`-- nextly:no-transaction\` the file's first line: the file then runs outside a transaction, statement by statement, and a failure part-way leaves the statements before it applied.
@@ -1586,6 +1600,13 @@ exports[`each code, as a command ends with it > SETUP_TOKEN_SET_BY_ENV 1`] = `
   Why:  A token set by NEXTLY_SETUP_TOKEN is read from the environment, not stored in the install's database.
   Next: Change the variable where it is set.
   Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)"
+`;
+
+exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
+"✗ \`nextly migrate:create\` can't tell which fields are translated, so it wrote nothing.
+  Why:  The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values.
+  Next: To record them, put the config back as it was at the last migration and run \`nextly migrate:create --record-snapshot\` against a database that has applied every migration, then make your changes again and run \`nextly migrate:create --name add_excerpt\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/translations-unrecorded  (TRANSLATIONS_UNRECORDED)"
 `;
 
 exports[`each code, as a command ends with it > UI_SCHEMA_INVALID 1`] = `

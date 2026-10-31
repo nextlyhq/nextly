@@ -115,6 +115,42 @@ export const MIGRATE_CREATE_CODES = defineCodes({
     cause:
       "A prompt of `nextly migrate:create` was cancelled, so it wrote no migration.",
   },
+  RECORD_SNAPSHOT_NEEDS_APP_MIGRATION: {
+    cause:
+      "`--record-snapshot` was given to `nextly migrate:create` with `--blank` or `--plugin`, which write no snapshot of the app.",
+  },
+  TRANSLATIONS_UNRECORDED: {
+    cause:
+      "`nextly migrate:create` was run in a project with translations whose latest snapshot predates the record of translated fields.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "translations-unrecorded",
+        describe: error => refusal(error, 1),
+      },
+    ],
+  },
+  RECORD_SNAPSHOT_STORAGE_MISSING: {
+    cause:
+      "`nextly migrate:create --record-snapshot` would record translated fields that the database has no translations table or column for.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "record-snapshot-storage-missing",
+        describe: error => {
+          // Each as `collection "posts" has no column for "body" in dc_posts_locales`.
+          const missing = error.logContext?.missing;
+          return {
+            what: Array.isArray(missing)
+              ? `\`--record-snapshot\` found translated fields the database holds no storage for: ${missing.join("; ")}.`
+              : error.publicMessage,
+            why: "It records which fields are translated as the database holds them, so that no later migration is planned over a translations table that is not there. Nothing was written.",
+            next: "Run it against a database that has applied every migration, with the config as it was at the last migration.",
+          };
+        },
+      },
+    ],
+  },
 });
 
 /** A migration that is not `--blank` needs a name, positional or `--name`. */
@@ -123,6 +159,15 @@ export function migrationNameRequired(): CliError {
     what: "`nextly migrate:create` needs a name for the migration.",
     why: "Only a `--blank` migration may be created without a name.",
     next: "Name it, as in `nextly migrate:create add_excerpt` or `--name=add_excerpt`, or pass `--blank` for an empty migration.",
+  });
+}
+
+/** `--record-snapshot` writes the app's snapshot, which a blank migration and a plugin module have none of. */
+export function recordSnapshotNeedsAppMigration(): CliError {
+  return new CliError("RECORD_SNAPSHOT_NEEDS_APP_MIGRATION", {
+    what: "`--record-snapshot` can't be combined with `--blank` or `--plugin`.",
+    why: "It writes the app's migration and the snapshot that records which fields are translated, and a blank migration or a plugin module has no such snapshot.",
+    next: "Run `nextly migrate:create --record-snapshot` on its own.",
   });
 }
 
