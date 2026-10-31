@@ -206,6 +206,22 @@ describe("scheduling from the Publishing section", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("shows where focus landed, with the focus ring the editor's controls use", async () => {
+    // The section draws no outline of its own, so without a ring a keyboard
+    // user handed focus here cannot see where it went. Inset, so the panel's
+    // edges do not clip it.
+    showEditor();
+    await screen.findByText("Not scheduled.");
+    const ring = publishing().className.split(/\s+/);
+    expect(ring).toEqual(
+      expect.arrayContaining([
+        "focus-visible:ring-2",
+        "focus-visible:ring-inset",
+        "focus-visible:ring-ring",
+      ])
+    );
+  });
+
   it("holds the offer, saying why, from a person who may not create releases", async () => {
     grants.missing = ["create-content-releases"];
     showEditor();

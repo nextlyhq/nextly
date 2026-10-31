@@ -41,7 +41,13 @@ export function PanelSection({
     <section
       aria-labelledby={headingId}
       data-panel-section={title}
-      className="border-b border-border px-5 py-4 outline-none last:border-b-0"
+      className={cn(
+        "border-b border-border px-5 py-4 outline-none last:border-b-0",
+        // A section handed focus shows it with the ring the editor's controls
+        // use, drawn inside so the panel's edges do not clip it.
+        focusTarget !== undefined &&
+          "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      )}
       {...focusable}
     >
       <h3
