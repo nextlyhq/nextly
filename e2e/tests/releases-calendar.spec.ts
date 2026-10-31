@@ -14,6 +14,8 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
+import { dayKeyIn } from "../../packages/admin/src/components/features/releases/release-timezone";
+
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import {
@@ -28,7 +30,10 @@ import { LOCK } from "./support/locks";
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.releases] });
 
-test.use({ timezoneId: "America/New_York" });
+/** The zone the browser reads in, and so the zone the calendar opens in. */
+const READER_ZONE = "America/New_York";
+
+test.use({ timezoneId: READER_ZONE });
 
 /** The most months a test pages through before it gives up. */
 const MONTH_LIMIT = 30;
@@ -126,34 +131,45 @@ function chip(scope: Locator, title: string): Locator {
   return scope.getByRole("link").filter({ hasText: title });
 }
 
-/** The day `instant` falls on in New York, where the browser reads, as `YYYY-MM-DD`. */
-function newYorkDay(instant: Date): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(instant);
-  const part = (type: string) => parts.find(p => p.type === type)?.value;
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
+/** The most pages of one day's list a test reads before it gives up. */
+const DAY_PAGE_LIMIT = 10;
 
 /**
  * Open `day`'s full list from the day itself, which must be in the month on
- * screen, and answer the list. By keyboard: at a desk's width the day's chips
- * cover the middle of its button, where a pointer click would land on a chip.
+ * screen, and answer the row of the release titled `title` in it; the caller
+ * closes the list. By keyboard: at a desk's width the day's chips cover the
+ * middle of its button, where a pointer click would land on a chip.
+ *
+ * Read page by page from the first. The list draws one page of the day at a
+ * time, and a day the suite's other specs have filled can put the release
+ * past the first page. A page is read once its rows have replaced the
+ * previous page's, which a new first row says.
  */
-async function openDayList(page: Page, day: string): Promise<Locator> {
+async function dayListRow(
+  page: Page,
+  day: string,
+  title: string
+): Promise<Locator> {
   await page.locator(`[data-day="${day}"]`).focus();
   await page.keyboard.press("Enter");
   const sheet = page.getByRole("dialog", { name: longDay(day) });
-  await expect(sheet).toBeVisible();
-  return sheet.getByRole("list", { name: "Releases on this day" });
-}
-
-/** The row of the release titled `title`, in a day's full list. */
-function listRow(list: Locator, title: string): Locator {
-  return list.getByRole("listitem").filter({ hasText: title });
+  const list = sheet.getByRole("list", { name: "Releases on this day" });
+  const row = list.getByRole("listitem").filter({ hasText: title });
+  const first = list.getByRole("link").first();
+  const pager = sheet.getByRole("navigation", {
+    name: "Pages of this day's releases",
+  });
+  const next = pager.getByRole("button", { name: "Go to next page" });
+  await expect(first).toBeVisible();
+  if (await pager.isVisible()) await expect(pager).toContainText("Page 1 of");
+  for (let i = 0; i < DAY_PAGE_LIMIT; i += 1) {
+    if ((await row.count()) > 0) break;
+    if (!(await next.isVisible()) || (await next.isDisabled())) break;
+    const shown = (await first.getAttribute("href")) ?? "";
+    await next.click();
+    await expect(first).not.toHaveAttribute("href", shown);
+  }
+  return row;
 }
 
 /** The date of the day button holding focus. */
@@ -303,19 +319,25 @@ test.describe("the Releases calendar", () => {
         .locator('[aria-current="date"]')
         .getAttribute("data-day")) ?? "";
     expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    const todays = await openDayList(page, today);
-    await expect(listRow(todays, published)).toContainText("Published");
+    await expect(await dayListRow(page, today, published)).toContainText(
+      "Published"
+    );
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toBeHidden();
 
     // Overdue and stopped were due an hour ago, which near midnight is
-    // yesterday, and on the first of a month is in the month before.
-    const dueDay = newYorkDay(due);
+    // yesterday, and on the first of a month is in the month before. Their
+    // day is the one the calendar's own rule places them on.
+    const dueDay = dayKeyIn(due, READER_ZONE);
     await showMonth(page, dueDay);
-    const dues = await openDayList(page, dueDay);
-    await expect(listRow(dues, overdue)).toContainText("Overdue");
-    await expect(listRow(dues, overdue)).not.toContainText("Scheduled");
-    await expect(listRow(dues, stopped)).toContainText("Stopped");
+    const overdueRow = await dayListRow(page, dueDay, overdue);
+    await expect(overdueRow).toContainText("Overdue");
+    await expect(overdueRow).not.toContainText("Scheduled");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(await dayListRow(page, dueDay, stopped)).toContainText(
+      "Stopped"
+    );
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toBeHidden();
 
