@@ -556,6 +556,8 @@ export class MediaService {
         images: this.imageProcessor,
         logger: this.logger,
         addressPaths: bootedAddressPaths(),
+        addressHolders: address =>
+          this.legacyMediaService.addressHolderCount(address),
       },
       mediaId,
       {
@@ -575,6 +577,15 @@ export class MediaService {
     // The replace committed a media.updated outbox row; drain and prune it.
     await this.afterWrite();
     return this.mapToMediaFile(replaced);
+  }
+
+  /**
+   * How many records outside content (users' avatars, the email brand's
+   * logo, the site's logos) keep `address`. Each goes on naming it after a
+   * Replace, so the old file is kept for them.
+   */
+  addressHolderCount(address: string): Promise<number> {
+    return this.legacyMediaService.addressHolderCount(address);
   }
 
   /**

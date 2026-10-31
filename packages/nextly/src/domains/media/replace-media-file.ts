@@ -7,9 +7,13 @@
  * once, and the same name (its extension following the new file), alt text,
  * caption, folder and usage. The focus point is cleared, since it marked a
  * spot on the old picture. Once that has committed, the old files are
- * removed, except any another item still refers to, and except while a
- * document names the item by its address (`usage/address-uses`), when they
- * are kept for it; if it does not commit, the new files are removed instead.
+ * removed, except any another item still refers to, and except while
+ * anything names the item by its address, when they are kept for it: a
+ * document (`usage/address-uses`), or an avatar or a logo
+ * (`media-address-holders`). Before `nextly media reindex-usage` has built
+ * the usage record, which documents name the address is not known, so the
+ * old files are kept then too. If the change does not commit, the new files
+ * are removed instead.
  *
  * A new address rather than the old one overwritten: a CDN or an image cache
  * holding the old address would otherwise go on serving the old picture with
@@ -29,6 +33,7 @@ import { isImageMimeType, type Media } from "../../types/media";
 import { recordMutationEvent } from "../webhooks/record-mutation-event";
 
 import {
+  errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
   warnNotRemoved,
@@ -41,7 +46,11 @@ import {
   recordKeptFiles,
   type AddressPaths,
 } from "./usage/address-uses";
-import { listIdentifiedMediaUsage } from "./usage/media-usage-store";
+import {
+  listIdentifiedMediaUsage,
+  mediaUsagePresent,
+  mediaUsageRecorded,
+} from "./usage/media-usage-store";
 
 /** The new file, as the upload checks have passed it. */
 export interface ReplacementFile {
@@ -69,6 +78,11 @@ export interface ReplaceMediaFileDeps {
   logger: Logger;
   /** Which fields of each kind of document name an item by its address. */
   addressPaths: AddressPaths;
+  /**
+   * How many records outside content (avatars, logos) keep an address,
+   * as the `unused` view asks them.
+   */
+  addressHolders(address: string): Promise<number>;
 }
 
 /**
@@ -201,6 +215,41 @@ async function removeNewFiles(
 }
 
 /**
+ * Whether the files an item had before a Replace must be kept, and the usage
+ * rows naming their address: while any document or any avatar or logo names
+ * it, and, until the usage record has been built, always, since a document
+ * the record does not cover yet may name it. Kept, too, when this cannot be
+ * asked: a file kept is never a page broken.
+ */
+async function keepsOldFiles(
+  deps: ReplaceMediaFileDeps,
+  mediaId: string,
+  previous: Media
+): Promise<{ keep: boolean; rows: string[] }> {
+  try {
+    const present = await mediaUsagePresent(deps.adapter, deps.logger);
+    const recorded = present && (await mediaUsageRecorded(deps.adapter));
+    const rows = present
+      ? await addressUseRows(
+          await listIdentifiedMediaUsage(deps.adapter, mediaId),
+          deps.addressPaths
+        )
+      : [];
+    const held = previous.url ? await deps.addressHolders(previous.url) : 0;
+    return {
+      keep: !recorded || rows.length > 0 || held > 0,
+      rows: rows.map(row => row.id),
+    };
+  } catch (error) {
+    deps.logger.warn("[MediaService] Replaced file kept", {
+      mediaId,
+      error: errorForLog(error),
+    });
+    return { keep: true, rows: [] };
+  }
+}
+
+/**
  * Replace the file of `mediaId` with `file`, answering the item as it now
  * is. Not found when the item does not exist, or is deleted meanwhile.
  */
@@ -248,23 +297,21 @@ export async function replaceMediaFile(
   await revalidateMedia([mediaId], deps.logger);
 
   // The old files, now that nothing in this item refers to them: kept while
-  // any document names the item by its address (rich text, an email
-  // template's image), which goes on naming the old file; removed, except
-  // any another item still refers to, when none does.
+  // anything names the item by its address (rich text, an email template's
+  // image, an avatar, a logo), which goes on naming the old file, or while
+  // the usage record cannot yet say; removed, except any another item still
+  // refers to, when nothing does.
   const { previous, next } = replaced;
   const oldPaths = storedFilesOf(previous).paths.filter(
     path => !replacement.paths.includes(path)
   );
-  const addressUses = await addressUseRows(
-    await listIdentifiedMediaUsage(deps.adapter, mediaId),
-    deps.addressPaths
-  );
-  if (addressUses.length > 0) {
+  const decision = await keepsOldFiles(deps, mediaId, previous);
+  if (decision.keep) {
     await recordKeptFiles(
       deps.adapter,
       mediaId,
       oldPaths.map(path => ({ path, url: previous.url })),
-      addressUses.map(row => row.id)
+      decision.rows
     );
     return next;
   }

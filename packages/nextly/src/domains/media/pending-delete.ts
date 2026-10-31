@@ -10,10 +10,12 @@
  *
  * Once the window has passed, the item is finalised: the ordinary media
  * delete removes its row and its stored files. Taking the mark is the guard,
- * one statement deleting the mark only while it is still there AND older than
- * the window (as the retention gate claims its turn), so of an Undo, a timer
- * and any number of sweeps, exactly one takes it: an Undo inside the window
- * always wins, and every later attempt finds nothing to do.
+ * one statement deleting the mark only while it is still there AND on its
+ * side of the deadline: the finaliser's only once the window has ended (as
+ * the retention gate claims its turn), an Undo's only before it has. So of an
+ * Undo, a timer and any number of sweeps, exactly one takes it: an Undo
+ * inside the window always wins, an Undo after it never does, even when no
+ * timer or sweep has run yet, and every later attempt finds nothing to do.
  *
  * Two things finalise: a timer set when the mark is written, for a server
  * that is still running when the window ends, and a sweep that the library's
@@ -49,22 +51,17 @@ export function pendingDeleteKey(mediaId: string): string {
 /** The statements the marks need, as the adapter has them. */
 export type PendingDeleteDb = Pick<
   DrizzleAdapter,
-  "select" | "insert" | "delete"
+  "select" | "insert" | "delete" | "transaction"
 >;
 
 /** What finalising and logging need. */
 export interface PendingDeleteDeps {
   db: PendingDeleteDb;
   /**
-   * The ordinary media delete: the row, its outbox event and its stored
-   * files. Throws not-found for an item already gone.
+   * The ordinary media delete: the row, its outbox event, its stored files
+   * and any a Replace kept for it. Throws not-found for an item already gone.
    */
   deleteItem(mediaId: string, actor?: RequestActor): Promise<void>;
-  /**
-   * What else goes once the item is deleted: the files a Replace kept for
-   * pages that name the item by its old address.
-   */
-  afterDelete?(mediaId: string): Promise<void>;
   /** Where a delete that could not finish is reported. */
   logger?: { warn(payload: object): void };
   now?: () => Date;
@@ -132,68 +129,74 @@ export class PendingMediaDeletes {
   }
 
   /**
-   * Mark every item for deletion. Every id must name an item, or nothing is
-   * marked. An item already marked keeps its mark and its time.
+   * Mark every item for deletion, all or none: the check that every id names
+   * an item and every mark written are one transaction, so a failure on any
+   * item leaves every one of them unmarked and in the library. An item
+   * already marked keeps its mark and its time.
    */
   async mark(
     ids: readonly string[],
     actor?: RequestActor
   ): Promise<MarkedDeletion> {
     const wanted = [...new Set(ids)];
-    const found = await this.deps.db.select<Record<string, unknown>>("media", {
-      columns: ["id"],
-      where: { and: [{ column: "id", op: "IN", value: wanted }] },
-    });
-    const present = new Set(found.map(row => String(row.id)));
-    const missing = wanted.filter(id => !present.has(id));
-    if (missing.length > 0) {
-      throw NextlyError.notFound({
-        logContext: { reason: "media-delete-missing-items", missing },
-      });
-    }
     const now = this.now();
-    for (const id of wanted) {
-      try {
-        await this.deps.db.insert(META_TABLE, {
+    await this.deps.db.transaction(async tx => {
+      // Each item's row locked, in one order, so two deletes of the same
+      // items take turns: the second finds the first's marks and keeps them.
+      for (const id of [...wanted].sort()) await tx.lockRow("media", id);
+      const found = await tx.select<Record<string, unknown>>("media", {
+        columns: ["id"],
+        where: { and: [{ column: "id", op: "IN", value: wanted }] },
+      });
+      const present = new Set(found.map(row => String(row.id)));
+      const missing = wanted.filter(id => !present.has(id));
+      if (missing.length > 0) {
+        throw NextlyError.notFound({
+          logContext: { reason: "media-delete-missing-items", missing },
+        });
+      }
+      const marked = await tx.select<Record<string, unknown>>(META_TABLE, {
+        columns: ["key"],
+        where: {
+          and: [
+            { column: "key", op: "IN", value: wanted.map(pendingDeleteKey) },
+          ],
+        },
+      });
+      const standing = new Set(marked.map(row => idOfKey(row.key)));
+      for (const id of wanted) {
+        if (standing.has(id)) continue;
+        await tx.insert(META_TABLE, {
           key: pendingDeleteKey(id),
           value: JSON.stringify(actor ? { actor } : {}),
           updated_at: now,
         });
-      } catch (error) {
-        // The key is taken only by a mark already there, which stands. Any
-        // other failure is a real one.
-        if (!(await this.isMarked(id))) throw error;
       }
-    }
+    });
     return {
       ids: wanted,
       deleteAfter: new Date(now.getTime() + this.windowMs).toISOString(),
     };
   }
 
-  /** Whether an item carries a mark. */
-  private async isMarked(mediaId: string): Promise<boolean> {
-    const rows = await this.deps.db.select(META_TABLE, {
-      columns: ["key"],
-      where: {
-        and: [{ column: "key", op: "=", value: pendingDeleteKey(mediaId) }],
-      },
-    });
-    return rows.length > 0;
-  }
-
   /**
-   * Bring the items back: each whose mark is still there loses it, in the one
-   * statement that also decides it, so an Undo racing the finaliser either
-   * takes the mark (and the item stays) or finds it taken (and the item is
-   * gone).
+   * Bring the items back: each whose mark is still there and whose window
+   * has not ended loses it, in the one statement that also decides it. So an
+   * Undo racing the finaliser either takes the mark (and the item stays) or
+   * finds it taken (and the item is gone), and one arriving after the
+   * deadline is refused even before any finaliser has run: the mark stays
+   * for the finaliser, which owns the item from then on.
    */
   async undo(ids: readonly string[]): Promise<UndoneDeletion> {
     const restored: string[] = [];
     const gone: string[] = [];
+    const due = this.cutoff();
     for (const id of new Set(ids)) {
       const removed = await this.deps.db.delete(META_TABLE, {
-        and: [{ column: "key", op: "=", value: pendingDeleteKey(id) }],
+        and: [
+          { column: "key", op: "=", value: pendingDeleteKey(id) },
+          { column: "updatedAt", op: ">", value: due },
+        ],
       });
       (removed > 0 ? restored : gone).push(id);
     }
@@ -212,7 +215,6 @@ export class PendingMediaDeletes {
   ): Promise<boolean> {
     try {
       await this.deps.deleteItem(mediaId, actor);
-      await this.deps.afterDelete?.(mediaId);
       return true;
     } catch (error) {
       if (NextlyError.isNotFound(error)) return true;

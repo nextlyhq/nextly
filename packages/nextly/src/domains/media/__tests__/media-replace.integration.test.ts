@@ -4,6 +4,10 @@
  * usage; a new address and thumbnail; a document using the item resolves to
  * the new file; the old files go and the new ones stay. A file the upload
  * checks refuse is refused here too, leaving the item as it was.
+ *
+ * The old files stay while anything names the old address (rich text, an
+ * email template, an avatar, a site logo) and while the usage record is
+ * still being built, and they go with the item on every delete path.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -37,7 +41,8 @@ import {
   PENDING_DELETE_WINDOW_MS,
   PendingMediaDeletes,
 } from "../pending-delete";
-import { removeKeptFiles } from "../usage/address-uses";
+import { readReplacedRecord } from "../usage/address-uses";
+import { MEDIA_USAGE_RECORDED_KEY } from "../usage/media-usage-store";
 
 type Doc = Record<string, unknown>;
 
@@ -155,6 +160,27 @@ async function replace(
   return { status: res.status, json: (await res.json()) as Doc };
 }
 
+/** `DELETE /admin/api/media/:id`, or `/bulk` with `bulk`, as `key`. */
+async function deleteNow(
+  key: string,
+  ids: string[],
+  bulk = false
+): Promise<number> {
+  const path = bulk ? ["bulk"] : ids;
+  const res = await createMediaHandlers({ requireAuth: true }).DELETE(
+    new Request(`http://localhost/admin/api/media/${path.join("/")}`, {
+      method: "DELETE",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      ...(bulk ? { body: JSON.stringify({ mediaIds: ids }) } : {}),
+    }),
+    { params: Promise.resolve({ path }) }
+  );
+  return res.status;
+}
+
 describe.each(getConfiguredTestDialects())(
   "replacing a media item's file (%s)",
   (dialect: TestDialect) => {
@@ -177,6 +203,10 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       editor = await keyWith(t, ["read-media", "update-media"]);
+      // A record already built: a new site's is from the start.
+      await t.getService("metaService").set(MEDIA_USAGE_RECORDED_KEY, {
+        rebuiltAt: new Date().toISOString(),
+      });
       folderId = randomUUID();
       await t.adapter.insert("media_folders", {
         id: folderId,
@@ -420,13 +450,154 @@ describe.each(getConfiguredTestDialects())(
 
       // Deleting the item takes the kept file with it.
       await t.getService("mediaService").delete(logo.id, {});
-      await removeKeptFiles(
-        t.adapter,
-        getMediaStorage(),
-        t.getService("logger"),
-        logo.id
-      );
       expect(await getMediaStorage().exists(oldPath, "media")).toBe(false);
+    });
+
+    /** A logo replaced while a story names it by address: its kept file. */
+    async function replacedWithKeptFile(): Promise<{
+      id: string;
+      oldPath: string;
+    }> {
+      const logo = await usedLogo();
+      const before = (await row(logo.id))!;
+      await t
+        .getService("collectionsHandler")
+        .createEntry(
+          { collectionName: "replaceposts", overrideAccess: true },
+          { title: "Kept", body: imageText(String(before.url)) }
+        );
+      const replaced = await replace(editor, logo.id, {
+        data: PNG_1X1,
+        name: "again.png",
+        type: "image/png",
+      });
+      expect(replaced.status).toBe(200);
+      const oldPath = String(before.filename);
+      // POSITIVE CONTROL: the file and its record are there to remove.
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+      expect(await readReplacedRecord(t.adapter, logo.id)).not.toBeNull();
+      return { id: logo.id, oldPath };
+    }
+
+    it("removes the kept file and its record on an immediate delete, one item or a bulk one", async () => {
+      const deleter = await keyWith(t, ["read-media", "delete-media"]);
+      const one = await replacedWithKeptFile();
+      const bulk = [await replacedWithKeptFile(), await replacedWithKeptFile()];
+
+      expect(await deleteNow(deleter, [one.id])).toBe(200);
+      expect(
+        await deleteNow(
+          deleter,
+          bulk.map(item => item.id),
+          true
+        )
+      ).toBe(200);
+
+      for (const item of [one, ...bulk]) {
+        expect(await row(item.id)).toBeUndefined();
+        expect(await getMediaStorage().exists(item.oldPath, "media")).toBe(
+          false
+        );
+        expect(await readReplacedRecord(t.adapter, item.id)).toBeNull();
+      }
+    });
+
+    /** Replace `id`'s file, and answer whether its old file is still served. */
+    async function oldFileServedAfterReplace(id: string): Promise<boolean> {
+      const oldPath = String((await row(id))!.filename);
+      const replaced = await replace(editor, id, {
+        data: PNG_1X1,
+        name: "after.png",
+        type: "image/png",
+      });
+      expect(replaced.status).toBe(200);
+      if (!(await getMediaStorage().exists(oldPath, "media"))) return false;
+      const bytes = await getMediaStorage()
+        .getAdapterForCollection("media")
+        .read?.(oldPath);
+      expect(bytes).toEqual(PNG_1X1);
+      return true;
+    }
+
+    /** An image nothing in content uses. */
+    async function looseImage(): Promise<{ id: string; url: string }> {
+      const uploaded = await t.nextly.media.upload({
+        file: {
+          data: PNG_1X1,
+          name: `loose-${randomUUID().slice(0, 6)}.png`,
+          mimetype: "image/png",
+          size: PNG_1X1.length,
+        },
+      });
+      return { id: uploaded.id, url: String((await row(uploaded.id))!.url) };
+    }
+
+    it("keeps the old file for an image used only as a user's avatar", async () => {
+      const image = await looseImage();
+      await t.adapter.insert("users", {
+        id: `avatar-${randomUUID().slice(0, 8)}`,
+        email: `avatar-${randomUUID().slice(0, 8)}@test.local`,
+        image: image.url,
+      });
+      // The Replace dialog counts the avatar among the uses by address.
+      const asked = await usageOf(editor, image.id, "?byAddress=true");
+      expect(asked.items).toEqual([]);
+      expect(asked.meta).toMatchObject({
+        heldByAddress: 1,
+        usageRecorded: true,
+      });
+
+      expect(await oldFileServedAfterReplace(image.id)).toBe(true);
+    });
+
+    it("keeps the old file for an image used only as the site's logo", async () => {
+      const image = await looseImage();
+      await t
+        .getService("generalSettingsService")
+        .updateSettings({ logoUrl: `https://site.test${image.url}` });
+      try {
+        expect(
+          (await usageOf(editor, image.id, "?byAddress=true")).meta
+        ).toMatchObject({ heldByAddress: 1 });
+        expect(await oldFileServedAfterReplace(image.id)).toBe(true);
+      } finally {
+        await t.adapter.update(
+          "site_settings",
+          { logoUrl: null },
+          { and: [{ column: "id", op: "IS NOT NULL" }] }
+        );
+      }
+    });
+
+    it("removes the old file of an image nothing names by address", async () => {
+      // POSITIVE CONTROL for the two above: the same Replace, with no
+      // avatar or logo, does remove the old file.
+      const image = await looseImage();
+      expect(
+        (await usageOf(editor, image.id, "?byAddress=true")).meta
+      ).toMatchObject({ heldByAddress: 0, usageRecorded: true });
+      expect(await oldFileServedAfterReplace(image.id)).toBe(false);
+    });
+
+    it("keeps the old file, and records it kept, while the usage record is still being built", async () => {
+      const image = await looseImage();
+      const meta = t.getService("metaService");
+      await meta.delete(MEDIA_USAGE_RECORDED_KEY);
+      try {
+        expect(
+          (await usageOf(editor, image.id, "?byAddress=true")).meta
+        ).toMatchObject({ heldByAddress: 0, usageRecorded: false });
+        const oldPath = String((await row(image.id))!.filename);
+        expect(await oldFileServedAfterReplace(image.id)).toBe(true);
+        // Recorded as kept, so deleting the item takes the file with it.
+        expect(
+          (await readReplacedRecord(t.adapter, image.id))?.files
+        ).toContainEqual(expect.objectContaining({ path: oldPath }));
+      } finally {
+        await meta.set(MEDIA_USAGE_RECORDED_KEY, {
+          rebuiltAt: new Date().toISOString(),
+        });
+      }
     });
 
     it("removes the kept file when a deleted item's window ends", async () => {
@@ -454,13 +625,6 @@ describe.each(getConfiguredTestDialects())(
           deleteItem: async id => {
             await t.getService("mediaService").delete(id, {});
           },
-          afterDelete: id =>
-            removeKeptFiles(
-              t.adapter,
-              getMediaStorage(),
-              t.getService("logger"),
-              id
-            ),
           now: () => new Date(Date.now() + later),
         });
       // Deleted now, finished once the window has passed.

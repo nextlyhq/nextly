@@ -858,19 +858,6 @@ async function pendingDeletes(): Promise<PendingMediaDeletes> {
     db: getService("adapter"),
     deleteItem: (mediaId, actor) =>
       mediaService.delete(mediaId, createRequestContext(), actor),
-    // The files a Replace kept for pages naming the item's old address.
-    afterDelete: async mediaId => {
-      const [{ removeKeptFiles }, { getMediaStorage }] = await Promise.all([
-        import("../domains/media/usage/address-uses"),
-        import("../storage/storage"),
-      ]);
-      await removeKeptFiles(
-        getService("adapter"),
-        getMediaStorage(),
-        getService("logger"),
-        mediaId
-      );
-    },
     logger: getNextlyLogger(),
   });
 }
@@ -940,10 +927,36 @@ async function handleUndoDeleteMedia(request: Request): Promise<Response> {
 }
 
 /**
+ * What else a Replace keeps the old file for, beside the documents naming
+ * the item by address: how many avatars and logos keep its address, and
+ * whether the usage record has been built, without which the old file is
+ * kept whatever the record lists.
+ */
+async function addressUseMeta(
+  mediaService: MediaService,
+  address: string | undefined
+): Promise<{ heldByAddress: number; usageRecorded: boolean }> {
+  const { mediaUsagePresent, mediaUsageRecorded } = await import(
+    "../domains/media/usage/media-usage-store"
+  );
+  const adapter = getService("adapter");
+  const usageRecorded =
+    (await mediaUsagePresent(adapter)) && (await mediaUsageRecorded(adapter));
+  return {
+    heldByAddress: address ? await mediaService.addressHolderCount(address) : 0,
+    usageRecorded,
+  };
+}
+
+/**
  * The documents using one item that the caller may read, and the rest
  * counted by collection, read from the usage record. Served only on the
  * gated mount, since it names documents: the public mount answers it as an
  * unknown path. Per caller, so it is never cached for another.
+ *
+ * Asked for the uses by address, it also says what else keeps the old file
+ * on a Replace: `meta.heldByAddress` avatars and logos, and
+ * `meta.usageRecorded` false while the record is still being built.
  */
 async function handleMediaUsage(
   request: Request,
@@ -954,7 +967,7 @@ async function handleMediaUsage(
   if (!auth) throw NextlyError.authRequired();
   const mediaService = await getMediaService();
   // An item that does not exist is not found, rather than used by nothing.
-  await mediaService.findById(mediaId, createRequestContext());
+  const item = await mediaService.findById(mediaId, createRequestContext());
   // Loaded when it is asked, not with the handlers.
   const [{ readCaller, PRIVATE_NO_STORE_HEADERS }, { mediaUsesOf }, source] =
     await Promise.all([
@@ -983,6 +996,7 @@ async function handleMediaUsage(
       hasNext: false,
       hasPrev: false,
       ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
+      ...(byAddress ? await addressUseMeta(mediaService, item.url) : {}),
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );

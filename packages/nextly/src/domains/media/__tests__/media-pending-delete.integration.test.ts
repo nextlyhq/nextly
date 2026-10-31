@@ -11,6 +11,9 @@
  *   a fresh one included, and by the next library read;
  * - Undo racing the finaliser, and two finalisers, each settle on exactly
  *   one outcome, and an undone item is never deleted later;
+ * - Undo after the deadline is refused even before anything has finished
+ *   the delete, and the finaliser then deletes the item;
+ * - a batch is marked whole or not at all;
  * - both halves need the delete permission, checked before any mark is
  *   written.
  */
@@ -44,6 +47,7 @@ import {
   PENDING_DELETE_WINDOW_MS,
   PendingMediaDeletes,
   pendingDeleteKey,
+  type PendingDeleteDb,
 } from "../pending-delete";
 
 type Doc = Record<string, unknown>;
@@ -406,6 +410,106 @@ describe.each(getConfiguredTestDialects())(
 
       expect(read.status).toBe(200);
       expect(await row(file)).toBeUndefined();
+    });
+
+    it("refuses an Undo after the deadline though nothing has finished the delete, and the next finalise deletes the item", async () => {
+      const file = await unusedFile();
+      // Due, with no timer and no library read since to finish it.
+      await t.adapter.insert("nextly_meta", {
+        key: pendingDeleteKey(file),
+        value: JSON.stringify({}),
+        updated_at: new Date(Date.now() - PENDING_DELETE_WINDOW_MS - 5_000),
+      });
+
+      const late = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+
+      expect(late.status).toBe(200);
+      expect(late.json).toMatchObject({ restored: [], gone: [file] });
+      // The mark stands for the finaliser, which owns the item now.
+      const marks = await t.adapter.select<Doc>("nextly_meta", {
+        where: {
+          and: [{ column: "key", op: "=", value: pendingDeleteKey(file) }],
+        },
+      });
+      expect(marks).toHaveLength(1);
+      expect(await freshFinaliser(0).finalizeDue()).toContain(file);
+      expect(await row(file)).toBeUndefined();
+    });
+
+    it("still undoes inside the window", async () => {
+      // POSITIVE CONTROL for the deadline above: a mark written just now.
+      const file = await unusedFile();
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+      expect(undone.json).toMatchObject({ restored: [file], gone: [] });
+    });
+
+    it("marks none of a batch when marking any one of them fails", async () => {
+      const files = [
+        await unusedFile(),
+        await unusedFile(),
+        await unusedFile(),
+      ];
+      const failOn = pendingDeleteKey(files[2]!);
+      const refuse = (data: Record<string, unknown>) =>
+        data.key === failOn ? new Error("the third mark is refused") : null;
+      // The adapter, failing the third item's mark whether it is written on
+      // the pool or inside a transaction.
+      const failing = {
+        select: t.adapter.select.bind(t.adapter),
+        delete: t.adapter.delete.bind(t.adapter),
+        insert: (table: string, data: Record<string, unknown>) =>
+          refuse(data)
+            ? Promise.reject(refuse(data))
+            : t.adapter.insert(table, data),
+        transaction: (work: (tx: object) => Promise<unknown>) =>
+          t.adapter.transaction(tx =>
+            work(
+              new Proxy(tx, {
+                get(target, property, receiver) {
+                  if (property === "insert") {
+                    return (table: string, data: Record<string, unknown>) =>
+                      refuse(data)
+                        ? Promise.reject(refuse(data))
+                        : target.insert(table, data);
+                  }
+                  const value: unknown = Reflect.get(
+                    target,
+                    property,
+                    receiver
+                  );
+                  return typeof value === "function"
+                    ? value.bind(target)
+                    : value;
+                },
+              })
+            )
+          ),
+      } as unknown as PendingDeleteDb;
+      const pending = new PendingMediaDeletes({
+        db: failing,
+        deleteItem: async () => undefined,
+      });
+
+      await expect(pending.mark(files)).rejects.toThrow();
+
+      const marks = await t.adapter.select<Doc>("nextly_meta", {
+        where: {
+          and: [
+            { column: "key", op: "IN", value: files.map(pendingDeleteKey) },
+          ],
+        },
+      });
+      expect(marks).toEqual([]);
+      const listed = (
+        (await api(editor, "GET", [], { query: "?limit=100" })).json
+          .items as Doc[]
+      ).map(item => item.id);
+      expect(listed).toEqual(expect.arrayContaining(files));
     });
 
     it("settles Undo racing the finaliser on exactly one outcome", async () => {

@@ -120,12 +120,27 @@ function mediaCategoryCondition(
   ) as SQL;
 }
 
-/** Whether `value` ends in `suffix`, each a column, on `dialect`. */
+/**
+ * An item's address, as a holder is asked about it: the `media` row's own
+ * column, or an address already read from it.
+ */
+export type MediaAddress = AnyColumn | string;
+
+/**
+ * Whether `value` ends in `suffix`, on `dialect`. A suffix given as a string
+ * is measured here, in characters, as each dialect's own length counts them.
+ */
 function endsWith(
   value: AnyColumn,
-  suffix: AnyColumn,
+  suffix: MediaAddress,
   dialect: UnusedSources["dialect"]
 ): SQL {
+  if (typeof suffix === "string") {
+    const length = [...suffix].length;
+    return dialect === "sqlite"
+      ? sql`SUBSTR(${value}, ${-length}) = ${suffix}`
+      : sql`RIGHT(${value}, ${length}) = ${suffix}`;
+  }
   if (dialect === "postgresql") {
     return sql`RIGHT(${value}, LENGTH(${suffix})) = ${suffix}`;
   }
@@ -136,18 +151,31 @@ function endsWith(
   return sql`SUBSTR(${value}, -LENGTH(${suffix})) = ${suffix}`;
 }
 
+/**
+ * The rows of one holder that keep `address`: the condition on its table.
+ * The `unused` view asks it of each item's own address, and Replace of the
+ * address it is about to stop serving.
+ */
+export function holderKeeps(
+  holder: MediaAddressHolder,
+  address: MediaAddress,
+  dialect: UnusedSources["dialect"]
+): SQL {
+  const names = holder.columns.map(column =>
+    holder.match === "exact"
+      ? sql`${column} = ${address}`
+      : endsWith(column, address, dialect)
+  );
+  return or(...names) as SQL;
+}
+
 /** Whether one holder keeps the item. */
 function heldBy(
   media: MediaQueryColumns,
   holder: MediaAddressHolder,
   dialect: UnusedSources["dialect"]
 ): SQL {
-  const names = holder.columns.map(column =>
-    holder.match === "exact"
-      ? sql`${column} = ${media.url}`
-      : endsWith(column, media.url, dialect)
-  );
-  return sql`EXISTS (SELECT 1 FROM ${holder.table} WHERE ${or(...names)})`;
+  return sql`EXISTS (SELECT 1 FROM ${holder.table} WHERE ${holderKeeps(holder, media.url, dialect)})`;
 }
 
 /**

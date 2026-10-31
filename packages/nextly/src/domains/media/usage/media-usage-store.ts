@@ -356,6 +356,23 @@ export async function listMediaUsage(
 export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded";
 
 /**
+ * Whether the record has been built for content written before it existed:
+ * its {@link MEDIA_USAGE_RECORDED_KEY} mark is there. Until it is, a use the
+ * record lacks may still be in some document.
+ */
+export async function mediaUsageRecorded(
+  db: Pick<UsageDb, "select">
+): Promise<boolean> {
+  const rows = await db.select("nextly_meta", {
+    columns: ["key"],
+    where: {
+      and: [{ column: "key", op: "=", value: MEDIA_USAGE_RECORDED_KEY }],
+    },
+  });
+  return rows.length > 0;
+}
+
+/**
  * Whether the usage table exists yet, asked once per database and remembered
  * once found (`tablePresence`). A path that opens its own transaction asks
  * before it opens; one inside a transaction its caller holds asks `via` that
