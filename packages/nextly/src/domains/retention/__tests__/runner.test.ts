@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { resolveWebhookRetentionConfig } from "../../webhooks/retention-config";
 import { buildRetentionRunner } from "../passes";
+import { RetentionRunner } from "../runner";
 
 const T0 = new Date("2026-07-21T12:00:00.000Z");
 
@@ -153,5 +154,58 @@ describe("RetentionRunner", () => {
 
     await runner!.maybeRun();
     expect(f.limits).toHaveLength(0);
+  });
+});
+
+describe("RetentionRunner inside an open transaction", () => {
+  // A pass and a gate that record being reached, so "offered nothing" is
+  // observed rather than inferred from an absence of rows.
+  function counting(transactionOpen: () => boolean) {
+    const claims: string[] = [];
+    const runs: string[] = [];
+    const runner = new RetentionRunner({
+      passes: [
+        {
+          key: "probe",
+          intervalMs: () => 0,
+          run: async () => {
+            runs.push("probe");
+          },
+        },
+      ],
+      gate: {
+        claim: async (key: string): Promise<boolean> => {
+          claims.push(key);
+          return true;
+        },
+      } as never,
+      now: () => T0,
+      transactionOpen,
+    });
+    return { runner, claims, runs };
+  }
+
+  it("offers no pass, and claims no turn, while the flow holds a transaction", async () => {
+    const { runner, claims, runs } = counting(() => true);
+    await runner.maybeRun();
+    expect(claims).toEqual([]);
+    expect(runs).toEqual([]);
+  });
+
+  it("offers the passes once the transaction has finished", async () => {
+    let open = true;
+    const { runner, runs } = counting(() => open);
+    await runner.maybeRun();
+    open = false;
+    await runner.maybeRun();
+    expect(runs).toEqual(["probe"]);
+  });
+
+  it("counts a check that fails as an open transaction", async () => {
+    const { runner, runs } = counting(() => {
+      throw new Error("no flow store");
+    });
+    await expect(runner.maybeRun()).resolves.toBeUndefined();
+    expect(runs).toEqual([]);
   });
 });

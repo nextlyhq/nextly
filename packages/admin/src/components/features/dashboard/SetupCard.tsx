@@ -25,8 +25,9 @@
  * skipped. The Singles are one tile;
  * choosing it opens a short list of them, each with its state and link, and only then, the
  * reader's own action, does the card grow in place, as it does where the tiles wrap. Sample content
- * is the first tile, with its load and decline in its hint line, and is left out where the
- * project's sample-content route says it cannot be loaded by this reader.
+ * is the first tile, with its load and decline in its hint line and a load's progress and outcome
+ * in full under the tiles (`setup/SampleContentStep`), and is left out where the project's
+ * sample-content route says it cannot be loaded by this reader.
  *
  * Collapse and Dismiss sit in the card's header, beside its menu, while the card is expanded
  * (`frame/header-slot`), so the tiles take the body's whole width; collapsed, at the end of its one
@@ -63,10 +64,6 @@ import {
 
 import { Check, ChevronDown, ChevronUp, X } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
-import {
-  useSeedStatus,
-  type SeedStatus,
-} from "@admin/hooks/queries/useSeedStatus";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
 import { isApiError } from "@admin/lib/api/parseApiError";
@@ -88,11 +85,16 @@ import {
 } from "./setup/measures";
 import { useRetirementRefusals } from "./setup/retirement-refusals";
 import {
+  SampleContentHint,
+  SampleContentPanel,
+} from "./setup/SampleContentStep";
+import {
   filledIn,
   singleHref,
   stepPresentation,
   type StepPresentation,
 } from "./setup/step-presentation";
+import { useSampleRun } from "./setup/useSampleRun";
 import { useSetupState, type SetupStateWrite } from "./setup/useSetupState";
 
 /** The sidebar's own Singles request, so the card shares its answer for their labels. */
@@ -128,7 +130,7 @@ const STATUS_TEXT: Record<SetupStep["status"], string> = {
  */
 function drawnSteps(
   steps: readonly SetupStep[],
-  seed: SeedStatus,
+  sampleRefused: boolean,
   answeredHere: boolean
 ): SetupAnswer {
   const answered = steps.map(
@@ -137,9 +139,7 @@ function drawnSteps(
         ? { kind: "sample", status: "done" }
         : step
   );
-  return drawnSetup(talliedSetup(answered), {
-    sampleRefused: seed.kind === "hidden",
-  });
+  return drawnSetup(talliedSetup(answered), { sampleRefused });
 }
 
 /** Where the card's request to record "You're all set" stands. */
@@ -165,7 +165,12 @@ function useRetirement(
   due: boolean,
   sampleRefused: boolean,
   { retire, clearFailure }: Pick<SetupStateWrite, "retire" | "clearFailure">,
-  answer: SetupCardData
+  answer: SetupCardData,
+  /**
+   * Whether the project's sample-content route has answered: until it has, what the card draws
+   * is not yet the question, so nothing is asked and no remembered refusal is forgotten over it.
+   */
+  settled: boolean
 ): Retirement {
   const [retirement, setRetirement] = useState<Retirement>("unasked");
   const asked = useRef(false);
@@ -182,15 +187,16 @@ function useRetirement(
   // Its own effect, so a failed write, which also leaves the guard unasked, is not asked again at
   // once.
   useEffect(() => {
+    if (!settled) return;
     const refused = refusals.refused();
     if (refused === undefined || refused === signature) return;
     refusals.forget();
     if (retirement !== "refused") return;
     asked.current = false;
     setRetirement("unasked");
-  }, [signature, retirement, refusals]);
+  }, [settled, signature, retirement, refusals]);
   useEffect(() => {
-    if (!due || asked.current) return;
+    if (!settled || !due || asked.current) return;
     asked.current = true;
     const askedAbout = signature;
     // Refused over these same steps already, by this card or one drawn before it: not asked.
@@ -221,6 +227,7 @@ function useRetirement(
       }
     );
   }, [
+    settled,
     due,
     sampleRefused,
     retire,
@@ -354,64 +361,6 @@ function Dot() {
     <span aria-hidden="true" className="px-1">
       ·
     </span>
-  );
-}
-
-/**
- * Sample content inside its tile: load it or decline it, then its run and its outcome. A failed
- * load says what failed, with Retry, rather than taking the controls away.
- */
-function SampleContent({
-  seed,
-  startSeed,
-  skip,
-  onLoaded,
-}: {
-  seed: SeedStatus;
-  startSeed: () => void;
-  skip: () => void;
-  /** Runs once a load has succeeded. */
-  onLoaded: () => void;
-}) {
-  // The steps as they are now once a run has finished: never an earlier answer. Asked once per
-  // load that succeeds, however often the card is drawn while it shows that outcome.
-  const loaded = seed.kind === "success";
-  const told = useRef(false);
-  useEffect(() => {
-    if (!loaded) {
-      told.current = false;
-      return;
-    }
-    if (told.current) return;
-    told.current = true;
-    onLoaded();
-  }, [loaded, onLoaded]);
-  if (seed.kind === "loading") return <span>Checking…</span>;
-  if (seed.kind === "seeding") {
-    return <span role="status">Loading sample content…</span>;
-  }
-  if (seed.kind === "declining") return <span role="status">Saving…</span>;
-  if (seed.kind === "error") {
-    // Retry repeats what failed: a decline that could not be saved is asked again, not a load.
-    const decline = seed.failed === "decline";
-    return (
-      <>
-        <span role="alert" className="text-destructive" title={seed.message}>
-          {decline ? "Couldn't save" : "Couldn't load"}
-          <span className="sr-only">: {seed.message}</span>
-        </span>
-        <Dot />
-        <HintAction onClick={decline ? skip : startSeed}>Retry</HintAction>
-      </>
-    );
-  }
-  if (seed.kind !== "idle") return null;
-  return (
-    <>
-      <HintAction onClick={startSeed}>Load</HintAction>
-      <Dot />
-      <HintAction onClick={skip}>No thanks</HintAction>
-    </>
   );
 }
 
@@ -753,6 +702,26 @@ function AllSet({ write }: { write: SetupStateWrite }) {
   );
 }
 
+/**
+ * "You're all set", once any sample-content outcome waiting on the person has been seen: a load
+ * that finished setup keeps its outcome on the card until they continue.
+ */
+function AllSetAfterOutcome({
+  sample,
+  write,
+  retry,
+}: {
+  sample: ReturnType<typeof useSampleRun>;
+  write: SetupStateWrite;
+  retry: () => void;
+}) {
+  return sample.awaitingContinue ? (
+    <SampleContentPanel sample={sample} retry={retry} />
+  ) : (
+    <AllSet write={write} />
+  );
+}
+
 /** A known answer, as the card draws its tiles from. */
 type CountedSetup = Extract<SetupAnswer, { known: true }>;
 
@@ -764,20 +733,21 @@ type CountedSetup = Extract<SetupAnswer, { known: true }>;
  */
 function useDrawnSetup(
   card: SetupCardData,
-  seed: SeedStatus,
-  answeredHere: boolean,
+  sample: { sampleRefused: boolean; answeredHere: boolean; settled: boolean },
   write: Pick<SetupStateWrite, "retire" | "clearFailure">
 ): { allSet: boolean; counted: CountedSetup | undefined } {
+  const { sampleRefused, answeredHere, settled } = sample;
   const drawn =
     card.setup.known && !card.allSet
-      ? drawnSteps(card.setup.steps, seed, answeredHere)
+      ? drawnSteps(card.setup.steps, sampleRefused, answeredHere)
       : undefined;
   const drawnAllSet = drawn !== undefined && setupAllSet(drawn);
   const retirement = useRetirement(
     drawnAllSet,
-    seed.kind === "hidden",
+    sampleRefused,
     write,
-    card
+    card,
+    settled
   );
   const allSet = card.allSet || (drawnAllSet && retirement === "recorded");
   return { allSet, counted: drawn?.known && !allSet ? drawn : undefined };
@@ -822,6 +792,7 @@ function ExpandedSetup({
   write,
   singles: singlesList,
   sample,
+  samplePanel,
   failure,
   controls,
 }: {
@@ -830,6 +801,8 @@ function ExpandedSetup({
   write: SetupStateWrite;
   singles: SinglesListControl;
   sample: React.ReactNode;
+  /** Sample content's load or outcome in full, under the tiles, while one is on show. */
+  samplePanel: React.ReactNode;
   failure: React.ReactNode;
   controls: React.ReactNode;
 }) {
@@ -868,6 +841,7 @@ function ExpandedSetup({
           />
         ))}
       </ol>
+      {samplePanel}
       {singles !== undefined && singlesList.open && (
         <SinglesList step={singles} id={singlesList.listId} />
       )}
@@ -921,24 +895,6 @@ function useCollapsedHere(
 }
 
 /**
- * Sample content loaded or declined from this card, once the route confirmed it: its tile is
- * drawn done, and the card asks for its steps again.
- */
-function useSampleAnsweredHere(retry: () => void): {
-  answeredHere: boolean;
-  answered: () => void;
-} {
-  const [answeredHere, setAnsweredHere] = useState(false);
-  return {
-    answeredHere,
-    answered: () => {
-      setAnsweredHere(true);
-      retry();
-    },
-  };
-}
-
-/**
  * The card in its frame: "N of M done" in the header beside the title, so the body holds the bar
  * and the tiles alone (a change that could not be saved says so there instead, where it is seen);
  * grown only when its steps do not fit; and one grid row while collapsed, whose line is then the
@@ -980,34 +936,32 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   refreshing,
   retry,
 }) => {
-  const card = data as SetupCardData;
   const write = useSetupState(retry);
-  const { status: seed, startSeed, skip } = useSeedStatus();
+  // The card's data to draw is the sample step's: while a load or its outcome is on show, a later
+  // read that could not check setup keeps the last one that could, so the run stays on screen.
+  const sample = useSampleRun(data as SetupCardData, retry, refreshing);
+  const { card } = sample;
   const { collapsed, toggle } = useCollapsedHere(
     card.collapsed,
     refreshing,
     write
   );
   const [singlesOpen, setSinglesOpen] = useState(false);
-  const sample = useSampleAnsweredHere(retry);
   const singlesListId = useId();
   const content = useRef<HTMLDivElement>(null);
-  const { allSet, counted } = useDrawnSetup(
-    card,
-    seed,
-    sample.answeredHere,
-    write
-  );
+  const { allSet, counted } = useDrawnSetup(card, sample, write);
   const progress = useSetupInFrame(
     counted,
     collapsed,
     write.failed,
-    singlesOpen,
+    singlesOpen || sample.panelShown || sample.refreshFailed,
     content
   );
 
   if (!card.setup.known) return <NotKnown retry={retry} />;
-  if (allSet) return <AllSet write={write} />;
+  if (allSet) {
+    return <AllSetAfterOutcome sample={sample} write={write} retry={retry} />;
+  }
   if (counted === undefined || progress === undefined) return null;
   const controls = (
     <CardControls collapsed={collapsed} write={write} onToggle={toggle} />
@@ -1028,14 +982,8 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
       }}
       failure={failure}
       controls={controls}
-      sample={
-        <SampleContent
-          seed={seed}
-          startSeed={startSeed}
-          skip={() => skip(sample.answered)}
-          onLoaded={sample.answered}
-        />
-      }
+      sample={<SampleContentHint sample={sample} />}
+      samplePanel={<SampleContentPanel sample={sample} retry={retry} />}
     />
   );
 };
