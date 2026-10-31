@@ -459,7 +459,7 @@ Once no item holds sizes, `nextly media remove-sizes --apply --drop` drops the `
 Back up the database and the media storage first, then run again with --apply.
 ```
 
-The command removes files only from the media storage configured now. An item whose sizes were uploaded to another storage, bucket or host, before you moved media, is listed as `leave its stored sizes as they are`, with where its files are. Run the command for those items with the storage they were uploaded to configured; until then they keep their `sizes`, and the drop waits for them.
+The command removes files only from the media storage configured now. An item whose sizes were uploaded to another storage, bucket or host, before you moved media, is listed as `leave its stored sizes as they are`, with where its files are. A size recorded under a URL relative to your site was written by local disk, so with S3, Vercel Blob or UploadThing configured it is listed the same way. Run the command for those items with the storage they were uploaded to configured; until then they keep their `sizes`, and the drop waits for them.
 
 ### 3. Back up the database and the media storage
 
@@ -486,7 +486,7 @@ On Vercel Blob or UploadThing, download the files from the provider's dashboard 
 npx nextly media remove-sizes --apply
 ```
 
-It works item by item: it removes the item's size files, then clears its `sizes`. Just before removing each batch of files, it checks again that no media item has started using one as its original or thumbnail, and keeps any that one has. An item is left as it is, keeping its `sizes`, when the storage refuses one of its files, when its files are on another storage, or when that check cannot be made; the item is named, the run goes on with the next one, and the command exits non-zero. Fix the cause and run it again: a file already gone counts as removed, so a second run picks up where the first stopped. Like `nextly media orphans`, it removes files only when run from the project's own directory.
+It works item by item: it removes the item's size files, then clears its `sizes`. Just before removing each batch of files, it checks again that no media item has started using one as its original or thumbnail, and keeps any that one has. An item is left as it is, keeping its `sizes`, when the storage refuses one of its files, when its files are on another storage, or when that check cannot be made; the item is named, the run goes on with the next one, and the command exits non-zero. Fix the cause and run it again: a file already gone counts as removed, so a second run picks up where the first stopped. A delete that fails counts as removed only when the storage says that file is not there; a bare 404, which a missing bucket or a wrong address also answers, leaves the item. Like `nextly media orphans`, it removes files only when run from the project's own directory.
 
 ### 5. Drop the column and the table
 

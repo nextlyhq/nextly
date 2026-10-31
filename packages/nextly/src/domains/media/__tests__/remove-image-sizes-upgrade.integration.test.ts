@@ -27,6 +27,7 @@ import {
 } from "../../../__tests__/helpers/fresh-database";
 import {
   addRetiredImageSizes,
+  retiredImageSizesTableDdl,
   retiredSizesOn,
   runOn,
   setRetiredSizes,
@@ -487,6 +488,74 @@ describe.each(availableDialects())(
         expect(code).toBe(1);
         expect(lines).toContain(
           "Kept the `image_sizes` table: its columns are not exactly the ones Nextly created it with. Check it, and drop it yourself if it is the one image sizes left."
+        );
+        expect(await retired(fresh)).toEqual({ column: false, table: true });
+      });
+    });
+
+    it("never reads or drops a sizes column of another type than Nextly gave it", async () => {
+      const folder = await mkdtemp(path.join(tmpdir(), "nextly-sizes-type-"));
+      try {
+        await withFreshDatabase(dialect, "nextly_sizes_type", async fresh => {
+          await buildCurrentCoreSchema(fresh);
+          // No owner record: only the type tells it from the retired column.
+          const q = dialect === "mysql" ? "`" : '"';
+          await fresh.exec(
+            `ALTER TABLE ${q}media${q} ADD COLUMN ${q}sizes${q} varchar(255)`
+          );
+          const storage = localStorageIn(folder);
+          const report = await storage.upload(Buffer.from("r"), {
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+            collection: "media",
+          });
+          await insertItem(fresh, "item-typed", report, null);
+          const value = { invoice: { path: report.path, url: report.url } };
+          await runOn(
+            fresh.db,
+            dialect,
+            setRetiredSizes("item-typed", JSON.stringify(value))
+          );
+          const before = await filesIn(folder);
+
+          const run = await removeSizes(fresh, storage, {
+            apply: true,
+            drop: true,
+          });
+
+          expect(run.code).toBe(0);
+          expect(run.lines[0]).toContain("no sizes column");
+          expect(await retired(fresh)).toEqual({ column: true, table: false });
+          expect(await retiredSizesOn(fresh.db, dialect, "item-typed")).toEqual(
+            value
+          );
+          expect(await filesIn(folder)).toEqual(before);
+        });
+      } finally {
+        await rm(folder, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps an image_sizes table of exactly that shape where the media table has no sizes column beside it", async () => {
+      await withFreshDatabase(dialect, "nextly_sizes_lone", async fresh => {
+        await buildCurrentCoreSchema(fresh);
+        // A table an app created under that name and shape, on a database
+        // image sizes never reached: nothing of Nextly's is beside it.
+        for (const statement of await retiredImageSizesTableDdl(dialect)) {
+          await fresh.exec(statement);
+        }
+        const lines: string[] = [];
+
+        const code = await dropRetiredImageSizes({
+          db: fresh.db,
+          dialect,
+          executeSql: statement => fresh.exec(statement),
+          say: line => lines.push(line),
+        });
+
+        expect(code).toBe(1);
+        expect(lines.join("\n")).toContain(
+          "Kept the `image_sizes` table: the media table no longer has the `sizes` column Nextly created beside it"
         );
         expect(await retired(fresh)).toEqual({ column: false, table: true });
       });
