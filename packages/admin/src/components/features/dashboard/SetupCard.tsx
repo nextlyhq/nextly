@@ -165,7 +165,12 @@ function useRetirement(
   due: boolean,
   sampleRefused: boolean,
   { retire, clearFailure }: Pick<SetupStateWrite, "retire" | "clearFailure">,
-  answer: SetupCardData
+  answer: SetupCardData,
+  /**
+   * Whether the project's sample-content route has answered: until it has, what the card draws
+   * is not yet the question, so nothing is asked and no remembered refusal is forgotten over it.
+   */
+  settled: boolean
 ): Retirement {
   const [retirement, setRetirement] = useState<Retirement>("unasked");
   const asked = useRef(false);
@@ -182,15 +187,16 @@ function useRetirement(
   // Its own effect, so a failed write, which also leaves the guard unasked, is not asked again at
   // once.
   useEffect(() => {
+    if (!settled) return;
     const refused = refusals.refused();
     if (refused === undefined || refused === signature) return;
     refusals.forget();
     if (retirement !== "refused") return;
     asked.current = false;
     setRetirement("unasked");
-  }, [signature, retirement, refusals]);
+  }, [settled, signature, retirement, refusals]);
   useEffect(() => {
-    if (!due || asked.current) return;
+    if (!settled || !due || asked.current) return;
     asked.current = true;
     const askedAbout = signature;
     // Refused over these same steps already, by this card or one drawn before it: not asked.
@@ -221,6 +227,7 @@ function useRetirement(
       }
     );
   }, [
+    settled,
     due,
     sampleRefused,
     retire,
@@ -726,16 +733,22 @@ type CountedSetup = Extract<SetupAnswer, { known: true }>;
  */
 function useDrawnSetup(
   card: SetupCardData,
-  sampleRefused: boolean,
-  answeredHere: boolean,
+  sample: { sampleRefused: boolean; answeredHere: boolean; settled: boolean },
   write: Pick<SetupStateWrite, "retire" | "clearFailure">
 ): { allSet: boolean; counted: CountedSetup | undefined } {
+  const { sampleRefused, answeredHere, settled } = sample;
   const drawn =
     card.setup.known && !card.allSet
       ? drawnSteps(card.setup.steps, sampleRefused, answeredHere)
       : undefined;
   const drawnAllSet = drawn !== undefined && setupAllSet(drawn);
-  const retirement = useRetirement(drawnAllSet, sampleRefused, write, card);
+  const retirement = useRetirement(
+    drawnAllSet,
+    sampleRefused,
+    write,
+    card,
+    settled
+  );
   const allSet = card.allSet || (drawnAllSet && retirement === "recorded");
   return { allSet, counted: drawn?.known && !allSet ? drawn : undefined };
 }
@@ -936,12 +949,7 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   const [singlesOpen, setSinglesOpen] = useState(false);
   const singlesListId = useId();
   const content = useRef<HTMLDivElement>(null);
-  const { allSet, counted } = useDrawnSetup(
-    card,
-    sample.sampleRefused,
-    sample.answeredHere,
-    write
-  );
+  const { allSet, counted } = useDrawnSetup(card, sample, write);
   const progress = useSetupInFrame(
     counted,
     collapsed,

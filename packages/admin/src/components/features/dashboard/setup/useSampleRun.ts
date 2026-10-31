@@ -110,6 +110,8 @@ export interface SampleRunState {
   sampleRefused: boolean;
   /** Declined or recorded from this card and confirmed: the tile is drawn done. */
   answeredHere: boolean;
+  /** Whether the project's route has answered the probe: until then `sampleRefused` is not final. */
+  settled: boolean;
   /**
    * The card's data to draw: the latest, or while a run's state is on show and
    * the latest could not check setup, the last that could.
@@ -631,6 +633,7 @@ export function useSampleRun(
     sampleRefused: isSampleRefused(probe, step, local),
     awaitingContinue: local?.phase === "loaded",
     answeredHere: local?.phase === "answered",
+    settled: probe !== undefined,
     card,
     refreshFailed,
     panelShown: PANEL_VIEWS.has(view.kind) || local?.phase === "refused",
