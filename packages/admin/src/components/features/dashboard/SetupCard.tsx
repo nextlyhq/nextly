@@ -9,29 +9,35 @@
  * - setup could not be checked: says so with Retry, and never a step shown open on that basis;
  * - every step done: "You're all set", said once (the server has recorded it, so the next load
  *   leaves the card out);
- * - collapsed: one line, "Set up your project · N of M done", with Expand and Dismiss, the whole
- *   card one grid row tall (`frame/collapse`), kept per reader on the server;
+ * - collapsed: one line, the frame's header alone, "Set up your project N of M done" with Expand
+ *   and Dismiss beside the card's menu, the whole card one grid row tall (`frame/collapse`), kept
+ *   per reader on the server;
  * - the steps: "N of M done" in the frame's header beside the title, and in the body a thin
- *   progress bar over one row of compact tiles, two columns below 640 px. At the card's size,
+ *   progress bar over one row of compact tiles, in two columns where the body is too narrow for
+ *   each to read in full (`setupRowClass`). At the card's size,
  *   12 × 2, that is all the body holds (`setup/measures`), so the dashboard loads with nothing
  *   moving.
  *
  * Each tile is a step: its number or a tick, its name, and one hint line holding what the reader
- * can do about it ("Add", "2 of 5 filled in · Open · Skip"). Skip is offered on "Fill in your
- * Singles" and "Invite a teammate" only, and Restore on a step skipped. The Singles are one tile;
+ * can do about it ("Add", "2 of 5 · Open · Skip", "Invite · Skip"), its words short so a tile
+ * reads in full at narrow widths, and read in full to assistive technology ("2 of 5 filled in").
+ * Skip is offered on "Fill in your Singles" and "Invite a teammate" only, and Restore on a step
+ * skipped. The Singles are one tile;
  * choosing it opens a short list of them, each with its state and link, and only then, the
  * reader's own action, does the card grow in place, as it does where the tiles wrap. Sample content
  * is the first tile, with its load and decline in its hint line and a load's progress and outcome
  * in full under the tiles (`setup/SampleContentStep`), and is left out where the project's
  * sample-content route says it cannot be loaded by this reader.
  *
- * Collapse and Dismiss sit at the end of the tiles' row. Dismissing removes the card and keeps
- * that on the server for this reader.
+ * Collapse and Dismiss sit in the card's header, beside its menu, while the card is expanded
+ * (`frame/header-slot`), so the tiles take the body's whole width; collapsed, at the end of its one
+ * line. Dismissing removes the card and keeps that on the server for this reader.
  *
  * @module components/features/dashboard/SetupCard
  */
 
 import { Button } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   drawnSetup,
   isSkippableKind,
@@ -46,6 +52,7 @@ import {
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 import {
+  Fragment,
   useContext,
   useEffect,
   useId,
@@ -58,17 +65,25 @@ import {
 import { Check, ChevronDown, ChevronUp, X } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { useSingles } from "@admin/hooks/queries/useSingles";
+import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
 import { isApiError } from "@admin/lib/api/parseApiError";
 import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
 import { useCardCollapsed } from "../widgets/frame/collapse";
 import { CardGrowContext } from "../widgets/frame/grow";
+import { CardHeaderContent } from "../widgets/frame/header-slot";
 import { cardBodyHeightPx } from "../widgets/frame/measures";
 import { CardHeightContext } from "../widgets/frame/tier";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 
-import { SETUP_GAP, SETUP_TILE, SETUP_TILE_LINES } from "./setup/measures";
+import {
+  SETUP_GAP,
+  SETUP_TILE,
+  SETUP_TILE_LINES,
+  setupRowClass,
+} from "./setup/measures";
+import { useRetirementRefusals } from "./setup/retirement-refusals";
 import {
   SampleContentHint,
   SampleContentPanel,
@@ -77,6 +92,7 @@ import {
   filledIn,
   singleHref,
   stepPresentation,
+  type StepPresentation,
 } from "./setup/step-presentation";
 import { useSampleRun } from "./setup/useSampleRun";
 import { useSetupState, type SetupStateWrite } from "./setup/useSetupState";
@@ -137,24 +153,51 @@ type Retirement = "unasked" | "asked" | "recorded" | "refused";
  *
  * Asked once per answer the card is drawn from (`answer`): a write that failed is asked again
  * when the card's data is next read, on the next load or refocus, never in a loop on its own
- * failure. One the host refused, as it finds a step open (409), is not asked again: the card's
- * data is read once more (`refresh`) to draw the steps as the host now has them.
+ * failure. One the host refused, as it finds a step open (409), is never asked again over the same
+ * steps: the dashboard's answers are read again in place (the batch's own query, so the card stays
+ * drawn rather than being unmounted for a skeleton), and only an answer whose steps differ from the
+ * refused one's (`retirementSignature`) is asked about once more, when every step it draws is
+ * done. The refusal is kept outside the card (`setup/retirement-refusals`), so a card drawn again,
+ * after a Retry or a write that refreshes it, remembers it: a refusal the host keeps giving over
+ * the same steps is one request, however often the card is read or drawn.
  */
 function useRetirement(
   due: boolean,
   sampleRefused: boolean,
-  retire: SetupStateWrite["retire"],
-  answer: SetupCardData,
-  refresh: () => void
+  { retire, clearFailure }: Pick<SetupStateWrite, "retire" | "clearFailure">,
+  answer: SetupCardData
 ): Retirement {
   const [retirement, setRetirement] = useState<Retirement>("unasked");
   const asked = useRef(false);
-  // The latest refresh, read when an answer lands, so a new one each draw never asks again.
-  const latestRefresh = useRef(refresh);
-  latestRefresh.current = refresh;
+  const queryClient = useQueryClient();
+  // What the last refused ask was about (`retirementSignature`), outliving this card.
+  const refusals = useRetirementRefusals();
+  const signature = retirementSignature(answer, sampleRefused);
+  // An answer whose steps differ from the refused ones: it may be all done, finished on another
+  // device before the read, or have a step open that is done later. The refusal is forgotten,
+  // by whichever card is drawn over it (every new answer draws the card afresh), so these steps,
+  // or the refused ones reached again later, are asked about once more; and a card that was
+  // refused itself asks again. Compared by content, never by object: a refusal the host keeps
+  // giving over the same steps (no preferences table, a write it cannot record) is asked once.
+  // Its own effect, so a failed write, which also leaves the guard unasked, is not asked again at
+  // once.
+  useEffect(() => {
+    const refused = refusals.refused();
+    if (refused === undefined || refused === signature) return;
+    refusals.forget();
+    if (retirement !== "refused") return;
+    asked.current = false;
+    setRetirement("unasked");
+  }, [signature, retirement, refusals]);
   useEffect(() => {
     if (!due || asked.current) return;
     asked.current = true;
+    const askedAbout = signature;
+    // Refused over these same steps already, by this card or one drawn before it: not asked.
+    if (askedAbout === refusals.refused()) {
+      setRetirement("refused");
+      return;
+    }
     setRetirement("asked");
     retire(
       { sampleRefused },
@@ -162,8 +205,14 @@ function useRetirement(
         onDone: () => setRetirement("recorded"),
         onFailed: error => {
           if (isApiError(error) && error.status === 409) {
+            refusals.refuse(askedAbout);
+            // The card asked this itself, so nothing the reader changed failed: nothing is said.
+            clearFailure();
             setRetirement("refused");
-            latestRefresh.current();
+            // Read in place: the host's Retry would draw the skeleton and unmount the card.
+            void queryClient.invalidateQueries({
+              queryKey: WIDGET_QUERIES_KEY,
+            });
             return;
           }
           asked.current = false;
@@ -171,8 +220,32 @@ function useRetirement(
         },
       }
     );
-  }, [due, sampleRefused, retire, answer]);
+  }, [
+    due,
+    sampleRefused,
+    retire,
+    clearFailure,
+    answer,
+    signature,
+    refusals,
+    queryClient,
+  ]);
   return retirement;
+}
+
+/**
+ * What a retirement is judged over, as text: each step's kind and status, whether setup was known,
+ * and what the project's sample-content route said. Two answers alike in these ask the host the
+ * same question, whatever objects they arrive as.
+ */
+function retirementSignature(
+  answer: SetupCardData,
+  sampleRefused: boolean
+): string {
+  const steps = answer.setup.known
+    ? answer.setup.steps.map(step => `${step.kind}:${step.status}`)
+    : ["unknown"];
+  return JSON.stringify([steps, sampleRefused]);
 }
 
 /** "N of M done", from a counted answer. */
@@ -198,8 +271,9 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
 }
 
 /**
- * Collapse or expand, and dismiss: the card's two controls. At the end of the tiles' row when
- * expanded, 24 px each, the least a target may be; at the end of the one line when collapsed.
+ * Collapse or expand, and dismiss: the card's two controls, in the frame's header beside the
+ * card's menu whether it is expanded or collapsed, and drawn as the menu is: 28 px each, over the
+ * 24 px a target may be at least.
  */
 function CardControls({
   collapsed,
@@ -210,14 +284,14 @@ function CardControls({
   write: SetupStateWrite;
   onToggle: () => void;
 }) {
-  // The compact pair in the tiles' row: 24 px targets, inside the row's 36 px.
-  const compact = !collapsed && "h-6 w-6";
+  // Beside the card's menu in the header, the menu's own size and colour.
+  const inHeader = "size-7 text-muted-foreground hover:text-foreground";
   return (
     <span className="flex shrink-0 items-center gap-1">
       <Button
         variant="ghost"
         size="icon-sm"
-        className={cn(compact)}
+        className={inHeader}
         aria-expanded={!collapsed}
         onClick={onToggle}
         disabled={write.isWriting}
@@ -234,7 +308,7 @@ function CardControls({
       <Button
         variant="ghost"
         size="icon-sm"
-        className={cn(compact)}
+        className={inHeader}
         onClick={write.dismiss}
         disabled={write.isWriting}
       >
@@ -299,112 +373,132 @@ function TileMark({ step, position }: { step: SetupStep; position: number }) {
 }
 
 /** The step's own link, while it is open and has one. */
-function StepLink({
-  step,
-  label,
-  href,
-  action,
-}: {
-  step: SetupStep;
-  label: string;
-  href: string | undefined;
-  action: string | undefined;
-}) {
+function stepLink(
+  step: SetupStep,
+  { label, href, action }: StepPresentation
+): React.ReactNode {
   if (step.status !== "open" || href === undefined || action === undefined) {
     return null;
   }
   return (
-    <>
-      <Dot />
-      <Link
-        href={href}
-        className="font-medium text-foreground underline decoration-primary/40 underline-offset-2 hover:decoration-primary focus-visible:decoration-primary"
-      >
-        {action}
-        <span className="sr-only">: {label}</span>
-      </Link>
-    </>
+    <Link
+      href={href}
+      className="font-medium text-foreground underline decoration-primary/40 underline-offset-2 hover:decoration-primary focus-visible:decoration-primary"
+    >
+      {action}
+      <span className="sr-only">: {label}</span>
+    </Link>
   );
 }
 
 /** Open or Hide on the Singles step's tile, for the short list under the row. */
-function SinglesToggle({
-  step,
-  label,
-  open,
-  listId,
-  onToggle,
-}: {
-  step: SetupStep;
-  label: string;
-  open: boolean;
-  listId: string;
-  onToggle: () => void;
-}) {
+function singlesToggle(
+  step: SetupStep,
+  label: string,
+  { open, listId, onToggle }: SinglesListControl
+): React.ReactNode {
   if (step.kind !== "singles") return null;
   return (
-    <>
-      <Dot />
-      <HintAction
-        aria-expanded={open}
-        aria-controls={listId}
-        onClick={onToggle}
-      >
-        {open ? "Hide" : "Open"}
-        <span className="sr-only">: {label}</span>
-      </HintAction>
-    </>
+    <HintAction aria-expanded={open} aria-controls={listId} onClick={onToggle}>
+      {open ? "Hide" : "Open"}
+      <span className="sr-only">: {label}</span>
+    </HintAction>
   );
 }
 
 /** Skip on an open step of a skippable kind, Restore on a skipped one, and nothing on any other. */
-function SkipToggle({
-  step,
-  label,
-  write,
-}: {
-  step: SetupStep;
-  label: string;
-  write: SetupStateWrite;
-}) {
+function skipToggle(
+  step: SetupStep,
+  label: string,
+  write: SetupStateWrite
+): React.ReactNode {
   if (!isSkippableKind(step.kind) || step.status === "done") return null;
   const { kind } = step;
   const skip = step.status === "open";
   return (
-    <>
-      <Dot />
-      <HintAction
-        disabled={write.isWriting}
-        onClick={() => write.setSkipped(kind, skip)}
-      >
-        {skip ? "Skip" : "Restore"}
-        <span className="sr-only">: {label}</span>
-      </HintAction>
-    </>
+    <HintAction
+      disabled={write.isWriting}
+      onClick={() => write.setSkipped(kind, skip)}
+    >
+      {skip ? "Skip" : "Restore"}
+      <span className="sr-only">: {label}</span>
+    </HintAction>
   );
+}
+
+/** Whether the Singles' list is open, and what opens it, as the Singles tile's toggle needs. */
+interface SinglesListControl {
+  open: boolean;
+  listId: string;
+  onToggle: () => void;
+}
+
+/**
+ * What the hint line says before its actions, drawn and read aloud: "Skipped" on a skipped step,
+ * else the step's detail; nothing where its actions say it all ("Invite · Skip").
+ */
+function hintWords(
+  step: SetupStep,
+  { detail, spoken }: StepPresentation
+): { shown: string; spoken: string } | undefined {
+  if (step.status === "skipped") return { shown: "Skipped", spoken: "Skipped" };
+  if (detail === undefined) return undefined;
+  return { shown: detail, spoken: spoken ?? detail };
 }
 
 /**
  * What the hint line says before its actions: the sample offer while open, whole, as it is its
- * actions; else the step's state, the one part of the line cut short when the tile is narrow.
+ * actions; else the step's words, the one part of the line cut short when the tile is narrow, and
+ * read in full where they are drawn short ("2 of 5", read "2 of 5 filled in").
  */
 function HintText({
   step,
-  detail,
+  words,
   sample,
 }: {
   step: SetupStep;
-  detail: string;
+  words: { shown: string; spoken: string } | undefined;
   sample: React.ReactNode;
 }) {
   if (step.kind === "sample" && step.status === "open") {
     return <span className="flex shrink-0 items-center">{sample}</span>;
   }
-  const text = step.status === "skipped" ? "Skipped" : detail;
+  if (words === undefined) return null;
   return (
-    // Its whole text on hover, as a narrow tile may cut it short.
-    <span className="min-w-0 truncate" title={text}>
-      {text}
+    // Its whole words on hover, as a narrow tile may cut them short.
+    <span className="min-w-0 truncate" title={words.spoken}>
+      {words.shown === words.spoken ? (
+        words.shown
+      ) : (
+        <>
+          <span aria-hidden="true">{words.shown}</span>
+          <span className="sr-only">{words.spoken}</span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A tile's actions, "·" between each, and before the first only where words come before it, so a
+ * step whose actions say it all reads "Invite · Skip", never "· Invite · Skip".
+ */
+function HintActions({
+  actions,
+  afterWords,
+}: {
+  actions: readonly React.ReactNode[];
+  afterWords: boolean;
+}) {
+  return (
+    <span className="flex shrink-0 items-center" data-setup-actions="">
+      {actions.map((action, index) => (
+        // The actions are fixed for a step, in a fixed order, so the position is their identity.
+        <Fragment key={index}>
+          {(index > 0 || afterWords) && <Dot />}
+          {action}
+        </Fragment>
+      ))}
     </span>
   );
 }
@@ -417,27 +511,33 @@ function StepTile({
   step,
   position,
   write,
-  singlesOpen,
-  onToggleSingles,
-  singlesListId,
+  singles,
   sample,
 }: {
   step: SetupStep;
   position: number;
   write: SetupStateWrite;
-  singlesOpen: boolean;
-  onToggleSingles: () => void;
-  singlesListId: string;
+  singles: SinglesListControl;
   sample: React.ReactNode;
 }) {
-  const { label, detail, href, action } = stepPresentation(step);
+  const presentation = stepPresentation(step);
+  const { label } = presentation;
+  const words = hintWords(step, presentation);
+  const actions = [
+    stepLink(step, presentation),
+    singlesToggle(step, label, singles),
+    skipToggle(step, label, write),
+  ].filter(action => action !== null);
+  // Words or the sample offer come before the actions; "·" then leads them.
+  const afterWords =
+    words !== undefined || (step.kind === "sample" && step.status === "open");
   return (
     <li
       data-setup-step={step.kind}
       data-status={step.status}
       className={cn(
         SETUP_TILE.className,
-        "flex min-w-0 items-center gap-2 overflow-hidden rounded-md border border-border px-2 py-0.5",
+        "flex min-w-0 items-center gap-1 overflow-hidden rounded-md border border-border px-1.5 py-0.5",
         step.status === "done" && "border-success bg-success/5"
       )}
     >
@@ -461,18 +561,8 @@ function StepTile({
             "flex min-w-0 items-center whitespace-nowrap text-muted-foreground"
           )}
         >
-          <HintText step={step} detail={detail} sample={sample} />
-          <span className="flex shrink-0 items-center" data-setup-actions="">
-            <StepLink step={step} label={label} href={href} action={action} />
-            <SinglesToggle
-              step={step}
-              label={label}
-              open={singlesOpen}
-              listId={singlesListId}
-              onToggle={onToggleSingles}
-            />
-            <SkipToggle step={step} label={label} write={write} />
-          </span>
+          <HintText step={step} words={words} sample={sample} />
+          <HintActions actions={actions} afterWords={afterWords} />
         </span>
       </span>
     </li>
@@ -542,7 +632,7 @@ function SinglesList({
 /**
  * Asks the frame to grow the card only when its steps do not fit its rows: while the reader has
  * the Singles' list open, which is their own action, or where the tiles wrap into two columns
- * below 640 px. At rest in one row the steps fit 12 × 2 (`SETUP_ROW_BODY_PX`), so the card is
+ * (`setupRowClass`). At rest in one row the steps fit 12 × 2 (`SETUP_ROW_BODY_PX`), so the card is
  * drawn at its own rows and nothing moves as the dashboard loads. Measured after every draw; drawn
  * at its own rows again once the list closes or the steps are not drawn.
  */
@@ -638,21 +728,14 @@ function useDrawnSetup(
   card: SetupCardData,
   sampleRefused: boolean,
   answeredHere: boolean,
-  write: Pick<SetupStateWrite, "retire">,
-  refresh: () => void
+  write: Pick<SetupStateWrite, "retire" | "clearFailure">
 ): { allSet: boolean; counted: CountedSetup | undefined } {
   const drawn =
     card.setup.known && !card.allSet
       ? drawnSteps(card.setup.steps, sampleRefused, answeredHere)
       : undefined;
   const drawnAllSet = drawn !== undefined && setupAllSet(drawn);
-  const retirement = useRetirement(
-    drawnAllSet,
-    sampleRefused,
-    write.retire,
-    card,
-    refresh
-  );
+  const retirement = useRetirement(drawnAllSet, sampleRefused, write, card);
   const allSet = card.allSet || (drawnAllSet && retirement === "recorded");
   return { allSet, counted: drawn?.known && !allSet ? drawn : undefined };
 }
@@ -667,47 +750,34 @@ function SaveFailure({ message }: { message: string | undefined }) {
   );
 }
 
-/** The collapsed card: one line, "Set up your project · N of M done", and its controls. */
+/**
+ * The collapsed card: the frame's header is its one line, the title and "N of M done" beside it,
+ * so the body draws only its controls, into that header beside the card's menu.
+ */
 function CollapsedSetup({
-  progress,
   failure,
   controls,
 }: {
-  progress: string;
   failure: React.ReactNode;
   controls: React.ReactNode;
 }) {
   return (
-    <div
-      className="flex h-10 min-w-0 items-center gap-2"
-      data-testid="setup-card"
-    >
-      {/* The frame keeps the title and its count for assistive technology, which reads them as
-          the card's name; this is the same words, drawn. */}
-      <p
-        aria-hidden="true"
-        className="min-w-0 flex-1 truncate text-sm"
-        data-testid="setup-progress"
-      >
-        <span className="font-semibold text-foreground">
-          Set up your project
-        </span>
-        <span className="text-muted-foreground"> · {progress}</span>
-      </p>
+    <>
       {failure}
-      {controls}
-    </div>
+      <CardHeaderContent>{controls}</CardHeaderContent>
+    </>
   );
 }
 
-/** The expanded card: the bar, one row of tiles beside its controls, and the Singles' list. */
+/**
+ * The expanded card: the bar, one row of tiles across the body's whole width, and the Singles'
+ * list; its controls are drawn in the frame's header, beside the card's menu.
+ */
 function ExpandedSetup({
   content,
   counted,
   write,
-  singlesOpen,
-  onToggleSingles,
-  singlesListId,
+  singles: singlesList,
   sample,
   samplePanel,
   failure,
@@ -716,9 +786,7 @@ function ExpandedSetup({
   content: React.RefObject<HTMLDivElement | null>;
   counted: CountedSetup;
   write: SetupStateWrite;
-  singlesOpen: boolean;
-  onToggleSingles: () => void;
-  singlesListId: string;
+  singles: SinglesListControl;
   sample: React.ReactNode;
   /** Sample content's load or outcome in full, under the tiles, while one is on show. */
   samplePanel: React.ReactNode;
@@ -732,73 +800,83 @@ function ExpandedSetup({
   return (
     <div
       ref={content}
-      className={cn("grid", SETUP_GAP.className)}
+      // The container the tiles' row is judged by: the body's own width, whatever the viewport.
+      className={cn("@container grid", SETUP_GAP.className)}
       data-testid="setup-card"
     >
+      <CardHeaderContent>{controls}</CardHeaderContent>
       <ProgressBar done={counted.done} total={counted.total} />
       {failure}
-      {/* Below 640 px the controls sit over the tiles, so the tiles' two columns take the card's
-          whole width; from 640 px they end the tiles' one row. */}
-      <div
+      {/* One row of tiles across the body's whole width where each reads in full there, two
+          columns where the body is narrower (the body is the `@container` it is judged by). */}
+      <ol
         className={cn(
-          "flex flex-col-reverse items-end sm:flex-row sm:items-start",
+          "grid min-w-0",
+          setupRowClass(counted.steps.length),
           SETUP_GAP.className
         )}
+        aria-label="Setup steps"
       >
-        {/* One row of tiles: one column per step from 640 px, two below. */}
-        <ol
-          className={cn(
-            "grid min-w-0 flex-1 grid-cols-2 self-stretch sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none sm:self-auto",
-            SETUP_GAP.className
-          )}
-          aria-label="Setup steps"
-        >
-          {counted.steps.map((step, index) => (
-            <StepTile
-              key={step.kind}
-              step={step}
-              position={index + 1}
-              write={write}
-              singlesOpen={singlesOpen}
-              onToggleSingles={onToggleSingles}
-              singlesListId={singlesListId}
-              sample={sample}
-            />
-          ))}
-        </ol>
-        <span
-          // A tile high from 640 px (`SETUP_TILE`, 36 px), written out whole so the stylesheet
-          // keeps the class; one compact button high below.
-          className="flex h-6 shrink-0 items-center sm:h-9"
-        >
-          {controls}
-        </span>
-      </div>
+        {counted.steps.map((step, index) => (
+          <StepTile
+            key={step.kind}
+            step={step}
+            position={index + 1}
+            write={write}
+            singles={singlesList}
+            sample={sample}
+          />
+        ))}
+      </ol>
       {samplePanel}
-      {singles !== undefined && singlesOpen && (
-        <SinglesList step={singles} id={singlesListId} />
+      {singles !== undefined && singlesList.open && (
+        <SinglesList step={singles} id={singlesList.listId} />
       )}
     </div>
   );
 }
 
 /**
- * Collapsed as the server says, then as the reader sets it here while the write lands. A write
- * that fails puts back what was drawn before it, which is what the server still holds, and the
- * header says the change was not saved.
+ * Collapsed as the server says, then as the reader sets it here while the write lands and the
+ * card's data is read again. Once the write has landed and that read has answered (`refreshing`
+ * went on and off again), or an answer after it already holds what the reader set, the server's
+ * answer is drawn again, whatever it says: a change another device made meanwhile wins over this
+ * one, never masked by it. A write that fails puts back what was drawn before it, which is what
+ * the server still holds, and the header says the change was not saved.
  */
 function useCollapsedHere(
   stored: boolean,
+  refreshing: boolean,
   write: SetupStateWrite
 ): { collapsed: boolean; toggle: () => void } {
   const [here, setHere] = useState<boolean | undefined>();
+  // The reader's write has landed, and the card's data is being asked for again.
+  const [landed, setLanded] = useState(false);
+  // Whether that read has started since the write landed, so its end is the fresh answer.
+  const readStarted = useRef(false);
+  useEffect(() => {
+    if (!landed) return;
+    if (refreshing) {
+      readStarted.current = true;
+      return;
+    }
+    if (!readStarted.current && here !== stored) return;
+    readStarted.current = false;
+    setLanded(false);
+    setHere(undefined);
+  }, [landed, refreshing, here, stored]);
   const collapsed = here ?? stored;
   return {
     collapsed,
     toggle: () => {
       const before = here;
+      readStarted.current = false;
+      setLanded(false);
       setHere(!collapsed);
-      write.setCollapsed(!collapsed, () => setHere(before));
+      write.setCollapsed(!collapsed, {
+        onDone: () => setLanded(true),
+        onFailed: () => setHere(before),
+      });
     },
   };
 }
@@ -842,15 +920,19 @@ function NotKnown({ retry }: { retry: () => void }) {
 
 export const SetupCard: React.FC<DeclaredComponentProps> = ({
   data,
-  retry,
   refreshing,
+  retry,
 }) => {
   const write = useSetupState(retry);
   // The card's data to draw is the sample step's: while a load or its outcome is on show, a later
   // read that could not check setup keeps the last one that could, so the run stays on screen.
   const sample = useSampleRun(data as SetupCardData, retry, refreshing);
   const { card } = sample;
-  const { collapsed, toggle } = useCollapsedHere(card.collapsed, write);
+  const { collapsed, toggle } = useCollapsedHere(
+    card.collapsed,
+    refreshing,
+    write
+  );
   const [singlesOpen, setSinglesOpen] = useState(false);
   const singlesListId = useId();
   const content = useRef<HTMLDivElement>(null);
@@ -858,8 +940,7 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
     card,
     sample.sampleRefused,
     sample.answeredHere,
-    write,
-    retry
+    write
   );
   const progress = useSetupInFrame(
     counted,
@@ -879,22 +960,18 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   );
   const failure = <SaveFailure message={write.failed} />;
   if (collapsed) {
-    return (
-      <CollapsedSetup
-        progress={progress}
-        failure={failure}
-        controls={controls}
-      />
-    );
+    return <CollapsedSetup failure={failure} controls={controls} />;
   }
   return (
     <ExpandedSetup
       content={content}
       counted={counted}
       write={write}
-      singlesOpen={singlesOpen}
-      onToggleSingles={() => setSinglesOpen(open => !open)}
-      singlesListId={singlesListId}
+      singles={{
+        open: singlesOpen,
+        listId: singlesListId,
+        onToggle: () => setSinglesOpen(open => !open),
+      }}
       failure={failure}
       controls={controls}
       sample={<SampleContentHint sample={sample} />}

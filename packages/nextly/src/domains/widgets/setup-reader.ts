@@ -64,35 +64,54 @@ export function skipKey(kind: SkippableSetupStepKind): DashboardPreferenceKey {
   return `setup-skipped-${kind}`;
 }
 
-/** The repository over the booted instance's database. */
+/** The repository, and the adapter it was made over. */
+let shared:
+  | { adapter: DrizzleAdapter; repository: DashboardPreferences }
+  | undefined;
+
+/**
+ * The repository over the booted instance's database: one per adapter, shared by every request,
+ * so the table's presence, once found, is not asked again on each read (`tablePresence`). A new
+ * adapter (a reboot) is given a new one.
+ */
 export function preferences(): DashboardPreferences {
-  return new DashboardPreferences(container.get<DrizzleAdapter>("adapter"), {
-    warn: (message, context) =>
-      getNextlyLogger().warn({
-        kind: "dashboard-preferences-missing",
-        message,
-        ...context,
+  const adapter = container.get<DrizzleAdapter>("adapter");
+  if (shared?.adapter !== adapter) {
+    shared = {
+      adapter,
+      repository: new DashboardPreferences(adapter, {
+        warn: (message, context) =>
+          getNextlyLogger().warn({
+            kind: "dashboard-preferences-missing",
+            message,
+            ...context,
+          }),
       }),
-  });
+    };
+  }
+  return shared.repository;
 }
 
-/** What `userId`'s setup card remembers, each key read at once. */
+/** Every key the setup card keeps for a reader. */
+const SETUP_KEYS: readonly DashboardPreferenceKey[] = [
+  "setup-collapsed",
+  "setup-dismissed",
+  "setup-retired",
+  ...SETUP_SKIPPABLE_KINDS.map(skipKey),
+];
+
+/** What `userId`'s setup card remembers, every key in one read. */
 export async function readSetupState(
   userId: string,
   repository: DashboardPreferences = preferences()
 ): Promise<SetupState> {
-  const [collapsed, dismissed, retiredAt, ...skips] = await Promise.all([
-    repository.get(userId, "setup-collapsed"),
-    repository.get(userId, "setup-dismissed"),
-    repository.get(userId, "setup-retired"),
-    ...SETUP_SKIPPABLE_KINDS.map(kind => repository.get(userId, skipKey(kind))),
-  ]);
+  const values = await repository.getMany(userId, SETUP_KEYS);
   return {
-    collapsed: collapsed === YES,
-    dismissed: dismissed === YES,
-    retiredAt: retiredAt || undefined,
+    collapsed: values.get("setup-collapsed") === YES,
+    dismissed: values.get("setup-dismissed") === YES,
+    retiredAt: values.get("setup-retired") || undefined,
     skipped: new Set(
-      SETUP_SKIPPABLE_KINDS.filter((_kind, index) => skips[index] === YES)
+      SETUP_SKIPPABLE_KINDS.filter(kind => values.get(skipKey(kind)) === YES)
     ),
   };
 }

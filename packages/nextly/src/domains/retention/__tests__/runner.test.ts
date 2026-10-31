@@ -23,6 +23,19 @@ function inline(
   return work => work(db as TransactionContext);
 }
 
+/**
+ * The cache tag expiry ledger's part of an adapter, on a database without its
+ * table: these runners take no ledger pass, and one that did would ask the
+ * catalogue and stop there.
+ */
+const withoutLedger = {
+  getCapabilities: () => ({ dialect: "sqlite" as const }),
+  tableExists: async () => false,
+  getDrizzle: () => {
+    throw new Error("the ledger's table is not in this test");
+  },
+} as const;
+
 /** Records the policy each pass ran with, so the budget is observable. */
 function spyAdapter() {
   const limits: (number | undefined)[] = [];
@@ -36,7 +49,10 @@ function spyAdapter() {
     },
     delete: async (): Promise<number> => 0,
   };
-  return { limits, adapter: { ...db, transaction: inline(db) } };
+  return {
+    limits,
+    adapter: { ...db, ...withoutLedger, transaction: inline(db) },
+  };
 }
 
 function alwaysClaims() {
@@ -116,6 +132,7 @@ describe("RetentionRunner", () => {
           throw new Error("connection reset");
         },
         delete: async () => 0,
+        ...withoutLedger,
         transaction: inline({}),
       },
       gate: alwaysClaims(),

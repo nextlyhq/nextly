@@ -880,8 +880,12 @@ export class SingleRegistryService extends BaseRegistryService<
       // Every cached read of it now describes content that is gone: expired
       // here, the method every deletion path reaches, with the setting the
       // deleted row held. A delete that found the row already gone has thrown
-      // above, so a retry never flushes a Single that opted out.
-      await flushContentChange(expire, this.logger, "a Single was deleted");
+      // above, so a retry never flushes a Single that opted out. Once the
+      // delete is durable, as for collections: after an enclosing
+      // transaction commits, and never for one that rolls back.
+      await this.afterCommit(() =>
+        flushContentChange(expire, this.logger, "a Single was deleted")
+      );
 
       if (this.permissionSeedService) {
         try {
