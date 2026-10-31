@@ -35,10 +35,18 @@ const notes = defineCollection({
   fields: [text({ name: "title" })],
 });
 
-/** A second collection, so a key can hold a grant that says nothing about notes. */
+/**
+ * A second collection, so a key can hold a grant that says nothing about notes.
+ * Two of its fields carry a read rule: one that lets every reader read it and
+ * one that lets nobody. A card's settings may offer neither, whoever asks.
+ */
 const events = defineCollection({
   slug: EVENTS,
-  fields: [text({ name: "title" })],
+  fields: [
+    text({ name: "title" }),
+    text({ name: "budget", access: { read: () => true } }),
+    text({ name: "secret", access: { read: () => false } }),
+  ],
 });
 
 /** A Collection setting defaulting to events. */
@@ -487,6 +495,18 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     const offered = (body.widgetSources ?? []).map(source => source.collection);
     expect(offered).toContain(EVENTS);
     expect(offered).not.toContain(NOTES);
+  });
+
+  it("never offers a card's settings a field with a read rule, even one that lets this reader read it", async () => {
+    const body = await workspaceFor(await keyHolding([`read-${EVENTS}`]));
+    const fields = (body.widgetSources ?? [])
+      .find(source => source.collection === EVENTS)
+      ?.fields.map(field => field.name);
+    // The population: the collection is offered, and so is its plain field, so
+    // the absences below are the read rules' and not an empty field list.
+    expect(fields).toContain("title");
+    expect(fields).not.toContain("budget");
+    expect(fields).not.toContain("secret");
   });
 
   it("carries the audience token the layout read reports for the same reader", async () => {

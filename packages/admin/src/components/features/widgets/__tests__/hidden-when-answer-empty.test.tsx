@@ -1,8 +1,9 @@
 /**
  * A card that hides while empty leaves the dashboard by one of two rules, and the dashboard
  * holds each card to its own: a widget the layout read answers ahead keeps the verdict that read
- * gave, held for the visit; a widget it cannot answer (`registerWidget`, `contributes.admin.widgets`),
- * named in the layout's `hiddenWhenAnswerEmpty`, leaves while its own answer is empty, as drawn.
+ * gave, held for the visit; a widget it cannot answer (one whose data a query asks rather than a
+ * `load`), named in the layout's `hiddenWhenAnswerEmpty`, leaves while its own answer is empty, as
+ * drawn.
  * The grid takes a card out by the mark checked here (`data-hidden-empty`, `ArrangedCell`).
  */
 import { render, screen } from "@testing-library/react";

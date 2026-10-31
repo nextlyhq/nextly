@@ -417,6 +417,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       registerAttentionItems([
         {
           owner: 'plugin "@test/forms"',
+          plugin: "@test/forms",
           widgets: [],
           suggest: undefined,
           alternatives: undefined,

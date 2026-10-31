@@ -29,6 +29,4 @@
 "nextly": patch
 ---
 
-On Windows, `nextly generate:widget` now prints the files it made with forward slashes (`src/dashboard/open-orders.widget.ts`), so its `npx vitest run …` line also works when pasted into Git Bash, which reads a backslash as an escape. cmd and PowerShell take the same line.
-
 The recovery a drift error prints for a database never adopted into the migration history now keeps the separator its migration's path is written with, on every line. On Windows, a path written with forward slashes no longer gets an `rm` line with backslashes under an `mv` line with forward slashes; a path Windows resolved keeps its backslashes, as before.

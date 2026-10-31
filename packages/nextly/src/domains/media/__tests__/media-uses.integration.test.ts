@@ -1,0 +1,319 @@
+/**
+ * Where an item is used, read over the admin's media route on every dialect:
+ * one item used by an upload field, a rich-text image, a block document and
+ * an email template is listed once per document, with the fields that use it
+ * and the languages that do; a reader who may not read one collection is
+ * told how many of its documents use the item, and nothing else about them.
+ */
+
+// Set before the harness boots (env validation reads it once).
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { randomUUID } from "node:crypto";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { createMediaHandlers } from "../../../api/media-handlers";
+import {
+  defineCollection,
+  json,
+  richText,
+  text,
+  upload,
+} from "../../../config";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { ServiceContainer } from "../../../services/index";
+import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
+
+type Doc = Record<string, unknown>;
+
+const ITEM = { id: randomUUID(), url: "/uploads/2026/10/uses-logo.png" };
+
+/** A rich-text value showing one image, by its address. */
+function imageText(url: string): Doc {
+  return {
+    root: {
+      type: "root",
+      version: 1,
+      children: [{ type: "image", version: 1, src: url, altText: "" }],
+    },
+  };
+}
+
+/** The ids of these seeded grants, seeding the system ones first. */
+async function grantIds(t: TestNextly, slugs: string[]): Promise<string[]> {
+  const nextly = t.nextly as unknown as {
+    permissions: {
+      find: (a: { page: number; limit: number }) => Promise<{
+        items: { id: string; slug: string }[];
+        meta: { hasNext: boolean };
+      }>;
+    };
+  };
+  await (
+    t.getService("permissionSeedService") as {
+      seedSystemPermissions: () => Promise<unknown>;
+    }
+  ).seedSystemPermissions();
+  const seeded: { id: string; slug: string }[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed = await nextly.permissions.find({ page, limit: 100 });
+    seeded.push(...listed.items);
+    if (!listed.meta.hasNext) break;
+  }
+  return slugs.map(slug => {
+    const found = seeded.find(p => p.slug === slug);
+    expect(found, `\`${slug}\` must be seeded`).toBeDefined();
+    return found!.id;
+  });
+}
+
+/** An API key of a role holding exactly these grants, for a plain user. */
+async function keyWith(t: TestNextly, grants: string[]): Promise<string> {
+  const userId = await seedPlainAuthor(t);
+  const slug = `uses-reader-${randomUUID().slice(0, 8)}`;
+  const role = await (
+    t.nextly as unknown as {
+      roles: {
+        create: (a: { data: Record<string, unknown> }) => Promise<{
+          item: { id: string };
+        }>;
+      };
+    }
+  ).roles.create({
+    data: { name: slug, slug, permissionIds: await grantIds(t, grants) },
+  });
+  await new ServiceContainer(t.adapter).userRoles.assignRoleToUser(
+    userId,
+    role.item.id
+  );
+  const apiKeys = t.getService("apiKeyService") as unknown as {
+    createApiKey: (
+      userId: string,
+      input: {
+        name: string;
+        tokenType: string;
+        roleId?: string;
+        expiresIn: string;
+      }
+    ) => Promise<{ key: string }>;
+  };
+  const { key } = await apiKeys.createApiKey(userId, {
+    name: slug,
+    tokenType: "role-based",
+    roleId: role.item.id,
+    expiresIn: "unlimited",
+  });
+  return key;
+}
+
+/** `GET /admin/api/media/:id/usage` as the holder of `key`. */
+async function usageOf(
+  key: string,
+  mediaId: string
+): Promise<{ status: number; json: Doc }> {
+  const path = [mediaId, "usage"];
+  const res = await createMediaHandlers({ requireAuth: true }).GET(
+    new Request(`http://localhost/admin/api/media/${path.join("/")}`, {
+      headers: { authorization: `Bearer ${key}` },
+    }),
+    { params: Promise.resolve({ path }) }
+  );
+  return { status: res.status, json: (await res.json()) as Doc };
+}
+
+describe.each(getConfiguredTestDialects())(
+  "where a media item is used (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let postId: string;
+    let secretId: string;
+    let templateId: string;
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: {
+          locales: ["en", "es"],
+          defaultLocale: "en",
+          fallback: false,
+        },
+        collections: [
+          defineCollection({
+            slug: "usesposts",
+            labels: { singular: "Post", plural: "Posts" },
+            localized: true,
+            fields: [
+              text({ name: "title" }),
+              upload({ name: "cover", relationTo: "media" }),
+              richText({ name: "body", localized: true }),
+              json({ name: "layout" }),
+            ],
+          }),
+          defineCollection({
+            slug: "usessecrets",
+            labels: { singular: "Secret", plural: "Secrets" },
+            fields: [
+              text({ name: "title" }),
+              upload({ name: "image", relationTo: "media" }),
+            ],
+          }),
+        ],
+      });
+      await t.adapter.insert("media", {
+        id: ITEM.id,
+        filename: ITEM.url.slice("/uploads/".length),
+        originalFilename: "logo.png",
+        mimeType: "image/png",
+        size: 1,
+        url: ITEM.url,
+        uploadedAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const handler = t.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "usesposts", overrideAccess: true, locale: "en" },
+        {
+          title: "Launch",
+          cover: ITEM.id,
+          body: imageText(ITEM.url),
+          // A block document, which lists the items it uses.
+          layout: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [],
+            assets: { mediaIds: [ITEM.id] },
+          },
+        }
+      );
+      postId = String((created.data as { id?: unknown }).id);
+      const secret = await handler.createEntry(
+        { collectionName: "usessecrets", overrideAccess: true },
+        { title: "Hidden", image: ITEM.id }
+      );
+      secretId = String((secret.data as { id?: unknown }).id);
+
+      const template = await t
+        .getService("emailTemplateService")
+        .createTemplate({
+          name: "Welcome",
+          slug: `uses-welcome-${dialect}`,
+          subject: "Hello",
+          htmlContent: "<p>Hi</p>",
+          attachments: [{ mediaId: ITEM.id }],
+        });
+      templateId = template.id;
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("lists every document using the item, with its fields and languages", async () => {
+      const key = await keyWith(t, [
+        "read-media",
+        "read-usesposts",
+        "read-usessecrets",
+        "read-email-templates",
+      ]);
+      const { status, json: body } = await usageOf(key, ITEM.id);
+
+      expect(status).toBe(200);
+      expect(body.items).toEqual([
+        {
+          kind: "collection",
+          slug: "usesposts",
+          documentId: postId,
+          title: "Launch",
+          owner: "Posts",
+          fields: [
+            // The translated rich text uses it in English alone.
+            {
+              path: "body",
+              locales: ["en"],
+              byAddress: true,
+              showsPreviousFile: false,
+            },
+            {
+              path: "cover",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+            {
+              path: "layout",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+          ],
+        },
+        {
+          kind: "collection",
+          slug: "usessecrets",
+          documentId: secretId,
+          title: "Hidden",
+          owner: "Secrets",
+          fields: [
+            {
+              path: "image",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+          ],
+        },
+        {
+          kind: "email-template",
+          slug: "",
+          documentId: templateId,
+          title: "Welcome",
+          owner: "Email templates",
+          fields: [
+            {
+              path: "attachments",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+          ],
+        },
+      ]);
+      expect(body.meta).not.toHaveProperty("hidden");
+    });
+
+    it("counts the documents a reader may not read, naming none of them", async () => {
+      const key = await keyWith(t, ["read-media", "read-usesposts"]);
+      const { status, json: body } = await usageOf(key, ITEM.id);
+
+      expect(status).toBe(200);
+      expect(
+        (body.items as Doc[]).map(item => [item.slug, item.documentId])
+      ).toEqual([["usesposts", postId]]);
+      expect((body.meta as Doc).hidden).toEqual([
+        { scopeKind: "collection", scopeSlug: "usessecrets", count: 1 },
+        { scopeKind: "email-template", scopeSlug: "", count: 1 },
+      ]);
+      const sent = JSON.stringify(body);
+      expect(sent).not.toContain(secretId);
+      expect(sent).not.toContain("Hidden");
+      expect(sent).not.toContain("Welcome");
+    });
+
+    it("refuses a caller who may not read media, and answers an unknown item as not found", async () => {
+      const noMedia = await keyWith(t, ["read-usesposts"]);
+      expect((await usageOf(noMedia, ITEM.id)).status).toBe(403);
+
+      const reader = await keyWith(t, ["read-media"]);
+      expect((await usageOf(reader, randomUUID())).status).toBe(404);
+    });
+  }
+);

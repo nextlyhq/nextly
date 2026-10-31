@@ -35,6 +35,7 @@ const OWNER = 'plugin "forms"';
 function snapshot(attention: unknown, owner = OWNER): PluginDashboardSnapshot {
   return {
     owner,
+    plugin: "forms",
     widgets: [],
     suggest: undefined,
     alternatives: undefined,

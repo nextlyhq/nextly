@@ -160,6 +160,54 @@ describe("plugin-sdk public export surface", () => {
     expect(published.filter(({ name }) => removed.has(name))).toEqual([]);
   });
 
+  it("publishes none of the older widget shape's names", () => {
+    // Held by name beside the snapshots, as the doors above are: a widget is
+    // declared with `defineWidget` and drawn by its `view`, so the definition
+    // it was written as, the archetypes that drew it, the stats card's cells,
+    // the contributed family, and the props a component drew a query's answer
+    // with may not come back on any published subpath.
+    const removed = new Set([
+      "WidgetDefinition",
+      "WIDGET_ARCHETYPES",
+      "WidgetArchetype",
+      "DataWidgetArchetype",
+      "QuerylessWidgetArchetype",
+      "CellWidgetArchetype",
+      "DeclarativeWidgetArchetype",
+      "WidgetStatCell",
+      "WidgetQueryCell",
+      "WidgetAction",
+      "WidgetPatch",
+      "PluginAdminWidget",
+      "PluginAdminCustomWidget",
+      "PluginAdminDataWidget",
+      "PluginAdminStatsWidget",
+      "PluginAdminDeclarativeWidget",
+      "PluginAdminQuerylessWidget",
+      "CoreDisplay",
+      "ComponentDisplay",
+      "WidgetDisplay",
+      "getWidget",
+      "listWidgets",
+      "WidgetComponentProps",
+      "WidgetSlot",
+      "WidgetQueryBatchResponse",
+    ]);
+    const published = PUBLISHED_FILES.flatMap(file =>
+      exportedNames(file).map(entry => ({
+        file,
+        name: entry.replace(/ \((?:value|type)\)$/, ""),
+      }))
+    );
+    // The control: the same read finds what replaced them.
+    expect(published).toContainEqual({ file: "index.ts", name: "WidgetView" });
+    expect(published).toContainEqual({
+      file: "widgets.ts",
+      name: "WidgetProps",
+    });
+    expect(published.filter(({ name }) => removed.has(name))).toEqual([]);
+  });
+
   it("snapshots every subpath the package publishes", () => {
     // A subpath added to `exports` without a snapshot here fails this, so
     // the surface it publishes is reviewed like every other one.
