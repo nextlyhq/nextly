@@ -42,7 +42,7 @@ import {
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
 import type {
   MediaLibraryCounts,
-  MediaUsageQueryTable,
+  UnusedSources,
 } from "../domains/media/media-library-query";
 import {
   errorForLog,
@@ -214,16 +214,23 @@ export class MediaService extends BaseService {
   }
 
   /**
-   * The usage table, or `null` before `nextly migrate` has created it. Asked
-   * on the pool: nothing here runs inside a caller's transaction.
+   * What decides which items are unused: the usage table and the records
+   * outside content that keep an item by its address. `null` before
+   * `nextly migrate` has created the usage table. Asked on the pool: nothing
+   * here runs inside a caller's transaction.
    */
-  private async usageTable(): Promise<MediaUsageQueryTable | null> {
+  private async unusedSources(): Promise<UnusedSources | null> {
     // Loaded when the library is read, not with the service.
-    const { mediaUsagePresent } = await import(
-      "../domains/media/usage/media-usage-store"
-    );
-    const present = await mediaUsagePresent(this.adapter, this.logger);
-    return present ? this.tables.nextlyMediaUsage : null;
+    const [{ mediaUsagePresent }, { mediaAddressHolders }] = await Promise.all([
+      import("../domains/media/usage/media-usage-store"),
+      import("../domains/media/media-address-holders"),
+    ]);
+    if (!(await mediaUsagePresent(this.adapter, this.logger))) return null;
+    return {
+      usage: this.tables.nextlyMediaUsage,
+      holders: await mediaAddressHolders(this.adapter, this.tables),
+      dialect: this.adapter.getCapabilities().dialect,
+    };
   }
 
   /**
@@ -239,7 +246,7 @@ export class MediaService extends BaseService {
    */
   async countLibrary(): Promise<MediaLibraryCounts> {
     const { media, nextlyMeta } = this.tables;
-    const usage = await this.usageTable();
+    const unused = await this.unusedSources();
     // Loaded when the library is read, not with the service.
     const [
       { mediaLibraryCountsOf, missingAltText, unusedItem },
@@ -255,10 +262,10 @@ export class MediaService extends BaseService {
         missingAlt: sql<
           number | string | null
         >`SUM(CASE WHEN ${missingAltText(media)} THEN 1 ELSE 0 END)`,
-        unused: usage
+        unused: unused
           ? sql<
               number | string | null
-            >`SUM(CASE WHEN ${unusedItem(media, usage)} THEN 1 ELSE 0 END)`
+            >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
           : sql<number>`0`,
         // At most one marker row joins each item, so it multiplies nothing.
         recorded: sql<
@@ -268,7 +275,7 @@ export class MediaService extends BaseService {
       .from(media)
       .leftJoin(nextlyMeta, eq(nextlyMeta.key, MEDIA_USAGE_RECORDED_KEY))
       .groupBy(media.folderId);
-    return mediaLibraryCountsOf(groups, usage !== null);
+    return mediaLibraryCountsOf(groups, unused !== null);
   }
 
   /**
@@ -298,7 +305,7 @@ export class MediaService extends BaseService {
       );
       const whereClause = mediaQueryCondition(
         media,
-        view === "unused" ? await this.usageTable() : null,
+        view === "unused" ? await this.unusedSources() : null,
         { folderId, search, type, view }
       );
 

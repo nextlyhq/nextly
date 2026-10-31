@@ -123,9 +123,37 @@ function subjectWhere(subject: UsageSubject): {
 }
 
 /**
+ * The forms an address may name an item's own address in: itself, and for an
+ * absolute address its path, since content may hold an item's address made
+ * absolute against the site (an email's `<img>`, a pasted link) while the
+ * library gives it out as `/uploads/...`. A path that names an item on
+ * another host as well only keeps that item recorded, never drops a use.
+ */
+function addressForms(url: string): string[] {
+  let path: string;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return [url];
+    }
+    path = parsed.pathname;
+  } catch {
+    return [url];
+  }
+  let decoded = path;
+  try {
+    decoded = decodeURI(path);
+  } catch {
+    // A malformed escape: the path as it is.
+  }
+  return [...new Set([url, path, decoded])];
+}
+
+/**
  * Which of the ids and addresses name a media item, and which item each
- * names: the ids found, and each address's items. A reference to something
- * that is not an item, or no longer is, records nothing.
+ * names: the ids found, and each address's items, in any of its forms
+ * (`addressForms`). A reference to something that is not an item, or no
+ * longer is, records nothing.
  */
 async function resolveItems(
   db: UsageDb,
@@ -135,7 +163,9 @@ async function resolveItems(
   const wantedIds = [
     ...new Set(refs.flatMap(r => (r.mediaId ? [r.mediaId] : []))),
   ];
-  const wantedUrls = [...new Set(refs.flatMap(r => (r.url ? [r.url] : [])))];
+  const wantedUrls = [
+    ...new Set(refs.flatMap(r => (r.url ? addressForms(r.url) : []))),
+  ];
   const ids = new Set<string>();
   const byUrl = new Map<string, string[]>();
   // Each id or address is one bound value.
@@ -192,7 +222,7 @@ export async function replaceDocumentUsage(
       ? ids.has(ref.mediaId)
         ? [ref.mediaId]
         : []
-      : (byUrl.get(ref.url ?? "") ?? []);
+      : addressForms(ref.url ?? "").flatMap(form => byUrl.get(form) ?? []);
     for (const mediaId of items) {
       const key = JSON.stringify([ref.fieldPath, ref.locale, mediaId]);
       if (rows.has(key)) continue;

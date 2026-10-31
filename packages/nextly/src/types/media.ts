@@ -117,7 +117,8 @@ export type MediaParams = z.infer<typeof MediaParamsSchema>;
 
 /**
  * The views beside the folders. `missing-alt` is the images with no alt text;
- * `unused` is the items the usage record finds no document using.
+ * `unused` is the items the usage record finds no document using and no
+ * avatar or logo keeps.
  */
 const MEDIA_VIEWS = ["missing-alt", "unused"] as const;
 export type MediaView = (typeof MEDIA_VIEWS)[number];

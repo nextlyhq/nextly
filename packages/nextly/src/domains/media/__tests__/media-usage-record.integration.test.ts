@@ -912,6 +912,7 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               upload({ name: "gallery", relationTo: "media", hasMany: true }),
               deepGroups(6),
+              json({ name: "fonts" }),
             ],
           }),
           defineCollection({
@@ -1074,6 +1075,30 @@ describe.each(getConfiguredTestDialects())(
           ["promo.image", "", P.id],
           ["promo.blurb", "en", Q.id],
         ])
+      );
+    });
+
+    // Content may name an item by its media route, as a Page Builder font
+    // face does, or by its address made absolute against the site, as an
+    // email's image must: either is a use.
+    it("records an item named by its media route or by an absolute address", async () => {
+      const id = await create("usagewide", {
+        fonts: [{ family: "Brand", src: [{ url: `/api/media/${P.id}/raw` }] }],
+      });
+      expect(await recordedFor(t, "collection", "usagewide", id)).toEqual(
+        expected("collection", "usagewide", id, [["fonts", "", P.id]])
+      );
+
+      const template = await t
+        .getService("emailTemplateService")
+        .createTemplate({
+          name: "Absolute",
+          slug: `usage-absolute-${dialect}`,
+          subject: "Hello",
+          htmlContent: `<img src="https://site.test${Q.url}">`,
+        });
+      expect(await recordedFor(t, "email-template", "", template.id)).toEqual(
+        expected("email-template", "", template.id, [["htmlContent", "", Q.id]])
       );
     });
 
@@ -1305,6 +1330,94 @@ describe.each(getConfiguredTestDialects())(
       expect(await recordedFor(t, "collection", "usagekeptposts", id)).toEqual(
         both
       );
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a media item a user's avatar or a logo keeps (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    const SITE = "https://site.test";
+    /** Kept by an avatar, the email logo, the site's logo and its dark one. */
+    const [avatar, brand, siteLogo, darkLogo, loose] = Array.from(
+      { length: 5 },
+      (_, i) => ({
+        id: randomUUID(),
+        url: `/uploads/2026/10/kept_${i}.png`,
+      })
+    );
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        collections: [],
+      });
+      for (const item of [avatar, brand, siteLogo, darkLogo, loose]) {
+        await t.adapter.insert("media", {
+          id: item.id,
+          filename: item.url.slice("/uploads/".length),
+          originalFilename: "kept.png",
+          mimeType: "image/png",
+          size: 1,
+          url: item.url,
+          uploadedAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+      await t.getService("metaService").set(MEDIA_USAGE_RECORDED_KEY, {
+        rebuiltAt: new Date().toISOString(),
+      });
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    const media = () => t.getService("mediaService");
+
+    async function unusedIds(): Promise<string[]> {
+      const listed = await media().listMedia(
+        { view: "unused", limit: 100 },
+        {}
+      );
+      expect(listed.pagination.total).toBe(listed.data.length);
+      return listed.data.map(file => file.id).sort();
+    }
+
+    // None of these is a document the usage record covers, so the view
+    // asks them itself: a person may delete what it lists.
+    it("never lists or counts an item an avatar or a logo keeps as unused", async () => {
+      // Kept by nothing yet, every item is unused: the view reaches them.
+      expect(await unusedIds()).toEqual(
+        [avatar, brand, siteLogo, darkLogo, loose].map(i => i.id).sort()
+      );
+      expect((await media().countLibrary({})).unused).toBe(5);
+
+      // An avatar keeps the address as the library gave it out.
+      await t.adapter.insert("users", {
+        id: `avatar-${dialect}`,
+        email: `avatar-${dialect}@test.local`,
+        image: avatar.url,
+      });
+      // The email logo keeps it made absolute against the site.
+      await t.adapter.insert("email_brand", {
+        id: "default",
+        logoUrl: `${SITE}${brand.url}`,
+        updatedAt: new Date(),
+      });
+      // The site's logos, typed in as addresses.
+      await t
+        .getService("generalSettingsService")
+        .updateSettings({ logoUrl: `${SITE}${siteLogo.url}` });
+      await t.adapter.update(
+        "site_settings",
+        { logoUrlDark: `${SITE}${darkLogo.url}` },
+        { and: [{ column: "id", op: "IS NOT NULL" }] }
+      );
+
+      expect(await unusedIds()).toEqual([loose.id]);
+      expect((await media().countLibrary({})).unused).toBe(1);
     });
   }
 );

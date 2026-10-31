@@ -137,6 +137,43 @@ describe("collectMediaReferences", () => {
     ]);
   });
 
+  it("reads a JSON value's addresses, and an item named by its media route by id", () => {
+    // A Page Builder site style keeps its font files this way.
+    const fonts = [
+      {
+        family: "Brand",
+        src: [{ url: `/api/media/${ID_1}/raw`, format: "woff2" }],
+        weight: 400,
+      },
+    ];
+    const settings = {
+      id: ID_2,
+      image: { url: "/uploads/2026/10/og.png" },
+      label: "/uploads/not-an-address.png",
+    };
+    const fields = [
+      f({ type: "json", name: "fonts" }),
+      f({ type: "json", name: "settings" }),
+      f({ type: "richText", name: "body" }),
+    ];
+
+    expect(
+      collectMediaReferences(fields, {
+        fonts,
+        // As SQLite and MySQL return a JSON column.
+        settings: JSON.stringify(settings),
+        body: {
+          root: { children: [{ type: "image", src: `/api/media/${ID_2}` }] },
+        },
+      })
+    ).toEqual([
+      { fieldPath: "fonts", mediaId: ID_1 },
+      // Only what a `src` or `url` holds: not its own id, not any string.
+      { fieldPath: "settings", url: "/uploads/2026/10/og.png" },
+      { fieldPath: "body", mediaId: ID_2 },
+    ]);
+  });
+
   it("names a nested field by its containers, without positions", () => {
     const fields = [
       f({

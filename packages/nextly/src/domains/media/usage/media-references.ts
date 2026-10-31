@@ -12,6 +12,8 @@
  *     gallery node's `src`, never its id;
  *   - a block document (the value of a `blocks` field) lists the items it uses
  *     in `assets.mediaIds`, written with it; one that has no list is walked;
+ *     any other JSON value is read for the addresses it holds under `src` or
+ *     `url`, as a Page Builder font face holds its file;
  *   - a group, a repeater or a field group holds any of these inside it.
  *
  * What is found here is a candidate: an id or an address. Which candidates
@@ -65,6 +67,20 @@ export type FieldGroupSchemas = ReadonlyMap<
  */
 const ID_SHAPE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The media route an address may name an item by instead of the file's own
+ * address (`/api/media/<id>/raw`), as a Page Builder font face does: the
+ * item's id, read from it.
+ */
+const MEDIA_ROUTE =
+  /\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=[/?#]|$)/i;
+
+/** What an address refers to: the item its media route names, or itself. */
+function addressReference(url: string, fieldPath: string): MediaReference {
+  const routed = MEDIA_ROUTE.exec(url);
+  return routed ? { fieldPath, mediaId: routed[1] } : { fieldPath, url };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -166,7 +182,7 @@ function blockStringReference(
   inNode: boolean,
   fieldPath: string
 ): MediaReference | null {
-  if (key === "src" || key === "url") return { fieldPath, url: value };
+  if (key === "src" || key === "url") return addressReference(value, fieldPath);
   if (inNode && key === "id") return null;
   return ID_SHAPE.test(value) ? { fieldPath, mediaId: value } : null;
 }
@@ -205,6 +221,32 @@ function blockDocumentReferences(
     }
   };
   walk(document.nodes, null, false);
+}
+
+/**
+ * What a JSON value that is not a block document names: each address under a
+ * `src` or `url` key, however deep. Nothing else in it is read, so a list of
+ * a value's own ids is not taken for items.
+ */
+function jsonAddressReferences(
+  value: unknown,
+  fieldPath: string,
+  into: MediaReference[]
+): void {
+  const walk = (node: unknown, key: string | null): void => {
+    if (typeof node === "string") {
+      if ((key === "src" || key === "url") && node !== "") {
+        into.push(addressReference(node, fieldPath));
+      }
+    } else if (Array.isArray(node)) {
+      for (const item of node) walk(item, key);
+    } else if (isRecord(node)) {
+      for (const [childKey, child] of Object.entries(node)) {
+        walk(child, childKey);
+      }
+    }
+  };
+  walk(value, null);
 }
 
 /** The child fields of a group or repeater. */
@@ -257,7 +299,7 @@ const collectUpload: FieldCollector = (field, raw, path, _schemas, into) => {
 const collectRichText: FieldCollector = (_field, raw, path, _schemas, into) => {
   const urls: string[] = [];
   richTextUrls(parsed(raw), urls);
-  for (const url of urls) into.push({ fieldPath: path, url });
+  for (const url of urls) into.push(addressReference(url, path));
 };
 
 const collectGroup: FieldCollector = (field, raw, path, schemas, into) => {
@@ -286,8 +328,9 @@ const collectFieldGroup: FieldCollector = (field, raw, path, schemas, into) => {
 };
 
 /**
- * A `blocks` field, or any field a plugin contributes, whose value is a
- * block document. Any other value refers to nothing.
+ * A `blocks` field, a `json` field, or any field a plugin contributes: a
+ * block document by its own account, any other JSON value by the addresses
+ * it holds. A plain value refers to nothing.
  */
 const collectBlockDocument: FieldCollector = (
   _field,
@@ -297,7 +340,11 @@ const collectBlockDocument: FieldCollector = (
   into
 ) => {
   const value = parsed(raw);
-  if (isBlockDocument(value)) blockDocumentReferences(value, path, into);
+  if (isBlockDocument(value)) {
+    blockDocumentReferences(value, path, into);
+  } else if (isRecord(value) || Array.isArray(value)) {
+    jsonAddressReferences(value, path, into);
+  }
 };
 
 const COLLECTORS: Readonly<Record<string, FieldCollector>> = {
