@@ -829,6 +829,25 @@ export function AddWidgetPanel({
                 ))}
               </ul>
             )
+          ) : nothingFound && !searching ? (
+            // A chip with nothing under it, before any search: nothing to match, so no Clear.
+            <div
+              className="space-y-2 text-sm text-muted-foreground"
+              data-testid="add-panel-chip-empty"
+            >
+              <p className="font-medium text-foreground">
+                No {GALLERY_CHIPS.find(each => each.id === chip)?.label} widgets
+                to add.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setChip("all")}
+              >
+                Show all widgets
+              </Button>
+            </div>
           ) : nothingFound ? (
             <div
               className="space-y-2 text-sm text-muted-foreground"

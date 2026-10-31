@@ -388,11 +388,13 @@ for (const theme of ["light", "dark"] as Theme[]) {
 
       await expectNoAxeViolations(page);
 
-      // WCAG 2.5.8's minimum, measured on every control the panel draws.
+      // WCAG 2.5.8's minimum, measured on every control the panel draws that a reader can use:
+      // a tile's preview is an inert picture of its card, whose controls nobody can reach.
       const small = await panel
         .locator("button:visible, input:visible")
         .evaluateAll(controls =>
           controls.flatMap(control => {
+            if (control.closest("[inert]")) return [];
             const box = control.getBoundingClientRect();
             return box.width < 24 || box.height < 24
               ? [

@@ -299,6 +299,27 @@ describe("the chips", () => {
     await user.click(screen.getByRole("button", { name: "All" }));
     expect(tileNames()).toHaveLength(4);
   });
+
+  it("says a chip has nothing to add, rather than that a search matched nothing", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      gallery: {
+        read: { ...READ, tiles: TILES.filter(t => t.category !== "plugins") },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Plugins" }));
+    expect(screen.getByTestId("add-panel-chip-empty")).toHaveTextContent(
+      "No Plugins widgets to add."
+    );
+    expect(screen.queryByTestId("add-panel-none")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Show all widgets" }));
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+  });
 });
 
 describe("searching", () => {

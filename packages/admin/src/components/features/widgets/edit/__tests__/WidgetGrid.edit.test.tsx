@@ -1036,7 +1036,7 @@ describe("adding a widget", () => {
     );
   });
 
-  it("rings the card just added, and closing sends focus to its menu", async () => {
+  it("rings the card just added, scrolls it into view, and closing sends focus to its menu", async () => {
     mockBranding = branding(["core/a", "core/d"]);
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
       available: ["core/d"],
@@ -1046,10 +1046,18 @@ describe("adding a widget", () => {
     const user = await beginEditing();
 
     await openAddPanel(user);
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
     await user.click(screen.getByTestId("add-panel-add-core/d"));
     expect(screen.getByTestId("widget-cell-core/d")).toHaveAttribute(
       "data-highlighted"
     );
+    // Brought into view while the panel stays open, focus still in it.
+    await waitFor(() =>
+      expect(scrolled.mock.contexts).toContain(
+        screen.getByTestId("widget-cell-core/d")
+      )
+    );
+    scrolled.mockRestore();
     expect(screen.getByTestId("widget-cell-core/a")).not.toHaveAttribute(
       "data-highlighted"
     );

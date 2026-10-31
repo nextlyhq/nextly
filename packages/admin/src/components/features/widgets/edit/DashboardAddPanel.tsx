@@ -22,6 +22,7 @@ import { titleAsAsked } from "../widget-as-asked";
 
 import type { GalleryRead } from "./add-panel-model";
 import { AddWidgetPanel, type AddedCard } from "./AddWidgetPanel";
+import { CELL_PLACEMENT_ATTRIBUTE } from "./drag/cell-placement";
 import type { DashboardFocus } from "./useDashboardFocus";
 import type { LayoutEditor } from "./useLayoutEditor";
 
@@ -83,8 +84,8 @@ function useDashboardGallery(open: boolean) {
 
 /**
  * Brings the card just added into view once it is drawn, without moving focus out of the panel:
- * the card is found by its placement id, the id the arranged cell carries, after the render that
- * draws it.
+ * the card is found by the placement its cell carries (`CELL_PLACEMENT_ATTRIBUTE`), after the
+ * render that draws it.
  */
 function useScrollIntoView(): (placementId: string) => void {
   const pending = useRef<string | null>(null);
@@ -94,7 +95,9 @@ function useScrollIntoView(): (placementId: string) => void {
   useEffect(() => {
     const id = pending.current;
     if (id === null) return;
-    const card = document.getElementById(id);
+    const card = document.querySelector(
+      `[${CELL_PLACEMENT_ATTRIBUTE}="${CSS.escape(id)}"]`
+    );
     if (card === null) return;
     pending.current = null;
     // `nearest`, so a card already in view does not jump.
