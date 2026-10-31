@@ -42,8 +42,11 @@ interface WriteOutcome {
 }
 
 export interface SetupStateWrite {
-  /** Collapses or expands the card; `onFailed` runs when the write fails. */
-  setCollapsed: (collapsed: boolean, onFailed?: OnFailed) => void;
+  /**
+   * Collapses or expands the card; `onDone` runs once the write lands (the card's data is asked
+   * for again then), `onFailed` when it fails.
+   */
+  setCollapsed: (collapsed: boolean, outcome?: WriteOutcome) => void;
   dismiss: () => void;
   setSkipped: (kind: SkippableSetupStepKind, skipped: boolean) => void;
   /**
@@ -57,6 +60,11 @@ export interface SetupStateWrite {
   isWriting: boolean;
   /** The last write that failed, said in words; cleared by the next write. */
   failed: string | undefined;
+  /**
+   * Forgets the last write's failure, so it is not said: for a write the reader did not make,
+   * such as the card's own request to record "You're all set", which the host may refuse.
+   */
+  clearFailure: () => void;
 }
 
 /**
@@ -89,8 +97,8 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     [mutate]
   );
   const setCollapsed = useCallback(
-    (collapsed: boolean, onFailed?: OnFailed) =>
-      send({ collapsed }, onFailed === undefined ? {} : { onFailed }),
+    (collapsed: boolean, outcome?: WriteOutcome) =>
+      send({ collapsed }, outcome),
     [send]
   );
   const dismiss = useCallback(() => mutate({ dismissed: true }), [mutate]);
@@ -110,6 +118,7 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     setSkipped,
     retire,
     isWriting: mutation.isPending,
+    clearFailure: mutation.reset,
     failed: mutation.isError
       ? "That change could not be saved. Try again."
       : undefined,
