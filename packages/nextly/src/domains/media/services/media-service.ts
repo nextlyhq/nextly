@@ -81,9 +81,12 @@ import {
   isImageMimeType,
   UpdateMediaInputSchema,
   validateFileSize,
+  type MediaPageQuery,
   type MediaParams,
+  type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import type { MediaLibraryCounts } from "../media-library-query";
 import { withMediaRevalidationBatch } from "../revalidate-media";
 import type {
   MediaFile,
@@ -549,12 +552,13 @@ export class MediaService {
     const page = options.page ?? 1;
     const limit = options.limit ?? 24;
 
-    const queryParams: MediaParams = {
+    const queryParams: MediaParams & { view?: MediaView } = {
       page,
       limit,
       search: options.search,
       type: options.type,
       folderId: options.folderId,
+      view: options.view,
       sortBy: options.sortBy ?? "uploadedAt",
       sortOrder: options.sortOrder ?? "desc",
     };
@@ -578,6 +582,14 @@ export class MediaService {
         hasMore: offset + files.length < total,
       },
     };
+  }
+
+  /**
+   * The media library sidebar's counts: every folder's items and each view's,
+   * read from the database in one query.
+   */
+  async countLibrary(_context: RequestContext): Promise<MediaLibraryCounts> {
+    return this.legacyMediaService.countLibrary();
   }
 
   /**
@@ -1134,11 +1146,16 @@ export class MediaService {
    */
   async getFolderContents(
     folderId: string | null,
-    _context: RequestContext
+    _context: RequestContext,
+    /** Which page of its items, and how they are narrowed and sorted. */
+    query: Partial<MediaPageQuery> = {}
   ): Promise<FolderContents> {
     this.logger.debug("Getting folder contents", { folderId });
 
-    const result = await this.legacyFolderService.getFolderContents(folderId);
+    const result = await this.legacyFolderService.getFolderContents(
+      folderId,
+      query
+    );
 
     if (!result.success || !result.data) {
       // One throw. The converter answers a code-less 404 with the same generic
@@ -1157,6 +1174,7 @@ export class MediaService {
         this.mapToMediaFile(m)
       ),
       breadcrumbs: result.data.breadcrumbs,
+      meta: result.data.meta,
     };
   }
 

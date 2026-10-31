@@ -378,6 +378,28 @@ async function seedHistory(
     entryId: kind === "collection" ? entryId : "",
     pinnedAt: now,
   });
+  // A use of a media item by the document, recorded against its slug: a
+  // Single's names its slug alone.
+  const mediaId = randomUUID();
+  await adapter.insert("media", {
+    id: mediaId,
+    filename: `${mediaId}.png`,
+    originalFilename: "used.png",
+    mimeType: "image/png",
+    size: 1,
+    url: `/uploads/${mediaId}.png`,
+    uploadedAt: now,
+    updatedAt: now,
+  });
+  await adapter.insert("nextly_media_usage", {
+    id: randomUUID(),
+    mediaId,
+    subjectKind: kind,
+    subjectSlug: slug,
+    documentId: kind === "collection" ? entryId : "",
+    fieldPath: "image",
+    locale: "",
+  });
   return { releaseId: release.id };
 }
 

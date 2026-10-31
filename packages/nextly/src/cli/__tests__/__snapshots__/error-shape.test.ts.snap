@@ -796,6 +796,13 @@ exports[`each code, as a command ends with it > MEDIA_CONFIG_OUTSIDE_PROJECT 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/media-config-outside-project  (MEDIA_CONFIG_OUTSIDE_PROJECT)"
 `;
 
+exports[`each code, as a command ends with it > MEDIA_REINDEX_OUTSIDE_PROJECT 1`] = `
+"✗ Nothing was rebuilt: the command was run from outside /home/you/app.
+  Why:  The database settings were read before --cwd named /home/you/app, so they may be another project's.
+  Next: Run the command from /home/you/app to rebuild its record.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-reindex-outside-project  (MEDIA_REINDEX_OUTSIDE_PROJECT)"
+`;
+
 exports[`each code, as a command ends with it > MEDIA_STORAGE_UNLISTABLE 1`] = `
 "✗ The media storage (uploadthing) cannot list its files, so it cannot be searched for left-behind thumbnails.
   Why:  The uploadthing storage adapter offers no listing of the files it holds. Nothing was changed.
