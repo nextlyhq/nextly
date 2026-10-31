@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { post } = vi.hoisted(() => ({ post: vi.fn() }));
+const { post, debugLog } = vi.hoisted(() => ({
+  post: vi.fn(),
+  debugLog: vi.fn(),
+}));
 vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: { post } }));
+// Watched rather than silenced: an unexpected answer is said here, at debug
+// level, and never as a console error.
+vi.mock("@admin/lib/debug", () => ({ debugLog }));
 
 import { seedApi } from "../seedApi";
 
@@ -16,6 +22,7 @@ describe("seedApi", () => {
     global.fetch = originalFetch;
     vi.restoreAllMocks();
     post.mockReset();
+    debugLog.mockReset();
   });
 
   describe("probe", () => {
@@ -73,6 +80,16 @@ describe("seedApi", () => {
       [401, "no session", {}],
       [403, "a person the route refuses", {}],
       [404, "no sample-content route in this project", {}],
+      [400, "an admin API that refuses a path it does not serve", {}],
+      [405, "a route that does not answer HEAD", {}],
+      [410, "a route that is gone", {}],
+      [501, "a server that does not implement HEAD", {}],
+      // A 4xx that may not hold on the next ask stays not known, so the
+      // probe is asked again rather than hiding the offer for good.
+      [408, "a request that timed out", { unknown: true }],
+      [409, "a conflict that may clear", { unknown: true }],
+      [425, "too early", { unknown: true }],
+      [429, "too many requests", { unknown: true }],
       [500, "the route failing", { unknown: true }],
       [503, "the server still starting", { unknown: true }],
     ])(
@@ -91,6 +108,47 @@ describe("seedApi", () => {
         expect(await seedApi.probe()).toEqual({ available: false, ...extra });
       }
     );
+
+    // A 400 is what Nextly's admin API catch-all answered for a project with
+    // no sample-content route of its own, on every dashboard load. Read as
+    // "not known", the step stayed open as unreadable and was asked again on
+    // every read of the card.
+    it("reads a 400, the old catch-all's answer, as no offer, said once at debug level and never as a console error", async () => {
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      global.fetch = vi.fn(
+        async () => new Response(null, { status: 400 })
+      ) as unknown as typeof fetch;
+
+      expect(await seedApi.probe()).toEqual({ available: false });
+      expect(debugLog).toHaveBeenCalledTimes(1);
+      expect(debugLog).toHaveBeenCalledWith(
+        "seedApi",
+        expect.stringContaining("400")
+      );
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it("asks without the browser's cache, so a kept answer cannot hide a route added since", async () => {
+      const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      await seedApi.probe();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/api/seed",
+        expect.objectContaining({ method: "HEAD", cache: "no-store" })
+      );
+    });
+
+    it("says nothing at debug level for an answer the route's contract gives, or one asked again", async () => {
+      for (const status of [403, 404, 409, 429, 503]) {
+        global.fetch = vi.fn(
+          async () => new Response(null, { status })
+        ) as unknown as typeof fetch;
+        await seedApi.probe();
+      }
+      expect(debugLog).not.toHaveBeenCalled();
+    });
 
     it("refreshes an expired session before reading a 401 as a refusal, and offers once it answers", async () => {
       // A HEAD's 401 has no body to say the token expired: the probe refreshes, then asks again.
