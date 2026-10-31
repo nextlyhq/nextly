@@ -223,6 +223,8 @@ describe("the setup card", () => {
         expect.arrayContaining(["grid-flow-col", "overflow-x-auto"])
       );
       expect(classes).toContain("auto-cols-[minmax(max-content,1fr)]");
+      // Positioned, so a scrolled-away tile's screen-reader text stays inside the row's clip.
+      expect(classes).toContain("relative");
       // No rule that sets columns, at any width, so nothing can wrap the tiles onto a second row.
       expect(classes.filter(name => /(^|:)grid-cols-/.test(name))).toEqual([]);
       expect(classes.filter(name => name.startsWith("@"))).toEqual([]);

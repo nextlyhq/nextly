@@ -46,11 +46,14 @@ export const SETUP_ROW_BODY_PX = SETUP_BAR.px + SETUP_GAP.px + SETUP_TILE.px;
  *   scrolls sideways inside the card, a tile at a time, the next one cut by the card's edge to
  *   show there is more. Its scrollbar is not drawn, since the row has no height to spare for one:
  *   a tile's links and buttons scroll it into view as they take focus, and a touch or a trackpad
- *   scrolls it directly.
+ *   scrolls it directly;
+ * - positioned (`relative`), so what a tile holds for assistive technology alone (`sr-only`, placed
+ *   absolutely) is placed and clipped inside the row with its tile: unpositioned, the card's cell
+ *   would place it, and a tile scrolled out of view would carry it past the card's edge.
  */
 export const SETUP_ROW = {
   className:
-    "grid-flow-col auto-cols-[minmax(max-content,1fr)] overflow-x-auto overscroll-x-contain snap-x snap-proximity [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+    "relative grid-flow-col auto-cols-[minmax(max-content,1fr)] overflow-x-auto overscroll-x-contain snap-x snap-proximity [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
   tile: "snap-start",
 } as const;
 
