@@ -20,6 +20,7 @@ import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupDataService } from "../../services/field-groups/field-group-data-service";
+import { EXACT_STORED_LANGUAGE } from "../i18n/locale-selector";
 
 export interface ReadComponentSubtreesArgs {
   /** Absent when no component service is registered; the result is then empty. */
@@ -35,6 +36,11 @@ export interface ReadComponentSubtreesArgs {
    * another standing in for it. Undefined reads the default resolution.
    */
   locale?: string | undefined;
+  /**
+   * Read `locale` exactly as stored, whether or not the site has it active:
+   * for a reader that must see a language Settings removed and keeps.
+   */
+  exactLanguage?: boolean;
   /** Distinguishes the call sites in the thrown error's log context. */
   reason: string;
   logContext?: Record<string, unknown>;
@@ -66,6 +72,7 @@ export async function readComponentSubtrees({
   parentTable,
   fieldConfigs,
   locale,
+  exactLanguage = false,
   reason,
   logContext,
   onReadFailure,
@@ -87,7 +94,12 @@ export async function readComponentSubtrees({
       depth: 0,
       strict: true,
       ...(locale !== undefined
-        ? { locale, fallbackLocale: false as const }
+        ? {
+            locale,
+            fallbackLocale: exactLanguage
+              ? EXACT_STORED_LANGUAGE
+              : (false as const),
+          }
         : {}),
     });
     for (const f of componentFields) {

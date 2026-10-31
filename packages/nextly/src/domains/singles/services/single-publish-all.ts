@@ -846,7 +846,7 @@ export class SinglePublishAllService extends BaseService {
         adapter: this.adapter,
         logger: this.logger,
         fieldGroupDataService: this.fieldGroupDataService,
-        localization: this.localization,
+        localization: this.localizationSource,
       },
       {
         slug: plan.slug,

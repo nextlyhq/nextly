@@ -71,7 +71,11 @@ export interface StoredDocumentSource {
 export interface StoredUsageDeps {
   /** Absent when no field-group service is registered. */
   fieldGroupDataService: FieldGroupDataService | undefined;
-  /** The site's language codes; empty when it has no localization. */
+  /**
+   * Every language whose content the site keeps: the active ones and any
+   * removed in Settings and kept inactive (`storedLanguageCodes`). Empty when
+   * it has no localization.
+   */
   locales: readonly string[];
   /** The adapter's `maxParamsPerQuery`, which no statement passes. */
   maxParams: number;
@@ -168,6 +172,9 @@ async function fieldGroupReferences(
       parentTable: source.tableName,
       fieldConfigs: [...source.fields],
       locale: language,
+      // A removed language's instances are kept, and read as stored: what
+      // they use stays recorded until adding the language again shows them.
+      exactLanguage: true,
       reason: "media-usage-field-group-read",
       logContext: { kind: subject.kind, slug: subject.slug },
     });

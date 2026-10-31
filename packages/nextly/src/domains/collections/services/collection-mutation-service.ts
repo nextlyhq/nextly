@@ -212,6 +212,7 @@ import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
+  storedLanguageCodes,
 } from "../../i18n/localization-source";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
@@ -1295,7 +1296,7 @@ export class CollectionMutationService extends BaseService {
         tx,
         {
           fieldGroupDataService: this.fieldGroupDataService,
-          locales: this.localization?.locales.map(l => l.code) ?? [],
+          locales: storedLanguageCodes(this.localizationSource),
           maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
         },
         { kind: "collection", slug: args.collectionName, documentId: entryId },

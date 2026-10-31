@@ -42,6 +42,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
+import type { LanguageRegistry } from "../../i18n/language-registry";
+import { LanguageSettingsService } from "../../i18n/services/language-settings-service";
 import type { MediaType } from "../../../types/media";
 import { mediaCategoryOf } from "../media-categories";
 import {
@@ -1186,5 +1188,123 @@ describe.each(getConfiguredTestDialects())(
       },
       30_000
     );
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the media usage record of a language removed in Settings (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let settings: LanguageSettingsService;
+    const [G, H] = [
+      { id: randomUUID(), url: "/uploads/2026/10/kept-en.png" },
+      { id: randomUUID(), url: "/uploads/2026/10/kept-fr.png" },
+    ];
+
+    beforeAll(async () => {
+      // No `localization` block: the languages are the ones Settings stores.
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "usagekept",
+            localized: true,
+            fields: [text({ name: "caption" }), richText({ name: "blurb" })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "usagekeptposts",
+            access: OPEN,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "promo", component: "usagekept" }),
+            ],
+          }),
+        ],
+      });
+      settings = new LanguageSettingsService(
+        t.adapter,
+        t.getService("languageRegistry") as LanguageRegistry
+      );
+      for (const item of [G, H]) {
+        await t.adapter.insert("media", {
+          id: item.id,
+          filename: item.url.slice("/uploads/".length),
+          originalFilename: "kept.png",
+          mimeType: "image/png",
+          size: 1,
+          url: item.url,
+          uploadedAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    // Removing a language keeps its content, so adding it again brings it
+    // back: what that content uses stays in the record through a save of
+    // another language and through a rebuild, or the Unused view would offer
+    // its items for deletion.
+    it("keeps a removed language's field-group uses through another save and a rebuild", async () => {
+      await settings.change({ kind: "add", code: "fr", label: "French" });
+      const entries = t.getService("collectionsHandler").getEntryService();
+      const created = await entries.createEntry(
+        {
+          collectionName: "usagekeptposts",
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: "Kept", promo: { caption: "Hi", blurb: imageText(G.url) } }
+      );
+      const id = String((created.data as { id: unknown }).id);
+      const french = await entries.updateEntry(
+        {
+          collectionName: "usagekeptposts",
+          entryId: id,
+          overrideAccess: true,
+          locale: "fr",
+        },
+        { promo: { caption: "Salut", blurb: imageText(H.url) } }
+      );
+      expect(french.success, JSON.stringify(french)).toBe(true);
+      const both = expected("collection", "usagekeptposts", id, [
+        ["promo.blurb", "en", G.id],
+        ["promo.blurb", "fr", H.id],
+      ]);
+      expect(await recordedFor(t, "collection", "usagekeptposts", id)).toEqual(
+        both
+      );
+
+      await settings.change({ kind: "remove", code: "fr" });
+
+      // A save in the language still active rewrites the entry's record.
+      const saved = await entries.updateEntry(
+        {
+          collectionName: "usagekeptposts",
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: "Kept, saved again" }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      expect(await recordedFor(t, "collection", "usagekeptposts", id)).toEqual(
+        both
+      );
+
+      await t.adapter.delete(MEDIA_USAGE_TABLE, {
+        and: [{ column: "documentId", op: "=", value: id }],
+      });
+      await t
+        .getService("collectionService")
+        .rebuildMediaUsage("usagekeptposts");
+      expect(await recordedFor(t, "collection", "usagekeptposts", id)).toEqual(
+        both
+      );
+    });
   }
 );
