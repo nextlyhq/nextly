@@ -1,4 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
@@ -168,6 +169,12 @@ function normalizeCollectionBooleans(
     status: row.status === 1 || row.status === true,
     localized: row.localized === 1 || row.localized === true,
   };
+}
+
+/** What removing a collection's registry row found: how many rows went, and the cache setting the row held. */
+export interface UnregisteredCollectionRow {
+  removed: number;
+  stored: unknown;
 }
 
 export class DynamicCollectionRegistryService extends BaseService {
@@ -646,44 +653,67 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
-    // The setting and the delete in one transaction, the row locked between
-    // them: the expiry below uses the setting the deleted row held, and a
-    // second delete racing this one waits, then finds nothing to remove.
-    const where = {
-      and: [{ column: "slug", op: "=" as const, value: slug }],
-    };
-    let removed = 0;
-    let stored: unknown;
+    let unregistered: UnregisteredCollectionRow;
     // Cleared once the delete has run, as after an insert.
     try {
-      ({ removed, stored } = await this.adapter.transaction(async tx => {
-        const [row] = await tx.select<{ revalidate: unknown }>(
-          "dynamic_collections",
-          { columns: ["revalidate"], where, forUpdate: true }
-        );
-        return {
-          removed: await tx.delete("dynamic_collections", where),
-          stored: row?.revalidate,
-        };
-      }));
+      unregistered = await this.adapter.transaction(tx =>
+        this.unregisterCollectionIn(tx, slug)
+      );
     } finally {
       clearRegistryRowCache();
     }
+    await this.forgetUnregisteredCollection(slug, unregistered);
+  }
 
-    // Drop the in-process recording decision with the row: this is the path the
-    // Builder's delete takes, and a later collection created under the same slug
-    // must start from the recording default rather than inherit a suppression
-    // whose row no longer exists.
+  /**
+   * Remove a collection's registry row inside `tx`, so it goes with whatever
+   * else that transaction removes or not at all. The setting and the delete
+   * run with the row locked between them: the expiry after the commit uses
+   * the setting the deleted row held, and a second delete racing this one
+   * waits, then finds nothing to remove. What the process remembers about the
+   * collection is the caller's to forget once `tx` has committed
+   * (`forgetUnregisteredCollection`, given what this returns): forgotten
+   * earlier, a rollback would leave the row and lose what was known about it.
+   */
+  async unregisterCollectionIn(
+    tx: TransactionContext,
+    slug: string
+  ): Promise<UnregisteredCollectionRow> {
+    const where = {
+      and: [{ column: "slug", op: "=" as const, value: slug }],
+    };
+    const [row] = await tx.select<{ revalidate: unknown }>(
+      "dynamic_collections",
+      { columns: ["revalidate"], where, forUpdate: true }
+    );
+    return {
+      removed: await tx.delete("dynamic_collections", where),
+      stored: row?.revalidate,
+    };
+  }
+
+  /**
+   * Forget, in this process, a collection whose registry row is gone: its
+   * cached rows, cleared as after any registry write, and its recording
+   * decision, since a later collection created under the same slug must start
+   * from the recording default rather than inherit a suppression whose row no
+   * longer exists.
+   */
+  async forgetUnregisteredCollection(
+    slug: string,
+    unregistered: UnregisteredCollectionRow
+  ): Promise<void> {
+    clearRegistryRowCache();
     clearWebhookRecording("collection", slug);
 
     // Every cached read of it now describes rows that are gone. Only when this
-    // call removed the row, with the setting it held: a repeated delete finds
+    // delete removed the row, with the setting it held: a repeated delete finds
     // nothing and expires nothing. Once the delete is durable: after an
     // enclosing transaction commits, and never for one that rolls back.
-    if (removed > 0) {
+    if (unregistered.removed > 0) {
       await this.afterCommit(() =>
         flushContentChange(
-          deletedEntityIntent("collection", slug, stored),
+          deletedEntityIntent("collection", slug, unregistered.stored),
           this.logger,
           "a collection was deleted"
         )
