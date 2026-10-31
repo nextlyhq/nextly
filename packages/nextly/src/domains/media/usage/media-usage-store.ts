@@ -288,17 +288,23 @@ export async function removeEntityUsage(
   });
 }
 
+/** One stored row, with its own id, which a rewrite of its document renews. */
+export interface IdentifiedUsageRow extends MediaUsageRow {
+  id: string;
+}
+
 /**
- * Every document field that uses one media item, from the record alone: one
- * query on the item's index, reading no content table. Ordered so one
- * document's rows are together.
+ * Every row of the record for one media item, ids included: one query on
+ * the item's index, reading no content table. Ordered so one document's
+ * rows are together.
  */
-export async function listMediaUsage(
+export async function listIdentifiedMediaUsage(
   db: Pick<UsageDb, "select">,
   mediaId: string
-): Promise<MediaUsageRow[]> {
+): Promise<IdentifiedUsageRow[]> {
   const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
     columns: [
+      "id",
       "mediaId",
       "subjectKind",
       "subjectSlug",
@@ -316,6 +322,7 @@ export async function listMediaUsage(
     ],
   });
   return rows.map(row => ({
+    id: columnOf(row, "id", "id"),
     mediaId: columnOf(row, "mediaId", "media_id"),
     subjectKind: columnOf(
       row,
@@ -330,11 +337,40 @@ export async function listMediaUsage(
 }
 
 /**
+ * Every document field that uses one media item, from the record alone:
+ * {@link listIdentifiedMediaUsage} without the rows' own ids.
+ */
+export async function listMediaUsage(
+  db: Pick<UsageDb, "select">,
+  mediaId: string
+): Promise<MediaUsageRow[]> {
+  const rows = await listIdentifiedMediaUsage(db, mediaId);
+  return rows.map(({ id: _id, ...row }) => row);
+}
+
+/**
  * The `nextly_meta` key whose presence says the record has been built for
  * content written before it existed: set by `nextly media reindex-usage` once
  * it has rebuilt every document, and on a new site, which has none.
  */
 export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded";
+
+/**
+ * Whether the record has been built for content written before it existed:
+ * its {@link MEDIA_USAGE_RECORDED_KEY} mark is there. Until it is, a use the
+ * record lacks may still be in some document.
+ */
+export async function mediaUsageRecorded(
+  db: Pick<UsageDb, "select">
+): Promise<boolean> {
+  const rows = await db.select("nextly_meta", {
+    columns: ["key"],
+    where: {
+      and: [{ column: "key", op: "=", value: MEDIA_USAGE_RECORDED_KEY }],
+    },
+  });
+  return rows.length > 0;
+}
 
 /**
  * Whether the usage table exists yet, asked once per database and remembered

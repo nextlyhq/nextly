@@ -84,11 +84,7 @@ import {
   listWidgets,
   registerWidget,
 } from "../domains/widgets/registry";
-import {
-  allWidgets,
-  setContributedWidgets,
-  type CanonicalWidget,
-} from "../domains/widgets/canonical";
+import { allWidgets, type CanonicalWidget } from "../domains/widgets/canonical";
 import {
   CORE_DEFAULT_LAYOUT,
   CORE_WIDGET_IDS,
@@ -98,8 +94,11 @@ import {
   type DefaultLayoutPlan,
 } from "../domains/widgets/default-layout";
 import { collectionSettingsToken } from "../domains/widgets/collection-cards";
-import type { PluginDefinition } from "../plugins/plugin-context";
-import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
+import {
+  clearDeclaredWidgets,
+  registerDashboardWidgets,
+} from "../domains/widgets/declaration/declared-widgets";
+import { defineWidget } from "../domains/widgets/declaration/define-widget";
 
 import {
   deleteWidgetLayout,
@@ -181,6 +180,34 @@ function withoutUndefined<T extends object>(value: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as Partial<T>;
+}
+
+/**
+ * `id` declared with `defineWidget` by the plugin named `plugin`, as a plugin's
+ * `contributes.dashboard.widgets` reaches the registry: drawn as a list.
+ */
+function declareByPlugin(plugin: string, id: string): void {
+  registerDashboardWidgets({
+    groups: [
+      {
+        owner: `plugin "${plugin}"`,
+        plugin,
+        declarations: [
+          defineWidget({
+            id,
+            title: "Latest",
+            description: "The newest submissions.",
+            category: "Forms",
+            size: { default: { w: 6, h: 4 } },
+            load: () => Promise.resolve({ items: [] }),
+            view: { component: "@acme/forms/admin#Latest" },
+            isEmpty: () => false,
+            skeleton: "list",
+          }),
+        ],
+      },
+    ],
+  });
 }
 
 /** A layout read, with the query string `search` when it is given one. */
@@ -301,7 +328,7 @@ beforeEach(() => {
   deleted = undefined;
   logged.length = 0;
   clearWidgets();
-  setContributedWidgets([]);
+  clearDeclaredWidgets();
   setDefaultLayoutPlan(REGISTERED_DEFAULT);
   defaultCardsNotShown.mockResolvedValue(new Set());
   cardsAnsweredEmpty.mockResolvedValue([]);
@@ -478,15 +505,7 @@ describe("where the add panel lists each widget", () => {
         description: "How many users and roles the project has.",
       })
     );
-    setContributedWidgets([
-      {
-        id: "forms/latest",
-        plugin: "@acme/forms",
-        description: "The newest submissions.",
-        category: "Forms",
-        archetype: "list",
-      },
-    ]);
+    declareByPlugin("@acme/forms", "forms/latest");
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
@@ -512,7 +531,7 @@ describe("where the add panel lists each widget", () => {
     registerWidget(widget({ id: "core/team" }));
     registerWidget(widget({ id: "core/continue" }));
     registerWidget(widget({ id: "site/alpha" }));
-    setContributedWidgets([{ id: "forms/latest", plugin: "@acme/forms" }]);
+    declareByPlugin("@acme/forms", "forms/latest");
     // Something stored, so every widget is offered rather than placed.
     stored = { version: 1, layout: serializeLayout([]) };
 
@@ -548,93 +567,6 @@ describe("where the add panel lists each widget", () => {
       .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0))
       .map(([id]) => id);
     expect(ranked).toEqual(["core/continue", "site/zeta", "core/team"]);
-  });
-});
-
-describe("a widget that only CONTRIBUTED", () => {
-  it("appears in the default arrangement", async () => {
-    // 🔴 The defect. Layout resolution read the imperative registry alone, so a
-    // plugin using the documented `contributes.admin.widgets` surface rendered
-    // a card on the grid that was absent from every arrangement.
-    registerWidget(widget({ id: "core/a" }));
-    setContributedWidgets([{ id: "forms/latest", defaultOrder: 5 }]);
-
-    const body = await bodyOf(await getWidgetLayout(getReq()));
-
-    expect(body.placements?.map(p => p.widgetId)).toEqual([
-      "forms/latest",
-      "core/a",
-    ]);
-  });
-
-  it("can be saved into an arrangement", async () => {
-    // Every PUT naming a contributed widget was refused as unavailable, so the
-    // card could not be arranged, hidden or added even by a client that knew
-    // about it.
-    setContributedWidgets([{ id: "forms/latest" }]);
-
-    const res = await putWidgetLayout(
-      putReq({
-        placements: [
-          {
-            id: "p1",
-            widgetId: "forms/latest",
-            w: 12,
-            h: 3,
-            removed: false,
-          },
-        ],
-        version: 0,
-        scope: scopeFor(["forms/latest"]),
-      })
-    );
-
-    expect(res.status).toBe(200);
-    expect(saved?.placements.map(p => p.widgetId)).toEqual(["forms/latest"]);
-  });
-
-  it("is offered in `available` when it is not placed", async () => {
-    registerWidget(widget({ id: "core/a" }));
-    setContributedWidgets([{ id: "forms/latest" }]);
-    stored = {
-      version: 2,
-      layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
-      ]),
-    };
-
-    const body = await bodyOf(await getWidgetLayout(getReq()));
-
-    expect(body.available).toEqual(["forms/latest"]);
-  });
-
-  it("is gated by its declared permission like any other", async () => {
-    setContributedWidgets([
-      { id: "forms/latest", requiredPermission: "read-forms" },
-    ]);
-    callerHoldsPermission.mockResolvedValue(false);
-
-    const body = await bodyOf(await getWidgetLayout(getReq()));
-
-    expect(body.placements).toEqual([]);
-    expect(callerHoldsPermission).toHaveBeenCalledWith(
-      "read-forms",
-      expect.anything()
-    );
-  });
-
-  it("starts each card at the default size it declared", async () => {
-    setContributedWidgets([
-      { id: "forms/latest", size: { default: { w: 8, h: 4 } } },
-      { id: "forms/count", size: { default: { w: 3, h: 2 } } },
-    ]);
-
-    const body = await bodyOf(await getWidgetLayout(getReq()));
-
-    expect(body.placements?.map(p => [p.widgetId, p.w, p.h])).toEqual([
-      ["forms/latest", 8, 4],
-      ["forms/count", 3, 2],
-    ]);
   });
 });
 
@@ -2450,8 +2382,8 @@ describe("the sizes a card may take", () => {
 
 describe("widgets the reader may still add", () => {
   it("include a widget that allows several cards, even once one is placed", async () => {
+    registerWidget(widget({ id: "forms/many", allowsSeveral: true }));
     registerWidget(widget({ id: "core/one" }));
-    setContributedWidgets([{ id: "forms/many", allowsSeveral: true }]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
@@ -2599,7 +2531,7 @@ describe("a widget that allows one card", () => {
   });
 
   it("CONTROL: a widget that allows several takes a second card", async () => {
-    setContributedWidgets([{ id: "forms/many", allowsSeveral: true }]);
+    registerWidget(widget({ id: "forms/many", allowsSeveral: true }));
     const res = await putWidgetLayout(
       putReq({
         placements: two("forms/many"),
@@ -2822,140 +2754,25 @@ describe("a card's note", () => {
     expect(res.status).toBe(200);
   });
 
-  /** A plugin contributing `acme/notes`, a card with a five-character note, through its manifest alone. */
-  const contributedNotes = () =>
-    contributedWidgetSummaries([
-      {
-        name: "@acme/notes",
-        contributes: {
-          admin: {
-            widgets: [
-              {
-                id: "acme/notes",
-                title: "Notes",
-                archetype: "metric",
-                size: { default: { w: 12, h: 3 } },
-                query: { source: "collection:posts", op: "count" },
-                settings: [
-                  {
-                    name: "text",
-                    label: "Note",
-                    type: "textarea",
-                    maxLength: 5,
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      } as unknown as PluginDefinition,
-    ]);
-  const placedOn = (widgetId: string, text: string) =>
-    placed(text).map(placement => ({ ...placement, widgetId }));
-
-  it("is refused on a widget a plugin contributes, which no registry holds", async () => {
-    const summaries = contributedNotes();
-    // The control: the summary reached the canonical set with its bound, so
-    // a refusal below is the bound's, not an unknown widget's.
-    expect(summaries.map(summary => summary.textBounds)).toEqual([
-      [{ name: "text", label: "Note", maxLength: 5 }],
-    ]);
-    setContributedWidgets(summaries);
-    // The reader sees the contributed widget beside the registry's.
-    const scope = scopeFor([...listWidgets().map(w => w.id), "acme/notes"]);
-
-    // 🔴 Bounded by the registry alone, this was saved: a contribution's
-    // settings never reach it.
-    const refused = await putWidgetLayout(
-      putReq({
-        placements: placedOn("acme/notes", "hello!"),
-        version: 0,
-        scope,
-      })
-    );
-    expect(refused.status).toBe(400);
-    expect(JSON.stringify(await refused.json())).toContain(
-      '\\"Note\\" is at most 5 characters'
-    );
-    expect(saved).toBeUndefined();
-
-    // The must-differ half: within the bound, it saves.
-    const accepted = await putWidgetLayout(
-      putReq({
-        placements: placedOn("acme/notes", "hello"),
-        version: 0,
-        scope,
-      })
-    );
-    expect(accepted.status).toBe(200);
-  });
-
-  it("keeps a contribution's bound when a registration of the same id states no settings", async () => {
-    // The admin's rule: the registration's settings wherever it states any,
-    // else the contribution's, so the sheet still bounds this note.
-    setContributedWidgets(contributedNotes());
-    registerWidget(widget({ id: "acme/notes" }));
-    const res = await putWidgetLayout(
-      putReq({
-        placements: placedOn("acme/notes", "hello!"),
-        version: 0,
-        scope: scopeFor(),
-      })
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it("takes a registration's bound over a contribution's when it states settings", async () => {
-    setContributedWidgets(contributedNotes());
+  it("refuses a card a widget sets to a collection the reader may not read", async () => {
     registerWidget(
       widget({
-        id: "acme/notes",
-        settings: [
-          { name: "text", label: "Note", type: "textarea", maxLength: 10 },
-        ],
+        id: "acme/pinned",
+        title: "Pinned",
+        archetype: "metric",
+        component: undefined,
+        size: { default: { w: 12, h: 3 } },
+        query: { source: "collection:posts", op: "count" },
+        settings: [{ name: "source", label: "Collection", type: "collection" }],
       })
     );
-    // Over the contribution's five, within the registration's ten.
-    const res = await putWidgetLayout(
-      putReq({
-        placements: placedOn("acme/notes", "hello!"),
-        version: 0,
-        scope: scopeFor(),
-      })
-    );
-    expect(res.status).toBe(200);
-  });
-
-  it("refuses a card a plugin's widget sets to a collection the reader may not read", async () => {
-    const summaries = contributedWidgetSummaries([
-      {
-        name: "@acme/pinned",
-        contributes: {
-          admin: {
-            widgets: [
-              {
-                id: "acme/pinned",
-                title: "Pinned",
-                archetype: "metric",
-                size: { default: { w: 12, h: 3 } },
-                query: { source: "collection:posts", op: "count" },
-                settings: [
-                  { name: "source", label: "Collection", type: "collection" },
-                ],
-              },
-            ],
-          },
-        },
-      } as unknown as PluginDefinition,
-    ]);
-    // The control: the contribution's Collection setting reached the summary,
-    // so the refusal below is the collection's, not an unknown widget's.
-    expect(summaries.map(summary => summary.collectionSetting?.name)).toEqual([
-      "source",
-    ]);
-    setContributedWidgets(summaries);
-    // 🔴 Judged by the registry alone, a contributed widget's card was never
-    // judged at all: no registry holds it.
+    const summaries = allWidgets();
+    // The control: the widget's Collection setting reached its summary, so
+    // the refusal below is the collection's, not an unknown widget's.
+    expect(
+      summaries.find(summary => summary.id === "acme/pinned")?.collectionSetting
+        ?.name
+    ).toBe("source");
     const res = await putWidgetLayout(
       putReq({
         placements: [
@@ -2970,7 +2787,7 @@ describe("a card's note", () => {
         ],
         version: 0,
         scope: visibilityToken(
-          [...listWidgets().map(w => w.id), "acme/pinned"],
+          listWidgets().map(w => w.id),
           [],
           [],
           collectionSettingsToken(summaries)

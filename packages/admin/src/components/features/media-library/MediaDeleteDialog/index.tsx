@@ -3,31 +3,11 @@
 /**
  * MediaDeleteDialog Component
  *
- * Confirmation dialog for deleting a single media file.
- * Displays media details and handles the deletion process with error handling.
- *
- * ## Features
- *
- * - **Confirmation UI**: Shows media filename before deletion
- * - **Error Handling**: Displays errors with retry option
- * - **Loading States**: Shows spinner during deletion
- * - **Accessibility**: WCAG 2.2 AA compliant with proper ARIA attributes
- *
- * ## Usage
- *
- * ```tsx
- * const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
- * const [mediaToDelete, setMediaToDelete] = useState<Media | null>(null);
- * const { mutate: deleteMedia, isPending } = useDeleteMedia();
- *
- * <MediaDeleteDialog
- *   open={deleteDialogOpen}
- *   media={mediaToDelete}
- *   onOpenChange={setDeleteDialogOpen}
- *   onConfirm={() => deleteMedia(mediaToDelete.id)}
- *   isLoading={isPending}
- * />
- * ```
+ * Asks before one media item is deleted, saying first where it is used (the
+ * documents the reader may open, and how many more), since each of them
+ * will show no image until another is chosen. The delete can be undone for a
+ * few seconds afterwards, and the dialog says so. The library makes the
+ * request and offers the Undo.
  */
 
 import {
@@ -41,13 +21,16 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  toast,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useRef } from "react";
 import type { JSX } from "react";
 
 import { Loader2, AlertTriangle } from "@admin/components/icons";
 import type { Media } from "@admin/types/media";
+
+import type { MediaUsage } from "../media-library-api";
+import { useMediaUsage } from "../media-library-queries";
+import { MediaUsageList, placesText, usageTotal } from "../MediaUsedIn";
 
 /**
  * MediaDeleteDialog component props
@@ -84,6 +67,19 @@ export interface MediaDeleteDialogProps {
   isLoading?: boolean;
 }
 
+/** What the dialog says first: where the item is used, or that it isn't. */
+function usageSentence(usage: MediaUsage | undefined, failed: boolean): string {
+  if (usage) {
+    const total = usageTotal(usage);
+    return total > 0
+      ? `It's used in ${placesText(total)}, which will show no image until you choose another.`
+      : "It isn't used anywhere.";
+  }
+  return failed
+    ? "Couldn't check where it's used."
+    : "Checking where it's used…";
+}
+
 /**
  * MediaDeleteDialog component
  *
@@ -102,6 +98,8 @@ export function MediaDeleteDialog({
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
 
   const isPending = isDeleting || isLoading;
+  // Asked only while the dialog is open, for the item it is about.
+  const usage = useMediaUsage(open && media ? media.id : null);
 
   const handleConfirm = useCallback(async () => {
     if (isPending || !media) return;
@@ -111,17 +109,11 @@ export function MediaDeleteDialog({
       setError(null);
 
       await onConfirm();
-
-      toast.success("Media deleted successfully", {
-        description: `"${media.filename}" has been removed.`,
-      });
-
       onOpenChange(false);
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "An unknown error occurred";
-      setError(`Failed to delete media: ${errorMessage}`);
-      toast.error("Error deleting media", { description: errorMessage });
+      setError(`Couldn't delete it: ${errorMessage}`);
     } finally {
       setIsDeleting(false);
     }
@@ -149,13 +141,19 @@ export function MediaDeleteDialog({
       >
         <DialogHeader>
           <DialogTitle id="delete-media-dialog-title">
-            Delete Media?
+            Delete {media.originalFilename}?
           </DialogTitle>
           <DialogDescription id="delete-media-dialog-description">
-            Are you sure you want to delete <strong>{media.filename}</strong>?
-            This action cannot be undone.
+            {usageSentence(usage.data, usage.isError)} You can undo this for a
+            few seconds.
           </DialogDescription>
         </DialogHeader>
+
+        {usage.data && usageTotal(usage.data) > 0 && (
+          <div className="max-h-56 overflow-y-auto rounded-md border border-border px-3 py-1">
+            <MediaUsageList usage={usage.data} />
+          </div>
+        )}
 
         {error && (
           <Alert variant="destructive" className="mb-4">

@@ -101,6 +101,28 @@ describe("saving a card's settings outside customise mode", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
+  it("sends the card's own title with its settings, as the panel's Done keeps it", () => {
+    const { layout, mutate } = fakeLayout();
+    const { result } = renderHook(() => useCardSettingsWrite(layout));
+    const onLanded = vi.fn();
+    act(() =>
+      result.current.write(
+        {
+          placementId: "p2",
+          title: "B",
+          change: { kind: "settings", config: {}, ownTitle: " Drafts " },
+        },
+        { onLanded }
+      )
+    );
+    expect(mutate.mock.calls[0]?.[0].placements[1]).toEqual({
+      ...PLACEMENTS[1],
+      title: "Drafts",
+    });
+    // Landed only once the dashboard it holds shows the title too.
+    expect(onLanded).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the dashboard again and says nothing was saved when the write lost a race", () => {
     const { layout } = fakeLayout("conflict");
     const { result } = renderHook(() => useCardSettingsWrite(layout));

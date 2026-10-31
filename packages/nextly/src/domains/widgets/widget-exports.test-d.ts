@@ -25,16 +25,18 @@
  * locally the way those do rather than shared: a `.test-d.ts` exporting a helper
  * would be imported by files that are not type tests.
  */
+import { expectTypeOf } from "vitest";
+
 import type {
+  CoreView,
   GridSize,
-  WidgetArchetype,
-  WidgetDefinition,
   WidgetOp,
   WidgetFieldChoice,
   WidgetSizeDeclaration,
   WidgetSourceField,
   WidgetSourceFieldType,
   WidgetSourceKind,
+  WidgetView,
 } from "../../index";
 
 /** `Exact<A, B>` is `false` when the two types differ in either direction. */
@@ -54,20 +56,12 @@ assertType<
 assertType<
   Exact<WidgetSourceFieldType, "string" | "number" | "boolean" | "date">
 >(true);
-assertType<
-  Exact<
-    WidgetArchetype,
-    | "metric"
-    | "stats"
-    | "table"
-    | "list"
-    | "bars"
-    | "timeseries"
-    | "text"
-    | "actions"
-    | "custom"
-  >
->(true);
+// How a widget names its view: one of core's five, or a component's path,
+// and no display vocabulary beside them.
+expectTypeOf<CoreView>().toEqualTypeOf<
+  "figure" | "list" | "table" | "bars" | "series"
+>();
+expectTypeOf<WidgetView>().toEqualTypeOf<CoreView | { component: string }>();
 
 // The three claims a closed string union makes, stated together per type: the
 // valid member is assignable, and `string` and a plausible near-miss are not.
@@ -89,16 +83,6 @@ assertType<
       AssignableTo<"count", WidgetOp>,
       AssignableTo<string, WidgetOp>,
       AssignableTo<"sum", WidgetOp>,
-    ],
-    [true, false, false]
-  >
->(true);
-assertType<
-  Exact<
-    [
-      AssignableTo<"metric", WidgetArchetype>,
-      AssignableTo<string, WidgetArchetype>,
-      AssignableTo<"chart", WidgetArchetype>,
     ],
     [true, false, false]
   >
@@ -141,10 +125,9 @@ assertType<
 >(true);
 
 // 🔴 The one size vocabulary: a size is `{ w, h }` in grid units, and a
-// definition's `size` takes nothing else. A named width or size, the old
+// declaration's `size` takes nothing else. A named width or size, the old
 // vocabulary, does not type-check where a size is taken.
 assertType<Exact<GridSize, { w: number; h: number }>>(true);
-assertType<Exact<WidgetDefinition["size"], WidgetSizeDeclaration>>(true);
 assertType<
   Exact<
     [

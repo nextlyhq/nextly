@@ -85,11 +85,8 @@ export async function permissionVerdicts(
  * the query batch: a permission check resolves a session caller through a
  * per-user TTL cache, so firing thirty of them at once makes every one a miss.
  *
- * Judged on the CANONICAL set, so a colliding pair is one card with one gate:
- * a registration that tightened the permission on a contributed id tightens it
- * for both copies, and the workspace payload withholds the contribution's
- * prose along with the registration's rather than shipping the copy that
- * happened to carry no gate of its own.
+ * Judged on the CANONICAL set, the widgets as the admin may receive them, so
+ * the verdict is about the declaration that ships.
  *
  * The verdicts travel out with the cards because {@link widgetAudience} asks
  * about the gates INSIDE them next, and a second pass would be two RBAC reads
@@ -177,7 +174,7 @@ async function decide(caller: ReadAccessCaller): Promise<{
 export interface WidgetAudience {
   /** The cards this reader may see, in canonical order. */
   visible: CanonicalWidget[];
-  /** Ids of the declared widgets -- contributed or registered -- this reader may see. */
+  /** Ids of the declared widgets this reader may see. */
   declared: ReadonlySet<string>;
   /**
    * Whether a gate INSIDE a visible declaration holds for this reader.

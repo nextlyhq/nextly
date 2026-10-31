@@ -61,6 +61,9 @@ function parsedList(value: unknown): unknown[] {
   }
 }
 
+/** The template field whose images name an item by its address. */
+export const TEMPLATE_ADDRESS_FIELD = "htmlContent";
+
 /** The references a stored template row makes, by the field that makes each. */
 export function emailTemplateReferences(
   row: Record<string, unknown>
@@ -78,7 +81,7 @@ export function emailTemplateReferences(
   const html = row.htmlContent ?? row.html_content;
   if (typeof html === "string") {
     for (const url of imageSources(html)) {
-      refs.push({ fieldPath: "htmlContent", url });
+      refs.push({ fieldPath: TEMPLATE_ADDRESS_FIELD, url });
     }
   }
   return refs;
