@@ -22,6 +22,7 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateFieldGroup } from "@admin/hooks/queries/useFieldGroups";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { toSnakeName } from "@admin/lib/builder";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { navigateTo } from "@admin/lib/navigation";
@@ -92,9 +93,13 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
           })();
         },
         onError: err => {
-          const error = err as { message?: string };
+          // A refused address names its reason per field; the envelope's own message is only
+          // "Validation failed.", which says neither what was refused nor why.
           toast.error(
-            error?.message || "Could not create field group. Please try again."
+            apiErrorMessage(
+              err,
+              "Could not create field group. Please try again."
+            )
           );
         },
       }

@@ -61,6 +61,7 @@ import {
   overlongMessage,
   overlongSetting,
 } from "./setting-length";
+import { SettingEditorControl } from "./SettingEditorControl";
 
 export interface WidgetSettingsSheetProps {
   open: boolean;
@@ -459,7 +460,16 @@ function SheetFields({
       className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
     >
       {settings.map(setting =>
-        isContentSetting(setting) ? (
+        // A setting with its own editor is drawn by it, whatever its type.
+        setting.editor !== undefined ? (
+          <SettingEditorControl
+            key={setting.name}
+            setting={setting}
+            component={setting.editor.component}
+            disabled={saving}
+            sources={sources}
+          />
+        ) : isContentSetting(setting) ? (
           <ContentSettingControl
             key={setting.name}
             setting={setting}

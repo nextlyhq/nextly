@@ -16,8 +16,10 @@
 import { NextlyError } from "../errors/nextly-error";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
+import { isSuperAdmin } from "./access/actor";
 import { readsEntity } from "./access/entity-read";
 import { rememberRouteVerdict } from "./access/request-memo";
+import { actorForKey, userIsSuperAdmin } from "./access/resolve-actor";
 import { holdsPermissionAnswer } from "./access/route-gate-adapters";
 import { readOf, type FilteredRead } from "./access/rule-answer";
 import { currentRuleLanguage } from "./access/rule-language";
@@ -80,9 +82,9 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
   return {
     userId: caller.user.id,
     authMethod: "session",
-    // A session caller carries none here on purpose: its grants are resolved
-    // from the database by `checkAccess`. Handing it the key vocabulary would
-    // answer "denied" for every check.
+    // A session caller carries none here on purpose: the access decision
+    // resolves its grants from the database (`actorForUser`). Handing it the
+    // key vocabulary would answer "denied" for every check.
     permissions: [],
     roles: caller.user.roles ?? [],
   };
@@ -181,6 +183,32 @@ export function callerHoldsPermission(
   caller: ReadAccessCaller
 ): Promise<boolean> {
   return holdsPermissionAnswer(slug, caller, getRBACService());
+}
+
+/**
+ * Whether the caller holds super-admin authority, asked of the one decision's
+ * actor, as the schema journal's route asks it: a session by the person's
+ * roles, and an API key by its own actor, so only a key carrying its maker's
+ * super-admin authority (`keyHoldsSuperAdmin`, which only authentication
+ * sets) answers yes, never a narrower key that super-admin made.
+ *
+ * For the surfaces only a super-admin is shown, such as System health. A
+ * session whose roles cannot be read answers false: `isSuperAdmin` fails
+ * closed.
+ */
+export function callerIsSuperAdmin(caller: ReadAccessCaller): Promise<boolean> {
+  if (!caller.userId) return Promise.resolve(false);
+  if (caller.authMethod === "api-key") {
+    const actor = actorForKey({
+      keyId: "",
+      userId: caller.userId,
+      grants: caller.grants ?? [],
+      roles: caller.roles,
+      superAdmin: caller.keyHoldsSuperAdmin === true,
+    });
+    return Promise.resolve(isSuperAdmin(actor));
+  }
+  return userIsSuperAdmin(caller.userId);
 }
 
 /**
@@ -295,9 +323,9 @@ export function authorizationScheduler(
  * The decision is {@link canReadEntity}'s, taken per entity, because that is
  * the only thing that agrees with what a row read will answer. Deriving the set
  * from permission SLUGS instead — filtering `read-{slug}` or `{slug}:read` —
- * looks equivalent and is not: `checkAccess` asks a code-defined `access.read`
- * after the stored grant, and a collection REFUSED in code still has the row
- * that a slug filter would admit it on.
+ * looks equivalent and is not: the access decision asks a code-defined
+ * `access.read` after the stored grant, and a collection REFUSED in code still
+ * has the row that a slug filter would admit it on.
  *
  * Coarse only in WHAT it decides — whether an entity is in reach at all. The
  * per-row rules of whatever query follows still decide which documents come

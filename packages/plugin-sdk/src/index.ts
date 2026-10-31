@@ -40,9 +40,15 @@ export { defineWidget } from "nextly";
  * `sort`, `groupBy` and `fields`. `option` is the collections' own.
  */
 export { option, setting } from "nextly";
+/**
+ * @experimental `SettingEditorProps`: what a setting's own editor is handed,
+ * the component its `editor: { component }` names, drawn in the card's
+ * settings sheet in place of the setting's own field.
+ */
 export type {
   CoreView,
   GridSize,
+  SettingEditorProps,
   WidgetAccess,
   WidgetAccessGate,
   WidgetData,
@@ -95,12 +101,21 @@ export { rowsThatFit } from "nextly";
 /**
  * @experimental `defineAttentionItem` — declares one line of the Needs
  * attention card, which a plugin lists under `contributes.dashboard.attention`:
- * a label, a count taken as the person asking, and where it leads. Who sees it
+ * a label, optionally a one-line reason, a count taken as the person asking,
+ * and where it leads. Who sees it
  * is a permission, or the collections it counts. `AttentionItem` and
  * `AttentionCount` are the types it is written in.
  */
 export { defineAttentionItem } from "nextly";
 export type { AttentionCount, AttentionItem } from "nextly";
+/**
+ * `MAX_ATTENTION_ITEMS_PER_PLUGIN` — the most Needs attention items one plugin
+ * may declare; startup refuses a plugin that declares more. Published so a
+ * plugin with a line per something it reads builds no more than this, rather
+ * than restating the number. Intended to be stable: core's own bound, which
+ * changes only with a release that says so.
+ */
+export { MAX_ATTENTION_ITEMS_PER_PLUGIN } from "nextly";
 
 /**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
@@ -629,9 +644,10 @@ export type {
  *
  * @public `PluginAdminContributions`, `PluginAdminPage`, `PluginCollectionView`,
  *   `PluginMenuItem`, `ComponentPath` — exercised by `plugin-form-builder`.
- * @experimental `PluginAdminWidget` — dashboard widgets render (D22); the
- *   contribution shape is still settling, so it graduates once a first-party
- *   plugin ships one.
+ * @experimental `PluginAdminWidget` and its members — the older widget shape.
+ *   No contribution key takes it: a plugin's widgets are declared with
+ *   `defineWidget` under `contributes.dashboard`, and startup refuses a
+ *   plugin that still carries `contributes.admin.widgets`.
  */
 export type {
   ComponentPath,
@@ -803,15 +819,16 @@ export type {
 } from "nextly";
 
 /**
- * @experimental Dashboard widgets (D22/C9) — the registry a widget declares
- * itself to, the source registry a query names, and the declarative query
- * contract itself.
+ * @experimental Dashboard widgets (D22/C9) — the vocabularies a widget and its
+ * query are checked against, and the declarative query contract itself.
+ *
+ * Nothing here adds, changes or removes a widget or a data source: a plugin's
+ * widgets reach the dashboard only through `contributes.dashboard`, each
+ * declared with `defineWidget`, whose `load` reads data as the person asking.
  *
  * Forwarded here for the reason the Singles surface above is: a plugin imports
- * only from `@nextlyhq/plugin-sdk` and `@nextlyhq/ui`, never from core, so a
- * registry exported from the `nextly` root alone is one an author following the
- * documented surface cannot reach at all. There is no `nextly/widgets` subpath,
- * so this is the only supported spelling.
+ * only from `@nextlyhq/plugin-sdk` and `@nextlyhq/ui`, never from core. There
+ * is no `nextly/widgets` subpath, so this is the only supported spelling.
  *
  * Every contract a published shape NAMES travels with it, the way core's own
  * root export does: `WidgetDefinition.size` is a `WidgetSizeDeclaration`, and a
@@ -819,24 +836,12 @@ export type {
  * `WidgetOp` — a public property whose type has no public name can be inferred
  * but never annotated.
  *
- * Held `@experimental` alongside `PluginAdminWidget`, which is the same feature
- * seen from the contributions side: the widget contract graduates per D55 once a
- * first-party plugin ships one. See STABILITY.md.
+ * Held `@experimental` alongside `PluginAdminWidget`: the widget contract
+ * graduates per D55. See STABILITY.md.
  *
- * `PluginSourceResolver`, `PluginWidgetSource` and `ReadCaller` are the data
- * SOURCE contract, which `contributes.widgetSources` names. Inference covers a
- * resolver written inline inside `definePlugin`; these are what let an author
- * declare one as a named function instead, which is how a plugin publishing
- * more than one source ends up written.
- *
- * Type a contributed resolver as `PluginSourceResolver`, not
- * `WidgetSourceResolver`: the latter is core's own shape and rejects the
- * `PluginContext` parameter a plugin needs to read any data. `ResolverOptions`
- * is what the host passes beside the question -- a cancellation signal, and the
- * batch's shared work as a `WidgetScope` -- and is published so a standalone
- * resolver can annotate that parameter. `PluginManySourceResolver` types the
- * optional `resolveMany`, which answers several of a source's queries in one
- * call; it and `WidgetScope` are `@experimental`.
+ * `WidgetSourceResolver`, `ResolverOptions`, `WidgetScope` and `ReadCaller`
+ * are core's own source contract: what a source's resolver is handed and
+ * answers with.
  *
  * `callerReadOptions(caller)` turns the caller a resolver is handed into the
  * `ServiceOpts` a managed read takes. Use it rather than assembling them: the
@@ -853,8 +858,6 @@ export {
   WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
-  registerWidget,
-  registerSource,
   type WidgetDefinition,
   type WidgetLifecycle,
   type WidgetCondition,
@@ -873,11 +876,8 @@ export {
   type TimeseriesInterval,
   callerReadOptions,
   type WidgetSourceResolver,
-  type PluginSourceResolver,
-  type PluginManySourceResolver,
   type ResolverOptions,
   type WidgetScope,
-  type PluginWidgetSource,
   type ReadCaller,
 } from "nextly";
 

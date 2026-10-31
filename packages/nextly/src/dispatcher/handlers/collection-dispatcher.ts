@@ -32,7 +32,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { UserContext } from "../../domains/collections/services/collection-types";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
@@ -88,6 +88,7 @@ import {
   readAuthenticatedActor,
   readAuthenticatedScope,
   routeAdmittedUpdate,
+  routeVouched,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
@@ -529,8 +530,18 @@ const COLLECTIONS_METHODS: Record<
       };
 
       // The rows and the meta now describe one set, because the allowlist was
-      // a condition on the query that produced both.
-      return respondList(items, toPaginationMeta(baseMeta));
+      // a condition on the query that produced both. A collection removed from
+      // code stays listed, marked, so the admin can say so and name the step
+      // that retires it.
+      // Loaded on first use rather than with the dispatcher, so a module that
+      // imports the dispatcher and never lists does not load the mark.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      return respondList(
+        await withRemovedFromCodeMarks("collection", items),
+        toPaginationMeta(baseMeta)
+      );
     },
   },
   getCollection: {
@@ -551,7 +562,15 @@ const COLLECTIONS_METHODS: Record<
         [collection as CollectionWithAdmin],
         config?.plugins ?? []
       );
-      return respondDoc(collectionWithViews as unknown);
+      // Marked as the listing marks it, so the entity's own screens show the
+      // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      const [marked] = await withRemovedFromCodeMarks("collection", [
+        collectionWithViews as unknown as Record<string, unknown>,
+      ]);
+      return respondDoc(marked as unknown);
     },
   },
   updateCollection: {
@@ -1120,7 +1139,7 @@ const COLLECTIONS_METHODS: Record<
         );
         // Written past the registry services, so the cached rows are cleared
         // here: a read during the save may have cached the row from before it.
-        clearCollectionRowCache();
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
@@ -1374,10 +1393,12 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Route middleware already ran the RBAC/code-access gate for the
+          // caller it authenticated; attest it so the handler skips only that
+          // redundant re-check (field-level write access still runs). Never
+          // inferred from userId, and never for a visitor, whom the service
+          // judges itself.
+          routeAuthorized: routeVouched(),
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1502,10 +1523,12 @@ const COLLECTIONS_METHODS: Record<
         // Who performed the delete (user vs API key), recorded on the
         // `entry.deleted` outbox event — same attribution as create/update.
         actor: readAuthenticatedActor(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Route middleware already ran the RBAC/code-access gate for the
+        // caller it authenticated; attest it so the handler skips only that
+        // redundant re-check (field-level write access still runs). Never
+        // inferred from userId, and never for a visitor, whom the service
+        // judges itself.
+        routeAuthorized: routeVouched(),
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
         // and does not skip stored owner/role delete rules.

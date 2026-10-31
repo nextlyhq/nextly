@@ -42,7 +42,7 @@ pnpm create nextly-app@alpha my-blog --template blog --approach visual
 The Blog template supports two approaches:
 
 - **`code-first`** (default) -- Collections and singles are defined in TypeScript files under `src/collections/` and `src/singles/`. The CLI copies `configs/codefirst.config.ts` to the project root as `nextly.config.ts`. Best for version control and type safety.
-- **`visual`** -- Collections and singles are created via the Visual Schema Builder in the admin. The CLI copies `configs/visual.config.ts` (an empty config) to the project root as `nextly.config.ts`. After scaffolding, define your schemas through the admin UI, or seed the demo schemas and content from the **Seed Demo Content** card on the admin dashboard.
+- **`visual`** -- Collections and singles are created via the Visual Schema Builder in the admin. The CLI copies `configs/visual.config.ts` (an empty config) to the project root as `nextly.config.ts`. After scaffolding, define your schemas through the admin UI, or seed the demo schemas and content from the **Start with sample content** step of the **Set up your project** card on the admin dashboard.
 
 ## What it ships
 
@@ -84,22 +84,31 @@ A set of React components for the frontend lives under `src/app/(frontend)/compo
 
 ### Access control
 
-Two rules under `src/access/` gate each CRUD operation:
+Three rules under `src/access/` gate each CRUD operation:
 
 - `anyone` -- public read.
 - `has-permission` -- the caller's role holds the operation's permission on the collection,
   as the Roles screen grants it: `update-posts` to edit a post, `create-tags` to add a tag.
+- `own-posts` -- Posts' update and delete rule: a caller holding `publish-posts` changes
+  every post, and anyone else only the posts whose `author` is them (see
+  [Only their own entries](/docs/permissions#only-their-own-entries)).
 
-Neither checks a role's name, so a role you create and an API key are judged by the
-permissions they hold. Publishing a post needs `publish-posts`.
+None checks a role's name, so a role you create and an API key are judged by the
+permissions they hold. Publishing a post needs `publish-posts`. Only a caller holding it
+sets or changes a post's `author`; a new post with no author becomes its creator's.
+Media has no rule of its own: a visitor reads it through the built-in Public role's
+`read-media`, granted once at the first start, and taking it away on the Roles screen
+keeps it away.
 
 The demo-content seed creates three roles (`admin`, `editor`, `author`). An author may
-draft and edit posts but holds neither `delete-posts` nor `publish-posts`, since a rule
-cannot tell an author's own post from anyone else's; an editor publishes.
+draft posts and edit and delete their own, but holds no `publish-posts`; an editor
+publishes, and edits and deletes every post. A blog scaffolded with the visual approach
+has no code rules, so the permission alone decides: there the seed gives an author no
+`delete-posts`, and an author edits every post.
 
 ### Demo data
 
-The demo content is 16 posts, 3 authors, 4 categories, and 8 tags. The CLI does not ask about it: seeding runs through the **Seed Demo Content** card on the admin dashboard (rendered by `SeedDemoContentCard`) -- click it to start the seed, watch progress, and confirm completion. The seed is idempotent and uses placeholder gradient SVGs that you can replace later.
+The demo content is 16 posts, 3 authors, 4 categories, and 8 tags. The CLI does not ask about it: seeding runs from the first step of the **Set up your project** card on the admin dashboard, **Start with sample content**, which a super-admin sees while nobody has loaded or declined it and the site holds no entry. **Load** starts the seed and shows its progress in the step, and the step is ticked once it completes; **No thanks** declines it for the whole site. A seed or a decline that fails says so in the step, with **Retry**. The seed is idempotent and uses placeholder gradient SVGs that you can replace later.
 
 ### Newsletter form
 

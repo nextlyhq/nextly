@@ -3,11 +3,9 @@
  *
  * Each list names the permissions core asks of that action (`SYSTEM_*_POLICY`,
  * through `lib/permissions/system-policy`), so the hub asks what the server
- * asks. A role still holding `manage-email-templates` or
- * `manage-email-providers` holds each of them, as the server counts it
- * (`holdsPermission`). Seeing a tab needs its read permission; a change needs
- * the permission the server checks for that change, and the server refuses it
- * without one whatever this hides.
+ * asks, as the server counts it (`holdsPermission`). Seeing a tab needs its
+ * read permission; a change needs the permission the server checks for that
+ * change, and the server refuses it without one whatever this hides.
  *
  * @module constants/email-hub
  */

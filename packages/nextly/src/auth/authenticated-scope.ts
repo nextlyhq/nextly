@@ -18,7 +18,7 @@ import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import { permissionSlug } from "../schemas/_zod/rbac";
 
 import type { AccessTarget } from "./access/decide";
-import { onceForRequest } from "./access/request-memo";
+import { onceForRequest, onceForRequestAbout } from "./access/request-memo";
 import { codeAccessAllows } from "./code-access";
 import type { RequestActorType } from "./request-actor";
 import {
@@ -90,9 +90,11 @@ export interface AuthenticatedScope {
 }
 
 /**
- * The scopes authentication made for a full-access key whose maker is an
- * active super-admin, the only scopes that carry super-admin authority, each
- * with the moment that authority lapses.
+ * The scopes made from a key authentication judged on its maker's
+ * super-admin authority, each with the key and the moment that authority
+ * lapses where it holds it. Only a full-access key whose maker is an active
+ * super-admin holds it; the others are kept so a request asks about the key
+ * once, whichever scope it asks through.
  *
  * Kept here rather than as a field of the scope, because a scope is public
  * and can be built by hand: a field would be forged as easily as written. A
@@ -110,7 +112,17 @@ export interface AuthenticatedScope {
  * authentication asks again. Timed on a monotonic clock, so setting the wall
  * clock back cannot stretch it once it is made.
  */
-const SUPER_ADMIN_SCOPES = new WeakMap<AuthenticatedScope, number>();
+const SUPER_ADMIN_SCOPES = new WeakMap<AuthenticatedScope, KeyAuthority>();
+
+/**
+ * What authentication said of a key's super-admin authority, for a scope made
+ * from it: the key, when its id is known, and when the authority lapses, or
+ * nothing where the key holds none or its bound had already passed.
+ */
+interface KeyAuthority {
+  readonly keyId?: string;
+  readonly lapsesAt?: number;
+}
 
 const SUPER_ADMIN_SCOPE_LIFETIME_MS =
   SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS;
@@ -124,12 +136,19 @@ export function scopeHoldsSuperAdmin(
   scope: AuthenticatedScope | undefined
 ): boolean {
   if (scope === undefined) return false;
-  const lapsesAt = SUPER_ADMIN_SCOPES.get(scope);
-  if (lapsesAt === undefined) return false;
+  const authority = SUPER_ADMIN_SCOPES.get(scope);
+  if (authority === undefined) return false;
+  const { keyId, lapsesAt } = authority;
+  const ask = () => lapsesAt !== undefined && performance.now() < lapsesAt;
   // Asked once per request, so every door one operation passes gives the
-  // same answer, even one asked after the bound passed mid-operation. A scope
-  // kept for a later request is asked again there, and has lapsed by then.
-  return onceForRequest(scope, () => performance.now() < lapsesAt);
+  // same answer, even one asked after the bound passed mid-operation. Asked
+  // of the key rather than of this scope: one request builds a scope for the
+  // key at each door that needs one, and each must answer as the first did.
+  // A scope kept for a later request is asked again there, and has lapsed by
+  // then.
+  return keyId === undefined
+    ? onceForRequest(scope, ask)
+    : onceForRequestAbout(`super-admin-key:${keyId}`, ask);
 }
 
 /** Freeze a scope and the arrays inside it, so no gate can be desynced. */
@@ -198,6 +217,11 @@ export function apiKeyScopeFrom(caller: {
    * made.
    */
   keyStandingAskedAt?: number;
+  /**
+   * The key's id, so every scope one request builds for the key gives the
+   * request's first answer about its authority.
+   */
+  apiKeyId?: string;
 }): AuthenticatedScope {
   const scope = caller.grants
     ? apiKeyScope(caller.grants, caller.roles)
@@ -210,25 +234,46 @@ export function apiKeyScopeFrom(caller: {
         permissions: [...(caller.permissions ?? [])],
         ...(caller.roles ? { roles: [...caller.roles] } : {}),
       });
-  if (caller.keyHoldsSuperAdmin === true) {
-    // Counted from when the standing that admitted the key was asked, not
-    // from now: resolving the grants and roles in between can take a while.
-    // The role's expiry is wall-clock time, turned into how long is left of
-    // it now, so the deadline itself stays on the monotonic clock.
-    const now = performance.now();
-    const fromStanding =
-      (caller.keyStandingAskedAt ?? now) + SUPER_ADMIN_SCOPE_LIFETIME_MS;
-    const lapsesAt =
-      caller.keyHoldsSuperAdminUntil === undefined
-        ? fromStanding
-        : Math.min(
-            fromStanding,
-            now + (caller.keyHoldsSuperAdminUntil - Date.now())
-          );
-    // A bound already passed leaves nothing to carry.
-    if (lapsesAt > now) SUPER_ADMIN_SCOPES.set(scope, lapsesAt);
-  }
+  // Only a caller authentication answered about super-admin authority, yes
+  // or no, is judged on it; any other shape carries none.
+  if (typeof caller.keyHoldsSuperAdmin !== "boolean") return scope;
+  const keyId = caller.apiKeyId;
+  const lapsesAt =
+    caller.keyHoldsSuperAdmin === true ? superAdminLapsesAt(caller) : undefined;
+  // Recorded even where the key holds none or its bound has already passed,
+  // so a scope built late in a request still answers as the request's first
+  // ask about the key did.
+  SUPER_ADMIN_SCOPES.set(scope, {
+    ...(keyId === undefined ? {} : { keyId }),
+    ...(lapsesAt === undefined ? {} : { lapsesAt }),
+  });
   return scope;
+}
+
+/**
+ * When a key's super-admin authority lapses, on the monotonic clock, or
+ * `undefined` where its bound has already passed. Counted from when the
+ * standing that admitted the key was asked, not from now: resolving the
+ * grants and roles in between can take a while. The role's expiry is
+ * wall-clock time, turned into how long is left of it now, so the deadline
+ * itself stays on the monotonic clock.
+ */
+function superAdminLapsesAt(caller: {
+  keyHoldsSuperAdminUntil?: number;
+  keyStandingAskedAt?: number;
+}): number | undefined {
+  const now = performance.now();
+  const fromStanding =
+    (caller.keyStandingAskedAt ?? now) + SUPER_ADMIN_SCOPE_LIFETIME_MS;
+  const lapsesAt =
+    caller.keyHoldsSuperAdminUntil === undefined
+      ? fromStanding
+      : Math.min(
+          fromStanding,
+          now + (caller.keyHoldsSuperAdminUntil - Date.now())
+        );
+  // A bound already passed leaves nothing to carry.
+  return lapsesAt > now ? lapsesAt : undefined;
 }
 
 /**
@@ -240,10 +285,9 @@ export function apiKeyScopeFrom(caller: {
 export function keyCallerHoldsSuperAdmin(
   caller: Parameters<typeof apiKeyScopeFrom>[0]
 ): boolean {
-  return (
-    caller.keyHoldsSuperAdmin === true &&
-    scopeHoldsSuperAdmin(apiKeyScopeFrom(caller))
-  );
+  // Asked through a scope, so it gives the request's first answer about the
+  // key, as every other door does.
+  return scopeHoldsSuperAdmin(apiKeyScopeFrom(caller));
 }
 
 /**
@@ -410,9 +454,9 @@ interface CodeAccessSource {
  * the `{operation}-{resource}` grant AND satisfy the code-defined access rule
  * (`defineCollection/defineSingle({ access: { publish/unpublish/... } })`),
  * evaluated against the KEY's own scope — not the owner's. The permission check
- * alone is not enough: `rbac.checkAccess` (which the API-key path replaces) is
- * also where the code-defined rule runs, so skipping it would let a key with the
- * grant bypass an `access.publish` that returns false.
+ * alone is not enough: the session decision (which the API-key path replaces)
+ * is also where the code-defined rule runs, so skipping it would let a key with
+ * the grant bypass an `access.publish` that returns false.
  *
  * Returns `null` for a non-API-key caller, so the caller falls back to its normal
  * RBAC resolution (which already composes the code-defined rule for that path).

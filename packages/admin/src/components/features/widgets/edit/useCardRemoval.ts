@@ -4,9 +4,10 @@
  * Taking a card off the dashboard, and the one notice that offers it back.
  *
  * Two routes, one notice. While customising, Remove marks the card removed in
- * the DRAFT and nothing is written until Save. Outside customise mode a card
- * that declared `dismissible` carries its own control, which writes at once
- * (`useDismissPlacement`). Either way the card stays in the list marked
+ * the DRAFT and nothing is written until Save. Outside customise mode Remove in
+ * any card's menu is the reader's dismissal of it, which writes at once and
+ * leaves a reader on the default following it (`useDismissPlacement`). Either
+ * way the card stays in the list marked
  * removed, so Undo puts back the same card in the same place, size and
  * settings included.
  *

@@ -16,8 +16,10 @@
  * @module domains/versions/entity-teardown
  */
 
+import type { RevalidationIntent } from "../../revalidation/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { deletePinsOfTarget } from "../dashboard/dashboard-pins";
+import { deletedEntityIntent } from "../flush-content-change";
 
 import type { VersionsDbApi } from "./db-api";
 import { REGISTRY_TABLES } from "./history-locks";
@@ -39,7 +41,10 @@ export interface DashboardTables {
 
 /**
  * Delete an entity's registry row, then its autosaves, version pins and
- * readers' dashboard pins, on the caller's transaction. Returns how many registry rows were deleted.
+ * readers' dashboard pins, on the caller's transaction. Returns how many registry rows were deleted,
+ * and the intent that expires the entity's cached reads: read from the row's own `revalidate`
+ * setting on this transaction, so it is the current one and not a cached copy, and `undefined` when
+ * nothing was deleted or the entity opts out. The caller flushes it once the transaction commits.
  *
  * The row goes FIRST. A pin locks this row before it writes, so deleting it
  * first takes the same lock in the same order: a pin under way finishes, and
@@ -53,9 +58,17 @@ export async function deleteEntityRegistryRow(
   scopeKind: VersionScopeKind,
   scopeSlug: string,
   tables: DashboardTables
-): Promise<number> {
+): Promise<DeletedEntity> {
   const registry = REGISTRY_TABLES[scopeKind];
-  if (registry === undefined) return 0;
+  if (registry === undefined) return { deleted: 0, expire: undefined };
+  // Read before the delete, on the same transaction and locking the row, so
+  // the setting is the latest committed one and nothing changes it before
+  // the delete (a plain read on MySQL would see the transaction's snapshot).
+  const [row] = await tx.select<{ revalidate: unknown }>(registry, {
+    columns: ["revalidate"],
+    where: { and: [{ column: "slug", op: "=" as const, value: scopeSlug }] },
+    forUpdate: true,
+  });
   const deleted = await tx.delete(registry, {
     and: [{ column: "slug", op: "=" as const, value: scopeSlug }],
   });
@@ -73,7 +86,22 @@ export async function deleteEntityRegistryRow(
       targetSlug: scopeSlug,
     });
   }
-  return deleted;
+  const expire =
+    deleted > 0 && row !== undefined && isCached(scopeKind)
+      ? deletedEntityIntent(scopeKind, scopeSlug, row.revalidate)
+      : undefined;
+  return { deleted, expire };
+}
+
+/** What deleting an entity's registry row did. */
+export interface DeletedEntity {
+  deleted: number;
+  expire: RevalidationIntent | undefined;
+}
+
+/** Whether nextly tags cached reads of this kind of entity. */
+function isCached(kind: VersionScopeKind): kind is "collection" | "single" {
+  return kind === "collection" || kind === "single";
 }
 
 /**

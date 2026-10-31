@@ -10,7 +10,8 @@
  * - DocumentTitleBlock for the title and, on an entry, the slug under it
  * - EntryMetaStrip for the document id where the panel is not on screen
  * - EntryFormContent for field rendering (Builder-defined fields only)
- * - EntryFormSidebar for system metadata (Document panel only)
+ * - EntryFormSidebar for the document panel's sections, framed docked,
+ *   floating or as a sheet by DocumentSidePanel
  *
  * Supports both standalone (page) and embedded (modal) modes.
  *
@@ -59,6 +60,8 @@ import { EntryLocaleProvider } from "../EntryLocaleContext";
 import { DocumentLanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
+import { isRemovedFromCode } from "../removed-from-code-notice";
+import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
@@ -74,10 +77,10 @@ import { DocumentBanners } from "./DocumentBanners";
 import { DocumentBar } from "./DocumentBar";
 import {
   DOCUMENT_COLUMN_INSET,
-  DOCUMENT_PANEL_STICKY,
   DocumentEditorLayout,
 } from "./DocumentEditorLayout";
 import { DocumentLockBanner } from "./DocumentLockBanner";
+import { DocumentSidePanel } from "./DocumentSidePanel";
 import { DocumentTitleBlock } from "./DocumentTitleBlock";
 import { DocumentTrail } from "./DocumentTrail";
 import { DocumentViewBody, type DocumentViewMount } from "./DocumentViewBody";
@@ -109,7 +112,7 @@ import {
   type DocumentActionBindingsInput,
 } from "./useDocumentActionBindings";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
-import { useDocumentPanelCollapsed } from "./useDocumentPanelCollapsed";
+import { useDocumentPanel } from "./useDocumentPanel";
 import {
   useEntryForm,
   getCollectionFields,
@@ -529,13 +532,6 @@ export function EntryForm({
   // when a field-level revalidation runs after that first attempt.
   const { errors, submitCount } = form.formState;
 
-  // Rail collapse state. Toggle lives in the DocumentBar; the rail itself
-  // reads `railCollapsed` to decide whether to render. Persisted in
-  // localStorage so the choice survives reloads.
-  // Out of the way when the author collapsed it, and while history is open,
-  // which takes its place.
-  const { collapsed: railCollapsed, toggle: toggleRail } =
-    useDocumentPanelCollapsed(historyEnabledFrom(collection) !== false);
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
@@ -637,13 +633,22 @@ export function EntryForm({
   // A user who may read this entry but not change it gets the same page,
   // read-only, with no claim made on the document.
   const updateAnswer = useUpdateAnswer(collectionSlug);
-  const readOnlyForReader = updateAnswer === "refused" && mode === "edit";
+  // A collection removed from code refuses every write to its entries, for
+  // everyone: the page opens as it does for a reader, through the same gates.
+  const removedFromCode = isRemovedFromCode(collection);
+  const readOnlyForReader =
+    (updateAnswer === "refused" || removedFromCode) && mode === "edit";
+  // What the user's access allows, apart from the removal: previewing and
+  // sharing a preview follow it alone, since the server keeps preview links
+  // working for a removed collection and opening one writes no entry.
+  const accessAllowsEdits = mode === "create" || editsOffered(updateAnswer);
   // While a language switch's answer is on its way, nothing that saves is
   // offered and a submit is held, though the page is not read-only.
-  const mayEdit = mode === "create" || editsOffered(updateAnswer);
-  // What changing the entry needs is held with it: previewing and sharing a
-  // preview (minting a link needs it on the server) and a version's restore,
-  // for a reader and while a language switch's answer is on its way.
+  const mayEdit = accessAllowsEdits && !removedFromCode;
+  const previewHeld = !accessAllowsEdits;
+  // What changing the entry needs is held with it: a recovery point and a
+  // version's restore, for a reader, for a removed collection and while a
+  // language switch's answer is on its way.
   const updatesHeld = !mayEdit;
   // While a refused publish's recovery runs, every field it reaches is
   // read-only, as it is while someone else holds the entry.
@@ -653,6 +658,7 @@ export function EntryForm({
     entryId: entry?.id,
     enabled: mode === "edit",
     readOnlyForReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
   });
   const lock = heldWhileRecovering(lockSurface, recovering);
 
@@ -694,12 +700,16 @@ export function EntryForm({
   // Changing the content is held for a reader as well. Deleting is not: it
   // follows its own permission, and is offered only with it.
   const editsHeld = writesHeld || !mayEdit;
+  // A status write alone is held where the document's writes are, and for a
+  // collection removed from code, whose publish the server refuses as it
+  // refuses a save.
+  const statusWriteHold = writesHeld || removedFromCode;
   // Publishing every language changes only each language's status, so a
   // reader whose document nothing else holds is still offered it.
   const publishAllHeld = statusWritesHeld({
     editsHeld,
     refused: readOnlyForReader,
-    writesHeld,
+    writesHeld: statusWriteHold,
   });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
@@ -722,7 +732,8 @@ export function EntryForm({
     collectionSlug,
     "updateInDefaultLanguage"
   );
-  const canSave = mode === "create" ? canCreate : canUpdateUnnamed;
+  const canSave =
+    !removedFromCode && (mode === "create" ? canCreate : canUpdateUnnamed);
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
@@ -751,7 +762,7 @@ export function EntryForm({
     // their own permissions judge; everything else stays held.
     const status = readerStatusWrite(intent, {
       refused: readOnlyForReader,
-      writesHeld,
+      writesHeld: statusWriteHold,
     });
     return status === undefined
       ? Promise.resolve(submitHeld)
@@ -822,7 +833,7 @@ export function EntryForm({
   // Withheld from a reader too, so the share popover cannot stay mounted
   // once the user may no longer change the entry.
   const shareDocument: PreviewLinkDocument | undefined =
-    updatesHeld || savedEntryId === "" || linkLocale.kind === "unresolved"
+    previewHeld || savedEntryId === "" || linkLocale.kind === "unresolved"
       ? undefined
       : {
           collection: collection.name,
@@ -879,7 +890,7 @@ export function EntryForm({
   // Previewing, and sharing a preview, are offered only to a user who may
   // change the entry: minting a link needs that on the server.
   const canPreview =
-    !updatesHeld &&
+    !previewHeld &&
     entryPreview.isPreviewAvailable &&
     savedEntryId !== "" &&
     linkLocale.kind !== "unresolved";
@@ -898,6 +909,32 @@ export function EntryForm({
   };
   const contextDocumentStatus =
     mode === "create" ? {} : { documentStatus: editedStatus };
+
+  /*
+   * Whether the preview pane is actually on screen: withheld while
+   * translation mode is on, beside a document view, and for a reader, as the
+   * pane itself reads below. A removed collection keeps it: the preview
+   * follows access alone, as previewing writes nothing.
+   */
+  const previewOnScreen =
+    previewOpen &&
+    translationMode.source === undefined &&
+    !documentView &&
+    !previewHeld;
+
+  // The document panel: on screen or not, and how it sits at the editor's
+  // width. The preview folds it and showing it closes the preview; history
+  // takes its place. Its toggle lives in the DocumentBar.
+  const panel = useDocumentPanel({
+    historyAvailable: historyEnabledFrom(collection) !== false,
+    previewOpen: previewOnScreen,
+    closePreview: () => setPreviewOpen(false),
+  });
+  // Nothing to show before the entry exists.
+  const panelOnScreen = mode === "edit" && panel.shown;
+  // Where the docked column is on screen, it carries the id and the language
+  // panel, so the field column's own copies of them step aside.
+  const panelDocked = mode === "edit" && panel.docked;
 
   /*
    * What deciding this document's actions reads. Every write handler goes
@@ -919,6 +956,7 @@ export function EntryForm({
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
     canEdit: mayEdit,
+    writesRefused: removedFromCode,
     contributedActions: documentActions,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
@@ -966,6 +1004,21 @@ export function EntryForm({
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
             />
+            {/* No page around a modal to carry the removed-from-code notice in
+                a document banner, so the modal says it itself. */}
+            {removedFromCode && (
+              <RemovedFromCodeNotice
+                entity={{
+                  kind: "collection",
+                  label:
+                    collection.labels?.plural ||
+                    collection.label ||
+                    collection.name,
+                  slug: collection.name,
+                }}
+                state={collection.removedFromCodeState}
+              />
+            )}
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
             {/* This branch renders every collection field, the editable slug among them, but not
@@ -1061,12 +1114,7 @@ export function EntryForm({
               // flag survives a move from the edit screen into the view.
               // Nor for a reader, who is offered no preview: an open pane
               // closes once the user may no longer change the entry.
-              open={
-                previewOpen &&
-                translationMode.source === undefined &&
-                !documentView &&
-                !updatesHeld
-              }
+              open={previewOnScreen}
               onClose={() => setPreviewOpen(false)}
               scope={{
                 collection: collection.name,
@@ -1142,10 +1190,14 @@ export function EntryForm({
                               row, so they sit above it rather than inside the
                               measured field column. */}
                             <DocumentEditorLayout
+                              frameRef={panel.measure}
+                              panelMode={panel.mode}
                               bar={
                                 <DocumentBar
                                   mode={mode}
+                                  panelMode={panel.mode}
                                   documentLocked={lock.readOnly}
+                                  writesRefused={removedFromCode}
                                   isSubmitting={isSubmitting}
                                   // The whole unsaved-work state, so the restore
                                   // confirmation covers builder-held work too.
@@ -1199,7 +1251,7 @@ export function EntryForm({
                                   // locale is either refused by the mint route or, if the claim
                                   // were dropped to avoid that, a grant over every translation.
                                   isLinkAvailable={
-                                    !updatesHeld &&
+                                    !previewHeld &&
                                     savedEntryId !== "" &&
                                     linkLocale.kind !== "unresolved"
                                   }
@@ -1213,9 +1265,9 @@ export function EntryForm({
                                     "collection",
                                     controllerNames[0]
                                   )}
-                                  isRailCollapsed={railCollapsed}
+                                  isRailCollapsed={!panelOnScreen}
                                   onToggleRail={
-                                    mode === "edit" ? toggleRail : undefined
+                                    mode === "edit" ? panel.toggle : undefined
                                   }
                                 />
                               }
@@ -1269,17 +1321,15 @@ export function EntryForm({
                                   }
                                 />
                                 <EntryMetaStrip
-                                  isRailCollapsed={railCollapsed}
+                                  panelCarriesId={panelDocked}
                                   documentId={entry?.id}
                                 />
 
-                                {/* The language panel, inline. Its rail mount is
-                        `hidden @4xl/content:flex`, so this is the exact
-                        complement: shown only where the rail is not. When the
-                        rail cannot carry it at all — create mode, or the author
-                        collapsed it — the panel renders unconditionally instead,
-                        because "the actions live in the rail" is precisely the
-                        failure this stage removes. */}
+                                {/* The language panel, inline: the exact
+                        complement of the docked panel, shown wherever that
+                        column is not on screen — create mode, a folded panel,
+                        and every width the panel floats or is a sheet at,
+                        where it opens only when asked for. */}
                                 {localizationEnabled && (
                                   <div
                                     className={cn(
@@ -1287,9 +1337,7 @@ export function EntryForm({
                                       // fields, not indented past them.
                                       "pt-4",
                                       DOCUMENT_COLUMN_INSET,
-                                      mode === "edit" &&
-                                        !railCollapsed &&
-                                        "@4xl/content:hidden"
+                                      panelDocked && "hidden"
                                     )}
                                   >
                                     <DocumentLanguagePanel
@@ -1359,45 +1407,50 @@ export function EntryForm({
                                 </ViewedVersionBody>
                               </div>
 
-                              {/* Rail (collapsible). Width 320px. Hidden until the content panel
-                  is wide enough (@4xl) to fit it beside the main column, until a
-                  future mobile sheet ships.
-
-                  The mode === "edit" gate: in create mode the entry does not
-                  exist yet, so DocumentPanel returns null and the rail has
-                  nothing to show. Rendering it anyway left an empty 320px
-                  strip down the right side of the page, which reads as a
-                  failed load rather than as an absence. */}
-                              {mode === "edit" && !railCollapsed && (
-                                <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                                  <div
-                                    className={cn(
-                                      DOCUMENT_PANEL_STICKY,
-                                      "overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col"
-                                    )}
-                                  >
-                                    <EntryFormSidebar
-                                      mode={mode}
-                                      entry={entry}
-                                      hasStatus={hasStatus}
-                                      {...(locale === undefined
-                                        ? {}
-                                        : { locale })}
-                                      {...(switchLocale === undefined
-                                        ? {}
-                                        : { onLocaleChange: switchLocale })}
-                                      actionsDisabled={contentHeld}
-                                      // Publishing every language is a write
-                                      // too, so a recovery holds it as well.
-                                      publishAllDisabled={
-                                        publishAllHeld || recovering
-                                      }
-                                      // A reader may still open the other languages.
-                                      navigationDisabled={navigationHeld}
-                                    />
-                                  </div>
-                                </div>
-                              )}
+                              {/* The document panel, framed for the editor's
+                                width: docked beside the fields, floating
+                                over them, or a sheet on a phone. Not in
+                                create mode: the entry does not exist yet, and
+                                an empty column reads as a failed load. */}
+                              {mode === "edit" ? (
+                                <DocumentSidePanel
+                                  mode={panel.mode}
+                                  shown={panelOnScreen}
+                                  onClose={panel.hide}
+                                >
+                                  <EntryFormSidebar
+                                    mode={mode}
+                                    entry={entry}
+                                    hasStatus={hasStatus}
+                                    // The pill's status, read from the
+                                    // language being edited.
+                                    documentStatus={editedStatus}
+                                    {...(savedEntryId === ""
+                                      ? {}
+                                      : {
+                                          releaseDocument: {
+                                            scopeKind: "collection" as const,
+                                            scopeSlug: collection.name,
+                                            entryId: savedEntryId,
+                                          },
+                                        })}
+                                    {...(locale === undefined
+                                      ? {}
+                                      : { locale })}
+                                    {...(switchLocale === undefined
+                                      ? {}
+                                      : { onLocaleChange: switchLocale })}
+                                    actionsDisabled={contentHeld}
+                                    // Publishing every language is a write
+                                    // too, so a recovery holds it as well.
+                                    publishAllDisabled={
+                                      publishAllHeld || recovering
+                                    }
+                                    // A reader may still open the other languages.
+                                    navigationDisabled={navigationHeld}
+                                  />
+                                </DocumentSidePanel>
+                              ) : null}
                             </DocumentEditorLayout>
                           </CopyFromLanguageScope>
                         </SaveActionFormProvider>

@@ -9,7 +9,7 @@
  *
  * @module plugins/routes/retired-manage-asked
  */
-import { isRetiredManage } from "../../auth/access/manage-bridge";
+import { isRetiredManage } from "../../auth/access/retired-manage-permissions";
 import { getNextlyLogger } from "../../observability/logger";
 
 /** The plugins already told, with the resource they asked about. */

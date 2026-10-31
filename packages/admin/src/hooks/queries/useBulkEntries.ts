@@ -37,6 +37,8 @@ import {
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
+
 /**
  * Callback payload for bulk operation lifecycle hooks. Carries the
  * canonical `BulkResponse` shape so the consumer can render rich
@@ -213,6 +215,9 @@ export function useBulkDeleteEntries({
       onSuccess?.(payload);
     },
     onError: error => {
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
       // Network / non-2xx error: the server-bulk request itself failed.
       // Partial-success failures (200 with errors[]) come through onSuccess.
       if (showToast) {
@@ -306,6 +311,9 @@ export function useBulkUpdateEntries({
       onSuccess?.(payload);
     },
     onError: error => {
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
       if (showToast) {
         toast.error(
           error instanceof Error ? error.message : "Bulk update failed."

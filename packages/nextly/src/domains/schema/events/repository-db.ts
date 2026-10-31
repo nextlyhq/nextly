@@ -9,9 +9,16 @@
  * @module domains/schema/events/repository-db
  */
 
-/** A `select().from()` chain: awaitable as is, or narrowed by `where`. */
-type SelectChain = Promise<Array<Record<string, unknown>>> & {
-  where: (c: unknown) => Promise<Array<Record<string, unknown>>>;
+type Rows = Promise<Array<Record<string, unknown>>>;
+
+/**
+ * A `select().from()` chain: awaitable as is, or narrowed by `where`, and
+ * then awaitable as is or ordered and limited.
+ */
+type SelectChain = Rows & {
+  where: (c: unknown) => Rows & {
+    orderBy: (o: unknown) => { limit: (n: number) => Rows };
+  };
 };
 
 /** Structural shape of the Drizzle methods a schema repository uses. */

@@ -4,7 +4,12 @@
  * MediaLibrary Component
  *
  * Complete media management interface with upload, browse, search, edit, and delete functionality.
- * Integrates MediaGrid, MediaUploadDropzone, Pagination, and search/filter controls.
+ * Integrates MediaGrid, Pagination, and search/filter controls.
+ *
+ * Files dropped anywhere on the page, or chosen with Upload, go into the
+ * folder on screen through the upload queue, and the upload tray in the
+ * page's corner lists each with its progress. A person who may not upload
+ * has neither the Upload button nor the drop target.
  *
  * An item opens in a details panel beside the grid, which can expand to a
  * full-screen viewer; the page owns which item is open and returns focus to
@@ -57,12 +62,15 @@ import { MediaDeleteDialog } from "./MediaDeleteDialog";
 import type { MediaSave } from "./MediaDetails";
 import { MediaDetailsPanel } from "./MediaDetailsPanel";
 import { useMediaDetailsLayout } from "./MediaDetailsPanel/useMediaDetailsLayout";
+import { MediaDropOverlay } from "./MediaDropOverlay";
 import { MediaGrid } from "./MediaGrid";
 import { MediaLibraryToolbar } from "./MediaLibraryToolbar";
 import { MediaListView } from "./MediaListView";
-import { MediaUploadDropzone } from "./MediaUploadDropzone";
+import { useMediaFileDrop } from "./MediaUploadDropzone/useMediaFileDrop";
 import { MediaViewer } from "./MediaViewer";
 import { MoveToFolderDialog } from "./MoveToFolderDialog";
+import { UploadTray } from "./UploadTray";
+import { useUploadQueue } from "./UploadTray/useUploadQueue";
 
 /**
  * MediaLibrary component props
@@ -132,7 +140,7 @@ function emptyLibraryMessage({
   canUpload: boolean;
 }): string {
   if (filtered) return "Nothing matches this search or filter.";
-  if (canUpload) return "Add some with Upload files above.";
+  if (canUpload) return "Drop files here, or use Upload files above.";
   return "Nothing has been added here yet.";
 }
 
@@ -190,7 +198,6 @@ export function MediaLibrary({
   );
   const [openMenuId, setOpenMenuId] = React.useState<string | null>(null);
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
-  const [isUploadCollapsed, setIsUploadCollapsed] = React.useState(true);
 
   // State: the item whose details are open, and whether they are expanded to
   // the full-screen viewer. By id, so the panel always shows the item as the
@@ -202,9 +209,7 @@ export function MediaLibrary({
   const [focusReturnId, setFocusReturnId] = React.useState<string | null>(null);
   // What had focus when the panel opened: the fallback when that tile is gone.
   const openerRef = React.useRef<HTMLElement | null>(null);
-  const libraryRef = React.useRef<HTMLDivElement>(null);
   const headingRef = React.useRef<HTMLHeadingElement>(null);
-  const detailsLayout = useMediaDetailsLayout(libraryRef);
 
   // What this person may do. A reader browses and reads; everything that
   // writes is left out rather than offered and refused by the server.
@@ -339,18 +344,21 @@ export function MediaLibrary({
     setSelectedIds(new Set());
   }, []);
 
-  // Handlers: Upload
-  const handleUploadComplete = React.useCallback((_media: Media[]) => {
-    // The dropzone has already invalidated the media lists, which refetches
-    // the one on screen; asking again here would fetch it twice.
-    setSelectedIds(new Set());
-  }, []);
-
-  // Collapse the drop target as soon as files start uploading; the dropzone's
-  // queue keeps rendering while collapsed, so progress stays visible.
-  const handleUploadStart = React.useCallback(() => {
-    setIsUploadCollapsed(true);
-  }, []);
+  // Uploads: one queue for the drop target and the Upload button. Each upload
+  // refreshes the media lists itself, so a finished batch only clears the
+  // selection, whose items may have moved pages under the new files.
+  const uploadQueue = useUploadQueue({
+    onSettled: () => setSelectedIds(new Set()),
+  });
+  const fileDrop = useMediaFileDrop({
+    disabled: !canUpload,
+    // Into the folder on screen when the files arrive.
+    onFiles: files => uploadQueue.add(files, activeFolderId),
+  });
+  // The library's root is the drop target, so react-dropzone's ref to it is
+  // the element the details layout measures and focus returns within.
+  const libraryRef = fileDrop.rootRef;
+  const detailsLayout = useMediaDetailsLayout(libraryRef);
 
   // Handlers: Delete
   const handleDeleteItem = React.useCallback((media: Media) => {
@@ -447,7 +455,8 @@ export function MediaLibrary({
     if (focusMediaEntry(libraryRef.current, focusReturnId)) return;
     if (opener?.isConnected) opener.focus();
     else headingRef.current?.focus();
-  }, [focusReturnId]);
+    // `libraryRef` is react-dropzone's ref object, the same on every render.
+  }, [focusReturnId, libraryRef]);
 
   // Escape closes the panel from anywhere in the library while it sits
   // beside the grid. A dialog or menu opened from the page is portaled out of
@@ -465,7 +474,7 @@ export function MediaLibrary({
       event.preventDefault();
       handleCloseDetails();
     },
-    [openMediaId, detailsLayout, handleCloseDetails]
+    [openMediaId, detailsLayout, handleCloseDetails, libraryRef]
   );
 
   const handleSaveMedia: MediaSave = React.useCallback(
@@ -620,14 +629,20 @@ export function MediaLibrary({
     : null;
 
   return (
-    // A column rather than the scroll container: the page's main area
-    // scrolls, which is what lets the details panel stick beside the grid.
+    // The library's root, which takes a caller's className, and the drop
+    // target for files from outside the page: a reader's is disabled, so it
+    // takes no drop and shows no overlay. A column rather than the scroll
+    // container: the page's main area scrolls, which is what lets the details
+    // panel stick beside the grid.
     <div
-      ref={libraryRef}
-      className={cn(
-        "flex min-h-[calc(100vh-4rem)] min-w-0 flex-col",
-        className
-      )}
+      {...fileDrop.getRootProps({
+        className: cn(
+          "relative flex min-h-[calc(100vh-4rem)] min-w-0 flex-col",
+          className
+        ),
+      })}
+      // Beside the spread, not through it: with `noKeyboard`, react-dropzone
+      // drops a root keydown handler it is handed.
       onKeyDown={handleLibraryKeyDown}
     >
       <Breadcrumbs
@@ -663,24 +678,14 @@ export function MediaLibrary({
           visible: isFolderTreeVisible,
           onToggle: () => setIsFolderTreeVisible(!isFolderTreeVisible),
         }}
-        upload={{
-          allowed: canUpload,
-          open: !isUploadCollapsed,
-          onToggle: () => setIsUploadCollapsed(!isUploadCollapsed),
-        }}
+        upload={{ allowed: canUpload, onUpload: fileDrop.open }}
       />
 
-      {/* A reader has no drop target: nothing they drop could be stored. */}
+      {/* The chooser Upload opens; a reader has none. Upload is what a
+            person and a screen reader meet, so the input itself is hidden
+            from both, as the picker's is. */}
       {canUpload && (
-        <MediaUploadDropzone
-          isCollapsed={isUploadCollapsed}
-          onToggleCollapse={() => setIsUploadCollapsed(!isUploadCollapsed)}
-          onUploadComplete={handleUploadComplete}
-          onUploadStart={handleUploadStart}
-          activeFolderId={activeFolderId}
-          activeFolderName={activeFolderName}
-          className={cn(!isUploadCollapsed && "mb-8")}
-        />
+        <input {...fileDrop.getInputProps()} aria-hidden="true" tabIndex={-1} />
       )}
 
       {/* The grid and, beside it, the open item's details. */}
@@ -895,7 +900,7 @@ export function MediaLibrary({
             <AlertDialogAction
               onClick={handleConfirmBulkDelete}
               disabled={isBulkDeleting}
-              className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+              variant="destructive"
             >
               {isBulkDeleting ? "Deleting..." : "Delete"}
             </AlertDialogAction>
@@ -943,6 +948,23 @@ export function MediaLibrary({
           void refetch();
           if (moveMediaIds === null) setSelectedIds(new Set());
         }}
+      />
+
+      {fileDrop.isDragActive && (
+        <MediaDropOverlay
+          destination={
+            activeFolderId
+              ? (activeFolderName ?? "this folder")
+              : "Media Library"
+          }
+          description={fileDrop.description}
+        />
+      )}
+
+      <UploadTray
+        queue={uploadQueue}
+        placement="floating"
+        returnFocusRef={headingRef}
       />
     </div>
   );

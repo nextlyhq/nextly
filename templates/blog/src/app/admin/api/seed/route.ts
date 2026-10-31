@@ -130,7 +130,7 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const result = await seed({ nextly });
+    const result = await seed({ nextly, config });
 
     // Persist completedAt so the dashboard card hides on next probe.
     // Best-effort: a meta-write failure should NOT mask a successful

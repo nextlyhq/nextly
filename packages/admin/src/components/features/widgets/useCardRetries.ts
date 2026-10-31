@@ -298,6 +298,8 @@ export interface CardRetries {
   retry: (placementId: string) => void;
   /** When the answer this card shows arrived: its retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** When this card's own answer arrived: its retry's, or its own request's in the batch. */
+  answeredAtFor: (placementId: string) => Date | null;
   /**
    * Ask one card again if it now asks more, or other, than its answer was fetched for; see
    * `grown`. Handed the card's requests: its one, or one per cell.
@@ -318,6 +320,7 @@ export function useCardRetries(
     slots: Record<string, WidgetSlot>;
     cellSlots: CellSlots;
     updatedAt: Date | null;
+    answeredAtFor: (placementId: string) => Date | null;
     fetchedSizeFor: (placementId: string) => SizedAt | undefined;
     fetchedAppliedFor: (placementId: string) => string | undefined;
     fetchedCellsAppliedFor: (placementId: string) => CellsApplied | undefined;
@@ -419,6 +422,15 @@ export function useCardRetries(
     [state.settled, batch.updatedAt]
   );
 
+  // The card's own time, for a reader asking whether THIS card's answer has come in: its own
+  // request's in the batch, which `updatedAtFor`'s batch-wide oldest is not.
+  const batchAnsweredAtFor = batch.answeredAtFor;
+  const answeredAtFor = useCallback(
+    (placementId: string) =>
+      state.settled.get(placementId)?.at ?? batchAnsweredAtFor(placementId),
+    [state.settled, batchAnsweredAtFor]
+  );
+
   const fetchingPlacementIds = useMemo(
     () => new Set(state.inFlight.keys()),
     [state.inFlight]
@@ -439,6 +451,7 @@ export function useCardRetries(
     cellSlots,
     retry,
     updatedAtFor,
+    answeredAtFor,
     grow,
     fetchingPlacementIds,
     fetchedSizeFor,

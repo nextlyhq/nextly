@@ -17,6 +17,10 @@ import { createMediaHandlers } from "../../../api/media-handlers";
 import { container } from "../../../di/container";
 import { CollectionAccessService } from "../../../domains/collections/services/collection-access-service";
 import { checkSingleAccess } from "../../../domains/singles/services/single-query-service";
+import {
+  NEXTLY_ERROR_STATUS,
+  type NextlyErrorCode,
+} from "../../../errors/error-codes";
 import { getPluginRouteRegistry } from "../../../plugins/routes/route-registry";
 import { runPluginRoute } from "../../../plugins/routes/dispatch";
 import type {
@@ -53,6 +57,7 @@ import {
   hasOutsideTwin,
   rowKey,
   verdictOf,
+  WRITING_DOORS,
   type Answer,
   type Door,
   type Row,
@@ -69,6 +74,7 @@ import {
   personRoute,
   probesRead,
   pubSingleOf,
+  refsOf,
   relationOf,
   singleOf,
   widgetFor,
@@ -113,11 +119,13 @@ const askingOutside = new AsyncLocalStorage<true>();
 
 /** The target's slug, and the row id a collection action names. */
 function addressOf(world: World, row: Row, door: string) {
-  if (row.target === "single") return { slug: singleOf(row.rule), id: "" };
-  if (row.target === "single-pub") {
-    return { slug: pubSingleOf(row.rule), id: "" };
+  if (row.target === "single") {
+    return { slug: singleOf(row.rule, row.setup), id: "" };
   }
-  const slug = collectionOf(row.rule);
+  if (row.target === "single-pub") {
+    return { slug: pubSingleOf(row.rule, row.setup), id: "" };
+  }
+  const slug = collectionOf(row.rule, row.setup);
   const seeded = world.seeded.get(slug);
   if (!seeded) throw new Error(`nothing seeded for ${slug}`);
   // A filtered write's twin outside the filter first: an update's twin is a
@@ -498,10 +506,14 @@ async function directWithoutService(world: World, row: Row, who: CallerHandle) {
 }
 
 async function website(world: World, row: Row, who: CallerHandle) {
-  const entry = await resolveContent(collectionOf(row.rule), "probe", {
-    nextly: world.t.nextly,
-    ...(who.user ? { user: who.user } : {}),
-  });
+  const entry = await resolveContent(
+    collectionOf(row.rule, row.setup),
+    "probe",
+    {
+      nextly: world.t.nextly,
+      ...(who.user ? { user: who.user } : {}),
+    }
+  );
   return entry ? "A" : "R";
 }
 
@@ -526,9 +538,9 @@ async function route(world: World, row: Row, who: CallerHandle) {
 }
 
 export function targetSlug(row: Row): string {
-  if (row.target === "collection") return collectionOf(row.rule);
-  if (row.target === "single") return singleOf(row.rule);
-  if (row.target === "single-pub") return pubSingleOf(row.rule);
+  if (row.target === "collection") return collectionOf(row.rule, row.setup);
+  if (row.target === "single") return singleOf(row.rule, row.setup);
+  if (row.target === "single-pub") return pubSingleOf(row.rule, row.setup);
   return RESOURCE_PATHS[row.target] ?? row.target;
 }
 
@@ -714,7 +726,7 @@ async function schema(
     if (answer.refusal) noteRefusal(answer.refusal);
     return answer.refused;
   }
-  const slug = collectionOf(row.rule);
+  const slug = collectionOf(row.rule, row.setup);
   return {
     answer: answer.includes(slug) ? "A" : "R",
     deviations: bySubject.get(slug) ?? [],
@@ -753,11 +765,12 @@ function populationAnswer(value: unknown, row: Row, marker: string): Answer {
   return "uploadedBy" in value || "uploaded_by" in value ? "A" : "S";
 }
 
-/** Reads `refs` with its relationships populated, once per caller. */
+/** Reads the setup's `refs` with its relationships populated. */
 async function population(world: World, row: Row, who: CallerHandle) {
+  const collection = refsOf(row.setup);
   const ref = (await world.t.nextly.findByID({
-    collection: "refs",
-    id: world.refId,
+    collection,
+    id: world.refIds.get(collection) ?? "",
     depth: 1,
     ...(row.setup === "bound" ? boundCaller(who) : directCaller(who)),
   })) as Record<string, unknown> | null;
@@ -925,12 +938,12 @@ async function lock(world: World, row: Row, who: CallerHandle) {
     row.target === "single"
       ? {
           scopeKind: "single",
-          slug: singleOf(row.rule),
-          entryId: await singleDocumentId(world, singleOf(row.rule)),
+          slug: singleOf(row.rule, row.setup),
+          entryId: await singleDocumentId(world, singleOf(row.rule, row.setup)),
         }
       : {
           scopeKind: "collection",
-          slug: collectionOf(row.rule),
+          slug: collectionOf(row.rule, row.setup),
           entryId: addressOf(world, row, "lock").id,
         };
   const res = await request("POST", ["document-lock"], who.headers, ref);
@@ -953,6 +966,188 @@ async function lock(world: World, row: Row, who: CallerHandle) {
   return status === "acquired" ? "A" : `=${String(status)}`;
 }
 
+/** Whether `code` is a canonical code, which carries its status. */
+const isErrorCode = (code: string): code is NextlyErrorCode =>
+  Object.hasOwn(NEXTLY_ERROR_STATUS, code);
+
+/** A bulk route's answer: the entries it changed and those it failed. */
+interface BulkBody {
+  items?: { id?: unknown }[];
+  errors?: { id?: unknown; code?: unknown; message?: unknown }[];
+}
+
+/**
+ * Asks the REST bulk route by ids for `ids`, as the admin's entry list sends
+ * a row's or a selection's Delete, Publish and Unpublish: a delete through
+ * `bulk-delete`, any other write through `bulk-update` with the body the
+ * single write sends as its `data`.
+ */
+function bulkRequest(
+  slug: string,
+  action: Exclude<Row["action"], "list" | "count">,
+  ids: string[],
+  headers: Record<string, string>
+): Promise<Response> {
+  const { body } = COLLECTION_REQUESTS[action];
+  return action === "delete"
+    ? request(
+        "POST",
+        ["collections", slug, "entries", "bulk-delete"],
+        headers,
+        { ids }
+      )
+    : request(
+        "POST",
+        ["collections", slug, "entries", "bulk-update"],
+        headers,
+        { ids, data: body }
+      );
+}
+
+/** The row stored under `id` in the row's target table, if any. */
+async function storedRowOf(world: World, row: Row, id: string) {
+  return (await storedTable(world, row)).find(
+    stored => String(stored.id) === id
+  );
+}
+
+/** Whether a bulk route's items name `id` as changed. */
+async function bulkChanged(res: Response, id: string): Promise<boolean> {
+  const body = (await res.clone().json()) as BulkBody;
+  return body.items?.some(item => String(item.id) === id) === true;
+}
+
+/**
+ * The refusal a bulk route answered `id` with among its items, its message
+ * read with the id taken out, so an entry answered as missing compares equal
+ * with a missing entry, whose own id its message names. `undefined` where the
+ * route changed the entry.
+ */
+async function bulkItemRefusal(
+  res: Response,
+  id: string
+): Promise<Refusal | undefined> {
+  const body = (await res.clone().json()) as BulkBody;
+  const failed = body.errors?.find(item => String(item.id) === id);
+  if (!failed) return undefined;
+  const code = typeof failed.code === "string" ? failed.code : "-";
+  return {
+    status: isErrorCode(code) ? NEXTLY_ERROR_STATUS[code] : 0,
+    code,
+    shape: "item",
+    message:
+      typeof failed.message === "string"
+        ? failed.message.replaceAll(id, "<id>")
+        : "",
+  };
+}
+
+/**
+ * A filtered write's twin's answer from the request that sent it with the
+ * entry inside the filter, by row, until the table asks the twin.
+ */
+const bulkTwinAnswers = new Map<
+  string,
+  { answer: Answer; refusal?: Refusal }
+>();
+
+/**
+ * The bulk routes by ids. A request the route refuses whole answers with its
+ * status, as REST does; one it lets through answers 200 whatever happened to
+ * each entry, so the entry's own result among the items is the answer: `A`
+ * where it was changed, the status of its failure's code where it failed.
+ * Every refusal is compared with the same request for an entry that does not
+ * exist.
+ *
+ * A write a rule's filter limits sends the entry inside the filter together
+ * with its twin outside it, as a selection holding both is sent, and the
+ * twin's own result in that request is its answer when the table asks it
+ * ({@link bulkTwinAnswers}): `A` where the route changed it, a refusal's
+ * status where it failed it and left it as it was, `=twin-written` where it
+ * failed it and changed it all the same, and `=twin-unnamed` where it named
+ * it in neither list.
+ */
+async function bulk(world: World, row: Row, who: CallerHandle) {
+  // The table asks this door only writes to existing entries.
+  const { action } = row;
+  if (action === "list" || action === "count") {
+    throw new Error(`a bulk route sends no ${action}`);
+  }
+  const seen = askingOutside.getStore()
+    ? bulkTwinAnswers.get(rowKey(row))
+    : undefined;
+  if (seen) {
+    bulkTwinAnswers.delete(rowKey(row));
+    if (seen.refusal) noteRefusal(seen.refusal);
+    return seen.answer;
+  }
+  const { slug, id } = addressOf(world, row, "bulk");
+  const twin =
+    !askingOutside.getStore() && hasOutsideTwin(row)
+      ? askingOutside.run(true, () => addressOf(world, row, "bulk").id)
+      : undefined;
+  const twinBefore =
+    twin === undefined ? undefined : await storedRowOf(world, row, twin);
+  const res = await bulkRequest(
+    slug,
+    action,
+    twin === undefined ? [id] : [id, twin],
+    who.headers
+  );
+  const absent = () => bulkRequest(slug, action, [ABSENT_ID], who.headers);
+  // A request refused whole names no entry in its path, and is compared with
+  // the same request for an entry that does not exist, so a refusal that
+  // tells the two apart shows. Its twin, refused with it, is asked again on
+  // its own.
+  if (res.status >= 300) {
+    await noteResponse(res);
+    await noteMissing(res, await absent());
+    return fromStatus(res.status);
+  }
+  if (twin !== undefined) {
+    const kept = isDeepStrictEqual(
+      twinBefore,
+      await storedRowOf(world, row, twin)
+    );
+    const answered = await bulkItemAnswer(res, twin, absent);
+    bulkTwinAnswers.set(
+      rowKey(row),
+      answered.refusal && !kept ? { answer: "=twin-written" } : answered
+    );
+  }
+  const answered = await bulkItemAnswer(res, id, absent);
+  if (answered.refusal) noteRefusal(answered.refusal);
+  return answered.answer;
+}
+
+/**
+ * One entry's answer among a bulk route's items: `A` where it was changed,
+ * the status of its failure's code where it failed, with that refusal
+ * compared with the same request for an entry that does not exist, and
+ * `=unnamed` where neither list names it.
+ */
+async function bulkItemAnswer(
+  res: Response,
+  id: string,
+  absent: () => Promise<Response>
+): Promise<{ answer: Answer; refusal?: Refusal }> {
+  const refusal = await bulkItemRefusal(res, id);
+  if (!refusal) {
+    return { answer: (await bulkChanged(res, id)) ? "A" : "=unnamed" };
+  }
+  const missing = await absent();
+  noteRefusal(refusal);
+  noteMissingRefusal(
+    missing.status >= 300
+      ? await refusalOf(missing)
+      : await bulkItemRefusal(missing, ABSENT_ID)
+  );
+  return {
+    answer: refusal.status === 0 ? "E" : String(refusal.status),
+    refusal: takeRefusal(),
+  };
+}
+
 const ADAPTERS: Record<
   Door,
   (world: World, row: Row, who: CallerHandle) => Promise<Answer | Attributed>
@@ -970,6 +1165,7 @@ const ADAPTERS: Record<
   widget,
   lock,
   capabilities,
+  bulk,
 };
 
 /**
@@ -1023,34 +1219,35 @@ async function answer(
     : { answer: result.answer, deviations: [...result.deviations], refusal };
 }
 
-/**
- * The doors where asking for a write IS the write. The others only ask a gate
- * (`route`, `can`) or read, so nothing they answer can have been written.
- */
-const WRITING_DOORS: ReadonlySet<Door> = new Set<Door>([
-  "rest",
-  "direct",
-  "service",
-]);
+/** The doors where asking for a write IS the write ({@link WRITING_DOORS}). */
+const WRITES_BY_ASKING: ReadonlySet<Door> = new Set<Door>(WRITING_DOORS);
 
 const READS: ReadonlySet<Row["action"]> = new Set(["read", "list", "count"]);
 
+/** The setups whose writes are asked: the others ask reads alone. */
+const WRITING_SETUPS: ReadonlySet<Row["setup"]> = new Set<Row["setup"]>([
+  "service",
+  "public",
+]);
+
 function writes(row: Row, door: Door): boolean {
   return (
-    row.setup === "service" &&
+    WRITING_SETUPS.has(row.setup) &&
     !READS.has(row.action) &&
     (row.target === "collection" ||
       row.target === "single" ||
       row.target === "single-pub") &&
-    WRITING_DOORS.has(door)
+    WRITES_BY_ASKING.has(door)
   );
 }
 
 /** The table a write to the row's target lands in. */
 function tableOf(row: Row): string {
-  if (row.target === "single") return `single_${singleOf(row.rule)}`;
-  if (row.target === "single-pub") return `single_${pubSingleOf(row.rule)}`;
-  return `dc_${collectionOf(row.rule)}`;
+  if (row.target === "single") return `single_${singleOf(row.rule, row.setup)}`;
+  if (row.target === "single-pub") {
+    return `single_${pubSingleOf(row.rule, row.setup)}`;
+  }
+  return `dc_${collectionOf(row.rule, row.setup)}`;
 }
 
 /**
@@ -1081,7 +1278,7 @@ async function markUpdated(world: World, row: Row): Promise<void> {
   const single = row.target === "single";
   const id = single
     ? (await storedTable(world, row))[0]?.id
-    : world.seeded.get(collectionOf(row.rule))?.updateId;
+    : world.seeded.get(collectionOf(row.rule, row.setup))?.updateId;
   // A Single's row is made on its first read, which every Single's update
   // follows in the table's order; an update finding none is seen anyway.
   if (id === undefined || id === null) return;
@@ -1127,6 +1324,30 @@ function addedPublished(
   );
 }
 
+/**
+ * Whether a write naming one collection entry did what it sent, from the
+ * table after it: a delete left no row under `id`, and an update, publish or
+ * unpublish left the row holding every value its request sent. A create names
+ * no entry, so it is done when it changed the table.
+ */
+function entryWriteDone(
+  row: Row,
+  id: string,
+  after: readonly Record<string, unknown>[],
+  landed: boolean
+): boolean {
+  const { action } = row;
+  if (action === "list" || action === "count") return landed;
+  const { byId, body } = COLLECTION_REQUESTS[action];
+  if (!byId) return landed;
+  const stored = after.find(entry => String(entry.id) === id);
+  if (!body) return stored === undefined;
+  return (
+    stored !== undefined &&
+    Object.entries(body).every(([field, value]) => stored[field] === value)
+  );
+}
+
 /** The status a Single's publish or unpublish leaves it in. */
 const statusAfter = (row: Row) =>
   row.action === "publish" ? "published" : "draft";
@@ -1158,16 +1379,19 @@ export async function ask(
   const inside = await answer(world, row, door);
   const after = await storedTable(world, row);
   const landed = !isDeepStrictEqual(before, after);
-  // A Single's publish or unpublish is done only when its status moved, and
-  // a create sent as published only when the row it added is published: a
-  // write that drops the status changes the table without doing what was
-  // asked.
+  // A Single's publish or unpublish is done only when its status moved, a
+  // create sent as published only when the row it added is published, and a
+  // write to a collection entry only when the entry holds what was sent: a
+  // write that drops the status or the title changes the table without doing
+  // what was asked.
   const done =
     row.target === "single-pub"
       ? after[0]?.status === statusAfter(row)
       : row.action === "new-pub"
         ? addedPublished(before, after)
-        : landed;
+        : row.target === "collection"
+          ? entryWriteDone(row, addressOf(world, row, door).id, after, landed)
+          : landed;
   if (!hasOutsideTwin(row)) return { ...inside, landed, done };
   // The twin, compared with the table as the first ask left it: an ask
   // answered as refused that wrote all the same is caught here.

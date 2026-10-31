@@ -2772,7 +2772,6 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
-    onboarding: { operation: "list", method: "getDashboardOnboarding" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
@@ -2780,6 +2779,8 @@ const DASHBOARD_ROUTES: Readonly<
     activity: { operation: "list", method: "getDashboardActivity" },
     layout: { operation: "list", method: "getWidgetLayout" },
     pins: { operation: "list", method: "getDashboardPins" },
+    summary: { operation: "list", method: "getDashboardSummary" },
+    setup: { operation: "list", method: "getDashboardSetup" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
@@ -2787,6 +2788,7 @@ const DASHBOARD_ROUTES: Readonly<
   },
   PUT: {
     layout: { operation: "update", method: "putWidgetLayout" },
+    setup: { operation: "update", method: "putDashboardSetup" },
   },
   DELETE: {
     layout: { operation: "delete", method: "deleteWidgetLayout" },
@@ -2798,16 +2800,18 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
- *   GET  /api/dashboard/onboarding     → getDashboardOnboarding
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   GET  /api/dashboard/summary        → getDashboardSummary
  *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   DELETE /api/dashboard/layout       → deleteWidgetLayout
  *   POST /api/dashboard/query          → postWidgetQuery
  *   GET  /api/dashboard/pins           → getDashboardPins
  *   POST /api/dashboard/pins           → postDashboardPin
  *   DELETE /api/dashboard/pins         → deleteDashboardPin
+ *   GET  /api/dashboard/setup          → getDashboardSetup
+ *   PUT  /api/dashboard/setup          → putDashboardSetup
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.

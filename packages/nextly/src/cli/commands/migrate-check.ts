@@ -61,6 +61,7 @@ import {
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
+import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -100,16 +101,30 @@ import {
   resolveComponentTableName,
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
-import { describeError } from "../../errors/index";
+import { addressRefusalsError } from "../../shared/address-rule";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import {
-  assertPluginFieldDeclarations,
-  describeDeclarationFailure,
-} from "../../shared/lib/assert-plugin-field-declarations";
+  type CliError,
+  configDeclarationError,
+  exitWithError,
+} from "../errors";
+import {
+  builderSnapshotMissing,
+  migrationFileEdited,
+  migrationSnapshotInvalid,
+  migrationSnapshotMissing,
+  schemaChangeWithoutMigration,
+  settingsChangeWithoutMigration,
+  snapshotWithoutMigration,
+} from "../errors/areas/migrations";
+import { builderSchemaConflict } from "../errors/areas/plugin-config";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import type { SupportedDialect } from "../utils/adapter";
 import {
-  builderMigrationRemedy,
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
+import {
   discoverMigrationGroups,
   getSortedBaseNames,
   isBuilderWrittenMigration,
@@ -151,32 +166,18 @@ export async function runMigrateCheck(
   // we just need to know which SQL flavor the diff engine should target
   // when computing the desired snapshot. Without this, drift-check
   // results would be inconsistent across dialects.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables. " +
-        "(migrate:check does not connect to the DB but needs the dialect to compare snapshots correctly.)"
-    );
-    process.exit(1);
-  }
-  const dialect = dbValidation.dialect!;
+  const dbValidation = requireDatabaseEnv(logger);
+  const dialect = dbValidation.dialect;
 
   // Load config.
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
   // first moment an unknown field type can be told apart from one a plugin had
@@ -194,8 +195,7 @@ export async function runMigrateCheck(
   } catch (error) {
     // Reported and exited rather than thrown, so an invalid declaration reads
     // like every other check failure instead of an unhandled crash.
-    logger.error(describeDeclarationFailure(error));
-    process.exit(1);
+    exitWithError(logger, configDeclarationError(error) ?? error);
   }
 
   const cwd = options.cwd ?? process.cwd();
@@ -209,8 +209,7 @@ export async function runMigrateCheck(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(`UI_SCHEMA_INVALID: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   // Materialize plugin extends that target Builder-made entities (P8) so the
@@ -246,8 +245,7 @@ export async function runMigrateCheck(
       ),
     });
   } catch (error) {
-    logger.error(describeDeclarationFailure(error));
-    process.exit(1);
+    exitWithError(logger, configDeclarationError(error) ?? error);
   }
 
   // Cross-file checks (slug collision, relation targets).
@@ -258,10 +256,7 @@ export async function runMigrateCheck(
     manifest,
   });
   if (crossIssues.length > 0) {
-    for (const issue of crossIssues) {
-      logger.error(`${issue.code}: ${issue.message}`);
-    }
-    process.exit(1);
+    exitWithError(logger, builderSchemaConflict(crossIssues));
   }
 
   // Merge code + UI entities (code-first wins) for the drift comparison.
@@ -378,9 +373,7 @@ export async function runChecks(args: {
       // (fix = regenerate or upgrade nextly) apart from "snapshot is
       // missing entirely" (fix = git checkout).
       if (err instanceof SnapshotFileError) {
-        logger.error(`INVALID_SNAPSHOT: ${err.message}`);
-        process.exit(1);
-        return;
+        return exitWithError(logger, migrationSnapshotInvalid(err.message));
       }
       throw err;
     }
@@ -389,28 +382,21 @@ export async function runChecks(args: {
       // `migrate:create` writes for the change, which `nextly migrate` also
       // asks for before it refuses to apply this one.
       if (isBuilderWrittenMigration(sqlName.replace(/\.sql$/, ""))) {
-        logger.error(`MISSING_SNAPSHOT: ${builderMigrationRemedy(sqlName)}`);
-        process.exit(1);
-        return;
+        return exitWithError(
+          logger,
+          builderSnapshotMissing(
+            "`nextly migrate:check` found a Schema Builder migration file with no snapshot, which `nextly migrate` does not apply.",
+            [sqlName]
+          )
+        );
       }
-      logger.error(
-        `MISSING_SNAPSHOT: ${sqlName} has no paired snapshot file in ${metaDir}. ` +
-          "If this migration was generated before F11 PR 3 (snapshot-based migrate:create), " +
-          "you can either delete it or re-create it with `nextly migrate:create --blank` and copy the SQL across."
-      );
-      process.exit(1);
-      return;
+      return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
     }
     if (!result.ok) {
-      logger.error(`CHECKSUM_MISMATCH: ${sqlName}`);
-      logger.error(`  Expected SHA-256: ${result.expected}`);
-      logger.error(`  Actual SHA-256:   ${result.actual}`);
-      logger.error(
-        "  The migration file was edited after generation. Either revert the edit, " +
-          'or delete this file and re-generate via `nextly migrate:create --name="<migration-name>"`.'
+      return exitWithError(
+        logger,
+        migrationFileEdited(sqlName, result.expected, result.actual)
       );
-      process.exit(1);
-      return;
     }
   }
 
@@ -419,12 +405,10 @@ export async function runChecks(args: {
   for (const snapName of snapshotFiles) {
     const baseName = snapName.replace(/\.snapshot\.json$/, "");
     if (!sqlBaseNames.has(baseName)) {
-      logger.error(
-        `MISSING_MIGRATION: snapshot ${snapName} exists but ${baseName}.sql does not. ` +
-          "Restore the .sql file from version control, or delete the orphan snapshot."
+      return exitWithError(
+        logger,
+        snapshotWithoutMigration(snapName, baseName)
       );
-      process.exit(1);
-      return;
     }
   }
 
@@ -467,34 +451,34 @@ export async function runChecks(args: {
   } catch (err) {
     // F11 PR 4 review fix #3: see INVALID_SNAPSHOT comment above.
     if (err instanceof SnapshotFileError) {
-      logger.error(`INVALID_SNAPSHOT: ${err.message}`);
-      process.exit(1);
-      return;
+      return exitWithError(logger, migrationSnapshotInvalid(err.message));
     }
     throw err;
   }
 
-  const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
-  if (ops.length > 0) {
-    logger.error(`SCHEMA_DRIFT: ${ops.length} pending change(s) detected.`);
-    // Cap the listed ops at 10 to keep CI logs readable on large drifts.
-    for (const op of ops.slice(0, 10)) {
-      logger.error(`  + ${describeOp(op)}`);
-    }
-    if (ops.length > 10) {
-      logger.error(`  ... and ${ops.length - 10} more`);
-    }
-    logger.error(
-      'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
-    );
-    process.exit(1);
-    return;
+  // Addresses, by the one address rule, before the drift a new entity also
+  // shows. A new one the rule refuses fails the check; one an entity already
+  // has (its table is in the latest snapshot) keeps working, and is reported
+  // once as a warning naming the address and the reason. A refusal ends in the
+  // CLI's error shape, as every other failed check here does.
+  const refused = reportMigrationAddresses(args.entities, latest, logger);
+  if (refused.length > 0) {
+    return exitWithError(logger, addressRefusalsError(refused));
   }
 
-  if (!settingsInStep(args.entities, latest?.data.entities, logger)) {
-    process.exit(1);
-    return;
+  const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
+  if (ops.length > 0) {
+    // Cap the listed ops at 10 to keep CI logs readable on large drifts.
+    const listed = ops.slice(0, 10).map(op => `+ ${describeOp(op)}`);
+    if (ops.length > 10) listed.push(`... and ${ops.length - 10} more`);
+    return exitWithError(
+      logger,
+      schemaChangeWithoutMigration(ops.length, listed)
+    );
   }
+
+  const settingsDrift = settingsInStep(args.entities, latest?.data.entities);
+  if (settingsDrift !== undefined) return exitWithError(logger, settingsDrift);
 
   logger.success(
     `migrate:check OK — ${sqlFiles.length} migration file(s), no drift.`
@@ -506,8 +490,8 @@ export async function runChecks(args: {
 // ============================================================================
 
 /**
- * Check 6: settings changed with no migration for them, reported as errors.
- * False when there are any.
+ * Check 6: settings changed with no migration for them, as the error the
+ * check ends with; undefined when there are none.
  *
  * The delta is the one `migrate:create` writes a migration for. A newest
  * snapshot written before settings were recorded says nothing about them, so
@@ -522,25 +506,16 @@ function settingsInStep(
         components: readonly MinimalConfigEntity[];
       }
     | undefined,
-  recorded: EntitySettingsRecord | undefined,
-  logger: CommandContext["logger"]
-): boolean {
-  if (entities === undefined || recorded === undefined) return true;
+  recorded: EntitySettingsRecord | undefined
+): CliError | undefined {
+  if (entities === undefined || recorded === undefined) return undefined;
   const changes = settingsChangesFor(entities, recorded);
-  if (changes.length === 0) return true;
-  logger.error(
-    `SETTINGS_DRIFT: ${changes.length} entit${changes.length === 1 ? "y's" : "ies'"} settings changed with no migration.`
-  );
-  for (const change of changes.slice(0, 10)) {
-    logger.error(`  ~ ${describeSettingsChange(change)}`);
-  }
-  if (changes.length > 10) {
-    logger.error(`  ... and ${changes.length - 10} more`);
-  }
-  logger.error(
-    'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
-  );
-  return false;
+  if (changes.length === 0) return undefined;
+  const listed = changes
+    .slice(0, 10)
+    .map(change => `~ ${describeSettingsChange(change)}`);
+  if (changes.length > 10) listed.push(`... and ${changes.length - 10} more`);
+  return settingsChangeWithoutMigration(changes.length, listed);
 }
 
 /**
@@ -655,8 +630,7 @@ export function registerMigrateCheckCommand(program: Command): void {
       try {
         await runMigrateCheck(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

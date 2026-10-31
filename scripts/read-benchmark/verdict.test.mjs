@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { verdictFor } from "./verdict.mjs";
+import { verdictFor as verdictOf } from "./verdict.mjs";
+
+/** The pair the runs below hold, base first. */
+const PAIR = ["main", "per-language"];
+const verdictFor = (runs, options = {}) => verdictOf(runs, { modes: PAIR, ...options });
 
 /** Runs whose p95 for one read are `main` and `perLanguage`, run by run. */
 function runs(read, main, perLanguage) {
@@ -50,6 +54,20 @@ describe("the benchmark's verdict", () => {
 
   it("holds the bound it is given", () => {
     expect(only(verdictFor(runs("direct list", [10, 10, 10], [11.5, 11.5, 11.5]), { bound: 0.2 })).verdict).toBe("pass");
+  });
+
+  it("compares any two modes, the candidate over the base", () => {
+    const pairOf = (base, candidate) => [{ [base]: { results: { "direct list": { p95: 10 } } }, [candidate]: { results: { "direct list": { p95: 12 } } } }];
+    const e4 = only(verdictOf(pairOf("main", "e4"), { modes: ["main", "e4"] }));
+    expect(e4.ratio).toBeCloseTo(1.2, 10);
+    expect(Object.keys(e4.spread)).toEqual(["main", "e4"]);
+    // Named the other way round, the same runs give the inverse.
+    expect(only(verdictOf(pairOf("main", "e4"), { modes: ["e4", "main"] })).ratio).toBeCloseTo(10 / 12, 10);
+  });
+
+  it("refuses to call a result without the two modes it compares", () => {
+    expect(() => verdictOf(runs("direct list", [10], [11]))).toThrow(/^no modes/);
+    expect(() => verdictOf(runs("direct list", [10], [11]), { modes: ["main"] })).toThrow(/^no modes/);
   });
 
   it("gates on the Direct API reads only", () => {

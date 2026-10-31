@@ -87,6 +87,10 @@ export function readResults(body: unknown): unknown[] {
  * resolving with every slot by position once the answer has ended: `undefined`
  * where the stream never carried one.
  *
+ * `readAheadToken` is the token of the layout read the dashboard was drawn
+ * from, sent beside the queries so a card answered ahead by that read is
+ * handed that read's answer; left out when there is none.
+ *
  * Rejects as `fetcher` does for a refused request (the parsed error envelope),
  * for a body that is neither a stream of slots nor `{ results }`, and for a
  * stream cut off partway, so the caller's retry and failure states see it.
@@ -96,13 +100,17 @@ export async function fetchWidgetBatch(
   options: {
     signal?: AbortSignal;
     onSlots: (slots: readonly StreamedSlot[]) => void;
+    readAheadToken?: string;
   }
 ): Promise<unknown[]> {
+  const { readAheadToken } = options;
   const res = await authFetch(`${BASE_URL}/dashboard/query`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", Accept: NDJSON },
-    body: JSON.stringify({ queries }),
+    body: JSON.stringify(
+      readAheadToken === undefined ? { queries } : { queries, readAheadToken }
+    ),
     ...(options.signal && { signal: options.signal }),
   });
   noteSchemaVersion(res);

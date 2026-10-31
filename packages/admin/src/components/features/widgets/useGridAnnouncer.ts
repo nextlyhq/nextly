@@ -93,6 +93,22 @@ export interface GridAnnouncer {
 }
 
 /**
+ * What a reader is told when one of a card's settings changed: that the card shows it, or that it
+ * was saved but the card still shows its earlier data. Said by the grid, or by the toast that
+ * offers a quick setting's Undo, never by both.
+ */
+export function settingChangedSentence(
+  title: string,
+  setting: string,
+  value: string,
+  shown: boolean
+): string {
+  return shown
+    ? `${title}: ${setting} set to ${value}.`
+    : `${title}: ${setting} saved as ${value}, but the card could not load it and still shows the earlier data.`;
+}
+
+/**
  * What the grid says once a batch settles, or `null` for a state not worth
  * interrupting a reader for.
  *
@@ -206,11 +222,7 @@ export function useGridAnnouncer(
 
   const announceSettingChanged = useCallback(
     (title: string, setting: string, value: string, shown: boolean) =>
-      say(
-        shown
-          ? `${title}: ${setting} set to ${value}.`
-          : `${title}: ${setting} saved as ${value}, but the card could not load it and still shows the earlier data.`
-      ),
+      say(settingChangedSentence(title, setting, value, shown)),
     [say]
   );
 

@@ -43,6 +43,18 @@ vi.mock("../../helpers/di", () => ({
   getConfigFromDI: vi.fn(),
 }));
 
+// Observed at the reader the removed-from-code mark derives its state from:
+// which entities a handler asks about, and that it hands back the answer.
+vi.mock(
+  "../../../domains/dynamic-collections/services/removed-from-code-state",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/dynamic-collections/services/removed-from-code-state")
+    >()),
+    readRemovedFromCodeStates: vi.fn(),
+  })
+);
+
 // The apply is doubled; `movedOnto`, which only reads the apply's result, is kept as it is.
 vi.mock("../../../domains/schema/pipeline/apply", async importOriginal => ({
   ...(await importOriginal<
@@ -70,6 +82,8 @@ import { asCaller, sessionCaller } from "../../__tests__/request-caller";
 import { createApplyDesiredSchema } from "../../../domains/schema/pipeline/apply";
 import { previewDesiredSchema } from "../../../domains/schema/pipeline/preview";
 import { translatePipelinePreviewToLegacy } from "../../../domains/schema/legacy-preview/translate";
+import { readRemovedFromCodeStates } from "../../../domains/dynamic-collections/services/removed-from-code-state";
+import { publishDeclaredEntities } from "../../../domains/dynamic-collections/services/removed-from-code-writes";
 import { dispatchCollections } from "../collection-dispatcher";
 // Not mocked: the i18n enable guard reads the app config off the real
 // container, so these tests register one rather than stubbing the guard.
@@ -1394,5 +1408,142 @@ describe("dispatchCollections, localized persistence failure", () => {
 
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(200);
+  });
+});
+
+/**
+ * A listing or schema read of a collection or Single removed from code (a
+ * code row whose slug the published configuration no longer declares) marks
+ * it, with where its retirement stands, and leaves every other row's body as
+ * it was: a Builder row, a plugin row and a declared code row are never
+ * marked. The state is the reader's answer, handed back as it is.
+ */
+const fakeRetirementAdapter = {
+  dialect: "sqlite" as const,
+  tableExists: vi.fn(),
+  getDrizzle: vi.fn(),
+};
+
+function answerRemovedStates(): void {
+  vi.mocked(readRemovedFromCodeStates).mockReset();
+  vi.mocked(readRemovedFromCodeStates).mockImplementation(
+    async ({ entities }) =>
+      new Map(
+        entities.map(entity => [
+          `${entity.kind}:${entity.slug}`,
+          entity.kind === "single"
+            ? { state: "half-retired" as const }
+            : { state: "drop-pending" as const, migration: "0002_drop.sql" },
+        ])
+      )
+  );
+}
+
+describe("dispatchCollections, the removed-from-code mark", () => {
+  const rows = [
+    { slug: "posts", name: "posts", source: "code", tableName: "dc_posts" },
+    { slug: "pages", name: "pages", source: "code", tableName: "dc_pages" },
+    { slug: "drafts", name: "drafts", source: "ui", tableName: "dc_drafts" },
+    { slug: "forms", name: "forms", source: "plugin", tableName: "dc_forms" },
+  ];
+  const container = () =>
+    makeContainer({
+      listCollections: vi.fn().mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "ok",
+        data: rows,
+        meta: { total: 4, page: 1, limit: 10, totalPages: 1 },
+      }),
+      getCollection: vi.fn(
+        async ({ collectionName }: { collectionName: string }) => ({
+          success: true,
+          statusCode: 200,
+          message: "ok",
+          data: rows.find(row => row.slug === collectionName),
+        })
+      ),
+    });
+  const bodyOf = async (result: unknown) =>
+    (await (result as Response).json()) as Record<string, unknown>;
+
+  beforeEach(() => {
+    publishDeclaredEntities({ collections: [{ slug: "posts" }], singles: [] });
+    vi.mocked(getAdapterFromDI).mockReturnValue(fakeRetirementAdapter as never);
+    answerRemovedStates();
+  });
+
+  afterEach(() => {
+    publishDeclaredEntities(undefined);
+    vi.mocked(getAdapterFromDI).mockReset();
+  });
+
+  it("listCollections marks the removed collection with its state, and no other", async () => {
+    const body = await bodyOf(
+      await dispatchCollections(container(), "listCollections", {}, undefined)
+    );
+    const items = body.items as Array<Record<string, unknown>>;
+    expect(items.map(item => [item.slug, item.removedFromCode])).toEqual([
+      ["posts", undefined],
+      ["pages", true],
+      ["drafts", undefined],
+      ["forms", undefined],
+    ]);
+    expect(items[1]!.removedFromCodeState).toEqual({
+      state: "drop-pending",
+      migration: "0002_drop.sql",
+    });
+    for (const kept of [items[0], items[2], items[3]]) {
+      expect(kept).not.toHaveProperty("removedFromCodeState");
+    }
+    // Only the removed row's state is read.
+    expect(readRemovedFromCodeStates).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(readRemovedFromCodeStates).mock.calls[0]![0].entities
+    ).toEqual([{ kind: "collection", slug: "pages", tableName: "dc_pages" }]);
+    expect(Object.keys(body).sort()).toEqual(["items", "meta"]);
+  });
+
+  it("getCollection marks the removed collection, and leaves a declared one as it was", async () => {
+    expect(
+      await bodyOf(
+        await dispatchCollections(
+          container(),
+          "getCollection",
+          { collectionName: "pages" },
+          undefined
+        )
+      )
+    ).toMatchObject({
+      slug: "pages",
+      removedFromCode: true,
+      removedFromCodeState: {
+        state: "drop-pending",
+        migration: "0002_drop.sql",
+      },
+    });
+    vi.mocked(readRemovedFromCodeStates).mockClear();
+    const declared = await bodyOf(
+      await dispatchCollections(
+        container(),
+        "getCollection",
+        { collectionName: "posts" },
+        undefined
+      )
+    );
+    expect(declared).not.toHaveProperty("removedFromCode");
+    expect(readRemovedFromCodeStates).not.toHaveBeenCalled();
+  });
+
+  it("marks nothing while no configuration is published", async () => {
+    publishDeclaredEntities(undefined);
+    const body = await bodyOf(
+      await dispatchCollections(container(), "listCollections", {}, undefined)
+    );
+    expect(
+      (body.items as Array<Record<string, unknown>>).filter(
+        item => "removedFromCode" in item
+      )
+    ).toEqual([]);
   });
 });

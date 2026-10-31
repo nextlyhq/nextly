@@ -212,7 +212,12 @@ export const PATCH = withErrorHandler(
     }
 
     if (Object.keys(adminOverrides).length > 0) {
-      const existing = await registry.getSingle(slug);
+      // As stored, past the registry row cache: the overrides merge into it, so a cached row
+      // would write back an admin setting another instance changed a moment ago.
+      const existing = await registry.getSingleForWrite(slug);
+      if (!existing) {
+        throw NextlyError.notFound({ logContext: { entity: "Single", slug } });
+      }
       updateData.admin = {
         ...(existing.admin || {}),
         ...adminOverrides,

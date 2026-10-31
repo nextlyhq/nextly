@@ -1,0 +1,26 @@
+---
+title: MIGRATION_MISSING
+description: "A migration recorded as applied has no file in the migrations folder."
+---
+
+## Cause
+
+A migration recorded as applied has no file in the migrations folder.
+
+The database records the migration as applied, and no removal of it is recorded, but its file is not in the migrations folder. A build older than the database, or a file deleted by hand, does this.
+
+## Fix
+
+- Restore the file from version control, or deploy the build that has it.
+- Then run `nextly migrate` again.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ `20261020_120000_add_posts.sql` is recorded as applied, but its file is not in the migrations folder.
+  Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
+  Next: Restore the file from version control, or deploy the build that has it, then run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)
+```

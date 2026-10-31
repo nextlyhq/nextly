@@ -1,0 +1,23 @@
+---
+title: PLUGIN_SCHEMA_VERSION_MISSING
+description: "The plugin given to `--plugin` declares no `schemaVersion`, which its migrations are numbered by."
+---
+
+## Cause
+
+The plugin given to `--plugin` declares no `schemaVersion`, which its migrations are numbered by.
+
+A plugin's migrations are numbered by its `schemaVersion`, which the ledger records for each installation. A plugin without one cannot have migrations generated for it.
+
+## Fix
+
+Add `schemaVersion: 1` to the plugin's definition, then run `nextly migrate:create --plugin <entry>` again.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" declares no schemaVersion.
+  Why:  A plugin needs one before migrations can be generated for it.
+  Next: Add `schemaVersion: 1` to the plugin's definition, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-version-missing  (PLUGIN_SCHEMA_VERSION_MISSING)
+```

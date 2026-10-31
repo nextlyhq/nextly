@@ -48,8 +48,8 @@ describe("the base of the default", () => {
       CORE_DEFAULT_LAYOUT.map(card => card.widget)
     );
     expect(placements[0]).toEqual({
-      id: "core/get-started",
-      widgetId: "core/get-started",
+      id: "core/setup",
+      widgetId: "core/setup",
       w: 6,
       h: 3,
       removed: false,
@@ -62,7 +62,7 @@ describe("the base of the default", () => {
       plan({
         cards: [
           { widget: "acme/orders", w: 4, settings: { top: 5 } },
-          { widget: "core/team", h: 4 },
+          { widget: "core/upcoming-releases", h: 4 },
         ],
       })
     );
@@ -75,25 +75,31 @@ describe("the base of the default", () => {
         removed: false,
         config: { top: 5 },
       },
-      { id: "core/team", widgetId: "core/team", w: 6, h: 4, removed: false },
+      {
+        id: "core/upcoming-releases",
+        widgetId: "core/upcoming-releases",
+        w: 6,
+        h: 4,
+        removed: false,
+      },
     ]);
   });
 
   it("leaves out an optional entry whose widget is not installed, and places it once it is", () => {
     const cards = [
       { widget: "acme/orders", optional: true },
-      { widget: "core/team" },
+      { widget: "core/upcoming-releases" },
     ];
-    expect(ids(core, plan({ cards }))).toEqual(["core/team"]);
+    expect(ids(core, plan({ cards }))).toEqual(["core/upcoming-releases"]);
     expect(ids([...core, widget("acme/orders")], plan({ cards }))).toEqual([
       "acme/orders",
-      "core/team",
+      "core/upcoming-releases",
     ]);
   });
 });
 
 describe("the plugins' suggestions", () => {
-  const cards = [{ widget: "core/team" }];
+  const cards = [{ widget: "core/upcoming-releases" }];
   const declared = widget("acme/revenue", { serverData: true });
 
   it("are placed after the base, the named ones in order, then the older shape's by defaultOrder", () => {
@@ -108,7 +114,7 @@ describe("the plugins' suggestions", () => {
     expect(
       ids(widgets, plan({ cards, suggested: ["acme/revenue", "acme/orders"] }))
     ).toEqual([
-      "core/team",
+      "core/upcoming-releases",
       "acme/revenue",
       "acme/orders",
       "old/early",
@@ -123,11 +129,14 @@ describe("the plugins' suggestions", () => {
       ids(
         widgets,
         plan({
-          cards: [{ widget: "acme/revenue" }, { widget: "core/team" }],
+          cards: [
+            { widget: "acme/revenue" },
+            { widget: "core/upcoming-releases" },
+          ],
           suggested: ["acme/revenue"],
         })
       )
-    ).toEqual(["acme/revenue", "core/team"]);
+    ).toEqual(["acme/revenue", "core/upcoming-releases"]);
   });
 
   it("leave out what is offered and never placed: a declared widget no plugin suggests, one offered per collection", () => {
@@ -136,7 +145,7 @@ describe("the plugins' suggestions", () => {
       declared,
       widget("acme/per-collection", { offered: "per-collection" }),
     ];
-    expect(ids(widgets, plan({ cards }))).toEqual(["core/team"]);
+    expect(ids(widgets, plan({ cards }))).toEqual(["core/upcoming-releases"]);
   });
 
   it("are all ignored when the site sets suggestions: false", () => {
@@ -146,7 +155,7 @@ describe("the plugins' suggestions", () => {
         widgets,
         plan({ cards, suggestions: false, suggested: ["acme/revenue"] })
       )
-    ).toEqual(["core/team"]);
+    ).toEqual(["core/upcoming-releases"]);
   });
 });
 
@@ -158,16 +167,20 @@ describe("one default for everyone", () => {
       plan({ cards: [...CORE_DEFAULT_LAYOUT, { widget: "acme/orders" }] })
     );
     const everything = new Set(widgets.map(each => each.id));
-    // The second person may not see the team or the plugin's widget.
+    // The second person may not see the releases or the plugin's widget.
     const fewer = new Set(
-      [...everything].filter(id => id !== "core/team" && id !== "acme/orders")
+      [...everything].filter(
+        id => id !== "core/upcoming-releases" && id !== "acme/orders"
+      )
     );
     const first = partitionPlacements(placements, everything).visible;
     const second = partitionPlacements(placements, fewer).visible;
     expect(first).toEqual(placements);
     expect(second).toEqual(
       first.filter(
-        p => p.widgetId !== "core/team" && p.widgetId !== "acme/orders"
+        p =>
+          p.widgetId !== "core/upcoming-releases" &&
+          p.widgetId !== "acme/orders"
       )
     );
   });

@@ -35,7 +35,8 @@ import type {
 } from "../../../shared/base-registry-service";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
@@ -245,7 +246,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     await this.updateRecordMigrationStatus(slug, status, migrationId);
     // Every write to a collection's registry row clears the cached rows, so
     // this process never serves the row as it was (`collection-row-cache`).
-    clearCollectionRowCache();
+    clearRegistryRowCache();
   }
 
   async updateMigrationStatusWithVerification(
@@ -256,7 +257,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       slug,
       tableName
     );
-    clearCollectionRowCache();
+    clearRegistryRowCache();
     return result;
   }
 
@@ -325,7 +326,7 @@ export class CollectionRegistryService extends BaseRegistryService<
         record,
         { returning: "*" }
       );
-      clearCollectionRowCache();
+      clearRegistryRowCache();
 
       // Publish the decision into the live policy as well as the column. The
       // boot-time read only runs at startup, so without this a Builder-created
@@ -510,7 +511,7 @@ export class CollectionRegistryService extends BaseRegistryService<
         this.whereEq("slug", slug),
         { returning: "*" }
       );
-      clearCollectionRowCache();
+      clearRegistryRowCache();
 
       if (results.length === 0) {
         // Generic "Not found." from the factory; slug moves to logContext.
@@ -603,12 +604,12 @@ export class CollectionRegistryService extends BaseRegistryService<
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
       };
-      const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "collection", slug, tables);
-      });
+      const { deleted: count, expire } = await this.adapter.transaction(
+        async tx => deleteEntityRegistryRow(tx, "collection", slug, tables)
+      );
       // Once the transaction has committed, so no read in between keeps the
       // row it is deleting.
-      clearCollectionRowCache();
+      clearRegistryRowCache();
 
       if (count === 0) {
         throw NextlyError.notFound({ logContext: { slug } });
@@ -624,6 +625,11 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Its documents are gone with it, so a scheduled release holding one
       // cannot run: stopped now rather than at its instant.
       await this.recheckReleasesHolding(slug);
+
+      // Every cached read of it now describes rows that are gone: expired
+      // here, the method every deletion path reaches, with the setting the
+      // deleted row held. A delete that removed no row has thrown above.
+      await flushContentChange(expire, this.logger, "a collection was deleted");
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;
@@ -913,7 +919,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     );
     // A new row: until the caller commits, a read outside the transaction
     // finds none, and a missing row is never cached.
-    clearCollectionRowCache();
+    clearRegistryRowCache();
 
     return this.deserializeRecord(result);
   }

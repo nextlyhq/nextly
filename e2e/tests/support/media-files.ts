@@ -55,16 +55,17 @@ export function pngBuffer(shade: number, padToBytes = 0): Buffer {
   return png;
 }
 
+/**
+ * Adds files to the library through its Upload button, which opens the
+ * browser's file chooser; what is chosen joins the upload tray, as a drop
+ * anywhere on the page does.
+ */
 export async function dropFiles(
   page: Page,
   files: { name: string; buffer: Buffer }[]
 ) {
-  await page.getByRole("button", { name: "Upload Files" }).click();
-
   const chooserPromise = page.waitForEvent("filechooser");
-  await page
-    .getByRole("button", { name: /Upload files\. Drag and drop/ })
-    .click();
+  await page.getByRole("button", { name: "Upload files" }).click();
   const chooser = await chooserPromise;
 
   await chooser.setFiles(

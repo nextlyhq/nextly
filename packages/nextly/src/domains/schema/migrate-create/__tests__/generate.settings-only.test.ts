@@ -464,4 +464,57 @@ describe("every snapshot records every entity's full settings", () => {
       "-- Settings: widgets: fields.label.pluginOptions.presets"
     );
   });
+
+  it("keeps the access key of a plugin option's own fields, so a change to it is a change", async () => {
+    // A plugin option may hold a list named `fields` or `blocks`; its entries
+    // are the option's data, not declarations, so nothing is stripped from them.
+    const widget = (access: string) =>
+      defineCollection({
+        slug: "widgets",
+        fields: [
+          text({ name: "headline" }),
+          {
+            ...text({ name: "label" }),
+            pluginOptions: { fields: [{ name: "x", access }] },
+          },
+        ] as never,
+      });
+    const first = await written(
+      await generate({ collections: [widget("public")] }, "create")
+    );
+    const label =
+      first.snapshot.entities.collections.widgets.settings.fields.find(
+        (f: { name: string }) => f.name === "label"
+      );
+    expect(label.pluginOptions.fields).toEqual([
+      { name: "x", access: "public" },
+    ]);
+
+    const { sql } = await written(
+      await generate({ collections: [widget("private")] })
+    );
+
+    expect(sql).toContain(
+      "-- Settings: widgets: fields.label.pluginOptions.fields.x.access"
+    );
+  });
+
+  it("writes nothing when a code-first entity's last hook is removed", async () => {
+    // Code-first hooks are functions, which no snapshot records: a list of them
+    // and an empty list say the same about the stored settings.
+    const hooked = (beforeChange: unknown[]) =>
+      defineCollection({
+        slug: "hooked",
+        hooks: { beforeChange },
+        fields: [text({ name: "headline" })],
+      } as never);
+    await written(
+      await generate(
+        { collections: [hooked([({ data }: { data: unknown }) => data])] },
+        "create"
+      )
+    );
+
+    expect(await generate({ collections: [hooked([])] })).toBeNull();
+  });
 });

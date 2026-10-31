@@ -40,7 +40,10 @@ import type { ReadCaller } from "../../../services/dashboard/readable-resources"
 import { isAdminRelativePath } from "../admin-path";
 import { createBatchScope } from "../batch-scope";
 import { renamedCollection } from "../declaration/card-settings";
-import type { AttentionItem } from "../declaration/dashboard";
+import {
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
+  type AttentionItem,
+} from "../declaration/dashboard";
 import { isPermissionName } from "../declaration/permission-name";
 import { bindReadServices } from "../declaration/read-services";
 import type { WidgetDeclarationFault } from "../declaration/validate";
@@ -50,8 +53,9 @@ import { getSource } from "../sources";
 
 import type { DigestReader } from "./digest";
 
-/** The most attention items one plugin may declare. */
-export const MAX_ATTENTION_ITEMS_PER_PLUGIN = 10;
+// The most attention items one plugin may declare, declared beside the item
+// type it bounds, and named here beside the startup check that holds it.
+export { MAX_ATTENTION_ITEMS_PER_PLUGIN };
 
 /** Namespaces core keeps for its own kinds and content: no plugin item may use them. */
 const RESERVED_NAMESPACES: ReadonlySet<string> = new Set([
@@ -87,6 +91,7 @@ function shapeProblems(given: unknown): string[] {
   return [
     idProblem(given.id),
     labelProblem(given.label),
+    reasonProblem(given.reason),
     typeof given.count === "function" ? undefined : "needs a count function",
     // The one rule the admin also asks before it draws a plugin's link.
     isAdminRelativePath(given.link)
@@ -107,13 +112,23 @@ function idProblem(id: unknown): string | undefined {
     : undefined;
 }
 
+/** Whether a value is text the card can draw on one line. */
+function isOneLine(value: unknown): boolean {
+  return (
+    typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value)
+  );
+}
+
 /** Why an item's label is unusable: it is drawn on one line of the card. */
 function labelProblem(label: unknown): string | undefined {
-  return typeof label === "string" &&
-    label.trim() !== "" &&
-    !/[\r\n]/.test(label)
+  return isOneLine(label) ? undefined : "needs a one-line label";
+}
+
+/** Why an item's reason is unusable: optional, and drawn on one line under the label. */
+function reasonProblem(reason: unknown): string | undefined {
+  return reason === undefined || isOneLine(reason)
     ? undefined
-    : "needs a one-line label";
+    : "needs a one-line reason when it gives one";
 }
 
 /**
@@ -382,6 +397,7 @@ export function pluginItemReaders(
     // A plugin's item ranks as a warning, always: only core's kinds are critical.
     severity: "warning" as const,
     link: entry.item.link,
+    ...(entry.item.reason === undefined ? {} : { reason: entry.item.reason }),
     owner: entry.owner,
     visible: () => visibleTo(entry, caller, readable),
     read: async signal => {

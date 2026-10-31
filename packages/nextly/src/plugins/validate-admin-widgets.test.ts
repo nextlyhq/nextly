@@ -1,27 +1,29 @@
 /**
- * A contributed widget is serialized into `/api/admin-meta/workspace`, so a
- * value that `JSON.stringify` cannot carry does not break the widget -- it
- * breaks the whole authenticated workspace response, for every admin.
+ * Startup refuses a plugin that adds widgets or widget data sources through
+ * `contributes.admin.widgets` or `contributes.widgetSources`, naming the
+ * plugin, the key and the replacement.
+ *
+ * Below that gate, what a plugin carries under `admin.widgets` is still
+ * reduced before `buildPluginAdminMeta` serializes it into
+ * `/api/admin-meta/workspace`, so a value that `JSON.stringify` cannot carry
+ * does not break the whole authenticated workspace response, for every admin.
+ * Those cases call the reduction directly, with plugins built as plain
+ * JavaScript hands them over: the key is no field of the contributions type.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { canonicalWidgets } from "../domains/widgets/canonical";
+import { clearWidgets, registerWidget } from "../domains/widgets/registry";
 import { NextlyError } from "../errors/nextly-error";
-import * as loggerModule from "../observability/logger";
 
 import { buildPluginAdminMeta } from "./admin-meta";
-import type { PluginDefinition } from "./plugin-context";
+import { definePlugin, type PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
 import {
   assertAdminWidgets,
-  resetArchetypeWarnings,
+  contributedWidgetSummaries,
+  validatedAdminWidgets,
 } from "./validate-admin-widgets";
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  // The warning set is module-level and outlives a case, so without this the
-  // second test to use a given archetype finds it already warned.
-  resetArchetypeWarnings();
-});
 
 /**
  * A real admin route, so the fixtures do not teach a URL that resolves nowhere.
@@ -46,19 +48,251 @@ const bigintWidget = {
   query: { source: "collection:posts", op: "count", where: { id: 1n } },
 };
 
-describe("contributed widgets are validated at boot", () => {
-  it("fails plugin resolution rather than the first workspace request", () => {
-    expect(() =>
-      resolvePlugins([withWidget(bigintWidget)], {
-        coreVersion: "0.0.2-alpha.51",
-      })
-    ).toThrow(NextlyError);
+/** A plugin carrying `value` under `contributes.widgetSources`, as plain JavaScript can. */
+const withSources = (value: unknown, enabled?: boolean): PluginDefinition =>
+  ({
+    name: "@acme/s",
+    version: "1.0.0",
+    nextly: "*",
+    ...(enabled === undefined ? {} : { enabled }),
+    contributes: { widgetSources: value },
+  }) as unknown as PluginDefinition;
+
+/** A well-formed `plugin:` source, so a refusal is the key's and not a source rule's. */
+const revenueSource = {
+  source: {
+    id: "plugin:acme/revenue",
+    label: "Revenue",
+    kind: "plugin",
+    supports: ["count"],
+    fields: [{ name: "total", type: "number" }],
+  },
+  resolve: () => Promise.resolve({ op: "count", total: 1 }),
+};
+
+/** A plugin declaring its widgets the one way there is, with an admin page beside them. */
+const declaring = definePlugin({
+  name: "@acme/d",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    admin: { pages: [{ path: "reports", component: "@acme/d/admin#Reports" }] },
+    dashboard: { widgets: [] },
+  },
+});
+
+/** The startup failure, or `undefined` when the gate let every plugin through. */
+function startupRefusal(
+  plugins: readonly PluginDefinition[]
+): NextlyError | undefined {
+  try {
+    assertAdminWidgets([...plugins]);
+    return undefined;
+  } catch (error) {
+    expect(NextlyError.is(error)).toBe(true);
+    return error as NextlyError;
+  }
+}
+
+describe("startup refuses the keys a plugin no longer adds widgets through", () => {
+  it("refuses contributes.admin.widgets in one sentence naming the plugin, the key and the replacement", () => {
+    const refused = startupRefusal([
+      withWidget({ id: "acme/posts", component: "@acme/p/admin#Posts" }),
+    ]);
+    expect(refused?.code).toBe("NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL");
+    expect(refused?.logContext).toEqual({
+      plugin: "@acme/p",
+      key: "contributes.admin.widgets",
+    });
+    expect(refused?.logMessage).toBe(
+      'Plugin "@acme/p" declares contributes.admin.widgets, which Nextly no ' +
+        "longer reads: declare each widget with defineWidget() under " +
+        "contributes.dashboard.widgets, and read its data in that widget's load."
+    );
   });
 
-  it("names the plugin and the widget in the boot failure", () => {
+  it("refuses contributes.widgetSources in one sentence naming the plugin, the key and the replacement", () => {
+    const refused = startupRefusal([withSources([revenueSource])]);
+    expect(refused?.code).toBe("NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL");
+    expect(refused?.logContext).toEqual({
+      plugin: "@acme/s",
+      key: "contributes.widgetSources",
+    });
+    expect(refused?.logMessage).toBe(
+      'Plugin "@acme/s" declares contributes.widgetSources, which Nextly no ' +
+        "longer reads: declare each widget with defineWidget() under " +
+        "contributes.dashboard.widgets, and read its data in that widget's load."
+    );
+  });
+
+  it("refuses either key whatever it holds, an empty list included", () => {
+    const emptyWidgets = {
+      name: "@acme/p",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: { admin: { widgets: [] } },
+    } as unknown as PluginDefinition;
+    expect(startupRefusal([emptyWidgets])?.logContext).toEqual({
+      plugin: "@acme/p",
+      key: "contributes.admin.widgets",
+    });
+    expect(startupRefusal([withSources([])])?.logContext).toEqual({
+      plugin: "@acme/s",
+      key: "contributes.widgetSources",
+    });
+  });
+
+  it("refuses contributes.widgetSources declared as undefined: declaring the key is the fault", () => {
+    const sources = startupRefusal([
+      {
+        name: "@acme/s",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { widgetSources: undefined },
+      } as unknown as PluginDefinition,
+    ]);
+    expect(sources?.code).toBe("NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL");
+    expect(sources?.logContext).toEqual({
+      plugin: "@acme/s",
+      key: "contributes.widgetSources",
+    });
+  });
+
+  it("refuses contributes.admin.widgets declared as undefined, for the same reason", () => {
+    const widgets = startupRefusal([
+      {
+        name: "@acme/p",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: { widgets: undefined } },
+      } as unknown as PluginDefinition,
+    ]);
+    expect(widgets?.code).toBe("NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL");
+    expect(widgets?.logContext).toEqual({
+      plugin: "@acme/p",
+      key: "contributes.admin.widgets",
+    });
+  });
+
+  it("lets through a plugin that leaves both keys out, whatever else it declares", () => {
+    // The control for the case above: absence is not a declaration, with no
+    // contributions, with no admin contributions, and with an empty admin.
+    const absent = [
+      { name: "@acme/a", version: "1.0.0", nextly: "*" },
+      { name: "@acme/b", version: "1.0.0", nextly: "*", contributes: {} },
+      {
+        name: "@acme/c",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: {} },
+      },
+      {
+        name: "@acme/d",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: undefined },
+      },
+    ] as unknown as PluginDefinition[];
+    expect(startupRefusal(absent)).toBeUndefined();
+  });
+
+  it("refuses a disabled plugin carrying either key, so enabling it is never what fails a start", () => {
+    const disabled = {
+      ...withWidget(bigintWidget),
+      enabled: false,
+    } as PluginDefinition;
+    expect(startupRefusal([disabled])?.logContext).toEqual({
+      plugin: "@acme/p",
+      key: "contributes.admin.widgets",
+    });
+    expect(startupRefusal([withSources([revenueSource], false)])).toBeDefined();
+  });
+
+  it("refuses during plugin resolution, which every boot path runs", () => {
     let thrown: unknown;
     try {
-      assertAdminWidgets([withWidget(bigintWidget)]);
+      resolvePlugins([declaring, withSources([revenueSource])], {
+        coreVersion: "1.0.0",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect((thrown as NextlyError).logContext).toEqual({
+      plugin: "@acme/s",
+      key: "contributes.widgetSources",
+    });
+  });
+
+  it("lets through a plugin that declares its widgets under contributes.dashboard", () => {
+    // The control: a gate that refused every plugin would satisfy each case above.
+    expect(startupRefusal([declaring])).toBeUndefined();
+    expect(() =>
+      resolvePlugins([declaring], { coreVersion: "1.0.0" })
+    ).not.toThrow();
+  });
+});
+
+describe("a widget id cannot arrive through both a registration and a contribution", () => {
+  // A registration and a contribution sharing an id were merged field by field:
+  // the contribution's Collection setting kept beside the registration's
+  // query, which that setting does not drive, so the setting showed on the
+  // card's settings while deciding nothing about what it reads.
+  const contribution = withWidget({
+    id: "acme/pinned",
+    archetype: "metric",
+    query: { source: "collection:posts", op: "count" },
+    settings: [{ name: "source", label: "Collection", type: "collection" }],
+  });
+
+  afterEach(() => {
+    clearWidgets();
+  });
+
+  it("refuses at startup the contribution a registration would merge over", () => {
+    registerWidget(
+      {
+        id: "acme/pinned",
+        title: "Pinned",
+        archetype: "metric",
+        size: { default: { w: 3, h: 2 } },
+        query: { source: "single:homepage", op: "count" },
+      },
+      { source: "@acme/app" }
+    );
+
+    // The control: handed to the merge, the pair still forms the mixed widget,
+    // so what stops it below is the gate and not a merge that changed.
+    const merged = canonicalWidgets(
+      contributedWidgetSummaries([contribution])
+    ).find(widget => widget.id === "acme/pinned");
+    expect(merged?.collectionSetting?.name).toBe("source");
+    expect(merged?.knobQueries).toEqual([
+      { source: "single:homepage", op: "count" },
+    ]);
+
+    // Startup refuses the plugin carrying it, and a plugin that passes
+    // startup contributes nothing to the merge: the registration is the
+    // widget, with no Collection setting.
+    expect(startupRefusal([contribution])?.logContext).toEqual({
+      plugin: "@acme/p",
+      key: "contributes.admin.widgets",
+    });
+    expect(startupRefusal([declaring])).toBeUndefined();
+    expect(contributedWidgetSummaries([declaring])).toEqual([]);
+    const alone = canonicalWidgets(
+      contributedWidgetSummaries([declaring])
+    ).find(widget => widget.id === "acme/pinned");
+    expect(alone).toBeDefined();
+    expect(alone?.collectionSetting).toBeUndefined();
+  });
+});
+
+describe("widgets carried under admin.widgets are checked before they are published", () => {
+  it("names the plugin and the widget in the failure", () => {
+    let thrown: unknown;
+    try {
+      validatedAdminWidgets(withWidget(bigintWidget));
     } catch (error) {
       thrown = error;
     }
@@ -72,7 +306,7 @@ describe("contributed widgets are validated at boot", () => {
     // reads a string where the plugin wrote a Date, which is the failure the
     // round trip catches and a try/catch around the serializer cannot.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/since",
           component: "@acme/p/admin#Since",
@@ -81,25 +315,26 @@ describe("contributed widgets are validated at boot", () => {
             op: "count",
             where: { createdAt: { greater_than: new Date() } },
           },
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
   });
 
   it("checks a DISABLED plugin's widgets too", () => {
     // `buildPluginAdminMeta` withholds a disabled plugin's widgets, so this is
-    // belt-and-braces today -- but enabling the plugin must not be what turns a
-    // healthy install into a 500, and boot is where that is still cheap to say.
+    // belt-and-braces -- but enabling the plugin must not be what turns a
+    // healthy install into a 500.
     expect(() =>
-      assertAdminWidgets([
-        { ...withWidget(bigintWidget), enabled: false } as PluginDefinition,
-      ])
+      validatedAdminWidgets({
+        ...withWidget(bigintWidget),
+        enabled: false,
+      } as PluginDefinition)
     ).toThrow(NextlyError);
   });
 
   it("lets an ordinary widget through", () => {
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/revenue",
           component: "@acme/p/admin#Revenue",
@@ -109,8 +344,8 @@ describe("contributed widgets are validated at boot", () => {
             op: "count",
             where: { status: { equals: "published" } },
           },
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -123,7 +358,7 @@ describe("contributed widgets are validated at boot", () => {
     // draws the blank dashboard cell making `component` required was supposed
     // to prevent.
     expect(() =>
-      assertAdminWidgets([withWidget({ id: "stats", component: "" })])
+      validatedAdminWidgets(withWidget({ id: "stats", component: "" }))
     ).toThrow(NextlyError);
   });
 
@@ -132,14 +367,14 @@ describe("contributed widgets are validated at boot", () => {
     // same reading `validateWidgetDefinition` takes of a `custom` widget's
     // component.
     expect(() =>
-      assertAdminWidgets([withWidget({ id: "stats", component: "   " })])
+      validatedAdminWidgets(withWidget({ id: "stats", component: "   " }))
     ).toThrow(NextlyError);
   });
 
   it("refuses a widget that describes no body at all", () => {
     // Neither a component to draw it nor an archetype-and-query for core to
     // draw it from. Both routes are closed, so nothing can render this.
-    expect(() => assertAdminWidgets([withWidget({ id: "stats" })])).toThrow(
+    expect(() => validatedAdminWidgets(withWidget({ id: "stats" }))).toThrow(
       NextlyError
     );
   });
@@ -150,15 +385,15 @@ describe("contributed widgets are validated at boot", () => {
     // whole widget query contract exists for impossible to declare, and forced
     // an author to name a component core would never resolve.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/posts",
           title: "Published posts",
           archetype: "metric",
           size: { default: { w: 3, h: 2 } },
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -168,112 +403,68 @@ describe("contributed widgets are validated at boot", () => {
     // no request is made for it, no slot arrives, and the grid reads that
     // absence as still loading for the life of the page.
     expect(() =>
-      assertAdminWidgets([
-        withWidget({ id: "acme/posts", archetype: "metric" }),
-      ])
+      validatedAdminWidgets(
+        withWidget({ id: "acme/posts", archetype: "metric" })
+      )
     ).toThrow(NextlyError);
   });
 
   it("refuses `custom` with no component, which is the one archetype that needs one", () => {
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/panel",
           archetype: "custom",
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
   });
 
-  it("ACCEPTS an archetype this core does not know, and says so", () => {
-    // Forward compatibility, and the reachable cause is a plugin built against
-    // a newer core. `assertAdminWidgets` runs during plugin resolution, so
-    // refusing here would abort the whole install over one card core cannot
-    // draw -- while the grid already reports exactly that, by name, in the
-    // card's own place. The blast-radius argument behind the refusals in this
-    // file is about a widget that breaks the workspace payload for every
-    // admin; an unrecognised archetype is perfectly serializable.
-    const warn = vi.fn();
-    vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
-      warn,
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
-
+  it("ACCEPTS an archetype this core does not know", () => {
+    // Forward compatibility: the reachable cause is a plugin built against a
+    // newer core, and the grid already reports a card it cannot draw, by
+    // name, in the card's own place. The blast-radius argument behind the
+    // refusals in this file is about a widget that breaks the workspace
+    // payload for every admin; an unrecognised archetype is perfectly
+    // serializable.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/posts",
           archetype: "metrics",
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
-
-    // Not swallowed either: the other reachable cause is a typo, and a card
-    // reading "not rendered yet" suggests waiting rather than fixing.
-    expect(warn).toHaveBeenCalledTimes(1);
-    const logged = warn.mock.calls[0][0] as Record<string, unknown>;
-    expect(logged.kind).toBe("widget-archetype-unknown");
-    expect(logged.archetype).toBe("metrics");
-    expect(String(logged.message)).toContain("metric");
   });
-
-  it("warns ONCE about the same widget across repeated boot passes", () => {
-    // `assertAdminWidgets` runs more than once per boot: `registerServices`
-    // calls it through `resolvePlugins` and then again on the transformed list,
-    // and the CLI does the same. An unchanged widget was reported twice, which
-    // reads as two problems and teaches the author nothing the second time.
-    const warn = vi.fn();
-    vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
-      warn,
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
-
-    const plugins = [
-      withWidget({
-        id: "acme/posts",
-        archetype: "metrics",
-        query: { source: "collection:posts", op: "count" },
-      }),
-    ];
-    assertAdminWidgets(plugins);
-    assertAdminWidgets(plugins);
-
-    expect(warn).toHaveBeenCalledTimes(1);
-  });
-
   it("refuses a whitespace-only component even when the declarative half is valid", () => {
     // The admin resolver reads `component` for TRUTHINESS, so a whitespace
     // string won the archetype fallback, reached `PluginSlot` as a path nothing
     // resolves, and drew a blank card where the archetype's own diagnostic
     // belonged. An absent component is a choice; an unusable one is a mistake.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/posts",
           archetype: "metric",
           query: { source: "collection:posts", op: "count" },
           component: "   ",
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
   });
 
   it("still accepts a declarative widget that OMITS the component", () => {
     // The control: absent is fine, unusable is not.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/posts",
           archetype: "metric",
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -284,23 +475,23 @@ describe("contributed widgets are validated at boot", () => {
     // undefined destination -- while a REGISTERED widget carrying the same
     // shortcut was refused. One contract, two channels, one rule.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           actions: [{}],
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
 
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           actions: [{ label: "New post" }],
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
   });
 
@@ -312,14 +503,14 @@ describe("contributed widgets are validated at boot", () => {
     // same malformed array the gate declined to read, and renders the blank
     // link the check beside this one exists to prevent.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           component: "@acme/p/admin#Shortcuts",
           actions: [{}],
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
   });
 
@@ -328,14 +519,14 @@ describe("contributed widgets are validated at boot", () => {
     // widget carrying a component would satisfy that assertion while making the
     // fallback -- the whole reason a plugin ships one -- undeclarable.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           component: "@acme/p/admin#Shortcuts",
           actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -346,13 +537,13 @@ describe("contributed widgets are validated at boot", () => {
     // the component is then the body that actually renders. Holding the two
     // halves to one rule would reject a widget which draws correctly today.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/revenue",
           archetype: "metric",
           component: "@acme/p/admin#Revenue",
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -363,26 +554,26 @@ describe("contributed widgets are validated at boot", () => {
     // `actions` from the declaration, so the grid batched a read on every mount
     // and refetch whose result the declared renderer never looks at.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
 
     // The other queryless archetype, so the rule is the vocabulary's rather
     // than one arm's.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/note",
           archetype: "text",
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
   });
 
@@ -390,15 +581,15 @@ describe("contributed widgets are validated at boot", () => {
     // Same bypass the shortcut rule had: the component short-circuit must not
     // skip a declaration core will draw from.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           component: "@acme/p/admin#Shortcuts",
           actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).toThrow(NextlyError);
   });
 
@@ -406,13 +597,13 @@ describe("contributed widgets are validated at boot", () => {
     // The bound. The refusal is the queryless vocabulary's, not a ban on
     // queries -- a `metric` is drawn FROM one.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/revenue",
           archetype: "metric",
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -424,14 +615,14 @@ describe("contributed widgets are validated at boot", () => {
     // happened to arrive in, which is the worst way for it to fail.
     for (const defaultOrder of ["soon", Number.NaN, null, {}]) {
       expect(() =>
-        assertAdminWidgets([
+        validatedAdminWidgets(
           withWidget({
             id: "acme/shortcuts",
             archetype: "actions",
             actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
             defaultOrder,
-          }),
-        ])
+          })
+        )
       ).toThrow(NextlyError);
     }
   });
@@ -441,14 +632,14 @@ describe("contributed widgets are validated at boot", () => {
     // above while making the field undeclarable.
     for (const defaultOrder of [0, -1, 2.5]) {
       expect(() =>
-        assertAdminWidgets([
+        validatedAdminWidgets(
           withWidget({
             id: "acme/shortcuts",
             archetype: "actions",
             actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
             defaultOrder,
-          }),
-        ])
+          })
+        )
       ).not.toThrow();
     }
   });
@@ -460,13 +651,13 @@ describe("contributed widgets are validated at boot", () => {
     // absent case that way would assert the serialization rule rather than
     // this one.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -479,14 +670,14 @@ describe("contributed widgets are validated at boot", () => {
     for (const chrome of ["none", "card"]) {
       let thrown: NextlyError | undefined;
       try {
-        assertAdminWidgets([
+        validatedAdminWidgets(
           withWidget({
             id: "acme/thing",
             archetype: "custom",
             component: "@acme/p/admin#Thing",
             chrome,
-          }),
-        ]);
+          })
+        );
       } catch (error) {
         thrown = error as NextlyError;
       }
@@ -501,13 +692,13 @@ describe("contributed widgets are validated at boot", () => {
     // The control: a gate refusing every custom widget would satisfy the
     // assertion above.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/thing",
           archetype: "custom",
           component: "@acme/p/admin#Thing",
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -515,36 +706,14 @@ describe("contributed widgets are validated at boot", () => {
     // The control. A gate that refused every actions widget would satisfy the
     // assertions above while making the archetype undeclarable.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
           actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
-  });
-
-  it("says nothing about an archetype it DOES know", () => {
-    // The control. A warning that fired for every widget would satisfy the
-    // assertion above while telling an author nothing.
-    const warn = vi.fn();
-    vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
-      warn,
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
-
-    assertAdminWidgets([
-      withWidget({
-        id: "acme/posts",
-        archetype: "metric",
-        query: { source: "collection:posts", op: "count" },
-      }),
-    ]);
-
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("names BOTH routes in the diagnostic an author actually reads", () => {
@@ -554,11 +723,11 @@ describe("contributed widgets are validated at boot", () => {
     // Asserted on `logMessage`, which is where this factory puts the detail --
     // `publicMessage` is deliberately generic. A test reading `.message` passes
     // against any refusal at all and says nothing about what the author is
-    // told, which is the entire point of failing at boot rather than dropping
+    // told, which is the entire point of failing rather than dropping
     // the widget.
     let thrown: NextlyError | undefined;
     try {
-      assertAdminWidgets([withWidget({ id: "stats" })]);
+      validatedAdminWidgets(withWidget({ id: "stats" }));
     } catch (error) {
       thrown = error as NextlyError;
     }
@@ -574,12 +743,12 @@ describe("contributed widgets are validated at boot", () => {
     // The grid keys each cell on `id`, so a blank one collides with every
     // other blank one and React reconciles two different widgets as one.
     expect(() =>
-      assertAdminWidgets([
-        withWidget({ id: "  ", component: "@acme/p/admin#Stats" }),
-      ])
+      validatedAdminWidgets(
+        withWidget({ id: "  ", component: "@acme/p/admin#Stats" })
+      )
     ).toThrow(NextlyError);
     expect(() =>
-      assertAdminWidgets([withWidget({ component: "@acme/p/admin#Stats" })])
+      validatedAdminWidgets(withWidget({ component: "@acme/p/admin#Stats" }))
     ).toThrow(NextlyError);
   });
 
@@ -587,16 +756,57 @@ describe("contributed widgets are validated at boot", () => {
     // JSON carries a number happily, so the round trip has nothing to say
     // about it.
     expect(() =>
-      assertAdminWidgets([withWidget({ id: "stats", component: 7 })])
+      validatedAdminWidgets(withWidget({ id: "stats", component: 7 }))
     ).toThrow(NextlyError);
   });
 
+  it("refuses a setting's own editor, naming the widget and the setting", () => {
+    // Only a defineWidget declaration's editors reach the generated component
+    // map, so one contributed here would be drawn "unavailable" for everyone.
+    let thrown: unknown;
+    try {
+      validatedAdminWidgets(
+        withWidget({
+          id: "acme/goal",
+          component: "@acme/p/admin#Goal",
+          settings: [
+            {
+              name: "goal",
+              label: "Goal",
+              type: "number",
+              editor: { component: "@acme/p/admin#GoalEditor" },
+            },
+          ],
+        })
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    const logged = (thrown as NextlyError).logMessage;
+    expect(logged).toContain('admin widget "acme/goal"');
+    expect(logged).toContain(
+      'setting "goal" declares an editor: custom setting editors need a defineWidget declaration'
+    );
+
+    // The must-differ half: the same widget, its setting drawn by its own field.
+    expect(() =>
+      validatedAdminWidgets(
+        withWidget({
+          id: "acme/goal",
+          component: "@acme/p/admin#Goal",
+          settings: [{ name: "goal", label: "Goal", type: "number" }],
+        })
+      )
+    ).not.toThrow();
+  });
+
   it("names the plugin and the widget in the shape failure too", () => {
-    // The same diagnostic the JSON refusal gives, so an author reading a boot
+    // The same diagnostic the JSON refusal gives, so an author reading a
     // failure can find the entry whichever way it was malformed.
     let thrown: unknown;
     try {
-      assertAdminWidgets([withWidget({ id: "stats", component: "" })]);
+      validatedAdminWidgets(withWidget({ id: "stats", component: "" }));
     } catch (error) {
       thrown = error;
     }
@@ -611,9 +821,9 @@ describe("contributed widgets are validated at boot", () => {
     // -- a bare `stats` is a legal contribution, and rejecting it would refuse
     // valid plugins in the name of fixing this.
     expect(() =>
-      assertAdminWidgets([
-        withWidget({ id: "stats", component: "@acme/p/admin#Stats" }),
-      ])
+      validatedAdminWidgets(
+        withWidget({ id: "stats", component: "@acme/p/admin#Stats" })
+      )
     ).not.toThrow();
   });
 
@@ -623,9 +833,9 @@ describe("contributed widgets are validated at boot", () => {
     // the definition validator here would reject the shape this file exists to
     // check.
     expect(() =>
-      assertAdminWidgets([
-        withWidget({ id: "stats", component: "@acme/p/admin#Stats" }),
-      ])
+      validatedAdminWidgets(
+        withWidget({ id: "stats", component: "@acme/p/admin#Stats" })
+      )
     ).not.toThrow();
   });
 
@@ -638,7 +848,7 @@ describe("contributed widgets are validated at boot", () => {
   });
 });
 
-describe("the serializer cannot publish what boot refused", () => {
+describe("the serializer cannot publish what the check refuses", () => {
   it("refuses before the payload reaches JSON.stringify", () => {
     // The defect this closes: `buildPluginAdminMeta` copied the widget verbatim
     // and the throw landed in `respondData`'s `JSON.stringify`, where
@@ -674,7 +884,7 @@ describe("a contributed widget draws the result its archetype can draw", () => {
     // replaced by the body's "expected a count" message on every load.
     let thrown: unknown;
     try {
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/by-status",
           archetype: "metric",
@@ -683,8 +893,8 @@ describe("a contributed widget draws the result its archetype can draw", () => {
             op: "groupBy",
             groupBy: "status",
           },
-        }),
-      ]);
+        })
+      );
     } catch (error) {
       thrown = error;
     }
@@ -706,14 +916,14 @@ describe("a contributed widget draws the result its archetype can draw", () => {
     // aborted plugin resolution. A `Map` cannot be reached that way, so the
     // unknown archetype takes the path meant for it.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/proto",
           archetype: "toString",
           component: "@acme/p/admin#Proto",
           query: { source: "collection:posts", op: "count" },
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 
@@ -722,7 +932,7 @@ describe("a contributed widget draws the result its archetype can draw", () => {
     // decides what to draw, so constraining its op would be core guessing at a
     // plugin's intent.
     expect(() =>
-      assertAdminWidgets([
+      validatedAdminWidgets(
         withWidget({
           id: "acme/chart",
           component: "@acme/p/admin#Chart",
@@ -731,19 +941,19 @@ describe("a contributed widget draws the result its archetype can draw", () => {
             op: "groupBy",
             groupBy: "status",
           },
-        }),
-      ])
+        })
+      )
     ).not.toThrow();
   });
 });
 
-describe("a contributed widget's size, judged at boot", () => {
+describe("a carried widget's size, judged before it is published", () => {
   /** The detail a refused contribution's error carries, or `undefined` when it passed. */
   function refusal(size: unknown): string | undefined {
     try {
-      assertAdminWidgets([
-        withWidget({ id: "acme/w", component: "@acme/p/admin#W", size }),
-      ]);
+      validatedAdminWidgets(
+        withWidget({ id: "acme/w", component: "@acme/p/admin#W", size })
+      );
       return undefined;
     } catch (error) {
       expect(error).toBeInstanceOf(NextlyError);

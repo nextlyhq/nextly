@@ -267,14 +267,18 @@ export interface ReleasesServiceDeps {
     authority: ReleaseAuthority
   ) => Promise<boolean>;
   /**
-   * Whether this user may perform this lifecycle action on this scope.
+   * Whether this user may perform this lifecycle action on this document.
    *
    * The same question the ordinary write path asks (`publish-<slug>` /
-   * `unpublish-<slug>`), asked here at add time. Injected for the same reason.
+   * `unpublish-<slug>`, and the rule for it), asked here at add time, of the
+   * document itself: a rule that answers a filter admits only the documents
+   * it matches. Injected for the same reason.
    */
   canActOnDocument: (params: {
     userId: string;
+    scopeKind: ReleaseMemberRow["scopeKind"];
     scopeSlug: string;
+    entryId: string;
     action: ReleaseMemberAction;
     /**
      * The scoped API key's own grants, when the caller is one.
@@ -2220,6 +2224,65 @@ export class ReleasesService {
   }
 
   /**
+   * What ships next and what needs attention, judged at ONE instant: the first
+   * `limit` releases of the Upcoming tab, soonest first, and, when `attention`
+   * asks for them, how many releases each part of the Needs attention tab
+   * holds.
+   *
+   * For a reader that shows both together, as the dashboard's Upcoming
+   * releases card does. Both are the tabs' own queries (`release-tabs`), so
+   * one rule and one cutoff decide whether a release is upcoming or overdue;
+   * and both read one clock, so a release crossing the cutoff while they are
+   * read is in exactly one of them, never both or neither, as `find` and
+   * `count` called one after the other could place it.
+   *
+   * @experimental
+   */
+  async upcomingWithAttention(
+    query: { limit: number; attention: boolean },
+    actor: ReleaseActor
+  ): Promise<{
+    upcoming: ReleaseRow[];
+    attention: Partial<Record<ReleaseAttentionReason, number>>;
+  }> {
+    await this.authorize(actor, "read");
+    assertWholeNumber("limit", query.limit, 1);
+    if (query.limit > MAX_RELEASE_PAGE_SIZE) {
+      throw NextlyError.invalidInput({
+        message: `\`limit\` may be at most ${MAX_RELEASE_PAGE_SIZE}.`,
+        logContext: { reason: "limit-too-large", limit: query.limit },
+      });
+    }
+    const now = new Date();
+    const [page, counts] = await Promise.all([
+      this.deps.repository.findReleasePage({
+        ...this.listFilters({ tab: "upcoming", order: "soonest" }),
+        now,
+        order: "soonest",
+        offset: 0,
+        limit: query.limit,
+      }),
+      query.attention
+        ? Promise.all(
+            RELEASE_ATTENTION_REASONS.map(
+              async reason =>
+                [
+                  reason,
+                  await this.deps.repository.countReleases({
+                    ...this.listFilters({ tab: "attention", reason }),
+                    now,
+                  }),
+                ] as const
+            )
+          )
+        : [],
+    ]);
+    const attention: Partial<Record<ReleaseAttentionReason, number>> = {};
+    for (const [reason, count] of counts) attention[reason] = count;
+    return { upcoming: page.rows, attention };
+  }
+
+  /**
    * Whether the caller may read a release at all: one exists that the list
    * would show them.
    *
@@ -3263,7 +3326,10 @@ export class ReleasesService {
     input: AddMemberInput,
     actor: ReleaseActor
   ): Promise<string> {
-    await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
+    // The document's own authority, asked of the document the caller names: a
+    // rule that answers a filter is matched against that entry, and an entry
+    // the caller may not read is refused as one outside the filter is.
+    await this.authorizeDocumentAction(actor, input, input.action);
     requireRunnableMember(input, actor);
     return resolveReleaseTarget(
       this.deps.targets,
@@ -3775,7 +3841,7 @@ export class ReleasesService {
         },
       });
     }
-    await this.authorizeDocumentAction(actor, member.scopeSlug, action);
+    await this.authorizeDocumentAction(actor, member, action);
     const [release] = await this.deps.repository.findReleases({
       ids: [member.releaseId],
     });
@@ -4452,9 +4518,10 @@ export class ReleasesService {
 
   private async authorizeDocumentAction(
     actor: ReleaseActor,
-    scopeSlug: string,
+    document: Pick<ReleaseMemberRow, "scopeKind" | "scopeSlug" | "entryId">,
     action: ReleaseMemberAction
   ): Promise<void> {
+    const { scopeSlug } = document;
     if (actor.overrideAccess === true) return;
     if (actor.userId === null) {
       throw NextlyError.forbidden({
@@ -4464,7 +4531,9 @@ export class ReleasesService {
     if (
       await this.deps.canActOnDocument({
         userId: actor.userId,
+        scopeKind: document.scopeKind,
         scopeSlug,
+        entryId: document.entryId,
         action,
         authenticatedScope: actor.authenticatedScope,
         userRoles: actor.userRoles,

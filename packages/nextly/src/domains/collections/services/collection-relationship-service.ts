@@ -4,6 +4,7 @@ import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { relatedRowReads } from "../../../auth/access/population-read";
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import {
   readOf,
   type FilteredRead,
@@ -132,6 +133,25 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  * Maximum allowed depth to prevent performance issues.
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
+
+/**
+ * The two link columns of a many-to-many junction. Every junction read and
+ * write asks this one place, so the columns the runtime queries are the
+ * columns the DDL made. The DDL names the source column from the source's
+ * TABLE (`dc_my_posts` gives `my_posts_id`), so a hyphen in the source slug is
+ * written as an underscore here too; a hyphen-free slug names the same column
+ * it always did. The DDL takes the target column from the target slug as
+ * written, so that side stays as written.
+ */
+export function junctionLinkColumns(
+  sourceCollectionName: string,
+  targetCollectionName: string
+): { sourceColumn: string; targetColumn: string } {
+  return {
+    sourceColumn: `${sourceCollectionName.replace(/-/g, "_")}_id`,
+    targetColumn: `${targetCollectionName}_id`,
+  };
+}
 
 /**
  * The depth an expansion runs to for the depth a read asked for: absent means
@@ -1601,6 +1621,8 @@ export class CollectionRelationshipService extends BaseService {
       // The LIFECYCLE question, not the trust question — see widensLifecycle.
       overrideAccess: widensLifecycle(access),
       explicit: access.status,
+      // A visitor's expansion sees published rows only, as its own read does.
+      publishedOnly: readsAsVisitor(access),
     });
     return statusFilter;
   }
@@ -1944,6 +1966,10 @@ export class CollectionRelationshipService extends BaseService {
           },
           scope: access.authenticatedScope,
           principal: currentPrincipal(),
+          // Without the access-control service, the Public role as this
+          // service's own database records it, as its direct gate reads it.
+          visitorWithoutService: () =>
+            this.resolveAccessService().ownDatabaseVisitor(),
         },
         container.has("rbacAccessControlService")
           ? container.get<RBACAccessControlService>("rbacAccessControlService")
@@ -4084,6 +4110,8 @@ export class CollectionRelationshipService extends BaseService {
             // seeing the anonymous bearer who is actually asking.
             user: access.fieldAccessUser ?? access.user,
             overrideAccess: false,
+            // A visitor is handed the Public role the row gate above read.
+            visitor: this.resolveAccessService().fieldRuleVisitor,
           },
           redactions
         );
@@ -4112,7 +4140,12 @@ export class CollectionRelationshipService extends BaseService {
       // A scoped API key's own grants, never its owner's.
       state = {
         passes: new Map(),
-        grants: callerAccessGrants(user, access.authenticatedScope),
+        grants: callerAccessGrants(
+          user,
+          access.authenticatedScope,
+          undefined,
+          this.resolveAccessService().fieldRuleVisitor
+        ),
         redactions: new WeakMap(),
       };
       relatedFieldGroupState.set(access, state);
@@ -4302,8 +4335,12 @@ export class CollectionRelationshipService extends BaseService {
       targetCollectionName,
       field
     );
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const { sourceColumn, targetColumn } = junctionLinkColumns(
+      sourceCollectionName,
+      targetCollectionName
+    );
+    const sourceIdCol = sql.identifier(sourceColumn);
+    const targetIdCol = sql.identifier(targetColumn);
     const junctionQuery = sql`
       SELECT ${sourceIdCol} as source_id, ${targetIdCol} as target_id
       FROM ${sql.identifier(junctionTableName)}
@@ -4394,8 +4431,12 @@ export class CollectionRelationshipService extends BaseService {
 
     try {
       // Query junction table to get related IDs using sql tagged template
-      const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-      const targetIdCol = sql.identifier(targetCollectionName + "_id");
+      const { sourceColumn, targetColumn } = junctionLinkColumns(
+        sourceCollectionName,
+        targetCollectionName
+      );
+      const sourceIdCol = sql.identifier(sourceColumn);
+      const targetIdCol = sql.identifier(targetColumn);
 
       const junctionQuery = sql`
         SELECT ${targetIdCol} as target_id
@@ -4531,8 +4572,12 @@ export class CollectionRelationshipService extends BaseService {
       throw error;
     }
 
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const { sourceColumn, targetColumn } = junctionLinkColumns(
+      sourceCollectionName,
+      targetCollectionName
+    );
+    const sourceIdCol = sql.identifier(sourceColumn);
+    const targetIdCol = sql.identifier(targetColumn);
 
     // Insert each relationship. A genuine failure (for example a foreign-key
     // violation from a bad target id) is allowed to propagate: junction writes
@@ -4606,7 +4651,10 @@ export class CollectionRelationshipService extends BaseService {
       field
     );
 
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
+    const sourceIdCol = sql.identifier(
+      junctionLinkColumns(sourceCollectionName, targetCollectionName)
+        .sourceColumn
+    );
     const query = sql`
       DELETE FROM ${sql.identifier(junctionTableName)}
       WHERE ${sourceIdCol} = ${sourceEntryId}
@@ -4632,8 +4680,12 @@ export class CollectionRelationshipService extends BaseService {
       return field.options.junctionTable;
     }
 
-    // Auto-generate junction table name (same logic as in dynamic-collections.ts)
-    const sourceTableName = `dc_${sourceCollectionName}`;
+    // Auto-generate the junction name as the DDL does. The DDL names it from
+    // the source's TABLE, where a hyphen in the slug is an underscore, so the
+    // source side resolves through `getTableName`; a hyphen-free slug gives
+    // the same `dc_<slug>` as before. The DDL spells the target as
+    // `dc_<target slug>` as written, so the target side stays as written.
+    const sourceTableName = getTableName(sourceCollectionName);
     const targetTableName = `dc_${targetCollectionName}`;
     const tables = [sourceTableName, targetTableName].sort();
     return `${tables[0]}_${tables[1]}_${field.name}`;

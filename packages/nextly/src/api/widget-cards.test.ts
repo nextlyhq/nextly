@@ -9,12 +9,25 @@ import { createBatchScope } from "../domains/widgets/batch-scope";
 import { NextlyError } from "../errors/nextly-error";
 import * as loggerModule from "../observability/logger";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
+import type { WidgetReadServices } from "../domains/widgets/declaration/define-widget";
+import {
+  boundReadAhead,
+  type ReadAheadSide,
+} from "../domains/widgets/declaration/read-services";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { readableOfKind } from "../domains/widgets/reader-content";
 import { setSiteDashboardRules } from "../domains/widgets/site-rules";
 import { clearSources, registerSource } from "../domains/widgets/sources";
 
-import { cardIsShownTo, prepareCards } from "./widget-cards";
+import {
+  cardAnswersEmpty,
+  cardIsShownTo,
+  cardShownTo,
+  prepareCards,
+  readableCollectionsOnce,
+  type CardBatch,
+} from "./widget-cards";
 import { askableCards } from "./widget-layout";
 import {
   answerReadyQueries,
@@ -37,11 +50,23 @@ vi.mock(
   })
 );
 vi.mock("../domains/widgets/execute", () => ({ executeWidgetQuery: vi.fn() }));
+// Partial: the registry read a card's Field settings are judged against is stood in for.
+vi.mock("../domains/widgets/reader-content", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../domains/widgets/reader-content")
+  >()),
+  readableOfKind: vi.fn(),
+}));
 
 const person = { user: { id: "reader" } } as never;
 const auth = {} as never;
 const check = vi.fn(async (raw: unknown) => raw as WidgetQuery);
-const batch = { auth, caller: person, check };
+const batch = {
+  auth,
+  caller: person,
+  check,
+  readableCollections: async () => ({ slugs: [], reachable: true }),
+};
 
 const ordersFunction = vi.fn(async () => ({ total: 7 }));
 const gatedLoad = vi.fn(async () => ({ total: 1 }));
@@ -50,6 +75,10 @@ const needsLoad = vi.fn(async () => ({ total: 3 }));
 const maybeLoad = vi.fn(async () => ({ total: 4 }));
 const accessPredicate = vi.fn((_input: { user: unknown }): unknown => true);
 const showsPredicate = vi.fn((_input: unknown): unknown => true);
+// Records the Field setting each card of the by-field widgets was loaded with.
+const fieldLoad = vi.fn(async (_input: { settings: { field?: unknown } }) => ({
+  total: 5,
+}));
 // Reads a trend only for a card with the room to draw one: the size it is handed decides how much
 // it asks.
 const trendLoad = vi.fn(
@@ -63,7 +92,45 @@ const trendLoad = vi.fn(
     return { total, trend: true };
   }
 );
+// Finds nothing to show in a small card, whose figure has no room for the part it reads: what it
+// answers depends on the tier it is handed.
+const roomyLoad = vi.fn(async (input: { size: { tier: string } }) => ({
+  total: input.size.tier === "small" ? 0 : 3,
+}));
+// Drawn by core's bars display and declaring no `isEmpty`: empty by the display's own rule.
+const groupsLoad = vi.fn(
+  async (): Promise<{ buckets: { value: string; count: number }[] }> => ({
+    buckets: [],
+  })
+);
 const declarations: Record<string, unknown> = {
+  "acme/roomy": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/roomy",
+      size: {
+        default: { w: 4, h: 3 },
+        min: { w: 3, h: 3 },
+        max: { w: 12, h: 6 },
+      },
+      hidesWhenEmpty: true,
+      load: roomyLoad,
+      view: "figure",
+      isEmpty: (data: { total: number }) => data.total === 0,
+    },
+  },
+  "acme/groups": {
+    owner: "plugin @acme/shop",
+    display: "bars",
+    declaration: {
+      id: "acme/groups",
+      size: { default: { w: 12, h: 3 } },
+      hidesWhenEmpty: true,
+      load: groupsLoad,
+      view: "bars",
+    },
+  },
   "acme/orders": {
     owner: "plugin @acme/shop",
     display: "metric",
@@ -141,7 +208,7 @@ const declarations: Record<string, unknown> = {
     declaration: {
       id: "acme/needs",
       size: { default: { w: 12, h: 3 } },
-      settings: { collection: { type: "collection" } },
+      settings: { collection: { type: "collection", label: "Collection" } },
       load: needsLoad,
       view: "figure",
     },
@@ -223,6 +290,40 @@ const declarations: Record<string, unknown> = {
       id: "acme/dated",
       size: { default: { w: 12, h: 3 } },
       load: async () => ({ total: 3, at: new Date(0) }),
+      view: "figure",
+    },
+  },
+  // A field of a chosen collection, with no default and with one.
+  "acme/by-field": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/by-field",
+      size: { default: { w: 12, h: 3 } },
+      settings: {
+        collection: { type: "collection", label: "Collection" },
+        field: { type: "field", of: "collection", label: "Field" },
+      },
+      load: fieldLoad,
+      view: "figure",
+    },
+  },
+  "acme/by-field-default": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/by-field-default",
+      size: { default: { w: 12, h: 3 } },
+      settings: {
+        collection: { type: "collection", label: "Collection" },
+        field: {
+          type: "field",
+          of: "collection",
+          label: "Field",
+          defaultValue: "state",
+        },
+      },
+      load: fieldLoad,
       view: "figure",
     },
   },
@@ -673,9 +774,10 @@ describe("a card's load, judged before it runs", () => {
     expect(answer).toEqual({
       settled: {
         ok: false,
+        // Its label in a sentence, as the admin writes it: lowered, never "No Collection".
         error: "No collection chosen yet",
         code: "needs-setting",
-        setting: "collection",
+        setting: "Collection",
       },
     });
   });
@@ -807,7 +909,20 @@ describe("a card's load that fails", () => {
 describe("whether a card is shown to the person asking, without its load", () => {
   /** The card of `widget` placed with `config`, asked as the batch asks one. */
   function shown(widget: string, config?: Record<string, unknown>) {
-    return cardIsShownTo(
+    return cardIsShownTo(...cardAsked(widget, config));
+  }
+
+  /** As `shown`, with whether it could be judged at all (`cardShownTo`). */
+  function verdict(widget: string, config?: Record<string, unknown>) {
+    return cardShownTo(...cardAsked(widget, config));
+  }
+
+  /** What judging the card of `widget` placed with `config` is handed. */
+  function cardAsked(
+    widget: string,
+    config?: Record<string, unknown>
+  ): Parameters<typeof cardShownTo> {
+    return [
       declarations[widget] as never,
       {
         id: `c-${widget.slice(5)}`,
@@ -822,8 +937,8 @@ describe("whether a card is shown to the person asking, without its load", () =>
         signal: new AbortController().signal,
         scope: createBatchScope().forOwner("plugin @acme/shop"),
         now: new Date(Date.UTC(2026, 9, 22)),
-      }
-    );
+      },
+    ];
   }
 
   it("is shown when nothing says otherwise, and its load is never run", async () => {
@@ -950,6 +1065,185 @@ describe("whether a card is shown to the person asking, without its load", () =>
     expect(warned[0]?.[0]).toMatchObject({
       logContext: { reason: "widget-judging-timed-out", stage: "access" },
     });
+  });
+  it("could not be judged when shows throws or does not settle, which is not hidden", async () => {
+    // 🔴 The batch draws such a card as failed: whoever counts for the card
+    // has to know it is unknown, not left out.
+    showsPredicate.mockImplementation(() => {
+      throw new Error("lookup failed");
+    });
+    await expect(verdict("acme/maybe")).resolves.toBe("failed");
+    vi.useFakeTimers();
+    try {
+      showsPredicate.mockImplementation(() => new Promise(() => {}));
+      const judging = verdict("acme/maybe");
+      await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+      await expect(judging).resolves.toBe("failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is hidden, not failed, when its own rules leave it out", async () => {
+    // The control: a refusal, a predicate that throws refusing included, and
+    // a shows answering anything but true are each a card left out.
+    showsPredicate.mockImplementation(() => "yes");
+    await expect(verdict("acme/maybe")).resolves.toBe("hidden");
+    accessPredicate.mockImplementation(() => false);
+    await expect(verdict("acme/gated")).resolves.toBe("hidden");
+    accessPredicate.mockImplementation(() => {
+      throw new Error("access lookup failed");
+    });
+    await expect(verdict("acme/gated")).resolves.toBe("hidden");
+    showsPredicate.mockImplementation(() => true);
+    await expect(verdict("acme/maybe")).resolves.toBe("shown");
+  });
+});
+
+describe("whether a card answers empty, asked by the layout read before the dashboard is drawn", () => {
+  /**
+   * The card of `widget`, its settings given, answered whole as the layout read answers it, on a
+   * dashboard `dashboardWidth` wide.
+   */
+  function answersEmpty(
+    widget: string,
+    asked: CardBatch = batch,
+    {
+      w = 12,
+      dashboardWidth = 1200,
+    }: { w?: number; dashboardWidth?: number } = {}
+  ) {
+    return cardAnswersEmpty(
+      declarations[widget] as never,
+      {
+        id: `c-${widget.slice(5)}`,
+        widgetId: widget,
+        w,
+        h: 3,
+        removed: false,
+        config: { items: 3 },
+      },
+      asked,
+      {
+        signal: new AbortController().signal,
+        scope: createBatchScope().forOwner("plugin @acme/shop"),
+        now: new Date(Date.UTC(2026, 9, 22)),
+      },
+      dashboardWidth
+    );
+  }
+
+  beforeEach(() => {
+    vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
+  });
+
+  it("is empty only when its own isEmpty holds of what its load answered", async () => {
+    ordersFunction.mockResolvedValueOnce({ total: 0 });
+    await expect(answersEmpty("acme/orders")).resolves.toBe(true);
+    // The control: the same card with something to show.
+    await expect(answersEmpty("acme/orders")).resolves.toBe(false);
+    expect(ordersFunction).toHaveBeenCalledTimes(2);
+  });
+
+  it("is empty, drawn by a core display and declaring no isEmpty, when the display would find nothing", async () => {
+    await expect(answersEmpty("acme/groups")).resolves.toBe(true);
+    // The control: one group, drawn.
+    groupsLoad.mockResolvedValueOnce({
+      buckets: [{ value: "paid", count: 2 }],
+    });
+    await expect(answersEmpty("acme/groups")).resolves.toBe(false);
+  });
+
+  it("is not empty when its load throws, or its rules refuse it, so the card is placed", async () => {
+    ordersFunction.mockRejectedValueOnce(new Error("down"));
+    await expect(answersEmpty("acme/orders")).resolves.toBe(false);
+    accessPredicate.mockImplementation(() => false);
+    await expect(answersEmpty("acme/gated")).resolves.toBe(false);
+    expect(gatedLoad).not.toHaveBeenCalled();
+  });
+
+  it("is judged at the tier the card is drawn at on the dashboard's width, as its first query asks", async () => {
+    // Three columns: 288 px on a 1,200 px dashboard, small, and 342 px on a 1,440 px one, medium
+    // (`cardTierAt`). Judged at the unstated medium tier, both would show something.
+    await expect(
+      answersEmpty("acme/roomy", batch, { w: 3, dashboardWidth: 1200 })
+    ).resolves.toBe(true);
+    expect(roomyLoad.mock.lastCall?.[0].size).toEqual({
+      w: 3,
+      h: 3,
+      tier: "small",
+    });
+    await expect(
+      answersEmpty("acme/roomy", batch, { w: 3, dashboardWidth: 1440 })
+    ).resolves.toBe(false);
+    expect(roomyLoad.mock.lastCall?.[0].size).toEqual({
+      w: 3,
+      h: 3,
+      tier: "medium",
+    });
+  });
+
+  it("binds its read services to the credential its batch was asked on", async () => {
+    const bound: Array<ReadAheadSide | undefined> = [];
+    ordersFunction.mockImplementation(async (...args: unknown[]) => {
+      const { services } = args[0] as { services: WidgetReadServices };
+      bound.push(boundReadAhead(services));
+      return { total: 0 };
+    });
+    const readAhead = { side: "ahead", token: "load-k" } as const;
+    await answersEmpty("acme/orders", {
+      ...batch,
+      auth: { authMethod: "api-key", apiKeyId: "key-1" } as never,
+      readAhead,
+    });
+    await answersEmpty("acme/orders", {
+      ...batch,
+      auth: { authMethod: "api-key", apiKeyId: "key-2" } as never,
+      readAhead,
+    });
+    // A key authentication named no id for: no credential, so nothing read ahead is reused.
+    await answersEmpty("acme/orders", {
+      ...batch,
+      auth: { authMethod: "api-key" } as never,
+      readAhead,
+    });
+    expect(bound).toEqual([
+      { ...readAhead, credential: "api-key:key-1" },
+      { ...readAhead, credential: "api-key:key-2" },
+      readAhead,
+    ]);
+    ordersFunction.mockImplementation(async () => ({ total: 7 }));
+  });
+
+  it("binds its read services to the dashboard load its batch names, on the batch's side of it", async () => {
+    const bound: Array<ReadAheadSide | undefined> = [];
+    ordersFunction.mockImplementation(async (...args: unknown[]) => {
+      const { services } = args[0] as { services: WidgetReadServices };
+      bound.push(boundReadAhead(services));
+      return { total: 0 };
+    });
+    await answersEmpty("acme/orders", {
+      ...batch,
+      readAhead: { side: "ahead", token: "load-a" },
+    });
+    await answersEmpty("acme/orders", {
+      ...batch,
+      readAhead: { side: "batch", token: "load-b" },
+    });
+    await answersEmpty("acme/orders");
+    // Each load by its own token and side, on the session it was asked on, and a batch of no
+    // load bound to none.
+    expect(bound).toEqual([
+      { side: "ahead", token: "load-a", credential: "session" },
+      { side: "batch", token: "load-b", credential: "session" },
+      undefined,
+    ]);
+    ordersFunction.mockImplementation(async () => ({ total: 7 }));
   });
 });
 
@@ -1178,5 +1472,121 @@ describe("the size a card's load is handed", () => {
     expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
       size: { w: 12, h: 3, tier: "medium" },
     });
+  });
+});
+
+describe("a card's Field settings, judged against the reader's collections", () => {
+  /** A card of `widget` storing `field` over the orders collection. */
+  const fieldCard = (id: string, widget: string, field: string) =>
+    [
+      id,
+      {
+        id,
+        widgetId: widget,
+        w: 12,
+        h: 3,
+        removed: false,
+        config: { collection: "orders", field },
+      },
+    ] as const;
+
+  beforeEach(() => {
+    clearSources();
+    registerSource({
+      id: "collection:orders",
+      label: "Orders",
+      kind: "collection",
+      supports: ["count"],
+      fields: [
+        { name: "state", type: "string" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+    vi.mocked(readableOfKind).mockResolvedValue({
+      slugs: ["orders"],
+      reachable: true,
+    });
+    vi.mocked(askableCards).mockResolvedValue({
+      handed: new Map([
+        fieldCard("f-1", "acme/by-field", "state"),
+        fieldCard("f-2", "acme/by-field", "createdAt"),
+        fieldCard("f-3", "acme/by-field", "state"),
+        fieldCard("f-gone", "acme/by-field", "gone"),
+        fieldCard("f-gone-default", "acme/by-field-default", "gone"),
+      ]) as never,
+      placeable: new Set(["acme/by-field", "acme/by-field-default"]),
+    });
+  });
+  afterEach(() => clearSources());
+
+  /** Each card asked, in one batch that reads the reader's collections as the endpoint's does. */
+  async function answeredCards(cards: string[]): Promise<unknown[]> {
+    const fieldBatch = {
+      auth,
+      caller: person,
+      check,
+      readableCollections: readableCollectionsOnce(person),
+    };
+    const prepared = await prepareCards(
+      cards.map(card => ({
+        widget: card.endsWith("-default")
+          ? "acme/by-field-default"
+          : "acme/by-field",
+        card,
+      })),
+      fieldBatch
+    );
+    return Promise.all(
+      cards.map((_card, index) =>
+        (prepared.get(index) as { answer: Function }).answer({
+          signal: new AbortController().signal,
+          scope: createBatchScope().forOwner("plugin @acme/shop"),
+          now: new Date(Date.UTC(2026, 9, 22)),
+        })
+      )
+    );
+  }
+
+  /** The Field setting each run of the by-field load was handed, in order. */
+  const fieldsLoaded = () =>
+    fieldLoad.mock.calls.map(([input]) => input.settings.field);
+
+  it("reads the reader's collections once for every card of the batch", async () => {
+    await answeredCards(["f-1", "f-2", "f-3"]);
+    // The control: each card's Field setting was judged and loaded.
+    expect(fieldsLoaded()).toEqual(["state", "createdAt", "state"]);
+    expect(readableOfKind).toHaveBeenCalledTimes(1);
+    expect(readableOfKind).toHaveBeenCalledWith(person, "collection");
+  });
+
+  it("asks for a field the collection no longer offers again, without loading", async () => {
+    const [answer] = await answeredCards(["f-gone"]);
+    expect(answer).toEqual({
+      settled: {
+        ok: false,
+        error: "No field chosen yet",
+        code: "needs-setting",
+        setting: "Field",
+      },
+    });
+    expect(fieldLoad).not.toHaveBeenCalled();
+  });
+
+  it("loads a stale field with its declared default, where the collection offers it", async () => {
+    await expect(answeredCards(["f-gone-default"])).resolves.toEqual([
+      { result: { op: "count", total: 5 }, empty: false },
+    ]);
+    expect(fieldsLoaded()).toEqual(["state"]);
+  });
+
+  it("keeps a stored field while the registry cannot be read, and loads with it", async () => {
+    vi.mocked(readableOfKind).mockResolvedValue({
+      slugs: [],
+      reachable: false,
+    });
+    // Without a reachable registry nothing says the field is stale: it is not
+    // cleared into a "No field chosen yet" the reader would have to answer.
+    await answeredCards(["f-1"]);
+    expect(fieldsLoaded()).toEqual(["state"]);
   });
 });

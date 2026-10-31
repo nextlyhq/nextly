@@ -87,6 +87,8 @@ const arrangement: DashboardLayoutResponse = {
   defaultPlacements: [],
   version: 2,
   source: "own",
+  // A row of dismissals at most: the reader still follows the default.
+  arranged: false,
   scope: "tok",
   audience: "aud",
 };

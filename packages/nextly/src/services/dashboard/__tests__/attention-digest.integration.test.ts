@@ -27,7 +27,7 @@ import {
 import { defineCollection, text } from "../../../config";
 import { scheduleAsItStands } from "../../../domains/releases/__tests__/helpers/release-writes";
 import { ReleasesRepository } from "../../../domains/releases/releases-repository";
-import type { AttentionDigestItem } from "../../../domains/widgets/attention/digest";
+import type { AttentionDigestItem } from "../../../domains/widgets/attention/digest-item";
 import {
   clearAttentionItems,
   registerAttentionItems,
@@ -169,6 +169,7 @@ describe.each(getConfiguredTestDialects())(
           count: 1,
           severity: "critical",
           link: "releases?tab=attention&reason=overdue",
+          reason: "Still scheduled after its time.",
         },
         {
           id: "core/stopped-releases",
@@ -177,6 +178,7 @@ describe.each(getConfiguredTestDialects())(
           count: 1,
           severity: "critical",
           link: "releases?tab=attention&reason=stopped",
+          reason: "A scheduled publish failed.",
         },
       ]);
       // 🔴 A reader of no releases is handed exactly what they were handed on

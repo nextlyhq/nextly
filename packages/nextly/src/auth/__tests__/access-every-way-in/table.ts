@@ -232,8 +232,11 @@ export type Target = (typeof TARGETS)[number];
  *   statement that the caller is editing it.
  * - `capabilities`: what `GET /me/capabilities` tells the admin the caller
  *   may do, which is what the admin offers and withholds.
+ * - `bulk`: the REST bulk routes by ids, which the admin's entry list sends
+ *   its row and bulk Delete, Publish and Unpublish through, answered by the
+ *   entry's own result among the items.
  *
- * The last three were added after the others, and come last, so every column
+ * The last four were added after the others, and come last, so every column
  * already in the answers file keeps its place.
  */
 export const DOORS = [
@@ -250,8 +253,21 @@ export const DOORS = [
   "widget",
   "lock",
   "capabilities",
+  "bulk",
 ] as const;
 export type Door = (typeof DOORS)[number];
+
+/**
+ * The doors where asking for a write IS the write, each given rows of its
+ * own to write to. The others only ask a gate (`route`, `can`) or read, so
+ * nothing they answer can have been written.
+ */
+export const WRITING_DOORS: readonly Door[] = [
+  "rest",
+  "direct",
+  "service",
+  "bulk",
+];
 
 /**
  * With or without the access-control service registered. Without it, only
@@ -261,8 +277,12 @@ export type Door = (typeof DOORS)[number];
  * `bound` is a trusted read (`overrideAccess: true`) whose bound reaches only
  * the collection it reads, so every target it populates must be read as the
  * caller would read it: population only.
+ *
+ * `public` asks a visitor what `service` asks one, of targets of its own on
+ * which the Public role holds {@link PUBLIC_HOLDS}; in every other setup the
+ * Public role holds what boot seeding grants it (`publicHolds`).
  */
-export type Setup = "service" | "no-service" | "bound";
+export type Setup = "service" | "no-service" | "bound" | "public";
 
 export interface Row {
   setup: Setup;
@@ -292,6 +312,13 @@ const READ_UPDATE: readonly Action[] = ["read", "update"];
 const PUBLISHING: readonly Action[] = ["publish", "unpublish"];
 const NOT_PRINCIPAL = PRESENTED.filter(caller => !PRINCIPALS.includes(caller));
 const NOT_VISITOR = PRESENTED.filter(caller => caller !== "visitor");
+/**
+ * The staff a request can present, signed in with a session or a key: what a
+ * door that refuses anyone not signed in, before any decision, can name. A
+ * visitor's refusal there is the sign-in gate's, pinned apart in
+ * `visitor-refused-before-the-decision.integration.test.ts`.
+ */
+const SIGNED_IN = NOT_PRINCIPAL.filter(caller => caller !== "visitor");
 
 /**
  * What each door asks, with the access-control service registered.
@@ -299,7 +326,9 @@ const NOT_VISITOR = PRESENTED.filter(caller => caller !== "visitor");
  * A principal is read only by routes that declare one, so the staff routes,
  * the readers behind them and the schema list never see it. Only a resolved
  * caller reaches `entity` and `can`: every route in front of them has already
- * refused a visitor. `website` names a user or nobody, never a key. A
+ * refused a visitor. A plugin route that is not public, the schema list and a
+ * document lock refuse anyone not signed in before any decision, so they ask
+ * the signed-in callers alone. `website` names a user or nobody, never a key. A
  * plugin route's gate and `can` name one permission for one entry, so they are
  * asked no `list` or `count`.
  *
@@ -325,7 +354,8 @@ const REACH: Record<Door, Reach> = {
   },
   // Media, users and roles are read by the namespaces a principal cannot call
   // (only collection and Single operations can be made as one), so they are
-  // asked of the callers REST names there.
+  // asked of the callers REST names there. A checked read of media naming
+  // nobody is a visitor's, judged by the Public role's `read-media`.
   direct: {
     callers: PRESENTED,
     targets: {
@@ -344,7 +374,7 @@ const REACH: Record<Door, Reach> = {
   },
   website: { callers: ["visitor", ...USERS], targets: { collection: READ } },
   route: {
-    callers: NOT_PRINCIPAL,
+    callers: SIGNED_IN,
     targets: {
       collection: ENTRY_ACTIONS,
       single: READ_UPDATE,
@@ -371,7 +401,7 @@ const REACH: Record<Door, Reach> = {
     callers: [...STAFF, "key-without-rows"],
     targets: { collection: READ, single: READ },
   },
-  schema: { callers: NOT_PRINCIPAL, targets: { collection: READ } },
+  schema: { callers: SIGNED_IN, targets: { collection: READ } },
   population: {
     callers: CALLERS,
     targets: { related: READ, media: READ, users: READ },
@@ -395,7 +425,7 @@ const REACH: Record<Door, Reach> = {
   },
   // A lock is claimed by someone about to edit, so it is asked as an update.
   lock: {
-    callers: NOT_PRINCIPAL,
+    callers: SIGNED_IN,
     targets: { collection: ["update"], single: ["update"] },
   },
   // One answer names every collection and Single with every action it has,
@@ -412,6 +442,12 @@ const REACH: Record<Door, Reach> = {
       single: READ_UPDATE,
       "single-pub": PUBLISHING,
     },
+  },
+  // The bulk routes change existing entries, as the list's actions do, and
+  // only a collection has a list.
+  bulk: {
+    callers: NOT_PRINCIPAL,
+    targets: { collection: ["update", "delete", ...PUBLISHING] },
   },
 };
 
@@ -449,6 +485,16 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
   service: REACH,
   "no-service": REACH_WITHOUT_SERVICE,
   bound: REACH_BOUND,
+  // The doors that ask a visitor at all: the others never name one (`REACH`).
+  public: {
+    rest: REACH.rest,
+    direct: REACH.direct,
+    website: REACH.website,
+    service: REACH.service,
+    population: REACH.population,
+    system: REACH.system,
+    bulk: REACH.bulk,
+  },
 };
 
 /** Whether a door asks a case, so a row is never sent where it cannot be. */
@@ -523,11 +569,12 @@ export function rows(): Row[] {
     READ,
     CALLERS
   );
-  // A visitor's create, update and delete are rows like any other: with no
-  // rule naming the write they are refused, and a rule answering `true` is
-  // what lets one through.
-  return [...withService, ...withoutService, ...bound].filter(row =>
-    DOORS.some(door => asks(door, row))
+  // A visitor again, with the Public role holding what it can be granted.
+  const publicRole = cross("public", TARGETS, rulesOf, ACTIONS, ["visitor"]);
+  // A visitor's create, update and delete are rows like any other: judged by
+  // what the Public role holds, then by a rule naming the write.
+  return [...withService, ...withoutService, ...bound, ...publicRole].filter(
+    row => DOORS.some(door => asks(door, row))
   );
 }
 
@@ -764,11 +811,79 @@ export function hasOutsideTwin(row: Row): boolean {
 }
 
 /**
+ * What the Public role holds in the `public` setup, on that setup's own
+ * targets: every permission it can be given on the rule collections, the
+ * Singles and the related rows, and `read-media`; never `read-users`, a role
+ * or an email provider, which boot seeding never grants it. Publish and
+ * unpublish are held too, so the table shows a visitor refused them even
+ * where Public holds them.
+ *
+ * Every read is held, the Singles with a status included though only their
+ * publish and unpublish are asked, because boot seeding grants Public the read
+ * of each of these targets whose read rule answers a visitor `true`: holding
+ * every read, Public holds exactly this whatever boot adds.
+ */
+export const PUBLIC_HOLDS: Partial<Record<Target, readonly Action[]>> = {
+  collection: ["read", "create", "update", "delete", "publish", "unpublish"],
+  single: ["read", "update"],
+  "single-pub": ["read", "publish", "unpublish"],
+  related: ["read"],
+  media: ["read"],
+};
+
+/**
+ * Whether the Public role holds the permission for `action` on a target
+ * declaring `rule`.
+ *
+ * In `public`, it is {@link PUBLIC_HOLDS}. Everywhere else it is what boot
+ * seeding grants: `read-media`, and the read of each rule collection and
+ * Single whose declared read rule answers a visitor exactly `true`, asked as
+ * boot asks it, of a visitor holding no permissions (so `role-screen-spelling`
+ * says `false`); never a write, a user, a role or an email provider. No plugin
+ * in the table's world declares a grant for Public.
+ */
+export function publicHolds(
+  setup: Setup,
+  target: Target,
+  rule: Rule,
+  action: Action
+): boolean {
+  if (setup === "public")
+    return PUBLIC_HOLDS[target]?.includes(action) ?? false;
+  if (action !== "read") return false;
+  if (target === "media") return true;
+  return (
+    !RULELESS.includes(target) && RULE_SAYS[rule]("read", "visitor") === true
+  );
+}
+
+/**
+ * A visitor's answer: the Public role's permission, then, where the target
+ * declares a rule for the action, what the rule lets through, as for a
+ * signed-in user: a rule answering exactly `true` every entry, and a
+ * collection's read rule answering a well-formed filter the entries it
+ * matches. A rule that reads the caller's permissions sees the Public role's.
+ * A visitor never publishes or unpublishes, whatever Public holds.
+ */
+function visitorAnswer(row: Row, action: Action): Verdict {
+  const { setup, target, rule } = row;
+  if (isLifecycle(action)) return "refuse";
+  if (!publicHolds(setup, target, rule, action)) return "refuse";
+  // The rule reads the caller's permissions, which are the Public role's,
+  // and Public holds the action.
+  if (rule === "role-screen-spelling") return "allow";
+  const lets = rulesLet(rule, action, "visitor", target);
+  // A visitor is limited by a read rule's filter alone: a write rule's
+  // filter is not applied to a visitor yet, so it refuses.
+  if (lets === "matching" && FILTERED_WRITES.has(action)) return "refuse";
+  return answerFor(row, lets);
+}
+
+/**
  * The answer the composition in the access design gives a row, the same for
  * every way in and with or without the access-control service:
  *
- * - a visitor's permissions are the Public role's, and no Public role exists
- *   yet, so it holds none: every row is refused;
+ * - a visitor's permissions are the Public role's (`visitorAnswer`);
  * - a super-admin, held directly or through inheritance, passes every
  *   collection and Single rule, and so does the full-access key a super-admin
  *   made, which counts as holding every permission. The super-admin's
@@ -776,8 +891,7 @@ export function hasOutsideTwin(row: Row): boolean {
  * - a plugin's signed-in person holds no role, so the target's rule decides
  *   alone, and a target that declares none refuses. As today, a person never
  *   publishes or unpublishes, whatever the rule says. A person reads media
- *   as a visitor does, through the Public role's `read-media`, so it is
- *   refused while no Public role exists;
+ *   as a visitor does, through the Public role's `read-media`;
  * - everyone else needs the permission AND, where the target declares a rule
  *   for the action, a rule that answers exactly `true`. A publish or an
  *   unpublish is judged by its own permission and its own rule.
@@ -787,8 +901,9 @@ export function hasOutsideTwin(row: Row): boolean {
  * - a collection's read rule may answer a well-formed filter instead of
  *   `true`, which allows the entries it matches: a list or a count returns
  *   those alone, and a read of the probe entry, which it matches, is allowed.
- *   A delete rule may answer one too: the entry inside it is deleted and its
- *   twin outside it refused. A filter from any other rule refuses.
+ *   An update, delete, publish or unpublish rule may answer one too: the
+ *   entry inside it is changed and its twin outside it refused. A filter from
+ *   any other rule refuses.
  */
 export function oneAnswer(row: Row): Verdict {
   if (row.action === "new-pub") {
@@ -799,7 +914,9 @@ export function oneAnswer(row: Row): Verdict {
   }
   const { caller, target, rule } = row;
   const action = judgedAs(row.action);
-  if (PRINCIPALS.includes(caller) && target === "media") return "refuse";
+  if (PRINCIPALS.includes(caller) && target === "media") {
+    return visitorAnswer(row, action);
+  }
   if (PRINCIPALS.includes(caller)) {
     // Judged by the rule alone, so a target that declares none refuses.
     if (isLifecycle(action) || RULE_SAYS[rule](action, caller) === null) {
@@ -807,7 +924,7 @@ export function oneAnswer(row: Row): Verdict {
     }
     return answerFor(row, rulesLet(rule, action, caller, target));
   }
-  if (caller === "visitor") return "refuse";
+  if (caller === "visitor") return visitorAnswer(row, action);
   if (
     caller === "super-admin" ||
     caller === "super-admin-inherited" ||
@@ -821,19 +938,33 @@ export function oneAnswer(row: Row): Verdict {
 
 /**
  * The doors that answer yes or no about a collection, not about one entry.
- * Where the one answer lets the caller act on the entries a filter matches,
- * theirs is yes: the caller may act on the collection, on those entries.
+ * Where the one answer lets the caller read the entries a filter matches,
+ * theirs is yes: the caller may read the collection, those entries. A write
+ * under a filter is no there: the answer names no entry and applies no
+ * filter, so a yes would let the caller act past it.
  */
-const COLLECTION_DOORS: ReadonlySet<Door> = new Set<Door>([
-  "can",
-  "capabilities",
-  "widget",
-]);
+const YES_OR_NO_DOORS: ReadonlySet<Door> = new Set<Door>(["can"]);
 
-/** The one answer as `door` gives it (see {@link COLLECTION_DOORS}). */
+/**
+ * The doors that show a hint of what the caller may try, whose request
+ * applies the rule's filter: a capability cell, and a dashboard widget offered
+ * by the permission it requires. Where the one answer lets the caller act on
+ * the entries a filter matches, for any action, theirs is yes.
+ */
+const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities", "widget"]);
+
+/**
+ * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and
+ * {@link CELL_DOORS}).
+ */
 export function oneAnswerAt(row: Row, door: Door): Verdict {
   const answer = oneAnswer(row);
-  return answer === "matching" && COLLECTION_DOORS.has(door) ? "allow" : answer;
+  if (answer !== "matching") return answer;
+  if (CELL_DOORS.has(door)) return "allow";
+  if (YES_OR_NO_DOORS.has(door)) {
+    return judgedAs(row.action) === "read" ? "allow" : "refuse";
+  }
+  return answer;
 }
 
 // ---------------------------------------------------------------------------

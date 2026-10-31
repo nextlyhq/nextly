@@ -210,20 +210,22 @@ const SCHEMA_CHANGE_ACTIONS = ["create", "update", "delete"] as const;
  * The lines a row shows under its name, from what `ids` hold on it.
  *
  * - A built-in resource whose role still holds its retired `manage-`
- *   permission reads Can edit, which that permission gives until `nextly
- *   upgrade` converts it into the plain four. Saving the role stores the same
- *   access as plain permissions unless the row is changed. Where the role
- *   holds it only through a base role (`ownIds` lacks it), saving this role
- *   leaves it on the base role, so the note says where it comes from instead.
+ *   permission reads No access, as the server counts it, until `nextly
+ *   upgrade` converts it into the plain four. Saving the role converts it
+ *   too, unless the row is changed. Where the role holds it only through a
+ *   base role (`ownIds` lacks it), saving this role leaves it on the base
+ *   role, so the note says where it comes from instead.
  * - Settings says that changing collections and Singles needs Can edit on it,
  *   since the schema routes ask create, update and delete on settings
  *   together; a role holding update without the other two is told it can
- *   change settings but not the schema.
+ *   change settings but not the schema. Not on the Public role's rows
+ *   (`visitors`), which offer no Can edit to ask for.
  */
 export function rowNotes(
   row: LevelRow,
   ids: Iterable<string>,
-  ownIds: Iterable<string>
+  ownIds: Iterable<string>,
+  { visitors = false }: { visitors?: boolean } = {}
 ): string[] {
   if (row.kind !== "system") return [];
   const held = new Set(actionsHeld(row, ids));
@@ -232,20 +234,20 @@ export function rowNotes(
     notes.push(
       new Set(actionsHeld(row, ownIds)).has("manage")
         ? `This role still holds the retired manage-${row.slug} permission, ` +
-            "which gives Can edit. Run nextly upgrade to convert it into the " +
-            "plain permissions; saving this role converts it too."
+            "which gives no access until it is converted. Run nextly " +
+            "upgrade to convert this role; saving this role converts it too."
         : `This role inherits the retired manage-${row.slug} permission ` +
-            "from a base role, which gives Can edit. Run nextly upgrade, or " +
-            "save the base role, to convert it into the plain permissions."
+            "from a base role, which gives no access until it is converted. " +
+            "Run nextly upgrade, or save the base role, to convert it."
     );
   }
-  if (row.slug === "settings") {
+  if (row.slug === "settings" && !visitors) {
     notes.push(
       "Changing collections and Singles needs Can edit on Settings " +
         "(create, update and delete)."
     );
-    const schema =
-      held.has("manage") || SCHEMA_CHANGE_ACTIONS.every(a => held.has(a));
+    // A retired `manage` gives nothing, so only the three plain actions do.
+    const schema = SCHEMA_CHANGE_ACTIONS.every(a => held.has(a));
     if (held.has("update") && !schema) {
       notes.push("Can change settings, but not collections or Singles.");
     }
