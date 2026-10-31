@@ -173,6 +173,24 @@ function emptyLibraryMessage({
 }
 
 /**
+ * What the Unused view says in place of its list until the counts say the
+ * usage record is built: that they are still loading, that they could not be
+ * read, or that older content is still being recorded.
+ */
+function unusedPendingMessage(counts: {
+  isError: boolean;
+  data?: { usageRecorded: boolean };
+}): string {
+  if (counts.isError) {
+    return "Couldn't check where items are used, so the Unused view can't list them. Reload the page to try again.";
+  }
+  if (counts.data === undefined) {
+    return "Still counting where items are used, so the Unused view can't list them yet.";
+  }
+  return "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it.";
+}
+
+/**
  * MediaLibrary component
  *
  * Complete media management interface.
@@ -276,10 +294,12 @@ export function MediaLibrary({
   }, [activeFolderId, view, resetPage]);
 
   // Whether the usage record covers older content, asked only for the Unused
-  // view, which cannot be trusted until it does.
+  // view, which cannot be trusted until it does. Only an answer saying it
+  // does opens the view: while the counts load, or after they fail, it lists
+  // nothing, since the items it would list may still be used by older content.
   const usageCounts = useMediaLibraryCounts(view === "unused");
   const unusedPending =
-    view === "unused" && usageCounts.data?.usageRecorded === false;
+    view === "unused" && usageCounts.data?.usageRecorded !== true;
 
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     React.useState(false);
@@ -718,7 +738,7 @@ export function MediaLibrary({
       : undefined;
 
   const emptyStateMessage = unusedPending
-    ? "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it."
+    ? unusedPendingMessage(usageCounts)
     : emptyLibraryMessage({
         filtered: Boolean(debouncedSearch) || typeFilter !== "all",
         canUpload,

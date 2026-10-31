@@ -67,13 +67,20 @@ export interface MediaDeleteDialogProps {
   isLoading?: boolean;
 }
 
-/** What the dialog says first: where the item is used, or that it isn't. */
+/**
+ * What the dialog says first: where the item is used, or that it isn't. It
+ * says it isn't only once the usage record is built: before then a use the
+ * record lacks may still be in older content.
+ */
 function usageSentence(usage: MediaUsage | undefined, failed: boolean): string {
   if (usage) {
     const total = usageTotal(usage);
-    return total > 0
-      ? `It's used in ${placesText(total)}, which will show no image until you choose another.`
-      : "It isn't used anywhere.";
+    if (total > 0) {
+      return `It's used in ${placesText(total)}, which will show no image until you choose another.`;
+    }
+    return usage.usageRecorded
+      ? "It isn't used anywhere."
+      : "The usage record is still being built, so this may still be used.";
   }
   return failed
     ? "Couldn't check where it's used."

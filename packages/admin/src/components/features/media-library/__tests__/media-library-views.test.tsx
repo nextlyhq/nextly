@@ -297,6 +297,61 @@ describe("a view beside the folders", () => {
     expect(await screen.findByText(/still being recorded/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^photo-1\.jpg/ })).toBeNull();
   });
+
+  /** Unused picked, with the list answered and the counts as `counts` says. */
+  async function unusedWhileCounts(counts: Promise<unknown>) {
+    library.fetchMediaLibraryCounts.mockReturnValue(counts);
+    act(() => setMediaLibraryView("unused"));
+    renderLibrary();
+    // The list itself has answered: only the counts are outstanding.
+    await waitFor(() =>
+      expect(api.fetchMedia).toHaveBeenCalledWith(
+        expect.objectContaining({ view: "unused" })
+      )
+    );
+  }
+
+  /** No item of the list is on screen, nor any control acting on one. */
+  function noUnusedItemsShown() {
+    expect(screen.queryByRole("button", { name: /^photo-1\.jpg/ })).toBeNull();
+    expect(
+      screen.queryByRole("checkbox", { name: "Select photo-1.jpg" })
+    ).toBeNull();
+  }
+
+  it("lists nothing in Unused while the counts are still loading", async () => {
+    await unusedWhileCounts(new Promise(() => undefined));
+
+    expect(
+      await screen.findByText(/still counting where items are used/i)
+    ).toBeInTheDocument();
+    noUnusedItemsShown();
+  });
+
+  it("lists nothing in Unused when the counts could not be read", async () => {
+    await unusedWhileCounts(Promise.reject(new Error("counts failed")));
+
+    expect(
+      await screen.findByText(/couldn't check where items are used/i)
+    ).toBeInTheDocument();
+    noUnusedItemsShown();
+  });
+
+  it("lists Unused once the counts say the usage record is built", async () => {
+    // POSITIVE CONTROL for the two above: the same view, counts answered.
+    await unusedWhileCounts(
+      Promise.resolve({
+        all: 3,
+        missingAltText: 0,
+        unused: 3,
+        usageRecorded: true,
+        root: 3,
+        folders: {},
+      })
+    );
+
+    expect(await waitFor(() => tile(1))).toBeInTheDocument();
+  });
 });
 
 describe("Used in", () => {
@@ -330,6 +385,38 @@ describe("Used in", () => {
         within(usedIn).getByRole("link", { name: /Site settings/ })
       ).queryByText(/previous file/)
     ).toBeNull();
+  });
+});
+
+describe("Used in, before the usage record is built", () => {
+  /** Item 1's Used in, its uses answered with none and `usageRecorded`. */
+  async function usedInWithNoUses(usageRecorded: boolean) {
+    library.fetchMediaUsage.mockResolvedValue(
+      byAddress([], 0, { usageRecorded })
+    );
+    renderLibrary();
+    const panel = await openItem(1);
+    return within(panel).findByRole("region", { name: /^Used in/ });
+  }
+
+  it("says an item listing no use may still be used while the record is being built", async () => {
+    const usedIn = await usedInWithNoUses(false);
+
+    expect(
+      await within(usedIn).findByText(
+        "The usage record is still being built, so this may still be used."
+      )
+    ).toBeInTheDocument();
+    expect(within(usedIn).queryByText(/Not used anywhere/)).toBeNull();
+  });
+
+  it("says an item listing no use is not used once the record is built", async () => {
+    // POSITIVE CONTROL for the one above.
+    const usedIn = await usedInWithNoUses(true);
+
+    expect(
+      await within(usedIn).findByText("Not used anywhere yet.")
+    ).toBeInTheDocument();
   });
 });
 

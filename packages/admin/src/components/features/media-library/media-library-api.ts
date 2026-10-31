@@ -64,7 +64,8 @@ export interface MediaUsage {
   heldByAddress: number;
   /**
    * Whether the usage record has been built. Until it has, a Replace keeps
-   * the previous file whatever the record lists.
+   * the previous file whatever the record lists, and an item listing no use
+   * may still be used by older content. False when the answer does not say.
    */
   usageRecorded: boolean;
 }
@@ -123,24 +124,93 @@ export async function fetchMediaUsage(
       (sum, scope) => sum + scope.count,
       0
     ),
-    // Said only of the uses by address; none, and a built record, otherwise.
+    // Avatars and logos are counted only for the uses by address.
     heldByAddress: body.meta?.heldByAddress ?? 0,
-    usageRecorded: body.meta?.usageRecorded ?? true,
+    // Only an answer saying the record is built is taken as built: an answer
+    // that says nothing of it may come before the record covers older
+    // content, where an item listing no use may still be used.
+    usageRecorded: body.meta?.usageRecorded === true,
   };
 }
 
-/** Delete items so the delete can be undone for a few seconds. */
-export function deleteMediaLater(
-  ids: readonly string[]
-): Promise<PendingMediaDelete> {
-  return mediaJson<PendingMediaDelete>("/deletions", jsonPost({ ids }));
+/**
+ * The most items one delete or Undo request names: the server refuses more,
+ * and marks or restores each request's items all or none.
+ */
+const DELETION_BATCH = 100;
+
+/**
+ * `ids` in runs of at most {@link DELETION_BATCH}; none as one empty run, so
+ * the server answers it as it answers any request naming nothing.
+ */
+function deletionBatches(ids: readonly string[]): string[][] {
+  if (ids.length === 0) return [[]];
+  const batches: string[][] = [];
+  for (let start = 0; start < ids.length; start += DELETION_BATCH) {
+    batches.push(ids.slice(start, start + DELETION_BATCH));
+  }
+  return batches;
 }
 
-/** Bring back items deleted inside the window. */
-export function undoMediaDelete(
+/**
+ * Delete items so the delete can be undone for a few seconds. A selection
+ * larger than one request takes is sent in batches, one after another, and
+ * answered as one delete: every id, and the earliest batch's deadline, since
+ * an Undo after it would find that batch already gone. When a later batch
+ * fails, the batches already taken are brought back before the failure is
+ * reported, so the selection is deleted whole or not at all; one that cannot
+ * be brought back goes on with its window, as a delete of its own would.
+ */
+export async function deleteMediaLater(
+  ids: readonly string[]
+): Promise<PendingMediaDelete> {
+  const taken: PendingMediaDelete[] = [];
+  try {
+    for (const batch of deletionBatches(ids)) {
+      taken.push(
+        await mediaJson<PendingMediaDelete>(
+          "/deletions",
+          jsonPost({ ids: batch })
+        )
+      );
+    }
+  } catch (error) {
+    await Promise.allSettled(
+      taken.map(done =>
+        mediaJson<UndoneMediaDelete>(
+          "/deletions/undo",
+          jsonPost({ ids: done.ids })
+        )
+      )
+    );
+    throw error;
+  }
+  const deadlines = taken.map(done => done.deleteAfter);
+  return {
+    ids: taken.flatMap(done => done.ids),
+    deleteAfter: deadlines.reduce((earliest, next) =>
+      Date.parse(next) < Date.parse(earliest) ? next : earliest
+    ),
+  };
+}
+
+/**
+ * Bring back items deleted inside the window, in batches as the delete was
+ * sent, answered as one: every item brought back, and every one already gone.
+ */
+export async function undoMediaDelete(
   ids: readonly string[]
 ): Promise<UndoneMediaDelete> {
-  return mediaJson<UndoneMediaDelete>("/deletions/undo", jsonPost({ ids }));
+  const undone: UndoneMediaDelete = { restored: [], gone: [] };
+  for (const batch of deletionBatches(ids)) {
+    const answer = await mediaJson<UndoneMediaDelete>(
+      "/deletions/undo",
+      jsonPost({ ids: batch })
+    );
+    undone.restored.push(...answer.restored);
+    undone.gone.push(...answer.gone);
+  }
+  return undone;
 }
 
 /** Replace an item's file, keeping the item; the item as it now is. */
