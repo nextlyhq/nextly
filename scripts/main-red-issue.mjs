@@ -39,6 +39,8 @@ export const ADVISORY = {
   "e2e-cache-components-off": "Browser tests (Cache Components off)",
   "scaffold-smoke": "Scaffold smoke",
   "dev-script-smoke": "Dev script starts every watcher",
+  "scaffold-build-scope": "Decide whether this commit can affect a scaffold",
+  "scaffold-build": "Scaffold build",
 };
 
 /** The one label that marks the issue, and how a second is never opened. */
