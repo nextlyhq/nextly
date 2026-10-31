@@ -31,7 +31,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { Loader2, MoreHorizontal } from "lucide-react";
+import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
 import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -245,7 +245,13 @@ export function DocumentActionBar({
   const primary = bound(actionsAt(available, "primary"), bindings)[0];
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
-  const documentItems = bound(groups.document, bindings);
+  const publishItems = bound(actionsAt(available, "publish-menu"), bindings);
+  // The other ways to publish hang off the primary action. With none drawn,
+  // they lead More's document rows, so they keep a home and their reasons.
+  const documentItems =
+    primary === undefined
+      ? [...publishItems, ...bound(groups.document, bindings)]
+      : bound(groups.document, bindings);
   const dangerItems = bound(groups.danger, bindings);
   const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
   // A menu is drawn when it has a row to hold, folded controls included.
@@ -285,27 +291,11 @@ export function DocumentActionBar({
       ))}
 
       {primary === undefined ? null : (
-        <Button
-          size="sm"
-          {...(primary.binding.submitForm === undefined
-            ? { type: "button" as const, onClick: primary.binding.onSelect }
-            : { type: "submit" as const, form: primary.binding.submitForm })}
-          disabled={reasonFor(primary.action, primary.binding) !== undefined}
-          /*
-            The reason is the title when there is one, so a control an author
-            cannot use says why. Three separate permissions and several document
-            states decide these, and a dead button with no explanation reads as
-            broken rather than as forbidden.
-          */
-          title={
-            reasonFor(primary.action, primary.binding) ?? primary.action.label
-          }
-          data-action={primary.action.id}
-          data-primary="true"
-        >
-          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          {primary.action.label}
-        </Button>
+        <PrimaryAction
+          primary={primary}
+          options={publishItems}
+          pending={pending}
+        />
       )}
 
       {hasMenu ? (
@@ -316,6 +306,85 @@ export function DocumentActionBar({
           wideMenu={wideMenu}
         />
       ) : null}
+    </div>
+  );
+}
+
+/** What the arrow beside the primary action is called, and opens. */
+const PUBLISH_OPTIONS_LABEL = "More ways to publish";
+
+/**
+ * The one leading action, and where there are other ways to publish, the
+ * arrow that opens them, joined to it as one control.
+ */
+function PrimaryAction({
+  primary,
+  options,
+  pending,
+}: {
+  primary: Bound;
+  options: Bound[];
+  pending: boolean;
+}) {
+  const reason = reasonFor(primary.action, primary.binding);
+  const press = (
+    <Button
+      size="sm"
+      {...(primary.binding.submitForm === undefined
+        ? { type: "button" as const, onClick: primary.binding.onSelect }
+        : { type: "submit" as const, form: primary.binding.submitForm })}
+      disabled={reason !== undefined}
+      /*
+        The reason is the title when there is one, so a control an author
+        cannot use says why. Three separate permissions and several document
+        states decide these, and a dead button with no explanation reads as
+        broken rather than as forbidden.
+      */
+      title={reason ?? primary.action.label}
+      data-action={primary.action.id}
+      data-primary="true"
+      className={cn(options.length > 0 && "rounded-r-none")}
+    >
+      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {primary.action.label}
+    </Button>
+  );
+  if (options.length === 0) return press;
+  return (
+    <div className="flex items-center" data-publish-split="">
+      {press}
+      {/* Usable while the press is held: each option carries its own reason,
+        and scheduling or adding to a release writes nothing to the form. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            size="sm"
+            className="rounded-l-none border-l-primary-foreground/25 px-1.5"
+            aria-label={PUBLISH_OPTIONS_LABEL}
+            title={PUBLISH_OPTIONS_LABEL}
+          >
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-56">
+          {options.map(({ action, binding }) => (
+            <DropdownMenuItem
+              key={action.id}
+              disabled={reasonFor(action, binding) !== undefined}
+              // `onSelect`, which Radix withholds from a disabled item.
+              onSelect={binding.onSelect}
+              data-action={action.id}
+              {...reasonAttributes(reasonFor(action, binding))}
+            >
+              <ActionRow
+                label={action.label}
+                reason={reasonFor(action, binding)}
+              />
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

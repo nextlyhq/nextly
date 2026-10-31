@@ -33,8 +33,15 @@
  * `primary` is a promise as much as a position: exactly one action carries it,
  * and {@link documentActions} is what keeps that true. Two primaries is the
  * state the header was already in.
+ *
+ * `publish-menu` is the menu on the primary action's own arrow: the other
+ * ways of putting this document live, such as at a time or with a release.
+ * They sit beside the act they vary rather than in More, where nobody
+ * deciding WHEN to publish would look. With no primary action drawn, they
+ * join More's document rows instead, so a person who may not publish still
+ * finds them and reads why they are held.
  */
-export type ActionPlacement = "primary" | "toolbar" | "menu";
+export type ActionPlacement = "primary" | "toolbar" | "publish-menu" | "menu";
 
 /**
  * Which part of the menu an action belongs to.
