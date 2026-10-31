@@ -482,7 +482,8 @@ export function packInto(directory) {
   return join(directory, "package");
 }
 
-function option(argv, name) {
+/** The value given after a command-line option, or null. */
+export function option(argv, name) {
   const at = argv.indexOf(name);
   return at === -1 ? null : (argv[at + 1] ?? null);
 }

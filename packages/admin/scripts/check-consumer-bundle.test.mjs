@@ -11,14 +11,23 @@
  *
  * A real Turbopack build is not a fixture: `check:consumer-bundle` builds one.
  */
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
-  LEXICAL_DEVELOPMENT_TEXTS,
   LEXICAL_PRODUCTION_TEXT,
+  PLUGIN_PAGE_KEY,
+  PLUGIN_PAGE_MARK,
   consumerFindings,
+  developmentTexts,
+  lexicalDevelopmentTexts,
   mappedSegments,
+  outputIds,
   readChunk,
+  registryReader,
 } from "./check-consumer-bundle.mjs";
 
 // ---------------------------------------------------------------------------
@@ -115,7 +124,7 @@ describe("mappedSegments", () => {
 describe("readChunk", () => {
   const code =
     `${PUSH}11,e=>{let alpha=1;let beta=2;e.s(["a",0,alpha])},` +
-    `[12,13,e=>{var t=e.i(11);let gamma=3;let delta=4}],` +
+    `[12,13,e=>{var t=e.i(11);let gamma=3;let delta=4;e.s(["g",0,gamma,"d",0,delta],13)}],` +
     `14,e=>{e.v(t=>Promise.all(["static/chunks/b.js","static/chunks/c.js"].map(t=>e.l(t))).then(()=>t(12)))}]);`;
   const sources = [
     "turbopack:///[project]/app/node_modules/@nextlyhq/admin/dist/a-AAAAAAAA.mjs",
@@ -159,12 +168,47 @@ describe("readChunk", () => {
     ]);
   });
 
+  it("reads the id a merged factory gives each module's exports under", () => {
+    expect(chunk.factories[1].modules).toEqual([
+      {
+        id: 13,
+        sources: new Set([
+          "app/node_modules/@nextlyhq/admin/dist/b-BBBBBBBB.mjs",
+        ]),
+      },
+    ]);
+    const output = { chunks: new Map([[chunk.name, chunk]]) };
+    expect(
+      outputIds(output, "app/node_modules/@nextlyhq/admin/dist/b-BBBBBBBB.mjs")
+    ).toEqual([13]);
+    expect(
+      outputIds(output, "app/node_modules/@nextlyhq/admin/dist/a-AAAAAAAA.mjs")
+    ).toEqual([11]);
+  });
+
   it("reads what a loader fetches and the module it runs", () => {
     expect(chunk.factories[2].loader).toEqual({
       chunks: ["static/chunks/b.js", "static/chunks/c.js"],
       target: 12,
     });
     expect(chunk.factories[0].loader).toBeNull();
+  });
+
+  it("reads no loader where the promise runs something other than one module id", () => {
+    const shapes = [
+      `${PUSH}1,e=>{e.v(t=>Promise.all(["static/chunks/b.js"].map(t=>e.l(t))).then(()=>{t(12)}))}]);`,
+      `${PUSH}1,e=>{e.v(t=>Promise.all(["static/chunks/b.js"].map(t=>e.l(t))).then(()=>t(12,13)))}]);`,
+      `${PUSH}1,e=>{e.v(t=>Promise.all(["static/chunks/b.js"].map(t=>e.l(t))).then(()=>t("12")))}]);`,
+      `${PUSH}1,e=>{e.v(t=>Promise.all(["static/chunks/b.js"].map(t=>e.l(t))).then(t(12)))}]);`,
+    ];
+    for (const shape of shapes) {
+      const read = readChunk(
+        "static/chunks/x.js",
+        shape,
+        mapFor(shape, [], [])
+      );
+      expect(read.factories[0].loader).toBeNull();
+    }
   });
 
   it("reads a chunk that registers no modules as holding none", () => {
@@ -191,6 +235,7 @@ const ADMIN = "app/node_modules/@nextlyhq/admin";
 const PLUGIN = "app/src/plugin/page.jsx";
 const ROUTE = "/admin/[[...params]]";
 const src = module => `${ADMIN}/dist/${module}`;
+const DEVELOPMENT_TEXT = "indexPath: root is not a parent of child";
 
 function chunk(name, factories, code = "") {
   return {
@@ -266,7 +311,8 @@ function passing() {
     pkg,
     output,
     adminDir: ADMIN,
-    pluginPage: PLUGIN,
+    registration: { rendered: PLUGIN_PAGE_MARK },
+    developmentTexts: new Map([[DEVELOPMENT_TEXT, "lexical"]]),
     pinned: ["page.a", "page.b"],
   };
 }
@@ -317,6 +363,27 @@ describe("consumerFindings", () => {
     expect(kinds(input)).toEqual(["route-not-on-demand"]);
   });
 
+  it("does not count a loader in a chunk the page never reaches", () => {
+    const input = passing();
+    const shell = input.output.chunks.get("static/chunks/shell.js");
+    const [loader] = shell.factories.splice(3, 1);
+    input.output.chunks.set(
+      "static/chunks/orphan.js",
+      chunk("static/chunks/orphan.js", [loader])
+    );
+    expect(kinds(input)).toEqual(["route-not-on-demand"]);
+  });
+
+  it("counts a loader in a chunk another loader fetches", () => {
+    const input = passing();
+    const shell = input.output.chunks.get("static/chunks/shell.js");
+    const [loader] = shell.factories.splice(4, 1);
+    input.output.chunks.get("static/chunks/a.js").factories.push(loader);
+    const result = consumerFindings(input);
+    expect(result.problems).toEqual([]);
+    expect(result.counts.onDemand).toBe(2);
+  });
+
   it("reports a pinned route the package no longer splits off", () => {
     const input = passing();
     input.pinned = [...input.pinned, "page.gone"];
@@ -359,12 +426,26 @@ describe("consumerFindings", () => {
     expect(result.copied).toEqual([{ module: "both-BBBBBBBB.mjs", count: 2 }]);
   });
 
-  it("reports a plugin page the first load does not register", () => {
+  it("reports a registry that holds nothing for the plugin page", () => {
     const input = passing();
-    const shell = input.output.chunks.get("static/chunks/shell.js");
-    shell.factories.splice(2, 1);
-    shell.sources.delete(PLUGIN);
+    input.registration = { rendered: null };
+    const { problems } = consumerFindings(input);
+    expect(problems.map(p => p.kind)).toEqual(["plugin-page-not-registered"]);
+    expect(problems[0].message).toContain(
+      `holds nothing under ${PLUGIN_PAGE_KEY}`
+    );
+  });
+
+  it("reports a registry that holds another component under the key", () => {
+    const input = passing();
+    input.registration = { rendered: "something-else" };
     expect(kinds(input)).toEqual(["plugin-page-not-registered"]);
+  });
+
+  it("reports a registry it could not ask apart from one that said no", () => {
+    const input = passing();
+    input.registration = { error: "the probe gave no answer within 10 s" };
+    expect(kinds(input)).toEqual(["registration-unread"]);
   });
 
   it("reports the workspace's admin bundled in place of the packed one", () => {
@@ -381,11 +462,17 @@ describe("consumerFindings", () => {
   it("reports Lexical's development build, and an output with no Lexical to judge", () => {
     const input = passing();
     input.output.chunks.get("static/chunks/editor.js").code =
-      `throw Error("${LEXICAL_DEVELOPMENT_TEXTS[0]}")`;
+      `throw Error("${DEVELOPMENT_TEXT}")`;
     expect(kinds(input)).toEqual([
       "lexical-development-build",
       "lexical-unread",
     ]);
+  });
+
+  it("refuses to judge Lexical with no development text to look for", () => {
+    const input = passing();
+    input.developmentTexts = new Map();
+    expect(kinds(input)).toEqual(["lexical-unread"]);
   });
 
   it("reports a module the packed package does not hold", () => {
@@ -410,5 +497,126 @@ describe("consumerFindings", () => {
     const found = kinds(input);
     expect(found).toContain("nothing-read");
     expect(found).toContain("no-first-load");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lexical's development-only texts
+// ---------------------------------------------------------------------------
+
+describe("developmentTexts", () => {
+  const builds = [
+    {
+      from: "lexical",
+      development:
+        "function a(){throw Error(formatDev(`indexPath: root is not a parent of child ${1}`))}" +
+        'const shared="a message both builds keep in full";' +
+        'const short="too short";' +
+        'const quoted="a message with a \\"quote\\" inside it";',
+      production:
+        'function a(){throw Error(formatProd(12))};const shared="a message both builds keep in full";',
+    },
+    {
+      from: "@lexical/list",
+      development: "const m=`ListItemNode must have a ListNode parent`;",
+      production: "const m=0;",
+    },
+  ];
+
+  it("keeps the text only a development build holds, with its package", () => {
+    expect(developmentTexts(builds)).toEqual(
+      new Map([
+        ["indexPath: root is not a parent of child ", "lexical"],
+        ["ListItemNode must have a ListNode parent", "@lexical/list"],
+      ])
+    );
+  });
+
+  it("drops a text any production build holds, not only its own", () => {
+    const withShared = [
+      ...builds,
+      {
+        from: "@lexical/table",
+        development: "",
+        production: "x=`ListItemNode must have a ListNode parent`",
+      },
+    ];
+    expect([...developmentTexts(withShared).keys()]).toEqual([
+      "indexPath: root is not a parent of child ",
+    ]);
+  });
+
+  /*
+   * Against the Lexical this package installs: the texts are read from its
+   * real development builds, so a release that rewords them moves them here.
+   * Each package the admin bundles that has development-only messages must
+   * contribute; one missing from the result would go unrecognised.
+   */
+  it("reads the installed Lexical's development builds, its packages' own included", () => {
+    const texts = lexicalDevelopmentTexts();
+    const from = new Set(texts.values());
+    expect(texts.get("indexPath: root is not a parent of child")).toBe(
+      "lexical"
+    );
+    // @lexical/extension is not named by the admin: lexical's packages depend on it.
+    for (const name of [
+      "lexical",
+      "@lexical/list",
+      "@lexical/table",
+      "@lexical/extension",
+    ]) {
+      expect(from).toContain(name);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The registry's reader, as the package publishes it
+// ---------------------------------------------------------------------------
+
+describe("registryReader", () => {
+  function packageWith(entry) {
+    const dir = mkdtempSync(join(tmpdir(), "nx-registry-reader-"));
+    mkdirSync(join(dir, "dist", "lib", "plugins"), { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        exports: {
+          "./lib/component-registry": {
+            import: "./dist/lib/plugins/component-registry.mjs",
+          },
+        },
+      })
+    );
+    writeFileSync(
+      join(dir, "dist", "lib", "plugins", "component-registry.mjs"),
+      entry
+    );
+    return dir;
+  }
+
+  it("follows the published entry to the minified module and its export name", () => {
+    const dir = packageWith(
+      'export{c as registerComponents,r as getComponent}from"../../component-registry-AAAA.mjs";'
+    );
+    try {
+      expect(registryReader(dir)).toEqual({
+        module: "component-registry-AAAA.mjs",
+        name: "r",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses an entry that does not export the reader", () => {
+    const dir = packageWith(
+      'export{c as registerComponents}from"../../a.mjs";'
+    );
+    try {
+      expect(() => registryReader(dir)).toThrow(/does not export getComponent/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
