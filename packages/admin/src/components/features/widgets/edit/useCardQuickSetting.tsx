@@ -241,6 +241,25 @@ function offeredCollections(
   );
 }
 
+/**
+ * What a pending announcement does now: wait for the card's answer, note that its re-ask is in
+ * flight, or be said.
+ */
+function announcementStep(
+  pending: PendingAnnouncement,
+  isFetching: boolean,
+  shownAt: number | null
+): "wait" | "seen" | "say" {
+  const awaitsReask = pending.asksAgain && !pending.seenFetching;
+  if (isFetching) return awaitsReask ? "seen" : "wait";
+  if (!awaitsReask) return "say";
+  // An answer newer than the one shown as the change was made means the re-ask has already
+  // finished: the write waits for the invalidation that starts it, so it can end before the
+  // change is pending here, and waiting to see it in flight would wait for good. No answer at
+  // all is not a newer one.
+  return shownAt === null || shownAt === pending.shownAt ? "wait" : "say";
+}
+
 /** The announcement once the card shows it, in its toast; see the module note. */
 function useAnnouncement(
   pending: PendingAnnouncement | null,
@@ -252,11 +271,9 @@ function useAnnouncement(
   const { placementId, title, isFetching } = card;
   useEffect(() => {
     if (!pending || !settingsWrite) return;
-    if (pending.asksAgain && !pending.seenFetching) {
-      if (isFetching) setPending({ ...pending, seenFetching: true });
-      return;
-    }
-    if (isFetching) return;
+    const step = announcementStep(pending, isFetching, shownAt);
+    if (step === "seen") setPending({ ...pending, seenFetching: true });
+    if (step !== "say") return;
     // A refused quiet re-ask keeps the answer the card had, and its time with it: the card does
     // not show the change, so it is said as saved but not shown. Only an answer that arrived
     // after the change shows it.
@@ -464,6 +481,48 @@ function writeState(
   };
 }
 
+/**
+ * Whether an Undo the card offered may still write, kept by the card for the Undo it captures.
+ *
+ * An Undo is an at-rest write. Once customising begins the draft holds the card, and a write
+ * underneath it would move the stored version the draft's Save is checked against, so the
+ * card's toast goes, one not yet said is dropped, and an Undo pressed anyway does nothing.
+ * Remove's notice is cleared on the same change of mode by its own owner.
+ *
+ * The card's toast also goes with the card, and its Undo does nothing once the card is gone: a
+ * card removed at rest leaves without a change of mode, and an Undo pressed after it would write
+ * the removed card's old setting or size back.
+ */
+function useUndoLive(
+  isEditing: boolean,
+  placementId: string,
+  setPending: (pending: PendingAnnouncement | null) => void
+): () => boolean {
+  const editing = useRef(isEditing);
+  useEffect(() => {
+    editing.current = isEditing;
+    if (!isEditing) return;
+    toast.dismiss(changeToastId(placementId));
+    setPending(null);
+  }, [isEditing, placementId, setPending]);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+      toast.dismiss(changeToastId(placementId));
+    };
+  }, [placementId]);
+  return () => active.current && !editing.current;
+}
+
+/** `undo`, doing nothing once `live` says the card's Undo may no longer write. */
+function whileLive(undo: () => void, live: () => boolean): () => void {
+  return () => {
+    if (live()) undo();
+  };
+}
+
 export function useCardQuickSetting(args: {
   placementId: string;
   /** The widget as declared, before its settings apply. */
@@ -507,19 +566,7 @@ export function useCardQuickSetting(args: {
   useEffect(() => {
     latestConfig.current = args.config;
   });
-  // An Undo is an at-rest write. Once customising begins the draft holds the card, and a write
-  // underneath it would move the stored version the draft's Save is checked against, so the
-  // card's toast goes, one not yet said is dropped, and an Undo pressed anyway does nothing.
-  // Remove's notice is cleared on the same change of mode by its own owner.
-  const editing = useRef(isEditing);
-  const { placementId } = args;
-  useEffect(() => {
-    editing.current = isEditing;
-    if (!isEditing) return;
-    toast.dismiss(changeToastId(placementId));
-    setPending(null);
-  }, [isEditing, placementId]);
-
+  const undoLive = useUndoLive(isEditing, args.placementId, setPending);
   // Nowhere to keep a change: at rest before an arrangement has been read.
   if (!isEditing && !settingsWrite) return {};
   const settings = args.widget.settings ?? [];
@@ -542,11 +589,7 @@ export function useCardQuickSetting(args: {
         asksAgain,
         seenFetching: false,
         shownAt,
-        undo:
-          undo &&
-          (() => {
-            if (!editing.current) undo();
-          }),
+        undo: undo && whileLive(undo, undoLive),
       }),
   };
   const resolved = resolveWidgetSettings(settings, args.config);
