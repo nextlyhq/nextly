@@ -856,7 +856,10 @@ jobs:
         shell: bash
         run: |
           cd /tmp/scaffold-build/scaffolded-app
-          PORT=3101 NEXT_TELEMETRY_DISABLED=1 NEXTLY_TELEMETRY_DISABLED=1 npm start > /tmp/blog-start.log 2>&1 &
+          # With the operator's setup token, as a deployment sets it: the freshness
+          # check below makes its administrator through first-administrator setup.
+          setup_token=scaffold-setup-token-Qx7Vb2Lm9Rt4Wz8Np3Hk6Jd1Fs5Gc0Ya
+          NEXTLY_SETUP_TOKEN=$setup_token PORT=3101 NEXT_TELEMETRY_DISABLED=1 NEXTLY_TELEMETRY_DISABLED=1 npm start > /tmp/blog-start.log 2>&1 &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
@@ -958,32 +961,10 @@ jobs:
           # after a write the new version, as without it.
           # A write through the REST API, a Route Handler, expires the post's cached page
           # before it responds: the next request, made after the response, reads the new
-          # title. It writes as an administrator made for it through the Direct API, as
-          # the script above writes its posts, so the check depends on no seeded account.
+          # title. It writes as the site's first administrator, made through the setup
+          # route with the operator's token, as a new site gets one: a fresh database
+          # holds no role or account until then.
           base=http://localhost:3101
-          if [ -e scripts/admin-for-check.mts ]; then
-            echo "the scaffold already has scripts/admin-for-check.mts"; exit 1
-          fi
-          set -o noclobber
-          cat > scripts/admin-for-check.mts <<'TS'
-          import { getNextly } from "nextly";
-          import config from "../nextly.config";
-          const nextly = await getNextly({ config });
-          const roles = await nextly.roles.find({ limit: 100, page: 1 });
-          const admin = roles.items.find(r => (r as { slug?: string }).slug === "super-admin");
-          if (!admin) throw new Error("no super-admin role to make the check's administrator with");
-          await nextly.users.create({
-            email: "owner@example.com",
-            password: "Owner-Passw0rd!-check",
-            data: { name: "Owner", roles: [(admin as { id: string }).id], isActive: true },
-          });
-          process.exit(0);
-          TS
-          set +o noclobber
-          cp package.json /tmp/package.json.bak
-          npm pkg set type=module
-          npx --yes tsx@4.21.0 --env-file=.env scripts/admin-for-check.mts
-          cp /tmp/package.json.bak package.json
           owner='{"email":"owner@example.com","password":"Owner-Passw0rd!-check"}'
           # The auth routes take a double-submitted CSRF token: the cookie the csrf route
           # sets, and the same value in a header.
@@ -995,6 +976,9 @@ jobs:
             curl -s --max-time 30 -b "$jar" -c "$jar" -o "$2" -w '%{http_code}' -X POST "$base/admin/api/auth/$1" \
               -H 'Content-Type: application/json' -H "Origin: $base" -H "x-csrf-token: $csrf" -d "$3"
           }
+          setup=$(jq -cn --arg t "$setup_token" '{email: "owner@example.com", name: "Owner", password: "Owner-Passw0rd!-check", setupToken: $t}')
+          code=$(post_auth setup /tmp/setup.json "$setup")
+          [ "$code" = 201 ] || { echo "setup answered $code"; cat /tmp/setup.json; exit 1; }
           code=$(post_auth login /tmp/login.json "$owner")
           [ "$code" = 200 ] || { echo "login answered $code"; cat /tmp/login.json; exit 1; }
           # Signed in by the session cookies the login set, as the admin is.
