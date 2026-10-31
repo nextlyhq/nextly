@@ -1091,18 +1091,65 @@ function PanelHeader({
   );
 }
 
-/** The panel's body: the add step while one is open, else the gallery (`children`). */
-function PanelBody({
-  step,
-  stepView,
-  children,
+/** What the gallery's controls do, as `useGalleryActions` gives them. */
+type GalleryActions = ReturnType<typeof useGalleryActions>;
+
+/** The gallery itself: waiting, nothing found, or its lists with a tile per widget. */
+function GallerySection({
+  gallery,
+  found,
+  query,
+  chip,
+  onClear,
+  onShowAll,
+  suggestions,
+  atCapacity,
+  byId,
+  starting,
+  actions,
 }: {
-  step: AddStep | null;
-  stepView: (step: AddStep) => JSX.Element;
-  children: ReactNode;
+  gallery: GalleryAnswer;
+  found: GallerySearch;
+  query: string;
+  chip: GalleryChip;
+  onClear: () => void;
+  onShowAll: () => void;
+  suggestions: readonly SuggestionView[];
+  atCapacity: boolean;
+  byId: ReadonlyMap<string, DashboardWidget>;
+  /** The collection a new card starts on, which each tile's preview is drawn with. */
+  starting: string | undefined;
+  actions: GalleryActions;
 }): JSX.Element {
-  if (step !== null) return stepView(step);
-  return <>{children}</>;
+  return (
+    <GalleryBody
+      gallery={gallery}
+      found={found}
+      query={query}
+      chip={chip}
+      onClear={onClear}
+      onShowAll={onShowAll}
+    >
+      <GalleryLists
+        found={found}
+        suggestions={suggestions}
+        atCapacity={atCapacity}
+        tileFor={view => (
+          <Tile
+            key={view.tile.id}
+            view={view}
+            widget={byId.get(view.tile.id)}
+            collection={starting}
+            atCapacity={atCapacity}
+            onChoose={actions.choose}
+          />
+        )}
+        onAddBack={actions.addBack}
+        onSuggestion={actions.suggest}
+        onPair={actions.addPair}
+      />
+    </GalleryBody>
+  );
 }
 
 /** The sentence an add, or an add refused at the limit, is announced with. */
@@ -1241,63 +1288,6 @@ export function AddWidgetPanel({
     searchRef.current?.focus();
   };
 
-  const tileFor = (view: GalleryTileView) => (
-    <Tile
-      key={view.tile.id}
-      view={view}
-      widget={byId.get(view.tile.id)}
-      collection={starting}
-      atCapacity={atCapacity}
-      onChoose={actions.choose}
-    />
-  );
-
-  // Built here, drawn where the panel is in its gallery rather than its add step.
-  const search = (
-    <SearchAndChips
-      searchRef={searchRef}
-      query={query}
-      onQuery={setQuery}
-      chip={chip}
-      onChip={setChip}
-      count={voice.count}
-      ready={read !== undefined}
-    />
-  );
-  const stepView = (current: AddStep) => (
-    <AddStepView
-      step={current}
-      widget={byId.get(current.tile.id)}
-      collections={collections}
-      mostEdited={read?.mostEdited}
-      atCapacity={atCapacity}
-      onChange={setStep}
-      onBack={actions.back}
-      onAdd={actions.addFromStep}
-    />
-  );
-
-  const galleryBody = (
-    <GalleryBody
-      gallery={gallery}
-      found={found}
-      query={query}
-      chip={chip}
-      onClear={clear}
-      onShowAll={() => setChip("all")}
-    >
-      <GalleryLists
-        found={found}
-        suggestions={shownSuggestions}
-        atCapacity={atCapacity}
-        tileFor={tileFor}
-        onAddBack={actions.addBack}
-        onSuggestion={actions.suggest}
-        onPair={actions.addPair}
-      />
-    </GalleryBody>
-  );
-
   return (
     <PanelSheet
       open={open}
@@ -1308,15 +1298,50 @@ export function AddWidgetPanel({
       header={
         <PanelHeader
           onClose={() => onOpenChange(false)}
-          search={step === null ? search : null}
+          search={
+            step === null ? (
+              <SearchAndChips
+                searchRef={searchRef}
+                query={query}
+                onQuery={setQuery}
+                chip={chip}
+                onChip={setChip}
+                count={voice.count}
+                ready={read !== undefined}
+              />
+            ) : null
+          }
           atCapacity={atCapacity}
         />
       }
       spoken={voice.spoken}
     >
-      <PanelBody step={step} stepView={stepView}>
-        {galleryBody}
-      </PanelBody>
+      {step === null ? (
+        <GallerySection
+          gallery={gallery}
+          found={found}
+          query={query}
+          chip={chip}
+          onClear={clear}
+          onShowAll={() => setChip("all")}
+          suggestions={shownSuggestions}
+          atCapacity={atCapacity}
+          byId={byId}
+          starting={starting}
+          actions={actions}
+        />
+      ) : (
+        <AddStepView
+          step={step}
+          widget={byId.get(step.tile.id)}
+          collections={collections}
+          mostEdited={read?.mostEdited}
+          atCapacity={atCapacity}
+          onChange={setStep}
+          onBack={actions.back}
+          onAdd={actions.addFromStep}
+        />
+      )}
     </PanelSheet>
   );
 }
