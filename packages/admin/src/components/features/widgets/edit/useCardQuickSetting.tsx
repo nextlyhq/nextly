@@ -47,16 +47,19 @@ import { askableWith, questionOf } from "../widget-as-asked";
 
 import { sizeAxes } from "./CardActionsMenu";
 import { CardQuickSetting } from "./CardQuickSetting";
-import { dependentsOf, startingValue } from "./content-settings";
-import { collectionOptions } from "./ContentSettingControl";
+import {
+  collectionOptions,
+  dependentsOf,
+  startingValue,
+} from "./content-settings";
 import {
   popoverSettingsOf,
   quickSettingOf,
   quickValueLabel,
   type PopoverSetting,
 } from "./quick-setting";
+import { initialValues, toStoredConfig } from "./settings-values";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
-import { initialValues, toStoredConfig } from "./WidgetSettingsSheet";
 
 /** How a cell at rest saves its card's settings and size, bound to that card by the grid. */
 export interface CellSettingsWrite {

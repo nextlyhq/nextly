@@ -54,7 +54,7 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useAppName: () => appName,
 }));
 
-import { CELL_PLACEMENT_ATTRIBUTE } from "../widgets/edit/drag/useCardDrag";
+import { CELL_PLACEMENT_ATTRIBUTE } from "../widgets/edit/drag/cell-placement";
 
 import { SeedDemoContentCard } from "./SeedDemoContentCard";
 import {

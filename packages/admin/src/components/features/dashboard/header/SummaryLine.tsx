@@ -17,7 +17,7 @@ import { Fragment, type JSX, type MouseEvent } from "react";
 import { Link, prefersNativeNavigation } from "@admin/components/ui/link";
 import type { DashboardSummary } from "@admin/types/dashboard/summary";
 
-import { CELL_PLACEMENT_ATTRIBUTE } from "../../widgets/edit/drag/useCardDrag";
+import { CELL_PLACEMENT_ATTRIBUTE } from "../../widgets/edit/drag/cell-placement";
 
 import { summaryLine, type SummaryLinePart } from "./summary-wording";
 
