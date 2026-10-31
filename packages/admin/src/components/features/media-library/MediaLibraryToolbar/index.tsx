@@ -83,6 +83,11 @@ export interface MediaLibraryToolbarProps {
   /** Files in the current listing, for the count under the title. */
   total: number;
   inFolder: boolean;
+  /**
+   * What the listing is, when a view narrows it, said after the count:
+   * "missing alt text" reads "3 files missing alt text".
+   */
+  viewNote?: string;
   /** Where focus goes when there is no tile to return it to. */
   headingRef?: React.Ref<HTMLHeadingElement>;
   search: {
@@ -143,10 +148,12 @@ function FolderTreeToggle({
 function ToolbarTitle({
   total,
   inFolder,
+  viewNote,
   headingRef,
 }: {
   total: number;
   inFolder: boolean;
+  viewNote?: string;
   headingRef?: React.Ref<HTMLHeadingElement>;
 }): React.JSX.Element {
   return (
@@ -163,6 +170,7 @@ function ToolbarTitle({
       <p className="truncate text-sm text-muted-foreground">
         {total} {total === 1 ? "file" : "files"}
         {inFolder && " in this folder"}
+        {!inFolder && viewNote && ` ${viewNote}`}
       </p>
     </div>
   );
@@ -419,6 +427,7 @@ function ViewOptionsMenu({
 export function MediaLibraryToolbar({
   total,
   inFolder,
+  viewNote,
   headingRef,
   search,
   typeFilter,
@@ -443,6 +452,7 @@ export function MediaLibraryToolbar({
         <ToolbarTitle
           total={total}
           inFolder={inFolder}
+          viewNote={viewNote}
           headingRef={headingRef}
         />
         {/* The controls: the rest of the row, pushed to its end, wherever the
