@@ -2,7 +2,7 @@
  * What the admin knows about a dashboard widget and about the data one asked
  * for.
  *
- * The shared vocabulary (`WidgetSizeBounds`, `WidgetArchetype`, `WidgetQuery`) is
+ * The shared vocabulary (`WidgetSizeBounds`, the archetype, `WidgetQuery`) is
  * IMPORTED from core rather than restated, through `nextly/config`: this
  * package's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
  * importing from `"nextly"` shadows the package exports and drags core's whole
@@ -24,7 +24,6 @@
 import type {
   AnyWidgetSetting,
   WidgetAction,
-  WidgetArchetype,
   SourcelessWidgetQuery,
   WidgetQuery,
   WidgetQueryCell,
@@ -69,7 +68,7 @@ export interface DashboardWidget {
   description?: string;
   /** Lucide icon name, resolved to a component by the card. */
   icon?: string;
-  archetype: WidgetArchetype;
+  archetype: WidgetDefinition["archetype"];
   /**
    * The sizes this widget's cards may take, in grid units, with every end
    * filled in: the size a new card starts at, and the smallest and largest it
