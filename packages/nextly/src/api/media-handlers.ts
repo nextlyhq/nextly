@@ -863,10 +863,12 @@ async function sweepPendingDeletes(): Promise<void> {
     const pending = await pendingDeletes();
     await pending.finalizeDue();
   } catch (error) {
-    getNextlyLogger().warn(
-      "Deleted media items could not be finished; the next read tries again.",
-      { error: error instanceof Error ? error.message : String(error) }
-    );
+    getNextlyLogger().warn({
+      kind: "media-delete-sweep-failed",
+      message:
+        "Deleted media items could not be finished; the next read tries again.",
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

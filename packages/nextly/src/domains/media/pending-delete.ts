@@ -60,9 +60,8 @@ export interface PendingDeleteDeps {
    * files. Throws not-found for an item already gone.
    */
   deleteItem(mediaId: string, actor?: RequestActor): Promise<void>;
-  logger?: {
-    warn(message: string, context?: Record<string, unknown>): void;
-  };
+  /** Where a delete that could not finish is reported. */
+  logger?: { warn(payload: object): void };
   now?: () => Date;
   windowMs?: number;
 }
@@ -211,13 +210,13 @@ export class PendingMediaDeletes {
       return true;
     } catch (error) {
       if (NextlyError.isNotFound(error)) return true;
-      this.deps.logger?.warn(
-        "A deleted media item could not be removed; it will be tried again.",
-        {
-          mediaId,
-          error: error instanceof Error ? error.message : String(error),
-        }
-      );
+      this.deps.logger?.warn({
+        kind: "media-delete-not-finished",
+        message:
+          "A deleted media item could not be removed; it will be tried again.",
+        mediaId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       await this.deps.db
         .insert(META_TABLE, {
           key: pendingDeleteKey(mediaId),
