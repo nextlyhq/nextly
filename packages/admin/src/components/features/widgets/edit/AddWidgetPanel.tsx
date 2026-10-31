@@ -46,6 +46,7 @@ import {
 } from "react";
 
 import * as Icons from "@admin/components/icons";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 import type {
   DashboardWidget,
@@ -66,6 +67,9 @@ import {
   searchGallery,
   startingCollection,
   suggestionsFor,
+  canChoose,
+  collectionAsker,
+  collectionsFor,
   tilesInChip,
   widthsLabel,
   type GalleryChip,
@@ -283,20 +287,34 @@ function TileBody({
         </span>
       ) : null}
       <span className="block text-xs text-muted-foreground">
-        {view.action.kind === "on-dashboard" ? (
-          <span
-            className="inline-flex items-center gap-1"
-            data-testid={`add-panel-on-dashboard-${tile.id}`}
-          >
-            <Icons.Check aria-hidden className="size-3.5" />
-            On your dashboard
-          </span>
-        ) : (
-          tileMeta(view)
-        )}
+        <TileStatus view={view} />
       </span>
     </>
   );
+}
+
+/** The line under a tile's description: its widths, or why it cannot be added now. */
+function TileStatus({ view }: { view: GalleryTileView }): JSX.Element {
+  const { tile, action } = view;
+  if (action.kind === "on-dashboard") {
+    return (
+      <span
+        className="inline-flex items-center gap-1"
+        data-testid={`add-panel-on-dashboard-${tile.id}`}
+      >
+        <Icons.Check aria-hidden className="size-3.5" />
+        On your dashboard
+      </span>
+    );
+  }
+  if (action.kind === "no-collection") {
+    return (
+      <span data-testid={`add-panel-no-collection-${tile.id}`}>
+        No collection you can read suits it.
+      </span>
+    );
+  }
+  return <>{tileMeta(view)}</>;
 }
 
 /** A tile's frame, whether it is a control or not. */
@@ -328,8 +346,9 @@ function Tile({
       descriptionId={descriptionId}
     />
   );
-  if (action.kind === "on-dashboard") {
-    // Not a control: a one-card widget already on the dashboard is not added again.
+  if (!canChoose(view)) {
+    // Not a control: a one-card widget already on the dashboard is not added again, and one with
+    // no collection it can read cannot be added at all.
     return (
       <li className="min-w-0" data-testid={`add-panel-tile-${tile.id}`}>
         <div className={cn(TILE_FRAME, "opacity-80")}>{body}</div>
@@ -923,7 +942,7 @@ function usePanelFocus(
 /** What the gallery's controls do: open the add step, add a card, add one back, go back. */
 function useGalleryActions({
   byId,
-  starting,
+  startFor,
   onAdd,
   onAddBack,
   say,
@@ -932,8 +951,8 @@ function useGalleryActions({
   focusTile,
   keepFocusInPanel,
 }: Pick<AddWidgetPanelProps, "byId" | "onAdd" | "onAddBack"> & {
-  /** The collection a new card starts on. */
-  starting: string | undefined;
+  /** The collection a new card of a widget starts on, of those it may be set to. */
+  startFor: (widgetId: string) => string | undefined;
   say: (sentence: string) => void;
   step: AddStep | null;
   setStep: (step: AddStep | null) => void;
@@ -945,7 +964,11 @@ function useGalleryActions({
   const openStep = (tile: GalleryTile, collection?: string) => {
     openedFrom.current = tile.id;
     setStep(
-      startingStep(tile, byId.get(tile.id), collection ?? starting ?? "")
+      startingStep(
+        tile,
+        byId.get(tile.id),
+        collection ?? startFor(tile.id) ?? ""
+      )
     );
   };
   const addNow = (widgetId: string, settings?: Record<string, unknown>) => {
@@ -1105,7 +1128,7 @@ function GallerySection({
   suggestions,
   atCapacity,
   byId,
-  starting,
+  startFor,
   actions,
 }: {
   gallery: GalleryAnswer;
@@ -1117,8 +1140,8 @@ function GallerySection({
   suggestions: readonly SuggestionView[];
   atCapacity: boolean;
   byId: ReadonlyMap<string, DashboardWidget>;
-  /** The collection a new card starts on, which each tile's preview is drawn with. */
-  starting: string | undefined;
+  /** The collection a new card of a widget starts on, which its tile's preview is drawn with. */
+  startFor: (widgetId: string) => string | undefined;
   actions: GalleryActions;
 }): JSX.Element {
   return (
@@ -1139,7 +1162,7 @@ function GallerySection({
             key={view.tile.id}
             view={view}
             widget={byId.get(view.tile.id)}
-            collection={starting}
+            collection={startFor(view.tile.id)}
             atCapacity={atCapacity}
             onChoose={actions.choose}
           />
@@ -1192,7 +1215,7 @@ function useAddGallery({
   const { focusTile, keepFocusInPanel } = usePanelFocus(contentRef, searchRef);
   const actions = useGalleryActions({
     byId,
-    starting: model.starting,
+    startFor: model.startFor,
     onAdd,
     onAddBack,
     say: voice.say,
@@ -1244,9 +1267,13 @@ function useGalleryModel(
   chip: GalleryChip,
   query: string
 ) {
+  // Which collections each widget can be set to, by the rule its card is drawn by.
+  const sources = useBranding().widgetSources;
+  const canAsk = useMemo(() => collectionAsker(byId, sources), [byId, sources]);
   const tiles = useMemo(
-    () => (read === undefined ? [] : galleryTiles(read, placements, byId)),
-    [read, placements, byId]
+    () =>
+      read === undefined ? [] : galleryTiles(read, placements, byId, canAsk),
+    [read, placements, byId, canAsk]
   );
   const removed = useMemo(
     () => removedCards(placements, byId),
@@ -1256,16 +1283,22 @@ function useGalleryModel(
   const found = useMemo(
     () =>
       searchGallery(
-        { removed, tiles: tilesInChip(tiles, chip), collections },
+        { removed, tiles: tilesInChip(tiles, chip), collections, canAsk },
         query
       ),
-    [removed, tiles, chip, collections, query]
+    [removed, tiles, chip, collections, canAsk, query]
   );
   const suggestions = useMemo(
-    () => (read === undefined ? [] : suggestionsFor(read, tiles, placements)),
-    [read, tiles, placements]
+    () =>
+      read === undefined ? [] : suggestionsFor(read, tiles, placements, canAsk),
+    [read, tiles, placements, canAsk]
   );
-  const starting = read === undefined ? undefined : startingCollection(read);
+  const collectionsOf = (widgetId: string) =>
+    collectionsFor(widgetId, collections, canAsk);
+  const startFor = (widgetId: string) =>
+    read === undefined
+      ? undefined
+      : startingCollection(read, collectionsOf(widgetId));
   // Suggested is for the whole gallery: none while a search or a chip narrows it.
   const narrowed = query.trim() !== "" || chip !== "all";
   return {
@@ -1274,7 +1307,8 @@ function useGalleryModel(
     collections,
     found,
     shownSuggestions: narrowed ? [] : suggestions,
-    starting,
+    collectionsOf,
+    startFor,
   };
 }
 
@@ -1336,7 +1370,7 @@ export function AddWidgetPanel({
     actions,
     clear,
   } = useAddGallery({ open, gallery, placements, byId, onAdd, onAddBack });
-  const { collections, found, shownSuggestions, starting } = model;
+  const { found, shownSuggestions, collectionsOf, startFor } = model;
 
   return (
     <PanelSheet
@@ -1377,14 +1411,14 @@ export function AddWidgetPanel({
           suggestions={shownSuggestions}
           atCapacity={atCapacity}
           byId={byId}
-          starting={starting}
+          startFor={startFor}
           actions={actions}
         />
       ) : (
         <AddStepView
           step={step}
           widget={byId.get(step.tile.id)}
-          collections={collections}
+          collections={collectionsOf(step.tile.id)}
           mostEdited={read?.mostEdited}
           atCapacity={atCapacity}
           onChange={setStep}

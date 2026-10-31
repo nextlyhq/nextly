@@ -14,7 +14,11 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MAX_PLACEMENTS, sizeBounds } from "nextly/config";
+import {
+  MAX_PLACEMENTS,
+  sizeBounds,
+  type PublishedContentSource,
+} from "nextly/config";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +32,14 @@ import { registerCoreWidgetComponents } from "../../core-components";
 import type { GalleryRead, GalleryTile } from "../add-panel-model";
 import { AddWidgetPanel, type AddWidgetPanelProps } from "../AddWidgetPanel";
 
+/** The collections the reader's content settings see, as the workspace payload publishes them. */
+let mockSources: PublishedContentSource[] | undefined;
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
+  useBranding: () => ({ widgetSources: mockSources }),
+}));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
 }));
@@ -193,6 +205,7 @@ const tileNames = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSources = undefined;
   // The add step's preview waits on its answer; the gallery never needs one.
   vi.mocked(protectedApi.post).mockReturnValue(new Promise(() => {}));
 });
@@ -491,8 +504,7 @@ describe("the add step", () => {
     expect(add).toBeEnabled();
   });
 
-  it("has nothing to add a collection card with when the reader may read no collection", async () => {
-    const user = userEvent.setup();
+  it("offers no collection card when the reader may read no collection", () => {
     renderPanel({
       gallery: {
         read: { ...READ, collections: [], suggested: [] },
@@ -500,12 +512,11 @@ describe("the add step", () => {
         retry: vi.fn(),
       },
     });
-    await user.click(screen.getByRole("button", { name: "Add Over time" }));
-    const step = screen.getByTestId("add-panel-step");
-    expect(
-      within(step).getByRole("button", { name: "Add to dashboard" })
-    ).toBeDisabled();
-    expect(step).toHaveTextContent("There is no collection you can read yet.");
+    const tile = screen.getByTestId("add-panel-tile-core/over-time");
+    expect(tile).toHaveTextContent("No collection you can read suits it.");
+    expect(within(tile).queryByRole("button")).toBeNull();
+    // A widget that reads none is still added on choosing it.
+    expect(screen.getByRole("button", { name: "Add Note" })).toBeEnabled();
   });
 
   it("starts on the first readable collection, and says so, when the reader edited none", async () => {
@@ -549,6 +560,132 @@ describe("the add step", () => {
     expect(screen.queryByTestId("add-panel-step")).toBeNull();
     expect(live()).toHaveTextContent("Added Note.");
     expect(panel()).toBeInTheDocument();
+  });
+});
+
+describe("collections a widget can be set to", () => {
+  /** Breakdown divides a collection's entries: by status where it has a lifecycle. */
+  const BREAKDOWN: DashboardWidget = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "custom",
+    component: "core#Breakdown",
+    serverData: true,
+    size: sizeBounds({ default: { w: 4, h: 3 } }),
+    settings: [
+      { name: "collection", type: "collection", label: "Collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        label: "Group by",
+        defaultFrom: "collection",
+      },
+    ],
+  };
+  const BREAKDOWN_TILE: GalleryTile = {
+    id: "core/breakdown",
+    name: "Breakdown",
+    category: "trends",
+    size: BREAKDOWN.size,
+    collectionSetting: "collection",
+    allowsSeveral: true,
+  };
+  // Posts has a lifecycle to divide by; Pages has nothing to group its entries by.
+  const SOURCES: PublishedContentSource[] = [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: true,
+      fields: [
+        {
+          name: "status",
+          label: "Status",
+          type: "string",
+          choices: [
+            { value: "draft", label: "Draft" },
+            { value: "published", label: "Published" },
+          ],
+        },
+      ],
+    },
+    {
+      collection: "pages",
+      label: "Pages",
+      lifecycle: false,
+      fields: [{ name: "title", label: "Title", type: "string" }],
+    },
+  ];
+  const withBreakdown = (read: Partial<GalleryRead> = {}) =>
+    props({
+      byId: new Map([...BY_ID, [BREAKDOWN.id, BREAKDOWN]]),
+      gallery: {
+        read: { ...READ, tiles: [...TILES, BREAKDOWN_TILE], ...read },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+
+  it("offers in the add step only the collections the widget can ask anything of", async () => {
+    mockSources = SOURCES;
+    const user = userEvent.setup();
+    render(<AddWidgetPanel {...withBreakdown()} />, { wrapper });
+    await user.click(screen.getByRole("button", { name: "Add Breakdown" }));
+    const picker = within(screen.getByTestId("add-panel-step")).getByRole(
+      "combobox",
+      { name: "Collection" }
+    );
+    expect(
+      within(picker)
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toEqual(["Choose a collection", "Posts"]);
+    // Pages is the reader's most-edited, but Breakdown cannot ask it, so it starts on Posts.
+    expect(picker).toHaveValue("posts");
+  });
+
+  it("lists no pair, and no suggestion, for a collection the widget cannot ask", async () => {
+    mockSources = SOURCES;
+    const user = userEvent.setup();
+    render(
+      <AddWidgetPanel
+        {...withBreakdown({
+          suggested: [
+            {
+              widgetId: "core/breakdown",
+              collection: "pages",
+              label: "Pages by status",
+            },
+          ],
+        })}
+      />,
+      { wrapper }
+    );
+    expect(screen.queryByTestId("add-panel-suggested")).toBeNull();
+    await user.type(search(), "pages");
+    const pairs = within(screen.getByTestId("add-panel-pairs"))
+      .getAllByRole("button")
+      .map(b => b.textContent);
+    expect(pairs).toEqual(["Over time · Pages"]);
+  });
+
+  it("says a widget no readable collection suits cannot be added", () => {
+    mockSources = [SOURCES[1]!];
+    render(
+      <AddWidgetPanel
+        {...withBreakdown({
+          collections: [
+            { slug: "pages", label: "Pages", lifecycle: false, entries: 12 },
+          ],
+        })}
+      />,
+      { wrapper }
+    );
+    const tile = screen.getByTestId("add-panel-tile-core/breakdown");
+    expect(tile).toHaveTextContent("No collection you can read suits it.");
+    expect(within(tile).queryByRole("button")).toBeNull();
+    // The control: a widget that can read Pages is still offered.
+    expect(screen.getByRole("button", { name: "Add Over time" })).toBeEnabled();
   });
 });
 

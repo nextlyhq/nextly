@@ -10,7 +10,7 @@
  * @module components/features/widgets/edit/add-panel-model
  */
 
-import type { WidgetSizeBounds } from "nextly/config";
+import type { PublishedContentSource, WidgetSizeBounds } from "nextly/config";
 import type { WidgetResult } from "nextly/widget-result";
 
 import type {
@@ -19,6 +19,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { widthChoiceName, widthChoices } from "../sizes";
+import { askableWith } from "../widget-as-asked";
 
 /** The chips past All, as the server names a tile's. */
 export type GalleryCategory = "content" | "activity" | "trends" | "plugins";
@@ -85,7 +86,44 @@ export const GALLERY_CHIPS: ReadonlyArray<{ id: GalleryChip; label: string }> =
 export type TileAction =
   | { kind: "add" }
   | { kind: "add-another" }
-  | { kind: "on-dashboard" };
+  | { kind: "on-dashboard" }
+  /** It reads a collection, and none the reader may read is one it can ask anything of. */
+  | { kind: "no-collection" };
+
+/** Whether a card of this widget set to this collection can be asked anything. */
+export type CanAsk = (widgetId: string, collection: string) => boolean;
+
+/**
+ * Whether a card of a widget, set to a collection, can be asked anything, by the rule the
+ * dashboard draws such a card by (`askableWith`): a Breakdown, say, asks nothing of a collection
+ * with nothing to group its entries by. A widget this admin cannot draw, or one with no Collection
+ * setting, can be set to none.
+ */
+export function collectionAsker(
+  byId: ReadonlyMap<string, DashboardWidget>,
+  sources: readonly PublishedContentSource[] | undefined
+): CanAsk {
+  return (widgetId, collection) => {
+    const widget = byId.get(widgetId);
+    const setting = widget?.settings?.find(s => s.type === "collection")?.name;
+    if (widget === undefined || setting === undefined) return false;
+    return askableWith(widget, { [setting]: collection }, sources);
+  };
+}
+
+/** The collections a widget may be set to: those it can ask anything of, in the read's order. */
+export function collectionsFor(
+  widgetId: string,
+  collections: readonly GalleryCollection[],
+  canAsk: CanAsk
+): GalleryCollection[] {
+  return collections.filter(collection => canAsk(widgetId, collection.slug));
+}
+
+/** Whether a tile can be chosen now: not one already on the dashboard, nor one with no collection. */
+export function canChoose(view: GalleryTileView): boolean {
+  return view.action.kind === "add" || view.action.kind === "add-another";
+}
 
 /** A tile as the gallery draws it now. */
 export interface GalleryTileView {
@@ -103,12 +141,15 @@ export interface GalleryTileView {
  * - one card only, and the draft holds it: "On your dashboard", not addable;
  * - one card only, and it was removed this session: no tile, since its card is listed under
  *   Removed, where adding it back restores its settings, and a fresh card would be a second;
+ * - it reads a collection, and none the reader may read is one it can ask anything of
+ *   (`canAsk`): shown, saying so, not addable, so no card lands that would draw as unavailable;
  * - otherwise Add, or Add another once one is placed.
  */
 export function galleryTiles(
-  read: Pick<GalleryRead, "tiles">,
+  read: Pick<GalleryRead, "tiles"> & Partial<Pick<GalleryRead, "collections">>,
   placements: readonly WidgetPlacement[],
-  byId: ReadonlyMap<string, DashboardWidget>
+  byId: ReadonlyMap<string, DashboardWidget>,
+  canAsk: CanAsk = () => true
 ): GalleryTileView[] {
   return read.tiles.flatMap((sent): GalleryTileView[] => {
     const widget = byId.get(sent.id);
@@ -121,6 +162,12 @@ export function galleryTiles(
       return [{ tile, placed, action: { kind: "on-dashboard" } }];
     }
     if (!tile.allowsSeveral && mine.some(p => p.removed)) return [];
+    if (
+      tile.collectionSetting !== undefined &&
+      collectionsFor(tile.id, read.collections ?? [], canAsk).length === 0
+    ) {
+      return [{ tile, placed, action: { kind: "no-collection" } }];
+    }
     return [
       {
         tile,
@@ -212,9 +259,12 @@ export function searchGallery(
     removed: readonly RemovedCard[];
     tiles: readonly GalleryTileView[];
     collections: readonly GalleryCollection[];
+    /** Which collections each widget can be set to; every one when absent. */
+    canAsk?: CanAsk;
   },
   query: string
 ): GallerySearch {
+  const canAsk = input.canAsk ?? (() => true);
   const needle = query.trim().toLowerCase();
   if (needle === "") {
     return { removed: [...input.removed], tiles: [...input.tiles], pairs: [] };
@@ -223,9 +273,7 @@ export function searchGallery(
     collection.label.toLowerCase().includes(needle)
   );
   const readers = input.tiles.filter(
-    view =>
-      view.tile.collectionSetting !== undefined &&
-      view.action.kind !== "on-dashboard"
+    view => view.tile.collectionSetting !== undefined && canChoose(view)
   );
   return {
     removed: input.removed.filter(card =>
@@ -233,12 +281,14 @@ export function searchGallery(
     ),
     tiles: input.tiles.filter(view => tileMatches(view.tile, needle)),
     pairs: matched.flatMap(collection =>
-      readers.map(view => ({
-        key: `${view.tile.id}:${collection.slug}`,
-        view,
-        collection,
-        label: `${view.tile.name} · ${collection.label}`,
-      }))
+      readers
+        .filter(view => canAsk(view.tile.id, collection.slug))
+        .map(view => ({
+          key: `${view.tile.id}:${collection.slug}`,
+          view,
+          collection,
+          label: `${view.tile.name} · ${collection.label}`,
+        }))
     ),
   };
 }
@@ -262,7 +312,8 @@ export function galleryCount(found: number, query: string): string {
 export function suggestionsFor(
   read: Pick<GalleryRead, "suggested">,
   tiles: readonly GalleryTileView[],
-  placements: readonly WidgetPlacement[]
+  placements: readonly WidgetPlacement[],
+  canAsk: CanAsk = () => true
 ): Array<GallerySuggestion & { view: GalleryTileView }> {
   return read.suggested.flatMap(suggestion => {
     const view = tiles.find(each => each.tile.id === suggestion.widgetId);
@@ -270,7 +321,8 @@ export function suggestionsFor(
     if (
       view === undefined ||
       setting === undefined ||
-      view.action.kind === "on-dashboard"
+      !canChoose(view) ||
+      !canAsk(suggestion.widgetId, suggestion.collection)
     ) {
       return [];
     }
@@ -285,14 +337,16 @@ export function suggestionsFor(
 }
 
 /**
- * The collection a new card starts on: the reader's most-edited one, else the first they may
- * read. `undefined` when they may read none, and then a card that reads one cannot be added.
+ * The collection a new card starts on, of those it may be set to (`collections`, every one the
+ * reader may read when absent): the reader's most-edited one, else the first. `undefined` when
+ * there is none, and then a card that reads one cannot be added.
  */
 export function startingCollection(
-  read: Pick<GalleryRead, "collections" | "mostEdited">
+  read: Pick<GalleryRead, "collections" | "mostEdited">,
+  collections: readonly GalleryCollection[] = read.collections
 ): string | undefined {
-  const edited = read.collections.find(c => c.slug === read.mostEdited);
-  return edited?.slug ?? read.collections[0]?.slug;
+  const edited = collections.find(c => c.slug === read.mostEdited);
+  return edited?.slug ?? collections[0]?.slug;
 }
 
 /** A widget's period, as the add step offers it. */

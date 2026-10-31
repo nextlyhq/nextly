@@ -13,6 +13,8 @@ import type {
 
 import {
   addWidths,
+  collectionsFor,
+  type CanAsk,
   galleryCount,
   galleryTiles,
   newCardSettings,
@@ -140,6 +142,65 @@ describe("galleryTiles", () => {
       BY_ID
     );
     expect(count.action).toEqual({ kind: "add" });
+  });
+});
+
+describe("collections a widget can be set to (canAsk)", () => {
+  // Count can ask Posts alone.
+  const canAsk: CanAsk = (widgetId, slug) =>
+    widgetId !== "core/count" || slug === "posts";
+
+  it("keeps only the collections the widget can ask", () => {
+    expect(
+      collectionsFor("core/count", READ.collections, canAsk).map(c => c.slug)
+    ).toEqual(["posts"]);
+  });
+
+  it("starts on the most-edited collection only when the widget can ask it", () => {
+    const own = collectionsFor("core/count", READ.collections, canAsk);
+    // Pages is most edited, but Count cannot ask it.
+    expect(startingCollection(READ, own)).toBe("posts");
+    expect(startingCollection(READ, [])).toBeUndefined();
+  });
+
+  it("says a widget no readable collection suits cannot be added", () => {
+    const [count] = galleryTiles(READ, [], BY_ID, () => false);
+    expect(count?.action).toEqual({ kind: "no-collection" });
+    // A widget that reads no collection is untouched by it.
+    expect(
+      galleryTiles(READ, [], BY_ID, () => false).find(
+        view => view.tile.id === "core/team"
+      )?.action
+    ).toEqual({ kind: "add" });
+  });
+
+  it("pairs a collection only with the widgets that can ask it", () => {
+    const found = searchGallery(
+      {
+        removed: [],
+        tiles: galleryTiles(READ, [], BY_ID, canAsk),
+        collections: READ.collections,
+        canAsk,
+      },
+      "pages"
+    );
+    expect(found.pairs).toEqual([]);
+  });
+
+  it("suggests no pair the widget cannot ask", () => {
+    const views = galleryTiles(READ, [], BY_ID, canAsk);
+    expect(
+      suggestionsFor(
+        {
+          suggested: [
+            { widgetId: "core/count", collection: "pages", label: "x" },
+          ],
+        },
+        views,
+        [],
+        canAsk
+      )
+    ).toEqual([]);
   });
 });
 
