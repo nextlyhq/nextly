@@ -1152,6 +1152,75 @@ function GallerySection({
   );
 }
 
+/**
+ * The panel's state and what it is worked out from: the search, the chip and the add step, each
+ * fresh as the panel opens; the lists (`useGalleryModel`); what the panel says
+ * (`usePanelVoice`); where focus goes (`usePanelFocus`); and what each control does
+ * (`useGalleryActions`).
+ */
+function useAddGallery({
+  open,
+  gallery,
+  placements,
+  byId,
+  onAdd,
+  onAddBack,
+}: Pick<
+  AddWidgetPanelProps,
+  "open" | "gallery" | "placements" | "byId" | "onAdd" | "onAddBack"
+>) {
+  const [query, setQuery] = useState("");
+  const [chip, setChip] = useState<GalleryChip>("all");
+  const [step, setStep] = useState<AddStep | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const read = gallery.read;
+  const model = useGalleryModel(read, placements, byId, chip, query);
+  const voice = usePanelVoice(foundCount(model.found), query, open);
+  // A fresh gallery each time it opens: an old search, chip or step would hide what the reader
+  // came to find.
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    setChip("all");
+    setStep(null);
+  }, [open]);
+  const { focusTile, keepFocusInPanel } = usePanelFocus(contentRef, searchRef);
+  const actions = useGalleryActions({
+    byId,
+    starting: model.starting,
+    onAdd,
+    onAddBack,
+    say: voice.say,
+    step,
+    setStep,
+    focusTile,
+    keepFocusInPanel,
+  });
+  const clear = () => {
+    setQuery("");
+    voice.say(
+      `${galleryCount(model.removed.length + model.tiles.length, "")}.`
+    );
+    searchRef.current?.focus();
+  };
+  return {
+    query,
+    setQuery,
+    chip,
+    setChip,
+    step,
+    setStep,
+    searchRef,
+    contentRef,
+    read,
+    model,
+    voice,
+    actions,
+    clear,
+  };
+}
+
 /** The sentence an add, or an add refused at the limit, is announced with. */
 function addedSentence(added: AddedCard | null, verb: string): string {
   return added === null
@@ -1248,45 +1317,22 @@ export function AddWidgetPanel({
   onAddBack,
   onClosed,
 }: AddWidgetPanelProps): JSX.Element {
-  const [query, setQuery] = useState("");
-  const [chip, setChip] = useState<GalleryChip>("all");
-  const [step, setStep] = useState<AddStep | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  const read = gallery.read;
-  const { tiles, removed, collections, found, shownSuggestions, starting } =
-    useGalleryModel(read, placements, byId, chip, query);
-  const voice = usePanelVoice(foundCount(found), query, open);
-
-  // A fresh gallery each time it opens: an old search, chip or step would hide what the reader
-  // came to find.
-  useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setChip("all");
-    setStep(null);
-  }, [open]);
-
-  const { focusTile, keepFocusInPanel } = usePanelFocus(contentRef, searchRef);
-
-  const actions = useGalleryActions({
-    byId,
-    starting,
-    onAdd,
-    onAddBack,
-    say: sentence => voice.say(sentence),
+  const {
+    query,
+    setQuery,
+    chip,
+    setChip,
     step,
     setStep,
-    focusTile,
-    keepFocusInPanel,
-  });
-
-  const clear = () => {
-    setQuery("");
-    voice.say(`${galleryCount(removed.length + tiles.length, "")}.`);
-    searchRef.current?.focus();
-  };
+    searchRef,
+    contentRef,
+    read,
+    model,
+    voice,
+    actions,
+    clear,
+  } = useAddGallery({ open, gallery, placements, byId, onAdd, onAddBack });
+  const { collections, found, shownSuggestions, starting } = model;
 
   return (
     <PanelSheet
