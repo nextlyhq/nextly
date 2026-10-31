@@ -155,3 +155,15 @@ describe("the media edit dialog's image sizes", () => {
     expect(screen.queryByText(/image sizes/i)).toBeNull();
   });
 });
+
+describe("the media edit dialog's layout", () => {
+  it("stacks the image above the form on a narrow screen, side by side from sm up", () => {
+    renderDialog();
+    // The image panel and the form share one container. In a row at every
+    // width, the image panel (full width on a phone) squeezed the form to
+    // nothing; below `sm` they stack.
+    const form = screen.getByLabelText(/alt text/i).closest("form");
+    const panels = form?.querySelector(":scope > div > div");
+    expect(panels).toHaveClass("flex-col", "sm:flex-row");
+  });
+});

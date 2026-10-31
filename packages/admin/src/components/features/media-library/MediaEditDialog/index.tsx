@@ -206,7 +206,12 @@ export function MediaEditDialog({
 
         <form onSubmit={handleFormSubmit}>
           <div className="px-6 pb-6">
-            <div className={cn("flex gap-6", !isImage && "flex-col")}>
+            {/* An image stacks above the form on a narrow screen, where a row
+                would squeeze the form beside a full-width image, and sits
+                beside it from `sm` up. */}
+            <div
+              className={cn("flex flex-col gap-6", isImage && "sm:flex-row")}
+            >
               {/* Left Panel - the whole image with its focus point. The
                   original, not the thumbnail, which is a square crop. */}
               {isImage && (
