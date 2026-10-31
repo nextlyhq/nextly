@@ -578,6 +578,14 @@ export default defineConfig({
       },
     },
     {
+      // The two-instance suite and its fixture app read runtime harness flags
+      // no turbo task builds against, as the playground does: the driver sets
+      // them for the processes it starts, Next.js sets NEXT_RUNTIME, and the
+      // suite runs through pnpm rather than turbo.
+      files: ["e2e/multi-instance/**"],
+      rules: { "turbo/no-undeclared-env-vars": "off" },
+    },
+    {
       // One owner for keyboard shortcuts: the admin's shortcut manager.
       files: ["packages/admin/src/**/*.{ts,tsx}"],
       rules: { "nextly/no-keyboard-listener": "error" },
