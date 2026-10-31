@@ -12,10 +12,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { registerContinueWidgetSource } from "../../../services/dashboard/continue-widget-source";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
+import { publishedWidgetDefinition } from "../../../plugins/test-widget-card";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
-import { toDefinition } from "../declaration/declared-widgets";
 import {
   chromeFieldProblem,
   requiredPermissionSlugs,
@@ -275,7 +275,7 @@ describe("a new card's defaults, before its reader touches a setting", () => {
   function published(id: string) {
     const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
     if (!declared) throw new Error(`no core declaration with id "${id}"`);
-    return toDefinition(declared, "core");
+    return publishedWidgetDefinition(declared, "core");
   }
 
   it("reads Over time's range as the last 30 days, through the reader its card is asked with", () => {

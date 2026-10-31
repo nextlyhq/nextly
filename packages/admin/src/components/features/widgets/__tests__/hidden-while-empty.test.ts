@@ -44,6 +44,8 @@ function answer(
     defaultPlacements: [],
     version: 0,
     source: "default",
+    // A reader following the default has arranged nothing.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...(hidden === undefined ? {} : { hiddenWhileEmpty: hidden }),

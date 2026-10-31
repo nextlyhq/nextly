@@ -76,6 +76,7 @@ function layoutOf(token: string, empty: boolean): DashboardLayoutResponse {
     defaultPlacements: [],
     version: 1,
     source: "own",
+    arranged: true,
     scope: "tok",
     audience: "aud",
     hiddenWhileEmpty: empty ? ["p-waiting"] : [],
