@@ -108,6 +108,47 @@ async function storeThumbnail(
   }
 }
 
+/** Refuse a file that claims to be an image and is not one. */
+async function refuseBrokenImage(
+  deps: ReplaceMediaFileDeps,
+  file: ReplacementFile
+): Promise<void> {
+  if (refusesUpload(await deps.images.isValidImage(file.buffer))) {
+    throw NextlyError.validation({
+      errors: [
+        { path: "file", code: "INVALID", message: "Invalid image file." },
+      ],
+    });
+  }
+}
+
+/** What the row records of the new file, once it is stored. */
+function replacementChanges(
+  current: Media,
+  file: ReplacementFile,
+  stored: UploadResult,
+  thumbnail: UploadResult | null,
+  dimensions: { width: number; height: number } | null
+): Record<string, unknown> {
+  return {
+    filename: stored.path,
+    originalFilename: nameAfterReplace(
+      current.originalFilename || file.filename,
+      file.filename
+    ),
+    mimeType: file.mimeType,
+    size: file.buffer.length,
+    width: dimensions?.width ?? null,
+    height: dimensions?.height ?? null,
+    url: stored.url,
+    thumbnailUrl: thumbnail?.url ?? null,
+    sizes: null,
+    focalX: null,
+    focalY: null,
+    updatedAt: new Date(),
+  };
+}
+
 /** Store the new file and, for an image, its thumbnail. */
 async function storeReplacement(
   deps: ReplaceMediaFileDeps,
@@ -115,45 +156,21 @@ async function storeReplacement(
   file: ReplacementFile
 ): Promise<StoredReplacement> {
   const image = isImageMimeType(file.mimeType);
-  if (image && refusesUpload(await deps.images.isValidImage(file.buffer))) {
-    throw NextlyError.validation({
-      errors: [
-        { path: "file", code: "INVALID", message: "Invalid image file." },
-      ],
-    });
-  }
+  if (image) await refuseBrokenImage(deps, file);
   const dimensions = image
     ? await deps.images.getDimensions(file.buffer)
     : null;
+  const { contentDisposition } = file;
   const stored = await deps.storage.upload(file.buffer, {
     filename: file.filename,
     mimeType: file.mimeType,
     collection: "media",
-    ...(file.contentDisposition
-      ? { contentDisposition: file.contentDisposition }
-      : {}),
+    ...(contentDisposition ? { contentDisposition } : {}),
   });
   const thumbnail = image ? await storeThumbnail(deps, file) : null;
-  const paths = thumbnail ? [stored.path, thumbnail.path] : [stored.path];
   return {
-    paths,
-    changes: {
-      filename: stored.path,
-      originalFilename: nameAfterReplace(
-        current.originalFilename || file.filename,
-        file.filename
-      ),
-      mimeType: file.mimeType,
-      size: file.buffer.length,
-      width: dimensions?.width ?? null,
-      height: dimensions?.height ?? null,
-      url: stored.url,
-      thumbnailUrl: thumbnail?.url ?? null,
-      sizes: null,
-      focalX: null,
-      focalY: null,
-      updatedAt: new Date(),
-    },
+    paths: thumbnail ? [stored.path, thumbnail.path] : [stored.path],
+    changes: replacementChanges(current, file, stored, thumbnail, dimensions),
   };
 }
 

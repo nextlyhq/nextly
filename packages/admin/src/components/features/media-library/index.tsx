@@ -14,6 +14,12 @@
  * An item opens in a details panel beside the grid, which can expand to a
  * full-screen viewer; the page owns which item is open and returns focus to
  * that item's tile when the panel closes.
+ *
+ * A view picked beside the folders (Missing alt text, Unused) lists its items
+ * across every folder, with the same search, filter, sort and paging. A
+ * delete leaves every list at once and can be undone for ten seconds; Replace
+ * swaps an item's file and keeps the item. Each is announced in a polite live
+ * region as well as a toast.
  */
 
 import {
@@ -34,8 +40,6 @@ import { ROUTES } from "@admin/constants/routes";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import {
   useMedia,
-  useDeleteMedia,
-  useBulkDeleteMedia,
   useUpdateMedia,
   useFolderById,
   useFolderContents,
@@ -50,13 +54,25 @@ import {
 } from "@admin/hooks/usePersistedState";
 import { copyableMediaUrl } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
-import type { Media, MediaParams, MediaType } from "@admin/types/media";
+import type {
+  Media,
+  MediaLibraryView,
+  MediaParams,
+  MediaType,
+} from "@admin/types/media";
 
 import { CreateFolderDialog } from "./CreateFolderDialog";
 import { DeleteFolderDialog } from "./DeleteFolderDialog";
 import { EditFolderDialog } from "./EditFolderDialog";
 import { FolderBreadcrumbs } from "./FolderBreadcrumbs";
 import { FolderCardsRow } from "./FolderCardsRow";
+import {
+  useDeleteMediaLater,
+  useMediaLibraryCounts,
+  useReplaceMediaFile,
+  useUndoMediaDelete,
+} from "./media-library-queries";
+import { setMediaLibraryView, useMediaLibraryView } from "./media-library-view";
 import { MediaBulkActionBar } from "./MediaBulkActionBar";
 import { MediaDeleteDialog } from "./MediaDeleteDialog";
 import type { MediaSave } from "./MediaDetails";
@@ -66,7 +82,9 @@ import { MediaDropOverlay } from "./MediaDropOverlay";
 import { MediaGrid } from "./MediaGrid";
 import { MediaLibraryToolbar } from "./MediaLibraryToolbar";
 import { MediaListView } from "./MediaListView";
+import { useMediaReplace } from "./MediaReplace";
 import { useMediaFileDrop } from "./MediaUploadDropzone/useMediaFileDrop";
+import { useMediaUsageState } from "./MediaUsedIn";
 import { MediaViewer } from "./MediaViewer";
 import { MoveToFolderDialog } from "./MoveToFolderDialog";
 import { UploadTray } from "./UploadTray";
@@ -106,6 +124,18 @@ export interface MediaLibraryProps {
   className?: string;
 }
 
+/**
+ * How long a delete can be undone: the server keeps a deleted item for ten
+ * seconds before it removes it for good.
+ */
+const MEDIA_UNDO_WINDOW_MS = 10_000;
+
+/** What a view's listing is, said after its count: "3 files missing alt text". */
+const VIEW_NOTES: Record<MediaLibraryView, string> = {
+  "missing-alt": "missing alt text",
+  unused: "nothing uses",
+};
+
 const isViewMode = (value: string): value is "grid" | "list" =>
   value === "grid" || value === "list";
 
@@ -135,11 +165,15 @@ function focusMediaEntry(container: HTMLElement | null, id: string): boolean {
 function emptyLibraryMessage({
   filtered,
   canUpload,
+  view,
 }: {
   filtered: boolean;
   canUpload: boolean;
+  view: MediaLibraryView | null;
 }): string {
   if (filtered) return "Nothing matches this search or filter.";
+  if (view === "missing-alt") return "Every image has alt text.";
+  if (view === "unused") return "Every item is used somewhere.";
   if (canUpload) return "Drop files here, or use Upload files above.";
   return "Nothing has been added here yet.";
 }
@@ -234,10 +268,24 @@ export function MediaLibrary({
     triggerAction,
   } = useMediaContext();
 
-  // Reset page when folder changes
+  // The view beside the folders, if one is picked. A folder picked anywhere
+  // (the tree, the cards, the breadcrumbs) leaves it, since a view spans
+  // every folder.
+  const view = useMediaLibraryView();
+  React.useEffect(() => {
+    if (activeFolderId !== null) setMediaLibraryView(null);
+  }, [activeFolderId]);
+
+  // Reset page when the folder or the view changes
   React.useEffect(() => {
     resetPage();
-  }, [activeFolderId, resetPage]);
+  }, [activeFolderId, view, resetPage]);
+
+  // Whether the usage record covers older content, asked only for the Unused
+  // view, which cannot be trusted until it does.
+  const usageCounts = useMediaLibraryCounts(view === "unused");
+  const unusedPending =
+    view === "unused" && usageCounts.data?.usageRecorded === false;
 
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     React.useState(false);
@@ -309,6 +357,7 @@ export function MediaLibrary({
     search: debouncedSearch || undefined,
     type: typeFilter === "all" ? undefined : typeFilter,
     folderId: activeFolderId,
+    view: view ?? undefined,
     sortBy,
     sortOrder,
   };
@@ -317,12 +366,16 @@ export function MediaLibrary({
   const { data, isLoading, isFetching, isPlaceholderData, error, refetch } =
     useMedia(queryParams);
 
-  // TanStack Query: Delete single item
-  const { mutate: deleteMedia, isPending: isDeleting } = useDeleteMedia();
+  // A delete that can be undone, for one item or the selection.
+  const { mutateAsync: deleteLater, isPending: isDeleting } =
+    useDeleteMediaLater();
+  const { mutateAsync: undoDelete } = useUndoMediaDelete();
+  const { mutateAsync: replaceFile } = useReplaceMediaFile();
+  const isBulkDeleting = isDeleting;
 
-  // TanStack Query: Bulk delete
-  const { mutate: bulkDeleteMedia, isPending: isBulkDeleting } =
-    useBulkDeleteMedia();
+  // What the page last did, said once in a polite live region: a delete, its
+  // Undo, a replaced file.
+  const [announcement, setAnnouncement] = React.useState("");
 
   // TanStack Query: Update media
   const { mutateAsync: updateMediaAsync } = useUpdateMedia();
@@ -366,24 +419,61 @@ export function MediaLibrary({
     setIsDeleteDialogOpen(true);
   }, []);
 
-  const handleConfirmDeleteItem = React.useCallback(async () => {
-    if (!mediaToDelete) return;
-    await new Promise<void>((resolve, reject) => {
-      deleteMedia(mediaToDelete.id, {
-        onSuccess: () => {
-          setSelectedIds(prev => {
-            const next = new Set(prev);
-            next.delete(mediaToDelete.id);
-            return next;
+  // Brings back what a delete took, and says whether it could.
+  const handleUndoDelete = React.useCallback(
+    async (ids: readonly string[], label: string) => {
+      try {
+        const undone = await undoDelete(ids);
+        if (undone.gone.length === 0) {
+          setAnnouncement(`${label} restored.`);
+          toast.success(`${label} restored`);
+        } else {
+          setAnnouncement(`Too late to undo: ${label} already deleted.`);
+          toast.error("Too late to undo", {
+            description:
+              undone.restored.length > 0
+                ? `${undone.gone.length} of them were already deleted.`
+                : "It was already deleted.",
           });
-          resolve();
-        },
-        onError: error => {
-          reject(error);
+        }
+      } catch (error) {
+        toast.error("Couldn't undo the delete", {
+          description: error instanceof Error ? error.message : undefined,
+        });
+      }
+    },
+    [undoDelete]
+  );
+
+  // Deletes the items, then offers Undo for the ten seconds the server keeps
+  // them, as one toast for however many there are.
+  const deleteWithUndo = React.useCallback(
+    async (ids: readonly string[], label: string) => {
+      await deleteLater(ids);
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      setAnnouncement(`${label} deleted. You can undo this for 10 seconds.`);
+      toast(`${label} deleted`, {
+        duration: MEDIA_UNDO_WINDOW_MS,
+        action: {
+          label: "Undo",
+          onClick: () => void handleUndoDelete(ids, label),
         },
       });
-    });
-  }, [deleteMedia, mediaToDelete]);
+    },
+    [deleteLater, handleUndoDelete]
+  );
+
+  const handleConfirmDeleteItem = React.useCallback(async () => {
+    if (!mediaToDelete) return;
+    await deleteWithUndo(
+      [mediaToDelete.id],
+      `"${mediaToDelete.originalFilename}"`
+    );
+  }, [deleteWithUndo, mediaToDelete]);
 
   const handleBulkDelete = React.useCallback(() => {
     if (selectedIds.size === 0) return;
@@ -391,21 +481,40 @@ export function MediaLibrary({
   }, [selectedIds]);
 
   const handleConfirmBulkDelete = React.useCallback(() => {
-    // `bulkDeleteMedia` wraps `useMutation`, so the call signature is
-    // `mutate(variables, options)`. The hook itself shows a server-
-    // authored toast (e.g. "Deleted 4 of 5 files."); we just close
-    // the dialog + clear selection on either success or error.
-    const idsArray = Array.from(selectedIds);
-    bulkDeleteMedia(idsArray, {
-      onSuccess: () => {
-        setSelectedIds(new Set());
-        setIsBulkDeleteDialogOpen(false);
-      },
-      onError: () => {
-        setIsBulkDeleteDialogOpen(false);
-      },
-    });
-  }, [selectedIds, bulkDeleteMedia]);
+    const ids = Array.from(selectedIds);
+    const label = `${ids.length} ${ids.length === 1 ? "file" : "files"}`;
+    deleteWithUndo(ids, label)
+      .catch((error: unknown) => {
+        toast.error("Couldn't delete the files", {
+          description: error instanceof Error ? error.message : undefined,
+        });
+      })
+      .finally(() => setIsBulkDeleteDialogOpen(false));
+  }, [selectedIds, deleteWithUndo]);
+
+  // Replace: a new file under the same item, announced when it lands.
+  const handleReplaceFile = React.useCallback(
+    (media: Media, file: File) => {
+      replaceFile({ mediaId: media.id, file })
+        .then(() => {
+          setAnnouncement(`Replaced the file of ${media.originalFilename}.`);
+          toast.success("File replaced", {
+            description: `${media.originalFilename} now shows ${file.name}.`,
+          });
+        })
+        .catch((error: unknown) => {
+          toast.error("Couldn't replace the file", {
+            description: error instanceof Error ? error.message : undefined,
+          });
+        });
+    },
+    [replaceFile]
+  );
+  const mediaReplace = useMediaReplace(handleReplaceFile);
+
+  // What the grid or list shows: nothing while the Unused view waits for the
+  // usage record, which would otherwise name items content still uses.
+  const shownMedia = unusedPending ? [] : (data?.data ?? []);
 
   // Handlers: Details
   const items = data?.data;
@@ -413,6 +522,8 @@ export function MediaLibrary({
     openMediaId && items ? items.findIndex(m => m.id === openMediaId) : -1;
   const openMedia = items && openIndex >= 0 ? items[openIndex] : null;
   const { data: openMediaFolder } = useFolderById(openMedia?.folderId ?? null);
+  // Where the open item is used, for its details.
+  const openMediaUsage = useMediaUsageState(openMedia?.id ?? null);
   // An item at the top level has no folder; one in a folder shows its name
   // once it has arrived.
   const openMediaFolderName = openMedia?.folderId
@@ -601,10 +712,13 @@ export function MediaLibrary({
       ? () => setOpenMediaId(items[openIndex + 1].id)
       : undefined;
 
-  const emptyStateMessage = emptyLibraryMessage({
-    filtered: Boolean(debouncedSearch) || typeFilter !== "all",
-    canUpload,
-  });
+  const emptyStateMessage = unusedPending
+    ? "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it."
+    : emptyLibraryMessage({
+        filtered: Boolean(debouncedSearch) || typeFilter !== "all",
+        canUpload,
+        view,
+      });
 
   // Ticking tiles leads only to Delete and Move, so a person who may do
   // neither is offered no checkboxes.
@@ -618,12 +732,14 @@ export function MediaLibrary({
         media: openMedia,
         folderName: openMediaFolderName,
         readOnly: !canEdit,
+        usage: openMediaUsage,
         onSave: handleSaveMedia,
         onPrevious: goToPrevious,
         onNext: goToNext,
         onCopyUrl: handleCopyUrl,
         onDownload: (media: Media) => void handleDownload(media),
         onMove: canEdit ? handleMoveOne : undefined,
+        onReplace: canEdit ? mediaReplace.start : undefined,
         onDelete: canDelete ? handleDeleteItem : undefined,
       }
     : null;
@@ -656,6 +772,7 @@ export function MediaLibrary({
       <MediaLibraryToolbar
         total={total}
         inFolder={Boolean(activeFolderId)}
+        viewNote={view ? VIEW_NOTES[view] : undefined}
         headingRef={headingRef}
         search={{
           value: search,
@@ -744,7 +861,7 @@ export function MediaLibrary({
               <>
                 <div className="p-4 sm:p-6">
                   <MediaGrid
-                    media={data?.data || []}
+                    media={shownMedia}
                     isLoading={isLoading}
                     error={error}
                     selectedIds={selectedIds}
@@ -766,7 +883,7 @@ export function MediaLibrary({
                   />
                 </div>
                 {/* Pagination for Grid View */}
-                {!isLoading && !error && data && data.data.length > 0 && (
+                {!isLoading && !error && shownMedia.length > 0 && (
                   <Pagination
                     currentPage={page}
                     totalPages={totalPages}
@@ -791,7 +908,7 @@ export function MediaLibrary({
               </>
             ) : (
               <MediaListView
-                media={data?.data || []}
+                media={shownMedia}
                 isLoading={isLoading}
                 error={error}
                 selectedIds={selectedIds}
@@ -809,7 +926,7 @@ export function MediaLibrary({
                 // rather than beside it. The grid branch above keeps its own,
                 // because a grid has no row-versus-card view to place it for.
                 pagination={
-                  !isLoading && !error && data && data.data.length > 0
+                  !isLoading && !error && shownMedia.length > 0
                     ? {
                         currentPage: page,
                         totalPages,
@@ -887,9 +1004,9 @@ export function MediaLibrary({
               {selectedIds.size === 1 ? "file" : "files"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete {selectedIds.size}{" "}
-              {selectedIds.size === 1 ? "media file" : "media files"}? This
-              action cannot be undone.
+              Anything using {selectedIds.size === 1 ? "it" : "them"} will show
+              no image until another is chosen. You can undo this for a few
+              seconds.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -961,11 +1078,24 @@ export function MediaLibrary({
         />
       )}
 
+      {canEdit && mediaReplace.element}
+
       <UploadTray
         queue={uploadQueue}
         placement="floating"
         returnFocusRef={headingRef}
       />
+
+      {/* Deletes, their Undo and replaced files, said once each. After the
+          upload tray, whose own region reports uploads. */}
+      <div
+        role="status"
+        aria-live="polite"
+        className="sr-only"
+        data-testid="media-library-announcer"
+      >
+        {announcement}
+      </div>
     </div>
   );
 }
