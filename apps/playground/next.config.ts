@@ -55,7 +55,9 @@ const NEXTLY_DYNAMIC_PACKAGES = [
  * them: the admin's own behaviour under Cache Components is not ready yet, and
  * a suite run with it on fails there for reasons that have nothing to do with
  * the change under test. Partial Prefetching is set only with it, since Next.js
- * accepts it only with Cache Components on.
+ * accepts it only with Cache Components on. Nextly supports only the on
+ * state, so a playground started with it off says so once at start; the
+ * default turns on together with the browser suite's expectations for it.
  */
 const CACHE_COMPONENTS = process.env.NEXTLY_PLAYGROUND_CACHE_COMPONENTS === "1";
 

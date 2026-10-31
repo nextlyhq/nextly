@@ -22,8 +22,8 @@ import type { DatabaseConfig } from "../types";
 import type { GeneratedFiles } from "./generated-files";
 
 /**
- * Where Nextly explains that Cache Components is off by default, and how an
- * app turns it on.
+ * Where Nextly explains the Cache Components settings every app it makes or
+ * joins carries, and why each one is there.
  */
 export const CACHE_COMPONENTS_DOCS_URL =
   "https://nextlyhq.com/docs/getting-started/installation#cache-components";
@@ -76,13 +76,50 @@ function packageListLiteral(database: DatabaseConfig): string {
 }
 
 /**
- * The setting every config this writes carries, with its reason in the file:
- * the developer who finds it is the one deciding whether to change it.
+ * Nextly's cache handlers, as the settings that install them. Under Cache
+ * Components, Next.js's default cache serves a page's previous shell once
+ * after a write expires its tags; these expire it at once.
  */
-const CACHE_COMPONENTS_OFF = `  // Off by default in a Nextly app. Turning it on takes a "use cache" read
-  // function of the app's own and Nextly's cache handlers:
+const HANDLER_SETTINGS = [
+  "cacheHandler",
+  "cacheMaxMemorySize",
+  "cacheHandlers",
+] as const;
+const HANDLER_PROPERTIES = [
+  'cacheHandler: require.resolve("nextly/cache-handler")',
+  "cacheMaxMemorySize: 0",
+  'cacheHandlers: { default: require.resolve("nextly/cache-handlers") }',
+];
+
+/** The two options Nextly runs with on. */
+const CACHE_COMPONENTS = "cacheComponents";
+const PARTIAL_PREFETCHING = "partialPrefetching";
+const ON_OPTIONS = [CACHE_COMPONENTS, PARTIAL_PREFETCHING] as const;
+
+/** Every setting Nextly needs, as lines of a config object. */
+const ON_LINES = [
+  ...ON_OPTIONS.map(option => `${option}: true`),
+  ...HANDLER_PROPERTIES,
+].map(property => `  ${property},`);
+
+/**
+ * The settings every config this writes carries, with their reason in the
+ * file: the developer who finds them is the one deciding whether to change
+ * them.
+ */
+const CACHE_COMPONENTS_ON = `  // Nextly runs with Cache Components and Partial Prefetching on. Its cache
+  // handlers make the first read after a write show the new version, where
+  // Next.js's default cache would serve the previous page once more:
   // ${CACHE_COMPONENTS_DOCS_URL}
-  cacheComponents: false,`;
+${ON_LINES.join("\n")}`;
+
+/**
+ * How an ES module config gets `require`, which Node defines only in
+ * CommonJS, to resolve the handlers from the app's own node_modules.
+ */
+const REQUIRE_IMPORT = 'import { createRequire } from "node:module";';
+const REQUIRE_DECLARATION = `// Resolves Nextly's cache handlers from this app's node_modules.
+const require = createRequire(import.meta.url);`;
 
 /**
  * Render a complete next.config.ts file for the selected database.
@@ -91,7 +128,7 @@ export function buildNextConfigTemplate(database: DatabaseConfig): string {
   return `import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-${CACHE_COMPONENTS_OFF}
+${CACHE_COMPONENTS_ON}
   serverExternalPackages: ${packageListLiteral(database)},
 };
 
@@ -101,9 +138,13 @@ export default nextConfig;
 
 /** The same config as a JavaScript module, for an app without TypeScript. */
 function buildNextConfigModule(database: DatabaseConfig): string {
-  return `/** @type {import("next").NextConfig} */
+  return `${REQUIRE_IMPORT}
+
+${REQUIRE_DECLARATION}
+
+/** @type {import("next").NextConfig} */
 const nextConfig = {
-${CACHE_COMPONENTS_OFF}
+${CACHE_COMPONENTS_ON}
   serverExternalPackages: ${packageListLiteral(database)},
 };
 
@@ -539,45 +580,47 @@ function addListProperty(
   object: ObjectExpression,
   entries: string[]
 ): Edit[] {
-  const open = (object.start ?? 0) + 1;
-  const close = (object.end ?? 0) - 1;
-  return spansLines(source, open, close)
-    ? listOnItsOwnLines(source, object, entries)
-    : [listOnTheSameLine(object, entries)];
-}
-
-/** The list added to an object written on one line, as `{ a: 1, serverExternalPackages: [...] }`. */
-function listOnTheSameLine(object: ObjectExpression, entries: string[]): Edit {
-  const property = `${PROPERTY}: [${entries.join(", ")}]`;
-  const last = object.properties.at(-1);
-  const open = (object.start ?? 0) + 1;
-  return last
-    ? { at: last.end ?? 0, remove: 0, text: `, ${property}` }
-    : { at: open, remove: (object.end ?? 0) - 1 - open, text: ` ${property} ` };
+  return appendProperties(source, object, (indent, ownLines) => [
+    ownLines
+      ? `${PROPERTY}: [\n${entries.map(entry => `${indent}  ${entry},\n`).join("")}${indent}]`
+      : `${PROPERTY}: [${entries.join(", ")}]`,
+  ]);
 }
 
 /**
- * The list added as the last property of an object written over several
- * lines, one entry per line at the indentation the object's properties use.
- * A comma goes after the last property first when it has none.
+ * Add properties after an object's last one, in the object's layout: on one
+ * line, as `{ a: 1, b: 2 }`, when it is written that way, and otherwise one
+ * per line at the indentation its properties use, before the closing brace,
+ * with a comma put after the last property first when it has none.
+ * `properties` gets that indentation, and whether each property has a line
+ * of its own, so a property spanning lines can follow the same layout.
  */
-function listOnItsOwnLines(
+function appendProperties(
   source: string,
   object: ObjectExpression,
-  entries: string[]
+  properties: (indent: string, ownLines: boolean) => string[]
 ): Edit[] {
+  const open = (object.start ?? 0) + 1;
   const close = (object.end ?? 0) - 1;
   const last = object.properties.at(-1);
+  if (!spansLines(source, open, close)) {
+    const text = properties("", false).join(", ");
+    return last
+      ? [{ at: last.end ?? 0, remove: 0, text: `, ${text}` }]
+      : [{ at: open, remove: close - open, text: ` ${text} ` }];
+  }
   const indent = last
     ? indentAt(source, last.start ?? 0)
     : `${indentAt(source, close)}  `;
-  const list = `${indent}${PROPERTY}: [\n${entries.map(entry => `${indent}  ${entry},\n`).join("")}${indent}],\n`;
+  const lines = properties(indent, true)
+    .map(property => `${indent}${property},\n`)
+    .join("");
   const needsComma =
     last !== undefined && !/^\s*,/.test(source.slice(last.end ?? 0, close));
   const comma: Edit[] = needsComma
     ? [{ at: last.end ?? 0, remove: 0, text: "," }]
     : [];
-  return [...comma, beforeClosingBrace(source, close, list)];
+  return [...comma, beforeClosingBrace(source, close, lines)];
 }
 
 /** Text put before an object's closing brace: on the line above it when the brace has a line of its own. */
@@ -876,173 +919,270 @@ export async function patchNextConfig(
   return { kind: "written", file, added: edited.added };
 }
 
-/** The setting Nextly needs off, and the one Next.js accepts only with it on. */
-const CACHE_COMPONENTS = "cacheComponents";
-const PARTIAL_PREFETCHING = "partialPrefetching";
+/**
+ * What Nextly's cache handlers came to in an existing app's config: `added`,
+ * already `present`, or left out, with why and what to add by hand.
+ */
+type HandlerOutcome = "added" | "present" | { skipped: string };
 
 /**
- * What turning Cache Components off in an existing app's config did.
+ * What turning Cache Components on in an existing app's config did.
  *
- * - `turned-off`: `cacheComponents: true` became `false`, and the settings in
- *   `removed`, which Next.js accepts only with it on, were taken out.
- * - `unchanged`: it was already off, or the app has no config, which leaves
- *   Next.js's default, off.
- * - `manual`: the setting could not be read or changed safely, so the file was
+ * - `turned-on`: the options in `turnedOn` were set to `true`, added where
+ *   the config did not set them, and `handlers` says whether Nextly's cache
+ *   handlers went in beside them.
+ * - `unchanged`: both options were on and the handlers settled already.
+ * - `manual`: an option could not be read or changed safely, so the file was
  *   left as it was.
  */
 export type CacheComponentsPatch =
-  | { kind: "turned-off"; file: string; removed: string[] }
-  | { kind: "unchanged" }
+  | {
+      kind: "turned-on";
+      file: string;
+      turnedOn: string[];
+      handlers: HandlerOutcome;
+    }
+  | { kind: "unchanged"; file: string; handlers: HandlerOutcome }
   | { kind: "manual"; file: string; reason: string };
 
 /**
- * Remove a property with the comma that separates it: the whole line when it
- * has one of its own, else the property and the comma after it, or before it
- * when it is the last one.
+ * The exported config object, when every setting this edits can be read in
+ * it; else why not. Not through a wrapper call: Next.js receives what the
+ * wrapper returns, which may set an option again, so the literal passed in
+ * says nothing final.
  */
-function removeProperty(source: string, property: ObjectProperty): Edit {
-  const start = property.start ?? 0;
-  const end = property.end ?? 0;
-  const ownLine = /^\s*$/.test(source.slice(lineStart(source, start), start));
-  const rest = /^[ \t]*,?[ \t]*\n/.exec(source.slice(end));
-  if (ownLine && rest) {
-    const from = lineStart(source, start);
-    return { at: from, remove: end + rest[0].length - from, text: "" };
-  }
-  const after = /^\s*,\s*/.exec(source.slice(end));
-  if (after)
-    return { at: start, remove: end - start + after[0].length, text: "" };
-  const before = /,\s*$/.exec(source.slice(0, start));
-  const from = before ? start - before[0].length : start;
-  return { at: from, remove: end - from, text: "" };
-}
-
-/** The exported config object, when both settings in it can be read; else why not. */
-function cacheComponentsObject(
-  source: string,
-  file: string
-): ObjectExpression | string {
-  const body = parseBody(source, file);
-  if (!body) return "it could not be parsed";
-  // Not through a wrapper call: Next.js receives what the wrapper returns, which
-  // may set the option again, so the literal passed in says nothing final.
+function cacheComponentsObject(body: Statement[]): ObjectExpression | string {
   const object = exportedConfig(body, false);
   if (typeof object === "string") return object;
   return (
-    hiddenSettings(object, [CACHE_COMPONENTS, PARTIAL_PREFETCHING], "it") ??
-    object
+    hiddenSettings(object, [...ON_OPTIONS, ...HANDLER_SETTINGS], "it") ?? object
   );
 }
 
-/** The `true` to flip, null when Cache Components is off or unset, or why the value cannot be read. */
-function enabledValue(object: ObjectExpression): Node | null | string {
-  const value = propertyValue(object, CACHE_COMPONENTS);
-  if (!value) return null;
+/**
+ * How to turn one option on: the `false` to flip, the property to add when the
+ * config does not set it, nothing when it is on, or why the value cannot be
+ * read.
+ */
+function optionStep(
+  object: ObjectExpression,
+  name: string
+): { flip?: Edit; add?: string } | string {
+  const value = propertyValue(object, name);
+  if (!value) return { add: `${name}: true` };
   if (value.type !== "BooleanLiteral") {
-    return `its ${CACHE_COMPONENTS} is not true or false written in place`;
+    return `its ${name} is not true or false written in place`;
   }
-  return value.value ? value : null;
-}
-
-/** The edits that turn Cache Components off in a config, none when it is off, or why it cannot be changed. */
-function cacheComponentsPlan(
-  source: string,
-  file: string
-): { edits: Edit[]; removed: string[] } | { reason: string } {
-  const object = cacheComponentsObject(source, file);
-  if (typeof object === "string") return { reason: object };
-  const value = enabledValue(object);
-  if (typeof value === "string") return { reason: value };
-  if (!value) return { edits: [], removed: [] };
-  const flip: Edit = {
-    at: value.start ?? 0,
-    remove: (value.end ?? 0) - (value.start ?? 0),
-    text: "false",
-  };
-  // Every definition, under any spelling of its key: the last one wins at run
-  // time, so removing only the first can leave the one Next.js reads.
-  const prefetching = object.properties.filter(
-    (property): property is ObjectProperty =>
-      isPropertyNamed(property, PARTIAL_PREFETCHING)
-  );
+  if (value.value) return {};
   return {
-    edits: [
-      flip,
-      ...prefetching.map(property => removeProperty(source, property)),
-    ],
-    removed: prefetching.length > 0 ? [PARTIAL_PREFETCHING] : [],
+    flip: {
+      at: value.start ?? 0,
+      remove: (value.end ?? 0) - (value.start ?? 0),
+      text: "true",
+    },
   };
 }
 
-/** Whether a config, read as code, still defines `partialPrefetching` anywhere in its exported object. */
-function definesPartialPrefetching(source: string, file: string): boolean {
-  const object = cacheComponentsObject(source, file);
+/**
+ * Whether Node loads the config as an ES module, where `require` is not
+ * defined: `.mjs` and `.mts` always, and `.js` when it imports or exports,
+ * which a config in a package of `"type": "module"` must, and which Node
+ * detects in any other. Next.js compiles `next.config.ts` to CommonJS.
+ */
+function loadsAsModule(file: string, body: Statement[]): boolean {
+  if (/\.m[jt]s$/.test(file)) return true;
   return (
-    typeof object !== "string" &&
-    object.properties.some(property =>
-      isPropertyNamed(property, PARTIAL_PREFETCHING)
+    file.endsWith(".js") &&
+    body.some(
+      statement =>
+        statement.type === "ImportDeclaration" ||
+        statement.type === "ExportDefaultDeclaration" ||
+        statement.type === "ExportNamedDeclaration" ||
+        statement.type === "ExportAllDeclaration"
     )
   );
 }
 
-/**
- * Turn Next.js Cache Components off in an existing app's config, Nextly's
- * default; `create-next-app` 16.4 turns it on by default.
- *
- * Only `cacheComponents: true` written in place is changed, and
- * `partialPrefetching` goes with it, since Next.js refuses that option once
- * Cache Components is off. The edit is trusted only once the result parses
- * and reads as off; anything else is left as it was, with what to change.
- */
-export async function turnOffCacheComponents(
-  cwd: string
-): Promise<CacheComponentsPatch> {
-  const file = await findConfigFile(cwd);
-  if (!file) return { kind: "unchanged" };
-  const source = await fs.readFile(path.join(cwd, file), "utf-8");
-  // Read structurally even when the file never names the setting: a spread or
-  // a wrapper can still turn it on, and only the parser can say it cannot tell.
-  const plan = cacheComponentsPlan(source, file);
-  if ("reason" in plan) return { kind: "manual", file, reason: plan.reason };
-  if (plan.edits.length === 0) return { kind: "unchanged" };
-  const text = applyEdits(source, plan.edits);
-  const recheck = cacheComponentsPlan(text, file);
-  if (
-    "reason" in recheck ||
-    recheck.edits.length > 0 ||
-    definesPartialPrefetching(text, file)
-  ) {
-    return { kind: "manual", file, reason: "the edit could not be confirmed" };
-  }
-  await fs.writeFile(path.join(cwd, file), text, "utf-8");
-  return { kind: "turned-off", file, removed: plan.removed };
+/** The edit that gives an ES module config `require`, after its last import. */
+function requireEdit(body: Statement[]): Edit {
+  const imports = body.filter(
+    statement => statement.type === "ImportDeclaration"
+  );
+  const last = imports.at(-1);
+  return last
+    ? {
+        at: last.end ?? 0,
+        remove: 0,
+        text: `\n${REQUIRE_IMPORT}\n\n${REQUIRE_DECLARATION}`,
+      }
+    : {
+        at: 0,
+        remove: 0,
+        text: `${REQUIRE_IMPORT}\n\n${REQUIRE_DECLARATION}\n\n`,
+      };
 }
 
 /**
- * What turning Cache Components off did, for the run's report: the change and
- * a notice saying why, or, for a config it could not change, what to change.
+ * How to install Nextly's cache handlers: the properties to add and any edit
+ * that gives the file `require`, or why they are left out. A config that sets
+ * any of their settings already has a cache of its own, which this does not
+ * replace.
+ */
+function handlerStep(
+  object: ObjectExpression,
+  body: Statement[],
+  esm: boolean
+): { add: string[]; edits: Edit[]; outcome: HandlerOutcome } {
+  const none = { add: [], edits: [] };
+  const set = HANDLER_SETTINGS.filter(
+    name => propertyValue(object, name) !== undefined
+  );
+  if (set.length === HANDLER_SETTINGS.length) {
+    return { ...none, outcome: "present" };
+  }
+  if (set.length > 0) {
+    return {
+      ...none,
+      outcome: {
+        skipped: `it already sets ${set.join(", ")}, so Nextly's cache handlers were not added beside a cache of its own`,
+      },
+    };
+  }
+  if (!esm) return { add: HANDLER_PROPERTIES, edits: [], outcome: "added" };
+  if (
+    referenceCount("require", body) > 0 ||
+    referenceCount("createRequire", body) > 0
+  ) {
+    return {
+      ...none,
+      outcome: {
+        skipped:
+          "it is an ES module that already names require or createRequire, so the line that defines require for the handlers could clash",
+      },
+    };
+  }
+  return {
+    add: HANDLER_PROPERTIES,
+    edits: [requireEdit(body)],
+    outcome: "added",
+  };
+}
+
+/** The edits that turn Cache Components on in a config, or why it cannot be changed. */
+function cacheComponentsPlan(
+  source: string,
+  file: string,
+  esm: boolean
+):
+  | { edits: Edit[]; turnedOn: string[]; handlers: HandlerOutcome }
+  | { reason: string } {
+  const body = parseBody(source, file);
+  if (!body) return { reason: "it could not be parsed" };
+  const object = cacheComponentsObject(body);
+  if (typeof object === "string") return { reason: object };
+  const edits: Edit[] = [];
+  const add: string[] = [];
+  const turnedOn: string[] = [];
+  for (const option of ON_OPTIONS) {
+    const step = optionStep(object, option);
+    if (typeof step === "string") return { reason: step };
+    if (step.flip) edits.push(step.flip);
+    if (step.add) add.push(step.add);
+    if (step.flip || step.add) turnedOn.push(option);
+  }
+  const handlers = handlerStep(object, body, esm);
+  edits.push(...handlers.edits);
+  add.push(...handlers.add);
+  if (add.length > 0)
+    edits.push(...appendProperties(source, object, () => add));
+  return { edits, turnedOn, handlers: handlers.outcome };
+}
+
+/**
+ * Turn Next.js Cache Components and Partial Prefetching on in an existing
+ * app's config, with Nextly's cache handlers: Nextly runs with both on.
+ * Apps that an earlier Nextly release turned off are turned on again.
+ *
+ * Only settings written in place as `true` or `false`, or absent, are
+ * changed; a value this cannot read leaves the file as it was, with what to
+ * add. The edit is trusted only once the result parses and reads as on.
+ */
+export async function turnOnCacheComponents(
+  cwd: string
+): Promise<CacheComponentsPatch> {
+  const file = await nextConfigFileToChange(cwd);
+  const source = await fs
+    .readFile(path.join(cwd, file), "utf-8")
+    .catch(() => null);
+  if (source === null) {
+    return { kind: "manual", file, reason: "the app has no Next config" };
+  }
+  const body = parseBody(source, file);
+  if (!body) return { kind: "manual", file, reason: "it could not be parsed" };
+  const esm = loadsAsModule(file, body);
+  // Read structurally even when the file never names the options: a spread or
+  // a wrapper can still set them, and only the parser can say it cannot tell.
+  const plan = cacheComponentsPlan(source, file, esm);
+  if ("reason" in plan) return { kind: "manual", file, reason: plan.reason };
+  if (plan.edits.length === 0) {
+    return { kind: "unchanged", file, handlers: plan.handlers };
+  }
+  const text = applyEdits(source, plan.edits);
+  const recheck = cacheComponentsPlan(text, file, esm);
+  if ("reason" in recheck || recheck.edits.length > 0) {
+    return { kind: "manual", file, reason: "the edit could not be confirmed" };
+  }
+  await fs.writeFile(path.join(cwd, file), text, "utf-8");
+  return {
+    kind: "turned-on",
+    file,
+    turnedOn: plan.turnedOn,
+    handlers: plan.handlers,
+  };
+}
+
+/**
+ * What turning Cache Components on did, for the run's report: each change and
+ * a notice saying why, or, for a config it could not change, the exact lines
+ * to add.
  */
 export function cacheComponentsFiles(
   patch: CacheComponentsPatch
 ): GeneratedFiles {
   const files: GeneratedFiles = { written: [], changed: [], skipped: [] };
-  if (patch.kind === "turned-off") {
-    files.changed.push({
-      path: patch.file,
-      added: [`${CACHE_COMPONENTS}: false`],
-    });
-    const removed = patch.removed.length
-      ? `, and removed ${patch.removed.join(", ")}, which Next.js accepts only with it on`
-      : "";
-    files.notices = [
-      `Turned Cache Components off in ${patch.file}: Nextly keeps it off by default${removed}. ` +
-        `How to turn it on: ${CACHE_COMPONENTS_DOCS_URL}`,
-    ];
-  } else if (patch.kind === "manual") {
+  if (patch.kind === "manual") {
     files.skipped.push({
       path: patch.file,
-      why: `Nextly could not confirm Cache Components is off: ${patch.reason}. Nextly keeps it off by default (${CACHE_COMPONENTS_DOCS_URL}); make sure the config Next.js receives leaves it unset or sets it to false, with no ${PARTIAL_PREFETCHING}`,
-      toAdd: `  ${CACHE_COMPONENTS}: false,`,
+      why: `Cache Components was not turned on: ${patch.reason}. Nextly runs with Cache Components and Partial Prefetching on, with its cache handlers (${CACHE_COMPONENTS_DOCS_URL}); add these to the config object Next.js receives, in place of any value of theirs`,
+      toAdd: ON_LINES.join("\n"),
+    });
+    return files;
+  }
+  const handlersAdded = patch.handlers === "added";
+  if (patch.kind === "turned-on") {
+    files.changed.push({
+      path: patch.file,
+      added: [
+        ...patch.turnedOn.map(option => `${option}: true`),
+        ...(handlersAdded ? [...HANDLER_SETTINGS] : []),
+      ],
+    });
+    const done = [
+      ...(patch.turnedOn.length > 0
+        ? [`turned ${patch.turnedOn.join(" and ")} on`]
+        : []),
+      ...(handlersAdded ? ["installed Nextly's cache handlers"] : []),
+    ].join(" and ");
+    files.notices = [
+      `In ${patch.file}, ${done}: Nextly runs with Cache Components and Partial Prefetching on. ` +
+        `What each setting does: ${CACHE_COMPONENTS_DOCS_URL}`,
+    ];
+  }
+  if (typeof patch.handlers === "object") {
+    files.skipped.push({
+      path: patch.file,
+      why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once (${CACHE_COMPONENTS_DOCS_URL}); in an ES module config, define require first with createRequire(import.meta.url) from node:module`,
+      toAdd: HANDLER_PROPERTIES.map(property => `  ${property},`).join("\n"),
     });
   }
   return files;

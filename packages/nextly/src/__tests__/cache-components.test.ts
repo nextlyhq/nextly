@@ -1,9 +1,11 @@
 /**
- * Nextly and an app with Next.js Cache Components on. Neither `withNextly()`
- * nor `createRegister()` warns about the setting any more: an app may turn it
- * on, as the caching guide describes. What `createRegister()` is told is kept
- * for the cached reads, so a read under Cache Components that finds no
- * `"use cache"` read function registered says so, once.
+ * Nextly and an app's Next.js Cache Components setting. Nextly supports only
+ * Cache Components and Partial Prefetching on, so `withNextly()` warns about a
+ * config with either off, and `createRegister()` about a build its
+ * `instrumentation.ts` reports with Cache Components off. What
+ * `createRegister()` is told is also kept for the cached reads, so a read under
+ * Cache Components that finds no `"use cache"` read function registered says
+ * so, once.
  *
  * Both values Nextly reads from Next.js are undocumented internals, so the
  * last cases pin them to the installed Next.js: the name it inlines the
@@ -33,27 +35,59 @@ import * as logger from "../observability/logger";
 import { applyCache, type UnstableCache } from "../runtime/cache/cached-find";
 import { recordCacheComponents } from "../runtime/cache/registered-read";
 
+/** The start-time check's once-per-process record, cleared so each case starts fresh. */
+const WARNED = Symbol.for("nextly/cache-components-off-warned");
+const forgetWarnings = () => {
+  delete (globalThis as Record<symbol, unknown>)[WARNED];
+};
+
 let warn: MockInstance<typeof console.warn>;
 beforeEach(() => {
+  forgetWarnings();
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => {
   warn.mockRestore();
   recordCacheComponents(false);
+  forgetWarnings();
   vi.restoreAllMocks();
 });
+
+/** The start-time warning, for the options it names. */
+const OFF =
+  /is off in .*Nextly supports only Cache Components and Partial Prefetching on/;
 
 /** Every warning printed so far, as one string. */
 const warned = () => warn.mock.calls.map(call => String(call[0])).join("\n");
 
 describe("withNextly and Cache Components", () => {
-  it("takes a config with Cache Components on without a warning", () => {
+  it("takes a config with both options on without a warning", () => {
     const wrapped = withNextly<Record<string, unknown>>({
       cacheComponents: true,
+      partialPrefetching: true,
     });
     expect(warned()).not.toMatch(/Cache Components/);
     expect(wrapped.cacheComponents).toBe(true);
     expect(wrapped.serverExternalPackages).toContain("nextly");
+  });
+
+  it("warns about a config with either option off or unset, naming it, and still wraps it", () => {
+    const wrapped = withNextly<Record<string, unknown>>({
+      cacheComponents: true,
+      partialPrefetching: false,
+    });
+    expect(warned()).toMatch(OFF);
+    expect(warned()).toMatch(
+      /`partialPrefetching` is off in this next\.config/
+    );
+    expect(wrapped.serverExternalPackages).toContain("nextly");
+
+    forgetWarnings();
+    warn.mockClear();
+    withNextly({});
+    expect(warned()).toMatch(
+      /`cacheComponents` and `partialPrefetching` are off in this next\.config/
+    );
   });
 });
 
@@ -89,15 +123,29 @@ describe("createRegister and Cache Components", () => {
     );
   });
 
-  it("says nothing, at start or at a read, when Next.js inlined it as off or not at all", async () => {
+  it("warns at start, naming the option, when Next.js inlined it as off or the hook passed nothing, and says nothing at a read", async () => {
     for (const host of [{ cacheComponents: "false" }, {}]) {
+      forgetWarnings();
+      warn.mockClear();
       await createRegister(config, host)();
+      expect(warned()).toMatch(OFF);
+      expect(warned()).toMatch(/`cacheComponents` is off/);
+      // `register()` cannot see `partialPrefetching`, so it never names it.
+      expect(warned()).not.toMatch(/`partialPrefetching`/);
       const nextlyWarn = spyNextlyWarn();
       await read();
       expect(nextlyWarn).not.toHaveBeenCalled();
       vi.restoreAllMocks();
+      warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     }
-    expect(warned()).not.toMatch(/Cache Components/);
+  });
+
+  it("warns once, however many times the server registers", async () => {
+    await createRegister(config, { cacheComponents: "false" })();
+    await createRegister(config, { cacheComponents: "false" })();
+    expect(
+      warn.mock.calls.filter(call => OFF.test(String(call[0])))
+    ).toHaveLength(1);
   });
 });
 

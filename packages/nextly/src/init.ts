@@ -33,7 +33,10 @@
  * ```
  */
 
-import { cacheComponentsEnabled } from "./cache-components";
+import {
+  cacheComponentsEnabled,
+  warnIfCacheComponentsOff,
+} from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
 import { recordRegisteredLocalization } from "./di/registered-localization";
@@ -573,7 +576,9 @@ export async function getCachedNextly(): Promise<Nextly> {
  *               build it runs in. `cacheComponents` is the value Next.js
  *               inlines there for `process.env.__NEXT_CACHE_COMPONENTS`. With
  *               it on, a cached read finding no `"use cache"` read function
- *               registered is said once, naming the file to add.
+ *               registered is said once, naming the file to add. With it off,
+ *               or not passed, Nextly warns once at start: it supports only
+ *               Cache Components on.
  */
 export function createRegister(
   config: SanitizedNextlyConfig,
@@ -587,6 +592,12 @@ export function createRegister(
     // `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
     // `cache-components.test.ts` pins it, so a rename fails loudly there.
     recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
+    // Before Nextly starts, so the line comes first in the server's output.
+    // Always checked: a hook that passes no value is read as off, as above.
+    warnIfCacheComponentsOff(
+      { cacheComponents: host.cacheComponents },
+      "this app's build, as its instrumentation.ts passes it to createRegister()"
+    );
     await getNextly({ config });
   };
 }
