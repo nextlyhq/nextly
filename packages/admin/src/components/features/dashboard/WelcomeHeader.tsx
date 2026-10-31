@@ -12,7 +12,9 @@ import { useDashboardChrome } from "./header/dashboard-chrome";
 import { EnvironmentBadge } from "./header/EnvironmentBadge";
 import { Freshness } from "./header/Freshness";
 import { NewSplitButton } from "./header/NewSplitButton";
+import { ResumeSetupLink } from "./header/ResumeSetupLink";
 import { SummaryLine } from "./header/SummaryLine";
+import { useSetupResume } from "./setup/useSetupResume";
 
 /**
  * The id of the dashboard's level-one heading.
@@ -60,8 +62,9 @@ function useMinuteClock(): Date {
 /**
  * The dashboard's header, part of the page rather than a widget: a greeting,
  * the project's name (the page's one level-one heading) with the environment
- * badge the site config names, the live summary, the freshness line when the
- * data is old, and Customize.
+ * badge the site config names, the live summary (ending with "Resume setup"
+ * while the reader's dismissed setup card can come back), the freshness line
+ * when the data is old, and Customize.
  *
  * It renders in every state, from first paint: the heading is where a
  * screen-reader or keyboard user lands when they jump by heading, and every
@@ -78,6 +81,7 @@ export function WelcomeHeader(): JSX.Element {
   const summary = useDashboardSummary();
   const chrome = useDashboardChrome();
   const now = useMinuteClock();
+  const setupResume = useSetupResume();
 
   return (
     <header
@@ -121,6 +125,11 @@ export function WelcomeHeader(): JSX.Element {
           summary={currentSummary(summary)}
           cards={chrome?.cards ?? {}}
           now={now}
+          trailing={
+            setupResume.resumable ? (
+              <ResumeSetupLink resume={setupResume} />
+            ) : null
+          }
         />
         <Freshness
           oldestAnswerAt={chrome?.oldestAnswerAt ?? null}

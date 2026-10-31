@@ -1402,6 +1402,18 @@ function buildPluginDatabase(
       Object.values(relations()).find(
         entry => getTableName(entry.table as Table) === tableName
       )?.table,
+    // Whose cached reads a `contributed` write changed: the collection, Single
+    // or field group the compiled schema seeded that table from, read per call
+    // like the rest of the schema.
+    contentEntity: tableName => active()?.entityOwners.get(tableName),
+    // Loaded on the first expiry rather than with the context: the context is
+    // built at every boot, and most never see a contributed write.
+    expireContent: async target => {
+      const { expireContentTarget } = await import(
+        "./database/expire-content-target"
+      );
+      await expireContentTarget(target);
+    },
     tableList: () => [
       ...(active()?.tables ?? []).map(table => ({
         name: table.name,

@@ -61,7 +61,7 @@ import {
 } from "react";
 
 import { Link } from "@admin/components/ui/link";
-import { isDevelopmentRuntime } from "@admin/lib/forms/label-landing";
+import { isDevelopmentRuntime } from "@admin/lib/development-runtime";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -70,6 +70,7 @@ import {
   type CardState,
   type SkeletonHint,
 } from "./frame/card-state";
+import { COLLAPSED_PADDING_CLASS, useFrameCollapsed } from "./frame/collapse";
 import {
   CARD_FOOTER_LINK_CLASS,
   CardFooterClaimProvider,
@@ -78,6 +79,7 @@ import {
   type CardFooterClaims,
   type FooterClaimRank,
 } from "./frame/footer-slot";
+import { CardHeaderSlotProvider } from "./frame/header-slot";
 import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
@@ -108,7 +110,11 @@ import {
   useMeasuredTier,
   type RowsLayout,
 } from "./frame/tier";
-import { CardTitleCountContext, titleCountSpoken } from "./frame/title-count";
+import {
+  CardTitleCountContext,
+  titleCountSpoken,
+  type TitleCount,
+} from "./frame/title-count";
 import {
   CardHiddenReportContext,
   useReportCardHidden,
@@ -244,7 +250,8 @@ function stateName(state: CardState): string {
 function bodyClassName(
   refreshing: boolean,
   customizing: boolean,
-  answering: boolean
+  answering: boolean,
+  collapsed: boolean
 ): string {
   return cn(
     // Top-aligned, not centred: cards in a grid row stretch to the tallest of them, so centring
@@ -252,7 +259,76 @@ function bodyClassName(
     "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0",
     FRAME_BODY_GAP.className,
     refreshing && "opacity-60 transition-opacity",
-    customizing && answering && "opacity-55"
+    customizing && answering && "opacity-55",
+    // Collapsed to one line, the header is the whole card: no gap under it.
+    collapsed && "pt-0"
+  );
+}
+
+/**
+ * Whether the card is drawn collapsed by its body to one line (`frame/collapse`): the header is
+ * then the whole card, its title, its count and the body's controls (`frame/header-slot`) beside
+ * its menu, with no gap under it and no footer. Never in customise mode, where the card's stored
+ * size is what is edited.
+ */
+function useDrawnCollapsed(customizing: boolean): boolean {
+  const collapsed = useFrameCollapsed();
+  return collapsed && !customizing;
+}
+
+/** The frame's padding: its own, or the collapsed card's one line. */
+function framePaddingClass(collapsed: boolean): string {
+  return collapsed ? COLLAPSED_PADDING_CLASS : FRAME_PADDING.className;
+}
+
+/** A boolean as a data attribute: present and empty while it holds, absent otherwise. */
+function presentWhile(holds: boolean): "" | undefined {
+  return holds ? "" : undefined;
+}
+
+/**
+ * What the body is handed while it is drawn: where it reports its state, its count beside the
+ * title, its line beneath it, what it has for the footer and its controls for the header. Nothing
+ * while the frame draws a state of its own.
+ */
+function BodyProviders({
+  drawn,
+  report,
+  setTitleCount,
+  setSubtitle,
+  footerSlot,
+  headerSlot,
+  claims,
+  children,
+}: {
+  drawn: boolean;
+  report: (next: CardState | null) => void;
+  setTitleCount: (count: TitleCount | undefined) => void;
+  setSubtitle: (subtitle: string | undefined) => void;
+  footerSlot: HTMLElement | null;
+  headerSlot: HTMLElement | null;
+  claims: CardFooterClaims;
+  children: ReactNode;
+}) {
+  if (!drawn) return null;
+  return (
+    <CardStateReportProvider value={report}>
+      <CardTitleCountContext.Provider value={setTitleCount}>
+        <CardSubtitleContext.Provider value={setSubtitle}>
+          <CardHeaderSlotProvider value={headerSlot}>
+            <CardFooterSlotProvider value={footerSlot}>
+              <CardFooterClaimProvider value={claims}>
+                {/* A card drawn inside this one is not the cell's card: it reports
+                  nothing in its place. */}
+                <CardHiddenReportContext.Provider value={undefined}>
+                  {children}
+                </CardHiddenReportContext.Provider>
+              </CardFooterClaimProvider>
+            </CardFooterSlotProvider>
+          </CardHeaderSlotProvider>
+        </CardSubtitleContext.Provider>
+      </CardTitleCountContext.Provider>
+    </CardStateReportProvider>
   );
 }
 
@@ -333,11 +409,15 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [reported, setReported] = useState<CardState | null>(null);
   // The footer's element, once mounted: where a body draws what it has for the footer.
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
+  // The header's slot, once mounted: where a body draws its controls for the whole card.
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
   // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
   // stops being drawn unmounts, and its unmount withdraws the count.
-  const [titleCount, setTitleCount] = useState<number | undefined>(undefined);
+  const [titleCount, setTitleCount] = useState<TitleCount | undefined>(
+    undefined
+  );
   // A line the body shows beneath the title (`useCardSubtitle`), withdrawn the same way.
   const [bodySubtitle, setBodySubtitle] = useState<string | undefined>(
     undefined
@@ -353,6 +433,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   // The width the card is drawn at decides how its figures are written; see `frame/tier`.
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = useMeasuredTier(rootRef, props.tier);
+  const collapsed = useDrawnCollapsed(customizing);
   // The grid counts the cards on show from this report, so it reads the decision drawn here.
   useReportCardHidden(flags.hidden);
 
@@ -370,12 +451,13 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
               data-card-id={cardId}
               data-tier={tier}
               data-state={stateName(state)}
+              data-collapsed={presentWhile(collapsed)}
               // Read by the grid cell, which takes a card whose widget hides when empty out of the
               // grid while it is; never in customise mode, where the card must stay reachable.
-              data-hidden-empty={flags.hiddenEmpty ? "" : undefined}
+              data-hidden-empty={presentWhile(flags.hiddenEmpty)}
               className={cn(
                 "flex h-full flex-col",
-                FRAME_PADDING.className,
+                framePaddingClass(collapsed),
                 props.className
               )}
             >
@@ -391,6 +473,8 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
                 titleTrigger={props.titleTrigger}
+                // Offered at rest only: in customise mode the body is out of reach.
+                headerSlotRef={customizing ? undefined : setHeaderSlot}
               />
 
               <CardContent
@@ -401,7 +485,8 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 className={bodyClassName(
                   flags.refreshing,
                   customizing,
-                  showsBody(state)
+                  showsBody(state),
+                  collapsed
                 )}
               >
                 <HiddenWhileEmptyNote
@@ -411,30 +496,26 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 <StateBody state={state} title={title} props={props} />
                 {/* The body stays mounted while it reports a state, so the data it reads keeps
                   arriving; what it renders then is its report, which draws nothing. */}
-                {drawsBody ? (
-                  <CardStateReportProvider value={report}>
-                    <CardTitleCountContext.Provider value={setTitleCount}>
-                      <CardSubtitleContext.Provider value={setBodySubtitle}>
-                        <CardFooterSlotProvider value={footerSlot}>
-                          <CardFooterClaimProvider value={footer.claims}>
-                            {/* A card drawn inside this one is not the cell's card: it reports
-                              nothing in its place. */}
-                            <CardHiddenReportContext.Provider value={undefined}>
-                              {props.children}
-                            </CardHiddenReportContext.Provider>
-                          </CardFooterClaimProvider>
-                        </CardFooterSlotProvider>
-                      </CardSubtitleContext.Provider>
-                    </CardTitleCountContext.Provider>
-                  </CardStateReportProvider>
-                ) : null}
+                <BodyProviders
+                  drawn={drawsBody}
+                  report={report}
+                  setTitleCount={setTitleCount}
+                  setSubtitle={setBodySubtitle}
+                  footerSlot={footerSlot}
+                  headerSlot={headerSlot}
+                  claims={footer.claims}
+                >
+                  {props.children}
+                </BodyProviders>
               </CardContent>
 
-              <WidgetCardFooter
-                link={ownFooterLink(flags.footer, footer.held, props.link)}
-                inert={customizing}
-                slotRef={setFooterSlot}
-              />
+              {collapsed ? null : (
+                <WidgetCardFooter
+                  link={ownFooterLink(flags.footer, footer.held, props.link)}
+                  inert={customizing}
+                  slotRef={setFooterSlot}
+                />
+              )}
             </Card>
           </CardHeightContext.Provider>
         </AnswerSizeContext.Provider>
@@ -610,7 +691,8 @@ function CardTitle({
  * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
  * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
  * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`). The quick control and the menu sit at the right end, always in that order,
- * so the menu is in the same place on every card.
+ * so the menu is in the same place on every card. A body's own controls for the whole card
+ * (`frame/header-slot`) come just before them, one header line high.
  */
 function WidgetCardHeader({
   titleId,
@@ -624,12 +706,13 @@ function WidgetCardHeader({
   quickInert,
   headerAction,
   titleTrigger,
+  headerSlotRef,
 }: {
   titleId: string;
   subtitleId: string;
   title: string;
   /** A count the body shows beside the title, muted; read after it as ", N items". */
-  titleCount?: number | undefined;
+  titleCount?: TitleCount | undefined;
   subtitle?: string | undefined;
   /** What the body reports beneath the title; drawn only where the card is given no subtitle. */
   bodySubtitle?: string | undefined;
@@ -638,6 +721,8 @@ function WidgetCardHeader({
   quickInert: boolean;
   headerAction?: ReactNode;
   titleTrigger?: WidgetCardProps["titleTrigger"];
+  /** Registers the slot a body draws its card controls into; absent, no slot is drawn. */
+  headerSlotRef?: ((element: HTMLElement | null) => void) | undefined;
 }) {
   const subtitle = givenSubtitle || bodySubtitle;
   return (
@@ -645,10 +730,7 @@ function WidgetCardHeader({
       // No rule under the header: a divider is the difference between a card and a panel.
       noBorder
       data-testid="widget-card-header"
-      className={cn(
-        FRAME_HEADER.className,
-        "shrink-0 flex-row items-center gap-2 space-y-0 p-0"
-      )}
+      className={headerClassName()}
     >
       {leading && <span className="-ml-2 shrink-0">{leading}</span>}
       <div className="min-w-0 flex-1">
@@ -662,18 +744,7 @@ function WidgetCardHeader({
           <span className="truncate">
             <CardTitle title={title} trigger={titleTrigger} />
           </span>
-          {titleCount !== undefined && (
-            <>
-              <span
-                aria-hidden
-                className="shrink-0 text-xs font-normal text-muted-foreground"
-                data-testid="widget-card-title-count"
-              >
-                {titleCount}
-              </span>
-              <span className="sr-only">{titleCountSpoken(titleCount)}</span>
-            </>
-          )}
+          <TitleCountMark count={titleCount} />
         </h2>
         {subtitle && (
           <p
@@ -685,6 +756,41 @@ function WidgetCardHeader({
           </p>
         )}
       </div>
+      <HeaderControls
+        slotRef={headerSlotRef}
+        quick={quick}
+        quickInert={quickInert}
+        headerAction={headerAction}
+      />
+    </CardHeader>
+  );
+}
+
+/**
+ * The header's right end, always in this order: the body's own controls (`frame/header-slot`),
+ * the card's one quick control, then its menu, so the menu is in the same place on every card.
+ */
+function HeaderControls({
+  slotRef,
+  quick,
+  quickInert,
+  headerAction,
+}: {
+  slotRef: ((element: HTMLElement | null) => void) | undefined;
+  quick: ReactNode;
+  quickInert: boolean;
+  headerAction: ReactNode;
+}) {
+  return (
+    <>
+      {slotRef && (
+        // Hidden while empty, so a card whose body draws nothing here keeps its header as it was.
+        <span
+          ref={slotRef}
+          className="flex shrink-0 items-center gap-1 empty:hidden"
+          data-testid="widget-card-header-slot"
+        />
+      )}
       {quick && (
         <span
           className="shrink-0"
@@ -695,7 +801,35 @@ function WidgetCardHeader({
         </span>
       )}
       {headerAction && <span className="shrink-0">{headerAction}</span>}
-    </CardHeader>
+    </>
+  );
+}
+
+/**
+ * The header's classes: the same in every state, so a collapsed card's one line is its header as
+ * drawn, every control in it visible and in reach, never one hidden yet focusable.
+ */
+function headerClassName(): string {
+  return cn(
+    FRAME_HEADER.className,
+    "shrink-0 flex-row items-center gap-2 space-y-0 p-0"
+  );
+}
+
+/** The count beside the title, muted, and read after it as ", N items"; nothing without one. */
+function TitleCountMark({ count }: { count: TitleCount | undefined }) {
+  if (count === undefined) return null;
+  return (
+    <>
+      <span
+        aria-hidden
+        className="shrink-0 text-xs font-normal text-muted-foreground"
+        data-testid="widget-card-title-count"
+      >
+        {count}
+      </span>
+      <span className="sr-only">{titleCountSpoken(count)}</span>
+    </>
   );
 }
 

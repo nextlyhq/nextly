@@ -38,11 +38,16 @@ import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
+import {
+  deleteEntityRegistryRow,
+  mediaUsageTablePresent,
+} from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -567,6 +572,55 @@ export class CollectionRegistryService extends BaseRegistryService<
     );
   }
 
+  /**
+   * Refuse, before anything is removed, to delete collections something
+   * outside the set still depends on: a field that points at one, a foreign
+   * key a plugin or the app declares on one of their tables, or another
+   * owner's column, index, foreign key or check on one of them. Also refused
+   * when any of those cannot be read (`collection-dependents`).
+   *
+   * Separate from {@link deleteCollection}, which removes only the registry
+   * row: promotion hands a collection's table and slug to its code-first
+   * definition, so whatever points at it still points at a collection there.
+   * Every path that goes on to drop the table asks this first.
+   *
+   * @param slugs the collections deleted in one operation
+   * @param options where the extension schema comes from; the one this
+   *   process published unless a command compiled its own
+   */
+  async assertNothingDependsOn(
+    slugs: readonly string[],
+    options: {
+      extensionSchema?: () => Promise<ExtensionSchemaRecord | null>;
+    } = {}
+  ): Promise<void> {
+    // Loaded when a delete asks, not with the registry: every caller of the
+    // registry would otherwise load the dependents readers it never uses.
+    const [
+      { assertNothingDependsOn, databaseDependentsSources },
+      { collectionOwnTables },
+    ] = await Promise.all([
+      import("./collection-dependents"),
+      import("../../schema/services/field-column-descriptor"),
+    ]);
+    const collections = [];
+    for (const slug of slugs) {
+      const record = await this.getCollection(slug);
+      collections.push({
+        slug,
+        tables: collectionOwnTables(record.tableName, record.fields ?? []),
+      });
+    }
+    await assertNothingDependsOn(
+      collections,
+      databaseDependentsSources(
+        this.adapter,
+        options.extensionSchema ??
+          (() => Promise.resolve(getActiveExtensionSchema(this.dialect)))
+      )
+    );
+  }
+
   async deleteCollection(
     slug: string,
     options?: { force?: boolean }
@@ -603,6 +657,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Asked before the transaction opens: see `DashboardTables`.
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+        mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
       };
       const { deleted: count, expire } = await this.adapter.transaction(
         async tx => deleteEntityRegistryRow(tx, "collection", slug, tables)
@@ -629,7 +684,12 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Every cached read of it now describes rows that are gone: expired
       // here, the method every deletion path reaches, with the setting the
       // deleted row held. A delete that removed no row has thrown above.
-      await flushContentChange(expire, this.logger, "a collection was deleted");
+      // Once the delete is durable: inside an enclosing transaction (a
+      // plugin's `ctx.db.transaction` on SQLite) only when that commits, and
+      // never for one that rolls back.
+      await this.afterCommit(() =>
+        flushContentChange(expire, this.logger, "a collection was deleted")
+      );
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;

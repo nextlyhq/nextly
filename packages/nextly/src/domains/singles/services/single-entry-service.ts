@@ -236,6 +236,16 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * Rebuild the record of which media items a Single uses, for
+   * `nextly media reindex-usage`. Returns whether it had a document to read.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async rebuildMediaUsage(slug: string): Promise<boolean> {
+    return this.mutationService.rebuildMediaUsage(slug);
+  }
+
+  /**
    * {@link discardWorkingDraft}, answering how many drafts it removed, counted
    * by the delete made under the Single's lock. A separate method so the
    * published `discardWorkingDraft` keeps its contract.

@@ -31,6 +31,16 @@
       "types": "./dist/runtime.d.mts",
       "import": "./dist/runtime.mjs"
     },
+    "./cache-handler": {
+      "types": "./dist/cache-handler.d.mts",
+      "import": "./dist/cache-handler.mjs",
+      "default": "./dist/cache-handler.mjs"
+    },
+    "./cache-handlers": {
+      "types": "./dist/cache-handlers.d.mts",
+      "import": "./dist/cache-handlers.mjs",
+      "default": "./dist/cache-handlers.mjs"
+    },
     "./db-operators": {
       "types": "./dist/db-operators.d.mts",
       "import": "./dist/db-operators.mjs"
@@ -90,6 +100,10 @@
     "./field-label": {
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"
+    },
+    "./media-categories": {
+      "types": "./dist/domains/media/media-categories.d.mts",
+      "import": "./dist/domains/media/media-categories.mjs"
     },
     "./core-widget-data": {
       "types": "./dist/domains/widgets/core-widgets/data.d.mts",
@@ -353,6 +367,7 @@
     "better-sqlite3": "^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.7",
     "@clack/prompts": "^1.1.0",
     "@inquirer/prompts": "^7.3.2",
     "@nextlyhq/adapter-drizzle": "workspace:*",
@@ -368,6 +383,7 @@
     "isomorphic-dompurify": "^2",
     "jose": "^6.2.2",
     "liquidjs": "^10.30.0",
+    "parse5": "^8.0.0",
     "picocolors": "^1.1.1",
     "safe-regex2": "^5.1.1",
     "semver": "^7.6.0",

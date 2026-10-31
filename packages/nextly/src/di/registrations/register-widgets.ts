@@ -69,6 +69,7 @@ import {
 } from "../../domains/widgets/declaration/site-dashboard";
 import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
 import { clearWidgets } from "../../domains/widgets/registry";
+import { registerSetupCard } from "../../domains/widgets/setup-card";
 import {
   clearSiteDashboardRules,
   setSiteDashboardRules,
@@ -80,7 +81,6 @@ import {
   pluginDashboardSnapshots,
   pluginLegacyWidgetIds,
   pluginSuggestionFaults,
-  pluginSuggestions,
   pluginWidgetDeclarationGroups,
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -153,6 +153,8 @@ export function resetWidgetRegistries(
   // Needs attention's source, which combines the releases' and versions' reads
   // with the entry list's counts and so belongs to no one domain.
   registerAttentionWidgetSource();
+  // The setup card's reads, which reach the permission and database graph.
+  registerSetupCard();
   // System health's read, which the card and the attention digest share.
   registerSystemHealthSource();
   registerSummaryWidgetSources();
@@ -161,7 +163,7 @@ export function resetWidgetRegistries(
   // Every widget, through the one call: core's own list, the plugins' widgets
   // declared with `defineWidget()`, and the site's. Each is checked together
   // with everything that names one (the site config's dashboard, the plugins'
-  // suggestions and alternatives), and startup stops on any fault of any owner,
+  // `suggest` lists and alternatives), and startup stops on any fault of any owner,
   // all of them reported at once, before any widget is kept; today's shape is
   // passed for the id rules it still keeps (`declared-widgets.ts`). Each
   // plugin's contribution and the site config are read once, here, and every
@@ -195,10 +197,9 @@ export function resetWidgetRegistries(
   // Only once the check above found no fault, so every item kept is whole.
   registerAttentionItems(dashboards);
   // The one default dashboard, from the copies just checked: the site's
-  // `defaultLayout` or core's, and the plugins' suggestions after it.
-  setDefaultLayoutPlan(
-    siteDefaultLayoutPlan(site, pluginSuggestions(dashboards))
-  );
+  // `defaultLayout` or core's. A plugin's `suggest` is checked above and places
+  // nothing; the add panel offers its widgets.
+  setDefaultLayoutPlan(siteDefaultLayoutPlan(site));
   // What the site keeps off the dashboard, replaces and overrides, from the
   // same checked copies: read wherever a widget is offered, drawn or described.
   setSiteDashboardRules(

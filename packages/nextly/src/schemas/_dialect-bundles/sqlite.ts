@@ -31,6 +31,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/sqlite";
 export { nextlyPluginSettings } from "../plugin-settings/sqlite";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/sqlite";
 export { nextlyLimitStore } from "../limit-store/sqlite";
+export { nextlyCacheTagExpiries } from "../cache-tag-expiries/sqlite";
 export { nextlySpentChallenges } from "../spent-challenges/sqlite";
 export { nextlySchemaOwners } from "../schema-owners/sqlite";
 export { nextlyWidgetLayout } from "../widget-layout/sqlite";
@@ -115,6 +116,9 @@ export { nextlyNoticesSqlite as nextlyNotices } from "../notices/sqlite";
 // creates.
 export { nextlyDashboardPinsSqlite as nextlyDashboardPins } from "../dashboard-pins/sqlite";
 export { nextlyDashboardPreferencesSqlite as nextlyDashboardPreferences } from "../dashboard-preferences/sqlite";
+// Which media items each document uses; in the bundle for the reason the
+// releases note above gives — this map is what the push creates.
+export { nextlyMediaUsageSqlite as nextlyMediaUsage } from "../media-usage/sqlite";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

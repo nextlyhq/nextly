@@ -4,10 +4,11 @@
  *
  * Every fault is gathered and refused together with the widget declarations'
  * own, each naming "the site config" and the entry, so one restart shows the
- * author everything to fix. Every key it accepts is applied: `widgets` are
- * registered with the plugins', `defaultLayout` and `suggestions` through
+ * author everything to fix. Every key it accepts but one is applied: `widgets`
+ * are registered with the plugins', `defaultLayout` through
  * `siteDefaultLayoutPlan`, and `hide`, `replace` and `overrides` through the
- * site's rules.
+ * site's rules. `suggestions` is still checked, so a config that sets it keeps
+ * starting, and changes nothing: no widget follows the default to turn off.
  *
  * @module domains/widgets/declaration/site-dashboard
  */
@@ -836,15 +837,12 @@ export function siteDashboardSnapshot(dashboard: unknown): unknown {
 
 /**
  * The default dashboard the site config asks for, from the copy startup checked:
- * its `defaultLayout`, or core's own where it gives none, and whether the
- * plugins' suggestions (`suggested`, in plugin order) are placed after it.
- * Read only once the config has passed every check, so each entry is a widget
- * id or a card of the shape the check admits.
+ * its `defaultLayout`, or core's own where it gives none. Nothing is placed
+ * after it: the add panel offers every other widget. Read only once the config
+ * has passed every check, so each entry is a widget id or a card of the shape
+ * the check admits.
  */
-export function siteDefaultLayoutPlan(
-  dashboard: unknown,
-  suggested: readonly string[]
-): DefaultLayoutPlan {
+export function siteDefaultLayoutPlan(dashboard: unknown): DefaultLayoutPlan {
   const site = isRecord(dashboard) ? dashboard : {};
   const given = site.defaultLayout as
     | readonly (string | DefaultLayoutCard)[]
@@ -873,8 +871,6 @@ export function siteDefaultLayoutPlan(
             ...(card.optional === undefined ? {} : { optional: card.optional }),
           };
     }),
-    suggestions: site.suggestions !== false,
-    suggested,
   };
 }
 

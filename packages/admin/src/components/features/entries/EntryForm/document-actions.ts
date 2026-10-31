@@ -37,6 +37,24 @@
 export type ActionPlacement = "primary" | "toolbar" | "menu";
 
 /**
+ * Where the editor's own header draws an action: the public placements, and
+ * `publish-menu`.
+ *
+ * `publish-menu` is the menu on the primary action's own arrow: the other
+ * ways of putting this document live, such as at a time or with a release.
+ * They sit beside the act they vary rather than in More, where nobody
+ * deciding WHEN to publish would look. With no primary action drawn, they
+ * join More's document rows instead, so a person who may not publish still
+ * finds them and reads why they are held.
+ *
+ * Kept off the published {@link ActionPlacement}, which a plugin's document
+ * view reads through `useDocumentActions()` and may handle exhaustively. That
+ * hook hands such an action over as a `menu` one: the place the editor itself
+ * draws it whenever it has no arrow to put it on.
+ */
+export type EditorActionPlacement = ActionPlacement | "publish-menu";
+
+/**
  * Which part of the menu an action belongs to.
  *
  * `danger` is separated because the menu currently mixes Duplicate with Delete
@@ -70,6 +88,16 @@ export interface DocumentAction {
    * surface this — a tooltip on a disabled button, helper text on a menu item.
    */
   disabledReason?: string;
+}
+
+/**
+ * An action as the editor's own header holds it: a {@link DocumentAction}
+ * that may also sit on the primary action's arrow. Internal to the admin;
+ * `useDocumentActions()` turns it into the published shape.
+ */
+export interface EditorDocumentAction
+  extends Omit<DocumentAction, "placement"> {
+  placement: EditorActionPlacement;
 }
 
 /**
@@ -221,7 +249,9 @@ function readerPrimary(
  *
  * FIRST MATCH WINS, so the rows read as "the most specific situation first".
  */
-function primaryAction(state: DocumentActionState): DocumentAction | undefined {
+function primaryAction(
+  state: DocumentActionState
+): EditorDocumentAction | undefined {
   // Nothing leads where every write is refused, not even a publish a
   // reader's own permission would offer.
   if (state.writesRefused === true) return undefined;
@@ -247,9 +277,9 @@ function primaryAction(state: DocumentActionState): DocumentAction | undefined {
 }
 
 function withReason(
-  action: DocumentAction,
+  action: EditorDocumentAction,
   reason: string | undefined
-): DocumentAction {
+): EditorDocumentAction {
   return reason === undefined ? action : { ...action, disabledReason: reason };
 }
 
@@ -273,7 +303,7 @@ interface ActionRule {
   applies: (state: DocumentActionState) => boolean;
   /** What it says, which for several actions depends on the state. */
   label: (state: DocumentActionState) => string;
-  placement: Exclude<ActionPlacement, "primary">;
+  placement: Exclude<EditorActionPlacement, "primary">;
   group?: ActionGroup;
   destructive?: boolean;
   /**
@@ -451,7 +481,9 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
  * were one slip apart, styled almost alike. It is rare, it changes what the
  * public sees, and it belongs with the other destructive verbs.
  */
-export function documentActions(state: DocumentActionState): DocumentAction[] {
+export function documentActions(
+  state: DocumentActionState
+): EditorDocumentAction[] {
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   const built = BUILT_IN_ACTIONS.filter(
     rule =>
@@ -499,9 +531,9 @@ export function documentActions(state: DocumentActionState): DocumentAction[] {
  * cannot push its own action above Publish by contributing early.
  */
 export function withContributedActions(
-  built: readonly DocumentAction[],
-  contributed: readonly DocumentAction[]
-): DocumentAction[] {
+  built: readonly EditorDocumentAction[],
+  contributed: readonly EditorDocumentAction[]
+): EditorDocumentAction[] {
   /*
    * `taken` GROWS as contributions are admitted, so the first of two
    * contributions sharing an id wins and the second is dropped.
@@ -514,7 +546,7 @@ export function withContributedActions(
    * be handed duplicate keys for them.
    */
   const taken = new Set(built.map(action => action.id));
-  const accepted: DocumentAction[] = [...built];
+  const accepted: EditorDocumentAction[] = [...built];
   for (const action of contributed) {
     if (taken.has(action.id)) continue;
     taken.add(action.id);
@@ -532,9 +564,9 @@ export function withContributedActions(
  * surfaces being edited.
  */
 export function actionsAt(
-  actions: readonly DocumentAction[],
-  placement: ActionPlacement
-): DocumentAction[] {
+  actions: readonly EditorDocumentAction[],
+  placement: EditorActionPlacement
+): EditorDocumentAction[] {
   return actions.filter(action => action.placement === placement);
 }
 
@@ -545,9 +577,9 @@ export function actionsAt(
  * draws a separator between them and a caller reading a flag would have to
  * rediscover where the boundary falls.
  */
-export function menuGroups(actions: readonly DocumentAction[]): {
-  document: DocumentAction[];
-  danger: DocumentAction[];
+export function menuGroups(actions: readonly EditorDocumentAction[]): {
+  document: EditorDocumentAction[];
+  danger: EditorDocumentAction[];
 } {
   const menu = actionsAt(actions, "menu");
   return {

@@ -7,8 +7,8 @@
  * image it shows the whole image with the shared focus point control. Here
  * Done only places the point: "Save changes" sends it with the text in one
  * `onSave`, as this exported dialog always has, so a caller whose handler
- * closes or submits runs once. "Show image sizes" gates only the generated
- * image-size list. Folder is intentionally NOT editable here -- moving files
+ * closes or submits runs once. Image sizes are no longer made, so none are
+ * listed. Folder is intentionally NOT editable here -- moving files
  * between folders is its own dedicated dialog.
  */
 
@@ -34,10 +34,7 @@ import { z } from "zod";
 import {
   Loader2,
   AlertTriangle,
-  ChevronDown,
-  ChevronRight,
   Copy,
-  Check,
   Trash2,
   Download,
 } from "@admin/components/icons";
@@ -45,12 +42,7 @@ import {
   MEDIA_ALT_TEXT_MAX_LENGTH,
   MEDIA_CAPTION_MAX_LENGTH,
 } from "@admin/constants/media";
-import {
-  copyableMediaUrl,
-  formatFileSize,
-  mediaImageSrc,
-  parseMediaSizes,
-} from "@admin/lib/media-utils";
+import { formatFileSize, mediaImageSrc } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
 
@@ -101,61 +93,6 @@ export interface MediaEditDialogProps {
 }
 
 // ============================================================
-// Image Sizes Display Component
-// ============================================================
-
-function ImageSizesDisplay({
-  sizes,
-}: {
-  sizes: Record<
-    string,
-    { url: string; width: number; height: number; filesize: number }
-  >;
-}) {
-  const [copiedUrl, setCopiedUrl] = React.useState<string | null>(null);
-
-  const handleCopyUrl = React.useCallback((url: string, name: string) => {
-    void navigator.clipboard.writeText(copyableMediaUrl(url));
-    setCopiedUrl(name);
-    setTimeout(() => setCopiedUrl(null), 2000);
-  }, []);
-
-  const entries = Object.entries(sizes);
-  if (entries.length === 0) return null;
-
-  return (
-    <div className="space-y-2">
-      <Label className="text-sm font-medium text-foreground">Image sizes</Label>
-      <div className="rounded-md border border-input divide-y divide-border">
-        {entries.map(([name, variant]) => (
-          <div key={name} className="flex items-center gap-3 px-3 py-2 text-sm">
-            <span className="font-medium min-w-[80px]">{name}</span>
-            <span className="text-muted-foreground">
-              {variant.width} x {variant.height}
-            </span>
-            <span className="text-muted-foreground ml-auto">
-              {formatFileSize(variant.filesize)}
-            </span>
-            <button
-              type="button"
-              onClick={() => handleCopyUrl(variant.url, name)}
-              className="p-1 rounded-md hover:bg-accent transition-colors"
-              title={`Copy ${name} URL`}
-            >
-              {copiedUrl === name ? (
-                <Check className="h-3.5 w-3.5 text-success" />
-              ) : (
-                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-              )}
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
 // Main Dialog Component
 // ============================================================
 
@@ -171,7 +108,6 @@ export function MediaEditDialog({
 }: MediaEditDialogProps): React.JSX.Element | null {
   const [isSaving, setIsSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   // The point as placed by Done, sent by "Save changes"; null until placed.
   const [focalDraft, setFocalDraft] =
     React.useState<MediaFocalPointValue | null>(null);
@@ -195,7 +131,6 @@ export function MediaEditDialog({
         altText: media.altText || "",
         caption: media.caption || "",
       });
-      setAdvancedOpen(false);
       setError(null);
       setFocalDraft(null);
     }
@@ -210,7 +145,7 @@ export function MediaEditDialog({
       setError(null);
 
       // The point goes only when Done moved it from the stored one, so a
-      // save that didn't touch it doesn't cut the image's sizes again.
+      // save that didn't touch it leaves the stored point as it was.
       const pointMoved =
         focalDraft !== null &&
         (focalDraft.focalX !== (media.focalX ?? 50) ||
@@ -247,12 +182,6 @@ export function MediaEditDialog({
     [handleSubmit]
   );
 
-  // Sizes may arrive as a JSON string from some adapters; one parser for both.
-  const parsedSizes = React.useMemo(
-    () => parseMediaSizes(media?.sizes),
-    [media?.sizes]
-  );
-
   if (!media) return null;
 
   return (
@@ -277,7 +206,12 @@ export function MediaEditDialog({
 
         <form onSubmit={handleFormSubmit}>
           <div className="px-6 pb-6">
-            <div className={cn("flex gap-6", !isImage && "flex-col")}>
+            {/* An image stacks above the form on a narrow screen, where a row
+                would squeeze the form beside a full-width image, and sits
+                beside it from `sm` up. */}
+            <div
+              className={cn("flex flex-col gap-6", isImage && "sm:flex-row")}
+            >
               {/* Left Panel - the whole image with its focus point. The
                   original, not the thumbnail, which is a square crop. */}
               {isImage && (
@@ -295,7 +229,7 @@ export function MediaEditDialog({
                 </div>
               )}
 
-              {/* Right Panel - Metadata Form + (advanced) Sizes */}
+              {/* Right Panel - Metadata Form */}
               <div className="flex-1 space-y-4 min-w-0">
                 {/* Filename */}
                 <div className="pb-2 border-b border-border">
@@ -358,31 +292,6 @@ export function MediaEditDialog({
                     </div>
                   )}
                 </div>
-
-                {/* Advanced toggle (images only) -- gates only the image-sizes
-                    list now; the focal-point picker is always visible above. */}
-                {isImage &&
-                  parsedSizes &&
-                  Object.keys(parsedSizes).length > 0 && (
-                    <div className="pt-2 space-y-3">
-                      <button
-                        type="button"
-                        onClick={() => setAdvancedOpen(prev => !prev)}
-                        className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                        aria-expanded={advancedOpen}
-                      >
-                        {advancedOpen ? (
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        ) : (
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        )}
-                        {advancedOpen ? "Hide image sizes" : "Show image sizes"}
-                      </button>
-                      {advancedOpen && (
-                        <ImageSizesDisplay sizes={parsedSizes} />
-                      )}
-                    </div>
-                  )}
               </div>
             </div>
 

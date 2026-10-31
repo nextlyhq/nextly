@@ -16,7 +16,7 @@ import type { DefaultLayoutCard } from "../declaration/dashboard";
 
 /** Each core widget's id, by name. */
 export const CORE_WIDGET_ID = {
-  getStarted: "core/get-started",
+  setup: "core/setup",
   contentTable: "core/content-table",
   team: "core/team",
   needsAttention: "core/needs-attention",
@@ -40,7 +40,7 @@ export type CoreWidgetId = (typeof CORE_WIDGET_ID)[keyof typeof CORE_WIDGET_ID];
  * sorts. Which of them the default dashboard holds is `CORE_DEFAULT_LAYOUT`.
  */
 export const CORE_WIDGET_IDS = [
-  CORE_WIDGET_ID.getStarted,
+  CORE_WIDGET_ID.setup,
   CORE_WIDGET_ID.contentTable,
   CORE_WIDGET_ID.team,
   CORE_WIDGET_ID.needsAttention,
@@ -56,6 +56,18 @@ export const CORE_WIDGET_IDS = [
 ] as const satisfies readonly CoreWidgetId[];
 
 /**
+ * The ids an earlier core gave a card that one of core's widgets has since taken over, each with
+ * the widget that took it over. A saved arrangement's card under a former id is read as the
+ * current widget's, in its place (`readStoredLayout`), so a reader who arranged their dashboard
+ * before the rename keeps the card, and their next save stores it under the current id.
+ */
+export const FORMER_CORE_WIDGET_IDS: ReadonlyMap<string, CoreWidgetId> =
+  new Map<string, CoreWidgetId>([
+    // "Get started" became the setup card's row of steps.
+    ["core/get-started", CORE_WIDGET_ID.setup],
+  ]);
+
+/**
  * Core's widgets only a super-admin is told exist: neither offered to anyone
  * else, nor placed, nor handed as a card (`widgetAudience`). A super-admin is
  * not a permission, so no `requiredPermission` gate can say it, and an
@@ -64,6 +76,7 @@ export const CORE_WIDGET_IDS = [
  * audience asks it without loading any card.
  */
 export const SUPER_ADMIN_WIDGET_IDS: ReadonlySet<string> = new Set<string>([
+  CORE_WIDGET_ID.setup,
   CORE_WIDGET_ID.systemHealth,
 ]);
 
@@ -78,25 +91,46 @@ const everyIdOrdered: Exclude<
 void everyIdOrdered;
 
 /**
+ * The form-builder plugin's New form submissions card: the one widget not
+ * core's own that core's default names. Spelled here because core cannot
+ * import the plugin; its entry is `optional`, so a site without the plugin
+ * leaves the card out and starts with no fault.
+ */
+const FORM_SUBMISSIONS_WIDGET_ID = "form-builder/new-submissions";
+
+/**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
- * there is one path to the default whoever wrote it: the onboarding card, then
- * Needs attention, Continue where you left off, Team activity, Content and
- * Upcoming releases, each at its widget's starting size. Creating an entry is
- * the header's New button, not a card, so Needs attention takes the full row
- * the Create card shared; the two activity lists share a row and a height. A
- * site's own `defaultLayout` takes its place whole.
+ * there is one path to the default whoever wrote it. In grid order, twelve
+ * columns to a row:
  *
- * Team is not on it: the card is for the people who manage the team, who add
- * it from the add panel.
+ * 1. Set up your project, across the row;
+ * 2. Needs attention (8) beside Upcoming releases (4): the near future in one
+ *    band. When only one of the two is on show, the admin draws it across the
+ *    whole row, never storing that width;
+ * 3. Continue where you left off (6) beside Content (6);
+ * 4. New form submissions (6) beside Team activity (6).
+ *
+ * Each entry states its size, so the default does not move when a widget's
+ * own starting size (what the add panel places) changes. The cards that share
+ * a row share a height, so the default tiles: two rows for the setup card, its
+ * one row of steps, and four for every other row, the least Upcoming releases
+ * and Team activity allow. Every size lies
+ * within its widget's bounds, so none is clamped where it is placed.
+ *
+ * Team is not on it: it is for the people who manage the team, who add it
+ * from the add panel. Nor is a Create card: creating an entry is the
+ * header's New button. A site's own `defaultLayout` takes this one's place
+ * whole.
  *
  * Here, beside the ids and importing no widget, so the site dashboard's check
  * and the default's builder read it without loading every core card.
  */
 export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
-  { widget: CORE_WIDGET_ID.getStarted },
-  { widget: CORE_WIDGET_ID.needsAttention, w: 12 },
-  { widget: CORE_WIDGET_ID.continue },
-  { widget: CORE_WIDGET_ID.teamActivity },
-  { widget: CORE_WIDGET_ID.contentTable },
-  { widget: CORE_WIDGET_ID.upcomingReleases },
+  { widget: CORE_WIDGET_ID.setup, w: 12, h: 2 },
+  { widget: CORE_WIDGET_ID.needsAttention, w: 8, h: 4 },
+  { widget: CORE_WIDGET_ID.upcomingReleases, w: 4, h: 4 },
+  { widget: CORE_WIDGET_ID.continue, w: 6, h: 4 },
+  { widget: CORE_WIDGET_ID.contentTable, w: 6, h: 4 },
+  { widget: FORM_SUBMISSIONS_WIDGET_ID, w: 6, h: 4, optional: true },
+  { widget: CORE_WIDGET_ID.teamActivity, w: 6, h: 4 },
 ];

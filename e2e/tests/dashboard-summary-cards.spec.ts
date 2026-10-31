@@ -132,13 +132,16 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     if ((await region.getAttribute("data-hidden-empty")) === "") {
       await expect(releases).toBeHidden();
     } else {
-      await expect(
-        releases
-          .getByRole("link", { name: /^View all/ })
-          .or(
-            releases.getByTestId("release-attention").getByRole("link").first()
-          )
-      ).toHaveAttribute("href", /\/admin\/releases/);
+      // Every way on from the card leads to Releases: "View all" under its rows, and each part
+      // of the attention line above them, which is drawn beside the rows whenever a release is
+      // stopped or overdue, as one an earlier spec left may be.
+      const waysOn = releases
+        .getByRole("link", { name: /^View all/ })
+        .or(releases.getByTestId("release-attention").getByRole("link"));
+      await expect(waysOn.first()).toBeVisible();
+      for (const way of await waysOn.all()) {
+        await expect(way).toHaveAttribute("href", /\/admin\/releases/);
+      }
     }
 
     // A card refreshing its data dims its body and marks it aria-busy until the

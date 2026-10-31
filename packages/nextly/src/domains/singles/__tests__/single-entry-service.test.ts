@@ -1238,11 +1238,13 @@ describe("SingleEntryService", () => {
       expect(rowInserts).toHaveLength(1);
       // No delete of the DOCUMENT. A successful save does delete the saving
       // author's recovery point, which is the supersede that keeps a saved
-      // document from offering its own saved work back, so "no deletes at all"
-      // is now too broad a statement of what this test is about.
+      // document from offering its own saved work back, and rewrites the
+      // record of the media the Single uses, so "no deletes at all" is now
+      // too broad a statement of what this test is about.
       expect(
         ctx.adapter.delete.mock.calls.filter(
-          ([table]: [string]) => table !== "nextly_versions"
+          ([table]: [string]) =>
+            table !== "nextly_versions" && table !== "nextly_media_usage"
         )
       ).toHaveLength(0);
     });

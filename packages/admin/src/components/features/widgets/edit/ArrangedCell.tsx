@@ -31,6 +31,11 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import {
+  CardCollapseContext,
+  collapsedRows,
+  type CardCollapse,
+} from "../frame/collapse";
 import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
@@ -53,6 +58,7 @@ import {
   CustomizingFence,
 } from "./CustomizingFence";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import { LazyWidgetSettingsSheet } from "./LazyWidgetSettingsSheet";
 import { SettingsPreview } from "./SettingsPreview";
 import {
   useCardQuickSetting,
@@ -60,10 +66,16 @@ import {
   type CellSettingsWrite,
 } from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
-import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
+import type { WidgetSettingsSheetProps } from "./WidgetSettingsSheet";
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
+  /**
+   * The columns the cell spans in place of its card's own width, where the grid draws it wider
+   * (the lone card of the pair). The cell's span ALONE: the card, its size controls, every write
+   * and Undo keep the stored size, so a change to its height saves its own width.
+   */
+  drawnW?: number;
   isEditing: boolean;
   /** The card just placed: moved, resized, added or put back. */
   highlighted?: boolean;
@@ -98,7 +110,7 @@ export interface ArrangedCellProps {
     slot: WidgetSlot | undefined;
     /** How a `stats` card reaches each cell's answer; absent otherwise. */
     slotFor?: CellSlotLookup;
-    /** `null` when this card took no part in the batch. */
+    /** When this card's own answer arrived; `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
     /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
@@ -390,7 +402,7 @@ function restingMenuFor(
  * closes when the save lands and says why in place when it does not.
  */
 function doneFor(props: ArrangedCellProps): {
-  done: ComponentProps<typeof WidgetSettingsSheet>["onDone"];
+  done: WidgetSettingsSheetProps["onDone"];
   blocked: string | undefined;
 } {
   const write = props.settingsWrite;
@@ -414,8 +426,11 @@ function doneFor(props: ArrangedCellProps): {
   };
 }
 
-/** The cell's classes: its columns, its leaving the grid while hidden, and its spacing. */
-function cellClassName(size: GridSize, isEditing: boolean): string {
+/**
+ * The cell's classes: its columns (`span`, the card's drawn width or the width the grid draws it
+ * at in its place), its leaving the grid while hidden, and its spacing.
+ */
+function cellClassName(span: number, isEditing: boolean): string {
   return cn(
     // `relative` so the drag handle, which is absolutely positioned, lands
     // on this cell rather than on the grid. `min-h-0` and `overflow-hidden`
@@ -425,7 +440,7 @@ function cellClassName(size: GridSize, isEditing: boolean): string {
     // 🔴 The PLACEMENT's size, drawn at the nearest size its widget's bounds
     // allow. The stored size IS the reader's arrangement, so it is never
     // replaced by the declaration's default here.
-    cardSpanClass(size.w),
+    cardSpanClass(span),
     // A card whose widget hides when empty leaves the grid while its answer is: the frame marks
     // it (`data-hidden-empty`) only outside customise mode, so the cell needs no state of its own.
     "has-[[data-hidden-empty]]:hidden",
@@ -560,7 +575,7 @@ function CellSettings({
   focusFirstField: boolean;
 }) {
   return (
-    <WidgetSettingsSheet
+    <LazyWidgetSettingsSheet
       open={open}
       onOpenChange={onOpenChange}
       focusFirstField={focusFirstField}
@@ -598,6 +613,10 @@ function CellSettings({
  */
 function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Mounted from its first opening on, and kept: its code loads only once a reader opens it
+  // (`LazyWidgetSettingsSheet`), and once drawn it stays, so it can close as it opened.
+  const [mounted, setMounted] = useState(false);
+  if (settingsOpen && !mounted) setMounted(true);
   const [focusFirstField, setFocusFirstField] = useState(false);
   const changeSettingsOpen = (open: boolean) => {
     setSettingsOpen(open);
@@ -616,11 +635,40 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
     : undefined;
   return {
     settingsOpen,
+    // Drawn for a widget that offers settings, from the sheet's first opening.
+    drawn: hasSettings && mounted,
     setSettingsOpen,
     focusFirstField,
     changeSettingsOpen,
     openFromEmpty,
   };
+}
+
+/**
+ * The rows a card is drawn at, from what its body asks of the frame: the body height its content
+ * has asked for while its reader shows more of it (`frame/grow`), and whether the body has
+ * collapsed it to one line (`frame/collapse`), which is one row. Its stored rows in customise
+ * mode, where the arrangement is what is being edited, and never collapsed there.
+ */
+function useBodyRows(
+  storedRows: number,
+  isEditing: boolean
+): {
+  rows: number;
+  collapse: CardCollapse;
+  setContentHeight: (height: number | undefined) => void;
+} {
+  const [contentHeight, setContentHeight] = useState<number | undefined>();
+  const [bodyCollapsed, setBodyCollapsed] = useState(false);
+  const collapsed = bodyCollapsed && !isEditing;
+  const collapse = useMemo<CardCollapse>(
+    () => ({ collapsed, setCollapsed: setBodyCollapsed }),
+    [collapsed]
+  );
+  const rows = isEditing
+    ? storedRows
+    : collapsedRows(grownRows(storedRows, contentHeight), collapsed);
+  return { rows, collapse, setContentHeight };
 }
 
 export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
@@ -647,11 +695,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => drawnSize(row.size, row.widget.size),
     [row.size, row.widget.size]
   );
-  // The body height the card's content has asked for while its reader shows more of it
-  // (`frame/grow`), and the rows that holds. Its stored rows in customise mode, where the
-  // arrangement is what is being edited.
-  const [contentHeight, setContentHeight] = useState<number | undefined>();
-  const rows = isEditing ? size.h : grownRows(size.h, contentHeight);
+  const { rows, collapse, setContentHeight } = useBodyRows(size.h, isEditing);
   // The card's report, bound to this placement. Only the card drawn in the cell is told it: the
   // settings sheet's preview of the same placement is drawn outside it and reports nothing.
   const { reportHidden } = props;
@@ -701,15 +745,16 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
-      className={cellClassName(size, isEditing)}
+      className={cellClassName(props.drawnW ?? size.w, isEditing)}
       style={cardRowStyle(rows)}
     >
       <CellEditActions actions={editActions} />
-      {/* Mounted whenever the widget offers settings, not only while
-          customising. A closed `Sheet` renders nothing, so this costs a card
-          nothing — and it is what lets the panel outlive customise mode rather
-          than being torn out from under a reader still filling it in. */}
-      {hasSettings ? (
+      {/* Mounted from the sheet's first opening, not only while
+          customising, and kept: a closed `Sheet` renders nothing, so this
+          costs a card nothing, and it is what lets the panel outlive customise
+          mode rather than being torn out from under a reader still filling it
+          in. */}
+      {sheet.drawn ? (
         <CellSettings
           {...{ row, widget, data, done }}
           open={sheet.settingsOpen}
@@ -717,17 +762,19 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           focusFirstField={sheet.focusFirstField}
         />
       ) : null}
-      <CardGrowContext.Provider value={setContentHeight}>
-        <CardHiddenReportContext.Provider value={reportCardHidden}>
-          <CardBody
-            {...{ widget, placement, headerAction, data, isEditing }}
-            subtitle={heading.subtitle}
-            quick={quick.inline}
-            titleTrigger={titleTrigger}
-            onOpenSettings={sheet.openFromEmpty}
-          />
-        </CardHiddenReportContext.Provider>
-      </CardGrowContext.Provider>
+      <CardCollapseContext.Provider value={collapse}>
+        <CardGrowContext.Provider value={setContentHeight}>
+          <CardHiddenReportContext.Provider value={reportCardHidden}>
+            <CardBody
+              {...{ widget, placement, headerAction, data, isEditing }}
+              subtitle={heading.subtitle}
+              quick={quick.inline}
+              titleTrigger={titleTrigger}
+              onOpenSettings={sheet.openFromEmpty}
+            />
+          </CardHiddenReportContext.Provider>
+        </CardGrowContext.Provider>
+      </CardCollapseContext.Provider>
     </DraggableWidgetCell>
   );
 }

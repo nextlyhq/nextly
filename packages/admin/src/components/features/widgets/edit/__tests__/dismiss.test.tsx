@@ -15,8 +15,6 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { GET_STARTED_WIDGET_ID } from "nextly/config";
-
 import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
 import {
   DASHBOARD_HEADING_ID,
@@ -34,6 +32,8 @@ import {
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
+
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -189,7 +189,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
-  api.get.mockImplementation(() => Promise.resolve(layoutResponse));
+  api.get.mockImplementation((path: string) =>
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    Promise.resolve(
+      isGalleryPath(path) && layoutResponse !== undefined
+        ? galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+        : layoutResponse
+    )
+  );
   /*
    * 🔴 The stand-in APPLIES the write, so the next read answers with it. A
    * `put` that merely resolves leaves every later GET returning the original
@@ -411,29 +418,6 @@ describe("Remove for a reader who has arranged their dashboard", () => {
       arranged: true,
     });
     expect(sent.placements.some(placement => placement.removed)).toBe(false);
-  });
-
-  it("hides the Get started card instead, which the server would carry back into a list without it", async () => {
-    mockBranding = branding({
-      "core/onboarding": { id: GET_STARTED_WIDGET_ID, title: "Get started" },
-    });
-    const placements = [
-      { ...ARRANGED[0], widgetId: GET_STARTED_WIDGET_ID },
-      ARRANGED[1],
-    ];
-    layoutResponse = layout({ arranged: true, placements });
-    const user = userEvent.setup();
-    renderGrid();
-    await removeFromMenu(user, "Get started");
-
-    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
-    // Held in the list, marked removed: the reader's choice the server keeps.
-    expect(api.put.mock.calls[0][1]).toEqual({
-      placements: [{ ...placements[0], removed: true }, placements[1]],
-      version: 7,
-      scope: "tok",
-      arranged: true,
-    });
   });
 
   it("Undo puts the card back where it was, with its settings", async () => {

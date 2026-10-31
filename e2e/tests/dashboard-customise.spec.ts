@@ -303,22 +303,18 @@ async function openAddPanel(page: Page) {
   await bar(page).getByRole("button", { name: "Add widget" }).click();
   const panel = page.getByRole("dialog", { name: "Add widget" });
   await expect(
-    panel.getByRole("searchbox", { name: "Search widgets" })
+    panel.getByRole("searchbox", { name: "Search widgets or collections" })
   ).toBeFocused();
   return panel;
 }
 
 /**
- * The next control in the panel that puts a card on the dashboard: a new card (Add, Add
- * another) where one is offered, else a removed card back. Whichever widgets the site offers,
- * so the visit does not depend on them.
+ * The next control in the panel that puts a card on the dashboard at once: a removed card back,
+ * which the gallery lists first. Whichever widgets the site offers, so the visit does not depend
+ * on them; adding new cards, some through their add step, is `dashboard-gallery.spec.ts`'s.
  */
 function nextAdd(panel: Locator): Locator {
-  const fresh = panel.locator(
-    '[data-testid^="add-panel-add-"]:not([data-testid^="add-panel-add-back-"]):enabled'
-  );
-  const back = panel.locator('[data-testid^="add-panel-add-back-"]');
-  return fresh.or(back).first();
+  return panel.locator('[data-testid^="add-panel-add-back-"]').first();
 }
 
 test("the add panel adds three cards in one visit, each said and ringed, and closing lands on the last", async ({
@@ -344,7 +340,7 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
     await nextAdd(panel).click();
     await expect(page.locator(CELLS)).toHaveCount(before + added);
     await expect(panel.getByTestId("add-panel-live")).toHaveText(
-      new RegExp(`^Added (back )?.+ at position \\d+ of ${before + added}\\.$`)
+      /^Added back .+\.$/
     );
     // Still open, and focus still inside it.
     await expect(panel).toBeVisible();
@@ -392,11 +388,13 @@ for (const theme of ["light", "dark"] as Theme[]) {
 
       await expectNoAxeViolations(page);
 
-      // WCAG 2.5.8's minimum, measured on every control the panel draws.
+      // WCAG 2.5.8's minimum, measured on every control the panel draws that a reader can use:
+      // a tile's preview is an inert picture of its card, whose controls nobody can reach.
       const small = await panel
         .locator("button:visible, input:visible")
         .evaluateAll(controls =>
           controls.flatMap(control => {
+            if (control.closest("[inert]")) return [];
             const box = control.getBoundingClientRect();
             return box.width < 24 || box.height < 24
               ? [

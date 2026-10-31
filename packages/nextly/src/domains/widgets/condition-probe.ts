@@ -10,7 +10,7 @@
  * every collection.
  *
  * Sharing them by calling one helper from the other is what produced the
- * duplication: `onboardingSteps` resolved the slugs, then handed the caller to
+ * duplication: the setup steps once resolved the slugs, then handed the caller to
  * a function that resolved them again. A probe passed down instead makes the
  * sharing structural — an evaluator cannot accidentally re-resolve, because it
  * has no caller to re-resolve from.
@@ -31,15 +31,20 @@
 import { callerHoldsAny } from "../../auth/access/route-gate-adapters";
 import { scopeHoldsSuperAdmin } from "../../auth/authenticated-scope";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../../auth/collection-definition-policy";
+import { authorizationGroups } from "../../auth/entity-read-access";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
+import {
+  readSampleContent,
+  type SampleContentState,
+} from "../../database/seeders/sample-content";
+import { getService } from "../../di";
+import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
   callerMayReadAnyRelease,
   callerMayReadReleases,
 } from "../releases/releases-widget-source";
 
-import { getStartedDetail, type GetStartedDetail } from "./get-started";
-import type { GetStartedAnswer } from "./get-started-steps";
 import {
   createDisabledSlugs,
   createVerdict,
@@ -48,6 +53,8 @@ import {
   readerMayCreateEntry,
   type ContentAnswer,
 } from "./reader-content";
+import { setupSteps } from "./setup";
+import type { SetupAnswer } from "./setup-steps";
 
 /** A registry read for this reader: the slugs, and whether the registry could be read at all. */
 export interface RegistryAnswer {
@@ -114,16 +121,34 @@ export interface ConditionProbe {
    */
   releasesExist(): Promise<boolean>;
   /**
-   * The Get started steps offered to this reader, before their skips, resolved
-   * at most once: the one answer the setup condition and the step list both
-   * read, so the two cannot disagree.
+   * The first collection, in the registry's order, this reader may read and
+   * create an entry in from the admin, resolved at most once: the one setup's
+   * "Add your first entry" opens a new entry of. `undefined` when there is
+   * none. Rejects when a decision that could have changed that answer threw.
+   * The same create decision as {@link mayCreateOnDashboard}, over the same
+   * collections, so the two cannot disagree.
    */
-  getStarted(): Promise<GetStartedAnswer>;
+  firstCreatableCollection(): Promise<string | undefined>;
   /**
-   * The same answer with the detail the deprecated onboarding read is
-   * projected from, resolved at most once: `getStarted` is derived from it.
+   * Whether anyone has loaded or declined sample content, resolved at most
+   * once: a property of the site, recorded once for everyone, so it takes no
+   * caller. Rejects when the record cannot be read, which every reader of it
+   * treats as "cannot tell", never as "unanswered".
    */
-  getStartedDetail(): Promise<GetStartedDetail>;
+  sampleAnswered(): Promise<boolean>;
+  /**
+   * The site's answer to sample content, with a load nobody has seen through,
+   * resolved at most once: what `sampleAnswered` is derived from. Rejects when
+   * it cannot be read.
+   */
+  sampleContent(): Promise<SampleContentState>;
+  /**
+   * The setup steps offered to this reader, before their skips, resolved at
+   * most once. The setup card and the `onboarding:incomplete` condition both
+   * read it through `readerSetup`, which applies the reader's skips, so the
+   * two cannot disagree.
+   */
+  setup(): Promise<SetupAnswer>;
 }
 
 export function conditionProbe(caller: ReadCaller): ConditionProbe {
@@ -135,7 +160,9 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let createCollection: Promise<boolean> | undefined;
   let readReleases: Promise<boolean> | undefined;
   let anyRelease: Promise<boolean> | undefined;
-  let started: Promise<GetStartedDetail> | undefined;
+  let firstCreatable: Promise<string | undefined> | undefined;
+  let sample: Promise<SampleContentState> | undefined;
+  let started: Promise<SetupAnswer> | undefined;
 
   const readCollections = (): Promise<RegistryAnswer> => {
     collectionsRead ??= readableOfKind(caller, "collection");
@@ -186,7 +213,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   };
 
   // Each collection's create decision, made at most once for the request and
-  // shared by the onboarding step and the Create card's condition: both ask it,
+  // shared by the setup step and the Create card's condition: both ask it,
   // often of the same collections, and asked twice a rule could answer the two
   // differently within one response.
   const createVerdicts = new Map<string, Promise<boolean>>();
@@ -267,11 +294,64 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
         .then(may => (may ? callerMayReadAnyRelease(caller) : false));
       return anyRelease;
     },
-    getStarted: () => probe.getStartedDetail().then(detail => detail.answer),
-    getStartedDetail: () => {
-      started ??= getStartedDetail(probe);
+    firstCreatableCollection: () => {
+      firstCreatable ??= Promise.all([
+        readableSlugs(),
+        createDisabledSlugs(),
+      ]).then(([readable, disabled]) =>
+        firstCreatableOf(
+          readable.filter(slug => !disabled.has(slug)),
+          mayCreateIn
+        )
+      );
+      return firstCreatable;
+    },
+    sampleAnswered: () =>
+      probe.sampleContent().then(state => state.answer !== undefined),
+    sampleContent: () => {
+      // Through the container: `meta` lives on the instance, not on the
+      // Direct API's `Nextly`. The site's, so it takes no caller.
+      sample ??= readSampleContent(getService("metaService"));
+      return sample;
+    },
+    setup: () => {
+      started ??= setupSteps(probe);
       return started;
     },
   };
   return probe;
+}
+
+/**
+ * The first of `slugs`, in order, that `mayCreateIn` allows, asked in
+ * {@link authorizationGroups} order so a cold per-user cache is filled once and
+ * no group is asked past the first allowed one.
+ *
+ * A decision that threw has told us nothing, and nothing must read as neither
+ * a grant nor a refusal: one that threw ahead of the first grant could have
+ * been the first itself, or, with no grant after it, the only one. Either way
+ * the answer is not known, so this rejects with it, and the step that asks is
+ * not known rather than not offered. One that threw after a grant changes
+ * nothing, and is passed over.
+ */
+async function firstCreatableOf(
+  slugs: readonly string[],
+  mayCreateIn: (slug: string) => Promise<boolean>
+): Promise<string | undefined> {
+  for (const group of authorizationGroups(slugs)) {
+    const settled = await Promise.allSettled(group.map(mayCreateIn));
+    for (const [index, result] of settled.entries()) {
+      if (result.status === "rejected") {
+        throw NextlyError.internal({
+          ...(result.reason instanceof Error ? { cause: result.reason } : {}),
+          logContext: {
+            reason: "create-decision-failed",
+            collection: group[index],
+          },
+        });
+      }
+      if (result.value) return group[index];
+    }
+  }
+  return undefined;
 }

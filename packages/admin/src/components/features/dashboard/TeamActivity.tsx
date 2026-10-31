@@ -6,7 +6,7 @@
  * frame, which draws its heading and every state; this component draws the
  * rows, and reports an empty feed or an unreadable answer for the frame to say.
  * The server answers only events about what the reader may read, so every row
- * drawn, and every row counted towards "more", is one they may see.
+ * drawn, and the one row more the batch asks for, is one they may see.
  *
  * ## It shows a fixed page and offers no way past it
  *
@@ -71,10 +71,14 @@ function verbOf(activity: Activity): string {
     : EVENT_VERBS[activity.event];
 }
 
-/** One feed row: the activity it reads as, and where it leads, if anywhere. */
+/**
+ * One feed row: the activity it reads as, where it leads, if anywhere, and whether it is an
+ * install-level settings change, which is about no entry.
+ */
 interface ActivityRow {
   activity: Activity;
   href: string | undefined;
+  settings: boolean;
 }
 
 /**
@@ -92,24 +96,41 @@ function repeatText(activity: Activity): string {
  * The same as a screen reader hears it: the dot is a pause to the eye and is said as a comma,
  * "Ana updated Site style, 12 times". Nothing for a row of one save, whose title reads well.
  */
-function activitySpoken(activity: Activity): string | undefined {
+function activitySpoken({
+  activity,
+  settings,
+}: ActivityRow): string | undefined {
   const repeat = repeatText(activity);
   if (repeat === "") return undefined;
-  const subject = activitySubject(activity);
+  const subject = activitySubject(activity, settings);
   return `${activity.user.name} ${activity.action} ${subject}, ${repeat.slice(3)}`;
 }
 
 /**
- * What a row names: its entry's title, or, for an entry with none, its collection by the label
- * the row shows on its meta line, so the two never name it differently; a Single by its own name.
+ * What a row names: its entry's title, or a Single's own name, when the row carries one. A row
+ * without one names "an entry in" its collection, by the label the row shows on its meta line so
+ * the two never name it differently, and a Single without one is "a Single". Never the bare
+ * label: "Ana deleted Posts" reads as though the whole collection went. A settings change is about
+ * no entry, so it names what it changed by its label alone.
+ *
+ * A row carries no title for an entry that has none, and for one whose title the reader may not
+ * be told: the server drops the title of a document that no longer exists, whose read rule went
+ * with it. The two read alike here, so a hidden title is never called an empty one.
  */
-function activitySubject(activity: Activity): string {
-  return activity.entryTitle ?? activity.collectionLabel ?? activity.target;
+function activitySubject(activity: Activity, settings: boolean): string {
+  if (activity.entryTitle !== undefined) return activity.entryTitle;
+  if (settings && activity.collectionLabel !== undefined) {
+    return activity.collectionLabel;
+  }
+  if (activity.collectionLabel !== undefined) {
+    return `an entry in ${activity.collectionLabel}`;
+  }
+  return activity.target;
 }
 
 /** What a row's title says: who did what to which document, and how many times. */
-function activityTitle(activity: Activity): string {
-  const subject = activitySubject(activity);
+function activityTitle({ activity, settings }: ActivityRow): string {
+  const subject = activitySubject(activity, settings);
   return `${activity.user.name} ${activity.action} ${subject}${repeatText(activity)}`;
 }
 
@@ -126,8 +147,8 @@ function activityTitle(activity: Activity): string {
 function activityListModel(now: number): ListModel<ActivityRow> {
   return {
     titleLabel: "Activity",
-    titleOf: ({ activity }) => activityTitle(activity),
-    spokenOf: ({ activity }) => activitySpoken(activity),
+    titleOf: row => activityTitle(row),
+    spokenOf: row => activitySpoken(row),
     hrefOf: ({ href }) => href,
     leadingOf: ({ activity }) => (
       <Avatar className="size-full">
@@ -181,9 +202,10 @@ const EmptyState: React.FC = () => (
  *
  * It draws the rows its body holds, at most the "Number of items" its reader
  * chose, through the one list card core's lists use, each row leading to the
- * entry or Single it is about. The feed has no total, so when the answer holds
- * the one row more the batch asked for, its footer says "N+ more". A run of one
- * person's saves is one row.
+ * entry or Single it is about. The batch asks one row more than the card
+ * draws, and that row is not drawn: the feed has no list to open, so the card
+ * has no footer, and a footer only ever draws a link. A run of one person's
+ * saves is one row.
  *
  * The frame draws every state; what this card's own answer says beyond its
  * rows (still loading, an unreadable answer, or an empty feed) it reports.
@@ -204,7 +226,13 @@ export const TeamActivityCard: React.FC<WidgetComponentProps> = props => {
       told.collectionLabel === undefined
         ? told
         : { ...told, collectionLabel: labelOf(told.collectionLabel) };
-    return [{ activity: named, href: activityHref(row) }];
+    return [
+      {
+        activity: named,
+        href: activityHref(row),
+        settings: row.subjectKind === "settings",
+      },
+    ];
   });
   if (rows.length === 0) return <EmptyState />;
   return (

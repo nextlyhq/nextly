@@ -442,6 +442,18 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     onRename: "follow",
   },
   {
+    // Which media items the entity's documents use. A row follows its
+    // document, so the item's "Used in" names the entity by its new slug.
+    // An email template's rows carry kind "email-template" and are not moved.
+    table: "nextly_media_usage",
+    slugColumn: "subject_slug",
+    kind: {
+      column: "subject_kind",
+      values: { collection: ["collection"], single: ["single"] },
+    },
+    onRename: "follow",
+  },
+  {
     // The dashboard's activity feed. Its readers take a NULL kind, which rows
     // written before the kind was recorded carry, to be a collection's.
     table: "activity_log",

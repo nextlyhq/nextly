@@ -218,6 +218,22 @@ export interface AddReleaseMemberPayload {
   action: ReleaseMemberAction;
 }
 
+/**
+ * One document scheduled to go live on its own, in one all-or-nothing step:
+ * the server creates a single-document release named `title`, puts the
+ * document in it and schedules it at `at` in `timezone`, or does none of it.
+ */
+export interface ScheduleDocumentPayload {
+  into: "own";
+  document: ReleaseDocumentRef & { action: "publish" };
+  /** The release's name. */
+  title: string;
+  /** ISO 8601 with an explicit offset or `Z`; the route refuses anything else. */
+  at: string;
+  /** An IANA zone name. The route validates it through `Intl`. */
+  timezone: string;
+}
+
 /** A document, as the release list's `containing` filter names it. */
 export interface ReleaseDocumentRef {
   scopeKind: "collection" | "single";

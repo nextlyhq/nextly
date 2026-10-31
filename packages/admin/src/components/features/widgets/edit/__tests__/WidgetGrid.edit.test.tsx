@@ -36,6 +36,8 @@ import {
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
 
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
+
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 let layoutRejects = false;
@@ -86,6 +88,14 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
 );
 
 const api = vi.mocked(protectedApi);
+
+/**
+ * How many times the arrangement was read. The dashboard's header also reads the setup card's
+ * own state (`/dashboard/setup`), which is not the arrangement.
+ */
+const layoutReads = () =>
+  api.get.mock.calls.filter(([path]) => path.startsWith("/dashboard/layout"))
+    .length;
 
 /** Full width three rows high by default, resizable from 3 by 2 up to 12 by 6. */
 const RESIZABLE = {
@@ -195,11 +205,16 @@ beforeEach(() => {
     { id: "p2", widgetId: "core/b" },
     { id: "p3", widgetId: "core/c" },
   ]);
-  api.get.mockImplementation(() =>
-    layoutRejects
-      ? Promise.reject(new Error("layout unavailable"))
-      : Promise.resolve(layoutResponse)
-  );
+  api.get.mockImplementation((path: string) => {
+    if (layoutRejects) return Promise.reject(new Error("layout unavailable"));
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    if (isGalleryPath(path) && layoutResponse !== undefined) {
+      return Promise.resolve(
+        galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+      );
+    }
+    return Promise.resolve(layoutResponse);
+  });
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
 });
@@ -888,7 +903,7 @@ describe("removing a card", () => {
     const headings = within(panel)
       .getAllByRole("heading", { level: 3 })
       .map(heading => heading.textContent);
-    expect(headings[0]).toBe("Removed from your dashboard 1");
+    expect(headings[0]).toBe("Removed 1");
     await user.click(
       within(panel).getByRole("button", { name: "Add back Widget core/a" })
     );
@@ -896,7 +911,7 @@ describe("removing a card", () => {
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     // The panel says it, since a modal sheet hides the grid's own region.
     expect(within(panel).getByTestId("add-panel-live")).toHaveTextContent(
-      "Added back Widget core/a at position 1 of 3."
+      "Added back Widget core/a."
     );
     // Putting back the card the notice offered to undo answers the notice.
     expect(screen.queryByTestId("removal-notice")).toBeNull();
@@ -948,7 +963,7 @@ describe("adding a widget", () => {
       "@min-[1024px]/dashboard:col-span-4"
     );
     expect(screen.getByTestId("add-panel-live")).toHaveTextContent(
-      "Added Widget core/d at position 2 of 2."
+      "Added Widget core/d."
     );
 
     await closeAddPanel(user);
@@ -1002,7 +1017,7 @@ describe("adding a widget", () => {
       screen.getByRole("button", { name: "Add another Widget core/d" })
     );
     expect(screen.getAllByTestId("widget-cell-core/d")).toHaveLength(2);
-    expect(screen.getByTestId("add-panel-row-core/d")).toHaveTextContent(
+    expect(screen.getByTestId("add-panel-tile-core/d")).toHaveTextContent(
       "2 on your dashboard"
     );
 
@@ -1027,7 +1042,7 @@ describe("adding a widget", () => {
     );
   });
 
-  it("rings the card just added, and closing sends focus to its menu", async () => {
+  it("rings the card just added, scrolls it into view, and closing sends focus to its menu", async () => {
     mockBranding = branding(["core/a", "core/d"]);
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
       available: ["core/d"],
@@ -1037,10 +1052,18 @@ describe("adding a widget", () => {
     const user = await beginEditing();
 
     await openAddPanel(user);
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
     await user.click(screen.getByTestId("add-panel-add-core/d"));
     expect(screen.getByTestId("widget-cell-core/d")).toHaveAttribute(
       "data-highlighted"
     );
+    // Brought into view while the panel stays open, focus still in it.
+    await waitFor(() =>
+      expect(scrolled.mock.contexts).toContain(
+        screen.getByTestId("widget-cell-core/d")
+      )
+    );
+    scrolled.mockRestore();
     expect(screen.getByTestId("widget-cell-core/a")).not.toHaveAttribute(
       "data-highlighted"
     );
@@ -1201,7 +1224,7 @@ describe("the guards a save is sent against", () => {
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["dashboard", "layout"] });
     });
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(layoutReads()).toBe(2);
 
     await user.click(screen.getByTestId("dashboard-edit-save"));
 
@@ -1589,22 +1612,22 @@ describe("when the schema changes underneath an open dashboard", () => {
   it("re-reads the arrangement, so the add panel knows what exists now", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:schema-updated"));
       });
-      return waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+      return waitFor(() => expect(layoutReads()).toBe(2));
     });
   });
 
   it("does not re-read on an unrelated event", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:something-else"));
       });
-      expect(api.get).toHaveBeenCalledTimes(1);
+      expect(layoutReads()).toBe(1);
     });
   });
 });

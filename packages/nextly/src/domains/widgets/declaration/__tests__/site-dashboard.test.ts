@@ -60,14 +60,16 @@ function refusal(run: () => void): string {
 }
 
 const warn = vi.fn();
+const error = vi.fn();
 
 beforeEach(() => {
   resetLegacyIdWarnings();
   warn.mockReset();
+  error.mockReset();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn,
     info: vi.fn(),
-    error: vi.fn(),
+    error,
     debug: vi.fn(),
   } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
 });
@@ -539,8 +541,7 @@ describe("a plugin's suggestions and alternatives", () => {
   });
 
   it("refuses a key a plugin's dashboard contribution does not take, naming the one it most likely meant", () => {
-    // 🔴 Dropped, a misspelt `suggest` would never place anything, and
-    // nothing would say so.
+    // 🔴 Dropped, a misspelt key would be ignored, and nothing would say so.
     const message = refusal(() =>
       resetWidgetRegistries([
         plainPlugin("@other/stats", {
@@ -658,7 +659,7 @@ describe("the default the site config asks for", () => {
     ]);
   });
 
-  it("is set at startup from the copy checked: its defaultLayout, suggestions off, and what plugins suggest", () => {
+  it("is set at startup from the copy checked: its defaultLayout, with suggestions: false accepted and changing nothing", () => {
     resetWidgetRegistries([shop], {
       defaultLayout: [
         "core/team",
@@ -671,18 +672,24 @@ describe("the default the site config asks for", () => {
         { widget: "core/team" },
         { widget: "acme/orders-by-state", w: 4, settings: { top: 3 } },
       ],
-      suggestions: false,
-      suggested: ["acme/orders-by-state"],
     });
   });
 
-  it("is core's own defaultLayout, with suggestions on, when the site gives none", () => {
+  it("is core's own defaultLayout when the site gives none", () => {
     resetWidgetRegistries([shop], {});
-    expect(defaultLayoutPlan()).toEqual({
-      cards: CORE_DEFAULT_LAYOUT,
-      suggestions: true,
-      suggested: ["acme/orders-by-state"],
-    });
+    expect(defaultLayoutPlan()).toEqual({ cards: CORE_DEFAULT_LAYOUT });
+  });
+
+  it("places nothing a plugin suggests: its widget is offered from the add panel, never placed", () => {
+    // `shop` suggests acme/orders-by-state, declared with `defineWidget`.
+    resetWidgetRegistries([shop], {});
+    const widgets = allWidgets();
+    // The control: the widget is installed, so its absence below is the default's doing.
+    expect(widgets.map(widget => widget.id)).toContain("acme/orders-by-state");
+    const placed = defaultLayoutPlacements(widgets).map(p => p.widgetId);
+    // And the default did materialise: core's own cards are there.
+    expect(placed).toContain("core/continue");
+    expect(placed).not.toContain("acme/orders-by-state");
   });
 
   it("starts, saying nothing, with an optional card whose widget is not installed", () => {
@@ -696,6 +703,32 @@ describe("the default the site config asks for", () => {
     expect(defaultLayoutPlan().cards).toEqual([
       { widget: "acme/orders-by-state", optional: true },
       { widget: "core/team" },
+    ]);
+  });
+
+  it("starts on core's own default without the form-builder plugin, leaving its optional card out and logging nothing", () => {
+    // Core's default names New form submissions, a widget only that plugin declares.
+    expect(() => resetWidgetRegistries([], {})).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    // The plan still names it, as optional: the entry is skipped where the default is built.
+    expect(defaultLayoutPlan().cards).toContainEqual({
+      widget: "form-builder/new-submissions",
+      w: 6,
+      h: 4,
+      optional: true,
+    });
+    const widgets = allWidgets();
+    expect(widgets.map(widget => widget.id)).not.toContain(
+      "form-builder/new-submissions"
+    );
+    const placed = defaultLayoutPlacements(widgets).map(p => p.widgetId);
+    expect(placed).not.toContain("form-builder/new-submissions");
+    // The control: the rest of the default resolved, in order around the missing card.
+    expect(placed.slice(-3)).toEqual([
+      "core/continue",
+      "core/content-table",
+      "core/team-activity",
     ]);
   });
 

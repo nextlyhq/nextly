@@ -391,3 +391,78 @@ describe("the quick popover at rest", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("Size at rest on the lone card of the pair, drawn across its row", () => {
+  /** Needs attention on a default that pairs it with Upcoming releases, which this reader is not handed. */
+  function pairBranding(): AdminBranding {
+    return {
+      widgets: [
+        {
+          id: "core/needs-attention",
+          title: "Needs attention",
+          archetype: "custom",
+          size: RESIZABLE,
+          component: "core#AtRestBody",
+        },
+      ],
+    } as unknown as AdminBranding;
+  }
+  const ATTENTION: WidgetPlacement = {
+    id: "core/needs-attention",
+    widgetId: "core/needs-attention",
+    w: 8,
+    h: 3,
+    removed: false,
+  };
+
+  it("saves its stored width with a new height, and Undo restores the stored size", async () => {
+    mockBranding = pairBranding();
+    layoutResponse = {
+      ...layout(),
+      placements: [ATTENTION],
+      defaultPlacements: [ATTENTION],
+      // The default as configured gives the pair a row of their own.
+      pairedRow: true,
+    };
+    // The server's answer to a write, for this one card: what was written, the next version.
+    api.put.mockImplementation((_path: string, body: unknown) => {
+      const write = body as { placements: WidgetPlacement[] };
+      const before = layoutResponse as DashboardLayoutResponse;
+      layoutResponse = {
+        ...before,
+        placements: write.placements,
+        version: before.version + 1,
+      };
+      return Promise.resolve({ message: "ok", item: {} });
+    });
+    renderGrid();
+    const user = userEvent.setup();
+    // The precondition: drawn across the row, its stored width eight.
+    const cell = await screen.findByTestId("widget-cell-core/needs-attention");
+    await waitFor(() => expect(cell).toHaveClass("col-span-12"));
+    expect(cell).not.toHaveClass("@min-[1024px]/dashboard:col-span-8");
+
+    const menu = await openMenu(user, "Needs attention");
+    await user.click(within(menu).getByRole("menuitem", { name: /Height/ }));
+    const heights = await waitFor(() => {
+      const menus = screen.getAllByRole("menu");
+      expect(menus.length).toBe(2);
+      return menus[1];
+    });
+    within(heights).getByRole("menuitemradio", { name: "4 rows" }).focus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    // 🔴 The stored width, never the twelve it is drawn at.
+    expect(
+      sent(0)?.placements.find(p => p.id === "core/needs-attention")
+    ).toMatchObject({ w: 8, h: 4 });
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    pressUndo();
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
+    expect(
+      sent(1)?.placements.find(p => p.id === "core/needs-attention")
+    ).toMatchObject({ w: 8, h: 3 });
+  });
+});

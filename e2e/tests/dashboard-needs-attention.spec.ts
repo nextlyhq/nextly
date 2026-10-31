@@ -98,17 +98,23 @@ test("rows for stopped and overdue releases, each with its reason and Review; no
 });
 
 /**
+ * Where a return goes away to: Media, whose link the admin's navigation draws on every screen.
+ * Not a collection's list, which the navigation does not link to from the dashboard: there the
+ * only link to one is a card's, drawn only once that card's answer lands, and only for the
+ * collections it has room for.
+ */
+const AWAY = "/admin/media";
+
+/**
  * Follows the link at `href` the way the app does, within the page, so the dashboard's cached
- * layout answer is the one a return is first drawn from.
+ * layout answer is the one a return is first drawn from. Waits for the link to be drawn.
  */
 async function followLink(page: Page, href: string): Promise<void> {
-  await page.evaluate(target => {
-    const link = document.querySelector<HTMLAnchorElement>(
-      `a[href="${target}"]`
-    );
-    if (!link) throw new Error(`no link to ${target}`);
-    link.click();
-  }, href);
+  await page
+    .locator(`a[href="${href}"]`)
+    .filter({ visible: true })
+    .first()
+    .evaluate((link: HTMLElement) => link.click());
 }
 
 /**
@@ -247,8 +253,8 @@ test("a return that finds new work waiting shows the card, and says so", async (
 
     // Away and back within the session: the return is drawn from the cached answer, which hid
     // the card, and the read it makes again finds the overdue release.
-    await followLink(page, "/admin/collections/posts");
-    await page.waitForURL(/\/admin\/collections\/posts/);
+    await followLink(page, AWAY);
+    await page.waitForURL(/\/admin\/media/);
     await page.unroute(isLayoutRead);
     await page.unroute(isBatchRead);
     await followLink(page, "/admin");
@@ -277,8 +283,8 @@ test("a return whose waiting work was done meanwhile keeps the card in place", a
       .filter({ visible: true });
     await expect(card).toBeVisible();
 
-    await followLink(page, "/admin/collections/posts");
-    await page.waitForURL(/\/admin\/collections\/posts/);
+    await followLink(page, AWAY);
+    await page.waitForURL(/\/admin\/media/);
     await cancel(page, id);
     cancelled = true;
     const reread = page.waitForResponse(

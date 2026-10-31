@@ -229,6 +229,10 @@ import {
   type CollectedWidgetSource,
 } from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
+import {
+  installTagExpiryLedger,
+  withdrawTagExpiryLedger,
+} from "../runtime/cache/ledger-wiring";
 import { ensureSupportedFrameworkVersions } from "../runtime/framework-versions";
 import type {
   CollectionSource,
@@ -923,6 +927,9 @@ async function registerServicesOnce(
   const adapterDrizzleDb = adapter.getDrizzle<DatabaseInstance>();
 
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
+  // The cache handlers read expiries from this adapter's ledger, and writes
+  // made outside a request record theirs into it, for every instance.
+  installTagExpiryLedger(adapter);
 
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
@@ -4906,6 +4913,9 @@ async function releaseServices(opts: {
     // Collection db options are process-global too; a later registration must
     // start from its own config's, not inherit this one's `allowIdOnCreate`.
     publishCollectionDbOptions([]);
+    // The ledger belongs to the adapter just released: a later registration
+    // publishes its own, and none is used meanwhile.
+    withdrawTagExpiryLedger();
     // The declared entities are process-global too: unpublished, nothing is
     // judged removed from code until the next registration publishes its own.
     publishDeclaredEntities(undefined);
@@ -4970,6 +4980,7 @@ export function clearServices(): void {
   publishWorkflows(new Map());
   // Cleared for the same reason as in `releaseServices`.
   publishCollectionDbOptions([]);
+  withdrawTagExpiryLedger();
   publishDeclaredEntities(undefined);
   // Cleared for the same reason as in `releaseServices`: the configured
   // minimum belongs to this registration, and the next one sets its own.
