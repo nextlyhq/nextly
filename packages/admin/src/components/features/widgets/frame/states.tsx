@@ -249,11 +249,12 @@ export interface CardEmptyContent {
   /**
    * At most ONE action, and only one the person may take. The caller decides that; the frame
    * draws what it is given and never a second button: a link for an `href`, a button for an
-   * `onSelect`, such as one opening the card's own settings.
+   * `onSelect`, such as one opening the card's own settings. `onIntent` is called as a pointer
+   * comes over the button or focus reaches it, so what it opens can start loading.
    */
   action?:
     | { label: string; href: string }
-    | { label: string; onSelect: () => void };
+    | { label: string; onSelect: () => void; onIntent?: () => void };
 }
 
 /** The frame's own empty state, for a card whose body says nothing more particular. */
@@ -309,6 +310,8 @@ export function CardEmpty({
           size="sm"
           className={inline ? undefined : "mt-2"}
           onClick={action.onSelect}
+          onPointerEnter={action.onIntent}
+          onFocus={action.onIntent}
           data-testid="card-empty-action"
         >
           {action.label}

@@ -67,6 +67,8 @@ beforeEach(() => {
     .__nextly_tag_expiry_view;
   delete (globalThis as { __nextly_cache_entries?: unknown })
     .__nextly_cache_entries;
+  delete (globalThis as { __nextly_cache_reads?: unknown })
+    .__nextly_cache_reads;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -272,6 +274,55 @@ describe("the incremental cache handler", () => {
     await handler.set("k", page(2), { tags: ["posts"] });
     answer();
     expect(await judging).toBeNull();
+    expect((await handler.get("k"))?.value).toEqual(page(2));
+  });
+
+  it("refuses a fill that began before an expiry recorded while it ran", async () => {
+    const { ledger, recordElsewhere } = memoryLedger();
+    publishTagExpiryLedger(ledger);
+    // The miss that starts the fill.
+    expect(await new IncrementalHandler().get("k")).toBeNull();
+    vi.advanceTimersByTime(10);
+    // Another instance writes while the fill is still rendering old content.
+    recordElsewhere("posts");
+    vi.advanceTimersByTime(10);
+    await new IncrementalHandler().set("k", page(1), { tags: ["posts"] });
+    expect(await new IncrementalHandler().get("k")).toBeNull();
+  });
+
+  it("keeps an expiry it knew through a refresh that fails", async () => {
+    const { ledger, recordElsewhere } = memoryLedger();
+    let failing = false;
+    publishTagExpiryLedger({
+      ...ledger,
+      expiriesOf: async tags => {
+        if (failing) throw new Error("connection refused");
+        return ledger.expiriesOf(tags);
+      },
+    });
+    const handler = new IncrementalHandler();
+    await handler.set("old", page(1), { tags: ["posts"] });
+    vi.advanceTimersByTime(1);
+    recordElsewhere("posts");
+    vi.advanceTimersByTime(1);
+    await handler.set("new", page(2), { tags: ["posts"] });
+    // Learned here: posts expired after "old" was stored.
+    expect(await handler.get("new")).not.toBeNull();
+
+    failing = true;
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS + 1);
+    expect(await handler.get("old")).toBeNull();
+  });
+
+  it("serves a regeneration made in the same millisecond as its own expiry", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    vi.advanceTimersByTime(1);
+    // The clock does not move between these.
+    await handler.revalidateTag("posts");
+    expect(await handler.get("k")).toBeNull();
+    await handler.set("k", page(2), { tags: ["posts"] });
     expect((await handler.get("k"))?.value).toEqual(page(2));
   });
 

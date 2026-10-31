@@ -72,6 +72,25 @@ const RETIRED_ACCOUNT_TYPES = [
   "UnlinkAccountResponse",
 ];
 
+// Image sizes are no longer cut at upload, so nothing is published that picks,
+// makes or removes one, or names the table their definitions were kept in.
+// Values and types alike: a type-only export would pass an import check, so
+// these are read from the compiler too.
+const RETIRED_IMAGE_SIZE_NAMES = [
+  "getMediaVariant",
+  "getSmallestMediaVariant",
+  "generateImageSizes",
+  "deleteImageSizes",
+  "imageSizes",
+];
+const RETIRED_IMAGE_SIZE_TYPES = [
+  "GetMediaVariantOptions",
+  "MediaLike",
+  "ImageSizeConfig",
+  "GenerateImageSizesOptions",
+  "UploadFn",
+];
+
 // The ways to add, change or remove a widget or a widget source other than the
 // one door: a plugin's `contributes.dashboard`, a site's `admin.dashboard`, and
 // core's own list, all through one internal call. Each stays internal to the
@@ -255,6 +274,9 @@ function exportedAmong(names: readonly string[]): Map<string, Set<string>> {
 const ASKED = [
   ...RETIRED_ACCOUNT_TYPES,
   ...RETIRED_ACCOUNT_NAMES,
+  ...RETIRED_IMAGE_SIZE_NAMES,
+  ...RETIRED_IMAGE_SIZE_TYPES,
+  "toPublicMediaUrl",
   ...REMOVED_WIDGET_DOORS,
   ...REMOVED_WIDGET_SOURCE_TYPES,
   "WidgetSourceResolver",
@@ -524,6 +546,25 @@ describe("published export surface", () => {
         expect(compiled.get(entry)?.has("UserListResponse")).toBe(true);
         expect(compiled.get(entry)?.has("UserListResponseSchema")).toBe(true);
       }
+    },
+    COMPILE_TIMEOUT_MS
+  );
+
+  it(
+    "exports nothing that picks, makes or removes an image size",
+    () => {
+      const compiled = exported();
+      const leaked = [...compiled].flatMap(([entry, names]) =>
+        [...RETIRED_IMAGE_SIZE_NAMES, ...RETIRED_IMAGE_SIZE_TYPES]
+          .filter(name => names.has(name))
+          .map(name => `${entry}: ${name}`)
+      );
+      expect(leaked).toEqual([]);
+
+      // The control: the media URL helper published beside the removed ones
+      // is still read from the root, so the absences above are the names
+      // being gone rather than the root failing to load.
+      expect(compiled.get("nextly")?.has("toPublicMediaUrl")).toBe(true);
     },
     COMPILE_TIMEOUT_MS
   );

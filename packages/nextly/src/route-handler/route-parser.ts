@@ -3295,33 +3295,7 @@ export function parseRestRoute(
     return { service: "generalSettings", operation, method, routeParams };
   }
 
-  // Handle Image Sizes endpoints
-  if (resource === "image-sizes") {
-    // Sub-routes for regeneration
-    if (id === "regeneration-status") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerationStatus",
-        routeParams,
-      };
-    }
-    if (id === "regenerate") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerate",
-        routeParams,
-      };
-    }
-    if (id) routeParams.imageId = id;
-    return {
-      service: "imageSizes",
-      operation: "list",
-      method: "imageSizes",
-      routeParams,
-    };
-  }
-
+  // Nothing matched: answered as an unknown route. `image-sizes` is among
+  // these, since image sizes are no longer made or offered.
   return {};
 }

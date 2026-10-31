@@ -253,10 +253,11 @@ export function UploadPreview({
 
   return (
     <Card className={cn("relative group overflow-hidden", className)}>
-      {/* Preview area - clickable to open file */}
+      {/* Preview area - clickable to open file. A neutral backdrop with the
+          thumbnail fitted inside it, whole, as the library's tiles draw it. */}
       <div
         className={cn(
-          "aspect-square bg-primary/5 flex items-center justify-center",
+          "aspect-square bg-muted flex items-center justify-center",
           file.url && "cursor-pointer"
         )}
         onClick={handlePreviewClick}
@@ -274,7 +275,7 @@ export function UploadPreview({
           <img
             src={thumbnailSrc}
             alt={file.filename}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-contain"
             onError={e => {
               // If the generated thumbnail 404s (e.g., the storage
               // adapter never produced one), fall back to the full

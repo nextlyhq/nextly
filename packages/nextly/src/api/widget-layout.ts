@@ -630,14 +630,23 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
   //
-  // Never the setup card: it comes and goes on its own, from the site's
-  // state and the reader's own choices (`domains/widgets/setup-card`), and a
-  // card removed in customise mode is offered back only from Removed.
+  // The setup card only while it would show for this reader, as it comes and
+  // goes on its own, from the site's state and the reader's own choices:
+  // offered where their arrangement lacks it, as one saved before it existed
+  // does, exactly when the default handed in this same response holds it
+  // (`defaults`, cut by the card's own `shows`, judged once above). So the
+  // two never disagree, and nothing about it is read twice. Never once they
+  // dismissed it or were told "You're all set", and only a super-admin's
+  // widgets hold it at all. A card removed in customise mode is placed, and
+  // offered back only from Removed.
   const placed = new Set(placements.map(placement => placement.widgetId));
+  const setupOffered = defaults.some(
+    placement => placement.widgetId === CORE_WIDGET_ID.setup
+  );
   const available = inAddPanelOrder(
     view.widgets.filter(
       widget =>
-        widget.id !== CORE_WIDGET_ID.setup &&
+        (widget.id !== CORE_WIDGET_ID.setup || setupOffered) &&
         (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
     )
   ).map(widget => widget.id);

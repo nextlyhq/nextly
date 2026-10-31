@@ -62,8 +62,10 @@ export {
   roleInherits,
 } from "./rbac/postgres";
 
-// Plan A Task 8 — media tables. PG re-exports for direct-query callers.
-export { media, mediaFolders, imageSizes } from "./media/postgres";
+// Plan A Task 8 — media tables. PG re-exports for direct-query callers. The
+// `image_sizes` table is not among them: image sizes are no longer made or
+// read, and the table stays only until its stored rows are removed.
+export { media, mediaFolders } from "./media/postgres";
 
 // Plan A Task 9 — audit tables. PG re-exports for direct-query callers.
 export { auditLog, activityLog } from "./audit/postgres";

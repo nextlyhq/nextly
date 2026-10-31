@@ -1,11 +1,5 @@
 {
-  "forbidden-status-phrase": {
-    "docs/api-reference/rest-api.mdx": {
-      "count": 1,
-      "digests": ["12766779f886d8be"],
-      "reason": "Accurate. packages/nextly/src/routeHandler.ts returns { message: \"Batch regeneration coming soon\" } for the image-size regenerationStatus and regenerate sub-routes. Remove this entry when those routes do the work."
-    }
-  },
+  "forbidden-status-phrase": {},
   "plugin-route-mount": {
     "docs/plugins/seo.mdx": {
       "count": 1,

@@ -36,7 +36,7 @@ const releases = vi.hoisted(() => ({
   },
   asked: [] as unknown[],
 }));
-vi.mock("@admin/hooks/queries/useReleases", () => ({
+vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
   useReleasesContaining: (document: unknown, enabled: boolean) => {
     releases.asked.push({ document, enabled });
     return releases.current;
