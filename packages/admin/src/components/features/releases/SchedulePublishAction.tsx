@@ -103,6 +103,9 @@ export function useSchedulePublishAction({
     },
     binding: {
       onSelect: () => {
+        // Already open: a second form over the first would be a second
+        // request while the first may still be out.
+        if (open) return;
         setOpener(dialogOpenerOf(globalThis.document?.activeElement ?? null));
         setOpening(count => count + 1);
         setOpenFor(documentKey);

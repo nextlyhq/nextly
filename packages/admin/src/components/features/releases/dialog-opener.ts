@@ -31,3 +31,21 @@ export function returnFocusTo(opener: HTMLElement | null, event: Event): void {
   event.preventDefault();
   opener.focus();
 }
+
+/**
+ * Where focus goes once a schedule has landed: the place that shows its
+ * outcome, where the opener sits inside one, otherwise the opener.
+ *
+ * The Publishing section's own offer is drawn under "Not scheduled." and so
+ * goes the moment the new release shows, taking focus with it to the top of
+ * the page. The section itself stays, and names the release next.
+ */
+export function focusAfterScheduling(
+  opener: HTMLElement | null
+): HTMLElement | null {
+  const outcome = opener?.closest(`[${SCHEDULE_OUTCOME_ATTRIBUTE}]`);
+  return outcome instanceof HTMLElement ? outcome : opener;
+}
+
+/** Marks the element that shows a schedule's outcome and can take focus. */
+export const SCHEDULE_OUTCOME_ATTRIBUTE = "data-schedule-outcome";

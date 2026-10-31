@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
 
-import { instantFor, readerZone } from "../release-timezone";
+import { instantFor, readerZone, wallTimeIn } from "../release-timezone";
 import { defaultScheduleWall } from "../schedule-publish";
 import { SchedulePublishDialog } from "../SchedulePublishDialog";
 
@@ -26,6 +26,14 @@ const DOCUMENT = {
 };
 
 const fetchMock = vi.fn();
+
+const { grants } = vi.hoisted(() => ({
+  grants: { missing: [] as string[] },
+}));
+
+vi.mock("@admin/hooks/useCan", () => ({
+  useCan: (slug: string) => !grants.missing.includes(slug),
+}));
 
 function answer(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -52,6 +60,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   fetchMock.mockReset();
   fetchMock.mockResolvedValue(answer(201, SCHEDULED));
+  grants.missing = [];
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -201,6 +210,42 @@ describe("the request", () => {
       /may have been scheduled\. Check the Publishing section/
     );
   });
+
+  it("says, to a person who cannot see releases, who can check", async () => {
+    // They may schedule, but the Publishing section and the banner both read
+    // releases, so neither is drawn for them: pointing there sends them
+    // nowhere, and a retry may schedule the document twice.
+    grants.missing = ["read-content-releases"];
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    open();
+    await userEvent.click(submit());
+
+    const alert = (await screen.findByRole("alert")).textContent ?? "";
+    expect(alert).toMatch(/may have been scheduled/);
+    expect(alert).not.toMatch(/Publishing section/);
+    expect(alert).toMatch(/someone who can see releases/);
+  });
+});
+
+describe("while the request is on its way", () => {
+  it("stays open, so the document cannot be sent twice", async () => {
+    // A request that has not answered yet.
+    fetchMock.mockReturnValue(new Promise(() => undefined));
+    const { onOpenChange } = open();
+    await userEvent.click(submit());
+    await screen.findByRole("button", { name: "Scheduling…" });
+
+    await userEvent.keyboard("{Escape}");
+    const cancel = screen.getByRole("button", {
+      name: "Cancel",
+    }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+    fireEvent.click(cancel);
+
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(requests()).toHaveLength(1);
+  });
 });
 
 describe("a time that cannot be scheduled", () => {
@@ -225,6 +270,25 @@ describe("a time that cannot be scheduled", () => {
 
     expect(screen.getByRole("status").textContent).toBe(
       "That time doesn't exist in Europe/Berlin on that date: the clocks go forward past it. Pick a time before or after."
+    );
+    expect(submit().disabled).toBe(true);
+  });
+
+  it("is said, not silently ignored, when it passes between the clock's ticks", async () => {
+    // A minute ahead when chosen; two minutes on, with the dialog's own
+    // clock not yet moved, it has passed.
+    open();
+    setWall(wallTimeIn(new Date(NOW.getTime() + 60_000), readerZone()));
+    expect(submit().disabled).toBe(false);
+    vi.setSystemTime(new Date(NOW.getTime() + 120_000));
+
+    fireEvent.submit(submit().closest("form") as HTMLFormElement);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe(
+        "That time has already passed. Pick a later one, or use Publish to publish now."
+      )
     );
     expect(submit().disabled).toBe(true);
   });

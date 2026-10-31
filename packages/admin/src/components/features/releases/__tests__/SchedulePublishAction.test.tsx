@@ -9,7 +9,7 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
 import {
   useSchedulePublishAction,
@@ -154,5 +154,50 @@ describe("the dialog", () => {
     expect(
       await screen.findByRole("dialog", { name: "Schedule publish" })
     ).toBeTruthy();
+  });
+});
+
+describe("a request on its way", () => {
+  it("is never sent a second time by closing and opening the dialog again", async () => {
+    // The schedule step makes a new release each time it is asked, so a
+    // second request while the first is out would schedule the document
+    // twice.
+    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      show();
+      await userEvent.click(screen.getByRole("button", { name: "open" }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(
+        dialog.querySelector('button[type="submit"]') as HTMLButtonElement
+      );
+      await screen.findByRole("button", { name: "Scheduling…" });
+
+      // Every way a person closes a dialog, then the action again.
+      await userEvent.keyboard("{Escape}");
+      const cancel = screen.queryByRole("button", { name: "Cancel" });
+      if (cancel !== null) fireEvent.click(cancel);
+      fireEvent.click(
+        screen.getByRole("button", { name: "open", hidden: true })
+      );
+
+      const again = await screen.findByRole("dialog");
+      const send = again.querySelector(
+        'button[type="submit"]'
+      ) as HTMLButtonElement;
+      fireEvent.click(send);
+      fireEvent.submit(send.closest("form") as HTMLFormElement);
+
+      // The client sends on a later turn: let anything sent arrive.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const posts = fetchMock.mock.calls.filter(
+        call =>
+          (call as unknown as [string, RequestInit | undefined])[1]?.method ===
+          "POST"
+      );
+      expect(posts).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

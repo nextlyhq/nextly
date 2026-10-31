@@ -19,7 +19,7 @@
  * @module components/features/releases/SchedulePublishDialog
  */
 import type { JSX } from "react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { CalendarClock } from "@admin/components/icons";
 import {
@@ -34,9 +34,10 @@ import {
   Label,
 } from "@admin/components/ui";
 import { useScheduleDocument } from "@admin/hooks/queries/useReleases";
+import { useCan } from "@admin/hooks/useCan";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
-import { returnFocusTo } from "./dialog-opener";
+import { focusAfterScheduling, returnFocusTo } from "./dialog-opener";
 import { isDefiniteRefusal, releaseErrorMessage } from "./release-error";
 import { releaseTimeText, type ReleaseTimeText } from "./release-time";
 import { instantFor, readerZone, wallTimeIn } from "./release-timezone";
@@ -67,13 +68,22 @@ export function SchedulePublishDialog({
   opener,
 }: SchedulePublishDialogProps): JSX.Element {
   const ids = useId();
-  const now = useMinuteClock();
   const reader = readerZone();
   const [zone, setZone] = useState(reader);
   const [wall, setWall] = useState(() => defaultScheduleWall(Date.now(), zone));
-  const schedule = useScheduleDocument();
-
   const instant = wall === "" ? null : instantFor(wall, zone);
+  const title = scheduledReleaseTitle(documentTitle);
+  const { now, schedule, send, requestOpenChange, returnTo, canReadReleases } =
+    useSchedulingRequest({
+      wall,
+      instant,
+      zone,
+      title,
+      document,
+      opener,
+      onOpenChange,
+    });
+
   const problem = scheduleTimeProblem(wall, instant, now);
   const readback =
     problem === null
@@ -83,32 +93,14 @@ export function SchedulePublishDialog({
           now,
         })
       : null;
-  const title = scheduledReleaseTitle(documentTitle);
-
-  const send = () => {
-    // Asked again at the moment of sending: the clock above moves once a
-    // minute, and a time can pass while the dialog sits open.
-    if (instant === null) return;
-    if (scheduleTimeProblem(wall, instant, Date.now()) !== null) return;
-    schedule.mutate(
-      {
-        into: "own",
-        document: { ...document, action: "publish" },
-        title,
-        at: instant,
-        timezone: zone,
-      },
-      { onSuccess: () => onOpenChange(false) }
-    );
-  };
 
   const problemId = `${ids}-problem`;
   const zoneHelpId = `${ids}-zone-help`;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent
-        onCloseAutoFocus={event => returnFocusTo(opener, event)}
+        onCloseAutoFocus={event => returnFocusTo(returnTo.current, event)}
         className="w-[calc(100%-2rem)]"
       >
         <form
@@ -180,7 +172,7 @@ export function SchedulePublishDialog({
 
             {schedule.isError ? (
               <p role="alert" className="text-sm text-destructive">
-                {failureText(schedule.error)}
+                {failureText(schedule.error, canReadReleases)}
               </p>
             ) : null}
           </div>
@@ -189,7 +181,8 @@ export function SchedulePublishDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              disabled={schedule.isPending}
+              onClick={() => requestOpenChange(false)}
             >
               Cancel
             </Button>
@@ -204,6 +197,89 @@ export function SchedulePublishDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * The one request, and what guards it: the clock it is checked against,
+ * closing refused while it is out, and where focus goes once it lands.
+ */
+function useSchedulingRequest({
+  wall,
+  instant,
+  zone,
+  title,
+  document,
+  opener,
+  onOpenChange,
+}: {
+  wall: string;
+  instant: string | null;
+  zone: string;
+  title: string;
+  document: ReleaseDocumentRef;
+  opener: HTMLElement | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const clock = useMinuteClock();
+  /*
+   * When a send found the chosen time passed between the clock's ticks: the
+   * moment it checked, so the dialog says so at once rather than leaving
+   * Schedule apparently doing nothing until the next tick.
+   */
+  const [checkedAt, setCheckedAt] = useState(0);
+  // Whether this person can see where a schedule shows: the Publishing
+  // section and the banner both read releases.
+  const canReadReleases = useCan("read-content-releases");
+  // Where focus goes when the dialog closes: the opener, or after a
+  // schedule lands, where its outcome is shown.
+  const returnTo = useRef(opener);
+  const schedule = useScheduleDocument();
+
+  /*
+   * Closing is refused while the request is out. The step makes a new
+   * release each time it is asked, so a dialog closed and opened again
+   * around a slow request would send a second one and schedule the document
+   * twice.
+   */
+  const requestOpenChange = (next: boolean) => {
+    if (!next && schedule.isPending) return;
+    onOpenChange(next);
+  };
+
+  const send = () => {
+    if (schedule.isPending || instant === null) return;
+    // Asked again at the moment of sending: the clock moves once a minute,
+    // and a time can pass while the dialog sits open.
+    const at = Date.now();
+    if (scheduleTimeProblem(wall, instant, at) !== null) {
+      setCheckedAt(at);
+      return;
+    }
+    schedule.mutate(
+      {
+        into: "own",
+        document: { ...document, action: "publish" },
+        title,
+        at: instant,
+        timezone: zone,
+      },
+      {
+        onSuccess: () => {
+          returnTo.current = focusAfterScheduling(opener);
+          onOpenChange(false);
+        },
+      }
+    );
+  };
+
+  return {
+    now: Math.max(clock, checkedAt),
+    schedule,
+    send,
+    requestOpenChange,
+    returnTo,
+    canReadReleases,
+  };
 }
 
 /**
@@ -245,11 +321,15 @@ function Readback({ text }: { text: ReleaseTimeText }) {
 /**
  * What a failed request means. A refusal changed nothing, since the step is
  * all or nothing; a lost answer may have scheduled it, and the editor is told
- * where to look before trying again.
+ * where to look before trying again. A person who may schedule but not read
+ * releases has nowhere to look, since the Publishing section and the banner
+ * both read them, so they are told who can.
  */
-function failureText(error: unknown): string {
+function failureText(error: unknown, canReadReleases: boolean): string {
   if (!isDefiniteRefusal(error)) {
-    return "No answer came back, so this may have been scheduled. Check the Publishing section before trying again.";
+    return canReadReleases
+      ? "No answer came back, so this may have been scheduled. Check the Publishing section before trying again."
+      : "No answer came back, so this may have been scheduled. Ask someone who can see releases to check before trying again, so it isn't scheduled twice.";
   }
   return releaseErrorMessage(
     error,

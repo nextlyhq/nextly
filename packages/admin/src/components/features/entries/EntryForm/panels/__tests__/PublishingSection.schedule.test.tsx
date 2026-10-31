@@ -184,6 +184,28 @@ describe("scheduling from the Publishing section", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  it("leaves focus in the section, not on the page, once the offer it came from is gone", async () => {
+    showEditor();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Schedule publish…" })
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Schedule publish",
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Schedule publish" })
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Not scheduled.")).toBeNull()
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The button that opened the dialog went with "Not scheduled.", so
+    // focus is handed to the section, which names the new release next.
+    await waitFor(() => expect(document.activeElement).toBe(publishing()));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("holds the offer, saying why, from a person who may not create releases", async () => {
     grants.missing = ["create-content-releases"];
     showEditor();

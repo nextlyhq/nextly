@@ -22,6 +22,7 @@
 import type { JSX } from "react";
 import { useId } from "react";
 
+import { SCHEDULE_OUTCOME_ATTRIBUTE } from "@admin/components/features/releases/dialog-opener";
 import {
   describeRelease,
   formatScheduledAt,
@@ -56,7 +57,9 @@ export function PublishingSection({
   if (!canRead || document === undefined) return null;
 
   return (
-    <PanelSection title="Publishing">
+    // Takes focus once a schedule made from its own offer lands: the offer
+    // goes with "Not scheduled.", and the section names the release next.
+    <PanelSection title="Publishing" focusTarget={SCHEDULE_OUTCOME_ATTRIBUTE}>
       <PublishingBody
         releases={data?.items}
         isError={isError}

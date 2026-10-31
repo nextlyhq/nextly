@@ -20,19 +20,29 @@ import { cn } from "@admin/lib/utils";
 export function PanelSection({
   title,
   titleHidden = false,
+  focusTarget,
   children,
 }: {
   title: string;
   /** Says the heading only to assistive technology. */
   titleHidden?: boolean;
+  /**
+   * Lets the section take focus from script, marked with the given data
+   * attribute: for a section whose control goes away when it has done its
+   * work, so focus lands on the section rather than the top of the page.
+   */
+  focusTarget?: `data-${string}`;
   children: ReactNode;
 }): JSX.Element {
   const headingId = useId();
+  const focusable =
+    focusTarget === undefined ? {} : { tabIndex: -1, [focusTarget]: "" };
   return (
     <section
       aria-labelledby={headingId}
       data-panel-section={title}
-      className="border-b border-border px-5 py-4 last:border-b-0"
+      className="border-b border-border px-5 py-4 outline-none last:border-b-0"
+      {...focusable}
     >
       <h3
         id={headingId}
