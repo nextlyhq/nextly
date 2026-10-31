@@ -64,7 +64,11 @@ import { withErrorHandler } from "./with-error-handler";
 /** A change names a few booleans and one kind; nothing larger is a real one. */
 const MAX_SETUP_BODY_BYTES = 1024;
 
-/** The change a PUT may make: at least one of the four. */
+/** Why a body naming a sample answer and another change is refused. */
+const ALONE =
+  "Send the sample answer on its own: `sample` cannot be combined with another change.";
+
+/** The change a PUT may make: at least one of the five, a sample answer alone. */
 const setupChange = z
   .object({
     collapsed: z.boolean().optional(),
@@ -97,6 +101,18 @@ const setupChange = z
       message:
         "Name at least one of collapsed, dismissed, skip, retire or sample.",
     }
+  )
+  // A sample answer is the site's and cannot be undone; sent with a change that
+  // could still be refused, a refusal would come after it had committed. So it
+  // travels alone, and the whole body is judged before anything is written.
+  .refine(
+    change =>
+      change.sample === undefined ||
+      (change.collapsed === undefined &&
+        change.dismissed === undefined &&
+        change.skip === undefined &&
+        change.retire === undefined),
+    { message: ALONE }
   );
 
 /**
@@ -171,6 +187,9 @@ export const putDashboardSetup = withErrorHandler(async (req: Request) => {
     })
   );
   if (!parsed.success) {
+    if (parsed.error.issues.some(issue => issue.message === ALONE)) {
+      throw NextlyError.invalidInput({ message: ALONE });
+    }
     throw NextlyError.invalidInput({
       message:
         'The body must name at least one of `collapsed` or `dismissed` (true or false), `skip: { kind, skipped }` with a kind that may be skipped, `retire: { sampleRefused }`, or `sample` as `"decline"` or `{ record }`.',

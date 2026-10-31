@@ -301,6 +301,29 @@ describe("who is offered sample content", () => {
     ).toBeInTheDocument();
   });
 
+  it("never drops a step whose answer could not be read, though the route refuses this person", async () => {
+    route(() => new Response(null, { status: 403 }));
+    // Every other step done: dropped, the unreadable step would let the card retire.
+    render(
+      card(
+        dataOf(
+          { kind: "sample", status: "open", unreadable: true },
+          { kind: "entry", status: "done" }
+        )
+      )
+    );
+    expect(
+      await within(sampleTile()!).findByText("Couldn't check")
+    ).toBeInTheDocument();
+    await act(async () => undefined);
+    expect(sampleTile()).toHaveAttribute("data-status", "open");
+    expect(screen.queryByTestId("setup-all-set")).toBeNull();
+    expect(put).not.toHaveBeenCalledWith(
+      "/dashboard/setup",
+      expect.objectContaining({ retire: expect.anything() })
+    );
+  });
+
   it("asks for the site's current answer whenever the dashboard regains focus", async () => {
     route(allowed);
     render(card(dataOf(OPEN)));
@@ -408,6 +431,28 @@ describe("a load and its outcome", () => {
     );
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toEqual({ confirm: true });
+  });
+
+  it("offers a way to end a failed load that left entries: declining, for the site", async () => {
+    route(allowed);
+    render(
+      card(
+        dataOf(
+          withRun({ state: "failed", startedAt: STARTED, failure: "boom" }),
+          { kind: "entry", status: "done" }
+        )
+      )
+    );
+    fireEvent.click(
+      await within(await shownPanel()).findByRole("button", {
+        name: "Decline sample content",
+      })
+    );
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/dashboard/setup", {
+        sample: "decline",
+      })
+    );
   });
 
   it("offers no Try again on a failed load once the site holds an entry", async () => {

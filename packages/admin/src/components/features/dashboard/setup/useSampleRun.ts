@@ -397,6 +397,9 @@ function isSampleRefused(
   local: SampleCache
 ): boolean {
   if (probe === undefined || probe.available || probe.unknown) return false;
+  // A step whose site-wide answer could not be read is never absent: dropped, it could let
+  // setup retire for good over an outage, whatever the route says of this person.
+  if (step?.unreadable === true) return false;
   return (
     step?.run === undefined && (local === null || local.phase === "refused")
   );

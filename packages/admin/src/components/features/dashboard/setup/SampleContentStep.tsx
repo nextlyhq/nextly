@@ -146,6 +146,12 @@ function Unfinished({ view, sample }: ViewProps<"unfinished">) {
   );
 }
 
+/**
+ * A failed load: what failed, "Add your first entry" while that step is open, Try again while the
+ * site holds no entry, and always a way to end the step, declining sample content for the site,
+ * which the server allows over a failed load. Without it a failed load that left entries would
+ * hold setup open with nothing to press.
+ */
 function Failed({ view, sample }: ViewProps<"failed">) {
   return (
     <p role="alert">
@@ -159,6 +165,10 @@ function Failed({ view, sample }: ViewProps<"failed">) {
           <SampleAction onClick={sample.askAgain}>Try again</SampleAction>
         </>
       )}
+      <Dot />
+      <SampleAction onClick={sample.decline}>
+        Decline sample content
+      </SampleAction>
     </p>
   );
 }
