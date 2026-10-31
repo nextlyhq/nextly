@@ -217,6 +217,19 @@ describe("an existing app with an option off or missing", () => {
     expect(text).not.toMatch(/cacheComponents: false/);
   });
 
+  it("puts a comma after a last property written without one", async () => {
+    await write(
+      "next.config.js",
+      "module.exports = {\n  reactStrictMode: true\n};\n"
+    );
+
+    await turnOnCacheComponents(dir);
+
+    expect(await read("next.config.js")).toBe(
+      `module.exports = {\n  reactStrictMode: true,\n  cacheComponents: true,\n  partialPrefetching: true,\n${HANDLERS}};\n`
+    );
+  });
+
   it("turns on only the option that is off", async () => {
     await write(
       "next.config.mjs",
