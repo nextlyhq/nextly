@@ -522,9 +522,96 @@ describe("a delete that fails while the file may still be there", () => {
     expect(code).toBe(0);
     expect(store.cleared).toEqual(["item"]);
   });
+
+  // A 404 says something is not found, not that the file is: a bucket that
+  // does not exist, or a storage reached at the wrong address, answers 404
+  // too, while the file itself may still be served from where it is.
+  it.each([
+    [
+      "a bucket that does not exist",
+      Object.assign(new Error("The specified bucket does not exist"), {
+        name: "NoSuchBucket",
+        $metadata: { httpStatusCode: 404 },
+      }),
+    ],
+    [
+      "a bare 404 from a storage's endpoint",
+      Object.assign(new Error("404 page not found"), {
+        $metadata: { httpStatusCode: 404 },
+      }),
+    ],
+    [
+      "an error named only NotFound",
+      Object.assign(new Error("Not Found"), { name: "NotFound" }),
+    ],
+  ])(
+    "keeps the item's sizes for %s, which does not say the file is gone",
+    async (_case, error) => {
+      const storage = bucket("s3");
+      const { large, store } = await oneItem(storage.adapter);
+
+      const { code, report } = await removeStoredImageSizes({
+        store,
+        storage: failingWith(storage.adapter, large.path, error),
+        objects,
+        apply: true,
+        referencedNow: usedIn(store),
+        say: () => {},
+      });
+
+      expect(code).toBe(1);
+      expect(store.cleared).toEqual([]);
+      expect(holdsStoredSizes(store.table[0].sizes)).toBe(true);
+      expect(report.itemsLeft.map(item => item.id)).toEqual(["item"]);
+    }
+  );
 });
 
 describe("sizes stored on another storage than the one configured now", () => {
+  // A URL relative to the site was written by local disk, which serves files
+  // from the site itself. An object storage serves from its own host, so the
+  // same path under it is another file: the local one would stay, publicly
+  // served, once its record was cleared.
+  it.each([
+    ["by their own site-relative URL", true],
+    ["by path alone, beside a site-relative original", false],
+  ])(
+    "are refused on an object storage when recorded %s",
+    async (_case, sizeHasUrl) => {
+      const adapter = new Bucket("s3");
+      const key = "2026/10/photo-small.webp";
+      // The bucket holds its own file at the very key the record names.
+      adapter.files.set(key, Buffer.from("this bucket's own file"));
+      adapter.files.set("2026/10/photo.png", Buffer.from("original"));
+      const store = new MemoryStore([
+        {
+          id: "from-disk",
+          filename: "2026/10/photo.png",
+          url: "/2026/10/photo.png",
+          thumbnailUrl: null,
+          sizes: JSON.stringify({
+            small: sizeHasUrl ? { path: key, url: `/${key}` } : { path: key },
+          }),
+        },
+      ]);
+      const before = [...adapter.files.keys()].sort();
+
+      const { code, report } = await removeStoredImageSizes({
+        store,
+        storage: adapter,
+        objects,
+        apply: true,
+        referencedNow: usedIn(store),
+        say: () => {},
+      });
+
+      expect(code).toBe(1);
+      expect([...adapter.files.keys()].sort()).toEqual(before);
+      expect(store.cleared).toEqual([]);
+      expect(report.itemsLeft.map(item => item.id)).toEqual(["from-disk"]);
+    }
+  );
+
   it("are refused: nothing is sent to this storage, the item keeps its sizes and is named", async () => {
     const adapter = new Bucket("s3");
     const storage: Storage = {

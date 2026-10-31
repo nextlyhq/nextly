@@ -245,9 +245,11 @@ function servedAt(url: string): { origin: string | null; path: string } {
 
 /**
  * Whether a URL a record holds is where the storage configured now serves
- * `path`. A URL relative to the site and an absolute one are compared by
- * path, since local disk is served from the site under either spelling;
- * otherwise by origin and path, so another bucket, account or host differs.
+ * `path`: the same path, and the same origin, or both relative to the site.
+ * One relative and one absolute match only on local disk, which is served
+ * from the site under either spelling. On any other storage a URL relative to
+ * the site is a file local disk wrote, and the same path under the storage's
+ * own host is another file, so it is not this storage's.
  */
 function servedHere(
   url: string,
@@ -257,11 +259,9 @@ function servedHere(
   const recorded = servedAt(url);
   const here = servedAt(storage.getPublicUrl(path));
   if (recorded.path !== here.path) return false;
-  return (
-    recorded.origin === null ||
-    here.origin === null ||
-    recorded.origin === here.origin
-  );
+  if (recorded.origin === here.origin) return true;
+  const oneRelative = recorded.origin === null || here.origin === null;
+  return oneRelative && storage.getType() === "local";
 }
 
 /**
@@ -488,23 +488,18 @@ function sayPlan(
 
 /**
  * Whether a storage's error says the file is not there, and nothing else:
- * local disk's ENOENT, S3's NoSuchKey or 404, Vercel Blob's not-found error.
- * Anything else, a refusal, an outage or an unknown shape, says nothing about
- * the file.
+ * local disk's ENOENT, S3's NoSuchKey, Vercel Blob's not-found error. Each
+ * names the file. A bare 404, or an error named only `NotFound`, does not: a
+ * bucket that does not exist (S3's NoSuchBucket is a 404) or a storage reached
+ * at the wrong address answers so too, while the file may still be served
+ * from where it is. Those, a refusal, an outage and any unknown shape say
+ * nothing about the file.
  */
 function isDefinitelyNotFound(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const { code, name, $metadata } = error as {
-    code?: unknown;
-    name?: unknown;
-    $metadata?: { httpStatusCode?: unknown };
-  };
+  const { code, name } = error as { code?: unknown; name?: unknown };
   return (
-    code === "ENOENT" ||
-    name === "NoSuchKey" ||
-    name === "NotFound" ||
-    name === "BlobNotFoundError" ||
-    $metadata?.httpStatusCode === 404
+    code === "ENOENT" || name === "NoSuchKey" || name === "BlobNotFoundError"
   );
 }
 
