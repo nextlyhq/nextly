@@ -1,20 +1,13 @@
 /**
  * The widget declarations each enabled plugin contributes, as startup reads
- * them for the one store of declared widgets.
- *
- * Two readings of a plugin: the widgets it declares with `defineWidget()`
- * under `contributes.dashboard.widgets`, and the ids it declares in today's
- * shape under `contributes.admin.widgets`, which take part only in the id
- * rules. A disabled plugin contributes neither, as it contributes no other
- * admin surface (`contributedWidgetSummaries`).
+ * them for the one store of declared widgets: the widgets it declares with
+ * `defineWidget()` under `contributes.dashboard.widgets`. A disabled plugin
+ * contributes none, as it contributes no other admin surface.
  *
  * @module plugins/dashboard-declarations
  */
 
-import type {
-  DeclaredWidgetGroup,
-  LegacyWidgetIds,
-} from "../domains/widgets/declaration/declared-widgets";
+import type { DeclaredWidgetGroup } from "../domains/widgets/declaration/declared-widgets";
 import { quote } from "../domains/widgets/declaration/quote";
 import { unknownKeyProblems } from "../domains/widgets/declaration/site-dashboard";
 import {
@@ -23,7 +16,6 @@ import {
 } from "../domains/widgets/declaration/validate";
 
 import type { PluginDefinition } from "./plugin-context";
-import { carriedRemovedKey } from "./removed-widget-keys";
 import { resolvePluginSelf } from "./self";
 
 /** How a fault names the plugin it is about. */
@@ -44,6 +36,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  */
 export interface PluginDashboardSnapshot {
   readonly owner: string;
+  /** The plugin's name, which the add panel lists its widgets under. */
+  readonly plugin: string;
   /** Its `widgets`, as given: startup checks every declaration. */
   readonly widgets: unknown;
   /** Its `suggest`, copied where it is a list. */
@@ -86,6 +80,7 @@ export function pluginDashboardSnapshots(
     return [
       {
         owner: pluginOwner(plugin),
+        plugin: plugin.name,
         widgets,
         // Copied by `slice`, which keeps an empty slot where the list has one,
         // so the check can name it; a spread would read it as `undefined`.
@@ -119,31 +114,15 @@ export function pluginDashboardSnapshots(
 export function pluginWidgetDeclarationGroups(
   dashboards: readonly PluginDashboardSnapshot[]
 ): DeclaredWidgetGroup[] {
-  return dashboards.map(({ owner, widgets, collections }) => ({
+  return dashboards.map(({ owner, plugin, widgets, collections }) => ({
     owner,
+    plugin,
     // Left out is a plugin that adds only Needs attention items: it declares
     // no widget. Only `undefined` reads so; `null` is a list that is not one,
     // and goes on to the shape check to be refused.
     declarations: widgets === undefined ? [] : widgets,
     ...(collections === undefined ? {} : { collections }),
   }));
-}
-
-/**
- * The widget ids each enabled plugin declares under `contributes.admin.widgets`,
- * a key startup refuses.
- */
-export function pluginLegacyWidgetIds(
-  plugins: readonly PluginDefinition[]
-): LegacyWidgetIds[] {
-  return enabled(plugins).flatMap(plugin => {
-    const widgets = carriedRemovedKey(plugin, "admin.widgets");
-    if (!Array.isArray(widgets)) return [];
-    const ids = widgets
-      .map(widget => (widget as { id?: unknown } | null)?.id)
-      .filter((id): id is string => typeof id === "string" && id !== "");
-    return ids.length > 0 ? [{ owner: pluginOwner(plugin), ids }] : [];
-  });
 }
 
 /**
@@ -255,23 +234,6 @@ export function pluginSuggestionFaults(
       ...alternativeFaults(dashboard, own, coreIds),
     ];
   });
-}
-
-/**
- * The widgets the plugins suggest for the default dashboard, in the order the
- * site lists its plugins, from the copies startup checked: each is one of its
- * plugin's own widgets, or startup refused it.
- */
-export function pluginSuggestions(
-  dashboards: readonly PluginDashboardSnapshot[]
-): string[] {
-  return dashboards.flatMap(({ suggest }) =>
-    Array.isArray(suggest)
-      ? (suggest as readonly unknown[]).filter(
-          (id): id is string => typeof id === "string"
-        )
-      : []
-  );
 }
 
 /**

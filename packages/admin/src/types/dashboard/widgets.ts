@@ -2,7 +2,7 @@
  * What the admin knows about a dashboard widget and about the data one asked
  * for.
  *
- * The shared vocabulary (`WidgetSizeBounds`, `WidgetArchetype`, `WidgetQuery`) is
+ * The shared vocabulary (`WidgetSizeBounds`, the archetype, `WidgetQuery`) is
  * IMPORTED from core rather than restated, through `nextly/config`: this
  * package's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
  * importing from `"nextly"` shadows the package exports and drags core's whole
@@ -24,7 +24,6 @@
 import type {
   AnyWidgetSetting,
   WidgetAction,
-  WidgetArchetype,
   SourcelessWidgetQuery,
   WidgetQuery,
   WidgetQueryCell,
@@ -58,10 +57,10 @@ export type {
  * A widget as the grid renders it: every field the card and the archetype need,
  * with nothing optional that the renderer would have to invent a default for.
  *
- * Plugin contributions arrive as `PluginWidgetMeta`, whose declarative half is
- * all optional (a widget may still be nothing but a `component`). `resolve`
- * in `resolve-widgets.ts` is the one place that gap is closed, so the renderer
- * below it never has to ask whether a title exists.
+ * Widgets arrive over the wire as the registry publishes them.
+ * `resolveDashboardWidgets` in `resolve-widgets.ts` is the one place one
+ * becomes this, so the renderer below it never has to ask whether a title
+ * exists.
  */
 export interface DashboardWidget {
   id: string;
@@ -69,7 +68,7 @@ export interface DashboardWidget {
   description?: string;
   /** Lucide icon name, resolved to a component by the card. */
   icon?: string;
-  archetype: WidgetArchetype;
+  archetype: WidgetDefinition["archetype"];
   /**
    * The sizes this widget's cards may take, in grid units, with every end
    * filled in: the size a new card starts at, and the smallest and largest it
@@ -289,6 +288,13 @@ export interface DashboardLayoutResponse {
    * `source` says `"own"` for both of those rows, so it cannot tell them apart.
    */
   arranged: boolean;
+  /**
+   * Whether the default as configured gives Needs attention and Upcoming releases a row of their
+   * own, side by side: judged by the server before this reader's cards are left out, so it is
+   * the same for a reader who may not see one of the two. Absent from a server that predates
+   * it, which reads as no.
+   */
+  pairedRow?: boolean;
   /**
    * An opaque token for the set of widgets this reader could see when the
    * arrangement was read. Echoed back on write; a mismatch is a 409.

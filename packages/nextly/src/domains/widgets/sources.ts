@@ -166,7 +166,7 @@ export interface WidgetSource {
    *
    * Spelled `read-<slug>`, the vocabulary the permission table and
    * `canReadEntity` use, and the one the same field name already carries on
-   * `WidgetDefinition` and `PluginAdminWidget`. One field name, one spelling.
+   * `WidgetDefinition`. One field name, one spelling.
    */
   requiredPermission?: string;
   /**

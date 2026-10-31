@@ -32,10 +32,10 @@ import {
   collectPrincipalKinds,
   publishPrincipalKinds,
 } from "./principals/registry";
+import { assertNoRemovedWidgetKeys } from "./removed-widget-keys";
 import { resolutionError } from "./resolution-error";
 import { assertSettingsPermissionsGuardSettings } from "./settings-permission";
 import { topoSortPlugins } from "./topo-sort";
-import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
@@ -132,13 +132,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // other fail-fast checks rather than surfacing when the admin first asks for
   // its metadata and losing the whole branding response with it.
   assertClientConfigs(plugins);
-  // Beside it, and for the same reason one level up: a contributed widget rides
-  // in the SAME `/api/admin-meta/workspace` payload, through the same single
-  // `JSON.stringify`. A bigint under `query.where` is type-legal there, so the
-  // throw lands on the workspace response for every admin rather than on the
-  // one card -- which is a worse failure than a bad `clientConfig`, not a
-  // lesser one.
-  assertAdminWidgets(plugins);
+  // Beside it: a plugin still adding widgets or widget sources through a key
+  // Nextly no longer reads is refused here, by name, rather than having its
+  // cards silently absent.
+  assertNoRemovedWidgetKeys(plugins);
   // And the document views: two screens on one address would leave the admin
   // drawing whichever it reached first, and a transformer can add either.
   assertDocumentViews(plugins);

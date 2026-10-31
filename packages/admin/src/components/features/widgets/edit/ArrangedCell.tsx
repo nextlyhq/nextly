@@ -70,6 +70,12 @@ import type { WidgetSettingsSheetProps } from "./WidgetSettingsSheet";
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
+  /**
+   * The columns the cell spans in place of its card's own width, where the grid draws it wider
+   * (the lone card of the pair). The cell's span ALONE: the card, its size controls, every write
+   * and Undo keep the stored size, so a change to its height saves its own width.
+   */
+  drawnW?: number;
   isEditing: boolean;
   /** The card just placed: moved, resized, added or put back. */
   highlighted?: boolean;
@@ -420,8 +426,11 @@ function doneFor(props: ArrangedCellProps): {
   };
 }
 
-/** The cell's classes: its columns, its leaving the grid while hidden, and its spacing. */
-function cellClassName(size: GridSize, isEditing: boolean): string {
+/**
+ * The cell's classes: its columns (`span`, the card's drawn width or the width the grid draws it
+ * at in its place), its leaving the grid while hidden, and its spacing.
+ */
+function cellClassName(span: number, isEditing: boolean): string {
   return cn(
     // `relative` so the drag handle, which is absolutely positioned, lands
     // on this cell rather than on the grid. `min-h-0` and `overflow-hidden`
@@ -431,7 +440,7 @@ function cellClassName(size: GridSize, isEditing: boolean): string {
     // 🔴 The PLACEMENT's size, drawn at the nearest size its widget's bounds
     // allow. The stored size IS the reader's arrangement, so it is never
     // replaced by the declaration's default here.
-    cardSpanClass(size.w),
+    cardSpanClass(span),
     // A card whose widget hides when empty leaves the grid while its answer is: the frame marks
     // it (`data-hidden-empty`) only outside customise mode, so the cell needs no state of its own.
     "has-[[data-hidden-empty]]:hidden",
@@ -736,7 +745,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
-      className={cellClassName(size, isEditing)}
+      className={cellClassName(props.drawnW ?? size.w, isEditing)}
       style={cardRowStyle(rows)}
     >
       <CellEditActions actions={editActions} />

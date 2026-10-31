@@ -60,7 +60,7 @@ export {
  * query result, so it inherits the card anatomy, the loading and empty states,
  * the theme tokens and the accessibility work for free.
  */
-export const WIDGET_ARCHETYPES = [
+const WIDGET_ARCHETYPES = [
   "metric",
   // Several labelled, clickable numbers. Named "stats" rather than the obvious
   // "metrics", and the near-miss is the reason: `metric` and `metrics` differ by
@@ -120,7 +120,7 @@ export const DATA_ARCHETYPES = [
  * using `query`. `stats` is the first, so it gets its own name rather than
  * being filed under whichever existing one is closer.
  */
-export const CELL_ARCHETYPES = ["stats"] as const;
+const CELL_ARCHETYPES = ["stats"] as const;
 
 /** An archetype core draws from several query results. */
 export type CellWidgetArchetype = (typeof CELL_ARCHETYPES)[number];
@@ -383,10 +383,10 @@ export interface WidgetDefinition {
    */
   sourceFilters?: readonly WidgetSourceFilter[];
   /**
-   * Where this widget sits among the older-shape widgets suggested for the
-   * default dashboard, after its own cards (`default-layout.ts`), ascending.
-   * Omitted means "after everything that states one". Core's own widgets state
-   * none: their place is core's `defaultLayout`.
+   * Where this widget sits, ascending, among the declared cards the admin
+   * draws while no arrangement could be read. Omitted means "after everything
+   * that states one". It places nothing on the default dashboard, which is only
+   * what its `defaultLayout` names; core's own widgets state none.
    *
    * The DECLARED default, not the reader's own arrangement -- a stored layout
    * carries its own order per placement and wins over this. It exists because
@@ -455,7 +455,7 @@ export interface WidgetDefinition {
    * returns -- that is `execute`'s job, and it is not optional there.
    *
    * A `PermissionSlug` spelling (`read-posts`), the same vocabulary
-   * `WidgetSource.requiredPermission` and `PluginAdminWidget` carry.
+   * `WidgetSource.requiredPermission` carries.
    *
    * 🔴 An ARRAY means ANY-OF, and it exists because a single slug cannot
    * describe the rule the services behind these cards actually apply. Release
@@ -931,7 +931,7 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
  * Archetypes core draws with NO query at all, exported for the same reason as
  * `DATA_ARCHETYPES` above.
  */
-export const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
+const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
 
 /** An archetype core draws without asking for data. */
 export type QuerylessWidgetArchetype = (typeof QUERYLESS_ARCHETYPES)[number];
@@ -1008,7 +1008,7 @@ export const MAX_TEXT_CONTENT = 10_000;
  * shared. A `text` widget IS its prose, so blank content describes an empty
  * card; the bound is explained on {@link MAX_TEXT_CONTENT}.
  */
-export function textContentProblem(content: unknown): string | undefined {
+function textContentProblem(content: unknown): string | undefined {
   if (typeof content !== "string" || content.trim() === "") {
     return 'archetype "text" requires non-empty content';
   }
@@ -1046,14 +1046,10 @@ function validateAction(action: WidgetAction | undefined, at: string): void {
 /**
  * What is wrong with one shortcut, or `undefined` when nothing is.
  *
- * A PREDICATE beside the throwing check, because both channels into the grid
- * need this rule and only one of them throws. `assertAdminWidgets` refuses a
- * contributed widget with its own error shape and its own message, so it cannot
- * call `validateAction` -- and restating the rule there is how the two came to
- * disagree: the registry rejected a blank label while a contributed
- * `actions: [{}]` was published and drew a link with an undefined destination.
+ * A PREDICATE beside the throwing check, so a caller can ask the rule without
+ * catching a throw.
  */
-export function actionProblem(action: unknown): string | undefined {
+function actionProblem(action: unknown): string | undefined {
   const candidate = action as Partial<WidgetAction> | null | undefined;
   if (typeof candidate?.label !== "string" || candidate.label.trim() === "") {
     return "requires a non-empty label";
@@ -1080,7 +1076,7 @@ export function actionProblem(action: unknown): string | undefined {
  * `WidgetDefinition` and a decoded JSON object can ask it without either side
  * casting to the other's shape.
  */
-export function querylessQueryProblem(
+function querylessQueryProblem(
   archetype: unknown,
   query: unknown
 ): string | undefined {
@@ -1135,7 +1131,7 @@ export function chromeFieldProblem(widget: object): string | undefined {
  * uses infinity as its "stated nothing" sentinel, so an infinite ORDER would
  * tie with every widget that declared none.
  */
-export function defaultOrderProblem(value: unknown): string | undefined {
+function defaultOrderProblem(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "defaultOrder must be a finite number";
@@ -1245,7 +1241,7 @@ export function statCellProblem(cell: unknown, at: string): string | undefined {
  * published -- the exact values the registry refuses, arriving by the other
  * door and rendering as silent dashes or one answer drawn twice.
  */
-export function cellsProblem(
+function cellsProblem(
   cells: unknown,
   max: number = MAX_STAT_CELLS
 ): string | undefined {
@@ -1334,7 +1330,7 @@ function queryCellProblem(cell: unknown, index: number): string | undefined {
  * registry's and a plugin's contributed widgets, so neither accepts a shape the
  * other refuses.
  */
-export function customAsksTwiceProblem(widget: {
+function customAsksTwiceProblem(widget: {
   archetype?: unknown;
   query?: unknown;
   cells?: unknown;
@@ -1407,7 +1403,7 @@ function validateCells(d: Partial<WidgetDefinition>): void {
  * Answers a reason rather than throwing, like {@link querylessQueryProblem}
  * beside it, so the caller attaches the widget id once for every rule.
  */
-export function archetypeResultProblem(
+function archetypeResultProblem(
   archetype: WidgetArchetype,
   // Sourceless too: the op decides what an archetype can draw, whichever way
   // the source arrives.

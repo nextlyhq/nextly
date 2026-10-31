@@ -73,6 +73,7 @@ import {
   useHiddenWhileEmptyAtFirstPaint,
   type CardAnswers,
 } from "./hidden-while-empty";
+import { WidenLonePairContext, widensLonePair } from "./lone-pair";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
@@ -421,7 +422,12 @@ function CardContexts({
   return (
     <DrawFailureContext.Provider value={reportDraw}>
       <HiddenWhileEmptyContext.Provider value={hiddenWhileEmpty}>
-        {children}
+        {/* The lone card of the pair is drawn across its row where the default gives the pair
+            a row of their own and the reader follows it: a reader's own arrangement, and a
+            site's default that places them otherwise, keep their sizes. */}
+        <WidenLonePairContext.Provider value={widensLonePair(layout)}>
+          {children}
+        </WidenLonePairContext.Provider>
       </HiddenWhileEmptyContext.Provider>
     </DrawFailureContext.Provider>
   );
@@ -484,16 +490,9 @@ export function WidgetGrid(): JSX.Element {
   const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
 
-  // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
-  // and the registry `registerWidget` writes to. Reading only the first made the
-  // registry invisible to the renderer built around it.
+  // The widgets the registry publishes: core's, the plugins' and the site's.
   const declared = useMemo(
-    () =>
-      resolveDashboardWidgets(
-        branding?.plugins,
-        branding?.widgets,
-        hasPermission
-      ),
+    () => resolveDashboardWidgets(branding?.widgets, hasPermission),
     [branding, hasPermission]
   );
 

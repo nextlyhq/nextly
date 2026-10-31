@@ -24,7 +24,6 @@ const allow = () => true;
 
 function registered(fields: Record<string, unknown>): DashboardWidget {
   const [widget] = resolveDashboardWidgets(
-    undefined,
     [
       {
         id: "acme/orders",

@@ -36,5 +36,10 @@ export const teamActivityWidget = {
   // Asked like core's own lists: the rows its size draws and one more, so the
   // card can say more exist at every size.
   sizedQuery: true,
+  // Offered only while the reader may read a collection or a Single the
+  // dashboard lists: the feed leaves out every event about anything else, so
+  // with none of them it could never draw a row.
+  lifecycle: "conditional",
+  visibleWhen: "content:present",
   settings: [RECENT_ACTIVITY_ITEMS, LIST_DENSITY],
 } as const satisfies WidgetDefinition;

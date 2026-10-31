@@ -23,7 +23,7 @@
  * @module components/features/widgets/outcome
  */
 
-import type { WidgetArchetype } from "nextly/config";
+import type { WidgetDefinition } from "nextly/config";
 import { noSettingChosen, settingInSentence } from "nextly/widget-result";
 import type { ReactNode } from "react";
 
@@ -48,6 +48,9 @@ import type {
 } from "./archetypes/types";
 import { EMPTY_DEFAULT, type CardEmptyContent } from "./frame/states";
 
+/** An archetype a published widget names. */
+type Archetype = WidgetDefinition["archetype"];
+
 /**
  * The archetypes core draws from a query result.
  *
@@ -55,7 +58,7 @@ import { EMPTY_DEFAULT, type CardEmptyContent } from "./frame/states";
  * render, and the card says so by name rather than coming up blank. `custom`
  * is deliberately absent — it is not drawn from a result at all.
  */
-const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
+const ARCHETYPE_BODIES: Partial<Record<Archetype, ArchetypeRenderer>> = {
   metric: { accepts: metricAccepts, body: metricBody },
   list: { accepts: listAccepts, body: listBody },
   table: { accepts: tableAccepts, body: tableBody },
@@ -84,7 +87,7 @@ const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
  */
 function archetypeRenderer(archetype: string): ArchetypeRenderer | undefined {
   return Object.hasOwn(ARCHETYPE_BODIES, archetype)
-    ? ARCHETYPE_BODIES[archetype as WidgetArchetype]
+    ? ARCHETYPE_BODIES[archetype as Archetype]
     : undefined;
 }
 

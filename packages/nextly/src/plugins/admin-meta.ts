@@ -10,13 +10,11 @@ import type {
   FieldStoragePrimitive,
   FieldTypeCategory,
 } from "../collections/fields/catalog";
-import { withSiteOverride } from "../domains/widgets/site-rules";
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
   HeaderButtonId,
   PluginAdminPage,
-  PluginAdminWidget,
   PluginMenuItem,
 } from "./admin-contributions";
 import type { FieldSurface } from "./contributions";
@@ -30,7 +28,6 @@ import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
 import { settingsPermissionOf } from "./settings-permission";
-import { validatedAdminWidgets } from "./validate-admin-widgets";
 import { validatedClientConfig } from "./validate-client-config";
 import {
   contributedDocumentViews,
@@ -128,8 +125,6 @@ export interface PluginAdminMeta {
     hideDefaults?: boolean;
     hide?: HeaderButtonId[];
   };
-  /** Dashboard widgets — present only for enabled plugins. */
-  widgets?: PluginAdminWidget[];
   /** Schema-builder slot component path — present only for enabled plugins. */
   schemaBuilderSlot?: string;
   /** Entry/single form toolbar slot component path — present only for enabled plugins. */
@@ -436,19 +431,6 @@ export function buildPluginAdminMeta(
         };
       }
       if (slot) meta.headerSlot = slot;
-      // Validated rather than copied, the same way `clientConfig` is above and
-      // for a wider blast radius. A widget declaration never passes through
-      // `registerWidget`, so nothing else stands between it and the single
-      // `JSON.stringify` that serializes this whole payload -- and a value that
-      // throws there fails `/api/admin-meta/workspace` for every admin, not
-      // just this card. The same validator boot runs, so this path cannot
-      // accept what boot rejected; called again here because the reduced value
-      // is what publishes.
-      const widgets = validatedAdminWidgets(plugin);
-      // As the site's `overrides` change each one, the same application every
-      // other reading of a widget takes.
-      if (widgets && widgets.length > 0)
-        meta.widgets = widgets.map(widget => withSiteOverride(widget));
       if (admin.schemaBuilderSlot)
         meta.schemaBuilderSlot = admin.schemaBuilderSlot;
       if (admin.entryFormToolbarSlot)
