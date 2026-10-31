@@ -56,6 +56,8 @@ export interface SchedulePublishDialogProps {
   document: ReleaseDocumentRef;
   /** The document's title, which names the release it goes into. */
   documentTitle: string | undefined;
+  /** Whether saving writes what readers see at once, with no draft between. */
+  savesGoLive: boolean;
   /** The control to hand focus back to on close, where it is still there. */
   opener: HTMLElement | null;
 }
@@ -65,6 +67,7 @@ export function SchedulePublishDialog({
   onOpenChange,
   document,
   documentTitle,
+  savesGoLive,
   opener,
 }: SchedulePublishDialogProps): JSX.Element {
   const ids = useId();
@@ -114,8 +117,7 @@ export function SchedulePublishDialog({
             <DialogTitle>Schedule publish</DialogTitle>
             <DialogDescription>
               <span className="font-medium text-foreground">{title}</span> goes
-              live at the time you choose. Changes you save before then go out
-              with it.
+              live at the time you choose. {savingBeforeThen(savesGoLive)}
             </DialogDescription>
           </DialogHeader>
 
@@ -324,6 +326,18 @@ function Readback({ text }: { text: ReleaseTimeText }) {
       </div>
     </div>
   );
+}
+
+/**
+ * What saving before the release falls due does. A save waits for the
+ * release only where it lands in a draft: on a live document whose
+ * collection or Single keeps no drafts, it is published at once, and saying
+ * otherwise would lead an editor to publish planned content early.
+ */
+function savingBeforeThen(savesGoLive: boolean): string {
+  return savesGoLive
+    ? "It is already published, so changes you save before then go live as soon as you save them."
+    : "Changes you save before then go out with it.";
 }
 
 /**

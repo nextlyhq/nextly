@@ -370,6 +370,9 @@ export default function EditEntryPage({
     onDefaultLocale: !isNonDefaultLocale,
     documentTitle: ({ values }) =>
       entryTitleValue(values, collection?.admin?.useAsTitle),
+    // With no drafts, a save of a live entry is published at once.
+    savesGoLive:
+      collection?.draftsEnabled !== true && entry?.status === "published",
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });

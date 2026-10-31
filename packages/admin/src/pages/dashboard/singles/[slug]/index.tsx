@@ -269,6 +269,9 @@ export default function SingleEditPage({
     onDefaultLocale: !isNonDefaultLocale,
     // A Single is named by its schema, not by a field the form holds.
     documentTitle: () => schema?.label || slug,
+    // With no drafts, a save of a live Single is published at once.
+    savesGoLive:
+      schema?.draftsEnabled !== true && document?.status === "published",
   });
 
   // Update mutation — routes the save to the active language's companion row.

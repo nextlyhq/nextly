@@ -93,6 +93,7 @@ function Editor(props: { children: ReactNode }) {
     lifecycleEnabled: true,
     onDefaultLocale: true,
     documentTitle: () => "Spring launch",
+    savesGoLive: false,
   };
   const schedule = useSchedulePublishAction(PROPS);
   const contributed = schedule.contributed;

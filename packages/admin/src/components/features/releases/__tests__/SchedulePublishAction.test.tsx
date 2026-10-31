@@ -31,6 +31,7 @@ const PROPS: SchedulePublishProps = {
   lifecycleEnabled: true,
   onDefaultLocale: true,
   documentTitle: () => "Spring launch",
+  savesGoLive: false,
 };
 
 /** The document as the editor holds it when the action is chosen. */
@@ -188,6 +189,29 @@ describe("the dialog's open state", () => {
     await screen.findByRole("dialog");
     rerender(<Probe entryId="e1" />);
     expect(dialog()).not.toBeNull();
+  });
+});
+
+describe("what the dialog says about saving before then", () => {
+  it("promises later saves go out with the release where saving does not publish", async () => {
+    show({ savesGoLive: false });
+    await userEvent.click(screen.getByRole("button", { name: "open" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain(
+      "Changes you save before then go out with it."
+    );
+  });
+
+  it("says saving publishes at once where the document is live and has no drafts", async () => {
+    // There, Save writes what readers see: promising the save waits for the
+    // release would lead an editor to publish planned content early.
+    show({ savesGoLive: true });
+    await userEvent.click(screen.getByRole("button", { name: "open" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).not.toContain("go out with it");
+    expect(dialog.textContent).toContain(
+      "It is already published, so changes you save before then go live as soon as you save them."
+    );
   });
 });
 

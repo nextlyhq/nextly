@@ -83,6 +83,7 @@ function open(
       onOpenChange={onOpenChange}
       document={DOCUMENT}
       documentTitle="Spring launch"
+      savesGoLive={false}
       opener={over.opener ?? null}
     />
   );
@@ -330,6 +331,7 @@ describe("focus on close", () => {
         onOpenChange={onOpenChange}
         document={DOCUMENT}
         documentTitle="Spring launch"
+        savesGoLive={false}
         opener={opener}
       />
     );
@@ -341,6 +343,7 @@ describe("focus on close", () => {
         onOpenChange={onOpenChange}
         document={DOCUMENT}
         documentTitle="Spring launch"
+        savesGoLive={false}
         opener={opener}
       />
     );
@@ -372,6 +375,7 @@ describe("focus on close", () => {
         onOpenChange={onOpenChange}
         document={DOCUMENT}
         documentTitle="Spring launch"
+        savesGoLive={false}
         opener={opener}
       />
     );

@@ -57,6 +57,12 @@ export interface SchedulePublishProps {
    * title typed and not yet saved is the one the release takes.
    */
   documentTitle: (document: DocumentAsEdited) => string | undefined;
+  /**
+   * Whether saving writes what readers see at once: a published document
+   * whose collection or Single keeps no drafts. The dialog then says so
+   * rather than promising later saves wait for the release.
+   */
+  savesGoLive: boolean;
 }
 
 export interface SchedulePublishAction {
@@ -73,6 +79,7 @@ export function useSchedulePublishAction({
   lifecycleEnabled,
   onDefaultLocale,
   documentTitle,
+  savesGoLive,
 }: SchedulePublishProps): SchedulePublishAction {
   // Both, because the server asks both: creating the release, and
   // scheduling it, which is what puts content live later.
@@ -129,6 +136,7 @@ export function useSchedulePublishAction({
           onOpenChange={setOpen}
           document={{ scopeKind, scopeSlug, entryId }}
           documentTitle={title}
+          savesGoLive={savesGoLive}
           opener={opener}
         />
       </Suspense>
