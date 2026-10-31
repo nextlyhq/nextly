@@ -164,7 +164,7 @@ type Retirement = "unasked" | "asked" | "recorded" | "refused";
 function useRetirement(
   due: boolean,
   sampleRefused: boolean,
-  retire: SetupStateWrite["retire"],
+  { retire, clearFailure }: Pick<SetupStateWrite, "retire" | "clearFailure">,
   answer: SetupCardData
 ): Retirement {
   const [retirement, setRetirement] = useState<Retirement>("unasked");
@@ -206,6 +206,8 @@ function useRetirement(
         onFailed: error => {
           if (isApiError(error) && error.status === 409) {
             refusals.refuse(askedAbout);
+            // The card asked this itself, so nothing the reader changed failed: nothing is said.
+            clearFailure();
             setRetirement("refused");
             // Read in place: the host's Retry would draw the skeleton and unmount the card.
             void queryClient.invalidateQueries({
@@ -218,7 +220,16 @@ function useRetirement(
         },
       }
     );
-  }, [due, sampleRefused, retire, answer, signature, refusals, queryClient]);
+  }, [
+    due,
+    sampleRefused,
+    retire,
+    clearFailure,
+    answer,
+    signature,
+    refusals,
+    queryClient,
+  ]);
   return retirement;
 }
 
@@ -755,7 +766,7 @@ function useDrawnSetup(
   card: SetupCardData,
   seed: SeedStatus,
   answeredHere: boolean,
-  write: Pick<SetupStateWrite, "retire">
+  write: Pick<SetupStateWrite, "retire" | "clearFailure">
 ): { allSet: boolean; counted: CountedSetup | undefined } {
   const drawn =
     card.setup.known && !card.allSet
@@ -765,7 +776,7 @@ function useDrawnSetup(
   const retirement = useRetirement(
     drawnAllSet,
     seed.kind === "hidden",
-    write.retire,
+    write,
     card
   );
   const allSet = card.allSet || (drawnAllSet && retirement === "recorded");

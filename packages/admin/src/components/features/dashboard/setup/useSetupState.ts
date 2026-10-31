@@ -60,6 +60,11 @@ export interface SetupStateWrite {
   isWriting: boolean;
   /** The last write that failed, said in words; cleared by the next write. */
   failed: string | undefined;
+  /**
+   * Forgets the last write's failure, so it is not said: for a write the reader did not make,
+   * such as the card's own request to record "You're all set", which the host may refuse.
+   */
+  clearFailure: () => void;
 }
 
 /**
@@ -113,6 +118,7 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     setSkipped,
     retire,
     isWriting: mutation.isPending,
+    clearFailure: mutation.reset,
     failed: mutation.isError
       ? "That change could not be saved. Try again."
       : undefined,

@@ -656,6 +656,26 @@ describe("the setup card", () => {
     expect(put).toHaveBeenCalledTimes(1);
   });
 
+  it("says nothing failed when the host refuses the card's own retirement: the header keeps its progress", async () => {
+    put.mockRejectedValueOnce(
+      Object.assign(new Error("Setup is not all set: a step is still open."), {
+        status: 409,
+        code: "CONFLICT",
+      })
+    );
+    seed.status = { kind: "hidden" };
+    const steps: SetupStep[] = [
+      { kind: "sample", status: "open" },
+      { kind: "invite", status: "skipped" },
+    ];
+    draw(dataOf({ setup: { known: true, steps, done: 1, total: 2 } }));
+    await waitFor(() => expect(readInPlace()).toBe(1));
+    // Nothing the reader changed failed: the count stays, and nothing is announced.
+    expect(headerCount()).toHaveTextContent("1 of 1 done");
+    expect(headerCount()).not.toHaveTextContent("could not be saved");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("asks once over a refusal the host keeps giving, however often the same steps are read again", async () => {
     // The host refuses every time: no preferences table, or a write it cannot record.
     const refusal = () =>
