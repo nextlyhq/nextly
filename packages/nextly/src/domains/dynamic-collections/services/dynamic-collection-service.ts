@@ -6,6 +6,7 @@
 import { randomBytes } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
@@ -48,6 +49,7 @@ import {
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
+import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
 import {
   readColumnNullState,
@@ -72,6 +74,7 @@ import {
   type CollectionMetadata,
   type ListCollectionsOptions,
   type ListCollectionsResponse,
+  type UnregisteredCollectionRow,
 } from "./dynamic-collection-registry-service";
 import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-service";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -1906,6 +1909,26 @@ export class DynamicCollectionService extends BaseService {
     };
   }
 
+  /**
+   * The foreign keys a collection's own relationship columns hold, as the
+   * schema service declares them. Read for a stored definition, so an action
+   * the current rules would refuse is reported rather than refused.
+   */
+  relationshipForeignKeys(
+    tableName: string,
+    fields: readonly FieldDefinition[]
+  ): ForeignKeySpec[] {
+    return fields.flatMap(field => {
+      const key = this.schemaService.relationshipForeignKey(
+        tableName,
+        field,
+        false
+      );
+      return key === null ? [] : [key];
+    });
+  }
+
+  /** The migration dropping one collection's tables (see the schema service). */
   generateDropTableMigration(
     collectionName: string,
     tableName: string,
@@ -1919,6 +1942,17 @@ export class DynamicCollectionService extends BaseService {
       tableName,
       fields
     );
+  }
+
+  /** One migration dropping every table of collections deleted together (see the schema service). */
+  generateDropTablesMigration(
+    collections: ReadonlyArray<{
+      collectionName: string;
+      tableName: string;
+      fields?: readonly FieldDefinition[];
+    }>
+  ): { migrationSQL: string; migrationFileName: string } {
+    return this.schemaService.generateDropTablesMigration(collections);
   }
 
   async registerCollection(
@@ -1958,6 +1992,22 @@ export class DynamicCollectionService extends BaseService {
 
   async unregisterCollection(name: string): Promise<unknown> {
     return this.registryService.unregisterCollection(name);
+  }
+
+  /** Remove a collection's registry row inside `tx`; forget it once `tx` commits. */
+  async unregisterCollectionIn(
+    tx: TransactionContext,
+    name: string
+  ): Promise<UnregisteredCollectionRow> {
+    return this.registryService.unregisterCollectionIn(tx, name);
+  }
+
+  /** Forget, in this process, a collection whose registry row has gone, given what its removal found. */
+  async forgetUnregisteredCollection(
+    name: string,
+    unregistered: UnregisteredCollectionRow
+  ): Promise<void> {
+    await this.registryService.forgetUnregisteredCollection(name, unregistered);
   }
 
   /**

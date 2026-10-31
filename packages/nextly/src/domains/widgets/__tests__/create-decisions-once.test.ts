@@ -103,6 +103,7 @@ describe("the collection Add your first entry opens", () => {
       ...probe,
       hasContent: async () => false,
       sampleAnswered: async () => true,
+      sampleContent: async () => ({ answer: "declined" }),
       singlesRead: async () => ({ slugs: [], reachable: true }),
     };
   }

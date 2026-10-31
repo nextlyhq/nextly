@@ -34,6 +34,7 @@ import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import { AxisSection, sizeAxes } from "./CardActionsMenu";
+import { settingsIntent } from "./settings-sheet-code";
 
 export interface CardMenuProps {
   title: string;
@@ -172,6 +173,8 @@ export function CardMenu({
           className="size-7 text-muted-foreground hover:text-foreground"
           aria-label={`Card menu for ${title}`}
           data-testid="card-menu"
+          // Settings is in this menu: its sheet's code starts loading as the reader heads for it.
+          {...(onOpenSettings ? settingsIntent : {})}
         >
           <Icons.MoreHorizontal aria-hidden className="size-4" />
         </Button>

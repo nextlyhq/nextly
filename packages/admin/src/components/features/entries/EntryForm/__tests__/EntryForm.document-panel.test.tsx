@@ -53,6 +53,14 @@ vi.mock("@admin/hooks/queries/useReleases", async importOriginal => ({
     isPending: false,
   }),
 }));
+// The Publishing section asks through the hook's own module.
+vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
+  useReleasesContaining: () => ({
+    data: { items: [] },
+    isError: false,
+    isPending: false,
+  }),
+}));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 
 import { EntryForm } from "../EntryForm";

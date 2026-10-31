@@ -39,6 +39,7 @@ import {
 } from "@tanstack/react-query";
 
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
+import { formatScheduledAt } from "@admin/components/features/releases/release-schedule";
 import { toast } from "@admin/components/ui";
 import { collectionApi } from "@admin/services/collectionApi";
 import { entryApi } from "@admin/services/entryApi";
@@ -58,9 +59,11 @@ import {
   fetchReleases,
   publishReleaseNow,
   removeReleaseMember,
+  scheduleDocument,
   scheduleRelease,
   updateRelease,
   type ReleaseReadinessListResponse,
+  type ScheduleDocumentResponse,
   type ReleaseMutationResponse,
   type ReleaseListResponse,
   type MemberMutationResponse,
@@ -77,58 +80,28 @@ import {
   type ReleaseCalendarParams,
   type ReleaseCalendarRead,
   type ReleaseDocumentInfo,
-  type ReleaseDocumentRef,
   type ReleaseKind,
   type ReleaseListParams,
   type ReleaseListTab,
   type ReleaseMember,
   type ReleaseMemberAction,
   type ReleaseScopeNames,
+  type ScheduleDocumentPayload,
   type ScheduleReleasePayload,
   type UpdateReleasePayload,
   type Release,
   type ReleaseReadiness,
 } from "@admin/types/releases";
 
-export const releaseKeys = {
-  all: () => ["releases"] as const,
-  list: (
-    params: ReleaseListParams
-  ): readonly ["releases", "list", ReleaseListParams] =>
-    ["releases", "list", params] as const,
-  calendar: (
-    params: ReleaseCalendarParams
-  ): readonly ["releases", "calendar", ReleaseCalendarParams] =>
-    ["releases", "calendar", params] as const,
-  everyId: (
-    params: ReleaseListParams
-  ): readonly ["releases", "every-id", ReleaseListParams] =>
-    ["releases", "every-id", params] as const,
-  detail: (id: string): readonly ["releases", "detail", string] =>
-    ["releases", "detail", id] as const,
-  members: (id: string): readonly ["releases", "members", string] =>
-    ["releases", "members", id] as const,
-  blockers: (id: string): readonly ["releases", "blockers", string] =>
-    ["releases", "blockers", id] as const,
-  readinessOf: (id: string): readonly ["releases", "readiness", string] =>
-    ["releases", "readiness", id] as const,
-  history: (id: string): readonly ["releases", "history", string] =>
-    ["releases", "history", id] as const,
-  created: (id: string): readonly ["releases", "history", string, "created"] =>
-    ["releases", "history", id, "created"] as const,
-  documents: (
-    id: string,
-    scopeKind: string,
-    scopeSlug: string,
-    ids: string
-  ): readonly ["releases", "documents", string, string, string, string] =>
-    ["releases", "documents", id, scopeKind, scopeSlug, ids] as const,
-  readiness: (
-    ids: readonly string[],
-    listReadAt: number
-  ): readonly ["release-page-readiness", readonly string[], number] =>
-    ["release-page-readiness", [...ids], listReadAt] as const,
-};
+import {
+  hasPendingRelease,
+  NO_RELEASE_POLL_MS,
+  PENDING_RELEASE_POLL_MS,
+  releaseKeys,
+} from "./release-keys";
+
+export { releaseKeys } from "./release-keys";
+export { useReleasesContaining } from "./useReleasesContaining";
 
 export function useReleases(
   params: ReleaseListParams = {},
@@ -380,86 +353,6 @@ export function useReleasesReadiness(
   });
 }
 
-/**
- * The scheduled releases holding one document, soonest first.
- *
- * A narrowing of the same list, so it shares the list's cache key and is
- * invalidated by every release write — adding this document to a release
- * refreshes the banner without the banner knowing that happened.
- */
-export function useReleasesContaining(
-  document: ReleaseDocumentRef | undefined,
-  enabled = true
-): UseQueryResult<ReleaseListResponse, Error> {
-  // The route's ceiling rather than its default of 50. A document in more
-  // than fifty scheduled releases is implausible, and asking for the ceiling
-  // costs nothing when the real answer is one or two — but the banner presents
-  // the rows as a SEQUENCE whose last member is the document's final state, and
-  // a silently truncated sequence would present an incomplete answer as a
-  // complete one.
-  const params: ReleaseListParams = document
-    ? { containing: document, limit: 200 }
-    : {};
-  const query = useQuery({
-    queryKey: releaseKeys.list(params),
-    queryFn: () => fetchReleases(params),
-    // Never asked without a complete reference: the route refuses a partial
-    // one, and a 404-shaped error in the console under every document editor
-    // is a poor way to say "this document has no id yet".
-    enabled: enabled && Boolean(document),
-    // Re-asked on TWO schedules, because two different things change this
-    // answer and neither runs an admin mutation that would invalidate it.
-    //
-    // A pending release is resolved by the background drain, so an editor
-    // holding the page across the instant would otherwise keep reading that a
-    // release is coming, and that saves are still included, after it has run.
-    //
-    // An EMPTY answer changes too, and that is the case a pending-only interval
-    // misses: another administrator schedules this document from their own
-    // browser, which invalidates their QueryClient and not this one. The first
-    // editor then goes on saving, indefinitely, without learning the document
-    // has an automatic pending change. Polled more slowly rather than not at
-    // all — nearly every document is in no release, and the answer is worth one
-    // request every few minutes rather than one a minute.
-    refetchInterval: data =>
-      hasPendingRelease(data.state.data)
-        ? PENDING_RELEASE_POLL_MS
-        : NO_RELEASE_POLL_MS,
-    // And on return to the tab, which is when an editor actually resumes
-    // typing. The global provider disables this everywhere; here the answer is
-    // a safety signal rather than a view of data the reader already has, and
-    // coming back to a stale one is exactly the moment it matters.
-    refetchOnWindowFocus: true,
-  });
-  return query;
-}
-
-/**
- * How often to re-ask while a release is still ahead of this document.
- *
- * A minute. The banner is a safety signal rather than a clock, so the cost of
- * being a minute late is that an editor briefly reads a promise that has just
- * become moot; the cost of polling harder is a request per document editor per
- * few seconds, for a page that mostly sits open.
- */
-const PENDING_RELEASE_POLL_MS = 60_000;
-
-/**
- * How often to re-ask when this document is in no release at all.
- *
- * Five minutes. Nearly every document is in this state, so the cost is paid on
- * every open editor — but the answer is not static: somebody else can schedule
- * this document at any moment, and nothing they do reaches this browser.
- */
-const NO_RELEASE_POLL_MS = 300_000;
-
-/** Whether anything in this answer is still waiting to happen. */
-function hasPendingRelease(
-  data: { items: { state: string }[] } | undefined
-): boolean {
-  return (data?.items ?? []).some(release => release.state === "scheduled");
-}
-
 export function useRelease(
   id: string | undefined
 ): UseQueryResult<Release, Error> {
@@ -600,6 +493,33 @@ export function useScheduleRelease(id: string): UseMutationResult<
     onSuccess: () => {
       refresh(id);
       toast.success("Release scheduled.");
+    },
+  });
+}
+
+/**
+ * Schedule one document to go live on its own: a release holding only it, at
+ * the chosen time, made in one request that lands whole or not at all.
+ *
+ * Every release read is refreshed when the request SETTLES, not only when it
+ * succeeds. A request whose answer was lost may still have scheduled the
+ * document, and the document's banner and Publishing section are where the
+ * editor looks to find out, so they must not keep the answer from before.
+ */
+export function useScheduleDocument(): UseMutationResult<
+  ScheduleDocumentResponse,
+  Error,
+  ScheduleDocumentPayload,
+  unknown
+> {
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: (payload: ScheduleDocumentPayload) => scheduleDocument(payload),
+    onSettled: result => refresh(result?.item.release.id),
+    onSuccess: result => {
+      const at = formatScheduledAt(result.item.release);
+      toast.success(at ? `Scheduled to go live ${at}.` : "Scheduled.");
     },
   });
 }

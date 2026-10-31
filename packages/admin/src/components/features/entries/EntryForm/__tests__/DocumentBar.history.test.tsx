@@ -162,6 +162,24 @@ describe("DocumentBar version history", () => {
       })
     );
   });
+
+  it("tells the panel when the document's writes are refused, so no version is marked seen", () => {
+    // A document whose collection or Single was removed from code refuses
+    // every write, the seen mark among them.
+    renderHeader({ writesRefused: true });
+
+    expect(sheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ writesRefused: true, canRestore: false })
+    );
+  });
+
+  it("lets the panel mark versions seen while the document's writes are allowed", () => {
+    renderHeader();
+
+    expect(sheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ writesRefused: false })
+    );
+  });
 });
 
 const { actionBarProps } = vi.hoisted(() => ({

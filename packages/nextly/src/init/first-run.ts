@@ -660,6 +660,15 @@ export async function ensureFirstRunSetup(
       }
     }
 
+    // A new database holds no content, so the record of where each media
+    // item is used is complete from the start; an existing site's becomes so
+    // once `nextly media reindex-usage` has read its content.
+    await markMediaUsageRecordedOnNewSite(
+      adapter,
+      staticTables.nextlyMeta,
+      logger
+    );
+
     const durationMs = Date.now() - start;
     logger.info(
       `[nextly] Setup done in ${durationMs}ms (${result.statementsExecuted.length} statement(s)).`
@@ -947,4 +956,39 @@ async function resolveDeps(
     getDialectTables: injected?.getDialectTables ?? getDialectTables,
     getSchemaEventsDdl: injected?.getSchemaEventsDdl ?? getSchemaEventsDdl,
   };
+}
+
+/**
+ * Mark the media usage record complete on a database setup has just created.
+ * Never fails the setup: a site whose mark is missing reads its record as
+ * still being built until `nextly media reindex-usage` runs, which marks it.
+ */
+async function markMediaUsageRecordedOnNewSite(
+  adapter: EnsureFirstRunSetupArgs["adapter"],
+  /** The `nextly_meta` table the push above created. */
+  metaTable: unknown,
+  logger: EnsureFirstRunSetupArgs["logger"]
+): Promise<void> {
+  if (metaTable === undefined) return;
+  try {
+    const { MEDIA_USAGE_RECORDED_KEY } = await import(
+      "../domains/media/usage/media-usage-store"
+    );
+    // Inserted, not upserted: the database was created just above, so no
+    // row for the key can be there yet.
+    const db = adapter.getDrizzle() as {
+      insert(table: unknown): {
+        values(row: Record<string, unknown>): Promise<unknown>;
+      };
+    };
+    await db.insert(metaTable).values({
+      key: MEDIA_USAGE_RECORDED_KEY,
+      value: JSON.stringify({ rebuiltAt: new Date().toISOString() }),
+      updatedAt: new Date(),
+    });
+  } catch (err) {
+    logger.warn(
+      `[nextly] Could not mark the media usage record complete (${err instanceof Error ? err.message : String(err)}). Run \`nextly media reindex-usage\` once.`
+    );
+  }
 }

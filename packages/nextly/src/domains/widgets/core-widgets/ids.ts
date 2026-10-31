@@ -58,6 +58,18 @@ export const CORE_WIDGET_IDS = [
 ] as const satisfies readonly CoreWidgetId[];
 
 /**
+ * The ids an earlier core gave a card that one of core's widgets has since taken over, each with
+ * the widget that took it over. A saved arrangement's card under a former id is read as the
+ * current widget's, in its place (`readStoredLayout`), so a reader who arranged their dashboard
+ * before the rename keeps the card, and their next save stores it under the current id.
+ */
+export const FORMER_CORE_WIDGET_IDS: ReadonlyMap<string, CoreWidgetId> =
+  new Map<string, CoreWidgetId>([
+    // "Get started" became the setup card's row of steps.
+    ["core/get-started", CORE_WIDGET_ID.setup],
+  ]);
+
+/**
  * Core's widgets only a super-admin is told exist: neither offered to anyone
  * else, nor placed, nor handed as a card (`widgetAudience`). A super-admin is
  * not a permission, so no `requiredPermission` gate can say it, and an

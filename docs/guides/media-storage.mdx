@@ -1,6 +1,6 @@
 ---
 title: Media & Storage
-description: Configure storage adapters (local disk, S3, Vercel Blob, Uploadthing) and named image sizes for uploaded media.
+description: Configure storage adapters (local disk, S3, Vercel Blob, Uploadthing), and how uploaded images, their thumbnails and their focus points are stored.
 ---
 
 Nextly's media system is plugin-based. The default is local disk storage -- zero configuration, files written to `./public/uploads/` and served at `/uploads/...` by your app. For production deployments where the filesystem isn't durable (Vercel, container runtimes), opt into S3, Vercel Blob, or Uploadthing.
@@ -353,91 +353,45 @@ s3Storage({
 
 You can also register **multiple plugins** in the `storage` array if different collections need different backends -- for instance, public media on Vercel Blob and private documents on S3.
 
-## Named image sizes
+## Images and thumbnails
 
-Nextly can automatically generate resized image variants for every uploaded image, using `sharp`, which your app installs (see [Limits](#limits)). Manage the sizes in the admin (**Settings -> Image Sizes**) or through the REST endpoints below. `nextly.config.ts` has no option for them: a `media` key there is a type error and is not read.
+An uploaded image is stored as two files: the original, and one thumbnail for
+the admin. The thumbnail is the whole image fitted inside 480 by 480 pixels,
+keeping its proportions and never enlarged, so a wide or tall picture keeps its
+edges. Both are made with `sharp`, which your app installs (see [Limits](#limits)).
+Nothing else is cut from an upload.
 
-### Size options
-
-| Option    | Type     | Default     | Description                                                                                  |
-|-----------|----------|-------------|----------------------------------------------------------------------------------------------|
-| `name`    | `string` | required    | Unique key. Used in the API response and as part of the variant filename.                    |
-| `width`   | `number` | --          | Target width in pixels (omit to auto-calculate from height).                                 |
-| `height`  | `number` | --          | Target height in pixels (omit to auto-calculate from width).                                 |
-| `fit`     | `string` | `"inside"`  | `"inside"` (shrink to fit), `"cover"` (crop to fill), `"contain"`, or `"fill"`.              |
-| `quality` | `number` | `80`        | Image quality (1-100).                                                                       |
-| `format`  | `string` | `"auto"`    | `"auto"` (WebP when possible), `"webp"`, `"jpeg"`, `"png"`, or `"avif"`.                     |
-
-### Visual configuration
-
-Go to **Settings -> Image Sizes** in the admin panel to add, edit and remove sizes.
-
-### REST endpoints
-
-| Method | Path                                | Description                                  |
-|--------|-------------------------------------|----------------------------------------------|
-| GET    | `/admin/api/image-sizes`                  | List configured sizes (read).                |
-| POST   | `/admin/api/image-sizes`                  | Create a new size (UI-managed).              |
-| GET    | `/admin/api/image-sizes/:id`              | Get a single size.                           |
-| PATCH  | `/admin/api/image-sizes/:id`              | Update a size.                               |
-| DELETE | `/admin/api/image-sizes/:id`              | Delete a size.                               |
-| GET    | `/admin/api/image-sizes/regeneration-status` | Status of an in-progress regeneration job. |
-| POST   | `/admin/api/image-sizes/regenerate`       | Re-generate variants for existing media.     |
-
-The list endpoint is permission-gated by `read-settings`; adding a size requires `create-settings`, changing one or regenerating `update-settings`, and deleting one `delete-settings`.
-
-### Using sizes from your frontend
-
-A media file carries its generated variants under `sizes`, keyed by the name you
-configured. It does so however you read it: populated as a relationship on an entry
-or a single, fetched on its own with `media.findByID()`, or returned by
-`GET /api/media/:id`.
+A media file carries both URLs, however you read it: populated as a relationship
+on an entry or a single, fetched on its own with `media.findByID()`, or returned
+by `GET /api/media/:id`.
 
 ```json
 {
   "id": "abc-123",
   "url": "/uploads/2026/04/photo.jpg",
+  "thumbnailUrl": "/uploads/2026/04/thumb_photo.jpg",
   "width": 3000,
   "height": 2000,
   "focalX": 50,
-  "focalY": 50,
-  "sizes": {
-    "thumbnail": { "url": "...", "width": 150, "height": 150 },
-    "medium": { "url": "...", "width": 768, "height": 512 },
-    "large": { "url": "...", "width": 1200, "height": 800 }
-  }
+  "focalY": 50
 }
 ```
 
-Every URL in that response, the variants included, is as your storage adapter
-wrote it: on local disk a path on the adapter's own base (`/uploads/...` by
-default), and on S3, Vercel Blob or UploadThing an absolute URL. See
-[Media URLs](#media-urls) for how they are formed, and how to get an absolute one.
-`sizes` is `null` for a file with no variants: a non-image, or an image uploaded
-before you configured any size.
+Each URL is as your storage adapter wrote it: on local disk a path on the
+adapter's own base (`/uploads/...` by default), and on S3, Vercel Blob or
+UploadThing an absolute URL. See [Media URLs](#media-urls) for how they are formed,
+and how to get an absolute one.
 
-Select one with `getMediaVariant`, which asks for a name, tries your fallback name
-next, then `thumbnailUrl`, then the original:
+- **For a page, use `url` with `next/image`.** It resizes the original on request
+  to the width each screen needs, and a [custom loader](https://nextjs.org/docs/app/api-reference/config/next-config-js/images)
+  can send that to an image CDN.
+- **For a small preview, use `thumbnailUrl`.** It is a light copy, sized for a
+  list or a grid.
+- **To keep the subject in frame, use the focus point** (below) with
+  `object-position`.
 
-```tsx
-// app/(site)/media-image.tsx
-import Image from "next/image";
-import { getMediaVariant, type MediaLike } from "nextly";
-
-export function MediaImage({ media, alt }: { media: MediaLike; alt: string }) {
-  return (
-    <Image
-      src={getMediaVariant(media, "large", { fallback: "medium" }) ?? media.url}
-      alt={alt}
-      width={1200}
-      height={800}
-    />
-  );
-}
-```
-
-Hand it either kind of media value. `MediaLike` is the narrow shape the helper needs,
-and both a populated relationship and a `MediaFile` satisfy it.
+An image uploaded by an earlier release keeps the square thumbnail it was given
+then; the admin draws it whole, beside the fitted ones.
 
 Reading a media record on its own is still a `findByID`, and it still needs a runtime:
 
@@ -470,9 +424,9 @@ initialised process and throws `Nextly services not initialized` when it is the 
 Nextly code a worker runs, which a blank scaffold makes likely because it ships no
 `instrumentation.ts`.
 
-## Crop point (focal point)
+## Focus point
 
-Each media record can carry a focal point that controls how `"cover"` crops behave. Set it from the admin media library: open an item, choose **Set focus point**, click or drag on the image (or use the arrow keys), then **Done**. The values are stored as `focalX` (0-100, left to right) and `focalY` (0-100, top to bottom).
+Each media record can carry a focus point: the part of the image to keep in frame when a layout crops it. Set it from the admin media library: open an item, choose **Set focus point**, click or drag on the image (or use the arrow keys), then **Done**. The values are stored as `focalX` (0-100, left to right) and `focalY` (0-100, top to bottom). Saving a point changes no stored file: your site, or an image loader, reads it.
 
 Use them with CSS `object-position` for responsive cropping:
 
@@ -602,7 +556,7 @@ layout's `metadataBase`, which the starter templates set from your site's URL.
 
 ## Deleting media, and thumbnails left behind
 
-Deleting a media item, singly or in bulk, removes every file stored for it: the original, the thumbnail made at upload, and every named image size. A file the storage refuses to remove is logged with its path and the item, so it can be found.
+Deleting a media item, singly or in bulk, removes every file stored for it: the original, the thumbnail made at upload, and any resized copy an earlier release stored for it. A file the storage refuses to remove is logged with its path and the item, so it can be found.
 
 Earlier releases left the thumbnail behind when an item was deleted. On local disk that file stays under `public/uploads`, and on a public S3 bucket or Vercel Blob store it stays publicly reachable. UploadThing was not affected: there the delete found the thumbnail by its key. To find those thumbnails, run:
 
@@ -641,7 +595,7 @@ A common pattern is to switch automatically based on env vars:
 
 ## Limits
 
-- **Image processing needs `sharp` in your app.** `sharp` is an optional peer dependency of `nextly`, so Nextly does not install it: add it to your app's dependencies (`npm install sharp`) rather than relying on another package to bring it. Without it, uploads are still stored, but images get no thumbnail, no named sizes and no width or height, and **Settings -> Image Sizes** says so and shows the install command.
+- **Image processing needs `sharp` in your app.** `sharp` is an optional peer dependency of `nextly`, so Nextly does not install it: add it to your app's dependencies (`npm install sharp`) rather than relying on another package to bring it. Without it, uploads are still stored, but images get no thumbnail and no width or height.
 - **Four places to store files.** The built-in local disk, or one of three adapter packages: `@nextlyhq/storage-s3` for S3 and S3-compatible services, `@nextlyhq/storage-vercel-blob` and `@nextlyhq/storage-uploadthing`.
 - **Local disk is for one long-lived server.** Files written to `./public/uploads/` do not survive a restart on a serverless or ephemeral host.
 - **Switching adapters moves nothing.** Existing files and their stored URLs stay where they were; see [Migrating between adapters](#migrating-between-adapters).

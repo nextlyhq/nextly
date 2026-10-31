@@ -633,16 +633,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
   //
-  // Never the setup card: it comes and goes on its own, from the site's
-  // state and the reader's own choices (`domains/widgets/setup-card`), and a
-  // card removed in customise mode is offered back only from Removed.
-  const placed = new Set(placements.map(placement => placement.widgetId));
+  // The setup card only while it would show for this reader, as it comes and
+  // goes on its own, from the site's state and the reader's own choices:
+  // offered where their arrangement lacks it, as one saved before it existed
+  // does, exactly when the default handed in this same response holds it
+  // (`defaults`, cut by the card's own `shows`, judged once above). So the
+  // two never disagree, and nothing about it is read twice. Never once they
+  // dismissed it or were told "You're all set", and only a super-admin's
+  // widgets hold it at all. A card removed in customise mode is placed, and
+  // offered back only from Removed.
   const available = inAddPanelOrder(
-    view.widgets.filter(
-      widget =>
-        widget.id !== CORE_WIDGET_ID.setup &&
-        (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
-    )
+    offeredWidgets(view.widgets, placements, defaults, sizes)
   ).map(widget => widget.id);
 
   return respondData(
@@ -675,6 +676,84 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
     { headers: OPAQUE_CONFIG_HEADERS }
   );
 });
+
+/**
+ * The widgets this reader may add as a new card now, of those they may see
+ * (`widgets`), against the arrangement they were handed (`placements`) and the
+ * default as they would see it (`defaults`): one not placed, or one that
+ * allows several. The setup card only while the default holds it for them.
+ * The one rule the layout read's `available` and the add gallery's offer are
+ * both taken from, so the two cannot disagree.
+ */
+function offeredWidgets(
+  widgets: readonly CanonicalWidget[],
+  placements: readonly WidgetPlacement[],
+  defaults: readonly WidgetPlacement[],
+  sizes: Readonly<Record<string, WidgetSizeFacts>>
+): CanonicalWidget[] {
+  const placed = new Set(placements.map(placement => placement.widgetId));
+  const setupOffered = defaults.some(
+    placement => placement.widgetId === CORE_WIDGET_ID.setup
+  );
+  return widgets.filter(
+    widget =>
+      (widget.id !== CORE_WIDGET_ID.setup || setupOffered) &&
+      (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
+  );
+}
+
+/** What the add gallery is offered from, for one reader (`galleryOffer`). */
+export interface GalleryOffer {
+  auth: AuthContext;
+  reader: ReadCaller;
+  /** Every widget this reader may see now, by the layout read's two passes. */
+  widgets: readonly CanonicalWidget[];
+  /** The arrangement they were handed, removed cards included. */
+  placements: readonly WidgetPlacement[];
+  /** The ids of those widgets they may add a new card of now. */
+  offered: ReadonlySet<string>;
+  /** The collections they may read, as the audience pass answered it. */
+  readableCollections: ReadonlySet<string>;
+}
+
+/**
+ * What the add gallery offers this reader, by the layout read's own steps:
+ * the same two passes (`visibleWidgets`), the same arrangement they are
+ * handed and the same rule for which widgets may be added (`offeredWidgets`).
+ * The gallery then judges each declared widget with the person, and reads
+ * their collections; nothing here is decided a second way.
+ */
+export async function galleryOffer(
+  auth: AuthContext,
+  signal: AbortSignal
+): Promise<GalleryOffer> {
+  const service = await getLayoutService();
+  const view = await visibleWidgets(auth);
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  const judged = await notShownInDefault(auth, view, signal, stored.layout);
+  const arranged =
+    stored.layout !== undefined && layoutIsArranged(stored.layout);
+  const placements = visibleArrangement(
+    stored.layout,
+    view,
+    arranged ? NOTHING_WITHHELD : judged.forReader
+  );
+  const defaults = visibleArrangement(undefined, view, judged.inDefault);
+  const offered = offeredWidgets(
+    view.widgets,
+    placements,
+    defaults,
+    sizesOf(view.widgets)
+  );
+  return {
+    auth,
+    reader: view.reader,
+    widgets: view.widgets,
+    placements,
+    offered: new Set(offered.map(widget => widget.id)),
+    readableCollections: view.audience.readableCollections,
+  };
+}
 
 /**
  * Reads the `version` a write is guarded by.

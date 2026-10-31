@@ -8,11 +8,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import {
-  initialValues,
-  resetToDefaults,
-  toStoredConfig,
-} from "../WidgetSettingsSheet";
+import { initialValues, toStoredConfig } from "../settings-values";
+import { resetToDefaults } from "../WidgetSettingsSheet";
 import type {
   AnyWidgetSetting,
   PublishedContentSource,

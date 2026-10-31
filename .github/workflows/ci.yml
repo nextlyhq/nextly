@@ -1638,6 +1638,16 @@ jobs:
       - name: Check what the packed admin gives a production application
         run: pnpm --filter @nextlyhq/admin check:published-build
 
+      # What an application's own production build makes of the same packed
+      # files: a Next.js fixture mounts the admin through its public entry and
+      # builds with Turbopack, and each direct visit must still load only the
+      # shell and that route, every admin module run once, the registry hold a
+      # plugin page once the first load has run, and Lexical ship its
+      # production build. About 15 seconds here: one build of one page, then a
+      # read of its chunks and a run of its first load.
+      - name: Check an application's production build of the packed admin
+        run: pnpm --filter @nextlyhq/admin check:consumer-bundle
+
       # Before the step below rebuilds the admin in development mode: the chart
       # engine stays out of what an entry loads before it renders, and out of the
       # admin's and the plugin SDK's published types.
@@ -1650,6 +1660,14 @@ jobs:
         run: |
           NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsdown
           pnpm --filter @nextlyhq/admin check:published-build --packed . --must-fail-with error-detail,developer-tools
+
+      # The same development-mode build, packed into the application: its
+      # production build must still be reported as shipping Lexical's
+      # development build. The texts that recognise it are read from Lexical's
+      # installed development builds, so this is what shows a Lexical release
+      # has not moved them out of reach.
+      - name: The consumer check refuses Lexical's development build
+        run: pnpm --filter @nextlyhq/admin check:consumer-bundle --must-fail-with lexical-development-build
 
       # Only a job whose checks passed publishes what it learned.
       - name: Save Turbo cache

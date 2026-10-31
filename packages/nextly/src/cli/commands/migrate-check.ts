@@ -61,6 +61,7 @@ import {
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
+import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   appStreamSnapshots,
@@ -130,8 +131,6 @@ import {
   isBuilderWrittenMigration,
   selectVariant,
 } from "../utils/migration-discovery";
-
-import { parseSqlSections } from "./migrate";
 
 // ============================================================================
 // Types

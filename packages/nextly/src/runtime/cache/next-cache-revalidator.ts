@@ -34,6 +34,8 @@ import type {
 import { consoleLogger } from "../../shared/types";
 import { loadNextModule, requireNextApi } from "../next-api";
 
+import { MAX_TAGS_PER_READ } from "./nextly-tags";
+
 /** A Next `cacheLife`-style profile: `{ expire: 0 }` means expire immediately. */
 type CacheLifeProfile = string | { expire?: number };
 
@@ -114,8 +116,9 @@ function resolveNextCache(
  * Next.js keeps at most 128 tags on one cached read (`cacheTag`) and drops the
  * rest, so a read that names more than that may carry only its first 128. The
  * limit is per read, not per expiry: a write may expire any number of tags.
+ * Its value is the read side's, so the two can never disagree.
  */
-export const MAX_TAGS_PER_WRITE = 128;
+export const MAX_TAGS_PER_WRITE = MAX_TAGS_PER_READ;
 
 /**
  * What Next.js says when `updateTag` is called anywhere but a Server Action: in
@@ -376,37 +379,48 @@ export class NextCacheRevalidator implements CacheRevalidator {
     return owned.length > 0 ? { deferredTags: owned } : undefined;
   }
 
-  /**
-   * Hands tags off, awaited but bounded by {@link HANDOFF_TIMEOUT_MS}, without
-   * letting the hand-off itself fail the write: a queue that does not answer
-   * must not hold the response.
-   */
+  /** Hands tags off through {@link handOffWithin}, to the installed hand-off. */
   private async handOff(tags: string[], reason: string): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const timedOut = new Promise<"timed-out">(resolve => {
-        timer = setTimeout(() => resolve("timed-out"), HANDOFF_TIMEOUT_MS);
-        timer.unref?.();
-      });
-      const answer = await Promise.race([
-        Promise.resolve(this.handoff().handOff(tags, reason)),
-        timedOut,
-      ]);
-      if (answer === "timed-out") {
-        consoleLogger.error(
-          `[nextly] the cache expiry hand-off did not answer within ${HANDOFF_TIMEOUT_MS} ms: ${tags.join(", ")}`
-        );
-        // It may still take them, but it may not: keep them for the next flush too.
-        holdForNextFlush(tags);
-      }
-    } catch (error) {
+    await handOffWithin(this.handoff(), tags, reason);
+  }
+}
+
+/**
+ * Hands tags to `handoff`, awaited but bounded by {@link HANDOFF_TIMEOUT_MS},
+ * without letting the hand-off itself fail the write: one that does not answer
+ * must not hold the response, or a committed write made outside a request.
+ * Tags it refused, or did not take in time, are kept for this process's next
+ * flush. Shared by every revalidator that hands off.
+ */
+export async function handOffWithin(
+  handoff: ExpiryHandoff,
+  tags: string[],
+  reason: string
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timedOut = new Promise<"timed-out">(resolve => {
+      timer = setTimeout(() => resolve("timed-out"), HANDOFF_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    const answer = await Promise.race([
+      Promise.resolve(handoff.handOff(tags, reason)),
+      timedOut,
+    ]);
+    if (answer === "timed-out") {
       consoleLogger.error(
-        `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
+        `[nextly] the cache expiry hand-off did not answer within ${HANDOFF_TIMEOUT_MS} ms: ${tags.join(", ")}`
       );
-      // Not lost with the hand-off: the next flush in this process drains them.
+      // It may still take them, but it may not: keep them for the next flush too.
       holdForNextFlush(tags);
-    } finally {
-      clearTimeout(timer);
     }
+  } catch (error) {
+    consoleLogger.error(
+      `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    // Not lost with the hand-off: the next flush in this process drains them.
+    holdForNextFlush(tags);
+  } finally {
+    clearTimeout(timer);
   }
 }
