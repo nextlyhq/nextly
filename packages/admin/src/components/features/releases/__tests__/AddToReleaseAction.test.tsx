@@ -96,7 +96,10 @@ function Probe(over: Partial<AddToReleaseProps>) {
       {/* The action as the editor would draw it, so a test opens the picker the
           way an author does rather than by reaching into state. */}
       {release.contributed === null ? null : (
-        <button type="button" onClick={release.contributed.binding.onSelect}>
+        <button
+          type="button"
+          onClick={() => release.contributed?.binding.onSelect({ values: {} })}
+        >
           {release.contributed.action.label}
         </button>
       )}

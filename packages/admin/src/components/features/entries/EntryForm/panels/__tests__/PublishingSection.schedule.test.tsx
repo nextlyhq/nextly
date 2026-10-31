@@ -21,6 +21,7 @@ import {
   type SchedulePublishProps,
 } from "@admin/components/features/releases/SchedulePublishAction";
 
+import { acceptContributions } from "../../DocumentActionBar";
 import type { DocumentActionBindings } from "../../useDocumentActionBindings";
 import { PublishingSection } from "../PublishingSection";
 
@@ -95,14 +96,17 @@ function Editor(props: { children: ReactNode }) {
   };
   const schedule = useSchedulePublishAction(PROPS);
   const contributed = schedule.contributed;
+  // Folded in as the editor folds a page's contribution, so the section
+  // runs the same control the split's row runs.
+  const offered =
+    contributed === null ? null : acceptContributions([], {}, [contributed]);
   hosted.current =
-    contributed === null
+    contributed === null || offered === null
       ? null
       : {
-          actions: [contributed.action],
-          bindings: { [contributed.action.id]: contributed.binding },
+          ...offered,
           run: async () => {
-            contributed.binding.onSelect({ values: {} });
+            offered.bindings[contributed.action.id]?.onSelect();
             return { ok: true } as never;
           },
         };
