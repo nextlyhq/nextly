@@ -4,14 +4,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const find = vi.fn();
-const count = vi.fn();
+/** The service's one-instant read of the Upcoming tab and the attention counts. */
+const upcomingWithAttention = vi.fn();
+const memberCounts = vi.fn();
+const readinessOf = vi.fn();
 const has = vi.fn();
 
 vi.mock("../../../di/container", () => ({
   container: {
     has: (name: string) => has(name) as boolean,
-    get: () => ({ find, count }),
+    get: () => ({ upcomingWithAttention, memberCounts, readinessOf }),
   },
 }));
 
@@ -39,13 +41,21 @@ const row = {
   revision: 3,
 };
 
+/** What the service answers, as a case sets it. */
+let upcoming: Record<string, unknown>[] = [];
+let attentionCounts: Record<string, number> = {};
+
 beforeEach(() => {
   vi.clearAllMocks();
   has.mockReturnValue(true);
-  find.mockResolvedValue({ rows: [row], total: 1, page: 1, limit: 50 });
+  upcoming = [row];
   // One stopped release, none overdue.
-  count.mockImplementation(({ reason }: { reason: string }) =>
-    Promise.resolve(reason === "stopped" ? 1 : 0)
+  attentionCounts = { stopped: 1, overdue: 0 };
+  upcomingWithAttention.mockImplementation(
+    async (query: { attention: boolean }) => ({
+      upcoming,
+      attention: query.attention ? attentionCounts : {},
+    })
   );
   clearSources();
   clearSystemResolvers();
@@ -53,20 +63,19 @@ beforeEach(() => {
 });
 
 describe("what it asks the service", () => {
-  it("asks for the SOONEST scheduled releases still ahead", async () => {
-    // 🔴 All three together are the question. `order: "soonest"` alone under a
-    // missing `scheduledAfter` includes releases that already shipped; the
-    // window alone under the default order returns the furthest-out ones.
+  it("asks the releases domain's one read of the Upcoming tab and the attention counts", async () => {
+    // 🔴 One read, not a window of the card's own nor a `find` and a `count` made one after the
+    // other: the service judges the tab and the overdue line against one clock reading, so a
+    // release a few minutes late is in exactly one of them.
     await executeWidgetQuery(
       { source: RELEASES_SOURCE_ID, op: "list", limit: 3 },
       caller
     );
 
-    const [query] = find.mock.calls[0] as [Record<string, unknown>];
-    expect(query.state).toBe("scheduled");
-    expect(query.order).toBe("soonest");
-    expect(query.limit).toBe(3);
-    expect(query.scheduledAfter).toBeInstanceOf(Date);
+    const [query] = upcomingWithAttention.mock.calls[0] as [
+      Record<string, unknown>,
+    ];
+    expect(query).toEqual({ limit: 3, attention: false });
   });
 
   it("hands the service the CALLER, and never overrides access", async () => {
@@ -84,7 +93,10 @@ describe("what it asks the service", () => {
       }
     );
 
-    const [, actor] = find.mock.calls[0] as [unknown, Record<string, unknown>];
+    const [, actor] = upcomingWithAttention.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+    ];
     expect(actor.userId).toBe("user-1");
     expect(actor.overrideAccess).toBeUndefined();
     expect(actor.authenticatedScope).toEqual({
@@ -103,7 +115,10 @@ describe("what it asks the service", () => {
       caller
     );
 
-    const [, actor] = find.mock.calls[0] as [unknown, Record<string, unknown>];
+    const [, actor] = upcomingWithAttention.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+    ];
     expect(actor.userRoles).toEqual(["editor"]);
   });
 
@@ -116,7 +131,10 @@ describe("what it asks the service", () => {
       caller
     );
 
-    const [, actor] = find.mock.calls[0] as [unknown, Record<string, unknown>];
+    const [, actor] = upcomingWithAttention.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+    ];
     expect("authenticatedScope" in actor).toBe(false);
   });
 });
@@ -200,17 +218,16 @@ describe("the attention rows, asked for by selecting `reason`", () => {
     ]);
   });
 
-  it("counts each reason by the Releases list's own count, as the caller", async () => {
+  it("asks the one read for the attention counts, as the caller", async () => {
     await executeWidgetQuery(
       { source: RELEASES_SOURCE_ID, op: "list", select: ATTENTION_SELECT },
       caller
     );
-    for (const reason of ["stopped", "overdue"]) {
-      expect(count).toHaveBeenCalledWith(
-        { tab: "attention", reason },
-        expect.objectContaining({ userId: "user-1" })
-      );
-    }
+    expect(upcomingWithAttention).toHaveBeenCalledTimes(1);
+    expect(upcomingWithAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ attention: true }),
+      expect.objectContaining({ userId: "user-1" })
+    );
   });
 
   it.each([
@@ -229,12 +246,15 @@ describe("the attention rows, asked for by selecting `reason`", () => {
       );
       expect(items(result).every(item => item.kind !== "attention")).toBe(true);
       expect(items(result)).toHaveLength(1);
-      expect(count).not.toHaveBeenCalled();
+      expect(upcomingWithAttention).toHaveBeenCalledWith(
+        expect.objectContaining({ attention: false }),
+        expect.anything()
+      );
     }
   );
 
   it("sizes the upcoming releases alone by the limit", async () => {
-    count.mockResolvedValue(2);
+    attentionCounts = { stopped: 2, overdue: 2 };
     const result = await executeWidgetQuery(
       {
         source: RELEASES_SOURCE_ID,
@@ -244,7 +264,7 @@ describe("the attention rows, asked for by selecting `reason`", () => {
       },
       caller
     );
-    expect(find).toHaveBeenCalledWith(
+    expect(upcomingWithAttention).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 1 }),
       expect.anything()
     );
@@ -254,6 +274,90 @@ describe("the attention rows, asked for by selecting `reason`", () => {
       "attention",
       "release",
     ]);
+  });
+});
+
+describe("each release's entries and issues, asked for by selecting them", () => {
+  const items = (result: unknown) =>
+    (result as { items: Record<string, unknown>[] }).items;
+  const second = { ...row, id: "r2", title: "Summer launch" };
+
+  beforeEach(() => {
+    upcoming = [row, second];
+    memberCounts.mockResolvedValue({
+      r1: { total: 4, goLive: 4, comeDown: 0 },
+      r2: { total: 2, goLive: 1, comeDown: 1 },
+    });
+    readinessOf.mockResolvedValue([
+      {
+        releaseId: "r1",
+        checked: true,
+        // Two problems on one document, one on another, and a note: two
+        // documents to fix, since a note never stops a release.
+        hard: [{ memberId: "m1" }, { memberId: "m1" }, { memberId: "m2" }],
+        soft: [{ memberId: "m3" }],
+        // And one the reader may not read, counted by its collection.
+        hidden: [
+          {
+            scopeKind: "collection",
+            scopeSlug: "secret",
+            count: 2,
+            hard: 1,
+            soft: 0,
+          },
+        ],
+      },
+      { releaseId: "r2", checked: true, hard: [], soft: [], hidden: [] },
+    ]);
+  });
+
+  it("says how many documents each release holds and how many need a fix, by the release list's reads", async () => {
+    const result = await executeWidgetQuery(
+      {
+        source: RELEASES_SOURCE_ID,
+        op: "list",
+        select: ["id", "entries", "issues"],
+      },
+      caller
+    );
+    expect(items(result)).toEqual([
+      { id: "r1", entries: 4, issues: 3 },
+      { id: "r2", entries: 2, issues: 0 },
+    ]);
+    // Read once for the page, as the caller, the reads the release list makes.
+    expect(memberCounts).toHaveBeenCalledTimes(1);
+    expect(memberCounts).toHaveBeenCalledWith(
+      ["r1", "r2"],
+      expect.objectContaining({ userId: "user-1" })
+    );
+    expect(readinessOf).toHaveBeenCalledWith(
+      ["r1", "r2"],
+      expect.objectContaining({ userId: "user-1" })
+    );
+  });
+
+  it("leaves a release the batch did not check without a count of issues", async () => {
+    readinessOf.mockResolvedValue([
+      { releaseId: "r1", checked: false, reason: "over-member-limit" },
+      { releaseId: "r2", checked: true, hard: [], soft: [], hidden: [] },
+    ]);
+    const result = await executeWidgetQuery(
+      { source: RELEASES_SOURCE_ID, op: "list", select: ["id", "issues"] },
+      caller
+    );
+    expect(items(result)).toEqual([
+      { id: "r1", issues: null },
+      { id: "r2", issues: 0 },
+    ]);
+  });
+
+  it("reads neither for a query that selects neither", async () => {
+    await executeWidgetQuery(
+      { source: RELEASES_SOURCE_ID, op: "list", select: ["id", "title"] },
+      caller
+    );
+    expect(memberCounts).not.toHaveBeenCalled();
+    expect(readinessOf).not.toHaveBeenCalled();
   });
 });
 
@@ -272,7 +376,7 @@ describe("what it refuses", () => {
         caller
       )
     ).rejects.toThrow(/unavailable source or unsupported op/);
-    expect(find).not.toHaveBeenCalled();
+    expect(upcomingWithAttention).not.toHaveBeenCalled();
   });
 
   it("refuses a `status` selector, rather than ignoring it", async () => {
@@ -285,7 +389,7 @@ describe("what it refuses", () => {
         caller
       )
     ).rejects.toThrow(/unavailable source or unsupported op/);
-    expect(find).not.toHaveBeenCalled();
+    expect(upcomingWithAttention).not.toHaveBeenCalled();
   });
 
   it("refuses EVERY unconsumed field, named together", async () => {
@@ -304,7 +408,7 @@ describe("what it refuses", () => {
         caller
       )
     ).rejects.toThrow(/unavailable source or unsupported op/);
-    expect(find).not.toHaveBeenCalled();
+    expect(upcomingWithAttention).not.toHaveBeenCalled();
   });
 
   it("still answers a query that carries only consumed fields", async () => {
@@ -316,7 +420,7 @@ describe("what it refuses", () => {
         caller
       )
     ).resolves.toBeDefined();
-    expect(find).toHaveBeenCalledTimes(1);
+    expect(upcomingWithAttention).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a `sort`, rather than ignoring it", async () => {
@@ -326,7 +430,7 @@ describe("what it refuses", () => {
         caller
       )
     ).rejects.toThrow(/unavailable source or unsupported op/);
-    expect(find).not.toHaveBeenCalled();
+    expect(upcomingWithAttention).not.toHaveBeenCalled();
   });
 
   it("says nothing specific when the service is not registered", async () => {

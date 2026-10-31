@@ -182,6 +182,15 @@ export interface WidgetReadServices {
        * @experimental
        */
       total?: true;
+      /**
+       * `0` to answer each link (a relationship or an upload) as the id it
+       * stores, unexpanded. Absent, links are expanded as they are today, as
+       * core's own read expands them by default. `0` is the only depth a read
+       * may name.
+       *
+       * @experimental
+       */
+      depth?: 0;
       signal?: AbortSignal;
     }
   ): Promise<{
@@ -525,9 +534,8 @@ export interface WidgetDeclarationInput<
    */
   preview?: PreviewFor<DisplayOf<View>, Preview, SettingValues<S>>;
   /**
-   * A label and a count for the dashboard's header. Typed for the release
-   * whose header reads it: until then a declaration using it is refused at
-   * startup, rather than started with a summary nothing shows.
+   * A label and a count for the dashboard's header, counted as the reader for
+   * each card of the widget they are shown, and left out of the line at none.
    *
    * @experimental
    */

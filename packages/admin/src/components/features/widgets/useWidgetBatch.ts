@@ -108,6 +108,10 @@ export interface WidgetBatch {
   retry: (placementId: string) => void;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
+  answeredAtFor: (placementId: string) => Date | null;
+  /** Ask every card again, as the batch does on window focus. */
+  refresh: () => void;
   /**
    * The size the answer one card shows was fetched at. A card that grew keeps a smaller answer
    * on screen until a larger one lands, and draws no more rows than that answer was asked for.
@@ -368,11 +372,14 @@ const NO_DRAW_FAILURES: ReadonlySet<string> = new Set();
 /**
  * `drawFailed` is the placements whose own component threw drawing a fine
  * answer (`draw-failures`): the answer cannot say so, so they are counted as
- * failed from here.
+ * failed from here. `readAheadToken` is the token of the layout answer the
+ * cards are drawn from: the batch is asked under it, and again, once, under
+ * each new one (`useWidgetQueries`).
  */
 export function useWidgetBatch(
   cards: BatchCard[],
-  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES
+  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES,
+  readAheadToken?: string
 ): WidgetBatch {
   // 🔴 Sorted by ID, not left in display order. `useWidgetQueries` puts the
   // request partitions into its TanStack query keys, so a key built from the
@@ -401,7 +408,7 @@ export function useWidgetBatch(
     [cards]
   );
 
-  const batch = useWidgetQueries(requests);
+  const batch = useWidgetQueries(requests, readAheadToken);
   const { isFetching, updatedAt } = batch;
 
   // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
@@ -500,6 +507,8 @@ export function useWidgetBatch(
     settling: outcomes.some(outcome => outcome.state === "loading"),
     retry,
     updatedAtFor,
+    answeredAtFor: retries.answeredAtFor,
+    refresh: () => void batch.refetch(),
     fetchedSizeFor,
   };
 }

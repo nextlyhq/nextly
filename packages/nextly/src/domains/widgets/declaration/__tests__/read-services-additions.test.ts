@@ -121,6 +121,34 @@ describe("a list read's total", () => {
   });
 });
 
+describe("a list read's depth", () => {
+  beforeEach(() => {
+    executed.mockResolvedValue({
+      op: "list",
+      items: [{ id: "a", image: "media-1" }],
+    } satisfies WidgetResult);
+  });
+
+  it("hands the executor depth 0 when the call asks, and no depth when it does not", async () => {
+    await services().find("orders", { depth: 0 });
+    await services().find("orders");
+
+    expect(executed).toHaveBeenCalledTimes(2);
+    expect(executed.mock.calls[0][2]).toMatchObject({ depth: 0 });
+    expect(executed.mock.calls[1][2]).not.toHaveProperty("depth");
+  });
+
+  it("is refused when named as anything but 0, before anything is checked", async () => {
+    for (const depth of [1, "0", null]) {
+      await expect(
+        services().find("orders", { depth } as never)
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+    expect(prepare).not.toHaveBeenCalled();
+    expect(executed).not.toHaveBeenCalled();
+  });
+});
+
 describe("a list read asked for no rows", () => {
   beforeEach(() => {
     executed.mockResolvedValue({

@@ -2,8 +2,8 @@
  * The two channels into the widget registry must differ only where we SAY they
  * differ.
  *
- * `validateWidgetDefinition` guards `registerWidget`; `assertAdminWidgets`
- * guards `contributes.admin.widgets`. They validate related but distinct
+ * `validateWidgetDefinition` guards `registerWidget`; `validatedAdminWidgets`
+ * guards what a plugin carries under `contributes.admin.widgets`. They validate related but distinct
  * shapes -- a contribution is a DECLARATION that resolution fills in, while a
  * definition is the resolved widget -- so a handful of differences are correct
  * and are listed below by name.
@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 
 import { validateWidgetDefinition } from "../../domains/widgets/definition";
 import type { PluginDefinition } from "../plugin-context";
-import { assertAdminWidgets } from "../validate-admin-widgets";
+import { validatedAdminWidgets } from "../validate-admin-widgets";
 
 const asPlugin = (widget: unknown): PluginDefinition =>
   ({
@@ -670,7 +670,9 @@ const MUST_AGREE: Array<{
 describe("the registry and contributions channels agree except where declared", () => {
   it.each(MUST_AGREE)("both refuse: $case", ({ widget, expect: expected }) => {
     const registry = refuses(() => validateWidgetDefinition(widget));
-    const contributions = refuses(() => assertAdminWidgets([asPlugin(widget)]));
+    const contributions = refuses(() =>
+      validatedAdminWidgets(asPlugin(widget))
+    );
 
     // Asserted as a PAIR so the failure message shows which side let it through.
     expect({ registry, contributions }).toEqual({
@@ -699,7 +701,9 @@ describe("the registry and contributions channels agree except where declared", 
       // Each is a difference with a stated reason; if one starts agreeing, the
       // exception has become dead and should be removed rather than kept.
       expect(refuses(() => validateWidgetDefinition(widget))).toBe(true);
-      expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
+      expect(refuses(() => validatedAdminWidgets(asPlugin(widget)))).toBe(
+        false
+      );
     }
   );
 
@@ -714,6 +718,6 @@ describe("the registry and contributions channels agree except where declared", 
       query: { source: "collection:orders", op: "count" },
     };
     expect(refuses(() => validateWidgetDefinition(good))).toBe(false);
-    expect(refuses(() => assertAdminWidgets([asPlugin(good)]))).toBe(false);
+    expect(refuses(() => validatedAdminWidgets(asPlugin(good)))).toBe(false);
   });
 });
