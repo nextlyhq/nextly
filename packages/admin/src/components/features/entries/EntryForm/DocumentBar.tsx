@@ -762,6 +762,8 @@ function DocumentBarHistory({
       // version rides the same answer, so a removed entity's history offers
       // neither.
       canRestore={canUpdateDocument && props.writesRefused !== true}
+      // Nor is a version it shows marked seen: that mark is a write too.
+      writesRefused={props.writesRefused === true}
       // The restore's confirmation must disclose what happens to unsaved work
       // in the live editor — the WHOLE unsaved-work state, not just form
       // dirtiness: state a field holds outside the form is lost the same way.

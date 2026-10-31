@@ -10,11 +10,11 @@
  * adds it, so the fix is the import rather than a hunt through the graph. The
  * budget stays the gate; this is the pointer.
  *
- * A static walk over the source (`__tests__/static-import-walk`), with no
- * module evaluated, so this test is light itself. An `import()` loads only
- * when it runs, which is how the commands boot nextly when they need it. A
- * reference the walk cannot read or resolve fails it rather than counting as
- * importing nothing.
+ * The walk is the shared one (`__tests__/source-import-walk.ts`): a static
+ * read of what each file loads, with no module evaluated, so this test is
+ * light itself; an `import()` loads only when it runs, which is how the
+ * commands boot nextly when they need it, and the budget catches what an
+ * `import()` run at load costs.
  *
  * @module cli/__tests__/cli-graph-stays-off-the-dashboard.test
  */
@@ -32,7 +32,7 @@ import {
   PACKAGE_NAME,
   sourceFile,
   SRC,
-} from "../../__tests__/static-import-walk";
+} from "../../__tests__/source-import-walk";
 import { UNIT_FILE } from "../../__tests__/unit-files";
 
 const COMMANDS = join(SRC, "cli", "commands");

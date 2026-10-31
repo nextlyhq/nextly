@@ -8,6 +8,7 @@
  */
 import { getNextlyLogger } from "../../observability/logger";
 import {
+  MAX_TAG_LENGTH,
   collectionTag,
   entryIdLocaleTag,
   entryIdTag,
@@ -82,12 +83,16 @@ let readTagsDropReported = false;
  * The tags one cached read carries: its own (the collection's or Single's)
  * first, then the caller's, each once, and no more than Next.js keeps. Its own
  * come first so the tag every write to it expires is never the one dropped.
+ * A tag longer than Next.js accepts is left out before the count, since Next.js
+ * would drop it anyway and it must not push a valid tag past the limit.
  */
 export function readTags(
   own: readonly string[],
   extra: readonly string[] = []
 ): string[] {
-  const tags = [...new Set([...own, ...extra])];
+  const tags = [...new Set([...own, ...extra])].filter(
+    tag => tag.length <= MAX_TAG_LENGTH
+  );
   if (tags.length <= MAX_TAGS_PER_READ) return tags;
   if (!readTagsDropReported) {
     readTagsDropReported = true;

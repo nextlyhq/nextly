@@ -1326,25 +1326,20 @@ export class MediaService {
   /**
    * Map legacy media data to MediaFile type
    *
-   * `sizes`, `focalX` and `focalY` are carried through rather than dropped. The
-   * row holds all three in every dialect, and dropping them meant the same
-   * media file described itself differently depending on how it was read: with
-   * variants when populated as a relationship on another collection, without
-   * them from `media.findByID()` and `GET /api/media/:id`.
+   * `focalX` and `focalY` are carried through rather than dropped, so the same
+   * media file describes itself alike whether populated as a relationship on
+   * another collection or read from `media.findByID()` and `GET /api/media/:id`.
    *
    * The URLs go through `normalizeMediaUrls`, which the relationship and
    * Single paths use too, so the three cannot disagree about what a media URL
    * is: as the storage wrote it, the local adapter's own base followed by the
    * file's path, which the app's pages resolve on whatever host serves them.
-   * It carries the part that is easy to get wrong by hand: SQLite stores
-   * `sizes` as TEXT and returns a JSON string, which it parses, so the shape a
-   * caller receives is the same on all three dialects.
+   * A row's stored `sizes` is not carried: image sizes are no longer offered.
    */
   private mapToMediaFile(data: MediaRow): MediaFile {
-    const { url, thumbnailUrl, sizes } = normalizeMediaUrls({
+    const { url, thumbnailUrl } = normalizeMediaUrls({
       url: data.url,
       thumbnailUrl: data.thumbnailUrl,
-      sizes: data.sizes,
     });
     return {
       id: String(data.id),
@@ -1357,7 +1352,6 @@ export class MediaService {
       duration: data.duration,
       url,
       thumbnailUrl,
-      sizes,
       focalX: data.focalX,
       focalY: data.focalY,
       altText: data.altText,

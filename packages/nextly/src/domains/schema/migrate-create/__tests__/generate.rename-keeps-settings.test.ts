@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { TableSpec } from "../../pipeline/diff/types";
 import type { AppStreamTables } from "../app-stream";
-import { parseSqlSections } from "../../../../cli/commands/migrate";
+import { parseSqlSections } from "../../migrate/sql-sections";
 import { generateMigration, type MinimalConfigEntity } from "../generate";
 
 const posts = (fields: MinimalConfigEntity["fields"]): MinimalConfigEntity => ({

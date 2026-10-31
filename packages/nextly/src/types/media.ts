@@ -23,34 +23,6 @@ export const MediaTypeSchema = z.enum([
 export type MediaType = z.infer<typeof MediaTypeSchema>;
 
 // ========================================
-// IMAGE SIZE VARIANT
-// ========================================
-
-/**
- * Metadata for a single generated image size variant.
- * Stored in the media.sizes JSONB field, keyed by size name.
- */
-export interface ImageSizeVariant {
-  url: string;
-  path: string;
-  width: number;
-  height: number;
-  filesize: number;
-  mimeType: string;
-  filename: string;
-}
-
-export const ImageSizeVariantSchema = z.object({
-  url: z.string(),
-  path: z.string(),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  filesize: z.number().int().positive(),
-  mimeType: z.string(),
-  filename: z.string(),
-});
-
-// ========================================
 // MEDIA RECORD SCHEMA
 // ========================================
 
@@ -67,7 +39,6 @@ export const MediaSchema = z.object({
   thumbnailUrl: z.string().url().nullable(),
   focalX: z.number().int().min(0).max(100).nullable().optional(),
   focalY: z.number().int().min(0).max(100).nullable().optional(),
-  sizes: z.record(z.string(), ImageSizeVariantSchema).nullable().optional(),
   altText: z.string().nullable(),
   caption: z.string().nullable(),
   tags: z.array(z.string()).nullable(),

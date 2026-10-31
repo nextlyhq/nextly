@@ -121,8 +121,8 @@
       "compiled": 5
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 16,
-      "compiled": 11
+      "samples": 15,
+      "compiled": 10
     },
     "docs/guides/production-migrations.mdx": {
       "samples": 1,
@@ -157,7 +157,7 @@
       "compiled": 2
     },
     "docs/permissions/index.mdx": {
-      "samples": 9,
+      "samples": 10,
       "compiled": 6
     },
     "docs/plugins/admin-ui.mdx": {
@@ -457,7 +457,7 @@
     },
     "docs/guides/media-storage.mdx": {
       "uninstalled #0 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1,
-      "reader-file #12 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/commerce/index.mdx": {
       "uninstalled #0 error TS2307: Cannot find module '@nextlyhq/plugin-commerce' or its corresponding type declarations.": 1,

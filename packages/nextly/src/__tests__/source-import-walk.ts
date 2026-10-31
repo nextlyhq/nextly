@@ -1,24 +1,25 @@
 /**
- * A static walk over the package's source: what a module loads with it, read
- * through the repository's one reader of what a file loads, with no module
- * evaluated, so a test built on it is light itself.
+ * A static walk over the package's source: what a file loads with it, and,
+ * asked, what its `import()`s load when they run, through the repository's one
+ * reader of what a file loads, with no module evaluated, so a test built on it
+ * is light itself.
  *
- * It follows what a file loads with it: type-only references erase, and an
- * `import()` loads only when it runs. Its limit: an `import()` that runs
- * while the module initialises (a top-level `await import()`, or one inside a
- * function called at load) is read as deferred, because telling those apart
- * needs control-flow analysis; the module budget catches what that costs.
+ * Type-only references erase. An `import()` loads only when it runs, so it is
+ * followed only when asked. Its limit: an `import()` that runs while the
+ * module initialises (a top-level `await import()`, or one inside a function
+ * called at load) is read as deferred, because telling those apart needs
+ * control-flow analysis.
  *
  * Resolution is the package's own: relative paths, the `paths` in its
  * `tsconfig.json`, and explicit `.ts`/`.js` extensions. A reference it cannot
- * read or resolve is reported rather than counted as importing nothing, and
- * so is one to the package by its own name (`nextly`, `nextly/runtime`): that
+ * read or resolve is reported rather than counted as importing nothing, and so
+ * is one to the package by its own name (`nextly`, `nextly/runtime`): that
  * loads a built entry, which re-exports the registry, from inside it.
  *
- * @module __tests__/static-import-walk
+ * @module __tests__/source-import-walk
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep, type win32 } from "node:path";
+import { dirname, join, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
