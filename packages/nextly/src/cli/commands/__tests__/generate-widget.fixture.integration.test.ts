@@ -1,8 +1,8 @@
 /**
  * What `generate:widget` writes works as written, in projects made from the
- * real templates: every view kind generated into a site from the blank
- * template, a site from the blog template and a plugin from the plugin
- * template, then each project type-checked and its generated tests run. Those
+ * real templates: every view kind, with and without a collection setting,
+ * generated into a site from the blank template, a site from the blog
+ * template and a plugin from the plugin template, then each project type-checked and its generated tests run. Those
  * tests boot the widget through `createTestNextly`, which runs the startup
  * checks (a description, labelled settings, `isEmpty` for a component, a
  * preview case JSON carries), answer its load through the dashboard's route,
@@ -15,10 +15,14 @@
  * and not yet published; what gets installed is still decided by the
  * manifest, so a site from the blank template, which declares no
  * `@nextlyhq/plugin-sdk`, has one only once the command adds it, and is
- * installed again after it as its next steps say. The run needs the packages
+ * installed again after it as its next steps say. The generated tests run
+ * with nextly's optional database adapters resolved from the project, as an
+ * installed nextly finds them, so a site on PostgreSQL fails them until the
+ * command adds the SQLite adapter they boot on. The run needs the packages
  * built: an integration test, run from the root after the build.
  */
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import {
   access,
   cp,
@@ -38,6 +42,7 @@ import { parseSync } from "oxc-parser";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { WIDGET_VIEW_KINDS } from "../generate-widget/files";
+import { camelCase } from "../generate-widget/id";
 import { runGenerateWidget } from "../generate-widget/run";
 
 const REPO = resolve(import.meta.dirname, "../../../../../..");
@@ -51,6 +56,8 @@ const SOURCES: Record<string, string> = {
   "@nextlyhq/plugin-form-builder": join(REPO, "packages/plugin-form-builder"),
   "@nextlyhq/admin": join(REPO, "packages/admin"),
   "@nextlyhq/ui": join(REPO, "packages/ui"),
+  "@nextlyhq/adapter-sqlite": join(REPO, "packages/adapter-sqlite"),
+  "@nextlyhq/adapter-postgres": join(REPO, "packages/adapter-postgres"),
   react: dirname(fromAdmin.resolve("react/package.json")),
   "react-dom": dirname(fromAdmin.resolve("react-dom/package.json")),
   "@types/react": dirname(fromAdmin.resolve("@types/react/package.json")),
@@ -117,7 +124,9 @@ async function install(root: string): Promise<void> {
  * The manifest each scaffold writes, as far as these files import from it: a
  * site's from create-nextly-app's generatePackageJson (the blog adds the form
  * builder and the SDK it needs), a plugin's from its generatePluginPackageJson.
- * Vitest is in each, as a project that runs the generated test has it.
+ * The blank site is on SQLite, the blog on PostgreSQL, so it has no SQLite
+ * adapter until the command adds the one its tests boot on. Vitest is in
+ * each, as a project that runs the generated test has it.
  */
 async function manifest(kind: "blank" | "blog" | "plugin"): Promise<object> {
   const version = await versionOf("nextly");
@@ -140,22 +149,27 @@ async function manifest(kind: "blank" | "blog" | "plugin"): Promise<object> {
           "@nextlyhq/admin",
           "@nextlyhq/ui",
           "@nextlyhq/plugin-sdk",
+          "@nextlyhq/adapter-sqlite",
         ]),
         ...react,
         ...tooling,
       },
     };
   }
-  const blog =
+  const own =
     kind === "blog"
-      ? family(["@nextlyhq/plugin-form-builder", "@nextlyhq/plugin-sdk"])
-      : {};
+      ? family([
+          "@nextlyhq/plugin-form-builder",
+          "@nextlyhq/plugin-sdk",
+          "@nextlyhq/adapter-postgres",
+        ])
+      : family(["@nextlyhq/adapter-sqlite"]);
   return {
     name: kind,
     private: true,
     dependencies: {
       ...family(["nextly", "@nextlyhq/admin", "@nextlyhq/ui"]),
-      ...blog,
+      ...own,
       ...react,
     },
     devDependencies: tooling,
@@ -173,8 +187,48 @@ async function fillPlaceholders(path: string): Promise<void> {
   );
 }
 
-/** Every view kind is generated, half of them reading a collection. */
-const isCollection = (index: number): boolean => index % 2 === 1;
+/** Every view kind, generated both with and without a collection setting. */
+const WIDGETS = WIDGET_VIEW_KINDS.flatMap(view => [
+  { view, collection: false, name: `${view}-sample` },
+  { view, collection: true, name: `${view}-collection` },
+]);
+
+/** What the command adds to each project's manifest. */
+const ADDED: Record<Fixture["name"], string[]> = {
+  blank: ["@nextlyhq/plugin-sdk"],
+  blog: ["@nextlyhq/adapter-sqlite"],
+  plugin: [],
+};
+
+/**
+ * The child run's Vitest config: nextly's optional peers, its database
+ * adapters, resolved from the project, as they are once installed. Linked from
+ * the workspace, nextly would otherwise find them beside its own source, which
+ * a project that never installed one does not have.
+ */
+function installedPeersConfig(project: string): string {
+  const nextly = `${realpathSync(SOURCES.nextly!)}/`;
+  return `const NEXTLY = ${JSON.stringify(nextly)};
+const MANIFEST = ${JSON.stringify(join(project, "package.json"))};
+const PEERS = new Set(["@nextlyhq/adapter-sqlite", "@nextlyhq/adapter-postgres", "@nextlyhq/adapter-mysql"]);
+const MISSING = "\\0not-installed:";
+export default {
+  plugins: [{
+    name: "installed-peers",
+    enforce: "pre",
+    async resolveId(source, importer) {
+      if (!PEERS.has(source) || !importer?.startsWith(NEXTLY)) return null;
+      const found = await this.resolve(source, MANIFEST, { skipSelf: true });
+      return found ?? MISSING + source;
+    },
+    load(id) {
+      if (id.startsWith(MISSING)) throw new Error("Cannot find package '" + id.slice(MISSING.length) + "'");
+      return null;
+    },
+  }],
+};
+`;
+}
 
 interface Fixture {
   name: "blank" | "blog" | "plugin";
@@ -271,15 +325,18 @@ describe("generate:widget in projects made from the templates", () => {
         join(fixture.root, "tsconfig.json"),
         JSON.stringify({ ...TSCONFIG, include: fixture.include })
       );
-      // Every view kind, half of them reading a collection the reader chooses.
-      for (const [index, view] of WIDGET_VIEW_KINDS.entries()) {
+      await writeFile(
+        join(fixture.root, "vitest.installed.config.mjs"),
+        installedPeersConfig(fixture.root)
+      );
+      for (const widget of WIDGETS) {
         const result = await runGenerateWidget(fixture.root, {
-          id: `${view}-card`,
-          view,
-          collection: isCollection(index),
+          id: widget.name,
+          view: widget.view,
+          collection: widget.collection,
         });
         if (!result.ok)
-          throw new Error(`${fixture.name} ${view}: ${result.reason}`);
+          throw new Error(`${fixture.name} ${widget.name}: ${result.reason}`);
         expect(result.manual).toEqual([]);
       }
       // As its next steps say once the command adds a dependency.
@@ -292,26 +349,32 @@ describe("generate:widget in projects made from the templates", () => {
     if (base) await rm(base, { recursive: true, force: true });
   });
 
-  it("adds the SDK to the blank site, at the workspace's version, and to no other", async () => {
-    const sdk = await versionOf("@nextlyhq/plugin-sdk");
+  it("adds what the tests need and the project lacks, at the workspace's version, and nothing else", async () => {
+    const version = await versionOf("nextly");
     for (const fixture of fixtures) {
-      const declared = JSON.parse(
+      const declared: unknown = JSON.parse(
         await readFile(join(fixture.root, "package.json"), "utf8")
-      ) as Record<string, Record<string, string> | undefined>;
-      const added = declared.devDependencies?.["@nextlyhq/plugin-sdk"];
-      if (fixture.name === "blank") expect(added, fixture.name).toBe(sdk);
-      else
-        expect(JSON.stringify(declared), fixture.name).toBe(
-          JSON.stringify(await manifest(fixture.name))
-        );
+      );
+      const scaffolded = (await manifest(fixture.name)) as {
+        devDependencies?: Record<string, string>;
+      };
+      expect(declared, fixture.name).toEqual({
+        ...scaffolded,
+        devDependencies: {
+          ...scaffolded.devDependencies,
+          ...Object.fromEntries(
+            ADDED[fixture.name].map(name => [name, version])
+          ),
+        },
+      });
     }
   });
 
   it("lists every widget in a file that still parses", async () => {
     for (const fixture of fixtures) {
       const text = await readFile(fixture.listFile, "utf8");
-      for (const view of WIDGET_VIEW_KINDS) {
-        expect(text).toContain(`${view}Card`);
+      for (const widget of WIDGETS) {
+        expect(text).toContain(camelCase(widget.name));
       }
       expect(syntaxErrors(fixture.listFile, text), fixture.name).toEqual([]);
     }
@@ -330,8 +393,8 @@ describe("generate:widget in projects made from the templates", () => {
     const vitest = join(SOURCES.vitest!, "vitest.mjs");
     // Each file's tests: the load, the card, and for a widget reading a
     // collection, what it reads from a stored entry.
-    const tests = [...WIDGET_VIEW_KINDS.keys()].reduce(
-      (sum, index) => sum + (isCollection(index) ? 3 : 2),
+    const tests = WIDGETS.reduce(
+      (sum, widget) => sum + (widget.collection ? 3 : 2),
       0
     );
     for (const fixture of fixtures) {
@@ -345,6 +408,8 @@ describe("generate:widget in projects made from the templates", () => {
           ".widget.test.ts",
           "--root",
           fixture.root,
+          "--config",
+          join(fixture.root, "vitest.installed.config.mjs"),
           "--maxWorkers=1",
           "--testTimeout=120000",
           "--hookTimeout=120000",

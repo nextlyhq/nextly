@@ -35,13 +35,6 @@ function indentAt(text: string, index: number): string {
   return /^[ \t]*/.exec(text.slice(lineStart))?.[0] ?? "";
 }
 
-/** Inserts `entry` on its own line right after the character at `opening` (a `{` or `[`). */
-function insertAfter(text: string, opening: number, entry: string): string {
-  const at = opening + 1;
-  const indent = `${indentAt(text, opening)}  `;
-  return `${text.slice(0, at)}\n${indent}${entry}${text.slice(at)}`;
-}
-
 /** Where the widget goes: already listed, or inserted after the `{` or `[` at `opening`. */
 type Placement = { listed: true } | { opening: number; entry: string };
 
@@ -105,25 +98,78 @@ function callsTo(
   return found;
 }
 
-/**
- * The object literal the one call to `callee` is given, or why there is none
- * to edit: a file that does not parse, no call or more than one, or a call
- * given something other than an object literal.
- */
-function rootObject(
+type Program = ReturnType<ConfigParser>["program"];
+type ImportDeclaration = Extract<Statement, { type: "ImportDeclaration" }>;
+
+/** The file's syntax tree, or why it could not be read. */
+function readProgram(
   text: string,
-  callee: string,
   parser: ConfigParser
-): ObjectExpression | { unread: string } | undefined {
-  let program: ReturnType<ConfigParser>["program"];
+): Program | { unread: string } {
   try {
-    program = parser(text, PARSE_OPTIONS).program;
+    return parser(text, PARSE_OPTIONS).program;
   } catch (error) {
     return { unread: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * The object literal the one call to `callee` is given, or nothing when there
+ * is none to edit: no call or more than one, or a call given something other
+ * than an object literal.
+ */
+function rootObject(
+  program: Program,
+  callee: string
+): ObjectExpression | undefined {
   const calls = callsTo(program.body, callee);
   const [argument] = calls.length === 1 ? (calls[0]?.arguments ?? []) : [];
   return argument?.type === "ObjectExpression" ? argument : undefined;
+}
+
+/** A module specifier without its extension, so `./a.widget.js` and `./a.widget` are one module. */
+const moduleOf = (specifier: string): string =>
+  specifier.replace(/\.[cm]?[jt]sx?$/, "");
+
+/** Whether `declaration` binds `name` as a value, not only as a type. */
+function bindsValue(declaration: ImportDeclaration, name: string): boolean {
+  if (declaration.importKind === "type") return false;
+  return declaration.specifiers.some(
+    specifier =>
+      specifier.local.name === name &&
+      !("importKind" in specifier && specifier.importKind === "type")
+  );
+}
+
+/**
+ * How the file already imports the widget's name, read from its syntax, so
+ * quotes and formatting do not matter: from the declaration's module
+ * (`same`), from another module or only as a type (`other`), or not at all
+ * (`none`, with where a new import goes: after the last one, or at the top).
+ */
+function importOf(
+  program: Program,
+  name: string,
+  specifier: string
+):
+  | { kind: "same" }
+  | { kind: "other"; source: string }
+  | { kind: "none"; after: number } {
+  const imports = program.body.filter(
+    (node): node is ImportDeclaration => node.type === "ImportDeclaration"
+  );
+  const binding = imports.find(declaration =>
+    declaration.specifiers.some(each => each.local.name === name)
+  );
+  if (binding === undefined) {
+    return { kind: "none", after: imports.at(-1)?.end ?? 0 };
+  }
+  const same =
+    moduleOf(binding.source.value) === moduleOf(specifier) &&
+    bindsValue(binding, name);
+  return same
+    ? { kind: "same" }
+    : { kind: "other", source: binding.source.value };
 }
 
 /** A property's key as written, when it is a plain name or a string. */
@@ -218,15 +264,35 @@ function placement(
     : undefined;
 }
 
-/** Adds `line` after the file's last import, or at its top. */
-function withImport(text: string, line: string): string {
-  if (text.includes(line)) return text;
-  const imports = [...text.matchAll(/^import[^;]*;\s*$/gm)];
-  const last = imports.at(-1);
-  if (!last) return `${line}\n${text}`;
-  const at = last.index + last[0].length;
-  return `${text.slice(0, at)}\n${line}${text.slice(at)}`;
+/** Text to put into a file at one offset. */
+interface Insertion {
+  at: number;
+  text: string;
 }
+
+/** Applies `insertions`, all at offsets into the original text, the last first. */
+function inserted(text: string, insertions: readonly Insertion[]): string {
+  return [...insertions]
+    .sort((a, b) => b.at - a.at)
+    .reduce(
+      (current, { at, text: added }) =>
+        `${current.slice(0, at)}${added}${current.slice(at)}`,
+      text
+    );
+}
+
+/** The widget's entry, on its own line right after the `{` or `[` it opens. */
+function entryInsertion(
+  text: string,
+  place: { opening: number; entry: string }
+): Insertion {
+  const indent = `${indentAt(text, place.opening)}  `;
+  return { at: place.opening + 1, text: `\n${indent}${place.entry}` };
+}
+
+/** The import, on its own line after the file's last import, or at its top. */
+const importInsertion = (after: number, line: string): Insertion =>
+  after > 0 ? { at: after, text: `\n${line}` } : { at: 0, text: `${line}\n` };
 
 /** A relative module specifier from one file to another, without its extension. */
 function specifierFrom(fromFile: string, toFile: string): string {
@@ -258,53 +324,64 @@ export interface RegistrationInput {
   declarationPath: string;
 }
 
+/** The manual answer: why, then the import and where to list the widget. */
+const manual = (
+  why: string,
+  importLine: string,
+  input: RegistrationInput
+): RegistrationEdit => ({
+  kind: "manual",
+  instructions: `${why}\n  ${importLine}\nand list ${input.exportName} in ${OWNERS[input.kind].keys.join(".")}.`,
+});
+
 /** The edit that lists the widget, or what to do by hand when none is safe. */
 export function registrationEdit(input: RegistrationInput): RegistrationEdit {
-  const importLine = `import { ${input.exportName} } from "${specifierFrom(input.file, input.declarationPath)}";`;
+  const specifier = specifierFrom(input.file, input.declarationPath);
+  const importLine = `import { ${input.exportName} } from "${specifier}";`;
   const owner = OWNERS[input.kind];
-  const where = owner.keys.join(".");
-  const root = rootObject(input.text, owner.callee, input.parser);
-  const place =
-    root !== undefined && !("unread" in root)
-      ? placement(root, owner.keys, input.exportName)
-      : undefined;
-  if (!place) {
-    // Why it is left to the author: a file it could not read, or one whose
-    // shape does not prove where the widget goes.
-    const why =
-      root !== undefined && "unread" in root
-        ? `Could not read ${input.file} (${root.unread}), so it was left as it was. In it, add`
-        : `In ${input.file}, add`;
-    return {
-      kind: "manual",
-      instructions: `${why}\n  ${importLine}\nand list ${input.exportName} in ${where}.`,
-    };
+  const program = readProgram(input.text, input.parser);
+  if ("unread" in program) {
+    const why = `Could not read ${input.file} (${program.unread}), so it was left as it was. In it, add`;
+    return manual(why, importLine, input);
   }
-  const listed =
-    "listed" in place
-      ? input.text
-      : insertAfter(input.text, place.opening, place.entry);
+  const root = rootObject(program, owner.callee);
+  const place = root && placement(root, owner.keys, input.exportName);
+  const imported = importOf(program, input.exportName, specifier);
+  if (imported.kind === "other") {
+    const why = `In ${input.file}, ${input.exportName} is already imported from "${imported.source}", so it was left as it was. Import the widget under another name:`;
+    return manual(why, importLine, input);
+  }
+  if (!place) return manual(`In ${input.file}, add`, importLine, input);
+  const after = inserted(input.text, [
+    ...("listed" in place ? [] : [entryInsertion(input.text, place)]),
+    ...(imported.kind === "none"
+      ? [importInsertion(imported.after, importLine)]
+      : []),
+  ]);
   return {
     kind: "edit",
-    edits: [
-      {
-        path: input.file,
-        before: input.text,
-        after: withImport(listed, importLine),
-      },
-    ],
-    summary: `listed ${input.exportName} in ${where} in ${input.file}`,
+    edits: [{ path: input.file, before: input.text, after }],
+    summary: `listed ${input.exportName} in ${owner.keys.join(".")} in ${input.file}`,
   };
 }
 
 /** The line that exports a plugin's widget component from its admin entry. */
+export function adminExportLine(
+  adminIndex: string,
+  exportName: string,
+  componentPath: string
+): string {
+  return `export { ${exportName} } from "${specifierFrom(adminIndex, componentPath)}";`;
+}
+
+/** The edit adding that line to the admin entry, unless it is there already. */
 export function adminExportEdit(
   adminIndex: string,
   text: string,
   exportName: string,
   componentPath: string
 ): FileEdit {
-  const line = `export { ${exportName} } from "${specifierFrom(adminIndex, componentPath)}";`;
+  const line = adminExportLine(adminIndex, exportName, componentPath);
   const after = text.includes(line)
     ? text
     : `${text.replace(/\n*$/, "\n")}${line}\n`;

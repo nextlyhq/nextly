@@ -16,13 +16,14 @@ import { getCoreVersion } from "../../../plugins/core-version";
 
 import {
   adminExportEdit,
+  adminExportLine,
   registrationEdit,
   type FileEdit,
 } from "./config-edit";
 import {
   ADD_DEV,
   LOCKFILES,
-  sdkDependency,
+  testDependencies,
   type PackageManager,
 } from "./dependency";
 import {
@@ -52,6 +53,8 @@ export interface GenerateWidgetOptions {
   target?: TargetChoice;
   force?: boolean;
   dryRun?: boolean;
+  /** The site config the root CLI's `--config` names, relative to `cwd`. */
+  configPath?: string;
 }
 
 export interface GeneratedFile {
@@ -164,10 +167,7 @@ async function registrations(
   }
   if (target.kind === "plugin" && paths.component) {
     const { exportName: component } = componentRef(plan);
-    const index = await firstExisting([
-      join(target.root, "src", "admin", "index.ts"),
-      join(target.root, "src", "admin", "index.tsx"),
-    ]);
+    const index = await adminIndexOf(target.root);
     if (index === undefined) {
       manual.push(
         `Export ${component} (from ${paths.component}) from your plugin's admin entry, so the dashboard can load it.`
@@ -192,8 +192,8 @@ interface ProjectState {
   root: string;
   manager: PackageManager;
   hasVitest: boolean;
-  /** Whether the edits add a dependency, which only an install brings in. */
-  addsDependency: boolean;
+  /** The dependencies the edits add, which only an install brings in. */
+  added: readonly string[];
 }
 
 /** What to do next, in the order an author does it. */
@@ -203,8 +203,10 @@ function nextSteps(
 ): string[] {
   const rel = (path: string) => relative(project.root, path);
   return [
-    ...(project.addsDependency
-      ? [`Install what it added to package.json: ${project.manager} install`]
+    ...(project.added.length > 0
+      ? [
+          `Install what it added to package.json (${project.added.join(", ")}): ${project.manager} install`,
+        ]
       : []),
     `Make it yours: ${rel(paths.declaration)}${paths.component ? ` and ${rel(paths.component)}` : ""}.`,
     "See it before it has data: start your dev server and open /admin/dev/widget-previews.",
@@ -214,17 +216,17 @@ function nextSteps(
   ];
 }
 
-/** The SDK the generated files import, added to the project when it lacks it. */
-async function sdkEdits(
+/** What the generated test needs installed, added to the project where it lacks it. */
+async function dependencyEdits(
   root: string
-): Promise<{ edits: FileEdit[]; manual: string[] }> {
+): Promise<{ edits: FileEdit[]; manual: string[]; added: string[] }> {
   const path = join(root, "package.json");
-  const answer = sdkDependency(path, await textOf(path), getCoreVersion());
-  if (answer.kind === "edit") return { edits: [answer.edit], manual: [] };
-  if (answer.kind === "manual") {
-    return { edits: [], manual: [answer.instructions] };
+  const answer = testDependencies(path, await textOf(path), getCoreVersion());
+  if (answer.kind === "edit") {
+    return { edits: [answer.edit], manual: [], added: answer.added };
   }
-  return { edits: [], manual: [] };
+  const manual = answer.kind === "manual" ? [answer.instructions] : [];
+  return { edits: [], manual, added: [] };
 }
 
 /** The files a plan writes: the declaration, its component when it has one, its test. */
@@ -263,6 +265,55 @@ async function shadowRefusal(
     : `nothing written: ${rival} would be imported in place of the component ${component}; give the widget another name`;
 }
 
+/** The admin entry a plugin's components are exported from, when it has one. */
+const adminIndexOf = (root: string): Promise<string | undefined> =>
+  firstExisting([
+    join(root, "src", "admin", "index.ts"),
+    join(root, "src", "admin", "index.tsx"),
+  ]);
+
+/**
+ * What to remove before a component widget is generated again with a core
+ * view: its component, and a plugin's export of it from the admin entry.
+ */
+async function componentLeftovers(
+  plan: WidgetPlan,
+  component: string
+): Promise<string> {
+  const index =
+    plan.target.kind === "plugin"
+      ? await adminIndexOf(plan.target.root)
+      : undefined;
+  if (index === undefined) return component;
+  const line = adminExportLine(index, componentRef(plan).exportName, component);
+  return `${component} and the line \`${line}\` in ${index}`;
+}
+
+/**
+ * Why `--force` may not switch a widget between a view of its own and a core
+ * view: it writes over the declaration and the test but leaves a component
+ * (and a plugin's export of it) that no longer fits, or the other way round
+ * rewrites the widget around a component the files there were not made for.
+ * Nothing is removed for the author; the refusal names what to remove first.
+ */
+async function viewSwitchRefusal(
+  plan: WidgetPlan,
+  paths: ReturnType<typeof planPaths>,
+  force: boolean | undefined
+): Promise<string | undefined> {
+  if (!force || !(await exists(paths.declaration))) return undefined;
+  const component =
+    paths.component ?? planPaths({ ...plan, view: "component" }).component;
+  const hadComponent = component !== undefined && (await exists(component));
+  if (paths.component === undefined && hadComponent) {
+    return `nothing written: ${plan.name} has a component of its own, which --view ${plan.view} would leave behind; remove ${await componentLeftovers(plan, component)} first, then run it again`;
+  }
+  if (paths.component !== undefined && !hadComponent) {
+    return `nothing written: ${plan.name} has a core view, and --view component would rewrite it around a component; remove ${paths.declaration} and ${paths.test} first, then run it again`;
+  }
+  return undefined;
+}
+
 /** Why nothing may be written over the files already there, or nothing when it may. */
 async function overwriteRefusal(
   files: readonly GeneratedFile[],
@@ -295,7 +346,7 @@ async function planFrom(
   options: GenerateWidgetOptions,
   prompter: WidgetPrompter | undefined
 ): Promise<{ ok: true; plan: WidgetPlan } | { ok: false; reason: string }> {
-  const found = await findTarget(cwd, options.target);
+  const found = await findTarget(cwd, options.target, options.configPath);
   if (!found.ok) return found;
   const settled = await settle(options, prompter);
   if (!settled.ok) return settled;
@@ -325,22 +376,23 @@ export async function runGenerateWidget(
   const files = filesOf(plan, paths);
   const refusal =
     (await shadowRefusal(paths.component)) ??
+    (await viewSwitchRefusal(plan, paths, options.force)) ??
     (await overwriteRefusal(files, options.force));
   if (refusal !== undefined) return { ok: false, reason: refusal };
 
   const { root } = plan.target;
   const listed = await registrations(plan, paths);
-  const sdk = await sdkEdits(root);
+  const dependencies = await dependencyEdits(root);
   // An edit that changes nothing (a widget generated again, already listed)
   // is neither written nor reported.
-  const edits = [...listed.edits, ...sdk.edits].filter(
+  const edits = [...listed.edits, ...dependencies.edits].filter(
     edit => edit.after !== edit.before
   );
   const steps = nextSteps(paths, {
     root,
     manager: await packageManagerOf(root),
     hasVitest: await exists(join(root, "node_modules", "vitest")),
-    addsDependency: sdk.edits.length > 0,
+    added: dependencies.added,
   });
   if (!options.dryRun) await writeAll(files, edits, options.force);
   return {
@@ -348,7 +400,7 @@ export async function runGenerateWidget(
     written: !options.dryRun,
     files,
     edits,
-    manual: [...listed.manual, ...sdk.manual],
+    manual: [...listed.manual, ...dependencies.manual],
     nextSteps: steps,
   };
 }

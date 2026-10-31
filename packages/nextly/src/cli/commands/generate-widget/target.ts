@@ -9,8 +9,8 @@
  *
  * @module cli/commands/generate-widget/target
  */
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 
 import { findConfigFile } from "../../../shared/lib/config-file";
 
@@ -39,13 +39,40 @@ async function pluginPackage(root: string): Promise<string | undefined> {
 }
 
 /**
- * The target in `cwd`: what `choice` names, or what is found there when it
- * names nothing.
+ * The site whose config the root CLI's `--config` names: that file, relative to
+ * `cwd`, wherever it is, rather than the ones `findConfigFile` looks for.
+ */
+async function siteAt(
+  cwd: string,
+  configPath: string,
+  choice: TargetChoice
+): Promise<TargetAnswer> {
+  if (choice === "plugin") {
+    return {
+      ok: false,
+      reason: "--config names a site's config, so it cannot go with --plugin",
+    };
+  }
+  const path = resolve(cwd, configPath);
+  const found = await access(path).then(
+    () => true,
+    () => false
+  );
+  return found
+    ? { ok: true, target: { kind: "site", root: cwd, configPath: path } }
+    : { ok: false, reason: `no config at ${path}, which --config names` };
+}
+
+/**
+ * The target in `cwd`: the site `configPath` (the root CLI's `--config`) names,
+ * else what `choice` names, or what is found there when it names nothing.
  */
 export async function findTarget(
   cwd: string,
-  choice: TargetChoice
+  choice: TargetChoice,
+  configPath?: string
 ): Promise<TargetAnswer> {
+  if (configPath !== undefined) return siteAt(cwd, configPath, choice);
   const packageName = choice === "site" ? undefined : await pluginPackage(cwd);
   if (packageName !== undefined) {
     return { ok: true, target: { kind: "plugin", root: cwd, packageName } };
@@ -57,9 +84,9 @@ export async function findTarget(
         'no plugin here: --plugin needs a package.json whose "keywords" include "nextly-plugin", as the plugin scaffold writes',
     };
   }
-  const configPath = findConfigFile(cwd);
-  if (configPath !== undefined) {
-    return { ok: true, target: { kind: "site", root: cwd, configPath } };
+  const found = findConfigFile(cwd);
+  if (found !== undefined) {
+    return { ok: true, target: { kind: "site", root: cwd, configPath: found } };
   }
   return {
     ok: false,

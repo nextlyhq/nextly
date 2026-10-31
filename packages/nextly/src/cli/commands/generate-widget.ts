@@ -125,6 +125,8 @@ export function registerGenerateWidgetCommand(program: Command): void {
           target: flags.site ? "site" : flags.plugin ? "plugin" : undefined,
           force: flags.force,
           dryRun: flags.dryRun,
+          // The root CLI's `-c, --config`, which names the site's config.
+          configPath: context.configPath,
         };
         try {
           const result = await runGenerateWidget(

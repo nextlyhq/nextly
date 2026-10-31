@@ -223,6 +223,26 @@ describe("the registration edit", () => {
     expect(after(listed)).toBe(listed);
   });
 
+  it("reuses an import of the widget however it is written, and refuses a clashing one", () => {
+    // Single quotes, a `.js` extension and other names beside it: the same import.
+    const formatted =
+      "import { notes, openOrders } from './src/dashboard/open-orders.widget.js';\ndefineConfig({ admin: { dashboard: { widgets: [notes] } } })";
+    const result = after(formatted);
+    expect(result.match(/\bopenOrders\b/g)).toHaveLength(2);
+    expect(result).toMatch(/widgets: \[\n\s+openOrders,notes\]/);
+    // The name taken by an import from somewhere else: left for the author.
+    expect(
+      edit(
+        "import { openOrders } from './orders';\ndefineConfig({ collections: [] })"
+      )
+    ).toEqual({
+      kind: "manual",
+      instructions: expect.stringContaining(
+        'openOrders is already imported from "./orders"'
+      ),
+    });
+  });
+
   it("adds the import once, however often it runs", () => {
     const once = after("defineConfig({})");
     expect(once.split(IMPORT).length - 1).toBe(1);
@@ -354,7 +374,88 @@ describe("running the command", () => {
     expect(config.match(/\bopenOrders\b/g)).toHaveLength(2);
   });
 
-  it("adds the SDK its test imports to a site without it, at nextly's version, and says to install", async () => {
+  it("generates again with --force over a config its formatter rewrote, adding nothing", async () => {
+    await asSite();
+    await runGenerateWidget(dir, { id: "open-orders" });
+    const configFile = join(dir, "nextly.config.ts");
+    // As a formatter preferring single quotes leaves it.
+    const formatted = (await readFile(configFile, "utf8")).replaceAll('"', "'");
+    await writeFile(configFile, formatted);
+    const again = await runGenerateWidget(dir, {
+      id: "open-orders",
+      force: true,
+    });
+    expect(again).toMatchObject({ ok: true, edits: [] });
+    expect(await readFile(configFile, "utf8")).toBe(formatted);
+  });
+
+  it("edits the config the root CLI's --config names", async () => {
+    await asSite();
+    await mkdir(join(dir, "conf"), { recursive: true });
+    await writeFile(join(dir, "conf", "site.config.ts"), CONFIG);
+    const result = await runGenerateWidget(dir, {
+      id: "open-orders",
+      configPath: "conf/site.config.ts",
+    });
+    if (!result.ok) throw new Error(result.reason);
+    expect(
+      await readFile(join(dir, "conf", "site.config.ts"), "utf8")
+    ).toContain("widgets: [openOrders]");
+    // The config the search would have found is not the one it edits.
+    expect(await readFile(join(dir, "nextly.config.ts"), "utf8")).toBe(CONFIG);
+    expect(
+      await runGenerateWidget(dir, {
+        id: "open-orders",
+        configPath: "conf/missing.config.ts",
+      })
+    ).toEqual({
+      ok: false,
+      reason: expect.stringContaining("which --config names"),
+    });
+  });
+
+  it("refuses to switch a widget between its own component and a core view with --force, naming what to remove", async () => {
+    await asPlugin();
+    await runGenerateWidget(dir, { id: "open-orders", view: "component" });
+    const component = join(dir, "src", "admin", "open-orders-card.tsx");
+    const declarationFile = join(
+      dir,
+      "src",
+      "widgets",
+      "open-orders.widget.ts"
+    );
+    const before = await readFile(declarationFile, "utf8");
+    const toFigure = await runGenerateWidget(dir, {
+      id: "open-orders",
+      view: "figure",
+      force: true,
+    });
+    expect(toFigure).toEqual({
+      ok: false,
+      reason: expect.stringContaining(
+        `remove ${component} and the line \`export { OpenOrdersCard } from "./open-orders-card";\` in ${join(dir, "src", "admin", "index.ts")} first`
+      ),
+    });
+    // Nothing removed or rewritten for the author.
+    expect(await exists(component)).toBe(true);
+    expect(await readFile(declarationFile, "utf8")).toBe(before);
+    // And the other way: a core view rewritten around a component.
+    await runGenerateWidget(dir, { id: "closed-orders", view: "figure" });
+    expect(
+      await runGenerateWidget(dir, {
+        id: "closed-orders",
+        view: "component",
+        force: true,
+      })
+    ).toEqual({
+      ok: false,
+      reason: expect.stringContaining(
+        `remove ${join(dir, "src", "widgets", "closed-orders.widget.ts")} and ${join(dir, "src", "widgets", "closed-orders.widget.test.ts")} first`
+      ),
+    });
+  });
+
+  it("adds the SDK and the SQLite adapter its test needs to a site without them, at nextly's version, and says to install", async () => {
     await asSite();
     await writeFile(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     const result = await runGenerateWidget(dir, { id: "open-orders" });
@@ -366,20 +467,49 @@ describe("running the command", () => {
         {
           name: "app",
           dependencies: { nextly: NEXTLY_VERSION },
-          devDependencies: { "@nextlyhq/plugin-sdk": NEXTLY_VERSION },
+          devDependencies: {
+            "@nextlyhq/plugin-sdk": NEXTLY_VERSION,
+            "@nextlyhq/adapter-sqlite": NEXTLY_VERSION,
+          },
         },
         null,
         4
       )}\n`
     );
     expect(result.nextSteps[0]).toBe(
-      "Install what it added to package.json: pnpm install"
+      "Install what it added to package.json (@nextlyhq/plugin-sdk, @nextlyhq/adapter-sqlite): pnpm install"
     );
   });
 
-  it("leaves a manifest that already has the SDK alone", async () => {
+  it("adds the SQLite adapter its test boots on to a site on PostgreSQL", async () => {
     await asSite();
-    const withSdk = `${JSON.stringify({ name: "app", devDependencies: { "@nextlyhq/plugin-sdk": "1.0.0" } }, null, 2)}\n`;
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "app",
+        dependencies: {
+          nextly: NEXTLY_VERSION,
+          "@nextlyhq/adapter-postgres": NEXTLY_VERSION,
+          "@nextlyhq/plugin-sdk": NEXTLY_VERSION,
+        },
+      })
+    );
+    const result = await runGenerateWidget(dir, { id: "open-orders" });
+    if (!result.ok) throw new Error(result.reason);
+    const manifest = JSON.parse(
+      await readFile(join(dir, "package.json"), "utf8")
+    ) as { devDependencies?: Record<string, string> };
+    expect(manifest.devDependencies).toEqual({
+      "@nextlyhq/adapter-sqlite": NEXTLY_VERSION,
+    });
+    expect(result.nextSteps[0]).toContain(
+      "Install what it added to package.json (@nextlyhq/adapter-sqlite): "
+    );
+  });
+
+  it("leaves a manifest that already has what the test needs alone", async () => {
+    await asSite();
+    const withSdk = `${JSON.stringify({ name: "app", devDependencies: { "@nextlyhq/plugin-sdk": "1.0.0", "@nextlyhq/adapter-sqlite": "1.0.0" } }, null, 2)}\n`;
     await writeFile(join(dir, "package.json"), withSdk);
     const result = await runGenerateWidget(dir, { id: "open-orders" });
     if (!result.ok) throw new Error(result.reason);
@@ -468,7 +598,10 @@ describe("running the command", () => {
       JSON.stringify({
         name: "@acme/shop",
         keywords: ["nextly", "nextly-plugin"],
-        devDependencies: { "@nextlyhq/plugin-sdk": NEXTLY_VERSION },
+        devDependencies: {
+          "@nextlyhq/plugin-sdk": NEXTLY_VERSION,
+          "@nextlyhq/adapter-sqlite": NEXTLY_VERSION,
+        },
       })
     );
     await mkdir(join(dir, "src", "admin"), { recursive: true });
