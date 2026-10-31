@@ -10,24 +10,24 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { DocumentActionBar, type ActionBinding } from "../DocumentActionBar";
-import type { DocumentAction } from "../document-actions";
+import type { EditorDocumentAction } from "../document-actions";
 
-const PRIMARY: DocumentAction = {
+const PRIMARY: EditorDocumentAction = {
   id: "publish",
   label: "Publish",
   placement: "primary",
 };
-const SCHEDULE: DocumentAction = {
+const SCHEDULE: EditorDocumentAction = {
   id: "schedule-publish",
   label: "Schedule publish…",
   placement: "publish-menu",
 };
-const ADD: DocumentAction = {
+const ADD: EditorDocumentAction = {
   id: "add-to-release",
   label: "Add to release…",
   placement: "publish-menu",
 };
-const VIEW_API: DocumentAction = {
+const VIEW_API: EditorDocumentAction = {
   id: "view-api",
   label: "View API response",
   placement: "menu",

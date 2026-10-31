@@ -21,7 +21,7 @@ import { useDocumentHistory } from "@admin/components/features/versions/document
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
-import { documentActions, type DocumentAction } from "./document-actions";
+import { documentActions, type EditorDocumentAction } from "./document-actions";
 import {
   acceptContributions,
   reasonFor,
@@ -205,9 +205,9 @@ export interface ActionConfirmation {
 
 export interface DocumentActionBindings {
   /** Every action, in the order and placement the model gives it. */
-  actions: DocumentAction[];
+  actions: EditorDocumentAction[];
   /** The action that leads, when one does. */
-  primary: DocumentAction | undefined;
+  primary: EditorDocumentAction | undefined;
   /** What each action's control runs, and why it cannot at this instant. */
   bindings: Record<string, ActionBinding | undefined>;
   /**
@@ -653,7 +653,7 @@ function runAction(
     refusalFor,
   }: {
     offered: {
-      actions: readonly DocumentAction[];
+      actions: readonly EditorDocumentAction[];
       bindings: Record<string, ActionBinding | undefined>;
     };
     builtIn: {

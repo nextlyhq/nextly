@@ -66,6 +66,40 @@ describe("useDocumentActions", () => {
     );
   });
 
+  it("hands an action on the Publish arrow to a view as a menu action", () => {
+    // The arrow is the editor's own placement, not one the published
+    // contract names: a view handling the published placements must still
+    // find the action, where the editor draws it with no arrow, in the menu.
+    const { result } = renderHook(() => useDocumentActions(), {
+      wrapper: hostedBy({
+        onSaveDraft: () => Promise.resolve(saved),
+        onPublish: () => Promise.resolve(saved),
+        contributedActions: [
+          {
+            action: {
+              id: "schedule-publish",
+              label: "Schedule publish…",
+              placement: "publish-menu",
+            },
+            binding: { onSelect: () => undefined },
+          },
+        ],
+      }),
+    });
+    const schedule = result.current?.actions.find(
+      action => action.id === "schedule-publish"
+    );
+    expect(schedule?.placement).toBe("menu");
+    const placements = new Set(
+      result.current?.actions.map(action => action.placement)
+    );
+    expect(
+      [...placements].every(each =>
+        ["primary", "toolbar", "menu"].includes(each)
+      )
+    ).toBe(true);
+  });
+
   it("carries the reason the header would show for an action that cannot run now", () => {
     const { result } = renderHook(() => useDocumentActions(), {
       wrapper: hostedBy({

@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef } from "react";
 
-import type { DocumentAction } from "./document-actions";
+import type { DocumentAction, EditorDocumentAction } from "./document-actions";
 import { reasonFor } from "./DocumentActionBar";
 import { useDocumentActionsContext } from "./DocumentActionsContext";
 import type {
@@ -59,8 +59,11 @@ export function useDocumentActions(): DocumentActions | null {
     const binding = hosted.bindings[action.id];
     if (binding === undefined) return [];
     const reason = reasonFor(action, binding);
+    const published = publishedAction(action);
     return [
-      reason === undefined ? action : { ...action, disabledReason: reason },
+      reason === undefined
+        ? published
+        : { ...published, disabledReason: reason },
     ];
   });
   return {
@@ -70,6 +73,18 @@ export function useDocumentActions(): DocumentActions | null {
     saveState: hosted.saveState,
     storedAt: hosted.lastStoredAt,
   };
+}
+
+/**
+ * An action in its published shape. The editor's arrow beside the primary
+ * action (`publish-menu`) is not a placement the published contract names, so
+ * a plugin's view is handed such an action as a `menu` one: where the editor
+ * itself draws it when there is no arrow to draw it on.
+ */
+function publishedAction(action: EditorDocumentAction): DocumentAction {
+  return action.placement === "publish-menu"
+    ? { ...action, placement: "menu" }
+    : { ...action, placement: action.placement };
 }
 
 /**

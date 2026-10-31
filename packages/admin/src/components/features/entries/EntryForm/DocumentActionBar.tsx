@@ -40,7 +40,7 @@ import {
   actionsAt,
   menuGroups,
   withContributedActions,
-  type DocumentAction,
+  type EditorDocumentAction,
 } from "./document-actions";
 
 /** What a host wires an action to, and why it might not run right now. */
@@ -78,7 +78,7 @@ export interface ActionBinding {
  * makes the omission unrepresentable.
  */
 export interface ContributedAction {
-  action: DocumentAction;
+  action: EditorDocumentAction;
   binding: ActionBinding;
 }
 
@@ -99,11 +99,11 @@ export interface ContributedAction {
  * the first change to either.
  */
 export function acceptContributions(
-  built: readonly DocumentAction[],
+  built: readonly EditorDocumentAction[],
   builtBindings: Readonly<Record<string, ActionBinding | undefined>>,
   contributed: readonly ContributedAction[]
 ): {
-  actions: DocumentAction[];
+  actions: EditorDocumentAction[];
   bindings: Record<string, ActionBinding | undefined>;
 } {
   const actions = withContributedActions(
@@ -121,7 +121,7 @@ export function acceptContributions(
 }
 
 export interface DocumentActionBarProps {
-  actions: readonly DocumentAction[];
+  actions: readonly EditorDocumentAction[];
   /** Keyed by action id. An action with no entry is not drawn. */
   bindings: Readonly<Record<string, ActionBinding | undefined>>;
   /** Whether a mutation is in flight, which shows on the leading action. */
@@ -206,14 +206,14 @@ function ActionRow({
  * for exactly the same reasons.
  */
 export function reasonFor(
-  action: DocumentAction,
+  action: EditorDocumentAction,
   binding: ActionBinding
 ): string | undefined {
   return action.disabledReason ?? binding.disabledReason;
 }
 
 /** An action and what it is wired to. */
-type Bound = { action: DocumentAction; binding: ActionBinding };
+type Bound = { action: EditorDocumentAction; binding: ActionBinding };
 
 /**
  * The actions a host actually wired, paired with their bindings.
@@ -222,7 +222,7 @@ type Bound = { action: DocumentAction; binding: ActionBinding };
  * toolbar while the menu believes it does not exist.
  */
 function bound(
-  actions: readonly DocumentAction[],
+  actions: readonly EditorDocumentAction[],
   bindings: DocumentActionBarProps["bindings"]
 ): Bound[] {
   const out: Bound[] = [];
