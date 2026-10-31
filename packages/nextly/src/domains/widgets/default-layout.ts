@@ -121,29 +121,49 @@ const SHARED_ROW_PAIR: ReadonlySet<string> = new Set([
  * order, twelve columns to a row, a card that does not fit starting the next one), and the two
  * filling it.
  *
+ * 🔴 Deliberately conservative: yes only where every row up to and including the pair's is
+ * evenly tiled, all of its cards one height. Rows of one height are where the grid's own
+ * placement (in order, never backfilling) and this width-wrapping reading agree; past a row of
+ * mixed heights the grid may place a card beside a taller one's lower part, a row this reading
+ * cannot see, so it answers no and the dashboard is drawn as configured. Widening never moves a
+ * card the grid would have placed elsewhere.
+ *
  * Asked of the default BEFORE any reader's cards are left out, so a reader who may not see one
  * of the two is told the same as one who may: the admin draws the other across the row only
  * where the configured row is the pair's alone, and a site's default that places them
  * otherwise is drawn as it is written.
  */
 export function pairHasItsOwnRow(
-  placements: readonly Pick<WidgetPlacement, "widgetId" | "w">[]
+  placements: readonly Pick<WidgetPlacement, "widgetId" | "w" | "h">[]
 ): boolean {
   let used = 0;
+  let rowHeight: number | undefined;
   for (const [index, card] of placements.entries()) {
-    if (used + card.w > GRID_COLUMNS) used = 0;
+    if (used + card.w > GRID_COLUMNS) {
+      used = 0;
+      rowHeight = undefined;
+    }
+    // A row of mixed heights before the pair's, or in it: no answer this reading can stand by.
+    if (rowHeight !== undefined && card.h !== rowHeight) return false;
+    rowHeight = card.h;
     const next = placements[index + 1];
-    if (
-      used === 0 &&
-      next !== undefined &&
-      next.widgetId !== card.widgetId &&
-      SHARED_ROW_PAIR.has(card.widgetId) &&
-      SHARED_ROW_PAIR.has(next.widgetId) &&
-      card.w + next.w === GRID_COLUMNS
-    ) {
-      return true;
+    if (used === 0 && next !== undefined && startsThePair(card, next)) {
+      return next.h === card.h;
     }
     used += card.w;
   }
   return false;
+}
+
+/** Whether `card` and `next` are the pair, side by side, filling a row between them. */
+function startsThePair(
+  card: Pick<WidgetPlacement, "widgetId" | "w">,
+  next: Pick<WidgetPlacement, "widgetId" | "w">
+): boolean {
+  return (
+    next.widgetId !== card.widgetId &&
+    SHARED_ROW_PAIR.has(card.widgetId) &&
+    SHARED_ROW_PAIR.has(next.widgetId) &&
+    card.w + next.w === GRID_COLUMNS
+  );
 }

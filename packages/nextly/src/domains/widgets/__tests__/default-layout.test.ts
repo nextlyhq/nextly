@@ -219,7 +219,7 @@ describe("one default for everyone", () => {
 describe("whether the default gives Needs attention and Upcoming releases a row of their own", () => {
   const NA = "core/needs-attention";
   const UR = "core/upcoming-releases";
-  const card = (widgetId: string, w: number) => ({ widgetId, w });
+  const card = (widgetId: string, w: number, h = 4) => ({ widgetId, w, h });
 
   it("is yes for core's own default, the two side by side after the setup row", () => {
     const placements = defaultLayoutPlacements(
@@ -254,6 +254,32 @@ describe("whether the default gives Needs attention and Upcoming releases a row 
     expect(
       pairHasItsOwnRow([card(NA, 8), card("site/a", 4), card(UR, 4)])
     ).toBe(false);
+  });
+
+  it("is no past a row of mixed heights, which the grid may not lay out as rows of twelve", () => {
+    // A tall four-wide card beside a short eight-wide one: the grid may place the next card in
+    // the space under the short one, so the pair's row is not one this reading can stand by.
+    expect(
+      pairHasItsOwnRow([
+        card("site/tall", 4, 8),
+        card("site/short", 8, 4),
+        card(NA, 8, 4),
+        card(UR, 4, 4),
+      ])
+    ).toBe(false);
+    // The control: the same cards with the first row tiled is yes.
+    expect(
+      pairHasItsOwnRow([
+        card("site/tall", 4, 4),
+        card("site/short", 8, 4),
+        card(NA, 8, 4),
+        card(UR, 4, 4),
+      ])
+    ).toBe(true);
+  });
+
+  it("is no where the pair's own row is of two heights", () => {
+    expect(pairHasItsOwnRow([card(NA, 8, 4), card(UR, 4, 3)])).toBe(false);
   });
 
   it("is no where the first of them does not start a row", () => {

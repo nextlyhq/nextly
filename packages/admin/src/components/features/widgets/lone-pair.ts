@@ -3,10 +3,10 @@
  * releases, and the one rule about them: while only one of the two is on show, it is drawn
  * across the whole row, so the row the other leaves is not a gap beside it.
  *
- * A DRAWN width only. The rows handed back are copies for drawing; the arrangement, and so
- * every save, keeps the card's own size, and the card goes back to it the moment the other is
- * on show again. Both widgets declare a maximum width of twelve, so the widened card stays
- * within its bounds and `drawnSize` draws it at twelve.
+ * A DRAWN width only: the rule answers a width by placement, which the grid applies to the
+ * card's column span alone. The card itself, its size controls, every write and Undo keep its
+ * stored size, and it goes back to that span the moment the other is on show again. Both widgets
+ * declare a maximum width of twelve, so the widened span stays within their bounds.
  *
  * Pure, so the rule is tested over rows without a grid; `ArrangedGrid` applies it.
  *
@@ -27,11 +27,15 @@ const SHARED_ROW_PAIR: ReadonlySet<string> = new Set([
   "core/upcoming-releases",
 ]);
 
-/** What the rule reads of a row: its widget and its stored size. */
+/** What the rule reads of a row: its placement, its widget and its stored size. */
 interface PairRow {
+  placementId: string;
   widget: { id: string };
   size: GridSize;
 }
+
+/** No card drawn at another width than its own. */
+const NONE_WIDENED: ReadonlyMap<string, number> = new Map();
 
 /**
  * Whether the grid draws the lone card of the pair across its row ({@link widensLonePair}),
@@ -53,22 +57,21 @@ export function widensLonePair(
 }
 
 /**
- * `rows`, with the one card of the pair that is on show drawn twelve columns wide when the other
- * is not on show: hidden while empty, not shown to this reader, or not on the dashboard at all.
- * With both on show, or neither, the same array comes back, so a caller memoising on it redraws
- * nothing.
+ * The widths the grid draws cards at in place of their own, by placement: the one card of the
+ * pair that is on show, twelve columns wide, while the other is not on show (hidden while empty,
+ * not shown to this reader, or not on the dashboard at all). Empty with both on show, or
+ * neither, and for a card already twelve wide; the same empty map each time, so a caller
+ * memoising on it redraws nothing.
  */
 export function widenLoneOfPair<Row extends PairRow>(
-  rows: Row[],
+  rows: readonly Row[],
   isOnShow: (row: Row) => boolean
-): Row[] {
+): ReadonlyMap<string, number> {
   const shown = rows.filter(
     row => SHARED_ROW_PAIR.has(row.widget.id) && isOnShow(row)
   );
-  if (shown.length !== 1) return rows;
+  if (shown.length !== 1) return NONE_WIDENED;
   const [lone] = shown;
-  if (lone.size.w === GRID_COLUMNS) return rows;
-  return rows.map(row =>
-    row === lone ? { ...row, size: { ...row.size, w: GRID_COLUMNS } } : row
-  );
+  if (lone.size.w === GRID_COLUMNS) return NONE_WIDENED;
+  return new Map([[lone.placementId, GRID_COLUMNS]]);
 }

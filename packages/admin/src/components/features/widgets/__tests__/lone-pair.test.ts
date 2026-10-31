@@ -24,14 +24,20 @@ const rows = () => [
   row("core/content", 6),
 ];
 
-/** Each row as `[widget, w]`, in order. */
-const widths = (drawn: ReadonlyArray<ReturnType<typeof row>>) =>
-  drawn.map(each => [each.widget.id, each.size.w]);
+type Row = ReturnType<typeof row>;
+
+/** Each row as `[widget, the width it is drawn at]`, in order, by the rule over `given`. */
+const drawnAs = (given: readonly Row[], isOnShow: (row: Row) => boolean) => {
+  const widened = widenLoneOfPair(given, isOnShow);
+  return given.map(each => [
+    each.widget.id,
+    widened.get(each.placementId) ?? each.size.w,
+  ]);
+};
 
 describe("the pair that shares a row", () => {
   it("draws Needs attention across the row while Upcoming releases is not on show", () => {
-    const drawn = widenLoneOfPair(rows(), each => each.widget.id !== RELEASES);
-    expect(widths(drawn)).toEqual([
+    expect(drawnAs(rows(), each => each.widget.id !== RELEASES)).toEqual([
       [ATTENTION, 12],
       [RELEASES, 4],
       ["core/continue", 6],
@@ -40,8 +46,7 @@ describe("the pair that shares a row", () => {
   });
 
   it("draws Upcoming releases across the row while Needs attention is not on show", () => {
-    const drawn = widenLoneOfPair(rows(), each => each.widget.id !== ATTENTION);
-    expect(widths(drawn)).toEqual([
+    expect(drawnAs(rows(), each => each.widget.id !== ATTENTION)).toEqual([
       [ATTENTION, 8],
       [RELEASES, 12],
       ["core/continue", 6],
@@ -51,40 +56,39 @@ describe("the pair that shares a row", () => {
 
   it("draws the one on the dashboard across the row when the other is not on it at all", () => {
     // Not shown to this reader: the layout read leaves the card out of their placements.
-    const drawn = widenLoneOfPair(
+    const drawn = drawnAs(
       rows().filter(each => each.widget.id !== RELEASES),
       () => true
     );
-    expect(widths(drawn)[0]).toEqual([ATTENTION, 12]);
+    expect(drawn[0]).toEqual([ATTENTION, 12]);
   });
 
-  it("keeps each at its own size while both are on show, handing the same rows back", () => {
+  it("keeps each at its own size while both are on show, handing the same empty answer back", () => {
     const given = rows();
-    const drawn = widenLoneOfPair(given, () => true);
-    expect(drawn).toBe(given);
-    expect(widths(drawn)).toEqual(widths(rows()));
+    const widened = widenLoneOfPair(given, () => true);
+    expect(widened.size).toBe(0);
+    // The same answer each time, so a caller memoising on it redraws nothing.
+    expect(widenLoneOfPair(rows(), () => true)).toBe(widened);
   });
 
   it("widens nothing while neither is on show", () => {
-    const given = rows();
     expect(
       widenLoneOfPair(
-        given,
+        rows(),
         each => each.widget.id !== ATTENTION && each.widget.id !== RELEASES
-      )
-    ).toBe(given);
+      ).size
+    ).toBe(0);
   });
 
   it("widens no other card standing alone, and changes no height", () => {
     // The control: a lone card outside the pair keeps its width, so the rule is the pair's.
     const given = [row("core/continue", 6), row(RELEASES, 4, 5)];
-    const drawn = widenLoneOfPair(given, () => true);
-    expect(drawn.map(each => each.size)).toEqual([
-      { w: 6, h: 4 },
-      { w: 12, h: 5 },
-    ]);
+    expect([...widenLoneOfPair(given, () => true)]).toEqual([[RELEASES, 12]]);
     // The stored rows are left as they were: the width is drawn, never written back.
-    expect(given[1].size).toEqual({ w: 4, h: 5 });
+    expect(given.map(each => each.size)).toEqual([
+      { w: 6, h: 4 },
+      { w: 4, h: 5 },
+    ]);
   });
 });
 

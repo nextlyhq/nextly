@@ -318,27 +318,32 @@ function cellData(
   };
 }
 
+/** No card drawn at another width than its own. */
+const NONE_WIDENED: ReadonlyMap<string, number> = new Map();
+
 /**
- * The rows as they are drawn: at rest on the default dashboard, the lone card of the pair drawn
- * across its row (`widenLoneOfPair`), a card being on show unless it reported itself off the
- * dashboard (`hidden`, the same reports the grid counts by), so no second rule decides it. While
- * customising every card is shown, hidden ones marked, so nothing is widened and each card shows
- * the size a save would keep.
+ * The widths cards are drawn at in place of their own, by placement: at rest where the lone card
+ * of the pair is widened (`widenLoneOfPair`), a card being on show unless it reported itself off
+ * the dashboard (`hidden`, the same reports the grid counts by), so no second rule decides it.
+ * While customising every card is shown, hidden ones marked, so nothing is widened and each card
+ * shows the size a save would keep. Only a cell's column span reads these: the card, its
+ * controls and every write keep its stored size.
  */
-function drawnRows(
+function drawnWidths(
   rows: ArrangedWidget[],
   widen: boolean,
   hidden: ReadonlySet<string>
-): ArrangedWidget[] {
-  if (!widen) return rows;
+): ReadonlyMap<string, number> {
+  if (!widen) return NONE_WIDENED;
   return widenLoneOfPair(rows, row => !hidden.has(row.placementId));
 }
 
 /**
  * What the grid draws its cards from: the cards that reported themselves off the dashboard
- * (`useReportedPlacements`), the oldest answer on show, and the rows as drawn ({@link drawnRows}),
- * widened only where `WidenLonePairContext` says so and never while customising. The rows are
- * memoised, so a widened card is handed the same row until a report or the arrangement moves.
+ * (`useReportedPlacements`), the oldest answer on show, and the widths cards are drawn at in place
+ * of their own ({@link drawnWidths}), only where `WidenLonePairContext` says so and never while
+ * customising. Memoised, so the cells are handed the same widths until a report or the
+ * arrangement moves.
  */
 function useGridRows(
   rows: ArrangedWidget[],
@@ -347,14 +352,14 @@ function useGridRows(
 ) {
   const { placements: hidden, report: reportHidden } = useReportedPlacements();
   const widen = useContext(WidenLonePairContext) && !isEditing;
-  const drawn = useMemo(
-    () => drawnRows(rows, widen, hidden),
+  const widths = useMemo(
+    () => drawnWidths(rows, widen, hidden),
     [rows, widen, hidden]
   );
   return {
     hidden,
     reportHidden,
-    drawn,
+    widths,
     answeredAt: oldestAnswer(rows, { hidden, ...answers }),
   };
 }
@@ -374,8 +379,9 @@ export function ArrangedGrid({
   // What the batch answered, handed to each card as one (`cellData`).
   ...answers
 }: ArrangedGridProps): JSX.Element {
-  // The cards that reported themselves off the dashboard, each as it is drawn, and the rows.
-  const { hidden, reportHidden, drawn, answeredAt } = useGridRows(
+  // The cards that reported themselves off the dashboard, each as it is drawn, and the widths
+  // cards are drawn at in place of their own.
+  const { hidden, reportHidden, widths, answeredAt } = useGridRows(
     rows,
     isEditing,
     answers
@@ -412,10 +418,11 @@ export function ArrangedGrid({
           isEditing={isEditing}
         />
         <DropLineMark line={drag?.line} />
-        {drawn.map(row => (
+        {rows.map(row => (
           <ArrangedCell
             key={row.placementId}
             row={row}
+            drawnW={widths.get(row.placementId)}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
             // At one column each card menu lists its sizes in place, where a submenu has no room.
