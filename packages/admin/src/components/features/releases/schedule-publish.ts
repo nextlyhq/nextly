@@ -49,31 +49,66 @@ export function schedulePublishRefusal(facts: {
   return undefined;
 }
 
-/** The longest release name the server takes. */
+/**
+ * The longest release name the server takes, counted as it counts: in UTF-16
+ * code units, JavaScript's `length`.
+ */
 const MAX_RELEASE_TITLE_LENGTH = 255;
 
 /**
  * The name of the release a scheduled document goes into: the document's
  * own title, which is what the releases list and calendar then show beside
  * their "Single document" mark.
+ *
+ * A title too long for the server is cut at a whole character, so the name
+ * never ends in half of an emoji or in part of a joined one such as a family.
  */
 export function scheduledReleaseTitle(
   documentTitle: string | undefined
 ): string {
   const title = documentTitle?.trim() || "Untitled";
-  return title.length <= MAX_RELEASE_TITLE_LENGTH
-    ? title
-    : `${title.slice(0, MAX_RELEASE_TITLE_LENGTH - 1)}…`;
+  if (title.length <= MAX_RELEASE_TITLE_LENGTH) return title;
+  // Room for the ellipsis, which is one unit.
+  const room = MAX_RELEASE_TITLE_LENGTH - 1;
+  let kept = "";
+  for (const character of userCharacters(title)) {
+    if (kept.length + character.length > room) break;
+    kept += character;
+  }
+  return `${kept}…`;
+}
+
+/**
+ * The characters a reader sees: grapheme clusters where the runtime can
+ * segment them, otherwise code points, which at least never split a UTF-16
+ * pair.
+ */
+function userCharacters(text: string): Iterable<string> {
+  if (typeof Intl.Segmenter !== "function") return Array.from(text);
+  const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  return Array.from(segments.segment(text), part => part.segment);
 }
 
 /**
  * The time the dialog opens on: nine in the morning, tomorrow, on the clock
  * of `zone`. A sensible first answer, read back in words before anything is
  * sent, rather than an empty box to fill.
+ *
+ * Tomorrow is the next date on that zone's calendar, not the date 24 hours
+ * from now: on a night the clocks go back the day is 25 hours long, and 24
+ * hours on is still today.
  */
 export function defaultScheduleWall(now: number, zone: string): string {
-  const tomorrow = wallTimeIn(new Date(now + 86_400_000), zone);
-  return `${tomorrow.slice(0, 10)}T09:00`;
+  const today = wallTimeIn(new Date(now), zone).slice(0, 10);
+  const [year, month, day] = today.split("-").map(Number);
+  // Calendar arithmetic in UTC, where every day is 24 hours long; the
+  // date alone is kept, so the zone's clock changes cannot reach it.
+  const tomorrow = new Date(
+    Date.UTC(year ?? 0, (month ?? 1) - 1, (day ?? 1) + 1)
+  )
+    .toISOString()
+    .slice(0, 10);
+  return `${tomorrow}T09:00`;
 }
 
 /** What is wrong with the chosen time, or `null` when it can be sent. */

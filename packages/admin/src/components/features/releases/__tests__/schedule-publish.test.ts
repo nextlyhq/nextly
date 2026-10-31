@@ -28,7 +28,36 @@ describe("the release's name", () => {
     expect(named).toHaveLength(255);
     expect(named.endsWith("…")).toBe(true);
   });
+
+  it("never splits a character the 255 limit falls inside", () => {
+    // The limit falls between the emoji's two UTF-16 halves: kept, the first
+    // half alone is not a character, and the server stores a broken name.
+    const named = scheduledReleaseTitle(
+      `${"a".repeat(253)}😀${"b".repeat(10)}`
+    );
+    expect(named).toBe(`${"a".repeat(253)}…`);
+    expect(LONE_SURROGATE.test(named)).toBe(false);
+  });
+
+  it("never splits a character built from several, such as a family", () => {
+    // Eight UTF-16 units, three people joined: cut inside, it names fewer.
+    const family = "👨‍👩‍👧";
+    const named = scheduledReleaseTitle(`${"a".repeat(250)}${family}zzz`);
+    expect(named).toBe(`${"a".repeat(250)}…`);
+  });
+
+  it("keeps a character that fits whole", () => {
+    const named = scheduledReleaseTitle(
+      `${"a".repeat(252)}😀${"b".repeat(10)}`
+    );
+    expect(named).toBe(`${"a".repeat(252)}😀…`);
+    expect(named).toHaveLength(255);
+  });
 });
+
+/** Half of a UTF-16 pair with its other half missing. */
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 describe("the time the dialog opens on", () => {
   it("is nine tomorrow on the chosen zone's clock", () => {
@@ -36,6 +65,29 @@ describe("the time the dialog opens on", () => {
     const now = Date.parse("2026-10-30T23:30:00Z");
     expect(defaultScheduleWall(now, "UTC")).toBe("2026-10-31T09:00");
     expect(defaultScheduleWall(now, "Asia/Tokyo")).toBe("2026-11-01T09:00");
+  });
+
+  it("is tomorrow on a night the clocks go back", () => {
+    // 00:30 on 1 November 2026 in New York, before the clocks go back at
+    // 02:00: that day is 25 hours long, so 24 hours on is still the 1st.
+    const now = Date.parse("2026-11-01T04:30:00Z");
+    expect(defaultScheduleWall(now, "America/New_York")).toBe(
+      "2026-11-02T09:00"
+    );
+  });
+
+  it("is tomorrow on a night the clocks go forward", () => {
+    // 23:30 on 7 March 2026 in New York: the 8th is 23 hours long.
+    const now = Date.parse("2026-03-08T04:30:00Z");
+    expect(defaultScheduleWall(now, "America/New_York")).toBe(
+      "2026-03-08T09:00"
+    );
+  });
+
+  it("rolls over a month and a year end", () => {
+    expect(defaultScheduleWall(Date.parse("2026-12-31T12:00:00Z"), "UTC")).toBe(
+      "2027-01-01T09:00"
+    );
   });
 });
 
