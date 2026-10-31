@@ -15,6 +15,25 @@ type AdapterWithDrizzle = {
 export type { SeederResult };
 export { seedPermissions, seedSuperAdmin };
 
+// Sample content, one load at a time for the whole site: a project's own
+// sample-content route hands its load to these, which claim, load and record.
+export {
+  declineSampleContent,
+  readSampleContent,
+  recordSampleContent,
+  SAMPLE_DECLINED_KEY,
+  SAMPLE_LOADED_KEY,
+  SAMPLE_REFUSAL_MESSAGE,
+  sampleContentPost,
+  startSampleContent,
+  type SampleContentState,
+  type SampleContentStore,
+  type SampleDecline,
+  type SampleRecord,
+  type SampleRefusal,
+  type SampleStart,
+} from "./sample-content";
+
 /**
  * Run the system bootstrap seeders: permissions and (optionally) the
  * discovers or runs a user-provided `nextly.seed.ts` — that path is

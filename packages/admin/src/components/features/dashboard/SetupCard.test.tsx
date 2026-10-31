@@ -27,21 +27,19 @@ const { put } = vi.hoisted(() => ({ put: vi.fn() }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { put },
 }));
-// The sample-content offer's state, as a case sets it.
-const seed = vi.hoisted(() => ({
-  status: { kind: "idle", template: { slug: "blog", label: "Blog" } } as
-    | { kind: "loading" }
-    | { kind: "hidden" }
-    | { kind: "idle"; template: { slug: string; label: string } }
-    | { kind: "seeding" }
-    | { kind: "success"; result: unknown }
-    | { kind: "declining" }
-    | { kind: "error"; message: string; failed: "load" | "decline" },
-  startSeed: vi.fn(),
-  skip: vi.fn(),
+// The project's sample-content route: it lets this reader load. Its runs are drawn and tested in
+// `setup/SampleContentStep.test.tsx`.
+const probe = vi.hoisted(() => ({
+  answer: { available: true } as { available: boolean },
 }));
-vi.mock("@admin/hooks/queries/useSeedStatus", () => ({
-  useSeedStatus: () => seed,
+vi.mock("@admin/services/seedApi", () => ({
+  seedApi: {
+    probe: async () =>
+      probe.answer.available
+        ? { available: true, template: { slug: "blog", label: "Blog" } }
+        : { available: false },
+    start: vi.fn(),
+  },
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
   useSingles: () => ({
@@ -153,9 +151,7 @@ beforeEach(() => {
   put.mockReset();
   put.mockResolvedValue({});
   retry.mockClear();
-  seed.status = { kind: "idle", template: { slug: "blog", label: "Blog" } };
-  seed.startSeed.mockClear();
-  seed.skip.mockClear();
+  probe.answer = { available: true };
 });
 
 describe("the setup card", () => {
@@ -389,106 +385,9 @@ describe("the setup card", () => {
     expect(retry).toHaveBeenCalled();
   });
 
-  it("leaves sample content out where the project's route says this reader cannot load it", () => {
-    seed.status = { kind: "hidden" };
-    draw(dataOf());
-    expect(tiles().map(tile => tile.dataset.setupStep)).not.toContain("sample");
-    // Counted over the tiles drawn.
-    expect(headerCount()).toHaveTextContent("1 of 4 done");
-  });
-
-  it("keeps sample content as done once someone on the site answered it, whatever the route says now", () => {
-    seed.status = { kind: "hidden" };
-    const steps: SetupStep[] = [
-      { kind: "sample", status: "done" },
-      { kind: "entry", status: "open", collection: "posts" },
-    ];
-    draw(dataOf({ setup: { known: true, steps, done: 1, total: 2 } }));
-    expect(tiles()[0]).toHaveAttribute("data-status", "done");
-  });
-
-  it("loads or declines sample content from its tile, and shows a failed run with Retry", () => {
-    const { unmount } = draw(dataOf());
-    const sample = tiles()[0]!;
-    fireEvent.click(within(sample).getByRole("button", { name: "Load" }));
-    expect(seed.startSeed).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(sample).getByRole("button", { name: "No thanks" }));
-    expect(seed.skip).toHaveBeenCalledTimes(1);
-    unmount();
-
-    seed.status = {
-      kind: "error",
-      message: "Seed failed (500)",
-      failed: "load",
-    };
-    draw(dataOf());
-    const failed = tiles()[0]!;
-    expect(within(failed).getByRole("alert")).toHaveTextContent(
-      "Seed failed (500)"
-    );
-    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
-    expect(seed.startSeed).toHaveBeenCalledTimes(2);
-  });
-
-  it("draws sample content done only once the decline is confirmed, and asks for the card again then", () => {
-    draw(dataOf());
-    fireEvent.click(
-      within(tiles()[0]!).getByRole("button", { name: "No thanks" })
-    );
-    // Not yet: the route has not confirmed it, and may refuse it.
-    expect(tiles()[0]).toHaveAttribute("data-status", "open");
-    expect(headerCount()).toHaveTextContent("1 of 5 done");
-    expect(retry).not.toHaveBeenCalled();
-    // The decline is recorded: done, counted, and the card asks for its steps as they now are.
-    const [onRecorded] = seed.skip.mock.calls[0] as [() => void];
-    act(() => onRecorded());
-    expect(tiles()[0]).toHaveAttribute("data-status", "done");
-    expect(headerCount()).toHaveTextContent("2 of 5 done");
-    expect(retry).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps sample content open when the decline fails, says so, and Retry declines again", () => {
-    const { rerender } = draw(dataOf());
-    fireEvent.click(
-      within(tiles()[0]!).getByRole("button", { name: "No thanks" })
-    );
-    // The decline failed: its confirmation never comes, and the offer says why.
-    seed.status = {
-      kind: "error",
-      message: "Decline failed (500)",
-      failed: "decline",
-    };
-    rerender(
-      <CardHeightContext.Provider value={2}>
-        {inFrame(
-          <SetupCard
-            widgetId="core/setup"
-            placementId="core/setup"
-            settings={{}}
-            size={{ w: 12, h: 2, tier: "large" }}
-            data={dataOf()}
-            refreshing={false}
-            retry={retry}
-          />,
-          "Set up your project"
-        )}
-      </CardHeightContext.Provider>
-    );
-    const sample = tiles()[0]!;
-    expect(sample).toHaveAttribute("data-status", "open");
-    expect(headerCount()).toHaveTextContent("1 of 5 done");
-    expect(within(sample).getByRole("alert")).toHaveTextContent(
-      "Couldn't save: Decline failed (500)"
-    );
-    fireEvent.click(within(sample).getByRole("button", { name: "Retry" }));
-    expect(seed.skip).toHaveBeenCalledTimes(2);
-    expect(seed.startSeed).not.toHaveBeenCalled();
-    expect(retry).not.toHaveBeenCalled();
-  });
-
   it("says You're all set over the steps it draws, and asks the host to record it with what the route said", async () => {
     // No sample route for this reader, and Invite skipped: one tile drawn, done.
-    seed.status = { kind: "hidden" };
+    probe.answer = { available: false };
     const steps: SetupStep[] = [
       { kind: "sample", status: "open" },
       { kind: "invite", status: "skipped" },
@@ -523,7 +422,7 @@ describe("the setup card", () => {
         code: "CONFLICT",
       })
     );
-    seed.status = { kind: "hidden" };
+    probe.answer = { available: false };
     const steps: SetupStep[] = [
       { kind: "sample", status: "open" },
       { kind: "invite", status: "skipped" },
@@ -553,31 +452,6 @@ describe("the setup card", () => {
     expect(screen.queryByTestId("setup-all-set")).toBeNull();
     expect(headerCount()).toHaveTextContent("1 of 2 done");
     expect(put).not.toHaveBeenCalled();
-  });
-
-  it("asks for the card again once per load that succeeds, however often it is drawn", () => {
-    seed.status = { kind: "success", result: {} };
-    const { rerender } = draw(dataOf());
-    expect(retry).toHaveBeenCalledTimes(1);
-    expect(tiles()[0]).toHaveAttribute("data-status", "done");
-    // Drawn again in the same place, as a refetch draws it: the same card, not a new one.
-    rerender(
-      <CardHeightContext.Provider value={2}>
-        {inFrame(
-          <SetupCard
-            widgetId="core/setup"
-            placementId="core/setup"
-            settings={{}}
-            size={{ w: 12, h: 2, tier: "large" }}
-            data={dataOf()}
-            refreshing={false}
-            retry={retry}
-          />,
-          "Set up your project"
-        )}
-      </CardHeightContext.Provider>
-    );
-    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("puts the card back as the server holds it when a collapse fails, says so, and collapses on the next try", async () => {
@@ -615,7 +489,7 @@ describe("the setup card", () => {
 
   it("asks the host again to record all set after a failed write, on the card's next read, never in a loop", async () => {
     put.mockRejectedValueOnce(new Error("network"));
-    seed.status = { kind: "hidden" };
+    probe.answer = { available: false };
     const steps: SetupStep[] = [
       { kind: "sample", status: "open" },
       { kind: "invite", status: "skipped" },
@@ -665,13 +539,5 @@ describe("the setup card", () => {
     expect(
       within(kept as HTMLElement).getByRole("button", { name: /^Skip/ })
     ).toBeInTheDocument();
-  });
-
-  it("says a sample-content run is under way inside its tile", () => {
-    seed.status = { kind: "seeding" };
-    draw(dataOf());
-    expect(within(tiles()[0]!).getByRole("status")).toHaveTextContent(
-      "Loading sample content"
-    );
   });
 });
