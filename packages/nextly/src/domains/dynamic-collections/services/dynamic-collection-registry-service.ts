@@ -22,6 +22,10 @@ import {
   renameEntity,
 } from "../../entity-rename/rename-entity";
 import {
+  deletedEntityIntent,
+  flushContentChange,
+} from "../../flush-content-change";
+import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
@@ -165,6 +169,12 @@ function normalizeCollectionBooleans(
     status: row.status === 1 || row.status === true,
     localized: row.localized === 1 || row.localized === true,
   };
+}
+
+/** What removing a collection's registry row found: how many rows went, and the cache setting the row held. */
+export interface UnregisteredCollectionRow {
+  removed: number;
+  stored: unknown;
 }
 
 export class DynamicCollectionRegistryService extends BaseService {
@@ -643,43 +653,43 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
+    let unregistered: UnregisteredCollectionRow;
+    // Cleared once the delete has run, as after an insert.
     try {
-      await this.deleteRegistryRow(this.db, slug);
-    } catch (error) {
-      // Cleared whether or not the delete ran, as after an insert.
+      unregistered = await this.adapter.transaction(tx =>
+        this.unregisterCollectionIn(tx, slug)
+      );
+    } finally {
       clearRegistryRowCache();
-      throw error;
     }
-    this.forgetUnregisteredCollection(slug);
+    await this.forgetUnregisteredCollection(slug, unregistered);
   }
 
   /**
    * Remove a collection's registry row inside `tx`, so it goes with whatever
-   * else that transaction removes or not at all. What the process remembers
-   * about the collection is the caller's to forget once `tx` has committed
-   * (`forgetUnregisteredCollection`): forgotten earlier, a rollback would
-   * leave the row and lose what was known about it.
+   * else that transaction removes or not at all. The setting and the delete
+   * run with the row locked between them: the expiry after the commit uses
+   * the setting the deleted row held, and a second delete racing this one
+   * waits, then finds nothing to remove. What the process remembers about the
+   * collection is the caller's to forget once `tx` has committed
+   * (`forgetUnregisteredCollection`, given what this returns): forgotten
+   * earlier, a rollback would leave the row and lose what was known about it.
    */
   async unregisterCollectionIn(
     tx: TransactionContext,
     slug: string
-  ): Promise<void> {
-    await this.deleteRegistryRow(
-      tx.drizzleWithRelations<DatabaseAdapter["db"]>(
-        resolveRelations(this.dialect)
-      ),
-      slug
+  ): Promise<UnregisteredCollectionRow> {
+    const where = {
+      and: [{ column: "slug", op: "=" as const, value: slug }],
+    };
+    const [row] = await tx.select<{ revalidate: unknown }>(
+      "dynamic_collections",
+      { columns: ["revalidate"], where, forUpdate: true }
     );
-  }
-
-  /** The one statement that removes a collection's registry row, on the handle it is given. */
-  private async deleteRegistryRow(
-    db: DatabaseAdapter["db"],
-    slug: string
-  ): Promise<void> {
-    await db
-      .delete(this.dynamicCollections)
-      .where(eq(this.dynamicCollections.slug, slug));
+    return {
+      removed: await tx.delete("dynamic_collections", where),
+      stored: row?.revalidate,
+    };
   }
 
   /**
@@ -689,8 +699,22 @@ export class DynamicCollectionRegistryService extends BaseService {
    * from the recording default rather than inherit a suppression whose row no
    * longer exists.
    */
-  forgetUnregisteredCollection(slug: string): void {
+  async forgetUnregisteredCollection(
+    slug: string,
+    unregistered: UnregisteredCollectionRow
+  ): Promise<void> {
     clearRegistryRowCache();
     clearWebhookRecording("collection", slug);
+
+    // Every cached read of it now describes rows that are gone. Only when this
+    // delete removed the row, with the setting it held: a repeated delete finds
+    // nothing and expires nothing.
+    if (unregistered.removed > 0) {
+      await flushContentChange(
+        deletedEntityIntent("collection", slug, unregistered.stored),
+        this.logger,
+        "a collection was deleted"
+      );
+    }
   }
 }

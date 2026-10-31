@@ -120,9 +120,15 @@ export function describeActivityActor(entry: {
  *   re-rendering on a clock passes the instant that caused the render, so the
  *   label and the tick behind it cannot disagree -- and a test can state the
  *   moment it is asking about instead of stubbing the global clock.
+ * @param style - `"short"` drops " ago" and says "now" for "just now", for a column too narrow
+ *   for the words ("5m", "3h", "2d", "Mar 1"); the same thresholds either way.
  * @returns Relative time string (e.g. "just now", "5m ago", "3h ago", "2d ago", "Mar 1")
  */
-export function formatRelativeTime(isoTimestamp: string, at?: number): string {
+export function formatRelativeTime(
+  isoTimestamp: string,
+  at?: number,
+  style: "long" | "short" = "long"
+): string {
   const now = at ?? Date.now();
   const then = new Date(isoTimestamp).getTime();
   const diffMs = now - then;
@@ -130,11 +136,12 @@ export function formatRelativeTime(isoTimestamp: string, at?: number): string {
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
   const diffDay = Math.floor(diffHour / 24);
+  const ago = style === "short" ? "" : " ago";
 
-  if (diffSec < 60) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHour < 24) return `${diffHour}h ago`;
-  if (diffDay < 7) return `${diffDay}d ago`;
+  if (diffSec < 60) return style === "short" ? "now" : "just now";
+  if (diffMin < 60) return `${diffMin}m${ago}`;
+  if (diffHour < 24) return `${diffHour}h${ago}`;
+  if (diffDay < 7) return `${diffDay}d${ago}`;
   return formatDateWithAdminTimezone(
     isoTimestamp,
     {

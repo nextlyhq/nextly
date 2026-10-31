@@ -148,3 +148,31 @@ describe("CollectionFileManager.loadDynamicSchema on a registry hit", () => {
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("CollectionFileManager.saveDropMigration", () => {
+  it("refuses a name another delete already wrote, leaving that delete's file as it was", async () => {
+    const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const migrationsDir = await mkdtemp(join(tmpdir(), "nextly-drop-"));
+    try {
+      const fm = new CollectionFileManager({} as DatabaseInstance, {
+        schemasDir: join(migrationsDir, "schemas"),
+        migrationsDir,
+      });
+      const name = "1793164227440_drop_tags.sql";
+      await fm.saveDropMigration("DROP TABLE first;", name);
+
+      // Two deletes in the same millisecond share a name: the second must not
+      // overwrite the first's file, which its withdrawal would then remove.
+      await expect(
+        fm.saveDropMigration("DROP TABLE second;", name)
+      ).rejects.toThrow(/already exists/);
+      expect(await readFile(join(migrationsDir, name), "utf8")).toBe(
+        "DROP TABLE first;"
+      );
+    } finally {
+      await rm(migrationsDir, { recursive: true, force: true });
+    }
+  });
+});

@@ -36,6 +36,7 @@ import type {
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
@@ -654,9 +655,9 @@ export class CollectionRegistryService extends BaseRegistryService<
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
       };
-      const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "collection", slug, tables);
-      });
+      const { deleted: count, expire } = await this.adapter.transaction(
+        async tx => deleteEntityRegistryRow(tx, "collection", slug, tables)
+      );
       // Once the transaction has committed, so no read in between keeps the
       // row it is deleting.
       clearRegistryRowCache();
@@ -675,6 +676,11 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Its documents are gone with it, so a scheduled release holding one
       // cannot run: stopped now rather than at its instant.
       await this.recheckReleasesHolding(slug);
+
+      // Every cached read of it now describes rows that are gone: expired
+      // here, the method every deletion path reaches, with the setting the
+      // deleted row held. A delete that removed no row has thrown above.
+      await flushContentChange(expire, this.logger, "a collection was deleted");
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;

@@ -129,6 +129,16 @@ export type WidgetResult =
        */
       atLeast?: boolean;
       /**
+       * How `total` divides among the kinds of thing the rows are, for a
+       * source whose rows are of several kinds and each says which (`kind`):
+       * `{ collection: 8, single: 5 }` for 13 rows. Counted by the same read
+       * as `total`, so the parts add up to it. Absent from a source whose rows
+       * are of one kind.
+       *
+       * @experimental
+       */
+      totalByKind?: Readonly<Record<string, number>>;
+      /**
        * The span of time the source looked at, in whole days back from now.
        *
        * A source that keeps rows only for a period answers from that period
@@ -226,6 +236,46 @@ export type WidgetResult =
       op: "data";
       data: TransportableValue;
     };
+
+/**
+ * Whether an answer holds nothing a core display would draw: a list with no
+ * items, groups with no bucket, a series with no point. A count always holds
+ * its number, and a declared widget's own data is judged by its `isEmpty`.
+ *
+ * The one rule: each core display draws its empty state by it, and the layout
+ * read leaves a card that hides while empty off the dashboard by it, so the
+ * page is drawn without the card exactly when the card would draw nothing.
+ */
+export function answerHasNothing(result: WidgetResult): boolean {
+  switch (result.op) {
+    case "list":
+      return result.items.length === 0;
+    case "groupBy":
+      return result.buckets.length === 0;
+    case "timeseries":
+      return result.points.length === 0;
+    case "count":
+    case "data":
+      return false;
+  }
+}
+
+/**
+ * Whether a card's answer holds nothing: its widget's own empty test held
+ * (`empty`), or the core display that draws it would find nothing in it
+ * (`answerHasNothing`).
+ *
+ * The one rule a card that hides while empty is judged by, on both sides of
+ * the dashboard: the layout read leaves such a card off the page when its
+ * answer holds nothing, and the admin shows a card it was drawn without once
+ * the card's own batch answer holds something.
+ */
+export function cardAnswerIsEmpty(answer: {
+  result: WidgetResult;
+  empty?: boolean;
+}): boolean {
+  return answer.empty === true || answerHasNothing(answer.result);
+}
 
 /**
  * A setting's label as it reads inside a sentence: "Collection" becomes

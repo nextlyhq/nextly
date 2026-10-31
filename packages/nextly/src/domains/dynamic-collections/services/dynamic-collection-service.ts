@@ -74,6 +74,7 @@ import {
   type CollectionMetadata,
   type ListCollectionsOptions,
   type ListCollectionsResponse,
+  type UnregisteredCollectionRow,
 } from "./dynamic-collection-registry-service";
 import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-service";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -1989,17 +1990,24 @@ export class DynamicCollectionService extends BaseService {
     return this.registryService.getCollection(name, executor);
   }
 
+  async unregisterCollection(name: string): Promise<unknown> {
+    return this.registryService.unregisterCollection(name);
+  }
+
   /** Remove a collection's registry row inside `tx`; forget it once `tx` commits. */
   async unregisterCollectionIn(
     tx: TransactionContext,
     name: string
-  ): Promise<void> {
-    await this.registryService.unregisterCollectionIn(tx, name);
+  ): Promise<UnregisteredCollectionRow> {
+    return this.registryService.unregisterCollectionIn(tx, name);
   }
 
-  /** Forget, in this process, a collection whose registry row has gone. */
-  forgetUnregisteredCollection(name: string): void {
-    this.registryService.forgetUnregisteredCollection(name);
+  /** Forget, in this process, a collection whose registry row has gone, given what its removal found. */
+  async forgetUnregisteredCollection(
+    name: string,
+    unregistered: UnregisteredCollectionRow
+  ): Promise<void> {
+    await this.registryService.forgetUnregisteredCollection(name, unregistered);
   }
 
   /**

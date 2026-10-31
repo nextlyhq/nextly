@@ -270,6 +270,23 @@ function unreadableRefusal(
   });
 }
 
+/**
+ * The refusal for a delete of a collection whose own stored fields are not a
+ * list: its junction tables, and so what could depend on them, cannot be
+ * named. The same refusal as any unreadable fields.
+ */
+export function unreadableFieldsRefusal(
+  slugs: readonly string[],
+  slug: string
+): NextlyError {
+  return unreadableRefusal(
+    slugs,
+    new Map([
+      ["fields", new Error(`The stored fields of "${slug}" are not a list.`)],
+    ])
+  );
+}
+
 /** "a", "a and b", "a, b and c". */
 function joinWords(words: readonly string[]): string {
   if (words.length <= 1) return words.join("");

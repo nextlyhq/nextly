@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cardBodyHeightPx,
+  cardTierAt,
   LIST_ROW_HEIGHT_PX,
   rowsInBody,
   rowsThatFit,
@@ -63,5 +64,46 @@ describe("rowsThatFit", () => {
     expect(rowsThatFit(size, { density: "default" })).toBe(
       rowsThatFit(wider, { density: "default" })
     );
+  });
+});
+
+describe("cardTierAt", () => {
+  it("is the tier a card's drawn width reads as, at each band of the dashboard's width", () => {
+    // 1,200 px: each card at its own columns. 900 px: six or fewer take half, wider the row.
+    // 358 px: one column.
+    const tiers = (dashboardWidth: number) =>
+      [3, 4, 6, 8, 12].map(w => cardTierAt(w, dashboardWidth));
+    expect(tiers(1200)).toEqual([
+      "small",
+      "medium",
+      "medium",
+      "large",
+      "large",
+    ]);
+    expect(tiers(900)).toEqual([
+      "medium",
+      "medium",
+      "medium",
+      "large",
+      "large",
+    ]);
+    expect(tiers(358)).toEqual([
+      "medium",
+      "medium",
+      "medium",
+      "medium",
+      "medium",
+    ]);
+  });
+
+  it("counts the gaps between the columns a card spans", () => {
+    // 🔴 The separating pairs: six columns on 680 px are 332 px (small) and on 720 px 352 px,
+    // with 16 px gaps; three columns on 1,420 px are 337 px (small) with 24 px gaps, where
+    // 16 px would make 343 px. A rule that ignored either gap would call the first of each
+    // pair medium.
+    expect(cardTierAt(6, 680)).toBe("small");
+    expect(cardTierAt(6, 720)).toBe("medium");
+    expect(cardTierAt(3, 1420)).toBe("small");
+    expect(cardTierAt(3, 1440)).toBe("medium");
   });
 });

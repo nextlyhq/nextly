@@ -14,6 +14,7 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
+import { cardTierAt, tierOfWidth } from "nextly/card-geometry";
 import {
   effectiveWidgetLimit,
   GRID_COLUMNS,
@@ -23,34 +24,19 @@ import { createContext, useContext, type RefObject, type Context } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 
-import { columnGapPx, drawnSpan } from "../sizes";
-
 import { listBodyHeight, rowsInBody, type RowsSize } from "./list-rows";
 
-/** Below this rendered width a card is small: a full grouped figure may not fit. */
-const SMALL_BELOW_PX = 340;
-/** From this rendered width a card is large. */
-const LARGE_FROM_PX = 700;
-
-/** The tier for a rendered width, or `undefined` before the card has one. */
-export function tierForWidth(width: number | null): SizeTier | undefined {
-  if (width === null) return undefined;
-  if (width < SMALL_BELOW_PX) return "small";
-  return width >= LARGE_FROM_PX ? "large" : "medium";
-}
+// The outer width a card of `w` columns is drawn at on a dashboard of a given width: twelve
+// columns with a gap between each, at the span its band draws it across and the gap that width
+// draws. Core's own (`nextly/card-geometry`), the rule the layout read reads a card's tier by.
+export { cardOuterWidth } from "nextly/card-geometry";
 
 /**
- * The outer width, in pixels, of a card of `w` columns on a dashboard `dashboardWidth` wide.
- *
- * Twelve columns with a gap between each: a card spanning n of them takes n twelfths of the
- * dashboard and its share of the gaps, less the gap that follows it, at the span its band draws
- * it across and the gap that width draws (`sizes.ts`). This is the width the card measures once
- * drawn, so a tier read from it is the tier the card then measures.
+ * The tier for a rendered width, or `undefined` before the card has one: core's rule for a
+ * width (`tierOfWidth`), the one a predicted tier and the layout read's tier read too.
  */
-export function cardOuterWidth(w: number, dashboardWidth: number): number {
-  const span = drawnSpan(w, dashboardWidth);
-  const gap = columnGapPx(dashboardWidth);
-  return ((dashboardWidth + gap) * span) / GRID_COLUMNS - gap;
+export function tierForWidth(width: number | null): SizeTier | undefined {
+  return width === null ? undefined : tierOfWidth(width);
 }
 
 /**
@@ -58,16 +44,29 @@ export function cardOuterWidth(w: number, dashboardWidth: number): number {
  *
  * What a card's first query is sized by, since the query is asked before the card can measure
  * itself. Only a prediction: once drawn, the card's tier is the one its own rendered width
- * reads as, never the window's. Read through {@link tierForWidth}, the rule the measured tier
- * uses, so the two cannot disagree about a width; `undefined` while the dashboard itself has no
- * width yet.
+ * reads as, never the window's. Core's one rule for it (`cardTierAt`), which reads the width
+ * through the rule the measured tier uses, so the two cannot disagree about a width, and which
+ * the layout read judges a card that hides while empty by, at the dashboard width the layout
+ * read was sent; `undefined` while the dashboard itself has no width yet.
  */
 export function predictedTier(
   w: number,
   dashboardWidth: number | null | undefined
 ): SizeTier | undefined {
   if (dashboardWidth === null || dashboardWidth === undefined) return undefined;
-  return tierForWidth(cardOuterWidth(w, dashboardWidth));
+  return cardTierAt(w, dashboardWidth);
+}
+
+/**
+ * The tier a card of each span, one column to all of them, is drawn at on a dashboard
+ * `dashboardWidth` wide (`cardTierAt` of each), as one key. Two widths with the same key draw
+ * every card at the same tier, so what was judged of a card at its tier on one holds on the other;
+ * two with different keys draw some card at another tier.
+ */
+export function tierBandAt(dashboardWidth: number): string {
+  return Array.from({ length: GRID_COLUMNS }, (_, index) =>
+    cardTierAt(index + 1, dashboardWidth)
+  ).join(" ");
 }
 
 /**

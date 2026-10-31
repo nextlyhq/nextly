@@ -20,6 +20,7 @@ import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
@@ -998,7 +999,11 @@ export class CollectionMetadataService extends BaseService {
       // Loaded when a delete runs, not with the service: everything that
       // constructs the service would otherwise load the delete's readers.
       const [
-        { assertNothingDependsOn, databaseDependentsSources },
+        {
+          assertNothingDependsOn,
+          databaseDependentsSources,
+          unreadableFieldsRefusal,
+        },
         { dropOrder },
         { collectionOwnTables },
       ] = await Promise.all([
@@ -1033,6 +1038,17 @@ export class CollectionMetadataService extends BaseService {
             },
           });
         }
+      }
+
+      // A stored field list that is not a list names no junction tables, so
+      // what depends on them would go unasked: refused as unreadable fields.
+      const unreadable = slugs.findIndex(
+        (_, index) =>
+          collections[index].fields != null &&
+          !Array.isArray(collections[index].fields)
+      );
+      if (unreadable !== -1) {
+        throw unreadableFieldsRefusal(slugs, slugs[unreadable]);
       }
 
       // Before anything is torn down, and for the whole set, so a refusal
@@ -1155,6 +1171,8 @@ export class CollectionMetadataService extends BaseService {
       drop.migrationSQL,
       drop.migrationFileName
     );
+    // What each registry row's removal found, read after the commit.
+    const unregistered = new Map<string, UnregisteredCollectionRow>();
     try {
       await this.adapter.transaction(async tx => {
         const teardownAdapter = teardownAdapterIn(this.adapter, tx);
@@ -1169,7 +1187,10 @@ export class CollectionMetadataService extends BaseService {
           }
         }
         for (const { slug } of ordered) {
-          await this.collectionService.unregisterCollectionIn(tx, slug);
+          unregistered.set(
+            slug,
+            await this.collectionService.unregisterCollectionIn(tx, slug)
+          );
         }
       });
     } catch (error) {
@@ -1180,7 +1201,11 @@ export class CollectionMetadataService extends BaseService {
       throw this.deleteFailed(error, ordered);
     }
     for (const { slug, collection } of ordered) {
-      await this.forgetDeleted(slug, collection);
+      await this.forgetDeleted(
+        slug,
+        collection,
+        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+      );
     }
   }
 
@@ -1265,9 +1290,13 @@ export class CollectionMetadataService extends BaseService {
    */
   private async forgetDeleted(
     slug: string,
-    collection: DeletedCollectionRow
+    collection: DeletedCollectionRow,
+    unregistered: UnregisteredCollectionRow
   ): Promise<void> {
-    this.collectionService.forgetUnregisteredCollection(slug);
+    await this.collectionService.forgetUnregisteredCollection(
+      slug,
+      unregistered
+    );
     const [{ forgetCompanionReadiness }, { deleteResourcePermissions }] =
       await Promise.all([
         import("../../i18n/runtime/companion-readiness"),

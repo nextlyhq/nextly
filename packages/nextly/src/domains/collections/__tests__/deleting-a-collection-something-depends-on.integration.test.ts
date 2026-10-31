@@ -868,6 +868,39 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(await tagsState(current, false)).toEqual(INTACT);
   }, 120_000);
 
+  it("refuses the Builder's delete when the collection's own stored fields are not a list", async () => {
+    current = await createTestNextly({ dialect, collections: [plainTags] });
+    await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
+    await unlock(current, TAGS);
+    // The collection's own row damaged the same way: its tables, and so what
+    // could depend on them, cannot be named.
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const row = `${q("dynamic_collections")} WHERE ${q("slug")} = '${TAGS}'`;
+    const [{ fields: stored }] = await current.adapter.executeQuery<{
+      fields: unknown;
+    }>(`SELECT ${q("fields")} AS ${q("fields")} FROM ${row}`);
+    await current.adapter.executeQuery(
+      `UPDATE ${q("dynamic_collections")} SET ${q("fields")} = '"damaged"' WHERE ${q("slug")} = '${TAGS}'`
+    );
+
+    const result = await handlerOf(current).deleteCollection({
+      collectionName: TAGS,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 503,
+      message: `"${TAGS}" was not deleted, because the fields of collections, Singles and field groups could not be read, so whether anything depends on it is unknown. Nothing was removed. Fix the cause in the server log and try again.`,
+    });
+    // Repaired, so the registry can read the row again: everything is there.
+    const text = typeof stored === "string" ? stored : JSON.stringify(stored);
+    await current.adapter.executeQuery(
+      `UPDATE ${q("dynamic_collections")} SET ${q("fields")} = '${text.replaceAll("'", "''")}' WHERE ${q("slug")} = '${TAGS}'`
+    );
+    expect(await tagsState(current, false)).toEqual(INTACT);
+  }, 120_000);
+
   it("refuses the Builder's delete when the record of other owners' elements cannot be read", async () => {
     current = await createTestNextly({ dialect, collections: [plainTags] });
     await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
