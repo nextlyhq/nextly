@@ -272,12 +272,14 @@ export function DocumentActionBar({
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
   const publishItems = bound(actionsAt(available, "publish-menu"), bindings);
-  // The other ways to publish hang off the primary action. With none drawn,
-  // they lead More's document rows, so they keep a home and their reasons.
-  const documentItems =
-    primary === undefined
-      ? [...publishItems, ...bound(groups.document, bindings)]
-      : bound(groups.document, bindings);
+  // The other ways to publish hang off the primary action only when it is
+  // Publish. Where saving leads (a clean published document) or nothing
+  // does, they lead More's document rows instead: an arrow on Save would
+  // offer scheduling as a kind of saving.
+  const publishLeads = primary?.action.id === PUBLISH_ACTION_ID;
+  const documentItems = publishLeads
+    ? bound(groups.document, bindings)
+    : [...publishItems, ...bound(groups.document, bindings)];
   const dangerItems = bound(groups.danger, bindings);
   const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
   // A menu is drawn when it has a row to hold, folded controls included.
@@ -319,7 +321,7 @@ export function DocumentActionBar({
       {primary === undefined ? null : (
         <PrimaryAction
           primary={primary}
-          options={publishItems}
+          options={publishLeads ? publishItems : []}
           pending={pending}
         />
       )}
@@ -335,6 +337,9 @@ export function DocumentActionBar({
     </div>
   );
 }
+
+/** The built-in Publish's id, under both "Publish" and "Publish changes". */
+const PUBLISH_ACTION_ID = "publish";
 
 /** What the arrow beside the primary action is called, and opens. */
 const PUBLISH_OPTIONS_LABEL = "More ways to publish";

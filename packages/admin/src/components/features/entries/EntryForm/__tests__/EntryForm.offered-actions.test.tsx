@@ -187,6 +187,67 @@ describe("an action the page contributes", () => {
   });
 });
 
+describe("the other ways to publish", () => {
+  const lifecycle = { ...(categories as object), status: true } as never;
+  const ways = [
+    {
+      action: {
+        id: "schedule-publish",
+        label: "Schedule publish…",
+        placement: "publish-menu" as const,
+      },
+      binding: { onSelect: vi.fn() },
+    },
+    {
+      action: {
+        id: "add-to-release",
+        label: "Add to release…",
+        placement: "publish-menu" as const,
+      },
+      binding: { onSelect: vi.fn() },
+    },
+  ];
+  const editing = (status: "draft" | "published") =>
+    render(
+      <EntryForm
+        collection={lifecycle}
+        entry={{ id: "c1", title: "News", status } as never}
+        mode="edit"
+        documentActions={ways}
+      />,
+      { wrapper: Providers }
+    );
+
+  it("hang off Publish on a draft, as the Publish split", async () => {
+    holding("read-categories", "update-categories", "publish-categories");
+    editing("draft");
+    const bar = await screen.findByTestId("document-bar");
+
+    expect(within(bar).getByRole("button", { name: "Publish" })).toBeTruthy();
+    expect(
+      within(bar).getByRole("button", { name: "More ways to publish" })
+    ).toBeTruthy();
+  });
+
+  it("are rows of More on a clean published document, beside a plain Save", async () => {
+    // Saving leads there, and they are not ways to save: an arrow on Save
+    // would offer scheduling as a kind of saving.
+    holding("read-categories", "update-categories", "publish-categories");
+    editing("published");
+    const bar = await screen.findByTestId("document-bar");
+
+    expect(
+      within(bar).getByRole("button", { name: /^save changes$/i })
+    ).toBeTruthy();
+    expect(
+      within(bar).queryByRole("button", { name: "More ways to publish" })
+    ).toBeNull();
+    expect(await menuActions()).toEqual(
+      expect.arrayContaining(["schedule-publish", "add-to-release"])
+    );
+  });
+});
+
 describe("a quick-edit modal's Save", () => {
   it("is not offered without the update permission, and a submit sends nothing", async () => {
     holding("read-categories");
