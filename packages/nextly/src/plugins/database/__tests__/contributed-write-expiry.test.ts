@@ -275,6 +275,31 @@ describe("a contributed write whose document cannot be found", () => {
   });
 });
 
+describe("a contributed write whose expiry fails and whose logger throws", () => {
+  it("still resolves, the write kept", async () => {
+    vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
+      error: vi.fn(),
+      warn: () => {
+        throw new Error("logger down");
+      },
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as never);
+    const failing = surface({
+      contentEntity: () => {
+        throw new Error("registry unavailable");
+      },
+    });
+
+    await expect(
+      failing.contributed("dc_posts", flagColumns).set("p1", { fxFlag: "on" })
+    ).resolves.toBe(1);
+    expect(
+      sqlite.prepare("SELECT fx_flag FROM dc_posts WHERE id = 'p1'").get()
+    ).toEqual({ fx_flag: "on" });
+  });
+});
+
 describe("a contributed write inside ctx.db.transaction", () => {
   it("expires once the transaction commits, not before", async () => {
     let duringCallback: ContentTarget[] | undefined;

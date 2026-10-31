@@ -1661,12 +1661,18 @@ async function expireChangedContent(
   try {
     await findAndExpire(tableName, id, deps);
   } catch (error) {
-    getNextlyLogger().warn({
-      kind: "contributed-write-expiry-failed",
-      message: `The cached reads of the row "${String(id)}" of "${tableName}" were not expired after a contributed write: ${error instanceof Error ? error.message : String(error)}`,
-      table: tableName,
-      id: String(id),
-    });
+    // Guarded too, as `runCommitEffects` guards its logging: an app logger
+    // that throws must not reject a write that has already happened.
+    try {
+      getNextlyLogger().warn({
+        kind: "contributed-write-expiry-failed",
+        message: `The cached reads of the row "${String(id)}" of "${tableName}" were not expired after a contributed write: ${error instanceof Error ? error.message : String(error)}`,
+        table: tableName,
+        id: String(id),
+      });
+    } catch {
+      // Nothing is left to report it to.
+    }
   }
 }
 
