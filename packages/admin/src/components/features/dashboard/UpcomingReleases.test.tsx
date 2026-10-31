@@ -1,13 +1,15 @@
 /**
- * The dashboard's Upcoming releases card, drawn from its `system:releases`
- * answer: the line naming releases that need attention above the rows at every
+ * The dashboard's Upcoming releases card, drawn from the rows its `load` read
+ * from `system:releases`: the line naming releases that need attention above the rows at every
  * size, each part linking to the Releases list filtered to its reason; the rows
  * as core's lists draw them, each a date chip, the release's name, its entries
- * and its status, leading to its release; and the frame's own states.
+ * and its status, leading to its release. The frame draws loading, error and
+ * the empty card before the component is reached, so those are the frame's
+ * own tests.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { WidgetComponentProps } from "nextly/widget-result";
-import { describe, expect, it, vi } from "vitest";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
+import { describe, expect, it } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
@@ -18,28 +20,10 @@ import {
 
 import { UpcomingReleasesCard } from "./UpcomingReleases";
 
-const QUERY = {
-  source: "system:releases",
-  op: "list" as const,
-  select: [
-    "kind",
-    "id",
-    "title",
-    "scheduledAt",
-    "entries",
-    "issues",
-    "reason",
-    "count",
-  ],
-  limit: 5,
-};
-
-const FIELDS = [
-  { name: "title", label: "Release", type: "string" as const },
-  { name: "scheduledAt", label: "Scheduled", type: "date" as const },
-];
-
-const release = (n: number, extra: Record<string, unknown> = {}) => ({
+const release = (
+  n: number,
+  extra: CoreListWidgetData["items"][number] = {}
+) => ({
   kind: "release",
   id: `r${n}`,
   title: `Launch ${n}`,
@@ -49,14 +33,12 @@ const release = (n: number, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-function answer(items: Record<string, unknown>[]) {
-  return {
-    ok: true as const,
-    result: { op: "list" as const, items, fields: FIELDS },
-  };
-}
+/** The data the card's `load` answers: the source's rows. */
+const answer = (items: CoreListWidgetData["items"]): CoreListWidgetData => ({
+  items,
+});
 
-function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
+function draw(data: CoreListWidgetData, tier: SizeTier = "medium") {
   return render(
     <CardTierContext.Provider value={tier}>
       {inFrame(
@@ -64,10 +46,10 @@ function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
           widgetId="core/upcoming-releases"
           placementId="card-1"
           settings={{}}
-          slot={undefined}
-          isFetching={false}
-          query={QUERY}
-          {...props}
+          size={{ w: 4, h: 4, tier }}
+          data={data}
+          refreshing={false}
+          retry={() => undefined}
         />
       )}
     </CardTierContext.Provider>
@@ -83,7 +65,7 @@ describe("the releases that need attention", () => {
   it.each<SizeTier>(["small", "medium", "large"])(
     "are named above the rows at %s, each linking to its reason",
     tier => {
-      draw({ slot: answer([...ATTENTION, release(1)]) }, tier);
+      draw(answer([...ATTENTION, release(1)]), tier);
       const line = screen.getByTestId("release-attention");
       expect(line).toHaveTextContent("1 stopped");
       expect(line).toHaveTextContent("2 overdue");
@@ -102,7 +84,7 @@ describe("the releases that need attention", () => {
   it.each<SizeTier>(["small", "medium", "large"])(
     "leave no line at %s when none need attention",
     tier => {
-      draw({ slot: answer([release(1)]) }, tier);
+      draw(answer([release(1)]), tier);
       expect(screen.queryByTestId("release-attention")).toBeNull();
       expect(screen.getByText("Launch 1")).toBeInTheDocument();
     }
@@ -115,9 +97,7 @@ describe("the upcoming rows", () => {
     // so four releases are drawn, and the footer counts releases alone, at least five, never
     // the seven rows the answer holds.
     draw(
-      {
-        slot: answer([...ATTENTION, ...[1, 2, 3, 4, 5].map(n => release(n))]),
-      },
+      answer([...ATTENTION, ...[1, 2, 3, 4, 5].map(n => release(n))]),
       "medium"
     );
     expect(screen.getAllByTestId("entity-row")).toHaveLength(4);
@@ -129,10 +109,7 @@ describe("the upcoming rows", () => {
   it("say there are more when the release rows hold one more than the card draws", () => {
     // The footer leads to Releases. The source counts no total, so the extra row says at least
     // six exist.
-    draw(
-      { slot: answer([...[1, 2, 3, 4, 5, 6].map(n => release(n))]) },
-      "medium"
-    );
+    draw(answer([...[1, 2, 3, 4, 5, 6].map(n => release(n))]), "medium");
     expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
     const footer = screen.getByTestId("list-card-footer");
     expect(footer).toHaveTextContent("View all (6+)");
@@ -143,7 +120,7 @@ describe("the upcoming rows", () => {
     // 🔴 Four rows tall, the body holds four rows, and none to spare: counted without the line
     // above them, the fourth row would be cut off at the card's foot.
     const releases = [1, 2, 3, 4, 5, 6].map(n => release(n));
-    const drawAt = (items: Record<string, unknown>[]) =>
+    const drawAt = (items: CoreListWidgetData["items"]) =>
       render(
         <CardHeightContext.Provider value={4}>
           <CardTierContext.Provider value="medium">
@@ -152,9 +129,10 @@ describe("the upcoming rows", () => {
                 widgetId="core/upcoming-releases"
                 placementId="card-1"
                 settings={{}}
-                slot={answer(items)}
-                isFetching={false}
-                query={QUERY}
+                size={{ w: 4, h: 4, tier: "medium" }}
+                data={answer(items)}
+                refreshing={false}
+                retry={() => undefined}
               />
             )}
           </CardTierContext.Provider>
@@ -170,15 +148,13 @@ describe("the upcoming rows", () => {
 
   it("draw each release as a date chip, its name, its entries and its status", () => {
     draw(
-      {
-        slot: answer([
-          release(1, { scheduledAt: "2099-03-14T12:00:00.000Z", entries: 1 }),
-          release(2, { entries: 4, issues: 2 }),
-          release(3, { issues: 1 }),
-          // Left unchecked by the source: no status rather than a guess.
-          release(4, { issues: null }),
-        ]),
-      },
+      answer([
+        release(1, { scheduledAt: "2099-03-14T12:00:00.000Z", entries: 1 }),
+        release(2, { entries: 4, issues: 2 }),
+        release(3, { issues: 1 }),
+        // Left unchecked by the source: no status rather than a guess.
+        release(4, { issues: null }),
+      ]),
       "medium"
     );
     const rows = screen.getAllByTestId("entity-row");
@@ -211,32 +187,17 @@ describe("the upcoming rows", () => {
   });
 
   it("lead each release row to its release", () => {
-    draw({ slot: answer([release(1), release(2)]) }, "medium");
+    draw(answer([release(1), release(2)]), "medium");
     expect(screen.getByText("Launch 2").closest("a")).toHaveAttribute(
       "href",
       "/admin/releases/r2"
     );
   });
 
-  it("draws the standard empty state when nothing is scheduled or waiting", () => {
-    draw({ slot: answer([]) });
+  it("draws the standard empty state for rows this build cannot read", () => {
+    // The frame draws an empty answer itself; a row of a kind the card does
+    // not know is left out, so an answer of only those draws the same state.
+    draw(answer([{ kind: "unknown" }]));
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
-  });
-});
-
-describe("the card's states", () => {
-  it("says it is not available when the source refused this reader", () => {
-    draw({ slot: { ok: false, error: "Not available", code: "unavailable" } });
-    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
-  });
-
-  it("offers Retry on its error, asking the card's question again", () => {
-    const onRetry = vi.fn();
-    draw({
-      slot: { ok: false, error: "The database did not answer." },
-      onRetry,
-    });
-    screen.getByRole("button", { name: /retry/i }).click();
-    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

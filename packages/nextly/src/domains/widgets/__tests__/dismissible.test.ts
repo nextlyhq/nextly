@@ -55,7 +55,7 @@ describe("what the admin is told about dismissal", () => {
     // Absent rather than `false`, matching how every other optional field on
     // the summary travels -- a reader of the payload sees which cards made a
     // claim instead of inferring it from a default.
-    expect(summaryFor("core/content-table")).not.toHaveProperty("dismissible");
+    expect(summaryFor("core/quick-create")).not.toHaveProperty("dismissible");
   });
 
   it("travels beside a lifecycle without being implied by it", () => {
@@ -67,8 +67,9 @@ describe("what the admin is told about dismissal", () => {
     expect(started).not.toHaveProperty("visibleWhen");
     expect(started.dismissible).toBe(true);
 
-    const content = summaryFor("core/content-table");
-    expect(content.lifecycle).toBe("conditional");
-    expect(content).not.toHaveProperty("dismissible");
+    // Create, core's one card still written as a definition, offered on a condition.
+    const create = summaryFor("core/quick-create");
+    expect(create.lifecycle).toBe("conditional");
+    expect(create).not.toHaveProperty("dismissible");
   });
 });

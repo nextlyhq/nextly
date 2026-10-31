@@ -55,7 +55,10 @@ describe("the one call every owner's widgets come through", () => {
     // 🔴 Core's list was registered on its own before the declarations, so a
     // mistake in it threw alone, and a plugin's fault was a second boot away,
     // with core's cards already kept. Now both arrive in one message.
-    const [first, second] = CORE_WIDGETS;
+    // Core's one definition, and a second beside it under another id.
+    const [first] = CORE_WIDGETS;
+    if (first === undefined) throw new Error("core has a definition");
+    const second: WidgetDefinition = { ...first, id: "core/second" };
     const message = refused(() =>
       registerDashboardWidgets({
         core: [

@@ -27,6 +27,7 @@ import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
 // `WidgetAccessGate` (of `define-widget.ts`) onto.
 import type { WidgetPermissionGate as RequiredPermission } from "../gate";
 import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
+import type { WidgetCondition } from "../lifecycle";
 import {
   deregisterWidget,
   getWidget,
@@ -59,6 +60,17 @@ export interface DeclaredWidgetGroup extends WidgetDeclarationGroup {
    * lists them under; absent for core's and the site's.
    */
   readonly plugin?: string;
+  /**
+   * When each of core's own widgets is offered, by its id: a condition the
+   * add panel and the layout's visibility token judge, published as the
+   * registry's `lifecycle: "conditional"` and `visibleWhen`.
+   *
+   * 🔴 Read from core's own group alone (`core: true`), never from a plugin's
+   * or the site's: the conditions are core's internal vocabulary, so no
+   * declaration a plugin writes can name one, and `WidgetDeclarationInput`
+   * carries no field for it.
+   */
+  readonly conditions?: Readonly<Record<string, WidgetCondition>>;
 }
 
 /** A declaration as startup kept it, with who declared it. */
@@ -214,7 +226,9 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  */
 export function toDefinition(
   declaration: DeclaredWidgetShape,
-  owner: string
+  owner: string,
+  // One of core's own conditions, from core's group alone (`conditionOf`).
+  condition?: WidgetCondition
 ): WidgetDefinition {
   const settings = Object.entries(declaration.settings ?? {}).map(
     // Each was checked at startup by the rules a definition's settings are
@@ -236,8 +250,24 @@ export function toDefinition(
     size: sizeBounds(declaration.size),
     ...publishedGates(declaration),
     ...withEmpty(publishedEmpty(declaration.empty)),
+    // Offered only while the condition holds, judged where every conditional
+    // widget is: the add panel, and the layout's visibility token.
+    ...(condition === undefined
+      ? {}
+      : { lifecycle: "conditional", visibleWhen: condition }),
     serverData: true,
   };
+}
+
+/**
+ * The condition a declaration is offered under: core's own, named in core's
+ * group by the widget's id, and none for any other owner's.
+ */
+function conditionOf(
+  group: Pick<DeclaredWidgetGroup, "core" | "conditions">,
+  id: string
+): WidgetCondition | undefined {
+  return group.core === true ? group.conditions?.[id] : undefined;
 }
 
 /**
@@ -427,7 +457,8 @@ export function registerDashboardWidgets({
     registerWidget(definition, { source: CORE_OWNER });
   }
 
-  for (const { owner, declarations, collections, plugin } of groups) {
+  for (const group of groups) {
+    const { owner, declarations, collections, plugin } = group;
     // Every group is a list by now: one that was not is a fault, refused above.
     for (const raw of declarations as readonly unknown[]) {
       const declaration = raw as DeclaredWidgetShape;
@@ -442,7 +473,10 @@ export function registerDashboardWidgets({
       // has a declaration here to answer its cards from. One drawn by its own
       // component is published as a custom card core answers: the admin hands
       // that component the props its declaration types (`WidgetProps`).
-      registerDeclaredDefinition(toDefinition(declaration, owner), owner);
+      registerDeclaredDefinition(
+        toDefinition(declaration, owner, conditionOf(group, declaration.id)),
+        owner
+      );
     }
   }
 }
@@ -492,12 +526,16 @@ function wellFormedDefinitions(
 ): ReadonlyMap<string, WidgetDefinition> {
   const faulty = new Set(faults.map(fault => fault.widget));
   const definitions = new Map<string, WidgetDefinition>();
-  for (const { owner, declarations } of groups) {
+  for (const group of groups) {
+    const { owner, declarations } = group;
     if (!Array.isArray(declarations)) continue;
     for (const raw of declarations as readonly unknown[]) {
       const id = (raw as { id?: unknown } | null)?.id;
       if (typeof id !== "string" || faulty.has(id)) continue;
-      definitions.set(id, toDefinition(raw as DeclaredWidgetShape, owner));
+      definitions.set(
+        id,
+        toDefinition(raw as DeclaredWidgetShape, owner, conditionOf(group, id))
+      );
     }
   }
   return definitions;

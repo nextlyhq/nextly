@@ -2,15 +2,17 @@
 
 import { Card, CardContent } from "@nextlyhq/ui";
 import { ShieldCheck, Users as UsersIcon } from "lucide-react";
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { TeamWidgetData } from "nextly/core-widget-data";
+import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 
-import { FrameState, readSlot } from "../widgets/frame/card-state";
+import { FrameState } from "../widgets/frame/card-state";
 import { CardFigure } from "../widgets/frame/figure";
 import { useCardTier } from "../widgets/frame/tier";
+import { WidgetFooterLink } from "../widgets/kit/footer-link";
 
 /**
  * Compact "Team" summary on the dashboard. Two cards: total Users + total
@@ -61,42 +63,32 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
   );
 }
 
-/** The count a `system:team` row carries for `figure`, or `undefined` when the source sent none. */
-function figureOf(
-  rows: readonly Record<string, unknown>[],
-  figure: "users" | "roles"
-): number | undefined {
-  const row = rows.find(candidate => candidate.figure === figure);
-  return typeof row?.count === "number" ? row.count : undefined;
-}
+/** What the Team card is handed: its declaration's props, with the data its `load` answers. */
+export type TeamSummaryProps = Omit<DeclaredComponentProps, "data"> & {
+  data: TeamWidgetData;
+};
 
 /**
- * The dashboard's Team card, answered by `system:team` in the dashboard's batch.
+ * The dashboard's Team card, drawn from the counts its `load` read from
+ * `system:team`.
  *
- * The source asks the card's gate itself, so a reader it refuses gets the
- * frame's one "not available" state, and it sends the roles figure only to a
- * reader who may see roles: a figure it did not send is not drawn, rather than
- * drawn as 0.
+ * The source asks the card's gate itself, and it sends the roles figure only
+ * to a reader who may see roles: a figure it did not send is not drawn, rather
+ * than drawn as 0. The frame drew loading and error before this is reached.
+ * "All users" sits in the card's footer, where every card's link is drawn.
  */
-export const TeamSummary: React.FC<WidgetComponentProps> = ({
-  slot,
-  isFetching,
-  onRetry,
-}) => {
-  const read = readSlot(slot, {
-    isFetching,
-    skeleton: { shape: "figure" },
-    onRetry,
-  });
-  if ("state" in read) return <FrameState state={read.state} />;
-  const rows = read.result.op === "list" ? read.result.items : [];
-  const users = figureOf(rows, "users");
-  const roles = figureOf(rows, "roles");
+export const TeamSummary: React.FC<TeamSummaryProps> = ({ data }) => {
+  const { users, roles } = data;
   // Neither figure came: the frame's one unavailable state, rather than an empty body.
   if (users === undefined && roles === undefined) {
     return <FrameState state={{ kind: "no-access" }} />;
   }
-  return <TeamTiles users={users} roles={roles} />;
+  return (
+    <>
+      <TeamTiles users={users} roles={roles} />
+      <WidgetFooterLink href={ROUTES.USERS} label="All users" />
+    </>
+  );
 };
 
 /**

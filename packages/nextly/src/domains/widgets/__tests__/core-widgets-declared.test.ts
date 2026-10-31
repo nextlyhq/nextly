@@ -2,12 +2,12 @@
  * Every core widget is declared with `defineWidget`, as a plugin's widget is,
  * and reaches the registry through the same call.
  *
- * 🔴 Six of core's widgets are still written as definitions, answered from a
- * query, and they are NAMED below rather than counted: the list can only
- * shrink. A core widget added as a definition fails here, and so does one of
- * the six once it is declared and not taken off the list, so the list always
- * says exactly which are left. When it is empty, every entry of core's list is
- * a declaration.
+ * 🔴 One of core's widgets is still written as a definition, Create, until it
+ * is retired, and it is NAMED below rather than counted: the list can only
+ * shrink. A core widget added as a definition fails here, and so does one on
+ * the list once it is declared and not taken off it, so the list always says
+ * exactly which are left. When it is empty, every entry of core's list is a
+ * declaration.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,14 +23,7 @@ import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import { getWidget, widgetSource } from "../registry";
 
 /** Core's widgets still written as definitions, each to be declared. */
-const STILL_DEFINITIONS: readonly string[] = [
-  CORE_WIDGET_ID.contentTable,
-  CORE_WIDGET_ID.quickCreate,
-  CORE_WIDGET_ID.team,
-  CORE_WIDGET_ID.continue,
-  CORE_WIDGET_ID.upcomingReleases,
-  CORE_WIDGET_ID.teamActivity,
-];
+const STILL_DEFINITIONS: readonly string[] = [CORE_WIDGET_ID.quickCreate];
 
 beforeEach(() => {
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({

@@ -78,10 +78,16 @@ export type WidgetPermissionGate =
 export function requiredPermissionGroups(
   value: unknown
 ): readonly (readonly string[])[] | undefined {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+  // `{ allOf }`; any other object, `{ anyOf }` included, is read as one group.
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.hasOwn(value, "allOf")
+  ) {
     const keys = Object.keys(value);
     const allOf = (value as { allOf?: unknown }).allOf;
-    if (keys.length !== 1 || keys[0] !== "allOf") return undefined;
+    if (keys.length !== 1) return undefined;
     if (!Array.isArray(allOf) || allOf.length === 0) return undefined;
     const groups: (readonly string[])[] = [];
     for (const entry of allOf as readonly unknown[]) {
@@ -95,12 +101,27 @@ export function requiredPermissionGroups(
   return group === undefined ? undefined : [group];
 }
 
-/** One any-of group: a slug, or a non-empty array of slugs. */
+/** One any-of group: a slug, `{ anyOf }` of slugs, or a non-empty array of slugs. */
 function anyOfGroup(value: unknown): readonly string[] | undefined {
   const usable = (slug: unknown): slug is string =>
     typeof slug === "string" && slug !== "";
 
   if (usable(value)) return [value];
+  // `{ anyOf }`, a declaration's spelling of the same group, holding that key
+  // alone: read as its list, by the same rule as a bare one.
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== "anyOf") return undefined;
+    return anyOfList((value as { anyOf?: unknown }).anyOf, usable);
+  }
+  return anyOfList(value, usable);
+}
+
+/** A non-empty list of usable slugs, or `undefined`. */
+function anyOfList(
+  value: unknown,
+  usable: (slug: unknown) => slug is string
+): readonly string[] | undefined {
   // Every member must be usable, rather than filtering the junk out: an array
   // whose second entry is a number is a mistake its author can still see, and
   // silently gating on the first entry alone answers a narrower question than

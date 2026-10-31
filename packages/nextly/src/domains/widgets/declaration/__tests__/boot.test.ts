@@ -81,8 +81,9 @@ describe("startup with plugins that declare widgets", () => {
     expect(getWidget("acme/orders-by-state")).toBeDefined();
     clearDeclaredWidgets();
     expect(getWidget("acme/orders-by-state")).toBeUndefined();
-    // Core's own cards were never a declaration's, so they stay.
-    expect(getWidget("core/continue")).toBeDefined();
+    // Create, core's one card still written as a definition, was never a
+    // declaration's, so it stays.
+    expect(getWidget("core/quick-create")).toBeDefined();
     // And the same declarations can be made again.
     expect(() =>
       resetWidgetRegistries([plugin("@acme/shop", { dashboard })])
