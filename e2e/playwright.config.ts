@@ -51,8 +51,10 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `setup-*`: first-run setup's origin rules for loopback names hold in
  *   development only, and `next dev` is what serves those names a page.
  * - `component-map-dev`: a development server refusing a stale component map.
- * - The Schema Builder specs: a production build turns the builder off unless
- *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
+ * - The Schema Builder specs (`schema-builder*`, so a new one joins them): a
+ *   production build turns the builder off unless the app opts in, and
+ *   refuses its writes with `BUILDER_DISABLED`. The production refusal itself
+ *   is `tests/production/builder-guard.spec.ts`, which runs there.
  * - `widget-preview`: the widget preview page exists only while the server
  *   runs in development; a production build answers its address as not found
  *   (`tests/production/widget-preview.spec.ts`).
@@ -63,7 +65,7 @@ const DEV_SPECS = [
   "**/setup-*.spec.ts",
   "**/component-map-dev.spec.ts",
   "**/widget-preview.spec.ts",
-  "**/schema-builder.spec.ts",
+  "**/schema-builder*.spec.ts",
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",

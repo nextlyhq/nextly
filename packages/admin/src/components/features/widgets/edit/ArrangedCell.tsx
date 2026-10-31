@@ -108,7 +108,7 @@ export interface ArrangedCellProps {
     slot: WidgetSlot | undefined;
     /** How a `stats` card reaches each cell's answer; absent otherwise. */
     slotFor?: CellSlotLookup;
-    /** `null` when this card took no part in the batch. */
+    /** When this card's own answer arrived; `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
     /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
