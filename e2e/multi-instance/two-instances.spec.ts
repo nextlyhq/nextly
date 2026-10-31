@@ -12,18 +12,16 @@
  *
  * @module multi-instance/two-instances
  */
-import { readFileSync } from "node:fs";
-
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import {
-  databaseUrl,
-  startLeg,
-  WRITE_SECRET,
-  type Instance,
-  type Leg,
-  type Running,
-} from "./instances";
+  loggedKind,
+  noteOn,
+  NOT_SHARED_KIND,
+  servedWithin,
+  useLeg,
+} from "./checks";
+import { WRITE_SECRET, type Leg } from "./instances";
 
 /**
  * How soon the other instance must serve a write. The handlers ask the
@@ -41,95 +39,17 @@ const LEGS: Leg[] = [
   { name: "cache-components-on", cacheComponents: true, sharedHandlers: true },
 ];
 
-const url = databaseUrl();
-
-/** The note as `instance` serves it. */
-async function noteOn(
-  request: APIRequestContext,
-  instance: Instance
-): Promise<string | null> {
-  const res = await request.get(`${instance.url}/api/note`);
-  expect(res.status(), `GET /api/note on instance ${instance.name}`).toBe(200);
-  return ((await res.json()) as { value: string | null }).value;
-}
-
-/**
- * Waits for `instance` to serve `value` no later than `FRESH_WITHIN_MS` after
- * `since`, the write, and returns how long that took. The bound runs from the
- * write, not from this call: a check made after another, or after other work,
- * gets only what is left of it.
- */
-async function servedWithin(
-  request: APIRequestContext,
-  instance: Instance,
-  value: string,
-  since: number
-): Promise<number> {
-  const left = since + FRESH_WITHIN_MS - Date.now();
-  expect(
-    left,
-    `time left of the ${String(FRESH_WITHIN_MS)} ms bound for instance ${instance.name}`
-  ).toBeGreaterThan(0);
-  await expect
-    .poll(() => noteOn(request, instance), {
-      message: `instance ${instance.name} serves ${value}`,
-      timeout: left,
-      intervals: [250],
-    })
-    .toBe(value);
-  const took = Date.now() - since;
-  // The poll's last answer can arrive after its timeout, so the bound is
-  // asserted on the time itself.
-  expect(
-    took,
-    `instance ${instance.name} served ${value} within ${String(FRESH_WITHIN_MS)} ms of the write`
-  ).toBeLessThanOrEqual(FRESH_WITHIN_MS);
-  return took;
-}
-
 for (const leg of LEGS) {
   test.describe(`two instances, ${leg.name}`, () => {
-    test.describe.configure({ mode: "serial" });
-    // Never skipped in CI: a job that ran nothing would read as a pass.
-    test.skip(
-      !url && !process.env.CI,
-      "MULTI_INSTANCE_DATABASE_URL is unset; it names an empty Postgres test database"
-    );
-
-    let running: Running | undefined;
-
-    test.beforeAll(async () => {
-      if (!url) throw new Error("MULTI_INSTANCE_DATABASE_URL is unset");
-      // Two builds' worth: the fixture is built for each leg.
-      test.info().setTimeout(12 * 60_000);
-      running = await startLeg(leg, url);
-    });
-
-    test.afterAll(async () => {
-      await running?.stop();
-    });
-
-    test.afterEach(async () => {
-      const testInfo = test.info();
-      if (testInfo.status === testInfo.expectedStatus || !running) return;
-      for (const log of running.logs()) {
-        let body = "(missing)";
-        try {
-          body = readFileSync(log.path, "utf8");
-        } catch {
-          // A log a step never wrote stays named, with nothing in it.
-        }
-        await testInfo.attach(log.name, { body, contentType: "text/plain" });
-      }
-    });
+    const running = useLeg(leg);
 
     test("both instances serve the note from their cache: a change with no expiry is not served", async ({
       request,
     }) => {
-      const { a, b } = running!;
+      const { a, b } = running();
       expect(await noteOn(request, a)).toBe("v0");
       expect(await noteOn(request, b)).toBe("v0");
-      running!.writeOutsideRequest("unexpired", true);
+      running().writeOutsideRequest("unexpired", true);
       // Past the handlers' lookup interval, so an instance that would
       // re-read the database has had every chance to.
       await new Promise(resolve => setTimeout(resolve, 6_000));
@@ -140,7 +60,7 @@ for (const leg of LEGS) {
     test("a write through one instance is served by the other within the bound", async ({
       request,
     }, testInfo) => {
-      const { a, b } = running!;
+      const { a, b } = running();
       const since = Date.now();
       const res = await request.post(`${a.url}/api/note`, {
         headers: { "x-fixture-secret": WRITE_SECRET },
@@ -148,7 +68,13 @@ for (const leg of LEGS) {
       });
       expect(res.status()).toBe(200);
       expect(await noteOn(request, a)).toBe("through-a");
-      const took = await servedWithin(request, b, "through-a", since);
+      const took = await servedWithin(
+        request,
+        b,
+        "through-a",
+        since,
+        FRESH_WITHIN_MS
+      );
       testInfo.annotations.push({
         type: "fresh on the other instance",
         description: `${String(took)} ms`,
@@ -158,7 +84,7 @@ for (const leg of LEGS) {
     test("after a write both instances cache again: a later change with no expiry is not served", async ({
       request,
     }) => {
-      const { a, b } = running!;
+      const { a, b } = running();
       // An entry the writer filled while its own expiry was still being
       // recorded is judged against that record once it reads it back, and is
       // filled again, so it is read past one lookup interval first: what is
@@ -169,7 +95,7 @@ for (const leg of LEGS) {
       // The writer included: an instance that kept re-reading the database
       // after its own write would serve this change, and look fresh for the
       // wrong reason in the check after.
-      running!.writeOutsideRequest("unexpired-after-write", true);
+      running().writeOutsideRequest("unexpired-after-write", true);
       await new Promise(resolve => setTimeout(resolve, 6_000));
       expect(await noteOn(request, a)).toBe("through-a");
       expect(await noteOn(request, b)).toBe("through-a");
@@ -178,15 +104,35 @@ for (const leg of LEGS) {
     test("a write outside any request is served by both instances within the bound", async ({
       request,
     }, testInfo) => {
-      const { a, b } = running!;
-      running!.writeOutsideRequest("outside");
+      const { a, b } = running();
+      running().writeOutsideRequest("outside");
       const since = Date.now();
-      const tookA = await servedWithin(request, a, "outside", since);
-      const tookB = await servedWithin(request, b, "outside", since);
+      const tookA = await servedWithin(
+        request,
+        a,
+        "outside",
+        since,
+        FRESH_WITHIN_MS
+      );
+      const tookB = await servedWithin(
+        request,
+        b,
+        "outside",
+        since,
+        FRESH_WITHIN_MS
+      );
       testInfo.annotations.push({
         type: "fresh after the write",
         description: `A ${String(tookA)} ms, B ${String(tookB)} ms`,
       });
+    });
+
+    test("neither instance warns that the cache handlers are not shared", () => {
+      // Last, after every read above: an instance the shared handlers serve
+      // gets no lifetime cap and says nothing about one.
+      const { a, b } = running();
+      expect(loggedKind(a, NOT_SHARED_KIND), "instance A").toBe(0);
+      expect(loggedKind(b, NOT_SHARED_KIND), "instance B").toBe(0);
     });
   });
 }
