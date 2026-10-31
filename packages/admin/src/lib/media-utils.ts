@@ -1,25 +1,16 @@
+import { mediaCategoryOf } from "nextly/media-categories";
+
 import type { MediaType } from "@admin/types/media";
 
 /**
- * Determine media type from MIME type.
+ * Determine media type from MIME type: core's one answer, which the library
+ * query narrows to a type by too, so a badge and a filter agree.
  *
  * @param mimeType - MIME type string (e.g., "image/png"), or null/undefined
  * @returns MediaType enum value
  */
 export function getMediaType(mimeType: string | null | undefined): MediaType {
-  if (!mimeType || mimeType.trim() === "") return "other";
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("video/")) return "video";
-  if (mimeType.startsWith("audio/")) return "audio";
-  if (
-    mimeType === "application/pdf" ||
-    mimeType.startsWith("application/vnd.") ||
-    mimeType.startsWith("application/msword") ||
-    mimeType.startsWith("text/")
-  ) {
-    return "document";
-  }
-  return "other";
+  return mediaCategoryOf(mimeType);
 }
 
 /**
