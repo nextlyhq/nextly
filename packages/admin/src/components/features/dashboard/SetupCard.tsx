@@ -438,7 +438,7 @@ function StepTile({
       className={cn(
         SETUP_TILE.className,
         "flex min-w-0 items-center gap-2 overflow-hidden rounded-md border border-border px-2 py-0.5",
-        step.status === "done" && "border-success/40 bg-success/5"
+        step.status === "done" && "border-success bg-success/5"
       )}
     >
       <TileMark step={step} position={position} />
