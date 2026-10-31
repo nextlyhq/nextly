@@ -1,0 +1,23 @@
+---
+title: WIDGET_GENERATE_CANCELLED
+description: "A prompt of `nextly generate:widget` was cancelled, so it wrote no widget."
+---
+
+## Cause
+
+A prompt of `nextly generate:widget` was cancelled, so it wrote no widget.
+
+On a terminal, `nextly generate:widget` asks for what its arguments and flags leave out: the widget's name, how it shows its data, and whether it reads from a collection. Closing one of those prompts, for example with Ctrl+C, stops the command before it writes any file or edits any list of widgets.
+
+## Fix
+
+Run `nextly generate:widget` again and answer each prompt, or give the answers up front, as in `nextly generate:widget open-orders --view list --collection`, so it asks nothing. `--no-collection` answers no to the collection prompt.
+
+## Example
+
+```text
+✗ `nextly generate:widget` was cancelled, and wrote no widget.
+  Why:  A prompt was closed before it was answered.
+  Next: Run `nextly generate:widget` again and answer its prompts, or give the answers as flags, as in `nextly generate:widget open-orders --view figure --no-collection`.
+  Docs: https://nextlyhq.com/docs/cli/errors/widget-generate-cancelled  (WIDGET_GENERATE_CANCELLED)
+```

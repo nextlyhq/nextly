@@ -31,6 +31,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/sqlite";
 export { nextlyPluginSettings } from "../plugin-settings/sqlite";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/sqlite";
 export { nextlyLimitStore } from "../limit-store/sqlite";
+export { nextlyCacheTagExpiries } from "../cache-tag-expiries/sqlite";
 export { nextlySpentChallenges } from "../spent-challenges/sqlite";
 export { nextlySchemaOwners } from "../schema-owners/sqlite";
 export { nextlyWidgetLayout } from "../widget-layout/sqlite";

@@ -34,6 +34,8 @@ import type {
 import { consoleLogger } from "../../shared/types";
 import { loadNextModule, requireNextApi } from "../next-api";
 
+import { MAX_TAGS_PER_READ } from "./nextly-tags";
+
 /** A Next `cacheLife`-style profile: `{ expire: 0 }` means expire immediately. */
 type CacheLifeProfile = string | { expire?: number };
 
@@ -114,8 +116,9 @@ function resolveNextCache(
  * Next.js keeps at most 128 tags on one cached read (`cacheTag`) and drops the
  * rest, so a read that names more than that may carry only its first 128. The
  * limit is per read, not per expiry: a write may expire any number of tags.
+ * Its value is the read side's, so the two can never disagree.
  */
-export const MAX_TAGS_PER_WRITE = 128;
+export const MAX_TAGS_PER_WRITE = MAX_TAGS_PER_READ;
 
 /**
  * What Next.js says when `updateTag` is called anywhere but a Server Action: in

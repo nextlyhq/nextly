@@ -173,5 +173,6 @@
   "UPGRADE_BACKUP_NOT_CONFIRMED": "`nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask.",
   "UPGRADE_CANCELLED": "The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run.",
   "UPGRADE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly upgrade` moves the migration records into.",
+  "WIDGET_GENERATE_CANCELLED": "A prompt of `nextly generate:widget` was cancelled, so it wrote no widget.",
   "WORKFLOW_CANNOT_ATTACH": "A workflow in the configuration is attached to a collection or Single it cannot run on."
 }
