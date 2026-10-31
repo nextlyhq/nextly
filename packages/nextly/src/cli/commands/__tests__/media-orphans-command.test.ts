@@ -32,7 +32,11 @@ vi.mock("../../utils/config-loader", () => ({
   loadConfig: async (options: unknown) => {
     seen.loadConfig.push(options);
     seen.loadedIn.push(process.cwd());
-    return { config: { storage: seen.storage }, configPath: seen.loadedFrom };
+    return {
+      config: { storage: seen.storage },
+      appConfig: {},
+      configPath: seen.loadedFrom,
+    };
   },
 }));
 
@@ -43,26 +47,50 @@ vi.mock("../../utils/adapter", () => ({
     dialect: "sqlite",
     databaseUrl: "file:unused.db",
   }),
-  createCliAdapter: async () => ({
-    getCapabilities: () => ({ dialect: "sqlite" }),
-    // The media table these tests read holds no rows, so the retired sizes
-    // of no item are asked for and this handle is never queried.
-    dialect: "sqlite",
-    getDrizzle: () => ({}),
-    setTableResolver: (resolver: { getTable: (name: string) => unknown }) => {
-      seen.calls.push("setTableResolver");
-      seen.resolver = resolver;
-    },
-    // As the real adapter does: a table with no registered schema is refused.
-    select: async (table: string) => {
-      seen.calls.push(`select ${table}`);
-      if (!seen.resolver?.getTable(table)) {
-        throw new Error(`Table "${table}" not found in schema registry`);
-      }
-      return [];
-    },
-    disconnect: async () => {},
-  }),
+  createCliAdapter: async () => {
+    seen.calls.push("connect");
+    return {
+      getCapabilities: () => ({ dialect: "sqlite" }),
+      // The media table these tests read holds no rows, so the retired sizes
+      // of no item are asked for and this handle is never queried.
+      dialect: "sqlite",
+      getDrizzle: () => ({}),
+      setTableResolver: (resolver: { getTable: (name: string) => unknown }) => {
+        seen.calls.push("setTableResolver");
+        seen.resolver = resolver;
+      },
+      // As the real adapter does: a table with no registered schema is refused.
+      select: async (table: string) => {
+        seen.calls.push(`select ${table}`);
+        if (!seen.resolver?.getTable(table)) {
+          throw new Error(`Table "${table}" not found in schema registry`);
+        }
+        return [];
+      },
+      disconnect: async () => {},
+    };
+  },
+}));
+
+// The rebuild itself is tested in media-usage-record.integration.test.ts;
+// here it only has to say it ran, on the connection the command opened.
+vi.mock("../../../domains/media/usage/reindex-usage", () => ({
+  reindexMediaUsage: async () => {
+    seen.calls.push("reindex");
+    return { documents: 0, rows: 0 };
+  },
+}));
+vi.mock("../../../di/register", () => ({
+  registerServices: async () => {},
+  clearServices: () => {},
+  destroyRegisteredPlugins: async () => {},
+}));
+vi.mock("../../../di", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../di")>()),
+  getService: () => ({}),
+}));
+vi.mock("../../../init/build-service-config", () => ({
+  buildServiceConfig: () => ({}),
 }));
 
 import { createProgram } from "../../program";
@@ -509,5 +537,102 @@ describe("nextly media orphans, as the CLI runs it", () => {
     expect(seen.loadConfig).toEqual([
       { configPath: "src/nextly.config.ts", cwd: dir },
     ]);
+  });
+});
+
+// The rebuild empties the whole record of the database it connects to and
+// writes it again from the collections the config names: a database or a
+// config that is not the project's would leave that database's record
+// describing another project's content. So it runs only as `--apply` does.
+describe("nextly media reindex-usage, as the CLI runs it", () => {
+  const reindex = (...global: string[]) =>
+    createProgram().parseAsync([
+      "node",
+      "nextly",
+      ...global,
+      "media",
+      "reindex-usage",
+    ]);
+
+  it("rebuilds from inside the project --cwd names", async () => {
+    process.chdir(dir);
+
+    await reindex("--cwd", dir);
+
+    expect(exits).toEqual([0]);
+    expect(seen.calls).toEqual(["connect", "setTableResolver", "reindex"]);
+    expect(seen.loadedIn).toEqual([dir]);
+  });
+
+  // The database settings were read where the command ran, before --cwd
+  // named the project: another project's `.env`, the shell or a parent
+  // process, and nothing ties them to this project.
+  it("connects to nothing when run from another project with its own .env", async () => {
+    const elsewhere = path.join(dir, "elsewhere");
+    await mkdir(elsewhere);
+    await writeFile(
+      path.join(elsewhere, ".env"),
+      "DATABASE_URL=file:other.db\n"
+    );
+    process.chdir(elsewhere);
+
+    await reindex("--cwd", dir);
+
+    expect(exits).toEqual([1]);
+    expect(seen.calls).toEqual([]);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("MEDIA_REINDEX_OUTSIDE_PROJECT")
+    );
+  });
+
+  it("connects to nothing when run from another directory, with no .env there", async () => {
+    const elsewhere = path.join(dir, "no-env-here");
+    await mkdir(elsewhere);
+    process.chdir(elsewhere);
+
+    await reindex("--cwd", dir);
+
+    expect(exits).toEqual([1]);
+    expect(seen.calls).toEqual([]);
+  });
+
+  // A config outside the project names another project's collections, read
+  // against this project's database.
+  it("connects to nothing with a config from outside the project", async () => {
+    process.chdir(dir);
+
+    await reindex(
+      "--cwd",
+      dir,
+      "--config",
+      "../other-project/nextly.config.ts"
+    );
+
+    expect(exits).toEqual([1]);
+    expect(seen.calls).toEqual([]);
+    expect(seen.loadConfig).toEqual([]);
+  });
+
+  it("connects to nothing when the discovered config links outside the project", async () => {
+    const other = await mkdtemp(path.join(tmpdir(), "nextly-other-"));
+    await writeFile(
+      path.join(other, "nextly.config.ts"),
+      "export default {};\n"
+    );
+    await symlink(
+      path.join(other, "nextly.config.ts"),
+      path.join(dir, "nextly.config.ts")
+    );
+    seen.loadedFrom = path.join(dir, "nextly.config.ts");
+    process.chdir(dir);
+
+    try {
+      await reindex("--cwd", dir);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
+
+    expect(exits).toEqual([1]);
+    expect(seen.calls).toEqual([]);
   });
 });

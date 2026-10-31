@@ -184,6 +184,54 @@ describe('"You\'re all set", once', () => {
     expect(stored.has("ana:setup-retired")).toBe(false);
   });
 
+  it("never retires over a load nobody has seen through, though the route refuses this reader", async () => {
+    // The route's refusal (a 503 or an outage as much as a 403) withholds the offer only: an
+    // unfinished, failed or unrecorded load stays on the card and holds setup open.
+    for (const run of [
+      { state: "unfinished", startedAt: "2026-10-31T09:30:00.000Z" },
+      {
+        state: "failed",
+        startedAt: "2026-10-31T09:30:00.000Z",
+        failure: "boom",
+      },
+      {
+        state: "unrecorded",
+        startedAt: "2026-10-31T09:30:00.000Z",
+        run: "r1",
+      },
+    ] as const) {
+      steps.mockResolvedValue({
+        known: true,
+        steps: [
+          { kind: "sample", status: "open", run },
+          { kind: "invite", status: "done" },
+        ],
+        done: 1,
+        total: 2,
+      });
+      expect(
+        (await setupCardData(person, now, { sampleRefused: true })).allSet
+      ).toBe(false);
+    }
+    expect(stored.has("ana:setup-retired")).toBe(false);
+  });
+
+  it("never retires over a sample step whose answer could not be read, though the route refuses this reader", async () => {
+    steps.mockResolvedValue({
+      known: true,
+      steps: [
+        { kind: "sample", status: "open", unreadable: true },
+        { kind: "invite", status: "done" },
+      ],
+      done: 1,
+      total: 2,
+    });
+    expect(
+      (await setupCardData(person, now, { sampleRefused: true })).allSet
+    ).toBe(false);
+    expect(stored.has("ana:setup-retired")).toBe(false);
+  });
+
   it("counts a skipped step as done, so a skip can finish setup", async () => {
     await changeSetupState("ana", { skip: { kind: "invite", skipped: true } });
     const card = await setupCardData(person, now);

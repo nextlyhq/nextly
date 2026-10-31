@@ -1,5 +1,5 @@
 /**
- * Cache Components off in every app this CLI touches, until Nextly supports it.
+ * Cache Components off in every app this CLI touches, Nextly's default.
  *
  * A new project's config says so outright. An existing app it adds Nextly to
  * is changed the same way, with a notice: `create-next-app` 16.4 turns Cache
@@ -65,7 +65,7 @@ describe("a new project's Next config", () => {
   it("turns Cache Components off outright, and says why", () => {
     const text = buildNextConfigTemplate(sqlite);
     expect(text).toMatch(/^\s*cacheComponents: false,$/m);
-    expect(text).toMatch(/Nextly does not support Cache Components yet/);
+    expect(text).toMatch(/Off by default in a Nextly app/);
   });
 
   it("is what an existing app with no config gets too", async () => {
@@ -141,7 +141,7 @@ export default nextConfig;
       { path: "next.config.ts", added: ["cacheComponents: false"] },
     ]);
     expect(files.notices?.join("\n")).toMatch(
-      /Turned Cache Components off in next\.config\.ts.*Nextly does not support it yet.*removed partialPrefetching.*nextlyhq\.com\/docs\/getting-started\/installation#cache-components/s
+      /Turned Cache Components off in next\.config\.ts.*Nextly keeps it off by default.*removed partialPrefetching.*nextlyhq\.com\/docs\/getting-started\/installation#cache-components/s
     );
   });
 
@@ -185,12 +185,20 @@ describe("a config whose final setting it cannot see", () => {
 });
 
 describe("the page the notice links", () => {
-  it("is the one nextly's own error links", async () => {
-    const nextly = await readFile(
-      new URL("../../../nextly/src/cache-components.ts", import.meta.url),
+  it("has the section it names, and that section says how to turn it on", async () => {
+    // The docs site serves docs/<path>.mdx at /docs/<path>, and a heading at
+    // its slug.
+    const url = new URL(CACHE_COMPONENTS_DOCS_URL);
+    const page = await readFile(
+      new URL(`../../../..${url.pathname}.mdx`, import.meta.url),
       "utf-8"
     );
-    expect(nextly).toContain(`"${CACHE_COMPONENTS_DOCS_URL}"`);
+    expect(url.hash).toBe("#cache-components");
+    const section = page.split(/^### Cache Components$/m)[1];
+    expect(section, "the Cache Components heading").toBeDefined();
+    expect(section?.split(/^#{2,3} /m)[0]).toContain(
+      "/docs/guides/isr-caching#cache-components"
+    );
   });
 });
 

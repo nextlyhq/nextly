@@ -18,6 +18,7 @@
 
 import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import { authorizationGroups } from "../../auth/entity-read-access";
+import type { SampleContentState } from "../../database/seeders/sample-content";
 import { getService } from "../../di";
 import { isBuilderEnabled } from "../../shared/builder-access";
 
@@ -52,27 +53,52 @@ type StepAnswer = SetupStep | undefined | NotKnown;
 
 /**
  * "Start with sample content": done once anyone loaded or declined it, which
- * is recorded for the whole site. Open only while nobody has answered and the
- * site holds no entry (`dashboard-layout` R-18), so an established site is not
- * offered it. When the site's answer cannot be read, setup is not known as a
- * whole, as for every other check: dropping the step instead could let the
- * remaining steps finish setup and retire the card for good over an outage.
+ * is recorded for the whole site. Open while nobody has answered and the site
+ * holds no entry (`dashboard-layout` R-18), so an established site is not
+ * offered it.
+ *
+ * A load the site started and nobody has seen through keeps the step open
+ * with that load, whatever the site holds since: a load creates entries as it
+ * runs, and its outcome stays until somebody acts on it (R-19), so neither an
+ * unfinished nor a failed run may drop the step and let setup finish over it.
+ *
+ * When the site's answer cannot be read, the step is open with nothing to
+ * offer where the site holds no entry, so "Add your first entry" is shown and
+ * no load; elsewhere setup is not known as a whole, as for every other check:
+ * dropping the step instead could let the remaining steps finish setup and
+ * retire the card for good over an outage.
  *
  * Whether the project provides the route, and whether it would let this
  * reader load, only the route can say: the admin asks it, and drops the step
  * when it refuses.
  */
 async function sampleStep(probe: ConditionProbe): Promise<StepAnswer> {
-  let answered: boolean;
-  try {
-    answered = await probe.sampleAnswered();
-  } catch {
-    return NOT_KNOWN;
+  const state: SampleContentState | undefined = await probe
+    .sampleContent()
+    .catch(() => undefined);
+  if (state?.answer !== undefined) return { kind: "sample", status: "done" };
+  if (state?.run !== undefined) {
+    return { kind: "sample", status: "open", run: state.run };
   }
-  if (answered) return { kind: "sample", status: "done" };
+  return sampleOffer(probe, state !== undefined);
+}
+
+/**
+ * The offer, while nobody has answered and no load stands: open on a site
+ * with no entry, with nothing to offer where the site's answer could not be
+ * read (`readable`), and not offered once there is an entry, unless the
+ * answer could not be read, which makes setup not known.
+ */
+async function sampleOffer(
+  probe: ConditionProbe,
+  readable: boolean
+): Promise<StepAnswer> {
   const content = await probe.hasContent();
   if (content === "unknown") return NOT_KNOWN;
-  return content ? undefined : { kind: "sample", status: "open" };
+  if (content) return readable ? undefined : NOT_KNOWN;
+  return readable
+    ? { kind: "sample", status: "open" }
+    : { kind: "sample", status: "open", unreadable: true };
 }
 
 /**

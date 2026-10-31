@@ -29,7 +29,7 @@ import type {
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
-import { preloadWidgetSettingsSheet } from "../LazyWidgetSettingsSheet";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
   stubDashboardWidth,
   unstubDashboardWidth,

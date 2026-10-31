@@ -33,6 +33,10 @@ import { scopeHoldsSuperAdmin } from "../../auth/authenticated-scope";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../../auth/collection-definition-policy";
 import { authorizationGroups } from "../../auth/entity-read-access";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
+import {
+  readSampleContent,
+  type SampleContentState,
+} from "../../database/seeders/sample-content";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
@@ -133,6 +137,12 @@ export interface ConditionProbe {
    */
   sampleAnswered(): Promise<boolean>;
   /**
+   * The site's answer to sample content, with a load nobody has seen through,
+   * resolved at most once: what `sampleAnswered` is derived from. Rejects when
+   * it cannot be read.
+   */
+  sampleContent(): Promise<SampleContentState>;
+  /**
    * The setup steps offered to this reader, before their skips, resolved at
    * most once. The setup card and the `onboarding:incomplete` condition both
    * read it through `readerSetup`, which applies the reader's skips, so the
@@ -151,7 +161,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let readReleases: Promise<boolean> | undefined;
   let anyRelease: Promise<boolean> | undefined;
   let firstCreatable: Promise<string | undefined> | undefined;
-  let sample: Promise<boolean> | undefined;
+  let sample: Promise<SampleContentState> | undefined;
   let started: Promise<SetupAnswer> | undefined;
 
   const readCollections = (): Promise<RegistryAnswer> => {
@@ -296,8 +306,12 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       );
       return firstCreatable;
     },
-    sampleAnswered: () => {
-      sample ??= sampleIsAnswered();
+    sampleAnswered: () =>
+      probe.sampleContent().then(state => state.answer !== undefined),
+    sampleContent: () => {
+      // Through the container: `meta` lives on the instance, not on the
+      // Direct API's `Nextly`. The site's, so it takes no caller.
+      sample ??= readSampleContent(getService("metaService"));
       return sample;
     },
     setup: () => {
@@ -340,22 +354,4 @@ async function firstCreatableOf(
     }
   }
   return undefined;
-}
-
-/**
- * Whether anyone has accepted or declined the offer of sample content: the two
- * flags the sample-content route and its decline write, either of which
- * settles it.
- *
- * Reached through the container rather than the Direct API: `meta` lives on
- * the INSTANCE, and `requireNextly()` answers with the Direct API's own
- * `Nextly`, a different type of the same name with no meta accessor.
- */
-async function sampleIsAnswered(): Promise<boolean> {
-  const meta = getService("metaService");
-  const [completedAt, skippedAt] = await Promise.all([
-    meta.get<string>("seed.completedAt"),
-    meta.get<string>("seed.skippedAt"),
-  ]);
-  return Boolean(completedAt) || Boolean(skippedAt);
 }

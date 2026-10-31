@@ -100,6 +100,10 @@ export const COMMAND_CODES = defineCodes({
     cause:
       "`nextly media orphans --apply` was run from outside the project `--cwd` names, so the database settings it read may be another project's.",
   },
+  MEDIA_REINDEX_OUTSIDE_PROJECT: {
+    cause:
+      "`nextly media reindex-usage` was run from outside the project `--cwd` names, or given a configuration from outside it, so the database it would rebuild or the content it would read may be another project's.",
+  },
   SETUP_IN_PROGRESS: {
     cause:
       "Another setup holds this install's setup claim, so the command changed nothing.",
@@ -363,6 +367,30 @@ export function mediaApplyOutsideProject(cwd: string): CliError {
     why: `The database settings were read before --cwd named ${cwd}, so they may be another project's.`,
     next: `Run the command from ${cwd} to remove files.`,
   });
+}
+
+/**
+ * `nextly media reindex-usage` from another folder than the one `--cwd`
+ * names, or with a configuration from outside that project.
+ */
+export function mediaReindexOutsideProject(
+  cwd: string,
+  configPath?: string
+): CliError {
+  return new CliError(
+    "MEDIA_REINDEX_OUTSIDE_PROJECT",
+    configPath === undefined
+      ? {
+          what: `Nothing was rebuilt: the command was run from outside ${cwd}.`,
+          why: `The database settings were read before --cwd named ${cwd}, so they may be another project's.`,
+          next: `Run the command from ${cwd} to rebuild its record.`,
+        }
+      : {
+          what: `Nothing was rebuilt: the config ${configPath} is outside ${cwd}.`,
+          why: `${cwd}'s database would be rebuilt from the collections that config names, which may be another project's.`,
+          next: "Run the command from that config's project, or pass a config inside this one.",
+        }
+  );
 }
 
 // ── nextly setup-token and nextly users:create-admin ───────────────────────
