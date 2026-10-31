@@ -198,10 +198,12 @@ export class WidgetLayoutService extends BaseService {
     // Whether this write is a reader taking charge of the arrangement. The
     // caller resolves it -- including keeping an arranged row arranged -- and
     // this only records the answer; see `layoutIsArranged`.
-    arranged = true
+    arranged = true,
+    // The cards of an unarranged row whose size the reader chose; see `StoredLayout.sized`.
+    sized: readonly string[] = []
   ): Promise<number> {
     const id = layoutRowId(kind, scopeId);
-    const layout = serializeLayout(placements, arranged);
+    const layout = serializeLayout(placements, arranged, sized);
     const now = new Date();
 
     if (expectedVersion === NO_STORED_LAYOUT_VERSION) {
