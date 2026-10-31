@@ -1,12 +1,18 @@
 /**
- * Leaving an edited entry, opening another and coming back: only the page on
+ * Leaving an edited entry, opening another and coming back: only the entry on
  * screen decides what navigation does.
  *
- * Under Cache Components Next.js keeps a visited admin page mounted but hidden,
- * with its state. The entry left behind still holds its unsaved-changes guard,
- * which patches `history` while its form is dirty. Hidden, it must not ask about
- * leaving the entry on screen, nor keep the work it was told to discard; shown
- * again, it must show the entry as saved.
+ * The entry left behind held an unsaved-changes guard, which patches `history`
+ * while its form is dirty. Once left, it must not ask about leaving the entry
+ * on screen, nor keep the work it was told to discard; opened again, it must
+ * show the entry as saved.
+ *
+ * Moving between entries stays inside the admin's one Next.js route, where the
+ * admin's own router swaps the screen, so the entry left behind is unmounted
+ * here rather than kept hidden by Cache Components. What this covers is that
+ * the guard and the edits belong to the open entry alone, in both modes. The
+ * guard's order against Next.js's own router under Cache Components is the
+ * admin package's `hooks/__tests__/useUnsavedChanges.navigate.test.tsx`.
  */
 import { expect, type Page } from "@playwright/test";
 
