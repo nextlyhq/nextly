@@ -376,9 +376,10 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       await user.click(
         within(popover).getByRole("button", { name: "More settings" })
       );
-      const sheet = await screen.findByRole("dialog", {
-        name: "Notes settings",
-      });
+      // The sheet's panel opens at once and says it is loading until its code
+      // arrives, so wait for the form's field before reading the sheet.
+      await screen.findByLabelText(/Heading/);
+      const sheet = screen.getByRole("dialog", { name: "Notes settings" });
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
       await user.click(within(sheet).getByRole("button", { name: "Done" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

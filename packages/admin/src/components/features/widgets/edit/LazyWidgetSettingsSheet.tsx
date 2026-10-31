@@ -15,6 +15,13 @@
  * @module components/features/widgets/edit/LazyWidgetSettingsSheet
  */
 
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@nextlyhq/ui";
 import { lazy, Suspense, type JSX } from "react";
 
 import type { WidgetSettingsSheetProps } from "./WidgetSettingsSheet";
@@ -45,12 +52,70 @@ export const settingsIntent = {
   onFocus: preloadWidgetSettingsSheet,
 } as const;
 
-/** {@link WidgetSettingsSheet}, drawn once its code has arrived; nothing before that. */
+/**
+ * The sheet as it stands while its code is still arriving: the same panel and
+ * heading, saying it is loading. Opening can outrun the preload (a tap, or a
+ * screen reader's activation, gives it little or no lead), and the menu and
+ * popover that open the sheet close themselves without handing focus back, so
+ * without a panel here focus would fall to the page and the action would seem
+ * lost. The sheet takes focus into itself as it opens, and the status says why
+ * the form is not there yet. `Sheet` is already part of the shell, so this
+ * adds nothing to what every page loads.
+ */
+function SheetLoading({
+  open,
+  onOpenChange,
+  title,
+  renderPreview,
+}: Pick<
+  WidgetSettingsSheetProps,
+  "open" | "onOpenChange" | "title" | "renderPreview"
+>): JSX.Element {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        aria-busy="true"
+        // The loaded sheet's width, so the panel does not jump once the form arrives.
+        className={
+          renderPreview
+            ? "flex w-full flex-col overflow-hidden sm:max-w-md lg:max-w-4xl"
+            : "flex w-full flex-col overflow-hidden sm:max-w-md"
+        }
+      >
+        <SheetHeader>
+          <SheetTitle>{title} settings</SheetTitle>
+          <SheetDescription>
+            These apply to this card only. Another copy of the same widget keeps
+            its own.
+          </SheetDescription>
+        </SheetHeader>
+        <p role="status" className="px-4 text-sm text-muted-foreground">
+          Loading settings…
+        </p>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * {@link WidgetSettingsSheet} once its code has arrived, and {@link SheetLoading}
+ * in its place until then.
+ */
 export function LazyWidgetSettingsSheet(
   props: WidgetSettingsSheetProps
 ): JSX.Element {
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={
+        <SheetLoading
+          open={props.open}
+          onOpenChange={props.onOpenChange}
+          title={props.title}
+          renderPreview={props.renderPreview}
+        />
+      }
+    >
       <WidgetSettingsSheet {...props} />
     </Suspense>
   );
