@@ -260,6 +260,15 @@ export function sizeAxes(
   return axes.filter(axis => axis.choices.length > 1);
 }
 
+/**
+ * How Remove is drawn in a card's menu, at rest and while customising: in the destructive colour,
+ * highlighted or not, as the one item that takes something away. The deeper shade in light mode,
+ * where the reference red is under 4.5:1 on the menu's surface; the reference red in dark mode,
+ * where the deeper shade is the one that falls short.
+ */
+export const REMOVE_ITEM_CLASS =
+  "text-destructive-700 data-[highlighted]:text-destructive-700 dark:text-destructive dark:data-[highlighted]:text-destructive";
+
 export function CardActionsMenu({
   title,
   size,
@@ -344,9 +353,7 @@ export function CardActionsMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={handled(on.remove)}
-          // The destructive token, highlighted or not: the one item here that
-          // takes something away.
-          className="text-destructive data-[highlighted]:text-destructive"
+          className={REMOVE_ITEM_CLASS}
           data-testid="card-remove"
         >
           <Trash2 aria-hidden className="size-4" />
