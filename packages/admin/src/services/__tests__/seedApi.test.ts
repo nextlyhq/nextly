@@ -92,6 +92,44 @@ describe("seedApi", () => {
       }
     );
 
+    it("refreshes an expired session before reading a 401 as a refusal, and offers once it answers", async () => {
+      // A HEAD's 401 has no body to say the token expired: the probe refreshes, then asks again.
+      const calls: string[] = [];
+      let heads = 0;
+      global.fetch = vi.fn(
+        async (url: RequestInfo | URL, init?: RequestInit) => {
+          const method = init?.method ?? "GET";
+          calls.push(`${method} ${String(url).replace(/^.*\/admin\/api/, "")}`);
+          if (method === "HEAD") {
+            heads += 1;
+            return new Response(null, {
+              status: heads === 1 ? 401 : 200,
+              headers: { "x-nextly-seed-template": "blog" },
+            });
+          }
+          return new Response(null, { status: 200 });
+        }
+      ) as unknown as typeof fetch;
+      expect(await seedApi.probe()).toMatchObject({ available: true });
+      expect(calls).toEqual(["HEAD /seed", "POST /auth/refresh", "HEAD /seed"]);
+    });
+
+    it.each([
+      [401, {}],
+      [500, { unknown: true }],
+    ])(
+      "reads a 401 as refused only once the refresh is refused too (refresh %i)",
+      async (refreshStatus, extra) => {
+        global.fetch = vi.fn(
+          async (_url: RequestInfo | URL, init?: RequestInit) =>
+            init?.method === "HEAD"
+              ? new Response(null, { status: 401 })
+              : new Response(null, { status: refreshStatus })
+        ) as unknown as typeof fetch;
+        expect(await seedApi.probe()).toEqual({ available: false, ...extra });
+      }
+    );
+
     it("falls back to 'unknown'/'Template' if headers missing", async () => {
       global.fetch = vi.fn(
         async () => new Response(null, { status: 200 })

@@ -386,23 +386,41 @@ async function recordLoaded(
       finishedAt: now().toISOString(),
     });
   }
+  // Stamped only where no row holds it, then read back: two records of the
+  // same load at once both find it recorded, whichever wrote it, and a write
+  // that failed on the other's row is no failure.
+  let failed: unknown;
   try {
-    await store.set(SAMPLE_LOADED_KEY, now().toISOString());
-    return { recorded: true };
+    await store.insertIfAbsent(SAMPLE_LOADED_KEY, now().toISOString());
   } catch (error) {
-    return {
-      recorded: false,
-      failure: publicFailure(error, "sample-content-unrecorded", RECORD_FAILED),
-    };
+    failed = error;
   }
+  const stamped = await store
+    .getEntry(SAMPLE_LOADED_KEY)
+    .catch((): { present: false } => ({ present: false }));
+  if (holds(stamped)) return { recorded: true };
+  return {
+    recorded: false,
+    failure: publicFailure(
+      failed ?? "seed.completedAt was not written",
+      "sample-content-unrecorded",
+      RECORD_FAILED
+    ),
+  };
 }
 
-/** A start refused after this request's claim lost to someone else's. */
+/**
+ * A start refused after this request's claim lost to someone else's, saying
+ * why from the winner's answer as it reads now, through the same decision a
+ * start is refused by: still loading, failed (confirm to load again), loaded
+ * but not recorded (record it), or answered. A winner that left nothing to
+ * refuse on is still the reason this one did not start: a load in progress.
+ */
 async function lostClaim(store: SampleContentStore): Promise<SampleRefusal> {
   const state = await readSampleContent(store);
   return {
     outcome: "refused",
-    reason: state.answer !== undefined ? "answered" : "in-progress",
+    reason: blocked(state, false) ?? "in-progress",
     state,
   };
 }

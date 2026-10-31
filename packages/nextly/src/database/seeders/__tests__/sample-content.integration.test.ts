@@ -325,12 +325,13 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a load whose record failed on its own, without loading again", async () => {
       const h = await boot(dialect);
-      const realSet = h.meta.set.bind(h.meta);
+      // The site-wide record is stamped where absent: that write fails, once.
+      const realInsert = h.meta.insertIfAbsent.bind(h.meta);
       const once = vi
-        .spyOn(h.meta, "set")
+        .spyOn(h.meta, "insertIfAbsent")
         .mockImplementation(async (key, value) => {
           if (key === SAMPLE_LOADED_KEY) throw new Error("disk full");
-          return realSet(key, value);
+          return realInsert(key, value);
         });
       let loads = 0;
       const load = async () => {
@@ -363,6 +364,15 @@ describe.each(getConfiguredTestDialects())(
         (await putSetup(h.ownerId, { sample: { record: "someone-else" } }))
           .status
       ).toBe(409);
+      // Two records of the same load at once, from two sessions: both answer recorded, whichever
+      // stamp won, and neither fails on the other's row.
+      const [first, second] = await Promise.all([
+        putSetup(h.ownerId, { sample: { record: body.run } }, 1),
+        putSetup(h.ownerId, { sample: { record: body.run } }, 2),
+      ]);
+      expect([first.status, second.status]).toEqual([200, 200]);
+      expect(await h.meta.get(SAMPLE_LOADED_KEY)).toEqual(expect.any(String));
+      // Recording it again answers that it is recorded.
       const recorded = await putSetup(h.ownerId, {
         sample: { record: body.run },
       });

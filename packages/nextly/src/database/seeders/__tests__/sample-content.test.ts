@@ -21,6 +21,7 @@ function memoryStore(): SampleContentStore & {
   rows: Map<string, unknown>;
   failSet: Set<string>;
   failReads: boolean;
+  duplicateThrows: boolean;
 } {
   const rows = new Map<string, unknown>();
   const failSet = new Set<string>();
@@ -28,6 +29,7 @@ function memoryStore(): SampleContentStore & {
     rows,
     failSet,
     failReads: false,
+    duplicateThrows: false,
     async getEntry<T>(key: string) {
       if (store.failReads) throw new Error("meta down");
       return rows.has(key)
@@ -35,6 +37,13 @@ function memoryStore(): SampleContentStore & {
         : { present: false as const };
     },
     async insertIfAbsent(key: string, value: unknown) {
+      if (failSet.has(key)) throw new Error(`cannot write ${key}`);
+      // As a driver answers a second insert of one key that its conflict clause did not catch.
+      if (store.duplicateThrows && rows.has(key)) {
+        throw new Error(
+          `duplicate key value violates unique constraint on ${key}`
+        );
+      }
       if (!rows.has(key)) rows.set(key, structuredClone(value));
     },
     async compareAndSet(key: string, expected: unknown, next: unknown) {
@@ -257,6 +266,43 @@ describe("the site's answer after many loads", () => {
     expect(store.rows.get("seed.current")).toMatchObject({ generation: 13 });
   });
 
+  it("tells a start that lost its claim why, from the winner's answer as it reads now", async () => {
+    // Both read "nobody started"; the winner's load fails before the loser's claim lands, so the
+    // loser is told to confirm, as a start after a failure is, never that a load is running.
+    const store = memoryStore();
+    const realGet = store.getEntry.bind(store);
+    const realInsert = store.insertIfAbsent.bind(store);
+    let reads = 0;
+    let release: () => void = () => undefined;
+    const bothRead = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    store.getEntry = async <T>(key: string) => {
+      const entry = await realGet<T>(key);
+      if (key === "seed.current" && reads < 2) {
+        reads += 1;
+        if (reads === 2) release();
+        await bothRead;
+      }
+      return entry;
+    };
+    let winner: Promise<unknown> | undefined;
+    let inserts = 0;
+    store.insertIfAbsent = async (key: string, value: unknown) => {
+      inserts += 1;
+      // The second claim lands only once the first start has finished.
+      if (key === "seed.current" && inserts === 2) await winner;
+      return realInsert(key, value);
+    };
+    const failing = async () => {
+      throw new Error("boom");
+    };
+    winner = startSampleContent(store, { by: "a", load: failing });
+    const loser = await startSampleContent(store, { by: "b", load: failing });
+    expect(await winner).toMatchObject({ outcome: "failed" });
+    expect(loser).toMatchObject({ outcome: "refused", reason: "confirm" });
+  });
+
   it("lets a confirmed load claim over a failure only from the failure it read", async () => {
     // Two confirmed starts over one failure: both read it, one moves it, the other is refused.
     const store = memoryStore();
@@ -309,6 +355,18 @@ describe("recording a load on its own", () => {
     });
     expect(load).toHaveBeenCalledTimes(1);
     expect(await readSampleContent(store)).toMatchObject({ answer: "loaded" });
+  });
+
+  it("answers recorded to both of two records of the same load at once, though one's write lost", async () => {
+    const { store, load, run } = await unrecorded();
+    store.duplicateThrows = true;
+    const [one, two] = await Promise.all([
+      recordSampleContent(store, { run }),
+      recordSampleContent(store, { run }),
+    ]);
+    expect(one).toEqual({ outcome: "loaded" });
+    expect(two).toEqual({ outcome: "loaded" });
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a run that is not the one waiting, and says when recording fails again", async () => {

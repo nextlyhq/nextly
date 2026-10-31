@@ -18,6 +18,7 @@
 
 import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import { refreshAccessToken } from "@admin/lib/api/refreshInterceptor";
 import type { MutationResponse } from "@admin/lib/api/response-types";
 
 /**
@@ -56,13 +57,35 @@ type SampleStartAnswer =
 const PROBE_PATH = "/admin/api/seed";
 const SEED_PATH = "/seed";
 
+/** The probe itself: a HEAD, which carries no body to say why it was refused. */
+function headProbe(): Promise<Response> {
+  return fetch(PROBE_PATH, { method: "HEAD", credentials: "include" });
+}
+
+/**
+ * The probe's answer, after the admin's own session refresh where it was
+ * refused for want of a session. A HEAD's 401 has no body, so the client's
+ * interceptor cannot tell an expired access token from no session: the probe
+ * asks for a refresh itself (the one in flight, if any), and asks again once
+ * it lands. Only a 401 after that is a refusal; a refresh that could not be
+ * made is not known.
+ */
+async function answeredProbe(): Promise<Response | "unknown"> {
+  const first = await headProbe();
+  if (first.status !== 401) return first;
+  const refreshed = await refreshAccessToken();
+  if (refreshed === "transient") return "unknown";
+  return refreshed === "ok" ? headProbe() : first;
+}
+
 async function probe(): Promise<SeedProbeResult> {
-  let res: Response;
+  let res: Response | "unknown";
   try {
-    res = await fetch(PROBE_PATH, { method: "HEAD", credentials: "include" });
+    res = await answeredProbe();
   } catch {
     return { available: false, unknown: true };
   }
+  if (res === "unknown") return { available: false, unknown: true };
   // Offered only on a 2xx, because "available" means THIS person may load
   // sample content. The route answers the probe with the authorization its
   // POST enforces -- 401 without a session, 403 for anyone it refuses -- and

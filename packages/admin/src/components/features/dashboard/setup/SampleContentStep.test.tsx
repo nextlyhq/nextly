@@ -94,9 +94,13 @@ function route(
   ...starts: Array<() => Response | Promise<Response>>
 ) {
   const posts: unknown[] = [];
-  global.fetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+  global.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "HEAD") return probe();
-    throw new Error("only the probe is asked with fetch");
+    // The session refresh the probe asks for after a 401: it lands.
+    if (String(url).endsWith("/auth/refresh")) {
+      return new Response(null, { status: 200 });
+    }
+    throw new Error("only the probe and its refresh are asked with fetch");
   }) as unknown as typeof fetch;
   post.mockImplementation(async (_path: string, body: unknown) => {
     posts.push(body);
@@ -256,6 +260,21 @@ describe("who is offered sample content", () => {
       );
     }
   );
+
+  it("offers the load after an expired session is refreshed, and never retires over the 401", async () => {
+    // The first probe's access token had expired; refreshed, the second answers 200.
+    const answers = [() => new Response(null, { status: 401 }), allowed];
+    route(() => (answers.shift() ?? allowed)());
+    render(card(dataOf(OPEN, { kind: "entry", status: "done" })));
+    expect(
+      await within(sampleTile()!).findByRole("button", { name: "Load" })
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("setup-all-set")).toBeNull();
+    expect(put).not.toHaveBeenCalledWith(
+      "/dashboard/setup",
+      expect.objectContaining({ retire: expect.anything() })
+    );
+  });
 
   it("never retires over a probe that could not say, and offers the load once it answers yes", async () => {
     // A 503 first, then a 200: the route was starting.
