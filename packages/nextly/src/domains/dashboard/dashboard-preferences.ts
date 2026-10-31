@@ -75,20 +75,38 @@ export class DashboardPreferences {
     userId: string,
     key: DashboardPreferenceKey
   ): Promise<string | undefined> {
-    if (!(await this.present())) return undefined;
-    const [row] = await this.db.select<{ value: string }>(
+    return (await this.getMany(userId, [key])).get(key);
+  }
+
+  /**
+   * `userId`'s values for `keys`, in ONE query: each key that is set, and none where it is unset
+   * or the table is not kept yet. A feature that remembers several keys (the setup card's) reads
+   * them together, rather than one select and one presence check per key.
+   */
+  async getMany<K extends DashboardPreferenceKey>(
+    userId: string,
+    keys: readonly K[]
+  ): Promise<Map<K, string>> {
+    const values = new Map<K, string>();
+    if (keys.length === 0 || !(await this.present())) return values;
+    const rows = await this.db.select<{ key: string; value: string }>(
       DASHBOARD_PREFERENCES_TABLE,
       {
         where: {
           and: [
             { column: "userId", op: "=", value: userId },
-            { column: "key", op: "=", value: key },
+            { column: "key", op: "IN", value: [...keys] },
           ],
         },
-        columns: ["value"],
+        columns: ["key", "value"],
       }
     );
-    return row?.value;
+    // Only the keys asked for, whatever the database answers.
+    const asked = new Set<string>(keys);
+    for (const row of rows) {
+      if (asked.has(row.key)) values.set(row.key as K, row.value);
+    }
+    return values;
   }
 
   /**

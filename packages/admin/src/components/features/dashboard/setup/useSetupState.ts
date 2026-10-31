@@ -42,8 +42,11 @@ interface WriteOutcome {
 }
 
 export interface SetupStateWrite {
-  /** Collapses or expands the card; `onFailed` runs when the write fails. */
-  setCollapsed: (collapsed: boolean, onFailed?: OnFailed) => void;
+  /**
+   * Collapses or expands the card; `onDone` runs once the write lands (the card's data is asked
+   * for again then), `onFailed` when it fails.
+   */
+  setCollapsed: (collapsed: boolean, outcome?: WriteOutcome) => void;
   dismiss: () => void;
   setSkipped: (kind: SkippableSetupStepKind, skipped: boolean) => void;
   /**
@@ -89,8 +92,8 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     [mutate]
   );
   const setCollapsed = useCallback(
-    (collapsed: boolean, onFailed?: OnFailed) =>
-      send({ collapsed }, onFailed === undefined ? {} : { onFailed }),
+    (collapsed: boolean, outcome?: WriteOutcome) =>
+      send({ collapsed }, outcome),
     [send]
   );
   const dismiss = useCallback(() => mutate({ dismissed: true }), [mutate]);

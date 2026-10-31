@@ -79,6 +79,7 @@ import {
   type CardFooterClaims,
   type FooterClaimRank,
 } from "./frame/footer-slot";
+import { CardHeaderSlotProvider } from "./frame/header-slot";
 import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
@@ -259,15 +260,16 @@ function bodyClassName(
     FRAME_BODY_GAP.className,
     refreshing && "opacity-60 transition-opacity",
     customizing && answering && "opacity-55",
-    // Collapsed to one line, the header is kept for assistive technology only: no gap under it.
+    // Collapsed to one line, the header is the whole card: no gap under it.
     collapsed && "pt-0"
   );
 }
 
 /**
- * Whether the card is drawn collapsed by its body to one line (`frame/collapse`): the body's line
- * is then the whole card, so the header is kept for assistive technology only, with no gap under
- * it and no footer. Never in customise mode, where the card's stored size is what is edited.
+ * Whether the card is drawn collapsed by its body to one line (`frame/collapse`): the header is
+ * then the whole card, its title, its count and the body's controls (`frame/header-slot`) beside
+ * its menu, with no gap under it and no footer. Never in customise mode, where the card's stored
+ * size is what is edited.
  */
 function useDrawnCollapsed(customizing: boolean): boolean {
   const collapsed = useFrameCollapsed();
@@ -286,8 +288,8 @@ function presentWhile(holds: boolean): "" | undefined {
 
 /**
  * What the body is handed while it is drawn: where it reports its state, its count beside the
- * title, its line beneath it and what it has for the footer. Nothing while the frame draws a
- * state of its own.
+ * title, its line beneath it, what it has for the footer and its controls for the header. Nothing
+ * while the frame draws a state of its own.
  */
 function BodyProviders({
   drawn,
@@ -295,6 +297,7 @@ function BodyProviders({
   setTitleCount,
   setSubtitle,
   footerSlot,
+  headerSlot,
   claims,
   children,
 }: {
@@ -303,6 +306,7 @@ function BodyProviders({
   setTitleCount: (count: TitleCount | undefined) => void;
   setSubtitle: (subtitle: string | undefined) => void;
   footerSlot: HTMLElement | null;
+  headerSlot: HTMLElement | null;
   claims: CardFooterClaims;
   children: ReactNode;
 }) {
@@ -311,15 +315,17 @@ function BodyProviders({
     <CardStateReportProvider value={report}>
       <CardTitleCountContext.Provider value={setTitleCount}>
         <CardSubtitleContext.Provider value={setSubtitle}>
-          <CardFooterSlotProvider value={footerSlot}>
-            <CardFooterClaimProvider value={claims}>
-              {/* A card drawn inside this one is not the cell's card: it reports
+          <CardHeaderSlotProvider value={headerSlot}>
+            <CardFooterSlotProvider value={footerSlot}>
+              <CardFooterClaimProvider value={claims}>
+                {/* A card drawn inside this one is not the cell's card: it reports
                   nothing in its place. */}
-              <CardHiddenReportContext.Provider value={undefined}>
-                {children}
-              </CardHiddenReportContext.Provider>
-            </CardFooterClaimProvider>
-          </CardFooterSlotProvider>
+                <CardHiddenReportContext.Provider value={undefined}>
+                  {children}
+                </CardHiddenReportContext.Provider>
+              </CardFooterClaimProvider>
+            </CardFooterSlotProvider>
+          </CardHeaderSlotProvider>
         </CardSubtitleContext.Provider>
       </CardTitleCountContext.Provider>
     </CardStateReportProvider>
@@ -403,6 +409,8 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [reported, setReported] = useState<CardState | null>(null);
   // The footer's element, once mounted: where a body draws what it has for the footer.
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
+  // The header's slot, once mounted: where a body draws its controls for the whole card.
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
   // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
@@ -464,8 +472,9 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 quick={props.quick}
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
-                collapsed={collapsed}
                 titleTrigger={props.titleTrigger}
+                // Offered at rest only: in customise mode the body is out of reach.
+                headerSlotRef={customizing ? undefined : setHeaderSlot}
               />
 
               <CardContent
@@ -493,6 +502,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                   setTitleCount={setTitleCount}
                   setSubtitle={setBodySubtitle}
                   footerSlot={footerSlot}
+                  headerSlot={headerSlot}
                   claims={footer.claims}
                 >
                   {props.children}
@@ -681,7 +691,8 @@ function CardTitle({
  * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
  * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
  * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`). The quick control and the menu sit at the right end, always in that order,
- * so the menu is in the same place on every card.
+ * so the menu is in the same place on every card. A body's own controls for the whole card
+ * (`frame/header-slot`) come just before them, one header line high.
  */
 function WidgetCardHeader({
   titleId,
@@ -694,8 +705,8 @@ function WidgetCardHeader({
   quick,
   quickInert,
   headerAction,
-  collapsed,
   titleTrigger,
+  headerSlotRef,
 }: {
   titleId: string;
   subtitleId: string;
@@ -709,9 +720,9 @@ function WidgetCardHeader({
   quick?: ReactNode;
   quickInert: boolean;
   headerAction?: ReactNode;
-  /** Kept for assistive technology only: the body's one line names the card on screen. */
-  collapsed: boolean;
   titleTrigger?: WidgetCardProps["titleTrigger"];
+  /** Registers the slot a body draws its card controls into; absent, no slot is drawn. */
+  headerSlotRef?: ((element: HTMLElement | null) => void) | undefined;
 }) {
   const subtitle = givenSubtitle || bodySubtitle;
   return (
@@ -719,7 +730,7 @@ function WidgetCardHeader({
       // No rule under the header: a divider is the difference between a card and a panel.
       noBorder
       data-testid="widget-card-header"
-      className={headerClassName(collapsed)}
+      className={headerClassName()}
     >
       {leading && <span className="-ml-2 shrink-0">{leading}</span>}
       <div className="min-w-0 flex-1">
@@ -745,6 +756,41 @@ function WidgetCardHeader({
           </p>
         )}
       </div>
+      <HeaderControls
+        slotRef={headerSlotRef}
+        quick={quick}
+        quickInert={quickInert}
+        headerAction={headerAction}
+      />
+    </CardHeader>
+  );
+}
+
+/**
+ * The header's right end, always in this order: the body's own controls (`frame/header-slot`),
+ * the card's one quick control, then its menu, so the menu is in the same place on every card.
+ */
+function HeaderControls({
+  slotRef,
+  quick,
+  quickInert,
+  headerAction,
+}: {
+  slotRef: ((element: HTMLElement | null) => void) | undefined;
+  quick: ReactNode;
+  quickInert: boolean;
+  headerAction: ReactNode;
+}) {
+  return (
+    <>
+      {slotRef && (
+        // Hidden while empty, so a card whose body draws nothing here keeps its header as it was.
+        <span
+          ref={slotRef}
+          className="flex shrink-0 items-center gap-1 empty:hidden"
+          data-testid="widget-card-header-slot"
+        />
+      )}
       {quick && (
         <span
           className="shrink-0"
@@ -755,16 +801,18 @@ function WidgetCardHeader({
         </span>
       )}
       {headerAction && <span className="shrink-0">{headerAction}</span>}
-    </CardHeader>
+    </>
   );
 }
 
-/** The header's classes: kept for assistive technology only while the card is collapsed. */
-function headerClassName(collapsed: boolean): string {
+/**
+ * The header's classes: the same in every state, so a collapsed card's one line is its header as
+ * drawn, every control in it visible and in reach, never one hidden yet focusable.
+ */
+function headerClassName(): string {
   return cn(
     FRAME_HEADER.className,
-    "shrink-0 flex-row items-center gap-2 space-y-0 p-0",
-    collapsed && "sr-only"
+    "shrink-0 flex-row items-center gap-2 space-y-0 p-0"
   );
 }
 
