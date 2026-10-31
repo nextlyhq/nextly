@@ -16,7 +16,14 @@ import { BoundedEntries } from "../bounded-entries";
 import IncrementalHandler from "../incremental-cache-handler";
 import type { TagExpiries, TagExpiryLedger } from "../tag-expiry-ledger";
 import { LEDGER_RETENTION_MS } from "../tag-expiry-ledger";
-import { publishTagExpiryLedger, TAG_LOOKUP_TTL_MS } from "../tag-expiry-view";
+import {
+  expireTags,
+  isEntryExpired,
+  localNow,
+  publishTagExpiryLedger,
+  refreshTagExpiries,
+  TAG_LOOKUP_TTL_MS,
+} from "../tag-expiry-view";
 import useCacheHandler from "../use-cache-handler";
 
 const T0 = Date.UTC(2026, 9, 30, 12, 0, 0);
@@ -39,7 +46,7 @@ function memoryLedger(skewMs = 0) {
   const ledger: TagExpiryLedger = {
     record: async tags => {
       for (const tag of tags) rows.set(tag, now());
-      return true;
+      return new Map(tags.map(tag => [tag, rows.get(tag) ?? 0] as const));
     },
     expiriesOf,
     prune: async () => 0,
@@ -373,7 +380,7 @@ describe("the incremental cache handler", () => {
       throw new Error("connection refused");
     });
     publishTagExpiryLedger({
-      record: async () => true,
+      record: async () => new Map(),
       expiriesOf,
       prune: async () => 0,
     });
@@ -389,6 +396,55 @@ describe("the incremental cache handler", () => {
     expect(warn.mock.calls[0][0]).toMatchObject({
       kind: "cache-tag-ledger-unreachable",
     });
+  });
+});
+
+describe("the writer's own expiry", () => {
+  it("is not judged again by the ledger time its record stored a round trip later", async () => {
+    // The database runs 50 ms ahead and the record takes 50 ms to commit, so
+    // the stored time is after an entry this process began meanwhile.
+    const rows = new Map<string, number>();
+    const ahead = 50;
+    publishTagExpiryLedger({
+      record: async tags => {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        for (const tag of tags) rows.set(tag, Date.now() + ahead + 1000);
+        return new Map(tags.map(tag => [tag, rows.get(tag) ?? 0] as const));
+      },
+      expiriesOf: async tags => ({
+        now: Date.now() + ahead,
+        expired: new Map(
+          tags.flatMap(tag => {
+            const at = rows.get(tag);
+            return at === undefined ? [] : [[tag, at] as const];
+          })
+        ),
+      }),
+      prune: async () => 0,
+    });
+
+    const recording = expireTags(["t"]);
+    await vi.advanceTimersByTimeAsync(10);
+    const begunAt = localNow();
+    await vi.advanceTimersByTimeAsync(40);
+    await recording;
+
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await refreshTagExpiries(["t"]);
+    expect(isEntryExpired(["t"], begunAt)).toBe(false);
+  });
+
+  it("still judges another instance's later expiry of the same tag", async () => {
+    const { ledger, recordElsewhere } = memoryLedger();
+    publishTagExpiryLedger(ledger);
+    await expireTags(["t"]);
+    vi.advanceTimersByTime(10);
+    const begunAt = localNow();
+    vi.advanceTimersByTime(10);
+    recordElsewhere("t");
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await refreshTagExpiries(["t"]);
+    expect(isEntryExpired(["t"], begunAt)).toBe(true);
   });
 });
 

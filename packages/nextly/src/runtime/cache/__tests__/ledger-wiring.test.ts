@@ -76,7 +76,7 @@ afterEach(() => {
 
 describe("the ledger's expiry hand-off", () => {
   it("records the tags and expires them in this process at once", async () => {
-    const ledger = ledgerThat(async () => true);
+    const ledger = ledgerThat(async () => new Map());
     publishTagExpiryLedger(ledger);
     const handler = new IncrementalHandler();
     await handler.set("k", { kind: "FETCH", data: 1 }, { tags: ["posts"] });

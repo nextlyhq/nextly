@@ -15,6 +15,7 @@ import {
 import { cacheTagExpiriesTables } from "../../../schemas/cache-tag-expiries";
 import {
   createTagExpiryLedger,
+  TAG_EXPIRY_GRACE_MS,
   type TagExpiryLedger,
 } from "../tag-expiry-ledger";
 
@@ -51,7 +52,11 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
     const before = await ledger.expiriesOf(["posts"]);
     expect(before?.expired.size).toBe(0);
 
-    expect(await ledger.record(["posts", "posts:hello", "posts"])).toBe(true);
+    const stored = await ledger.record(["posts", "posts:hello", "posts"]);
+    expect([...(stored || new Map()).keys()].sort()).toEqual([
+      "posts",
+      "posts:hello",
+    ]);
     const after = await ledger.expiriesOf(["posts", "posts:hello", "never"]);
 
     expect([...(after?.expired.keys() ?? [])].sort()).toEqual([
@@ -59,7 +64,12 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
       "posts:hello",
     ]);
     expect(Number.isFinite(after?.now)).toBe(true);
-    expect(after?.expired.get("posts")).toBeLessThanOrEqual(after?.now ?? -1);
+    // Graced: a recorded expiry stands up to TAG_EXPIRY_GRACE_MS past the
+    // database's time, and what the record resolved is what was stored.
+    expect(after?.expired.get("posts")).toBeLessThanOrEqual(
+      (after?.now ?? -1) + TAG_EXPIRY_GRACE_MS
+    );
+    expect(after?.expired.get("posts")).toBe(stored ? stored.get("posts") : -1);
     expect(await rowCount()).toBe(2);
   });
 

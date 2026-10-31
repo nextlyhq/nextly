@@ -8,7 +8,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setNextlyLogger } from "../../observability/logger";
-import { LedgerExpiryHandoff } from "../../runtime/cache/ledger-wiring";
+import {
+  installTagExpiryLedger,
+  LedgerExpiryHandoff,
+  withdrawTagExpiryLedger,
+} from "../../runtime/cache/ledger-wiring";
 import { HANDOFF_TIMEOUT_MS } from "../../runtime/cache/next-cache-revalidator";
 import type { TagExpiryLedger } from "../../runtime/cache/tag-expiry-ledger";
 import { publishTagExpiryLedger } from "../../runtime/cache/tag-expiry-view";
@@ -32,6 +36,7 @@ beforeEach(() => {
     "__nextly_tag_expiry_view",
     "__nextly_expiry_handoff",
     "__nextly_expiry_fallback",
+    "__nextly_tag_ledger_withdrawn",
   ]) {
     delete (globalThis as Record<string, unknown>)[key];
   }
@@ -50,7 +55,7 @@ describe("the revalidator outside Next.js", () => {
     let refusing = true;
     const ledger = ledgerThat(async () => {
       if (refusing) throw new Error("connection reset");
-      return true;
+      return new Map();
     });
     setExpiryHandoff(new LedgerExpiryHandoff());
     const revalidator = new HandOffRevalidator();
@@ -77,8 +82,28 @@ describe("the revalidator outside Next.js", () => {
     expect(takePendingExpiries()).toEqual(["posts"]);
   });
 
+  it("keeps a write made between a release and the next registration for the next ledger", async () => {
+    // A database that has not run the migration: the ledger's hand-off then
+    // keeps what it is given for the next flush, which makes the hand-over
+    // visible without a real database.
+    const adapter = {
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      tableExists: async () => false,
+      getDrizzle: () => {
+        throw new Error("a statement reached the missing table");
+      },
+    } as never;
+    installTagExpiryLedger(adapter);
+    withdrawTagExpiryLedger();
+
+    await new HandOffRevalidator().flush(write("posts"));
+    installTagExpiryLedger(adapter);
+
+    await vi.waitFor(() => expect(takePendingExpiries()).toEqual(["posts"]));
+  });
+
   it("hands nothing off with only the in-process hand-off installed", async () => {
-    const ledger = ledgerThat(async () => true);
+    const ledger = ledgerThat(async () => new Map());
     setExpiryHandoff(null);
     await new HandOffRevalidator().flush(write("posts"));
     expect(ledger.record).not.toHaveBeenCalled();

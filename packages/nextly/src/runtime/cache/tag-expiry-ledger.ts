@@ -31,6 +31,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, asc, inArray, lt, sql, type SQL } from "drizzle-orm";
 
 import { tablePresence } from "../../domains/dashboard/table-presence";
+import { COLLECTION_ROW_LIFETIME_MS } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { databaseNowMs } from "../../domains/limits/store-clock";
 import { getNextlyLogger } from "../../observability/logger";
 import {
@@ -46,6 +47,15 @@ import { affectedRowCount } from "../../shared/lib/affected-row-count";
  * the handlers refuse by age.
  */
 export const LEDGER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How far past the database's time a recorded expiry is set. Another instance
+ * may still hold a registry row from before a schema change for up to its
+ * cached lifetime, and fill an entry from it after the change's expiry was
+ * recorded; an expiry graced by that lifetime still judges such an entry. The
+ * writer itself is not held to it (see the tag expiry view).
+ */
+export const TAG_EXPIRY_GRACE_MS = COLLECTION_ROW_LIFETIME_MS;
 
 /** How often the retention pass prunes the ledger. */
 export const LEDGER_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -70,11 +80,14 @@ export interface TagExpiries {
 
 export interface TagExpiryLedger {
   /**
-   * Record that `tags` expired now. Resolves `false`, writing nothing, while
-   * the table does not exist; throws when the database refuses the write, so a
-   * caller that must not lose the tags can keep them.
+   * Record that `tags` expired now, graced by {@link TAG_EXPIRY_GRACE_MS}: a
+   * row never moves back, whatever recorded it. Resolves each tag's stored
+   * time, so the writer can tell its own rows from another instance's; or
+   * `false`, writing nothing, while the table does not exist. Throws when the
+   * database refuses the write, so a caller that must not lose the tags can
+   * keep them.
    */
-  record(tags: readonly string[]): Promise<boolean>;
+  record(tags: readonly string[]): Promise<ReadonlyMap<string, number> | false>;
   /**
    * When each of `tags` last expired, read by key, or `undefined` while there
    * is no table.
@@ -174,23 +187,54 @@ export function createTagExpiryLedger(
   return {
     async record(tags) {
       const unique = [...new Set(tags)];
-      if (unique.length === 0) return true;
+      if (unique.length === 0) return new Map();
       if (!(await present())) return false;
+      const at = sql<number>`(${now} + ${TAG_EXPIRY_GRACE_MS})`;
       const insert = db()
         .insert(table)
         .values(
-          unique.map(tag => ({ id: tagExpiryId(tag), tag, expiredAt: now }))
+          unique.map(tag => ({ id: tagExpiryId(tag), tag, expiredAt: at }))
         );
-      // One statement for every tag: a row that exists moves forward to now.
+      // One statement for every tag. A row that exists keeps the later of its
+      // time and this one, so a record never moves an expiry back: not one
+      // made on a database clock that stepped back, nor a racing writer's.
       if (dialect === "mysql") {
-        await insert.onDuplicateKeyUpdate({ set: { expiredAt: now } });
+        await insert.onDuplicateKeyUpdate({
+          set: {
+            expiredAt: sql`greatest(${table.expiredAt}, values(${table.expiredAt}))`,
+          },
+        });
       } else {
         await insert.onConflictDoUpdate({
           target: table.id,
-          set: { expiredAt: now },
+          set: {
+            expiredAt:
+              dialect === "sqlite"
+                ? sql`max(${table.expiredAt}, excluded.expired_at)`
+                : sql`greatest(${table.expiredAt}, excluded.expired_at)`,
+          },
         });
       }
-      return true;
+      // Read back by key: the times stored, which the writer recognises as its
+      // own. A row a racing writer moved further on is not, and judges here as
+      // another instance's.
+      const stored = new Map<string, number>();
+      for (let i = 0; i < unique.length; i += LOOKUP_BATCH) {
+        const rows = await db()
+          .select<{ tag: string; expiredAt: number }>({
+            tag: table.tag,
+            expiredAt: table.expiredAt,
+          })
+          .from(table)
+          .where(
+            inArray(
+              table.id,
+              unique.slice(i, i + LOOKUP_BATCH).map(tagExpiryId)
+            )
+          );
+        for (const row of rows) stored.set(row.tag, Number(row.expiredAt));
+      }
+      return stored;
     },
 
     async expiriesOf(tags) {

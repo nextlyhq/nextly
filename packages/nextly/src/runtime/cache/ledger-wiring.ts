@@ -41,6 +41,20 @@ export class LedgerExpiryHandoff implements ExpiryHandoff {
   }
 }
 
+const globalForWiring = globalThis as unknown as {
+  __nextly_tag_ledger_withdrawn?: boolean;
+};
+
+/**
+ * Whether a ledger was installed and has been withdrawn, with no other
+ * installed since: between a release of nextly's services and the next
+ * registration, when a still-running plugin's write has no ledger to reach
+ * and its tags wait in the in-process hand-off for the next one.
+ */
+export function ledgerWithdrawn(): boolean {
+  return globalForWiring.__nextly_tag_ledger_withdrawn === true;
+}
+
 /** Publishes `adapter`'s ledger to the handlers and installs the hand-off into it. */
 export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
   const ledger: TagExpiryLedger = ledgerFor(adapter);
@@ -52,6 +66,7 @@ export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
   const waiting = isPendingExpiryHandoff(previous) ? previous.take() : [];
   const handoff = new LedgerExpiryHandoff();
   setExpiryHandoff(handoff);
+  globalForWiring.__nextly_tag_ledger_withdrawn = false;
   if (waiting.length > 0)
     void handoff.handOff(waiting, "waiting at registration");
 }
@@ -60,4 +75,5 @@ export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
 export function withdrawTagExpiryLedger(): void {
   publishTagExpiryLedger(null);
   setExpiryHandoff(null);
+  globalForWiring.__nextly_tag_ledger_withdrawn = true;
 }

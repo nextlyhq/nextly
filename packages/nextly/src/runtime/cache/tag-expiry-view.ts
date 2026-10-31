@@ -42,6 +42,13 @@ interface ViewState {
    * when compared, so an offset learned later cannot misplace them.
    */
   own: Map<string, number>;
+  /**
+   * The ledger times this process's own records stored, per tag. A lookup
+   * answering one of these is this process's write, judged by `own` alone:
+   * not by the grace other instances are held to (this process cleared its
+   * registry rows at once), nor by the database time a round trip after it.
+   */
+  mine: Map<string, number>;
   /** The database's clock less this process's, as of the last read that told it. */
   offsetMs: number;
   /** When stale answers were last dropped, on this process's clock. */
@@ -60,6 +67,7 @@ function state(): ViewState {
     lookups: new Map(),
     asking: new Map(),
     own: new Map(),
+    mine: new Map(),
     offsetMs: 0,
     sweptAt: 0,
     lastLocal: 0,
@@ -125,6 +133,9 @@ function sweep(view: ViewState, now: number): void {
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
+  for (const [tag, storedAt] of view.mine) {
+    if (storedAt < databaseHorizon) view.mine.delete(tag);
+  }
 }
 
 /**
@@ -188,11 +199,24 @@ export async function refreshTagExpiries(
   await Promise.all(pending);
 }
 
+/**
+ * The ledger's time for `tag` as this process judges by it: another
+ * instance's, as stored; none for a time this process's own record stored.
+ * That expiry is already in `own`, ordered with this process's entries by
+ * `localNow`, while the stored time is the database's, a round trip later and
+ * graced for other instances: judged by it, an entry filled during the round
+ * trip, or within the grace, would be refused once more.
+ */
+function recordedExpiry(view: ViewState, tag: string): number {
+  const recorded = view.lookups.get(tag)?.expiredAt ?? 0;
+  return recorded > 0 && view.mine.get(tag) === recorded ? 0 : recorded;
+}
+
 /** When `tag` last expired as far as this process knows, on the database's clock. */
 function expiryOf(view: ViewState, tag: string): number {
   const own = view.own.get(tag);
   return Math.max(
-    view.lookups.get(tag)?.expiredAt ?? 0,
+    recordedExpiry(view, tag),
     own === undefined ? 0 : own + view.offsetMs
   );
 }
@@ -214,7 +238,7 @@ export function isEntryExpired(
     // Another instance's expiry, on the database's clock, has no order with
     // this process's events: at or after, since an entry begun in the same
     // millisecond may hold the old value, and regenerating it costs one read.
-    const recorded = view.lookups.get(tag)?.expiredAt ?? 0;
+    const recorded = recordedExpiry(view, tag);
     if (recorded > 0 && recorded >= storedOnDatabaseClock) return true;
     // This process's own expiry is ordered with its entries by `localNow`, so
     // strictly after: an entry begun once the expiry was made is fresh.
@@ -257,7 +281,10 @@ export async function expireTags(
   for (const tag of tags) view.own.set(tag, now);
   if (view.ledger === undefined) return "no-ledger";
   try {
-    return (await view.ledger.record(tags)) ? "recorded" : "no-table";
+    const stored = await view.ledger.record(tags);
+    if (stored === false) return "no-table";
+    for (const [tag, at] of stored) view.mine.set(tag, at);
+    return "recorded";
   } catch (error) {
     warnOnce("the cache tag expiry ledger could not record an expiry", error);
     return "failed";
