@@ -33,6 +33,7 @@ import {
   setupInProgress,
   setupTokenSetByEnv,
   componentMapOutOfDate,
+  widgetGenerateCancelled,
 } from "../../errors/areas/commands";
 
 import { PROJECT, type ErrorCases } from "./types";
@@ -110,4 +111,5 @@ export const COMMAND_CASES = {
         "- no longer declared: @gone/old/admin#Chart",
       ],
     }),
+  WIDGET_GENERATE_CANCELLED: () => widgetGenerateCancelled(),
 } satisfies ErrorCases;
