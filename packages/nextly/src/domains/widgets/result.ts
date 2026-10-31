@@ -129,6 +129,16 @@ export type WidgetResult =
        */
       atLeast?: boolean;
       /**
+       * How `total` divides among the kinds of thing the rows are, for a
+       * source whose rows are of several kinds and each says which (`kind`):
+       * `{ collection: 8, single: 5 }` for 13 rows. Counted by the same read
+       * as `total`, so the parts add up to it. Absent from a source whose rows
+       * are of one kind.
+       *
+       * @experimental
+       */
+      totalByKind?: Readonly<Record<string, number>>;
+      /**
        * The span of time the source looked at, in whole days back from now.
        *
        * A source that keeps rows only for a period answers from that period

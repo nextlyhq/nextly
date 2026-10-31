@@ -2,8 +2,10 @@
  * Sending a card away from the card itself, outside customise mode, and
  * taking that back.
  *
- * The dismiss control is drawn outside customise mode and commits on its own,
- * because the editor's mutations write to a draft that does not exist there.
+ * Remove in every card's menu at rest is the reader's dismissal of it, whether
+ * or not its widget declared `dismissible`: it commits on its own, because the
+ * editor's mutations write to a draft that does not exist there, as a write
+ * that does not arrange the dashboard, so a reader on the default stays on it.
  * It leaves the same notice a Remove in customise mode does, and its Undo
  * writes the card back.
  */
@@ -36,7 +38,11 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 
 // `vi.hoisted`, because `vi.mock` is lifted above every other statement in the
 // file and a plain `const` here is not yet initialised when the factory runs.
-const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  error: vi.fn(),
+  success: vi.fn(),
+  dismiss: vi.fn(),
+}));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
@@ -128,6 +134,8 @@ function layout(
     defaultPlacements: [],
     version: 7,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...patch,
@@ -196,19 +204,44 @@ afterEach(() => {
   unstubDashboardWidth();
 });
 
-describe("the control a card carries itself", () => {
-  it("is drawn for a card that declared it, without entering customise mode", async () => {
-    renderGrid();
-    const dismiss = await screen.findByTestId("widget-dismiss");
-    expect(dismiss).toHaveAccessibleName(
-      "Dismiss Set up your project. You can bring it back from Customize."
-    );
-  });
+/** The card menu's button at rest. */
+function menuButton(title = "Set up your project"): HTMLElement {
+  return screen.getByRole("button", { name: `Card menu for ${title}` });
+}
 
-  it("is drawn only for the card that declared it", async () => {
+/** Opens a card's menu at rest and returns it. */
+async function openMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  title = "Set up your project"
+) {
+  await user.click(
+    await screen.findByRole("button", { name: `Card menu for ${title}` })
+  );
+  return screen.findByRole("menu");
+}
+
+/** Removes a card from its menu at rest, as a reader does. */
+async function removeFromMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  title = "Set up your project"
+) {
+  const menu = await openMenu(user, title);
+  await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
+}
+
+describe("the control a card carries itself", () => {
+  it("is Remove in every card's menu, dismissible or not, without entering customise mode", async () => {
+    const user = userEvent.setup();
     renderGrid();
-    await screen.findByTestId("widget-dismiss");
-    expect(screen.getAllByTestId("widget-dismiss")).toHaveLength(1);
+    for (const title of ["Set up your project", "Collections"]) {
+      const menu = await openMenu(user, title);
+      expect(
+        within(menu).getByRole("menuitem", { name: "Remove" })
+      ).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+    }
+    // The menu is the one control: no button of its own beside it.
+    expect(screen.queryByRole("button", { name: /^Dismiss/ })).toBeNull();
   });
 
   it("is withheld until an arrangement has been read", async () => {
@@ -224,41 +257,40 @@ describe("the control a card carries itself", () => {
     await waitFor(() =>
       expect(screen.getByTestId("widget-cell-core/onboarding")).toBeVisible()
     );
-    expect(screen.queryByTestId("widget-dismiss")).toBeNull();
+    // Its menu would hold Remove alone, so it is not drawn at all.
+    expect(
+      screen.queryByRole("button", {
+        name: "Card menu for Set up your project",
+      })
+    ).toBeNull();
   });
 
-  it("keeps the way back in reach of the control that removes", async () => {
+  it("gives way to the customise menu while customising", async () => {
     renderGrid();
-    expect(await screen.findByTestId("widget-dismiss")).toHaveClass(
-      "hidden",
-      "md:inline-flex"
-    );
-  });
-
-  it("puts the control in the card's header, before its title's end", async () => {
-    renderGrid();
-
-    const dismiss = await screen.findByTestId("widget-dismiss");
-    expect(dismiss).not.toHaveClass("absolute");
-    const header = dismiss.closest("div")?.parentElement;
-    expect(header?.textContent).toContain("Set up your project");
-  });
-
-  it("gives way to the card menu while customising", async () => {
-    renderGrid();
-    await screen.findByTestId("widget-dismiss");
+    await screen.findByRole("button", {
+      name: "Card menu for Set up your project",
+    });
     await beginEditing();
-    // Remove is in the card's menu there, and two controls doing one thing in
+    // Remove is in the customise menu there, and two menus doing one thing in
     // one card is a reader choosing between synonyms.
-    expect(screen.queryByTestId("widget-dismiss")).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Card menu for Set up your project",
+      })
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Card actions for Set up your project",
+      })
+    ).toBeInTheDocument();
   });
 });
 
 describe("what a dismiss writes", () => {
-  it("marks the placement removed, carrying the read's own guards, as NOT an arrangement", async () => {
+  it("marks a dismissible card removed, carrying the read's own guards, as NOT an arrangement", async () => {
     const user = userEvent.setup();
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     expect(api.put.mock.calls[0][1]).toEqual({
@@ -317,11 +349,123 @@ describe("what a dismiss writes", () => {
   });
 });
 
+describe("Remove for a card that never declared itself dismissible", () => {
+  it("is the same dismissal: marked removed, nothing dropped, NOT an arrangement", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user, "Collections");
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(api.put.mock.calls[0][1]).toEqual({
+      placements: [
+        { id: "p1", widgetId: "core/onboarding", w: 12, h: 3, removed: false },
+        { id: "p2", widgetId: "core/permanent", w: 6, h: 3, removed: true },
+      ],
+      version: 7,
+      scope: "tok",
+      arranged: false,
+    });
+  });
+});
+
+describe("Remove for a reader who has arranged their dashboard", () => {
+  /** An arranged reader's list, the first card carrying settings of its own. */
+  const ARRANGED: WidgetPlacement[] = [
+    {
+      id: "p1",
+      widgetId: "core/onboarding",
+      w: 12,
+      h: 3,
+      removed: false,
+      config: { note: "mine" },
+    },
+    { id: "p2", widgetId: "core/permanent", w: 6, h: 3, removed: false },
+  ];
+
+  beforeEach(() => {
+    layoutResponse = layout({ arranged: true, placements: ARRANGED });
+  });
+
+  it("takes the card out of their list, leaving no hidden copy, as an arrangement", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    const sent = api.put.mock.calls[0][1] as {
+      placements: WidgetPlacement[];
+    };
+    expect(sent).toEqual({
+      placements: [ARRANGED[1]],
+      version: 7,
+      scope: "tok",
+      // A write that drops a card from the list is an arranged one.
+      arranged: true,
+    });
+    expect(sent.placements.some(placement => placement.removed)).toBe(false);
+  });
+
+  it("Undo puts the card back where it was, with its settings", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+    await user.click(await screen.findByTestId("removal-notice-undo"));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
+    expect(api.put.mock.calls[1][1]).toEqual({
+      placements: ARRANGED,
+      version: 8,
+      scope: "tok",
+      arranged: true,
+    });
+    await waitFor(() => expect(document.activeElement).toBe(menuButton()));
+  });
+});
+
+describe("a card dismissed from the default dashboard", () => {
+  it("can be added back from the gallery, and draws again", async () => {
+    layoutResponse = layout({ source: "default", version: 0 });
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user, "Collections");
+    await waitFor(() =>
+      expect(screen.queryByTestId("widget-cell-core/permanent")).toBeNull()
+    );
+    await user.click(await screen.findByTestId("removal-notice-close"));
+
+    await beginEditing();
+    await user.click(screen.getByRole("button", { name: "Add widget" }));
+    const panel = await screen.findByRole("dialog", { name: "Add widget" });
+    // Its hidden card is what the gallery offers back, not a second copy.
+    await user.click(
+      within(panel).getByRole("button", { name: "Add back Collections" })
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
+    const saved = api.put.mock.calls[1][1] as {
+      placements: WidgetPlacement[];
+    };
+    expect(
+      saved.placements.filter(p => p.widgetId === "core/permanent")
+    ).toEqual([
+      { id: "p2", widgetId: "core/permanent", w: 6, h: 3, removed: false },
+    ]);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("widget-cell-core/permanent")
+      ).toBeInTheDocument()
+    );
+  });
+});
+
 describe("the notice a dismiss leaves", () => {
   it("says the card was removed once it has actually gone, and offers Undo", async () => {
     const user = userEvent.setup();
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     // 🔴 The CARD first: the re-read that fills the cache can fail on its own.
     await waitFor(() =>
@@ -336,7 +480,7 @@ describe("the notice a dismiss leaves", () => {
   it("moves focus to its Undo, since the control that had focus is gone", async () => {
     const user = userEvent.setup();
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     await waitFor(() =>
       expect(document.activeElement).toBe(
@@ -345,10 +489,10 @@ describe("the notice a dismiss leaves", () => {
     );
   });
 
-  it("Undo writes the card back, and returns focus to its dismiss control", async () => {
+  it("Undo writes the card back, and returns focus to the card's menu", async () => {
     const user = userEvent.setup();
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
     await user.click(await screen.findByTestId("removal-notice-undo"));
 
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
@@ -368,9 +512,7 @@ describe("the notice a dismiss leaves", () => {
       scope: "tok",
       arranged: false,
     });
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByTestId("widget-dismiss"))
-    );
+    await waitFor(() => expect(document.activeElement).toBe(menuButton()));
     expect(
       screen.getByTestId("widget-cell-core/onboarding")
     ).toBeInTheDocument();
@@ -381,7 +523,7 @@ describe("the notice a dismiss leaves", () => {
   it("sends focus to the dashboard's heading when it is closed", async () => {
     const user = userEvent.setup();
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
     await user.click(await screen.findByTestId("removal-notice-close"));
 
     expect(screen.queryByTestId("removal-notice")).toBeNull();
@@ -398,7 +540,7 @@ describe("the notice a dismiss leaves", () => {
     await screen.findByTestId("dashboard-edit-begin");
     api.put.mockResolvedValue({ message: "ok", item: {} });
     api.get.mockRejectedValue(new Error("layout unavailable"));
-    await user.click(screen.getByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
@@ -413,7 +555,7 @@ describe("the notice a dismiss leaves", () => {
     const user = userEvent.setup();
     api.put.mockRejectedValue(new Error("version conflict"));
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
@@ -425,17 +567,18 @@ describe("the notice a dismiss leaves", () => {
 });
 
 describe("while the stored dashboard cannot be read", () => {
-  it("keeps the control on the card, unavailable, saying why", async () => {
+  it("keeps Remove in the menu, unavailable, saying why", async () => {
     layoutResponse = layout({ source: "unreadable" });
     const user = userEvent.setup();
     renderGrid();
 
-    const dismiss = await screen.findByTestId("widget-dismiss");
-    expect(dismiss).toHaveAttribute("aria-disabled", "true");
-    expect(dismiss).toHaveAccessibleDescription(
+    const menu = await openMenu(user);
+    const remove = within(menu).getByRole("menuitem", { name: "Remove" });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
+    expect(remove).toHaveAccessibleDescription(
       "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize first."
     );
-    await user.click(dismiss);
+    await user.click(remove);
     // 🔴 The server refuses any single-card write to an unreadable row; the
     // control must not try one.
     expect(api.put).not.toHaveBeenCalled();
@@ -444,9 +587,12 @@ describe("while the stored dashboard cannot be read", () => {
   it("is available again once the dashboard can be read", async () => {
     // The control: the reason is tied to the unreadable state, not drawn
     // always.
+    const user = userEvent.setup();
     renderGrid();
-    const dismiss = await screen.findByTestId("widget-dismiss");
-    expect(dismiss).not.toHaveAttribute("aria-disabled");
+    const menu = await openMenu(user);
+    expect(
+      within(menu).getByRole("menuitem", { name: "Remove" })
+    ).not.toHaveAttribute("aria-disabled");
   });
 });
 
@@ -458,7 +604,7 @@ describe("a dismissal reports itself, and nothing else does", () => {
     });
     api.put.mockRejectedValue(conflict);
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     // 🔴 The customise alert speaks of unsaved changes; a reader who dismissed
@@ -490,13 +636,15 @@ describe("a dismissal reports itself, and nothing else does", () => {
     const user = userEvent.setup();
     api.put.mockImplementation(() => new Promise(() => {}));
     renderGrid();
-    const dismiss = await screen.findByTestId("widget-dismiss");
-    await user.click(dismiss);
+    await removeFromMenu(user);
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
 
     // 🔴 Every dismissal builds a whole-layout snapshot against ONE cached
     // version, so a second in flight carries the same guard.
-    await waitFor(() => expect(dismiss).toBeDisabled());
-    await user.click(dismiss);
+    const menu = await openMenu(user, "Collections");
+    const remove = within(menu).getByRole("menuitem", { name: "Remove" });
+    await waitFor(() => expect(remove).toHaveAttribute("data-disabled"));
+    await user.click(remove);
     expect(api.put).toHaveBeenCalledTimes(1);
   });
 });
@@ -506,7 +654,7 @@ describe("one layout write at a time", () => {
     const user = userEvent.setup();
     api.put.mockImplementation(() => new Promise(() => {}));
     renderGrid();
-    await user.click(await screen.findByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     await waitFor(() =>
       expect(screen.getByTestId("dashboard-edit-begin")).toBeDisabled()
@@ -521,35 +669,12 @@ describe("one layout write at a time", () => {
     await screen.findByTestId("dashboard-edit-begin");
     const readsBefore = api.get.mock.calls.length;
     api.get.mockImplementation(() => new Promise(() => {}));
-    await user.click(screen.getByTestId("widget-dismiss"));
+    await removeFromMenu(user);
 
     await waitFor(() =>
       expect(api.get.mock.calls.length).toBeGreaterThan(readsBefore)
     );
     expect(api.put).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("dashboard-edit-begin")).toBeDisabled();
-  });
-});
-
-describe("a declaration that is not a boolean", () => {
-  it("draws no control for a truthy non-boolean", async () => {
-    mockBranding = branding({
-      "core/onboarding": { dismissible: "false" },
-    });
-    renderGrid();
-
-    // Waits for the BEGIN button, rendered only once an arrangement has been
-    // read: before then no card draws the control at all.
-    await screen.findByTestId("dashboard-edit-begin");
-    expect(screen.queryByTestId("widget-dismiss")).toBeNull();
-    expect(screen.getAllByTestId("widget-cell-core/onboarding")).toHaveLength(
-      1
-    );
-  });
-
-  it("draws the control when the declaration really says true", async () => {
-    renderGrid();
-    await screen.findByTestId("dashboard-edit-begin");
-    expect(screen.getByTestId("widget-dismiss")).toBeInTheDocument();
   });
 });

@@ -28,6 +28,7 @@ const SAMPLES: { [D in CoreDisplay]: Canonical<D> } = {
     window: { days: 90 },
     total: 12,
     atLeast: false,
+    totalByKind: { collection: 8, single: 4 },
   },
   table: {
     items: [{ title: "A" }],
@@ -35,6 +36,7 @@ const SAMPLES: { [D in CoreDisplay]: Canonical<D> } = {
     window: { days: 90 },
     total: 12,
     atLeast: false,
+    totalByKind: { collection: 8, single: 4 },
   },
   bars: {
     buckets: [{ value: "paid", count: 1 }],
@@ -113,6 +115,20 @@ describe("the data core's displays draw, checked at run time", () => {
       })
     ).toContain("field.choices.0.value");
   });
+
+  it.each([
+    ["a part that is not a whole count", { collection: 8, single: 1.5 }],
+    ["a negative part", { collection: -1 }],
+    ["a part that is text", { collection: "8" }],
+    ["a list where an object belongs", [8, 4]],
+  ])(
+    "refuses a list's breakdown by kind with %s, as the admin drops it",
+    (_case, totalByKind) => {
+      expect(
+        displayDataProblem("list", { ...SAMPLES.list, totalByKind })
+      ).toContain("totalByKind");
+    }
+  );
 
   it("refuses a list's column that names no field", () => {
     expect(

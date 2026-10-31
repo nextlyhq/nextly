@@ -17,6 +17,8 @@ import { adminHref } from "@admin/constants/routes";
 
 import { countSpoken, countText } from "../widgets/frame/list-card";
 
+import { isRecord, isText } from "./answer-guards";
+
 /** How urgent an item is, as the server ranked it. */
 export type AttentionSeverity = "critical" | "warning";
 
@@ -36,12 +38,6 @@ export interface AttentionRow {
   /** The count could not be read: the row says so and offers Retry. */
   failed: boolean;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isText = (value: unknown): value is string =>
-  typeof value === "string" && value !== "";
 
 /** One item of the answer, or `null` for anything the card cannot draw. */
 function attentionRow(item: unknown): AttentionRow | null {

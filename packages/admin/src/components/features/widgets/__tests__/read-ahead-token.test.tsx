@@ -76,6 +76,7 @@ function layoutOf(token: string, empty: boolean): DashboardLayoutResponse {
     defaultPlacements: [],
     version: 1,
     source: "own",
+    arranged: true,
     scope: "tok",
     audience: "aud",
     hiddenWhileEmpty: empty ? ["p-waiting"] : [],
@@ -172,6 +173,37 @@ describe("a focus whose layout read lands after the batch was asked again", () =
     );
     expect(revealed).not.toHaveAttribute("data-hidden-empty");
     expect(postedTokens()).toEqual(["load-1", "load-1", "load-2"]);
+  });
+});
+
+describe("a fresh layout answer that hides and reveals nothing", () => {
+  it("asks no card again under its token, as after the reader's own write the layout is read again", async () => {
+    api.get.mockResolvedValue(layoutOf("load-1", true));
+    renderGrid();
+    await screen.findByRole("region", { name: "Orders waiting" });
+    await waitFor(() => expect(postedTokens()).toEqual(["load-1"]));
+
+    // The layout read again, with a token of its own and the same verdict: the card still
+    // hidden while empty.
+    let land!: (answer: DashboardLayoutResponse) => void;
+    api.get.mockReturnValueOnce(
+      new Promise<DashboardLayoutResponse>(resolve => {
+        land = resolve;
+      })
+    );
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await waitFor(() => expect(postedTokens()).toEqual(["load-1", "load-1"]));
+    await act(async () => {
+      land(layoutOf("load-2", true));
+    });
+
+    // The focus's own refetch was the only ask: the new token asked nothing.
+    await screen.findByRole("region", { name: "Orders waiting" });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(postedTokens()).toEqual(["load-1", "load-1"]);
   });
 });
 

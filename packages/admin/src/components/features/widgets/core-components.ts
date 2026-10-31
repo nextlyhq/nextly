@@ -21,12 +21,13 @@ import { BreakdownCard } from "@admin/components/features/dashboard/BreakdownCar
 import { ContentTable } from "@admin/components/features/dashboard/ContentTable";
 import { ContinueCard } from "@admin/components/features/dashboard/ContinueCard";
 import { CountCard } from "@admin/components/features/dashboard/CountCard";
-import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedCard";
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
 import { NoteCard } from "@admin/components/features/dashboard/NoteCard";
 import { OverTimeCard } from "@admin/components/features/dashboard/OverTimeCard";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentEntriesCard } from "@admin/components/features/dashboard/RecentEntriesCard";
+import { SetupCard } from "@admin/components/features/dashboard/SetupCard";
+import { SystemHealthCard } from "@admin/components/features/dashboard/SystemHealthCard";
 import { TeamActivityCard } from "@admin/components/features/dashboard/TeamActivity";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
@@ -41,7 +42,7 @@ import { registerCoreComponent } from "@admin/lib/plugins/component-registry-int
  * one card reports itself and the dashboard stands.
  */
 export function registerCoreWidgetComponents(): void {
-  registerCoreComponent("core#GetStartedCard", GetStartedCard);
+  registerCoreComponent("core#Setup", SetupCard);
   registerCoreComponent("core#ContentTable", ContentTable);
   registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
@@ -54,4 +55,5 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#Note", NoteCard);
   registerCoreComponent("core#RecentEntries", RecentEntriesCard);
   registerCoreComponent("core#OverTime", OverTimeCard);
+  registerCoreComponent("core#SystemHealth", SystemHealthCard);
 }

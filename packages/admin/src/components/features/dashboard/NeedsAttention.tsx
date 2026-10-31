@@ -84,10 +84,16 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
   return (
     <div
       ref={fold.listRef}
-      className="grid gap-2"
+      className="grid min-w-0 gap-2"
       data-testid="needs-attention"
     >
-      <ul id={listId} ref={listRef} className="grid divide-y divide-border">
+      {/* min-w-0 down the grid: a grid item is otherwise as wide as its unwrapped text, which
+          pushed the Review button out of a narrow card instead of cutting the reason line. */}
+      <ul
+        id={listId}
+        ref={listRef}
+        className="grid min-w-0 divide-y divide-border"
+      >
         {rows.slice(0, fold.shown).map(row => (
           // Focusable from script only, so "Show N more" can move focus to
           // the first row it revealed.
@@ -95,7 +101,7 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
             key={row.id}
             data-fold-row
             tabIndex={-1}
-            className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="min-w-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             data-testid="needs-attention-item"
           >
             {row.failed ? (

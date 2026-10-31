@@ -73,6 +73,22 @@ describe("what leaves an item", () => {
     expect(items.map(item => item.id)).toEqual(["w/one"]);
   });
 
+  it("carries a reader's link onto its item, and no link for a reader with none", async () => {
+    const unlinked: DigestReader = {
+      id: "w/nowhere",
+      kind: "plugin",
+      label: "w/nowhere",
+      severity: "warning",
+      owner: 'plugin "test"',
+      read: answers(1),
+    };
+    const items = await runDigest([reader("w/linked", answers(1)), unlinked]);
+    expect(items.find(item => item.id === "w/linked")?.link).toBe("w/linked");
+    expect(items.find(item => item.id === "w/nowhere")).not.toHaveProperty(
+      "link"
+    );
+  });
+
   it("keeps a zero that is a floor, since lists went unread", async () => {
     const [item] = await runDigest([
       reader("w/floor", answers({ count: 0, atLeast: true })),
