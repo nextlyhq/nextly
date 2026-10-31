@@ -1,11 +1,6 @@
 import path from "node:path";
 
-import {
-  findUnscopedRules,
-  namespaceInternalProperties,
-  prefixKeyframes,
-  scopeCss,
-} from "@nextlyhq/admin-css";
+import { isolateAdminStylesheet } from "@nextlyhq/admin-css";
 
 /**
  * Scopes the playground's compile of the admin's source stylesheet the way the
@@ -17,10 +12,10 @@ import {
  * resolves component stylesheet imports to an empty module). That file starts
  * with `@import "tailwindcss"`, and compiled here as it stands it is a whole
  * unscoped Tailwind sheet: a theme on `:root` and a reset on `html` that
- * restyle every page the admin has visited, the site's included. The
- * published `style.css` gets the same passes in `packages/admin/scripts/
- * build-css.mjs`; these run them on that one file, from the same package, so
- * the admin the playground shows is the one users get.
+ * restyle every page the admin has visited, the site's included. This runs
+ * `isolateAdminStylesheet` on that one file, the same function the admin's
+ * build (`packages/admin/scripts/build-css.mjs`) runs on the published
+ * `style.css`, so the admin the playground shows is the one users get.
  */
 
 /**
@@ -36,12 +31,6 @@ const ADMIN_SOURCE_STYLESHEET = path.join(
   "globals.css"
 );
 
-/**
- * The prefix `build-css.mjs` gives the names this sheet publishes
- * document-wide, so the keyframes and properties match the published sheet's.
- */
-const NAME_PREFIX = "nx-";
-
 /** @returns {import("postcss").Plugin} */
 export default function scopeAdminSource() {
   return {
@@ -53,7 +42,7 @@ export default function scopeAdminSource() {
         !path.resolve(from).endsWith(path.sep + ADMIN_SOURCE_STYLESHEET)
       )
         return;
-      // One rule to a line, its whole selector list on it, as `scopeCss`
+      // One rule to a line, its whole selector list on it, as the function
       // reads the Tailwind CLI's output in the admin's own build. Here
       // Tailwind keeps a list's line breaks from the source, and in a
       // production build minifies its output (its `optimize` follows
@@ -62,18 +51,9 @@ export default function scopeAdminSource() {
       root.walkRules(rule => {
         rule.selector = rule.selectors.join(", ");
       });
-      let css = scopeCss(root.toString());
-      css = prefixKeyframes(css, NAME_PREFIX);
-      css = namespaceInternalProperties(css, NAME_PREFIX);
-      // The admin's build refuses a rule that escapes the scope, and so does
-      // this: an escaped rule restyles the site, which is the defect this
-      // module exists to prevent, so it fails the compile rather than pass.
-      const unscoped = findUnscopedRules(css);
-      if (unscoped.length > 0) {
-        throw new Error(
-          `${unscoped.length} rule(s) of the admin's source stylesheet escaped .nextly-admin: ${unscoped.slice(0, 5).join(" | ")}`
-        );
-      }
+      // Throws on a rule that escaped the scope, failing the compile: an
+      // escaped rule restyles the site, the defect this module prevents.
+      const css = isolateAdminStylesheet(root.toString());
       root.removeAll();
       root.append(postcss.parse(css, { from }).nodes);
     },
