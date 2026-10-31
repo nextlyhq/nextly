@@ -317,3 +317,31 @@ export function sectionOf(setting: AnyWidgetSetting): SettingSection {
     ? "data"
     : "display";
 }
+
+/**
+ * A Collection setting's choices: the collections the server sent, and its
+ * own default when that names none of them. A widget may declare a default
+ * that is not a collection (one meaning every collection, say); it is what
+ * the card uses until the reader chooses, so it is offered by name rather
+ * than left as a value the select cannot show or return to. A card's quick
+ * popover offers the same choices. Kept here, apart from the panel's controls, so the
+ * dashboard, which the popover is drawn on, does not load those controls to ask it.
+ */
+export function collectionOptions(
+  setting: Extract<ContentSetting, { type: "collection" }>,
+  sources: readonly PublishedContentSource[]
+): { label: string; value: string }[] {
+  const options = sources.map(source => ({
+    label: source.label,
+    value: source.collection,
+  }));
+  const fallback = setting.defaultValue;
+  if (
+    fallback === undefined ||
+    fallback === "" ||
+    options.some(option => option.value === fallback)
+  ) {
+    return options;
+  }
+  return [{ label: "Default", value: fallback }, ...options];
+}

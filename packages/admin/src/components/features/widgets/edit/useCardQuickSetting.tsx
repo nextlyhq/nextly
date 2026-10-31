@@ -47,8 +47,11 @@ import { askableWith, questionOf } from "../widget-as-asked";
 
 import { sizeAxes } from "./CardActionsMenu";
 import { CardQuickSetting } from "./CardQuickSetting";
-import { dependentsOf, startingValue } from "./content-settings";
-import { collectionOptions } from "./ContentSettingControl";
+import {
+  collectionOptions,
+  dependentsOf,
+  startingValue,
+} from "./content-settings";
 import { initialValues, toStoredConfig } from "./panel-values";
 import {
   popoverSettingsOf,
