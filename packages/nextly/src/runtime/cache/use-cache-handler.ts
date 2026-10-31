@@ -8,6 +8,8 @@
  *
  * @module runtime/cache/use-cache-handler
  */
+import { holdForNextFlush } from "../../revalidation/expiry-handoff";
+
 import { sharedEntries } from "./bounded-entries";
 import {
   expireTags,
@@ -114,7 +116,9 @@ const useCacheHandler = {
   // Every expiry is immediate here, `max` profiles included: a write recorded
   // for another instance cannot carry a stale-while-revalidate window there.
   async updateTags(tags: string[]): Promise<void> {
-    await expireTags(tags);
+    // A refused record is retried by the next flush; no table is not, as in
+    // the incremental handler.
+    if ((await expireTags(tags)) === "failed") holdForNextFlush(tags);
   },
 };
 

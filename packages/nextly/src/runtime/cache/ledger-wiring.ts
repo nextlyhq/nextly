@@ -12,7 +12,9 @@
  * @module runtime/cache/ledger-wiring
  */
 import {
+  expiryHandoff,
   holdForNextFlush,
+  isPendingExpiryHandoff,
   setExpiryHandoff,
   type ExpiryHandoff,
 } from "../../revalidation/expiry-handoff";
@@ -32,8 +34,10 @@ import { expireTags, publishTagExpiryLedger } from "./tag-expiry-view";
  */
 export class LedgerExpiryHandoff implements ExpiryHandoff {
   async handOff(tags: string[], _reason: string): Promise<void> {
-    const recorded = await expireTags(tags);
-    if (!recorded) holdForNextFlush(tags);
+    // Kept for this process's next flush unless the ledger took them: it
+    // expires them in a request here, the most a write outside one can get
+    // without the ledger.
+    if ((await expireTags(tags)) !== "recorded") holdForNextFlush(tags);
   }
 }
 
@@ -41,7 +45,15 @@ export class LedgerExpiryHandoff implements ExpiryHandoff {
 export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
   const ledger: TagExpiryLedger = ledgerFor(adapter);
   publishTagExpiryLedger(ledger);
-  setExpiryHandoff(new LedgerExpiryHandoff());
+  // Tags the in-process hand-off took before this registration (a plugin's
+  // write between a release and the next registration) go to the ledger
+  // rather than being left in a hand-off nothing drains any more.
+  const previous = expiryHandoff();
+  const waiting = isPendingExpiryHandoff(previous) ? previous.take() : [];
+  const handoff = new LedgerExpiryHandoff();
+  setExpiryHandoff(handoff);
+  if (waiting.length > 0)
+    void handoff.handOff(waiting, "waiting at registration");
 }
 
 /** Withdraws the ledger and restores the in-process hand-off. */

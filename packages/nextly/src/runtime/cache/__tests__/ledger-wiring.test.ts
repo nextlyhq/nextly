@@ -13,6 +13,7 @@ import {
   isPendingExpiryHandoff,
   takePendingExpiries,
 } from "../../../revalidation/expiry-handoff";
+import useCacheHandler from "../use-cache-handler";
 import IncrementalHandler from "../incremental-cache-handler";
 import {
   installTagExpiryLedger,
@@ -124,7 +125,37 @@ describe("the ledger's expiry hand-off", () => {
   });
 });
 
+describe("the handlers' own expiries", () => {
+  it("keep a refused record for the next flush to retry", async () => {
+    publishTagExpiryLedger(
+      ledgerThat(async () => {
+        throw new Error("read-only transaction");
+      })
+    );
+    await new IncrementalHandler().revalidateTag("posts");
+    await useCacheHandler.updateTags(["pages"]);
+    expect(takePendingExpiries().sort()).toEqual(["pages", "posts"]);
+  });
+
+  it("keep nothing while the table is missing, so no request expires them again", async () => {
+    installTagExpiryLedger(adapterWithoutTheTable());
+    await new IncrementalHandler().revalidateTag("posts");
+    await useCacheHandler.updateTags(["pages"]);
+    expect(takePendingExpiries()).toEqual([]);
+  });
+});
+
 describe("installing and withdrawing the ledger", () => {
+  it("hands the ledger tags the in-process hand-off took before it was installed", async () => {
+    // A write between a release and the next registration.
+    await expiryHandoff().handOff(["posts"], "outside a request");
+    installTagExpiryLedger(adapterWithoutTheTable());
+    // Handed to the ledger's hand-off, which keeps them for the next flush
+    // while the table is missing; left in the replaced hand-off, they would be
+    // in neither and lost.
+    await vi.waitFor(() => expect(takePendingExpiries()).toEqual(["posts"]));
+  });
+
   it("installs the ledger's hand-off, and withdrawing restores the in-process one", () => {
     installTagExpiryLedger(adapterWithoutTheTable());
     expect(expiryHandoff()).toBeInstanceOf(LedgerExpiryHandoff);
