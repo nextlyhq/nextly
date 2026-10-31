@@ -14,8 +14,8 @@
  * later layout read's or the card's own batch answer, judged by the rule the
  * layout read hid it by (`cardAnswerIsEmpty`). New work is worth the one move.
  *
- * A widget the layout read cannot answer (one of the `registerWidget` or
- * `contributes.admin.widgets` channel) is named in its `hiddenWhenAnswerEmpty`
+ * A widget the layout read cannot answer (one whose data a query asks rather
+ * than a `load`) is named in its `hiddenWhenAnswerEmpty`
  * instead: its card leaves the dashboard while its own answer is empty, as it
  * is drawn (`useHidesWhenAnswerEmpty`).
  *

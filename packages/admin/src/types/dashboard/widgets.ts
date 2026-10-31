@@ -58,10 +58,10 @@ export type {
  * A widget as the grid renders it: every field the card and the archetype need,
  * with nothing optional that the renderer would have to invent a default for.
  *
- * Plugin contributions arrive as `PluginWidgetMeta`, whose declarative half is
- * all optional (a widget may still be nothing but a `component`). `resolve`
- * in `resolve-widgets.ts` is the one place that gap is closed, so the renderer
- * below it never has to ask whether a title exists.
+ * Widgets arrive over the wire as the registry publishes them.
+ * `resolveDashboardWidgets` in `resolve-widgets.ts` is the one place one
+ * becomes this, so the renderer below it never has to ask whether a title
+ * exists.
  */
 export interface DashboardWidget {
   id: string;
