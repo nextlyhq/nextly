@@ -2,6 +2,7 @@
  * The setup card's states, its row of tiles, its Singles and its controls, drawn from what the
  * card's `load` answered, and what each control writes.
  */
+import { QueryClient } from "@tanstack/react-query";
 import type { SetupCardData, SetupStep } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +14,7 @@ import {
 import { CardGrowContext } from "@admin/components/features/widgets/frame/grow";
 import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
 import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
+import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
 import {
   act,
   fireEvent,
@@ -94,6 +96,15 @@ function dataOf(patch: Partial<SetupCardData> = {}): SetupCardData {
 
 const retry = vi.fn();
 
+// The dashboard's answers asked for again in place, by the batch's own query.
+const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+/** How many times the card asked the dashboard's answers again in place. */
+const readInPlace = () =>
+  invalidate.mock.calls.filter(
+    ([filters]) =>
+      JSON.stringify(filters?.queryKey) === JSON.stringify(WIDGET_QUERIES_KEY)
+  ).length;
+
 /** The card as the dashboard draws it, for `render` or a `rerender` with new data. */
 function tree(
   data: SetupCardData,
@@ -172,6 +183,7 @@ beforeEach(() => {
   put.mockReset();
   put.mockResolvedValue({});
   retry.mockClear();
+  invalidate.mockClear();
   seed.status = { kind: "idle", template: { slug: "blog", label: "Blog" } };
   seed.startSeed.mockClear();
   seed.skip.mockClear();
@@ -629,8 +641,10 @@ describe("the setup card", () => {
     ];
     const data = dataOf({ setup: { known: true, steps, done: 1, total: 2 } });
     const { rerender } = draw(data);
-    // The card's data is read again, once, to draw the steps as the host has them.
-    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    // The dashboard's answers are read again, once, in place (never the host's Retry, which
+    // would unmount the card), to draw the steps as the host has them.
+    await waitFor(() => expect(readInPlace()).toBe(1));
+    expect(retry).not.toHaveBeenCalled();
     expect(screen.queryByTestId("setup-all-set")).toBeNull();
     expect(screen.queryByText(/won't show again/)).toBeNull();
     expect(
@@ -658,14 +672,15 @@ describe("the setup card", () => {
     const answer = () =>
       dataOf({ setup: { known: true, steps: steps(), done: 1, total: 2 } });
     const { rerender } = draw(answer());
-    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(readInPlace()).toBe(1));
+    expect(retry).not.toHaveBeenCalled();
     // Each read hands a new object with the same steps: never a second request.
     for (let read = 0; read < 4; read += 1) {
       rerender(tree(answer()));
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     expect(put).toHaveBeenCalledTimes(1);
-    expect(retry).toHaveBeenCalledTimes(1);
+    expect(readInPlace()).toBe(1);
   });
 
   it("asks once more after a refusal when a new answer is all done, finished elsewhere before the read", async () => {
@@ -684,7 +699,8 @@ describe("the setup card", () => {
       setup: { known: true, steps: asked, done: 1, total: 2 },
     });
     const { rerender } = draw(data);
-    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(readInPlace()).toBe(1));
+    expect(retry).not.toHaveBeenCalled();
     expect(put).toHaveBeenCalledTimes(1);
     // The read the refusal asked for answers all done again: Invite was finished on another
     // device meanwhile, so the card never draws a step open in between.
@@ -725,7 +741,8 @@ describe("the setup card", () => {
     const { rerender } = draw(
       dataOf({ setup: { known: true, steps: done, done: 1, total: 2 } })
     );
-    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(readInPlace()).toBe(1));
+    expect(retry).not.toHaveBeenCalled();
     expect(put).toHaveBeenCalledTimes(1);
     rerender(
       tree(

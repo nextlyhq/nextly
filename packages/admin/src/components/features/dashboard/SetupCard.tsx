@@ -36,6 +36,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   drawnSetup,
   isSkippableKind,
@@ -67,6 +68,7 @@ import {
   type SeedStatus,
 } from "@admin/hooks/queries/useSeedStatus";
 import { useSingles } from "@admin/hooks/queries/useSingles";
+import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
 import { isApiError } from "@admin/lib/api/parseApiError";
 import { cn } from "@admin/lib/utils";
 
@@ -84,6 +86,7 @@ import {
   SETUP_TILE_LINES,
   setupRowClass,
 } from "./setup/measures";
+import { useRetirementRefusals } from "./setup/retirement-refusals";
 import {
   filledIn,
   singleHref,
@@ -151,56 +154,63 @@ type Retirement = "unasked" | "asked" | "recorded" | "refused";
  * Asked once per answer the card is drawn from (`answer`): a write that failed is asked again
  * when the card's data is next read, on the next load or refocus, never in a loop on its own
  * failure. One the host refused, as it finds a step open (409), is never asked again over the same
- * steps: the card's data is read once more (`refresh`) to draw the steps as the host now has them,
- * and only an answer whose steps differ from the refused one's (`retirementSignature`) is asked
- * about once more, when every step it draws is done. A refusal the host keeps giving over the same
- * steps is one request, however often the card's data is read.
+ * steps: the dashboard's answers are read again in place (the batch's own query, so the card stays
+ * drawn rather than being unmounted for a skeleton), and only an answer whose steps differ from the
+ * refused one's (`retirementSignature`) is asked about once more, when every step it draws is
+ * done. The refusal is kept outside the card (`setup/retirement-refusals`), so a card drawn again,
+ * after a Retry or a write that refreshes it, remembers it: a refusal the host keeps giving over
+ * the same steps is one request, however often the card is read or drawn.
  */
 function useRetirement(
   due: boolean,
   sampleRefused: boolean,
   retire: SetupStateWrite["retire"],
-  answer: SetupCardData,
-  refresh: () => void
+  answer: SetupCardData
 ): Retirement {
   const [retirement, setRetirement] = useState<Retirement>("unasked");
   const asked = useRef(false);
-  // The latest refresh, read when an answer lands, so a new one each draw never asks again.
-  const latestRefresh = useRef(refresh);
-  latestRefresh.current = refresh;
-  // What the refused ask was about (`retirementSignature`): never asked again over the same.
-  const refusedSignature = useRef<string | undefined>(undefined);
-  // Refused, and an answer read since differs in what it says: it may be all done, finished on
-  // another device before the read, or have a step open that is done later. Either way it earns
-  // one more ask, so a card that finishes while it is drawn is still retired, never left all done
-  // for good. Compared by content, never by object: every read hands a new object, so a refusal
-  // the host keeps giving (no preferences table, a write it cannot record) is asked once and not
-  // again while the steps it judged stay as they were. Its own effect, so a failed write, which
-  // also leaves the guard unasked, is not asked again at once.
+  const queryClient = useQueryClient();
+  // What the last refused ask was about (`retirementSignature`), outliving this card.
+  const refusals = useRetirementRefusals();
+  const signature = retirementSignature(answer, sampleRefused);
+  // An answer whose steps differ from the refused ones: it may be all done, finished on another
+  // device before the read, or have a step open that is done later. The refusal is forgotten,
+  // by whichever card is drawn over it (every new answer draws the card afresh), so these steps,
+  // or the refused ones reached again later, are asked about once more; and a card that was
+  // refused itself asks again. Compared by content, never by object: a refusal the host keeps
+  // giving over the same steps (no preferences table, a write it cannot record) is asked once.
+  // Its own effect, so a failed write, which also leaves the guard unasked, is not asked again at
+  // once.
   useEffect(() => {
+    const refused = refusals.refused();
+    if (refused === undefined || refused === signature) return;
+    refusals.forget();
     if (retirement !== "refused") return;
-    if (
-      retirementSignature(answer, sampleRefused) === refusedSignature.current
-    ) {
-      return;
-    }
     asked.current = false;
     setRetirement("unasked");
-  }, [answer, sampleRefused, retirement]);
+  }, [signature, retirement, refusals]);
   useEffect(() => {
     if (!due || asked.current) return;
     asked.current = true;
+    const askedAbout = signature;
+    // Refused over these same steps already, by this card or one drawn before it: not asked.
+    if (askedAbout === refusals.refused()) {
+      setRetirement("refused");
+      return;
+    }
     setRetirement("asked");
-    const askedAbout = retirementSignature(answer, sampleRefused);
     retire(
       { sampleRefused },
       {
         onDone: () => setRetirement("recorded"),
         onFailed: error => {
           if (isApiError(error) && error.status === 409) {
-            refusedSignature.current = askedAbout;
+            refusals.refuse(askedAbout);
             setRetirement("refused");
-            latestRefresh.current();
+            // Read in place: the host's Retry would draw the skeleton and unmount the card.
+            void queryClient.invalidateQueries({
+              queryKey: WIDGET_QUERIES_KEY,
+            });
             return;
           }
           asked.current = false;
@@ -208,7 +218,7 @@ function useRetirement(
         },
       }
     );
-  }, [due, sampleRefused, retire, answer]);
+  }, [due, sampleRefused, retire, answer, signature, refusals, queryClient]);
   return retirement;
 }
 
@@ -745,8 +755,7 @@ function useDrawnSetup(
   card: SetupCardData,
   seed: SeedStatus,
   answeredHere: boolean,
-  write: Pick<SetupStateWrite, "retire">,
-  refresh: () => void
+  write: Pick<SetupStateWrite, "retire">
 ): { allSet: boolean; counted: CountedSetup | undefined } {
   const drawn =
     card.setup.known && !card.allSet
@@ -757,8 +766,7 @@ function useDrawnSetup(
     drawnAllSet,
     seed.kind === "hidden",
     write.retire,
-    card,
-    refresh
+    card
   );
   const allSet = card.allSet || (drawnAllSet && retirement === "recorded");
   return { allSet, counted: drawn?.known && !allSet ? drawn : undefined };
@@ -977,8 +985,7 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
     card,
     seed,
     sample.answeredHere,
-    write,
-    retry
+    write
   );
   const progress = useSetupInFrame(
     counted,
