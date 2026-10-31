@@ -5,20 +5,10 @@
  */
 
 export {
-  WIDGET_ARCHETYPES,
   DATA_ARCHETYPES,
-  QUERYLESS_ARCHETYPES,
-  CELL_ARCHETYPES,
   MAX_STAT_CELLS,
   validateWidgetDefinition,
-  type WidgetDefinition,
-  type WidgetAction,
   type WidgetSetting,
-  type WidgetStatCell,
-  type WidgetArchetype,
-  type DataWidgetArchetype,
-  type QuerylessWidgetArchetype,
-  type CellWidgetArchetype,
 } from "./definition";
 // The one size vocabulary, beside the definition whose `size` names it: the
 // grid's width and the size types. Its functions reach the admin through
@@ -70,11 +60,8 @@ export {
   overrideWidget,
   extendWidget,
   deregisterWidget,
-  getWidget,
-  listWidgets,
   widgetSource,
   clearWidgets,
-  type WidgetPatch,
 } from "./registry";
 export { MAX_QUERIES_PER_REQUEST } from "./batch-limit";
 export { executeWidgetQuery, type WidgetResult } from "./execute";

@@ -129,7 +129,7 @@ export interface CanonicalWidget {
  * The gates an `actions` declaration carries, one per action; none for a
  * declaration without actions, or with actions that are not a list.
  */
-export function actionGatesOf(actions: unknown): readonly unknown[] {
+function actionGatesOf(actions: unknown): readonly unknown[] {
   if (!Array.isArray(actions)) return [];
   return actions.map(action =>
     typeof action === "object" && action !== null
@@ -206,7 +206,7 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
  * The queries a declaration's settings may drive, as a summary field: its
  * query, or each of its cells' queries.
  */
-export function knobQueriesField(declaration: {
+function knobQueriesField(declaration: {
   query?: unknown;
   cells?: unknown;
 }): Pick<CanonicalWidget, "knobQueries"> {
@@ -227,7 +227,7 @@ export function knobQueriesField(declaration: {
  * A declaration's textarea bounds as a summary field: absent when it states no
  * settings.
  */
-export function textBoundsField(
+function textBoundsField(
   settings: readonly AnyWidgetSetting[] | undefined
 ): Pick<CanonicalWidget, "textBounds"> {
   const textBounds = textBoundsOf(settings);
@@ -235,14 +235,14 @@ export function textBoundsField(
 }
 
 /** A declaration's settings as a summary field: absent when it states none. */
-export function settingsField(
+function settingsField(
   settings: readonly AnyWidgetSetting[] | undefined
 ): Pick<CanonicalWidget, "settings"> {
   return settings === undefined ? {} : { settings };
 }
 
 /** A declaration's Collection setting as a summary field: absent when it states none. */
-export function collectionSettingField(
+function collectionSettingField(
   settings: readonly AnyWidgetSetting[] | undefined
 ): Pick<CanonicalWidget, "collectionSetting"> {
   const collectionSetting = settings?.find(

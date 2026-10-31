@@ -25,6 +25,8 @@
  * locally the way those do rather than shared: a `.test-d.ts` exporting a helper
  * would be imported by files that are not type tests.
  */
+import { expectTypeOf } from "vitest";
+
 import type {
   CoreView,
   GridSize,
@@ -56,10 +58,13 @@ assertType<
 >(true);
 // How a widget names its view: one of core's five, or a component's path,
 // and no display vocabulary beside them.
-assertType<Exact<CoreView, "figure" | "list" | "table" | "bars" | "series">>(
-  true
-);
-assertType<Exact<WidgetView, CoreView | { component: string }>>(true);
+expectTypeOf<CoreView>().toEqualTypeOf<
+  "figure" | "list" | "table" | "bars" | "series"
+>();
+// One assertion per type, written out (see below): a run of them reads as a clone of
+// every other type test's run, and has no shared helper to become.
+// fallow-ignore-next-line code-duplication
+expectTypeOf<WidgetView>().toEqualTypeOf<CoreView | { component: string }>();
 
 // The three claims a closed string union makes, stated together per type: the
 // valid member is assignable, and `string` and a plausible near-miss are not.
@@ -75,6 +80,7 @@ assertType<Exact<WidgetView, CoreView | { component: string }>>(true);
 // deferred, and the wrapper evaluated to `false` for a HEALTHY union -- a helper
 // that fails on correct code and would have been "fixed" by deleting the
 // assertions it broke. Instantiated directly, they resolve.
+// fallow-ignore-next-line code-duplication
 assertType<
   Exact<
     [
