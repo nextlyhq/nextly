@@ -5,8 +5,18 @@
  * item's id, and as an image in its HTML, by the item's address in an
  * `<img src>`. A layout is a template too, and is read the same way.
  *
+ * The HTML is read by an HTML parser, as the mail client that shows it reads
+ * it: an unquoted or entity-encoded `src` is the address it names, and a
+ * `data-src`, a comment or a script's text names none.
+ *
  * @module domains/media/usage/email-template-usage
  */
+
+import {
+  html as parse5Html,
+  parse,
+  type DefaultTreeAdapterTypes,
+} from "parse5";
 
 import type { MediaReference } from "./media-references";
 import {
@@ -20,8 +30,25 @@ import {
 /** The table the templates are stored in. */
 const EMAIL_TEMPLATES_TABLE = "email_templates";
 
-/** Every `<img src>` address in an HTML string. */
-const IMG_SRC = /<img\b[^>]*?\bsrc\s*=\s*(["'])(.*?)\1/gi;
+/**
+ * Every HTML `<img>` element's `src` in an HTML string (an SVG's `<image>`
+ * is not one), as the address it names:
+ * entities decoded and the surrounding whitespace a browser ignores removed.
+ * A `<template>`'s content is not shown, so it is not read.
+ */
+function imageSources(html: string): string[] {
+  const sources: string[] = [];
+  const visit = (node: DefaultTreeAdapterTypes.ChildNode): void => {
+    if (!("tagName" in node)) return;
+    if (node.tagName === "img" && node.namespaceURI === parse5Html.NS.HTML) {
+      const src = node.attrs.find(attr => attr.name === "src")?.value.trim();
+      if (src) sources.push(src);
+    }
+    for (const child of node.childNodes) visit(child);
+  };
+  for (const child of parse(html).childNodes) visit(child);
+  return sources;
+}
 
 function parsedList(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
@@ -50,9 +77,8 @@ export function emailTemplateReferences(
   }
   const html = row.htmlContent ?? row.html_content;
   if (typeof html === "string") {
-    for (const match of html.matchAll(IMG_SRC)) {
-      const url = match[2];
-      if (url) refs.push({ fieldPath: "htmlContent", url });
+    for (const url of imageSources(html)) {
+      refs.push({ fieldPath: "htmlContent", url });
     }
   }
   return refs;

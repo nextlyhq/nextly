@@ -6,7 +6,8 @@
  * that knows them:
  *
  *   - an upload field holds the item's id, or a list of ids, as a column or a
- *     JSON list (a polymorphic one as `{ relationTo, value }`);
+ *     JSON list (a polymorphic one as `{ relationTo, value }`, read only
+ *     where it names media);
  *   - a rich-text value holds the item's address in an image, video or
  *     gallery node's `src`, never its id;
  *   - a block document (the value of a `blocks` field) lists the items it uses
@@ -79,22 +80,52 @@ function parsed(value: unknown): unknown {
   }
 }
 
-/** The ids an upload field's value holds, in any of its stored shapes. */
-function uploadIds(value: unknown): string[] {
+/** The collection media items are stored in, as an upload field names it. */
+const MEDIA_COLLECTION = "media";
+
+/**
+ * The collections an upload field may point at, or `null` when it names
+ * none and is read as pointing at media.
+ */
+function uploadTargets(field: FieldConfig): readonly string[] | null {
+  const relationTo = (field as { relationTo?: unknown }).relationTo;
+  if (typeof relationTo === "string") return [relationTo];
+  return Array.isArray(relationTo)
+    ? relationTo.filter((slug): slug is string => typeof slug === "string")
+    : null;
+}
+
+/**
+ * The ids an upload field's value holds for media, in any of its stored
+ * shapes. `onlyMedia` says the field can point at nothing else, so a value
+ * that does not name its collection is media's; a polymorphic value names
+ * its own, and only one naming media is read.
+ */
+function uploadIds(value: unknown, onlyMedia: boolean): string[] {
   const v = parsed(value);
-  if (Array.isArray(v)) return v.flatMap(uploadIds);
+  if (Array.isArray(v)) return v.flatMap(item => uploadIds(item, onlyMedia));
+  if (!onlyMedia && !isRecord(v)) return [];
   if (typeof v === "string") return v === "" ? [] : [v];
   if (typeof v === "number") return [String(v)];
-  return isRecord(v) ? uploadIdsOfObject(v) : [];
+  return isRecord(v) ? uploadIdsOfObject(v, onlyMedia) : [];
 }
 
 /**
  * `{ relationTo, value }` for a polymorphic upload, `{ id, ... }` for one
- * already expanded.
+ * already expanded: read only when it names media, or names no collection
+ * in a field that can point at nothing else.
  */
-function uploadIdsOfObject(v: Record<string, unknown>): string[] {
-  if ("value" in v) return uploadIds(v.value);
-  return "id" in v ? uploadIds(v.id) : [];
+function uploadIdsOfObject(
+  v: Record<string, unknown>,
+  onlyMedia: boolean
+): string[] {
+  if (typeof v.relationTo === "string") {
+    if (v.relationTo !== MEDIA_COLLECTION) return [];
+    return "value" in v ? uploadIds(v.value, true) : uploadIds(v.id, true);
+  }
+  if (!onlyMedia) return [];
+  if ("value" in v) return uploadIds(v.value, true);
+  return "id" in v ? uploadIds(v.id, true) : [];
 }
 
 /** Every `src` address in a rich-text tree: image, video and gallery nodes. */
@@ -203,8 +234,18 @@ type FieldCollector = (
   into: MediaReference[]
 ) => void;
 
-const collectUpload: FieldCollector = (_field, raw, path, _schemas, into) => {
-  for (const mediaId of uploadIds(raw)) into.push({ fieldPath: path, mediaId });
+/**
+ * An upload field that can point at media: its ids, each read only where
+ * the value is media's (`uploadIds`). One pointing elsewhere uses no item,
+ * whatever ids it holds.
+ */
+const collectUpload: FieldCollector = (field, raw, path, _schemas, into) => {
+  const targets = uploadTargets(field);
+  if (targets !== null && !targets.includes(MEDIA_COLLECTION)) return;
+  const onlyMedia = targets === null || targets.length === 1;
+  for (const mediaId of uploadIds(raw, onlyMedia)) {
+    into.push({ fieldPath: path, mediaId });
+  }
 };
 
 const collectRichText: FieldCollector = (_field, raw, path, _schemas, into) => {

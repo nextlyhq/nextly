@@ -47,6 +47,44 @@ describe("collectMediaReferences", () => {
     ]);
   });
 
+  // An id is a media item's only where the field can point at media: a
+  // polymorphic value names its own collection, and an id held for another
+  // collection may also be a media item's id.
+  it("reads an upload's id only where it points at media", () => {
+    const fields = [
+      f({ type: "upload", name: "media", relationTo: "media" }),
+      f({ type: "upload", name: "docs", relationTo: "docs" }),
+      f({ type: "upload", name: "either", relationTo: ["media", "docs"] }),
+      f({
+        type: "upload",
+        name: "many",
+        relationTo: ["media", "docs"],
+        hasMany: true,
+      }),
+      f({ type: "upload", name: "expanded", relationTo: ["docs", "media"] }),
+      f({ type: "upload", name: "elsewhere", relationTo: ["docs", "files"] }),
+    ];
+
+    expect(
+      collectMediaReferences(fields, {
+        media: ID_1,
+        docs: ID_2,
+        either: { relationTo: "docs", value: ID_1 },
+        many: [
+          { relationTo: "media", value: ID_1 },
+          { relationTo: "docs", value: ID_2 },
+        ],
+        // An expanded value says which collection it is from, or it is read
+        // by what the field may hold.
+        expanded: { relationTo: "docs", value: { id: ID_2 } },
+        elsewhere: { id: ID_1 },
+      })
+    ).toEqual([
+      { fieldPath: "media", mediaId: ID_1 },
+      { fieldPath: "many", mediaId: ID_1 },
+    ]);
+  });
+
   it("reads a rich-text image, video and gallery by the address each shows", () => {
     const body = {
       root: {
@@ -151,6 +189,29 @@ describe("emailTemplateReferences", () => {
       { fieldPath: "attachments", mediaId: ID_1 },
       { fieldPath: "htmlContent", url: "/a.png" },
       { fieldPath: "htmlContent", url: "/b.png" },
+    ]);
+  });
+
+  // Read as a browser reads the HTML the email is sent with: an unquoted
+  // value, a value with entities, and only an `<img>` element's own `src`.
+  it("reads each image's src as HTML does, and nothing that only looks like one", () => {
+    expect(
+      emailTemplateReferences({
+        htmlContent: [
+          "<img src=/uploads/a.png alt=x>",
+          '<img data-src="/uploads/b.png" srcset="/uploads/c.png 2x">',
+          '<img alt="src=/uploads/d.png" src="/uploads/e.png?w=1&amp;h=2">',
+          "<!-- <img src=/uploads/f.png> -->",
+          '<script>"<img src=/uploads/g.png>"</script>',
+          '<p title="<img src=/uploads/h.png>">x</p>',
+          "<img\nsrc\n=\n'/uploads/i.png'>",
+          "<img src>",
+        ].join(""),
+      })
+    ).toEqual([
+      { fieldPath: "htmlContent", url: "/uploads/a.png" },
+      { fieldPath: "htmlContent", url: "/uploads/e.png?w=1&h=2" },
+      { fieldPath: "htmlContent", url: "/uploads/i.png" },
     ]);
   });
 });
