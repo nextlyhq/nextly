@@ -738,3 +738,39 @@ export async function sampleContentPost<Result>(
     });
   }
 }
+
+/**
+ * The project's sample-content route, as a path under the admin's API
+ * (`/admin/api/seed`): the admin's setup card asks it with a HEAD whether
+ * this person may load sample content, and POSTs to it to start the load.
+ */
+const SAMPLE_CONTENT_SEGMENT = "seed";
+
+/** Whether a path under the admin's API is the project's sample-content route. */
+export function isSampleContentPath(params: readonly string[]): boolean {
+  return params.length === 1 && params[0] === SAMPLE_CONTENT_SEGMENT;
+}
+
+/**
+ * Core's answer at the sample-content route where the project ships none:
+ * its own route file (the blog template's) is matched before the admin API's
+ * catch-all, so a request reaching the catch-all there names a route the
+ * project does not have. 404, which the setup card reads as "no sample
+ * content here" and does not ask again. Answered as the built-in router's
+ * invalid-route 400 before, which the card could read only as "not known":
+ * the step stayed open as unreadable and the probe was asked again on every
+ * read of the card. A HEAD, the card's probe, is answered with no body.
+ */
+export function sampleContentNotShipped(request: Request): Response {
+  const answer = buildErrorResponse(
+    NextlyError.notFound({
+      message: "This project ships no sample content.",
+      logContext: { reason: "no-sample-content-route" },
+    }),
+    { requestId: readOrGenerateRequestId(request) }
+  );
+  // The envelope's status and headers, without its body.
+  return request.method === "HEAD"
+    ? new Response(null, { status: answer.status, headers: answer.headers })
+    : answer;
+}

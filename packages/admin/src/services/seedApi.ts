@@ -20,11 +20,13 @@ import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { refreshAccessToken } from "@admin/lib/api/refreshInterceptor";
 import type { MutationResponse } from "@admin/lib/api/response-types";
+import { debugLog } from "@admin/lib/debug";
 
 /**
  * The probe's answer. `available: false` alone is a definitive no: the route
- * refuses this person (401, 403) or the project ships none (404). With
- * `unknown`, the route could not say (a 5xx while it starts, a network
+ * refuses this person (401, 403), the project ships none (404), or it answered
+ * with another refusal of the request (another 4xx, below). With `unknown`,
+ * the route could not say (a 5xx while it starts, a 408 or 429, a network
  * failure): nothing is offered, but setup is not judged on it, and the probe
  * is asked again.
  */
@@ -34,6 +36,9 @@ export type SeedProbeResult =
 
 /** The answers that say no for good: no session, refused, or no sample content at all. */
 const DEFINITIVE_NO = new Set([401, 403, 404]);
+
+/** The refusals that may not hold on the next ask: timed out, or too many requests. */
+const TRANSIENT_REFUSAL = new Set([408, 429]);
 
 /**
  * What starting a load came to, as this person is told it. Never a throw: a
@@ -58,6 +63,27 @@ export type SampleStartAnswer =
 /** The probe's full path, and the start's path under the admin's API. */
 const PROBE_PATH = "/admin/api/seed";
 const SEED_PATH = "/seed";
+
+/**
+ * A failed probe's answer. Any other 4xx is a no as well: the request itself
+ * was refused, and asking again sends the same request. A project whose
+ * admin API answers the path it does not serve with a 400 (Nextly's own
+ * catch-all did, before it answered 404 there) would otherwise be "not
+ * known" for good, the step held open as unreadable and the probe asked
+ * again on every read of the card. Not the route's contract, so it is said
+ * at debug level, once per load: unlike "not known", a no is not asked again.
+ */
+function failedProbe(status: number): SeedProbeResult {
+  if (DEFINITIVE_NO.has(status)) return { available: false };
+  if (status >= 400 && status < 500 && !TRANSIENT_REFUSAL.has(status)) {
+    debugLog(
+      "seedApi",
+      `HEAD ${PROBE_PATH} answered ${status}: read as no sample content.`
+    );
+    return { available: false };
+  }
+  return { available: false, unknown: true };
+}
 
 /** The probe itself: a HEAD, which carries no body to say why it was refused. */
 function headProbe(): Promise<Response> {
@@ -95,12 +121,8 @@ async function probe(): Promise<SeedProbeResult> {
   // starting. Read as "the endpoint exists", a refusal drew a button whose
   // every press fails, in place of an action the person could take. Every
   // other failure fails closed too: no answer is never a yes. But it is not a
-  // no either: only a refusal or a missing route is.
-  if (!res.ok) {
-    return DEFINITIVE_NO.has(res.status)
-      ? { available: false }
-      : { available: false, unknown: true };
-  }
+  // no either: only a refusal or a missing route is (`failedProbe`).
+  if (!res.ok) return failedProbe(res.status);
   // Template metadata from headers, so the offer names the template without
   // hardcoding it.
   const slug = res.headers.get("x-nextly-seed-template") ?? "unknown";
