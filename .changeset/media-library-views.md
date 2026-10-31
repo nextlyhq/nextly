@@ -42,13 +42,17 @@ Replace.
 - Delete lists where an item is used before asking, then takes it out of every list and count at
   once and offers Undo for ten seconds, one Undo for a bulk delete. The item, its files, folder and
   usage stay until the window ends; then it is deleted with its files, by the server even if the
-  person has left the page. `POST /admin/api/media/deletions` and `/deletions/undo` take a list of
+  person has left the page. An Undo after the deadline is refused, and a bulk delete marks every
+  item or none. `POST /admin/api/media/deletions` and `/deletions/undo` take a list of
   ids and need the delete permission. The existing `DELETE` routes still delete at once.
 - Replace file stores a new file under the same item: the same id, name, alt text, caption, folder
   and usage, with a new address and thumbnail, so every document using it by id (upload fields,
-  block documents, attachments) shows the new file at once. Rich text and email-template images
-  name the item by its address, so while any does, the old file is kept and they go on showing
-  the previous image until they are edited; the Replace dialog says how many and lists them, and
-  Used in marks each. The kept file goes when the item is deleted. The focus point is cleared.
+  block documents, attachments) shows the new file at once. Rich text, email-template images,
+  users' avatars and the email and site logos name the item by its address, so while any does, the
+  old file is kept and they go on showing the previous image until they are edited; the Replace
+  dialog says how many and lists the documents, and Used in marks each. Until
+  `nextly media reindex-usage` has run, the old file is always kept, and the dialog says so. The
+  kept file goes when the item is deleted, by any delete. The focus point is cleared.
   `POST /admin/api/media/:id/replace` answers it, with the upload's own checks, and
-  `GET /admin/api/media/:id/usage?byAddress=true` lists the uses by address.
+  `GET /admin/api/media/:id/usage?byAddress=true` lists the uses by address, with the avatars and
+  logos keeping it and whether the usage record is built.
