@@ -19,7 +19,9 @@ import { Fragment, type JSX, type MouseEvent, type ReactNode } from "react";
 import { Link, prefersNativeNavigation } from "@admin/components/ui/link";
 import type { DashboardSummary } from "@admin/types/dashboard/summary";
 
-import { CELL_PLACEMENT_ATTRIBUTE } from "../../widgets/edit/drag/useCardDrag";
+// From its own import-free module, never from the drag code: this line is part of the first
+// screen every page loads, and customise mode's drag loads with the dashboard route.
+import { CELL_PLACEMENT_ATTRIBUTE } from "../../widgets/cell-placement-attribute";
 
 import { summaryLine, type SummaryLinePart } from "./summary-wording";
 
