@@ -65,6 +65,7 @@ export interface Running {
   logs: () => { name: string; path: string }[];
   /** Writes the note outside any request, through the Direct API, or straight into the table with `raw`. */
   writeOutsideRequest: (value: string, raw?: boolean) => void;
+  /** Stops both instances, then removes the leg's copies, its builds and its logs. */
   stop: () => Promise<void>;
 }
 
@@ -158,7 +159,8 @@ async function startInstance(
     await waitFor(
       `instance ${name} to answer on ${url}`,
       async () => {
-        if (server.exitCode !== null) {
+        // A server killed by a signal has no exit code, only its signal.
+        if (server.exitCode !== null || server.signalCode !== null) {
           throw new Error(`instance ${name} exited:\n${tail(logFile)}`);
         }
         const res = await fetch(`${url}/api/ready`).catch(() => null);
@@ -184,6 +186,31 @@ export async function startLeg(leg: Leg, url: string): Promise<Running> {
   const dir = path.join(RUN, leg.name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
+  try {
+    return await buildAndStart(leg, url, dir);
+  } catch (error) {
+    // The error carries the failed step's log, so the copies are not needed.
+    removeLeg(dir);
+    throw error;
+  }
+}
+
+/**
+ * Removes a leg's copies of the fixture, its builds and its logs, which are
+ * large, once its servers have stopped and a failed test has attached the
+ * logs. `MULTI_INSTANCE_KEEP_RUN=1` keeps them, to look into a failure.
+ */
+function removeLeg(dir: string): void {
+  if (process.env.MULTI_INSTANCE_KEEP_RUN === "1") return;
+  rmSync(dir, { recursive: true, force: true });
+}
+
+/** `startLeg`'s steps, in `dir`, which it removes again if any of them fails. */
+async function buildAndStart(
+  leg: Leg,
+  url: string,
+  dir: string
+): Promise<Running> {
   const appA = path.join(dir, "a");
   const appB = path.join(dir, "b");
   cpSync(FIXTURE, appA, { recursive: true });
@@ -272,6 +299,7 @@ export async function startLeg(leg: Leg, url: string): Promise<Running> {
     },
     stop: async () => {
       await Promise.all([stop(a.server), stop(b.server)]);
+      removeLeg(dir);
     },
   };
 }
