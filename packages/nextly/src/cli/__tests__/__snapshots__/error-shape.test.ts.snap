@@ -1637,6 +1637,13 @@ exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
 `;
 
+exports[`each code, as a command ends with it > WIDGET_GENERATE_CANCELLED 1`] = `
+"✗ \`nextly generate:widget\` was cancelled, and wrote no widget.
+  Why:  A prompt was closed before it was answered.
+  Next: Run \`nextly generate:widget\` again and answer its prompts, or give the answers as flags, as in \`nextly generate:widget open-orders --view figure --no-collection\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/widget-generate-cancelled  (WIDGET_GENERATE_CANCELLED)"
+`;
+
 exports[`each code, as a command ends with it > WORKFLOW_CANNOT_ATTACH 1`] = `
 "✗ A workflow cannot be attached where the configuration attaches it.
   Why:  \`editorial\` cannot be attached to \`pages\`: it does not keep drafts: set \`status: true\` and \`versions: { drafts: true }\`.

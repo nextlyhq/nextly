@@ -13,6 +13,8 @@ import { container } from "../../di/container";
 import type { LanguageRegistry } from "../../domains/i18n/language-registry";
 import { loadNextModule, requireNextApi } from "../next-api";
 
+import { readTags } from "./nextly-tags";
+
 /** The subset of `unstable_cache` this helper uses. */
 export type UnstableCache = <T>(
   cb: () => Promise<T>,
@@ -140,7 +142,10 @@ export function applyCache<T>(
 ): Promise<T> {
   if (!unstableCache) return reader();
   const cached = unstableCache(afterLanguagesRead(reader), options.keyParts, {
-    tags: options.tags,
+    // Each once, none longer than Next.js accepts, and no more than it keeps,
+    // in the order given: the routes put their own collection's or Single's
+    // tag first, and a caller's own `cachedFind` keeps its order.
+    tags: readTags(options.tags),
     revalidate: options.revalidate ?? false,
   });
   return runCachedOrDirect(cached, reader);

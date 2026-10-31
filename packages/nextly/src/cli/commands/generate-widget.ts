@@ -15,8 +15,12 @@
 import * as clack from "@clack/prompts";
 import type { Command } from "commander";
 
-import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../context";
+import { exitWithError } from "../errors";
+import {
+  widgetGenerateCancelled,
+  widgetNotGenerated,
+} from "../errors/areas/commands";
 
 import type { WidgetViewKind } from "./generate-widget/files";
 import {
@@ -26,11 +30,14 @@ import {
   type WidgetPrompter,
 } from "./generate-widget/run";
 
-/** A cancelled prompt stops the command; nothing has been written by then. */
+/**
+ * A cancelled prompt stops the command; nothing has been written by then. The prompts are asked
+ * only inside the action's `try`, so the throw ends the command through its catch, in the shape.
+ */
 function answered<T>(value: T | symbol): T {
   if (clack.isCancel(value)) {
     clack.cancel("Nothing written.");
-    process.exit(1);
+    throw widgetGenerateCancelled();
   }
   return value;
 }
@@ -134,14 +141,11 @@ export function registerGenerateWidgetCommand(program: Command): void {
             options,
             interactive() ? terminalPrompter : undefined
           );
-          if (!result.ok) {
-            context.logger.error(result.reason);
-            process.exit(1);
-          }
+          // A refusal of what it was given; the catch prints it as the CLI's error shape.
+          if (!result.ok) throw widgetNotGenerated(result.reason);
           report(result, context);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

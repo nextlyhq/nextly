@@ -943,6 +943,81 @@ jobs:
               exit 1
             fi
           done
+          # Cache Components is not supported yet, and under it the first read after a
+          # write can still be the previous version, so this check runs on the legs
+          # that build without it: the configuration the freshness promise is made for.
+          # Not indented under the `if`, so the heredoc's closing line stays in column 0.
+          if [ "${{ matrix.cacheComponents }}" != on ]; then
+          # A write through the REST API, a Route Handler, expires the post's cached page
+          # before it responds: the next request, made after the response, reads the new
+          # title. It writes as an administrator made for it through the Direct API, as
+          # the script above writes its posts, so the check depends on no seeded account.
+          base=http://localhost:3101
+          if [ -e scripts/admin-for-check.mts ]; then
+            echo "the scaffold already has scripts/admin-for-check.mts"; exit 1
+          fi
+          set -o noclobber
+          cat > scripts/admin-for-check.mts <<'TS'
+          import { getNextly } from "nextly";
+          import config from "../nextly.config";
+          const nextly = await getNextly({ config });
+          const roles = await nextly.roles.find({ limit: 100, page: 1 });
+          const admin = roles.items.find(r => (r as { slug?: string }).slug === "super-admin");
+          if (!admin) throw new Error("no super-admin role to make the check's administrator with");
+          await nextly.users.create({
+            email: "owner@example.com",
+            password: "Owner-Passw0rd!-check",
+            data: { name: "Owner", roles: [(admin as { id: string }).id], isActive: true },
+          });
+          process.exit(0);
+          TS
+          set +o noclobber
+          cp package.json /tmp/package.json.bak
+          npm pkg set type=module
+          npx --yes tsx@4.21.0 --env-file=.env scripts/admin-for-check.mts
+          cp /tmp/package.json.bak package.json
+          owner='{"email":"owner@example.com","password":"Owner-Passw0rd!-check"}'
+          # The auth routes take a double-submitted CSRF token: the cookie the csrf route
+          # sets, and the same value in a header.
+          jar=/tmp/fresh-check-cookies
+          rm -f "$jar"
+          csrf=$(curl -s --max-time 10 -c "$jar" "$base/admin/api/auth/csrf" | jq -r '.token // .data.token // empty')
+          [ -n "$csrf" ] || { echo "the csrf route gave no token"; exit 1; }
+          post_auth() {
+            curl -s --max-time 30 -b "$jar" -c "$jar" -o "$2" -w '%{http_code}' -X POST "$base/admin/api/auth/$1" \
+              -H 'Content-Type: application/json' -H "Origin: $base" -H "x-csrf-token: $csrf" -d "$3"
+          }
+          code=$(post_auth login /tmp/login.json "$owner")
+          [ "$code" = 200 ] || { echo "login answered $code"; cat /tmp/login.json; exit 1; }
+          # Signed in by the session cookies the login set, as the admin is.
+          api() {
+            curl -s --max-time 30 -b "$jar" -c "$jar" -H "Origin: $base" -H "x-csrf-token: $csrf" "$@"
+          }
+          post=$(api "$base/admin/api/collections/posts/entries?limit=20&depth=0" |
+            jq -c '[.items[]? | select(.status == "published")][0] // empty')
+          [ -n "$post" ] || { echo "the API lists no published post to write to"; exit 1; }
+          id=$(echo "$post" | jq -r '.id'); slug=$(echo "$post" | jq -r '.slug'); old=$(echo "$post" | jq -r '.title')
+          page="$base/blog/$slug"
+          # Read twice, so the page is in the cache before the write.
+          for _ in 1 2; do
+            curl -sf --max-time 30 -o /tmp/before.html "$page" || { echo "$page did not answer before the write"; exit 1; }
+          done
+          grep -qF "$old" /tmp/before.html || { echo "$page does not show its title \"$old\" before the write"; exit 1; }
+          # The slug is sent unchanged, so the page stays at the URL just read.
+          new="Fresh after the write $(date +%s)"
+          code=$(api -o /tmp/patch.json -w '%{http_code}' -X PATCH "$base/admin/api/collections/posts/entries/$id" \
+            -H 'Content-Type: application/json' -d "$(jq -cn --arg t "$new" --arg s "$slug" '{title: $t, slug: $s}')")
+          [ "$code" = 200 ] || { echo "the update answered $code"; cat /tmp/patch.json; exit 1; }
+          # One read, in sequence after the response: no retry, since the expiry must
+          # have completed by then.
+          curl -sf --max-time 30 -o /tmp/after.html "$page" || { echo "$page did not answer after the write"; exit 1; }
+          if ! grep -qF "$new" /tmp/after.html; then
+            grep -qF "$old" /tmp/after.html && echo "$page still shows the title \"$old\" after the update to \"$new\" responded"
+            echo "$page does not show the updated title \"$new\""
+            exit 1
+          fi
+          echo "$page shows \"$new\" on the first read after the write"
+          fi
 
       # Under Cache Components every route streams a static shell, so the first request for
       # an unknown slug is answered with the not-found page and `noindex` before its status
@@ -1045,7 +1120,7 @@ jobs:
           import { seed } from "../src/endpoints/seed";
 
           const nextly = await getNextly({ config });
-          const result = await seed({ nextly });
+          const result = await seed({ nextly, config });
           console.log(JSON.stringify(result.summary));
           process.exit(0);
           TS

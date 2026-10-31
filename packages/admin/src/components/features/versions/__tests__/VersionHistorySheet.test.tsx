@@ -467,6 +467,32 @@ describe("VersionHistorySheet", () => {
     expect(markSeenMock).toHaveBeenLastCalledWith(scope, 2);
   });
 
+  it("marks nothing for a document whose writes are refused", async () => {
+    // Its collection or Single was removed from code, and the mark is a write.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    renderSheet({ writesRefused: true });
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+
+    // The version is chosen and shown, as for any reader; only the mark,
+    // which the same showing sends for any other document, is not.
+    await waitFor(() =>
+      expect(useVersionMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ versionNo: 2 })
+      )
+    );
+    expect(markSeenMock).not.toHaveBeenCalled();
+  });
+
   it("marks nothing while the chosen version has not arrived", async () => {
     useVersionsMock.mockReturnValue(
       listState({

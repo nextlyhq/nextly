@@ -38,7 +38,8 @@ import { marksNoTransaction } from "../../../../domains/schema/migrate/split-sql
 import { withMigrateLock } from "../../../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { createLogger } from "../../../utils/logger";
-import { migrateCore, parseSqlSections } from "../../migrate";
+import { migrateCore } from "../../migrate";
+import { parseSqlSections } from "../../../../domains/schema/migrate/sql-sections";
 import { downDatabaseDeps, migrateDownCore } from "../../migrate-down";
 
 const [dialect, url, migrationsDir, command, when, watched, lease] =

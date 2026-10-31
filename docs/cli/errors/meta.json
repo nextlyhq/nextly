@@ -176,6 +176,7 @@
     "upgrade-backup-not-confirmed",
     "upgrade-cancelled",
     "upgrade-events-table-taken",
+    "widget-generate-cancelled",
     "workflow-cannot-attach"
   ]
 }

@@ -46,6 +46,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/postgres";
 export { nextlyPluginSettings } from "../plugin-settings/postgres";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/postgres";
 export { nextlyLimitStore } from "../limit-store/postgres";
+export { nextlyCacheTagExpiries } from "../cache-tag-expiries/postgres";
 export { nextlySpentChallenges } from "../spent-challenges/postgres";
 export { nextlySchemaOwners } from "../schema-owners/postgres";
 export { nextlyWidgetLayout } from "../widget-layout/postgres";
