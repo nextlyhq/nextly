@@ -151,9 +151,10 @@ type Retirement = "unasked" | "asked" | "recorded" | "refused";
  * Asked once per answer the card is drawn from (`answer`): a write that failed is asked again
  * when the card's data is next read, on the next load or refocus, never in a loop on its own
  * failure. One the host refused, as it finds a step open (409), is never asked again over the same
- * answer: the card's data is read once more (`refresh`) to draw the steps as the host now has them,
- * and any new answer read after the refusal is asked about once more when every step it draws is
- * done.
+ * steps: the card's data is read once more (`refresh`) to draw the steps as the host now has them,
+ * and only an answer whose steps differ from the refused one's (`retirementSignature`) is asked
+ * about once more, when every step it draws is done. A refusal the host keeps giving over the same
+ * steps is one request, however often the card's data is read.
  */
 function useRetirement(
   due: boolean,
@@ -167,31 +168,37 @@ function useRetirement(
   // The latest refresh, read when an answer lands, so a new one each draw never asks again.
   const latestRefresh = useRef(refresh);
   latestRefresh.current = refresh;
-  // The answer a refusal was about: never asked again over that one.
-  const refusedAnswer = useRef<SetupCardData | undefined>(undefined);
-  // Refused, and a new answer has been read since: it may be all done, finished on another device
-  // before the read, or have a step open that is done later. Either way it earns one more ask, so
-  // a card that finishes while it is drawn is still retired, never left all done for good. A
-  // refetch that answers the same leaves the same object (the query keeps it), so this never
-  // loops. Its own effect, so a failed write, which also leaves the guard unasked, is not asked
-  // again at once.
+  // What the refused ask was about (`retirementSignature`): never asked again over the same.
+  const refusedSignature = useRef<string | undefined>(undefined);
+  // Refused, and an answer read since differs in what it says: it may be all done, finished on
+  // another device before the read, or have a step open that is done later. Either way it earns
+  // one more ask, so a card that finishes while it is drawn is still retired, never left all done
+  // for good. Compared by content, never by object: every read hands a new object, so a refusal
+  // the host keeps giving (no preferences table, a write it cannot record) is asked once and not
+  // again while the steps it judged stay as they were. Its own effect, so a failed write, which
+  // also leaves the guard unasked, is not asked again at once.
   useEffect(() => {
-    if (retirement !== "refused" || answer === refusedAnswer.current) return;
+    if (retirement !== "refused") return;
+    if (
+      retirementSignature(answer, sampleRefused) === refusedSignature.current
+    ) {
+      return;
+    }
     asked.current = false;
     setRetirement("unasked");
-  }, [answer, retirement]);
+  }, [answer, sampleRefused, retirement]);
   useEffect(() => {
     if (!due || asked.current) return;
     asked.current = true;
     setRetirement("asked");
-    const askedAbout = answer;
+    const askedAbout = retirementSignature(answer, sampleRefused);
     retire(
       { sampleRefused },
       {
         onDone: () => setRetirement("recorded"),
         onFailed: error => {
           if (isApiError(error) && error.status === 409) {
-            refusedAnswer.current = askedAbout;
+            refusedSignature.current = askedAbout;
             setRetirement("refused");
             latestRefresh.current();
             return;
@@ -203,6 +210,21 @@ function useRetirement(
     );
   }, [due, sampleRefused, retire, answer]);
   return retirement;
+}
+
+/**
+ * What a retirement is judged over, as text: each step's kind and status, whether setup was known,
+ * and what the project's sample-content route said. Two answers alike in these ask the host the
+ * same question, whatever objects they arrive as.
+ */
+function retirementSignature(
+  answer: SetupCardData,
+  sampleRefused: boolean
+): string {
+  const steps = answer.setup.known
+    ? answer.setup.steps.map(step => `${step.kind}:${step.status}`)
+    : ["unknown"];
+  return JSON.stringify([steps, sampleRefused]);
 }
 
 /** "N of M done", from a counted answer. */

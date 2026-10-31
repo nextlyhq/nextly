@@ -642,6 +642,32 @@ describe("the setup card", () => {
     expect(put).toHaveBeenCalledTimes(1);
   });
 
+  it("asks once over a refusal the host keeps giving, however often the same steps are read again", async () => {
+    // The host refuses every time: no preferences table, or a write it cannot record.
+    const refusal = () =>
+      Object.assign(new Error("Setup is not all set: a step is still open."), {
+        status: 409,
+        code: "CONFLICT",
+      });
+    put.mockImplementation(() => Promise.reject(refusal()));
+    seed.status = { kind: "hidden" };
+    const steps = (): SetupStep[] => [
+      { kind: "sample", status: "open" },
+      { kind: "invite", status: "skipped" },
+    ];
+    const answer = () =>
+      dataOf({ setup: { known: true, steps: steps(), done: 1, total: 2 } });
+    const { rerender } = draw(answer());
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    // Each read hands a new object with the same steps: never a second request.
+    for (let read = 0; read < 4; read += 1) {
+      rerender(tree(answer()));
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it("asks once more after a refusal when a new answer is all done, finished elsewhere before the read", async () => {
     put.mockRejectedValueOnce(
       Object.assign(new Error("Setup is not all set: a step is still open."), {
