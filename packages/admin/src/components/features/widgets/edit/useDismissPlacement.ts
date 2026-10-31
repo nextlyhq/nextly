@@ -39,7 +39,6 @@
  * @module components/features/widgets/edit/useDismissPlacement
  */
 
-import { GET_STARTED_WIDGET_ID } from "nextly/config";
 import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
@@ -81,11 +80,8 @@ type NoticeTaken = NonNullable<RemovalNotice["taken"]>;
 
 /**
  * What removing one card at rest writes: the card taken out of an arranged reader's list, or
- * hidden in the list of a reader still following the default.
- *
- * The Get started card is hidden for an arranged reader too. The server carries it back into a
- * write that leaves it out, as it does a dormant one the reader was never handed, so taken out it
- * would come straight back; held with `removed: true` it is the reader's own choice, kept.
+ * hidden in the list of a reader still following the default. No card is carried back into a
+ * list that leaves it out, the setup card included, so none needs holding as removed.
  */
 function removalOf(
   stored: DashboardLayoutResponse,
@@ -95,7 +91,7 @@ function removalOf(
   const index = stored.placements.findIndex(p => p.id === placementId);
   const placement = stored.placements[index];
   if (placement === undefined) return undefined;
-  if (!arranged || placement.widgetId === GET_STARTED_WIDGET_ID) {
+  if (!arranged) {
     return {
       placements: removePlacement(stored.placements, placementId),
       // Said as it is: an arranged reader's write stays an arrangement.
