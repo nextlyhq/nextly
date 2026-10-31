@@ -72,7 +72,7 @@ function usageSentence(usage: MediaUsage | undefined, failed: boolean): string {
   if (usage) {
     const total = usageTotal(usage);
     return total > 0
-      ? `It's used in ${placesText(total)}. Those will show no image until you choose another.`
+      ? `It's used in ${placesText(total)}, which will show no image until you choose another.`
       : "It isn't used anywhere.";
   }
   return failed
