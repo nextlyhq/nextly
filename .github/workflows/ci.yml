@@ -2531,6 +2531,73 @@ jobs:
           node scripts/check-scaffold-cli-scripts.mjs \
             /tmp/scaffold-test/smoke-app \
             packages/nextly/dist/cli/nextly.mjs
+  # The scaffold build on main: scaffold-build.yml runs on a pull request that
+  # touches a template, create-nextly-app or the workflow itself, and nothing ran
+  # it on main, so a red there went unread. It runs here for a push to main that
+  # changed one of those same paths, and `main-red` reports it with the other
+  # advisory jobs. Any other commit skips it, as its pull-request trigger does.
+  # `main-red` watches the scope job too: one that fails skips the build, which
+  # alone would report nothing.
+  scaffold-build-scope:
+    name: Decide whether this commit can affect a scaffold
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      inert: ${{ steps.decide.outputs.inert }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # The commit this job last built a scaffold for, so a push after one it
+      # skipped is compared with what was actually tested. Every leg is named,
+      # by the name its run carries: a run where one leg was cancelled did not
+      # test that leg, though the others reached a verdict.
+      - name: Ask whether a newer push already covers this one
+        id: newer
+        uses: ./.github/actions/superseded-on-main
+        with:
+          workflow: ci.yml
+          substantive-job: |
+            Scaffold build / Scaffold blank
+            Scaffold build / Scaffold blank-pnpm9
+            Scaffold build / Scaffold blank-pnpm11
+            Scaffold build / Scaffold blank-bundled
+            Scaffold build / Scaffold blog-code-first
+            Scaffold build / Scaffold blog-visual
+            Scaffold build / Scaffold blog-cache-components
+            Scaffold build / Scaffold existing-create-next-app
+          token: ${{ github.token }}
+
+      # Everything is inert but the paths scaffold-build.yml's pull-request
+      # trigger names.
+      - name: Decide
+        id: decide
+        env:
+          SUPERSEDED: ${{ steps.newer.outputs.superseded }}
+          LAST_TESTED_SHA: ${{ steps.newer.outputs.last-tested-sha }}
+          SCOPE_TITLE: Scaffold build scope
+          INERT_PATHS: "."
+          ALWAYS_RUN_PATHS: '^(templates/(base|blank|blog)/|packages/create-nextly-app/|\.github/workflows/scaffold-build\.yml$)'
+        run: node scripts/change-scope.mjs
+
+  scaffold-build:
+    name: Scaffold build
+    needs: [scaffold-build-scope]
+    if: needs.scaffold-build-scope.outputs.inert != 'true'
+    uses: ./.github/workflows/scaffold-build.yml
+
   # The `dev` script of `packages/ui` starts TWO watchers, and the shape it used
   # before — `a --watch & b --watch & wait` — is POSIX. `cmd.exe` treats `&` as a
   # SEQUENTIAL separator and has no `wait`, so on Windows the first watcher held
@@ -2863,8 +2930,8 @@ jobs:
           scripts/cli-entry.cli.test.mjs
 
   # Keeps one issue open while a job above that does not block a merge is red
-  # on `main` (the browser tests, dev reload and the smokes), and closes it on
-  # the first run in which they all pass. They are not in `CI gate`, so a red
+  # on `main` (the browser tests, dev reload, the smokes and the scaffold
+  # build), and closes it on the first run in which they all pass. They are not in `CI gate`, so a red
   # one on `main` would otherwise show only inside a run whose gate passed.
   # `always()` so it reads the jobs whatever they concluded; on a pull request
   # it never runs. A run in which they were skipped (superseded) or cancelled
@@ -2892,6 +2959,8 @@ jobs:
       - e2e-cache-components-off
       - scaffold-smoke
       - dev-script-smoke
+      - scaffold-build-scope
+      - scaffold-build
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
