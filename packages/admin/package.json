@@ -151,7 +151,7 @@
     "liquidjs": "^10.30.0",
     "lucide-react": "^0.544.0",
     "pluralize": "^8.0.0",
-    "react-dropzone": "^14.3.8",
+    "react-dropzone": "^20.1.4",
     "react-hook-form": "^7.66.0",
     "recharts": "3.10.1",
     "sonner": "^2.0.7",
