@@ -548,30 +548,22 @@ export function chosenSizeIds(
   placements: readonly WidgetPlacement[],
   stored?: StoredLayout
 ): string[] {
-  const keptAsStored = storedChosenSizes(stored);
+  // The stored card each default card stands for, by the same matching as the write's, so a
+  // card the row holds under an id an earlier default gave it is still the reader's.
+  const before = defaultCardsWithChoices(defaults, stored?.placements ?? []);
+  const sized = new Set(stored?.sized ?? []);
   return defaultCardsWithChoices(defaults, placements).flatMap(
-    ([placement, choice]) => {
+    ([placement, choice], index) => {
       if (choice === undefined) return [];
       const departs = choice.w !== placement.w || choice.h !== placement.h;
-      const before = keptAsStored.get(choice.id);
+      const was = before[index]?.[1];
       const unchanged =
-        before?.widgetId === choice.widgetId &&
-        before.w === choice.w &&
-        before.h === choice.h;
+        was !== undefined &&
+        sized.has(was.id) &&
+        was.w === choice.w &&
+        was.h === choice.h;
       return departs || unchanged ? [choice.id] : [];
     }
-  );
-}
-
-/** The cards `stored` names as sized by their reader, by id, as the row stored each. */
-function storedChosenSizes(
-  stored: StoredLayout | undefined
-): ReadonlyMap<string, WidgetPlacement> {
-  const sized = new Set(stored?.sized ?? []);
-  return new Map(
-    (stored?.placements ?? [])
-      .filter(placement => sized.has(placement.id))
-      .map(placement => [placement.id, placement])
   );
 }
 

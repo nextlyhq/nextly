@@ -544,6 +544,28 @@ describe("a row of an earlier format is no saved arrangement", () => {
     ).toEqual([]);
   });
 
+  it("keeps a size the reader chose for a card the row stored under another id, matched by its widget", () => {
+    // The row holds core/a's one card under the id an earlier default gave it; the default now
+    // places it under its own id, at the size the reader chose.
+    const defaults = [card("core/a", "core/a", { w: 8, h: 3 })];
+    const row = readRow(
+      serializeLayout([card("old-id", "core/a", { w: 8, h: 3 })], false, [
+        "old-id",
+      ])
+    );
+    expect(
+      chosenSizeIds(defaults, [card("core/a", "core/a", { w: 8, h: 3 })], row)
+    ).toEqual(["core/a"]);
+    // The same card resized to anything else gives the choice up.
+    expect(
+      chosenSizeIds(
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        row
+      )
+    ).toEqual([]);
+  });
+
   it("starts a card afresh when its id was stored for another widget", () => {
     // The config now names `slot` a card of core/b; the row kept core/a's
     // removal and settings under it, which core/b must not take.

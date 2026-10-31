@@ -856,6 +856,47 @@ describe("a row nobody arranged still follows the defaults", () => {
       ]);
     });
 
+    it("stays the reader's for a card the row stored under another id", async () => {
+      // The row holds core/a's one card under an id an earlier default gave it; the default
+      // now gives it the size the reader chose, and places it under its own id.
+      registerWidget(
+        widget({
+          id: "core/a",
+          size: { ...RESIZABLE, default: { w: 8, h: 3 } },
+          defaultOrder: 0,
+        })
+      );
+      registerWidget(
+        widget({ id: "core/b", size: RESIZABLE, defaultOrder: 10 })
+      );
+      stored = unarrangedRow(
+        [
+          { id: "old-a", widgetId: "core/a", w: 8, h: 3, removed: false },
+          { id: "core/b", widgetId: "core/b", w: 6, h: 3, removed: false },
+        ],
+        1,
+        ["old-a"]
+      );
+      // The reader is handed the card under the default's id, and removes the other card.
+      const read = await bodyOf(await getWidgetLayout(getReq()));
+      expect(read.placements?.map(p => [p.id, p.w])).toEqual([
+        ["core/a", 8],
+        ["core/b", 6],
+      ]);
+      await putWidgetLayout(
+        putReq({
+          placements: [
+            { id: "core/a", widgetId: "core/a", w: 8, h: 3, removed: false },
+            { id: "core/b", widgetId: "core/b", w: 6, h: 3, removed: true },
+          ],
+          version: 1,
+          scope: scopeFor(),
+          arranged: false,
+        })
+      );
+      expect(saved?.sized).toEqual(["core/a"]);
+    });
+
     it("is given up when the reader resizes the card back to the default's size", async () => {
       registerWidget(
         widget({ id: "core/a", size: RESIZABLE, defaultOrder: 0 })
