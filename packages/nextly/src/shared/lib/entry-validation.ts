@@ -782,6 +782,28 @@ function asSentence(message: string): string {
  * reported as a refusal, exactly as the per-field `validate` is, so a defective
  * plugin cannot turn a rejected write into a 500.
  */
+/**
+ * The field that found an issue whose path addresses somewhere else, as a
+ * plugin type's validator may choose: the issue is told at its path, and is
+ * judged by this field's read rules. Keyed by the issue itself, so it adds
+ * nothing to the shape a caller is handed.
+ */
+const ISSUE_ORIGINS = new WeakMap<ValidationIssue, string>();
+
+/** The path of the field that found `issue`: where it addresses, unless it was found elsewhere. */
+export function issueOrigin(issue: ValidationIssue): string {
+  return ISSUE_ORIGINS.get(issue) ?? issue.path;
+}
+
+/** Whether `issuePath` is `fieldPath` or a position under it. */
+function addressesWithin(issuePath: string, fieldPath: string): boolean {
+  return (
+    issuePath === fieldPath ||
+    issuePath.startsWith(`${fieldPath}.`) ||
+    issuePath.startsWith(`${fieldPath}[`)
+  );
+}
+
 async function validatePluginFieldType(
   validate: NonNullable<PluginFieldType["validate"]>,
   field: ValidatableField,
@@ -823,14 +845,19 @@ async function validatePluginFieldType(
 
     if (Array.isArray(result)) {
       for (const issue of result) {
-        issues.push({
+        const told: ValidationIssue = {
           // A structured value can be wrong somewhere inside itself, so an
           // issue may address a position under this field; without one it
           // belongs to the field as a whole.
           path: issue.path ?? path,
           code: issue.code ?? "CUSTOM",
           message: asSentence(issue.message),
-        });
+        };
+        // The path is the validator's to choose, and is told as given; the
+        // field that found the issue is kept beside it, for what its caller
+        // may be told to follow that field's read rules.
+        if (!addressesWithin(told.path, path)) ISSUE_ORIGINS.set(told, path);
+        issues.push(told);
       }
       return;
     }
