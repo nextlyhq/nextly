@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A cached page now leaves out any tag longer than the 256 characters Next.js accepts before applying the 128-tag limit, so an over-long tag from the code making the read can no longer push a valid one off the end. The caching and REST guides now say when a page shows a write, what happens when an expiry fails, which writes expire pages, and that the login returns `accessToken`.
+A cached read, through `cachedFind` or Nextly's collection and Single routes, now leaves out any tag longer than the 256 characters Next.js accepts before applying the 128-tag limit, so an over-long tag can no longer push a valid one off the end. The caching and REST guides now say when a page shows a write, what happens when an expiry fails, which writes expire pages, and that the login returns `accessToken`.

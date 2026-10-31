@@ -112,7 +112,7 @@ request, and the REST and admin response says so with a notice:
 }
 ```
 
-A write through the Direct API gets the log line only.
+The Direct API's mutations return the same notice in the result's `warnings`, so a caller can tell the expiry was deferred.
 
 ### Which writes expire a page
 
@@ -244,8 +244,10 @@ unaffected); it just does not bust any cache tags.
 - Add `revalidate: <seconds>` to `cachedFind` for a time-based safety net on top
   of tag-based busting.
 - Next.js keeps at most 128 tags on one cached read and drops any tag longer
-  than 256 characters. The routes Nextly provides leave out the over-long
-  tags, put their own collection's or Single's tag first, then the tags you
-  pass, each once, and leave off the rest with a warning logged once. A read that
+  than 256 characters. `cachedFind` leaves out the over-long tags, keeps each
+  tag once in the order you give, and leaves off any past 128 with a warning
+  logged once. The routes Nextly provides put their own collection's or
+  Single's tag first, so a read that lists many related collections still
+  expires whenever its own content changes. A read that
   lists many related collections still expires whenever its own content
   changes.
