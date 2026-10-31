@@ -17,8 +17,8 @@
  * draws its cards at other tiers than the width it was judged at, where what
  * was judged of them no longer holds, so the cards it hid are shown.
  *
- * A widget the layout read cannot answer (one of the `registerWidget` or
- * `contributes.admin.widgets` channel) is named in its `hiddenWhenAnswerEmpty`
+ * A widget the layout read cannot answer (one whose data a query asks rather
+ * than a `load`) is named in its `hiddenWhenAnswerEmpty`
  * instead: its card leaves the dashboard while its own answer is empty, as it
  * is drawn (`useHidesWhenAnswerEmpty`).
  *

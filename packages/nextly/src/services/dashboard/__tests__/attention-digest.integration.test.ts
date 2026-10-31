@@ -89,6 +89,7 @@ function declare(items: AttentionItem[]): void {
   registerAttentionItems([
     {
       owner: OWNER,
+      plugin: "acme",
       widgets: [],
       suggest: undefined,
       alternatives: undefined,

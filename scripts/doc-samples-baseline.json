@@ -117,8 +117,8 @@
       "compiled": 7
     },
     "docs/guides/isr-caching.mdx": {
-      "samples": 5,
-      "compiled": 5
+      "samples": 7,
+      "compiled": 6
     },
     "docs/guides/media-storage.mdx": {
       "samples": 15,
@@ -165,8 +165,8 @@
       "compiled": 12
     },
     "docs/plugins/api-reference.mdx": {
-      "samples": 23,
-      "compiled": 1
+      "samples": 24,
+      "compiled": 2
     },
     "docs/plugins/auth.mdx": {
       "samples": 4,

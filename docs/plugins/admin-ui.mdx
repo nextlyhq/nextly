@@ -10,9 +10,9 @@ A plugin can extend the Nextly admin in two complementary ways:
 - **`admin`** (on the plugin definition) — _placement & appearance_: where the
   plugin's items sit in the sidebar and how they look (D20).
 
-Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
-on the admin dashboard today, but the contract remains
-[`@experimental`](/docs/plugins/stability) while its shape settles.
+Both are `@public`. Admin **dashboard widgets** are declared with `defineWidget` under
+`contributes.dashboard`, and are rendered on the admin dashboard today, but the contract
+remains [`@experimental`](/docs/plugins/stability) while its shape settles.
 
 ## Component paths
 

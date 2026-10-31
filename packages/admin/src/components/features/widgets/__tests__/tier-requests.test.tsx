@@ -66,13 +66,7 @@ const FULL = listCard("acme/full", "collection:pages", 12, 5);
 /** The dashboard with the half drawn `h` rows tall, as a change of its size makes it. */
 function halfAt(h: number): AdminBranding {
   return {
-    plugins: [
-      {
-        name: "@acme",
-        collections: [],
-        widgets: [listCard("acme/half", "collection:posts", 6, 8, h), FULL],
-      },
-    ],
+    widgets: [listCard("acme/half", "collection:posts", 6, 8, h), FULL],
   } as unknown as AdminBranding;
 }
 
@@ -108,7 +102,7 @@ function renderGrid() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockBranding = {
-    plugins: [{ name: "@acme", collections: [], widgets: [HALF, FULL] }],
+    widgets: [HALF, FULL],
   } as unknown as AdminBranding;
   // Each query answered with an empty list, one slot per query asked.
   vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
@@ -266,25 +260,19 @@ describe("the requests a dashboard sends as it is sized", () => {
     // A plugin's own component draws a custom card from the raw answer, with no tier and no
     // row slicer, so its query is never sized: the rows it asked for are the rows it gets.
     mockBranding = {
-      plugins: [
+      widgets: [
         {
-          name: "@acme",
-          collections: [],
-          widgets: [
-            {
-              id: "acme/custom",
-              title: "acme/custom",
-              archetype: "custom",
-              component: "@acme/admin#Custom",
-              size: { default: { w: 6, h: 4 } },
-              query: {
-                source: "collection:posts",
-                op: "list",
-                select: ["title"],
-                limit: 8,
-              },
-            },
-          ],
+          id: "acme/custom",
+          title: "acme/custom",
+          archetype: "custom",
+          component: "@acme/admin#Custom",
+          size: { default: { w: 6, h: 4 } },
+          query: {
+            source: "collection:posts",
+            op: "list",
+            select: ["title"],
+            limit: 8,
+          },
         },
       ],
     } as unknown as AdminBranding;
@@ -301,26 +289,20 @@ describe("the requests a dashboard sends as it is sized", () => {
     // the one more that says more exist, where an unsized custom card above gets exactly 8.
     // Four rows tall, its body holds four rows, and one more.
     mockBranding = {
-      plugins: [
+      widgets: [
         {
-          name: "@acme",
-          collections: [],
-          widgets: [
-            {
-              id: "acme/sized",
-              title: "acme/sized",
-              archetype: "custom",
-              component: "@acme/admin#Sized",
-              size: { default: { w: 6, h: 4 } },
-              sizedQuery: true,
-              query: {
-                source: "collection:posts",
-                op: "list",
-                select: ["title"],
-                limit: 8,
-              },
-            },
-          ],
+          id: "acme/sized",
+          title: "acme/sized",
+          archetype: "custom",
+          component: "@acme/admin#Sized",
+          size: { default: { w: 6, h: 4 } },
+          sizedQuery: true,
+          query: {
+            source: "collection:posts",
+            op: "list",
+            select: ["title"],
+            limit: 8,
+          },
         },
       ],
     } as unknown as AdminBranding;

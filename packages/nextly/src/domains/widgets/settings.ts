@@ -507,16 +507,9 @@ function fail(message: string): never {
 /**
  * Why this declaration cannot be used, or `undefined` when it can.
  *
- * 🔴 Returns the problem rather than throwing it, because the two channels into
- * the registry need the same rules in different shapes: `registerWidget` throws
- * on a bad definition, while `validatedAdminWidgets` walks a list of rules that
- * each return a sentence and names the plugin that shipped the widget. Written
- * as a throwing validator, only the registry could call it — which is exactly
- * what happened: a contributed `settings` reached the admin having passed no
- * settings rule at all, and `settings: {}` from an untyped declaration got as
- * far as the grid before failing, taking the dashboard down instead of the
- * install. One rule set answering both channels is the thing
- * `plugins/__tests__/channel-divergence` exists to protect.
+ * Returns the problem rather than throwing it, so each caller reports it in its
+ * own shape: `registerWidget` throws on a bad definition, and a declaration's
+ * startup check names the owner and the widget beside every other fault.
  */
 export function widgetSettingsProblem(
   settings: unknown,

@@ -5,20 +5,10 @@
  */
 
 export {
-  WIDGET_ARCHETYPES,
   DATA_ARCHETYPES,
-  QUERYLESS_ARCHETYPES,
-  CELL_ARCHETYPES,
   MAX_STAT_CELLS,
   validateWidgetDefinition,
-  type WidgetDefinition,
-  type WidgetAction,
   type WidgetSetting,
-  type WidgetStatCell,
-  type WidgetArchetype,
-  type DataWidgetArchetype,
-  type QuerylessWidgetArchetype,
-  type CellWidgetArchetype,
 } from "./definition";
 // The one size vocabulary, beside the definition whose `size` names it: the
 // grid's width and the size types. Its functions reach the admin through
@@ -70,11 +60,8 @@ export {
   overrideWidget,
   extendWidget,
   deregisterWidget,
-  getWidget,
-  listWidgets,
   widgetSource,
   clearWidgets,
-  type WidgetPatch,
 } from "./registry";
 export { MAX_QUERIES_PER_REQUEST } from "./batch-limit";
 export { executeWidgetQuery, type WidgetResult } from "./execute";
@@ -101,42 +88,17 @@ export {
 } from "../collections/query/timeseries-interval";
 
 /**
- * The contract a plugin's widget source is written against.
+ * The contract a source is resolved against: the shape core's own system
+ * sources use, with the caller and the host's `ResolverOptions` it is handed.
  *
- * Published because `contributes.widgetSources` names it, and every contract a
- * published shape names travels with it. Inference covers the common case --
- * an author writing the resolver inline inside `definePlugin` gets `query` and
- * `caller` typed from the contextual type, and needs none of these names. What
- * inference cannot do is let them declare the resolver as a standalone
- * function, or hand it to a helper, which is exactly how a plugin with more
- * than one source ends up written.
- *
- * 🔴 TWO resolver types, and a plugin author wants the second.
- * `WidgetSourceResolver` is the shape core's own system sources use: the query,
- * the caller, and the host's `ResolverOptions`. `PluginSourceResolver` is what
- * `contributes.widgetSources` takes: the same, with the plugin's own
- * `PluginContext` between them, which is how a resolver reaches any data.
- * Typing a contributed resolver as the former rejects the `ctx` parameter it
- * needs, so both are published and the names say which is which.
- *
- * `ReadCaller` and `ResolverOptions` travel with them for the same reason: they
- * are the other arguments, so without them a parameter has no name to annotate.
- * `PluginManySourceResolver` is the optional many-query counterpart, and
- * `WidgetScope` the batch-shared work `ResolverOptions` carries; both are
- * `@experimental`.
+ * `ReadCaller` and `ResolverOptions` travel with it because they are its other
+ * arguments, so without them a parameter has no name to annotate. `WidgetScope`
+ * is the batch-shared work `ResolverOptions` carries, and is `@experimental`.
  */
 export type {
   SourceResolver as WidgetSourceResolver,
   ResolverOptions,
   WidgetScope,
 } from "./resolved-sources";
-export type {
-  PluginSourceResolver,
-  PluginManySourceResolver,
-} from "../../plugins/widgets/collect-widget-sources";
 export type { ReadCaller } from "../../services/dashboard/readable-resources";
 export { callerReadOptions } from "./caller-read-options";
-export type {
-  PluginWidgetSource,
-  CollectedWidgetSource,
-} from "../../plugins/widgets/collect-widget-sources";

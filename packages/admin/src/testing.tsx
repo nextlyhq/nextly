@@ -52,7 +52,7 @@ export function widgetCardElement(
   if (options.component !== undefined && definition.component !== undefined) {
     registerComponent(definition.component, options.component);
   }
-  const [widget] = resolveDashboardWidgets(undefined, [definition], () => true);
+  const [widget] = resolveDashboardWidgets([definition], () => true);
   if (widget === undefined) {
     throw new Error(`widgetCardElement: ${definition.id} could not be drawn`);
   }
