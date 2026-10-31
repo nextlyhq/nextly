@@ -92,6 +92,15 @@ export function bringRefusedPanelForward(): void {
   }, 0);
 }
 
+/**
+ * Discard every open panel's change, by closing it: a panel rebuilds its form and title from
+ * what is stored once closed. The dashboard's Cancel asks this, so "Changes discarded" holds for
+ * a panel's change as well as the draft's, and no Done is left to keep one after it.
+ */
+export function discardOpenPanels(): void {
+  for (const panel of openPanels.values()) panel.close();
+}
+
 function subscribePanels(listener: () => void): () => void {
   panelListeners.add(listener);
   return () => {

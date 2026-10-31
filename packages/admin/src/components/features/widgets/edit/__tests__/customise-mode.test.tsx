@@ -873,6 +873,31 @@ describe("leaving with unsaved changes", () => {
     expect(api.put).not.toHaveBeenCalled();
   });
 
+  it("the bar's Cancel discards a settings panel's change too: it closes, and nothing is left to keep", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    // "Changes discarded" is true of the panel too: it is closed, with no Done to press.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /settings$/ })).toBeNull()
+    );
+    expect(writes()).toBe(0);
+    // Opened again, it holds what is stored, not the discarded Heading.
+    await user.click(await screen.findByTestId("dashboard-edit-begin"));
+    await screen.findAllByTestId("card-actions");
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    expect(within(panel).getByLabelText(/Heading/)).toHaveValue("");
+    expect(writes()).toBe(0);
+  });
+
   it("lets the reader leave without asking when nothing changed", async () => {
     renderDashboard();
     await beginEditing();

@@ -30,6 +30,7 @@ import {
 } from "../layout-editor";
 import { sizeName } from "../sizes";
 
+import { discardOpenPanels } from "./settings-panel-registry";
 import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
 import { useCardHighlight, type CardHighlight } from "./useCardHighlight";
 import type { DashboardFocus } from "./useDashboardFocus";
@@ -172,6 +173,9 @@ function useCustomiseLifecycle(
   }, [editor, announce, focus]);
 
   const cancel = useCallback(() => {
+    // An open settings panel's change is discarded with the draft: Save keeps the two together,
+    // so Cancel drops them together, and no panel is left holding a change Done could keep.
+    discardOpenPanels();
     editor.cancel();
     announce.discarded();
     focus.request({ kind: "customize" });
