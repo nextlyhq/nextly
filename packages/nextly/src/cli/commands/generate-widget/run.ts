@@ -12,23 +12,30 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
+import { getCoreVersion } from "../../../plugins/core-version";
+
 import {
   adminExportEdit,
   registrationEdit,
   type FileEdit,
 } from "./config-edit";
 import {
+  ADD_DEV,
+  LOCKFILES,
+  sdkDependency,
+  type PackageManager,
+} from "./dependency";
+import {
   componentRef,
   componentSource,
   declarationSource,
-  camelCase,
   isWidgetViewKind,
   testSource,
   WIDGET_VIEW_KINDS,
   type WidgetPlan,
   type WidgetViewKind,
 } from "./files";
-import { widgetId } from "./id";
+import { camelCase, widgetId } from "./id";
 import { findTarget, planPaths, type TargetChoice } from "./target";
 
 /** What the command asks on a terminal when a flag left something out. */
@@ -110,11 +117,27 @@ async function settle(
   return { ok: true, id, view, collection };
 }
 
+/** A file's text, or nothing when there is no file. */
+const textOf = async (path: string): Promise<string | undefined> =>
+  (await exists(path)) ? readFile(path, "utf8") : undefined;
+
+/** The package manager a project installs with: by its lockfile, here or in a folder above (a workspace's), else npm. */
+async function packageManagerOf(root: string): Promise<PackageManager> {
+  for (let dir = root; ; dir = dirname(dir)) {
+    for (const [file, manager] of LOCKFILES) {
+      if (await exists(join(dir, file))) return manager;
+    }
+    if (dirname(dir) === dir) return "npm";
+  }
+}
+
 /** The registration edits a plan needs, and what is left for the author. */
 async function registrations(
   plan: WidgetPlan,
   paths: ReturnType<typeof planPaths>
 ): Promise<{ edits: FileEdit[]; manual: string[] }> {
+  // The parser the config is read with, loaded only by this command.
+  const { parse } = await import("@babel/parser");
   const exportName = camelCase(plan.name);
   const edits: FileEdit[] = [];
   const manual: string[] = [];
@@ -131,6 +154,7 @@ async function registrations(
     const answer = registrationEdit({
       file: listFile,
       text: await readFile(listFile, "utf8"),
+      parser: parse,
       kind: target.kind,
       exportName,
       declarationPath: paths.declaration,
@@ -162,28 +186,45 @@ async function registrations(
   return { edits, manual };
 }
 
+/** What the project has, that the next steps depend on. */
+interface ProjectState {
+  /** Where the command ran: the paths it prints are relative to it. */
+  root: string;
+  manager: PackageManager;
+  hasVitest: boolean;
+  /** Whether the edits add a dependency, which only an install brings in. */
+  addsDependency: boolean;
+}
+
 /** What to do next, in the order an author does it. */
 function nextSteps(
-  plan: WidgetPlan,
   paths: ReturnType<typeof planPaths>,
-  root: string,
-  hasVitest: boolean
+  project: ProjectState
 ): string[] {
-  const rel = (path: string) => relative(root, path);
+  const rel = (path: string) => relative(project.root, path);
   return [
+    ...(project.addsDependency
+      ? [`Install what it added to package.json: ${project.manager} install`]
+      : []),
     `Make it yours: ${rel(paths.declaration)}${paths.component ? ` and ${rel(paths.component)}` : ""}.`,
     "See it before it has data: start your dev server and open /admin/dev/widget-previews.",
-    hasVitest
+    project.hasVitest
       ? `Run its test: npx vitest run ${rel(paths.test)}`
-      : `Run its test once Vitest is installed (npm install -D vitest): npx vitest run ${rel(paths.test)}`,
+      : `Run its test once Vitest is installed (${ADD_DEV[project.manager]} vitest): npx vitest run ${rel(paths.test)}`,
   ];
 }
 
-/** The project root a target belongs to: where its package.json is. */
-function rootOf(plan: WidgetPlan): string {
-  return plan.target.kind === "site"
-    ? dirname(plan.target.configPath)
-    : plan.target.root;
+/** The SDK the generated files import, added to the project when it lacks it. */
+async function sdkEdits(
+  root: string
+): Promise<{ edits: FileEdit[]; manual: string[] }> {
+  const path = join(root, "package.json");
+  const answer = sdkDependency(path, await textOf(path), getCoreVersion());
+  if (answer.kind === "edit") return { edits: [answer.edit], manual: [] };
+  if (answer.kind === "manual") {
+    return { edits: [], manual: [answer.instructions] };
+  }
+  return { edits: [], manual: [] };
 }
 
 /** The files a plan writes: the declaration, its component when it has one, its test. */
@@ -198,6 +239,28 @@ function filesOf(
       : []),
     { path: paths.test, content: testSource(plan) },
   ];
+}
+
+/** Modules an extensionless import of a component could resolve to instead of its `.tsx`. */
+const RIVAL_EXTENSIONS = [".ts", ".d.ts", ".js", ".jsx", ".mts", ".mjs"];
+
+/**
+ * Why the component cannot be written where it would be shadowed: a module of
+ * the same name beside it, or a folder its import would resolve to. Even
+ * `--force` writes nothing then, since the card would still not be imported.
+ */
+async function shadowRefusal(
+  component: string | undefined
+): Promise<string | undefined> {
+  if (component === undefined) return undefined;
+  const base = component.replace(/\.tsx$/, "");
+  const rival = await firstExisting([
+    ...RIVAL_EXTENSIONS.map(extension => `${base}${extension}`),
+    base,
+  ]);
+  return rival === undefined
+    ? undefined
+    : `nothing written: ${rival} would be imported in place of the component ${component}; give the widget another name`;
 }
 
 /** Why nothing may be written over the files already there, or nothing when it may. */
@@ -260,20 +323,32 @@ export async function runGenerateWidget(
   const { plan } = planned;
   const paths = planPaths(plan);
   const files = filesOf(plan, paths);
-  const refusal = await overwriteRefusal(files, options.force);
+  const refusal =
+    (await shadowRefusal(paths.component)) ??
+    (await overwriteRefusal(files, options.force));
   if (refusal !== undefined) return { ok: false, reason: refusal };
 
-  const { edits, manual } = await registrations(plan, paths);
-  const root = rootOf(plan);
-  const hasVitest = await exists(join(root, "node_modules", "vitest"));
-  const steps = nextSteps(plan, paths, root, hasVitest);
+  const { root } = plan.target;
+  const listed = await registrations(plan, paths);
+  const sdk = await sdkEdits(root);
+  // An edit that changes nothing (a widget generated again, already listed)
+  // is neither written nor reported.
+  const edits = [...listed.edits, ...sdk.edits].filter(
+    edit => edit.after !== edit.before
+  );
+  const steps = nextSteps(paths, {
+    root,
+    manager: await packageManagerOf(root),
+    hasVitest: await exists(join(root, "node_modules", "vitest")),
+    addsDependency: sdk.edits.length > 0,
+  });
   if (!options.dryRun) await writeAll(files, edits, options.force);
   return {
     ok: true,
     written: !options.dryRun,
     files,
     edits,
-    manual,
+    manual: [...listed.manual, ...sdk.manual],
     nextSteps: steps,
   };
 }

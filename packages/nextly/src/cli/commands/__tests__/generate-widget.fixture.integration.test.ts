@@ -8,12 +8,19 @@
  * preview case JSON carries), answer its load through the dashboard's route,
  * and draw it in the admin's frame.
  *
- * The projects link the workspace's built packages into their `node_modules`,
- * as an installed project has them, so the run needs the packages built: an
- * integration test, run from the root after the build.
+ * Each project has the package.json its scaffold writes, and is installed
+ * from it: every package it declares, and only those, is linked into its
+ * `node_modules` from the workspace's built packages. The registry is the one
+ * thing this stands in for, since the packages under test are this checkout's
+ * and not yet published; what gets installed is still decided by the
+ * manifest, so a site from the blank template, which declares no
+ * `@nextlyhq/plugin-sdk`, has one only once the command adds it, and is
+ * installed again after it as its next steps say. The run needs the packages
+ * built: an integration test, run from the root after the build.
  */
 import { spawnSync } from "node:child_process";
 import {
+  access,
   cp,
   mkdtemp,
   mkdir,
@@ -37,10 +44,11 @@ const REPO = resolve(import.meta.dirname, "../../../../../..");
 const TEMPLATES = join(REPO, "templates");
 const fromAdmin = createRequire(join(REPO, "packages/admin/package.json"));
 
-/** Where an installed project would find each package it imports. */
-const LINKED: Record<string, string> = {
+/** Where the install finds each package a fixture's manifest may declare. */
+const SOURCES: Record<string, string> = {
   nextly: join(REPO, "packages/nextly"),
   "@nextlyhq/plugin-sdk": join(REPO, "packages/plugin-sdk"),
+  "@nextlyhq/plugin-form-builder": join(REPO, "packages/plugin-form-builder"),
   "@nextlyhq/admin": join(REPO, "packages/admin"),
   "@nextlyhq/ui": join(REPO, "packages/ui"),
   react: dirname(fromAdmin.resolve("react/package.json")),
@@ -68,12 +76,90 @@ const TSCONFIG = {
   },
 };
 
-async function linkPackages(root: string): Promise<void> {
-  for (const [name, target] of Object.entries(LINKED)) {
+/** A workspace package's version, which every package of the family shares. */
+const versionOf = async (name: string): Promise<string> =>
+  (
+    JSON.parse(
+      await readFile(join(SOURCES[name]!, "package.json"), "utf8")
+    ) as { version: string }
+  ).version;
+
+const exists = (path: string): Promise<boolean> =>
+  access(path).then(
+    () => true,
+    () => false
+  );
+
+/**
+ * Installs a project from its package.json: links every package its
+ * dependencies and devDependencies declare that is not there yet, and
+ * nothing it does not declare.
+ */
+async function install(root: string): Promise<void> {
+  const manifest = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8")
+  ) as Record<string, Record<string, string> | undefined>;
+  const declared = Object.keys({
+    ...manifest.dependencies,
+    ...manifest.devDependencies,
+  });
+  for (const name of declared) {
+    const source = SOURCES[name];
+    if (source === undefined) throw new Error(`no source for ${name}`);
     const at = join(root, "node_modules", name);
+    if (await exists(at)) continue;
     await mkdir(dirname(at), { recursive: true });
-    await symlink(target, at, "dir");
+    await symlink(source, at, "dir");
   }
+}
+
+/**
+ * The manifest each scaffold writes, as far as these files import from it: a
+ * site's from create-nextly-app's generatePackageJson (the blog adds the form
+ * builder and the SDK it needs), a plugin's from its generatePluginPackageJson.
+ * Vitest is in each, as a project that runs the generated test has it.
+ */
+async function manifest(kind: "blank" | "blog" | "plugin"): Promise<object> {
+  const version = await versionOf("nextly");
+  const family = (names: string[]) =>
+    Object.fromEntries(names.map(name => [name, version]));
+  const react = { react: "^19", "react-dom": "^19" };
+  const tooling = {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    vitest: "^5",
+  };
+  if (kind === "plugin") {
+    return {
+      name: "@acme/shop",
+      keywords: ["nextly", "nextly-plugin"],
+      type: "module",
+      devDependencies: {
+        ...family([
+          "nextly",
+          "@nextlyhq/admin",
+          "@nextlyhq/ui",
+          "@nextlyhq/plugin-sdk",
+        ]),
+        ...react,
+        ...tooling,
+      },
+    };
+  }
+  const blog =
+    kind === "blog"
+      ? family(["@nextlyhq/plugin-form-builder", "@nextlyhq/plugin-sdk"])
+      : {};
+  return {
+    name: kind,
+    private: true,
+    dependencies: {
+      ...family(["nextly", "@nextlyhq/admin", "@nextlyhq/ui"]),
+      ...blog,
+      ...react,
+    },
+    devDependencies: tooling,
+  };
 }
 
 /** A plugin's files with the scaffold's placeholders filled in. */
@@ -87,8 +173,11 @@ async function fillPlaceholders(path: string): Promise<void> {
   );
 }
 
+/** Every view kind is generated, half of them reading a collection. */
+const isCollection = (index: number): boolean => index % 2 === 1;
+
 interface Fixture {
-  name: string;
+  name: "blank" | "blog" | "plugin";
   root: string;
   /** What the project's own tsconfig includes. */
   include: string[];
@@ -136,14 +225,6 @@ async function pluginPackage(base: string): Promise<Fixture> {
   for (const file of ["src/plugin.ts", "src/admin/index.ts"]) {
     await fillPlaceholders(join(root, file));
   }
-  await writeFile(
-    join(root, "package.json"),
-    JSON.stringify({
-      name: "@acme/shop",
-      keywords: ["nextly", "nextly-plugin"],
-      type: "module",
-    })
-  );
   return {
     name: "plugin",
     root,
@@ -181,7 +262,11 @@ describe("generate:widget in projects made from the templates", () => {
     base = await mkdtemp(join(tmpdir(), "nextly-generate-widget-fixture-"));
     for (const make of [blankSite, blogSite, pluginPackage]) {
       const fixture = await make(base);
-      await linkPackages(fixture.root);
+      await writeFile(
+        join(fixture.root, "package.json"),
+        `${JSON.stringify(await manifest(fixture.name), null, 2)}\n`
+      );
+      await install(fixture.root);
       await writeFile(
         join(fixture.root, "tsconfig.json"),
         JSON.stringify({ ...TSCONFIG, include: fixture.include })
@@ -191,18 +276,35 @@ describe("generate:widget in projects made from the templates", () => {
         const result = await runGenerateWidget(fixture.root, {
           id: `${view}-card`,
           view,
-          collection: index % 2 === 1,
+          collection: isCollection(index),
         });
         if (!result.ok)
           throw new Error(`${fixture.name} ${view}: ${result.reason}`);
         expect(result.manual).toEqual([]);
       }
+      // As its next steps say once the command adds a dependency.
+      await install(fixture.root);
       fixtures.push(fixture);
     }
   }, 120_000);
 
   afterAll(async () => {
     if (base) await rm(base, { recursive: true, force: true });
+  });
+
+  it("adds the SDK to the blank site, at the workspace's version, and to no other", async () => {
+    const sdk = await versionOf("@nextlyhq/plugin-sdk");
+    for (const fixture of fixtures) {
+      const declared = JSON.parse(
+        await readFile(join(fixture.root, "package.json"), "utf8")
+      ) as Record<string, Record<string, string> | undefined>;
+      const added = declared.devDependencies?.["@nextlyhq/plugin-sdk"];
+      if (fixture.name === "blank") expect(added, fixture.name).toBe(sdk);
+      else
+        expect(JSON.stringify(declared), fixture.name).toBe(
+          JSON.stringify(await manifest(fixture.name))
+        );
+    }
   });
 
   it("lists every widget in a file that still parses", async () => {
@@ -225,7 +327,13 @@ describe("generate:widget in projects made from the templates", () => {
   }, 600_000);
 
   it("passes the tests it wrote: booted, loaded and drawn", () => {
-    const vitest = join(LINKED.vitest!, "vitest.mjs");
+    const vitest = join(SOURCES.vitest!, "vitest.mjs");
+    // Each file's tests: the load, the card, and for a widget reading a
+    // collection, what it reads from a stored entry.
+    const tests = [...WIDGET_VIEW_KINDS.keys()].reduce(
+      (sum, index) => sum + (isCollection(index) ? 3 : 2),
+      0
+    );
     for (const fixture of fixtures) {
       // Only the generated tests, so the count is theirs: the plugin template
       // ships a test of its own.
@@ -244,7 +352,7 @@ describe("generate:widget in projects made from the templates", () => {
         fixture.root
       );
       expect(result.output, fixture.name).toMatch(
-        new RegExp(`Tests\\s+${WIDGET_VIEW_KINDS.length * 2} passed`)
+        new RegExp(`Tests\\s+${tests} passed`)
       );
       expect(result.status, fixture.name).toBe(0);
     }

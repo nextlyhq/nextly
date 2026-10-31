@@ -10,7 +10,7 @@
  *
  * @module cli/commands/generate-widget/files
  */
-import type { WidgetTarget } from "./id";
+import { camelCase, pascalCase, type WidgetTarget } from "./id";
 
 /** The views a scaffold can declare: core's five and a component of its own. */
 export const WIDGET_VIEW_KINDS = [
@@ -33,21 +33,31 @@ interface ViewSource {
   sample: string;
   /** The load's body when it reads `settings.collection` through `services`. */
   fromCollection: string;
+  /**
+   * What that load answers once the test has stored one entry (`SEEDED`), as
+   * a matcher for `toMatchObject`.
+   */
+  fromSeed: string;
   /** What the card's title says the widget shows. */
   noun: string;
 }
+
+/** The note a component view's sample holds, which its test finds the component drawing. */
+const SAMPLE_NOTE = "Ship the release notes";
 
 const VIEWS: Record<WidgetViewKind, ViewSource> = {
   figure: {
     sample: "{ total: 42 }",
     fromCollection:
       "return { total: await services.count(settings.collection) };",
+    fromSeed: "{ total: 1 }",
     noun: "a number",
   },
   list: {
     sample: '{ items: [{ title: "First entry" }, { title: "Second entry" }] }',
     fromCollection:
       'const { items } = await services.find(settings.collection, { sort: "-createdAt", limit: 5 });\n    return { items };',
+    fromSeed: '{ items: [{ title: "First entry" }] }',
     noun: "a list",
   },
   table: {
@@ -55,6 +65,7 @@ const VIEWS: Record<WidgetViewKind, ViewSource> = {
       '{ items: [{ title: "First entry", status: "published" }, { title: "Second entry", status: "draft" }] }',
     fromCollection:
       'const { items } = await services.find(settings.collection, { sort: "-createdAt", limit: 5 });\n    return { items };',
+    fromSeed: '{ items: [{ title: "First entry", stage: "draft" }] }',
     noun: "a table",
   },
   bars: {
@@ -62,6 +73,7 @@ const VIEWS: Record<WidgetViewKind, ViewSource> = {
       '{ buckets: [{ value: "draft", count: 3 }, { value: "published", count: 8 }] }',
     fromCollection:
       "const { buckets } = await services.groupBy(settings.collection);\n    return { buckets: [...buckets] };",
+    fromSeed: '{ buckets: [{ value: "draft", count: 1 }] }',
     noun: "bars",
   },
   series: {
@@ -69,12 +81,15 @@ const VIEWS: Record<WidgetViewKind, ViewSource> = {
       '{ interval: "day" as const, points: [{ start: "2026-01-01", count: 2 }, { start: "2026-01-02", count: 5 }] }',
     fromCollection:
       'const { points, interval } = await services.timeseries(settings.collection, { range: "30d" });\n    return { points: [...points], interval };',
+    fromSeed:
+      '{ interval: "day", points: expect.arrayContaining([{ start: expect.any(String), count: 1 }]) }',
     noun: "a series",
   },
   component: {
-    sample: '{ notes: ["Ship the release notes"] }',
+    sample: `{ notes: ["${SAMPLE_NOTE}"] }`,
     fromCollection:
       'const { items } = await services.find(settings.collection, { sort: "-createdAt", limit: 5 });\n    return { notes: items.map(item => String(item.title ?? item.id)) };',
+    fromSeed: '{ notes: ["First entry"] }',
     noun: "notes",
   },
 };
@@ -89,21 +104,6 @@ export interface WidgetPlan {
   target: WidgetTarget;
 }
 
-/** `open-orders` → `OpenOrders`. */
-function pascalCase(name: string): string {
-  return name
-    .split("-")
-    .filter(Boolean)
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-    .join("");
-}
-
-/** `open-orders` → `openOrders`. */
-export function camelCase(name: string): string {
-  const pascal = pascalCase(name);
-  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
-}
-
 /** `open-orders` → `Open orders`. */
 function titleOf(name: string): string {
   const words = name.split("-").filter(Boolean).join(" ");
@@ -115,6 +115,13 @@ function sdkModule(target: WidgetTarget): string {
   return target.kind === "site" ? "nextly" : "@nextlyhq/plugin-sdk";
 }
 
+/**
+ * The basename of a widget's component file, without its extension: never the
+ * bare name, which a module beside it (a plugin's `src/admin/index.ts`) can
+ * already have.
+ */
+export const componentBasename = (name: string): string => `${name}-card`;
+
 /** The component's name and where the declaration says to find it. */
 export function componentRef(plan: WidgetPlan): {
   exportName: string;
@@ -122,7 +129,10 @@ export function componentRef(plan: WidgetPlan): {
 } {
   const exportName = `${pascalCase(plan.name)}Card`;
   return plan.target.kind === "site"
-    ? { exportName, path: `./src/dashboard/${plan.name}#${exportName}` }
+    ? {
+        exportName,
+        path: `./src/dashboard/${componentBasename(plan.name)}#${exportName}`,
+      }
     : {
         exportName,
         path: `${plan.target.packageName}/admin#${exportName}`,
@@ -201,6 +211,126 @@ export function componentSource(plan: WidgetPlan): string {
   ].join("\n");
 }
 
+/** The collection a `--collection` widget's test stores an entry in, and the entry. */
+const SEEDED = {
+  slug: "articles",
+  data: '{ title: "First entry", stage: "draft" }',
+};
+
+/**
+ * The test's own collection, declared in the test, so the test reads none of
+ * the project's: a title, and a field with choices for `bars` to group by.
+ * Written inline in the boot, so no name of its own can meet the widget's.
+ */
+const SEEDED_COLLECTION = [
+  "    collections: [",
+  "      // A collection of the test's own for the widget to read.",
+  "      defineCollection({",
+  `        slug: "${SEEDED.slug}",`,
+  "        fields: [",
+  '          text({ name: "title" }),',
+  '          select({ name: "stage", options: [{ label: "Draft", value: "draft" }, { label: "Published", value: "published" }] }),',
+  "        ],",
+  "      }),",
+  "    ],",
+];
+
+/** The test's imports: the harness, the card renderer, and what it draws. */
+function testImports(plan: WidgetPlan): string[] {
+  const exported = camelCase(plan.name);
+  const component =
+    plan.view === "component"
+      ? [
+          `import { ${componentRef(plan).exportName} } from "${componentFromTest(plan)}";`,
+        ]
+      : [];
+  return [
+    'import { createTestNextly, runWidgetLoad, type TestNextly } from "@nextlyhq/plugin-sdk/testing";',
+    'import { renderWidgetCard } from "@nextlyhq/plugin-sdk/testing/admin";',
+    ...(plan.collection
+      ? ['import { defineCollection, select, text } from "nextly/config";']
+      : []),
+    'import { renderToStaticMarkup } from "react-dom/server";',
+    'import { afterAll, beforeAll, expect, it } from "vitest";',
+    "",
+    ...component,
+    `import { ${exported} } from "./${plan.name}.widget";`,
+    "",
+  ];
+}
+
+/** The component's module as the test imports it, from beside the declaration. */
+function componentFromTest(plan: WidgetPlan): string {
+  const base = componentBasename(plan.name);
+  return plan.target.kind === "site" ? `./${base}` : `../admin/${base}`;
+}
+
+/**
+ * What the test asks of the load: for a widget with a collection setting,
+ * that it waits for one, then what it reads from an entry the test stores;
+ * otherwise the data it answers.
+ */
+function loadCases(plan: WidgetPlan): string[] {
+  const source = VIEWS[plan.view];
+  const exported = camelCase(plan.name);
+  if (!plan.collection) {
+    return [
+      `it("answers its data for the instance's administrator", async () => {`,
+      `  const answer = await runWidgetLoad(t, ${exported}, { as: { id: adminId } });`,
+      `  expect(answer).toEqual({ state: "ready", data: ${source.sample} });`,
+      "});",
+    ];
+  }
+  return [
+    `it("asks for its collection before it has one", async () => {`,
+    `  const answer = await runWidgetLoad(t, ${exported}, { as: { id: adminId } });`,
+    `  expect(answer.state).toBe("needs-setting");`,
+    "});",
+    "",
+    `it("answers what it reads from the collection it is set to", async () => {`,
+    `  await t.nextly.create({ collection: "${SEEDED.slug}", data: ${SEEDED.data} });`,
+    `  const answer = await runWidgetLoad(t, ${exported}, {`,
+    "    as: { id: adminId },",
+    `    settings: { collection: "${SEEDED.slug}" },`,
+    "  });",
+    `  expect(answer).toMatchObject({ state: "ready", data: ${source.fromSeed} });`,
+    "});",
+  ];
+}
+
+/**
+ * What the test asks of the card: its preview case drawn in the dashboard's
+ * frame, and for a view of its own, drawn by the generated component.
+ */
+function drawCase(plan: WidgetPlan): string[] {
+  const source = VIEWS[plan.view];
+  const exported = camelCase(plan.name);
+  if (plan.view !== "component") {
+    return [
+      `it("draws its preview case in the dashboard's card", () => {`,
+      "  const html = renderToStaticMarkup(",
+      `    renderWidgetCard(${exported}, { state: "ready", data: ${source.sample} })`,
+      "  );",
+      `  expect(html).toContain("${titleOf(plan.name)}");`,
+      "});",
+    ];
+  }
+  const { exportName } = componentRef(plan);
+  return [
+    `it("draws its preview case with its own component, in the dashboard's card", () => {`,
+    "  const html = renderToStaticMarkup(",
+    `    renderWidgetCard(${exported}, {`,
+    '      state: "ready",',
+    `      data: ${source.sample},`,
+    `      component: ${exportName},`,
+    "    })",
+    "  );",
+    `  expect(html).toContain("${titleOf(plan.name)}");`,
+    `  expect(html).toContain("<li>${SAMPLE_NOTE}</li>");`,
+    "});",
+  ];
+}
+
 /**
  * The test file's source: the load answered as the instance's administrator,
  * through the dashboard's own route, and the card drawn in the admin's frame.
@@ -211,34 +341,22 @@ export function componentSource(plan: WidgetPlan): string {
  * environment.
  */
 export function testSource(plan: WidgetPlan): string {
-  const source = VIEWS[plan.view];
   const exported = camelCase(plan.name);
-  const loadCase = plan.collection
+  const boot = plan.collection
     ? [
-        `it("asks for its collection before it has one", async () => {`,
-        `  const answer = await runWidgetLoad(t, ${exported}, { as: { id: adminId } });`,
-        `  expect(answer.state).toBe("needs-setting");`,
-        "});",
+        "  t = await createTestNextly({",
+        `    widgets: [${exported}],`,
+        ...SEEDED_COLLECTION,
+        "  });",
       ]
-    : [
-        `it("answers its data for the instance's administrator", async () => {`,
-        `  const answer = await runWidgetLoad(t, ${exported}, { as: { id: adminId } });`,
-        `  expect(answer).toEqual({ state: "ready", data: ${source.sample} });`,
-        "});",
-      ];
+    : [`  t = await createTestNextly({ widgets: [${exported}] });`];
   return [
-    'import { createTestNextly, runWidgetLoad, type TestNextly } from "@nextlyhq/plugin-sdk/testing";',
-    'import { renderWidgetCard } from "@nextlyhq/plugin-sdk/testing/admin";',
-    'import { renderToStaticMarkup } from "react-dom/server";',
-    'import { afterAll, beforeAll, expect, it } from "vitest";',
-    "",
-    `import { ${exported} } from "./${plan.name}.widget";`,
-    "",
+    ...testImports(plan),
     "let t: TestNextly;",
     "let adminId: string;",
     "",
     "beforeAll(async () => {",
-    `  t = await createTestNextly({ widgets: [${exported}] });`,
+    ...boot,
     "  // The first user an instance stores is its super administrator.",
     "  const admin = await t.nextly.users.create({",
     '    email: "admin@example.com",',
@@ -252,14 +370,9 @@ export function testSource(plan: WidgetPlan): string {
     "  await t.destroy();",
     "});",
     "",
-    ...loadCase,
+    ...loadCases(plan),
     "",
-    `it("draws its preview case in the dashboard's card", () => {`,
-    "  const html = renderToStaticMarkup(",
-    `    renderWidgetCard(${exported}, { state: "ready", data: ${source.sample} })`,
-    "  );",
-    `  expect(html).toContain("${titleOf(plan.name)}");`,
-    "});",
+    ...drawCase(plan),
     "",
   ].join("\n");
 }

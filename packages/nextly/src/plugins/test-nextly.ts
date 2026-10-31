@@ -386,6 +386,23 @@ function giveTestSecret(): void {
 }
 
 /**
+ * The secret for a boot on the caller's own adapter (`supplied`), which
+ * changes nothing else about the environment: given only when none is set,
+ * with a snapshot to put it back by (the one an abandoned instance left, when
+ * there is one). A boot that makes its own adapter gives the secret there.
+ */
+function secretForCallerAdapter(
+  supplied: TestAdapter | undefined,
+  inherited: (() => void) | undefined
+): (() => void) | undefined {
+  if (!supplied || process.env.NEXTLY_SECRET !== undefined) return inherited;
+  const restore = inherited ?? snapshotEnv();
+  giveTestSecret();
+  _resetEnvCache();
+  return restore;
+}
+
+/**
  * What the currently booted instance has done to this process, held here
  * rather than only in its closure.
  *
@@ -655,7 +672,7 @@ export async function createTestNextly(
   // step that throws — an unset server URL, an unreachable server — and until
   // this instance owns the pending snapshot there is nothing to put the
   // environment back with.
-  let restoreEnv: (() => void) | undefined = inheritedRestore;
+  let restoreEnv = secretForCallerAdapter(adapter, inheritedRestore);
   if (!adapter && opts.dialect && opts.dialect !== "sqlite") {
     try {
       provisioned = await provisionDatabase(

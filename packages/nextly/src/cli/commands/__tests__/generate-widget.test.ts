@@ -7,18 +7,36 @@
  * `generate-widget.fixture.integration.test.ts`'s, in projects built from the
  * real templates.
  */
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import {
+  access,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { parse } from "@babel/parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { registrationEdit } from "../generate-widget/config-edit";
+import { testSource } from "../generate-widget/files";
 import { widgetId, type WidgetTarget } from "../generate-widget/id";
 import { runGenerateWidget, type WidgetPrompter } from "../generate-widget/run";
 
+/** The version of the nextly these tests run, which the SDK it adds must match. */
+const NEXTLY_VERSION = (
+  JSON.parse(
+    readFileSync(join(import.meta.dirname, "../../../../package.json"), "utf8")
+  ) as { version: string }
+).version;
+
 const site: WidgetTarget = {
   kind: "site",
+  root: "/app",
   configPath: "/app/nextly.config.ts",
 };
 const plugin: WidgetTarget = {
@@ -54,6 +72,36 @@ describe("the widget id", () => {
       reason: expect.stringContaining("<namespace>/<name>"),
     });
   });
+
+  it("refuses a name whose code would not be a TypeScript identifier", () => {
+    expect(widgetId("2026-sales", site)).toEqual({
+      ok: false,
+      reason: expect.stringContaining('"2026Sales"'),
+    });
+    expect(widgetId("default", site)).toEqual({
+      ok: false,
+      reason: expect.stringContaining("reserved word"),
+    });
+    expect(widgetId("sales-2026", site)).toMatchObject({ ok: true });
+  });
+
+  it("gives a plugin named after a reserved namespace its scope in front, and says so", () => {
+    for (const reserved of ["core", "collection", "single", "site"]) {
+      const named: WidgetTarget = {
+        kind: "plugin",
+        root: "/plugin",
+        packageName: `@acme/${reserved}`,
+      };
+      expect(widgetId("open-orders", named)).toMatchObject({
+        ok: true,
+        id: `acme-${reserved}/open-orders`,
+      });
+      const refused = widgetId(`${reserved}/open-orders`, named);
+      if (refused.ok) throw new Error(`${reserved}/ was accepted`);
+      expect(refused.reason).toContain(`use "acme-${reserved}/open-orders"`);
+      expect(refused.reason).toContain(`"${reserved}", is reserved`);
+    }
+  });
 });
 
 describe("the registration edit", () => {
@@ -61,6 +109,7 @@ describe("the registration edit", () => {
     registrationEdit({
       file: "/app/nextly.config.ts",
       text,
+      parser: parse,
       kind,
       exportName: "openOrders",
       declarationPath: "/app/src/dashboard/open-orders.widget.ts",
@@ -101,23 +150,115 @@ describe("the registration edit", () => {
     ).toContain("dashboard: { widgets: [openOrders] },");
   });
 
-  it("leaves a config it cannot read plainly as it was, and says what to add", () => {
-    // Two `widgets: [` could be the dashboard's or a plugin option's.
-    const twice =
-      "defineConfig({ plugins: [shop({ widgets: [] })], admin: { dashboard: { widgets: [] } } })";
-    expect(edit(twice)).toEqual({
+  it("lists it under defineConfig's own admin, never in a plugin option's widgets", () => {
+    const pluginOption =
+      "defineConfig({\n  plugins: [shop({ widgets: [] })],\n  collections: [],\n})";
+    const result = after(pluginOption);
+    expect(result).toContain("shop({ widgets: [] })");
+    expect(result).toContain(
+      "defineConfig({\n  admin: { dashboard: { widgets: [openOrders] } },"
+    );
+    // With the site's own list there too, that list is the one it reaches.
+    expect(
+      after(
+        "defineConfig({ plugins: [shop({ widgets: [] })], admin: { dashboard: { widgets: [] } } })"
+      )
+    ).toMatch(
+      /shop\(\{ widgets: \[\] \}\)[\s\S]*widgets: \[\n\s+openOrders,\]/
+    );
+  });
+
+  it("leaves a config whose shape it cannot prove as it was, and says what to add", () => {
+    for (const text of [
+      // The admin block is a variable's.
+      "defineConfig({ admin: adminOptions })",
+      // A spread could already carry an admin block.
+      "defineConfig({ ...base, collections: [] })",
+      // A method, not a plain value, gives the admin block.
+      "defineConfig({ admin() { return {}; } })",
+      // Two configs: which one is the site's?
+      "const a = defineConfig({}); const b = defineConfig({});",
+      // No defineConfig call at all, or not one this file can parse.
+      "export default config;",
+      "defineConfig({ admin: { dashboard: { widgets: [ } } })",
+    ]) {
+      expect(edit(text), text).toEqual({
+        kind: "manual",
+        instructions: expect.stringContaining(
+          "list openOrders in admin.dashboard.widgets"
+        ),
+      });
+    }
+  });
+
+  it("says it could not read a file that does not parse, and leaves it as it was", () => {
+    expect(
+      edit("defineConfig({ admin: { dashboard: { widgets: [ } } })")
+    ).toEqual({
       kind: "manual",
-      instructions: expect.stringContaining(
-        "list openOrders in admin.dashboard.widgets"
+      instructions: expect.stringMatching(
+        /^Could not read \/app\/nextly\.config\.ts \(.+\), so it was left as it was\. In it, add\n/
       ),
     });
-    // No defineConfig call to anchor on at all.
-    expect(edit("export default config;").kind).toBe("manual");
+  });
+
+  it("reads TypeScript and JSX in a config as written", () => {
+    const typed =
+      'import type { Config } from "nextly";\nconst brand = (name: string) => <b>{name}</b>;\nexport default defineConfig({ admin: { brand } } satisfies Config);';
+    // `satisfies` wraps the object: not a literal it may edit, but a file it read.
+    expect(edit(typed)).toEqual({
+      kind: "manual",
+      instructions: expect.stringMatching(/^In \/app\/nextly\.config\.ts, add/),
+    });
+    expect(
+      after(
+        "const brand = (name: string): string => name;\ndefineConfig<Options>({ collections: [] as string[] })"
+      )
+    ).toContain("admin: { dashboard: { widgets: [openOrders] } },");
+  });
+
+  it("leaves a widget it already lists where it is", () => {
+    const listed =
+      'import { openOrders } from "./src/dashboard/open-orders.widget";\ndefineConfig({ admin: { dashboard: { widgets: [notes, openOrders] } } })';
+    expect(after(listed)).toBe(listed);
   });
 
   it("adds the import once, however often it runs", () => {
     const once = after("defineConfig({})");
     expect(once.split(IMPORT).length - 1).toBe(1);
+  });
+});
+
+describe("the test it writes", () => {
+  const plan = (view: "figure" | "component", collection: boolean) => ({
+    id: "site/open-orders",
+    name: "open-orders",
+    view,
+    collection,
+    target: site,
+  });
+
+  it("for a collection, stores an entry and asks the load for what it reads", () => {
+    const text = testSource(plan("figure", true));
+    expect(text).toContain('slug: "articles",');
+    expect(text).toContain(
+      'await t.nextly.create({ collection: "articles", data: { title: "First entry", stage: "draft" } });'
+    );
+    expect(text).toContain('settings: { collection: "articles" }');
+    expect(text).toContain(
+      'expect(answer).toMatchObject({ state: "ready", data: { total: 1 } });'
+    );
+  });
+
+  it("for a component view, draws the card with the component it wrote", () => {
+    const text = testSource(plan("component", false));
+    expect(text).toContain(
+      'import { OpenOrdersCard } from "./open-orders-card";'
+    );
+    expect(text).toContain("component: OpenOrdersCard,");
+    expect(text).toContain(
+      'expect(html).toContain("<li>Ship the release notes</li>");'
+    );
   });
 });
 
@@ -132,7 +273,21 @@ describe("running the command", () => {
 
   const CONFIG =
     'import { defineConfig } from "nextly/config";\n\nexport default defineConfig({\n  collections: [],\n});\n';
-  const asSite = () => writeFile(join(dir, "nextly.config.ts"), CONFIG);
+  // A site's manifest as the blank scaffold writes it: nextly, no SDK.
+  const MANIFEST = `${JSON.stringify(
+    { name: "app", dependencies: { nextly: NEXTLY_VERSION } },
+    null,
+    4
+  )}\n`;
+  const asSite = async () => {
+    await writeFile(join(dir, "nextly.config.ts"), CONFIG);
+    await writeFile(join(dir, "package.json"), MANIFEST);
+  };
+  const exists = (path: string) =>
+    access(path).then(
+      () => true,
+      () => false
+    );
   const declaration = () =>
     join(dir, "src", "dashboard", "open-orders.widget.ts");
 
@@ -183,6 +338,58 @@ describe("running the command", () => {
     expect(await readFile(declaration(), "utf8")).toContain('view: "list"');
   });
 
+  it("lists a widget generated again with --force once, and edits nothing else", async () => {
+    await asSite();
+    await runGenerateWidget(dir, { id: "open-orders" });
+    const config = await readFile(join(dir, "nextly.config.ts"), "utf8");
+    const manifest = await readFile(join(dir, "package.json"), "utf8");
+    const again = await runGenerateWidget(dir, {
+      id: "open-orders",
+      force: true,
+    });
+    expect(again).toMatchObject({ ok: true, edits: [], manual: [] });
+    expect(await readFile(join(dir, "nextly.config.ts"), "utf8")).toBe(config);
+    expect(await readFile(join(dir, "package.json"), "utf8")).toBe(manifest);
+    // Its import and its one place in the list.
+    expect(config.match(/\bopenOrders\b/g)).toHaveLength(2);
+  });
+
+  it("adds the SDK its test imports to a site without it, at nextly's version, and says to install", async () => {
+    await asSite();
+    await writeFile(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    const result = await runGenerateWidget(dir, { id: "open-orders" });
+    if (!result.ok) throw new Error(result.reason);
+    const manifest = await readFile(join(dir, "package.json"), "utf8");
+    // The file's own four-space indentation, and the rest of it as it was.
+    expect(manifest).toBe(
+      `${JSON.stringify(
+        {
+          name: "app",
+          dependencies: { nextly: NEXTLY_VERSION },
+          devDependencies: { "@nextlyhq/plugin-sdk": NEXTLY_VERSION },
+        },
+        null,
+        4
+      )}\n`
+    );
+    expect(result.nextSteps[0]).toBe(
+      "Install what it added to package.json: pnpm install"
+    );
+  });
+
+  it("leaves a manifest that already has the SDK alone", async () => {
+    await asSite();
+    const withSdk = `${JSON.stringify({ name: "app", devDependencies: { "@nextlyhq/plugin-sdk": "1.0.0" } }, null, 2)}\n`;
+    await writeFile(join(dir, "package.json"), withSdk);
+    const result = await runGenerateWidget(dir, { id: "open-orders" });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.edits.map(edit => edit.path)).toEqual([
+      join(dir, "nextly.config.ts"),
+    ]);
+    expect(await readFile(join(dir, "package.json"), "utf8")).toBe(withSdk);
+    expect(result.nextSteps.join("\n")).not.toContain("Install what it added");
+  });
+
   it("writes nothing on a dry run, and shows what it would", async () => {
     await asSite();
     const result = await runGenerateWidget(dir, {
@@ -229,6 +436,22 @@ describe("running the command", () => {
     });
   });
 
+  it("prints paths from where it ran, with a config in src/", async () => {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "src", "nextly.config.ts"), CONFIG);
+    await writeFile(join(dir, "package.json"), MANIFEST);
+    await mkdir(join(dir, "node_modules", "vitest"), { recursive: true });
+    const result = await runGenerateWidget(dir, { id: "open-orders" });
+    if (!result.ok) throw new Error(result.reason);
+    const run = result.nextSteps.find(step => step.startsWith("Run its test"));
+    // Vitest is found in the project the command ran in, and the path it
+    // prints is the generated test's, from there.
+    const printed = /^Run its test: npx vitest run (\S+)$/.exec(run ?? "")?.[1];
+    expect(printed, run).toBeDefined();
+    expect(await exists(join(dir, printed!))).toBe(true);
+    expect(printed!.endsWith("open-orders.widget.test.ts")).toBe(true);
+  });
+
   it("says where to edit, how to preview and how to run the test", async () => {
     await asSite();
     const result = await runGenerateWidget(dir, { id: "open-orders" });
@@ -238,12 +461,14 @@ describe("running the command", () => {
     );
   });
 
-  it("in a plugin, exports a component view from its admin entry", async () => {
+  // A plugin as its scaffold writes one: the SDK among its devDependencies.
+  const asPlugin = async () => {
     await writeFile(
       join(dir, "package.json"),
       JSON.stringify({
         name: "@acme/shop",
         keywords: ["nextly", "nextly-plugin"],
+        devDependencies: { "@nextlyhq/plugin-sdk": NEXTLY_VERSION },
       })
     );
     await mkdir(join(dir, "src", "admin"), { recursive: true });
@@ -252,6 +477,10 @@ describe("running the command", () => {
       'import { definePlugin } from "@nextlyhq/plugin-sdk";\n\nexport const shop = () =>\n  definePlugin({\n    name: "@acme/shop",\n    contributes: {\n      collections: [],\n    },\n  });\n'
     );
     await writeFile(join(dir, "src", "admin", "index.ts"), "export {};\n");
+  };
+
+  it("in a plugin, exports a component view from its admin entry", async () => {
+    await asPlugin();
     const result = await runGenerateWidget(dir, {
       id: "open-orders",
       view: "component",
@@ -265,9 +494,38 @@ describe("running the command", () => {
     ).toContain('component: "@acme/shop/admin#OpenOrdersCard"');
     expect(
       await readFile(join(dir, "src", "admin", "index.ts"), "utf8")
-    ).toContain('export { OpenOrdersCard } from "./open-orders";');
+    ).toContain('export { OpenOrdersCard } from "./open-orders-card";');
     expect(await readFile(join(dir, "src", "plugin.ts"), "utf8")).toContain(
       "dashboard: { widgets: [openOrders] },"
     );
+  });
+
+  it("never names a plugin's component after a module beside it", async () => {
+    await asPlugin();
+    // A component named `index` would be imported from "./index", which is the
+    // admin entry itself; the card has a name of its own.
+    const result = await runGenerateWidget(dir, {
+      id: "index",
+      view: "component",
+    });
+    if (!result.ok) throw new Error(result.reason);
+    expect(await exists(join(dir, "src", "admin", "index-card.tsx"))).toBe(
+      true
+    );
+    expect(
+      await readFile(join(dir, "src", "admin", "index.ts"), "utf8")
+    ).toContain('export { IndexCard } from "./index-card";');
+    // A module already holding the card's name would still win its import.
+    await writeFile(join(dir, "src", "admin", "open-orders-card.ts"), "");
+    expect(
+      await runGenerateWidget(dir, {
+        id: "open-orders",
+        view: "component",
+        force: true,
+      })
+    ).toEqual({
+      ok: false,
+      reason: expect.stringContaining("open-orders-card.ts would be imported"),
+    });
   });
 });

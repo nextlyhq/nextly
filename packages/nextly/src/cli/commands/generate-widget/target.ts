@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 
 import { findConfigFile } from "../../../shared/lib/config-file";
 
-import type { WidgetPlan } from "./files";
+import { componentBasename, type WidgetPlan } from "./files";
 import type { WidgetTarget } from "./id";
 
 export type TargetChoice = "site" | "plugin" | undefined;
@@ -59,7 +59,7 @@ export async function findTarget(
   }
   const configPath = findConfigFile(cwd);
   if (configPath !== undefined) {
-    return { ok: true, target: { kind: "site", configPath } };
+    return { ok: true, target: { kind: "site", root: cwd, configPath } };
   }
   return {
     ok: false,
@@ -75,7 +75,12 @@ function widgetDir(target: WidgetTarget): string {
     : join(target.root, "src", "widgets");
 }
 
-/** Every file `plan` writes, by its absolute path. */
+/**
+ * Every file `plan` writes, by its absolute path. A component is named
+ * `<name>-card`, never the bare name: a plugin's `src/admin` holds modules of
+ * its own (`index.ts` among them), and an extensionless import of a name one
+ * of them shares would resolve to that module rather than the card.
+ */
 export function planPaths(plan: WidgetPlan): {
   declaration: string;
   test: string;
@@ -88,7 +93,7 @@ export function planPaths(plan: WidgetPlan): {
     declaration: join(dir, `${plan.name}.widget.ts`),
     test: join(dir, `${plan.name}.widget.test.ts`),
     ...(plan.view === "component"
-      ? { component: join(componentDir, `${plan.name}.tsx`) }
+      ? { component: join(componentDir, `${componentBasename(plan.name)}.tsx`) }
       : {}),
   };
 }

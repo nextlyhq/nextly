@@ -21,7 +21,10 @@ shows its data with `--view figure` (the default), `list`, `table`, `bars`, `ser
 collection the reader chooses. On a terminal it asks for anything you leave out.
 
 - A site's widgets are named `site/<name>`, and a plugin's are named under the plugin's own name.
-- It never writes over a file that exists, unless you pass `--force`.
+- It never writes over a file that exists, unless you pass `--force`. Generating a widget again
+  with `--force` leaves it listed once.
+- The test imports `@nextlyhq/plugin-sdk`, so a site without it gets it added to its
+  `devDependencies`, at your `nextly` version; run your package manager's install afterwards.
 - `--dry-run` shows the files and the config edit without writing them.
 - When it cannot edit your config safely, it leaves the file as it was and prints the line to add.
 
