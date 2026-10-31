@@ -20,6 +20,14 @@ vi.mock("../../../auth/access/route-gate-adapters", () => ({
     resource: string
   ): Promise<boolean> => mayPerform(action, resource) as Promise<boolean>,
 }));
+// The site's languages, as the registered configuration answers them: none unless a case says.
+const { localization } = vi.hoisted(() => ({
+  localization: vi.fn<() => unknown>(),
+}));
+vi.mock("../../i18n/configured-locales", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../i18n/configured-locales")>()),
+  appLocalization: () => localization(),
+}));
 vi.mock("../../../di", () => ({
   getService: (name: keyof typeof services) => services[name],
 }));
@@ -40,6 +48,7 @@ vi.mock("../reader-content", async importOriginal => {
   };
 });
 
+import { currentRuleLanguage } from "../../../auth/access/rule-language";
 import type { ConditionProbe } from "../condition-probe";
 import type { ContentAnswer } from "../reader-content";
 import {
@@ -104,6 +113,7 @@ const at = (iso: string) => new Date(iso);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localization.mockReturnValue(undefined);
   builder.enabled = true;
   published.clear();
   mayPerform.mockResolvedValue(false);
@@ -257,6 +267,30 @@ describe("filling in the Singles", () => {
       async (slug: string) => ({ slug, tableName: `single_${slug}` })
     );
     services.adapter.selectOne.mockResolvedValue(unchanged);
+  });
+
+  it("offers a localized Single as its editor's save is judged: in the default language alone", async () => {
+    localization.mockReturnValue({
+      defaultLocale: "en",
+      fallback: false,
+      locales: [
+        { code: "en", label: "English", rtl: false, fallbackLocale: [] },
+        { code: "fr", label: "French", rtl: false, fallbackLocale: [] },
+      ],
+    });
+    // An update rule that allows this reader the default language only, as the save of
+    // `/admin/singles/<slug>`, which names no language, is judged. Told every language (what a
+    // rule is told outside a write's own language), it refuses.
+    mayPerform.mockImplementation(async (action: string) => {
+      const { locale, locales } = currentRuleLanguage();
+      return action === "update" && locale === "en" && locales.length === 1;
+    });
+    const { byKind } = await stepsFor({
+      singles: { slugs: ["home"], reachable: true },
+    });
+    expect(byKind.singles?.singles.map(single => single.slug)).toEqual([
+      "home",
+    ]);
   });
 
   it("is ONE step for every Single the reader may update, in registry order", async () => {

@@ -22,7 +22,11 @@ import { getService } from "../../di";
 import { isBuilderEnabled } from "../../shared/builder-access";
 
 import type { ConditionProbe } from "./condition-probe";
-import { CONTENT_CHECK_BUDGET_MS, queryableSlugs } from "./reader-content";
+import {
+  CONTENT_CHECK_BUDGET_MS,
+  queryableSlugs,
+  updateVerdict,
+} from "./reader-content";
 import {
   isSkippableKind,
   talliedSetup,
@@ -115,7 +119,8 @@ async function entryStep(
 /**
  * Of `singles`, the ones this reader may update, in the order given.
  *
- * Decided per Single as a write is, in {@link authorizationGroups} order so a
+ * Decided per Single as its editor's save is ({@link updateVerdict}), in the
+ * default language that save is judged in, in {@link authorizationGroups} order so a
  * cold per-user cache is filled once. A decision that threw has told us
  * nothing, so its Single is "unknown", and the step that would offer it is not
  * known as a whole. No group starts after `signal` fires.
@@ -125,15 +130,14 @@ async function updatableSingles(
   singles: readonly string[],
   signal: AbortSignal
 ): Promise<Map<string, boolean | "unknown">> {
-  const { caller } = probe;
+  // The decision the Single's own editor saves under, in the language that
+  // save is judged in (`updateVerdict`), so a rule that answers by language
+  // offers the step exactly where the save is allowed.
+  const mayUpdate = updateVerdict(probe.caller);
   const decided = new Map<string, boolean | "unknown">();
   for (const group of authorizationGroups(singles)) {
     signal.throwIfAborted();
-    const settled = await Promise.allSettled(
-      group.map(slug =>
-        callerMayPerform(caller.authenticatedScope, "update", slug, caller.user)
-      )
-    );
+    const settled = await Promise.allSettled(group.map(mayUpdate));
     group.forEach((slug, index) => {
       const outcome = settled[index];
       decided.set(
