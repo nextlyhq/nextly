@@ -267,7 +267,8 @@ export default function SingleEditPage({
     entryId: document?.id,
     lifecycleEnabled: schema?.status,
     onDefaultLocale: !isNonDefaultLocale,
-    documentTitle: schema?.label || slug,
+    // A Single is named by its schema, not by a field the form holds.
+    documentTitle: () => schema?.label || slug,
   });
 
   // Update mutation — routes the save to the active language's companion row.

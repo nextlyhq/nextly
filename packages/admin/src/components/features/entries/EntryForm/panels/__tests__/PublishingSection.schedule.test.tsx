@@ -91,7 +91,7 @@ function Editor(props: { children: ReactNode }) {
     ...DOCUMENT,
     lifecycleEnabled: true,
     onDefaultLocale: true,
-    documentTitle: "Spring launch",
+    documentTitle: () => "Spring launch",
   };
   const schedule = useSchedulePublishAction(PROPS);
   const contributed = schedule.contributed;
@@ -102,7 +102,7 @@ function Editor(props: { children: ReactNode }) {
           actions: [contributed.action],
           bindings: { [contributed.action.id]: contributed.binding },
           run: async () => {
-            contributed.binding.onSelect();
+            contributed.binding.onSelect({ values: {} });
             return { ok: true } as never;
           },
         };

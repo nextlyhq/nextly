@@ -360,16 +360,16 @@ export default function EditEntryPage({
     onDefaultLocale: !isNonDefaultLocale,
   });
   // The Publish split's other way to publish: at a time, in a release of its
-  // own named after the entry.
+  // own named after the entry as the form holds it, so a title typed and not
+  // yet saved is the name the release takes.
   const schedule = useSchedulePublishAction({
     scopeKind: "collection",
     scopeSlug: slug,
     entryId: id,
     lifecycleEnabled: collection?.status,
     onDefaultLocale: !isNonDefaultLocale,
-    documentTitle: entry
-      ? entryTitleValue(entry, collection?.admin?.useAsTitle)
-      : undefined,
+    documentTitle: ({ values }) =>
+      entryTitleValue(values, collection?.admin?.useAsTitle),
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });

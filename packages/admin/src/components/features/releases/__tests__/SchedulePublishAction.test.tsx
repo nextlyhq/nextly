@@ -30,8 +30,11 @@ const PROPS: SchedulePublishProps = {
   entryId: "e1",
   lifecycleEnabled: true,
   onDefaultLocale: true,
-  documentTitle: "Spring launch",
+  documentTitle: () => "Spring launch",
 };
+
+/** The document as the editor holds it when the action is chosen. */
+const EDITED = { values: { headline: "Edited headline" } };
 
 /** What a page would receive, read out of a render, and the dialog mounted. */
 function Probe(over: Partial<SchedulePublishProps>) {
@@ -54,7 +57,10 @@ function Probe(over: Partial<SchedulePublishProps>) {
         {schedule.dialog === null ? "no-dialog" : "dialog"}
       </span>
       {contributed === null ? null : (
-        <button type="button" onClick={contributed.binding.onSelect}>
+        <button
+          type="button"
+          onClick={() => contributed.binding.onSelect(EDITED)}
+        >
           open
         </button>
       )}
@@ -154,6 +160,25 @@ describe("the dialog", () => {
     expect(
       await screen.findByRole("dialog", { name: "Schedule publish" })
     ).toBeTruthy();
+  });
+});
+
+describe("the release's name", () => {
+  it("is read from the document as the editor holds it when the action is chosen", async () => {
+    // The title being typed is in the form, not the saved entry, and the
+    // dialog says changes saved later go out with it: the name it shows and
+    // sends is the one on screen.
+    show({
+      documentTitle: ({ values }) =>
+        typeof values.headline === "string" ? values.headline : undefined,
+    });
+    await userEvent.click(screen.getByRole("button", { name: "open" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Schedule publish",
+    });
+    expect(dialog.textContent).toContain("Edited headline");
+    expect(dialog.textContent).not.toContain("Spring launch");
   });
 });
 

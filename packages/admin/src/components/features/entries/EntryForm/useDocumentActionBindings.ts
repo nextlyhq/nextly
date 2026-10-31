@@ -137,6 +137,11 @@ export interface DocumentActionBindingsInput {
    * distinguish from a feature that does not exist.
    */
   contributedActions?: readonly ContributedAction[];
+  /**
+   * The form's current values, unsaved edits included, which a contributed
+   * action is told when it is chosen.
+   */
+  currentValues?: () => Record<string, unknown>;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -414,6 +419,7 @@ export function useDocumentActionBindings({
   canEdit = true,
   writesRefused = false,
   contributedActions = [],
+  currentValues,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -572,7 +578,8 @@ export function useDocumentActionBindings({
     actionBindings,
     // A contribution acts on the document too (adding it to a release), which
     // is not offered where every write to it is refused.
-    isReadingHistory || writesRefused ? [] : contributedActions
+    isReadingHistory || writesRefused ? [] : contributedActions,
+    currentValues
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>

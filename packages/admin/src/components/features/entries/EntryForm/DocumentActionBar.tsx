@@ -79,8 +79,26 @@ export interface ActionBinding {
  */
 export interface ContributedAction {
   action: EditorDocumentAction;
-  binding: ActionBinding;
+  binding: ContributedBinding;
 }
+
+/**
+ * A contribution's control. Told, when it is chosen, the document as the form
+ * holds it: the page that contributes it sits above the form, so the saved
+ * entry is all it has, and an edit not yet saved (a title being typed) lives
+ * only in the form.
+ */
+export interface ContributedBinding extends Omit<ActionBinding, "onSelect"> {
+  onSelect: (document: DocumentAsEdited) => void;
+}
+
+/** The document as the editor holds it, unsaved edits included. */
+export interface DocumentAsEdited {
+  values: Record<string, unknown>;
+}
+
+/** What a host with no form to read hands a contribution. */
+const NO_VALUES = (): Record<string, unknown> => ({});
 
 /**
  * The built-in actions and bindings with a host's contributions folded in.
@@ -101,7 +119,12 @@ export interface ContributedAction {
 export function acceptContributions(
   built: readonly EditorDocumentAction[],
   builtBindings: Readonly<Record<string, ActionBinding | undefined>>,
-  contributed: readonly ContributedAction[]
+  contributed: readonly ContributedAction[],
+  /**
+   * The form's values, read at the moment a contribution is chosen rather
+   * than when the editor drew, so an edit made since the last render counts.
+   */
+  currentValues: () => Record<string, unknown> = NO_VALUES
 ): {
   actions: EditorDocumentAction[];
   bindings: Record<string, ActionBinding | undefined>;
@@ -115,7 +138,10 @@ export function acceptContributions(
   };
   for (const entry of contributed) {
     if (actions.includes(entry.action))
-      bindings[entry.action.id] = entry.binding;
+      bindings[entry.action.id] = {
+        ...entry.binding,
+        onSelect: () => entry.binding.onSelect({ values: currentValues() }),
+      };
   }
   return { actions, bindings };
 }

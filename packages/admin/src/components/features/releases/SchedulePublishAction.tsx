@@ -19,7 +19,10 @@
 import type { ReactNode } from "react";
 import { lazy, Suspense, useState } from "react";
 
-import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
+import type {
+  ContributedAction,
+  DocumentAsEdited,
+} from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import { useCan } from "@admin/hooks/useCan";
 
 import { dialogOpenerOf } from "./dialog-opener";
@@ -47,8 +50,12 @@ export interface SchedulePublishProps {
   lifecycleEnabled: boolean | undefined;
   /** Whether the editor is on the document's default locale. */
   onDefaultLocale: boolean;
-  /** The document's title, which names the release it goes into. */
-  documentTitle: string | undefined;
+  /**
+   * The document's title, which names the release it goes into: read from
+   * the document as the editor holds it when the action is chosen, so a
+   * title typed and not yet saved is the one the release takes.
+   */
+  documentTitle: (document: DocumentAsEdited) => string | undefined;
 }
 
 export interface SchedulePublishAction {
@@ -82,6 +89,8 @@ export function useSchedulePublishAction({
   const [opening, setOpening] = useState(0);
   // Where focus goes back to when the dialog closes.
   const [opener, setOpener] = useState<HTMLElement | null>(null);
+  // The title as it stood when the action was chosen.
+  const [title, setTitle] = useState<string | undefined>(undefined);
   const open = openFor === documentKey;
 
   if (lifecycleEnabled !== true || !scopeSlug || !entryId) {
@@ -102,11 +111,12 @@ export function useSchedulePublishAction({
       ...(disabledReason === undefined ? {} : { disabledReason }),
     },
     binding: {
-      onSelect: () => {
+      onSelect: edited => {
         // Already open: a second form over the first would be a second
         // request while the first may still be out.
         if (open) return;
         setOpener(dialogOpenerOf(globalThis.document?.activeElement ?? null));
+        setTitle(documentTitle(edited));
         setOpening(count => count + 1);
         setOpenFor(documentKey);
       },
@@ -122,7 +132,7 @@ export function useSchedulePublishAction({
           open={open}
           onOpenChange={next => setOpenFor(next ? documentKey : null)}
           document={{ scopeKind, scopeSlug, entryId }}
-          documentTitle={documentTitle}
+          documentTitle={title}
           opener={opener}
         />
       </Suspense>

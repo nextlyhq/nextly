@@ -143,6 +143,50 @@ describe("the editor's Delete", () => {
   });
 });
 
+describe("an action the page contributes", () => {
+  it("is told the document as the form holds it, an unsaved title included", async () => {
+    // The page sits above the form, so the saved entry is all it has; the
+    // title being typed lives only in the form until it is saved.
+    holding("read-categories", "update-categories");
+    const chosen = vi.fn();
+    render(
+      <EntryForm
+        collection={categories}
+        entry={entry}
+        mode="edit"
+        documentActions={[
+          {
+            action: {
+              id: "add-to-release",
+              label: "Add to release",
+              placement: "menu",
+              group: "document",
+            },
+            binding: { onSelect: chosen },
+          },
+        ]}
+      />,
+      { wrapper: Providers }
+    );
+    const title = screen.getByRole("textbox", { name: /title/i });
+    await userEvent.clear(title);
+    await userEvent.type(title, "Edited headline");
+
+    await userEvent.click(
+      within(await screen.findByTestId("document-bar")).getByRole("button", {
+        name: "More actions",
+      })
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Add to release" })
+    );
+
+    expect(chosen).toHaveBeenCalledWith({
+      values: expect.objectContaining({ title: "Edited headline" }),
+    });
+  });
+});
+
 describe("a quick-edit modal's Save", () => {
   it("is not offered without the update permission, and a submit sends nothing", async () => {
     holding("read-categories");
