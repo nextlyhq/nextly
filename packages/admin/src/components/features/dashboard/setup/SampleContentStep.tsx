@@ -64,7 +64,7 @@ function Dot() {
 }
 
 /** When a load started, in the reader's own words for a date and time. */
-export function startedWhen(iso: string): string {
+function startedWhen(iso: string): string {
   const at = new Date(iso);
   return Number.isNaN(at.getTime())
     ? iso

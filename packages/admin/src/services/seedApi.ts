@@ -15,7 +15,7 @@
  * raw bodies (not the `{success, data}` envelope that fetcher expects).
  */
 
-export interface SeedSummary {
+interface SeedSummary {
   rolesCreated: number;
   usersCreated: number;
   categoriesCreated: number;
@@ -28,7 +28,7 @@ export interface SeedSummary {
   permissionsSynced: number;
 }
 
-export interface SeedResult {
+interface SeedResult {
   message: string;
   summary: SeedSummary;
   warnings: string[];
@@ -43,7 +43,7 @@ export type SeedProbeResult =
  * load that could not be asked for is `failed` with why, so the card says so
  * and starts nothing on its own.
  */
-export type SampleStartAnswer =
+type SampleStartAnswer =
   /** Loaded and recorded; `result` is absent from a project route older than the runner. */
   | { outcome: "loaded"; result?: SeedResult }
   /** Loaded, but recording that failed: `run` records it on its own. */
@@ -98,6 +98,51 @@ function refusalReason(
   return REFUSALS.find(known => known === reason) ?? "other";
 }
 
+/** What a start's answer body may carry. */
+type StartBody = {
+  outcome?: unknown;
+  run?: unknown;
+  startedAt?: unknown;
+  failure?: unknown;
+  result?: SeedResult;
+} | null;
+
+/** A start that was not a success: refused (409) with why, or failed with what failed. */
+function notStarted(status: number, body: StartBody): SampleStartAnswer {
+  if (status === 409) {
+    return {
+      outcome: "refused",
+      reason: refusalReason(body),
+      message: messageIn(body, "Sample content could not be loaded now."),
+    };
+  }
+  return {
+    outcome: "failed",
+    failure:
+      typeof body?.failure === "string"
+        ? body.failure
+        : messageIn(body, `Loading failed (${status}).`),
+    ...(typeof body?.startedAt === "string"
+      ? { startedAt: body.startedAt }
+      : {}),
+  };
+}
+
+/** A start that loaded: recorded, or not recorded with the run that records it. */
+function started(body: StartBody): SampleStartAnswer {
+  if (
+    body?.outcome === "unrecorded" &&
+    typeof body.run === "string" &&
+    typeof body.startedAt === "string"
+  ) {
+    return { outcome: "unrecorded", run: body.run, startedAt: body.startedAt };
+  }
+  // A route older than the runner answers its result alone, having recorded it itself.
+  const result =
+    body?.outcome === "loaded" ? body.result : (body as SeedResult | null);
+  return result ? { outcome: "loaded", result } : { outcome: "loaded" };
+}
+
 /**
  * Starts the site's one load. Asked once: nothing here retries, as a second
  * request could start a second load.
@@ -121,48 +166,8 @@ async function start(confirm: boolean): Promise<SampleStartAnswer> {
       failure: "The server could not be reached.",
     };
   }
-  const body: unknown = await res.json().catch(() => null);
-  const answer = body as {
-    outcome?: unknown;
-    run?: unknown;
-    startedAt?: unknown;
-    failure?: unknown;
-    result?: SeedResult;
-  } | null;
-  if (res.status === 409) {
-    return {
-      outcome: "refused",
-      reason: refusalReason(body),
-      message: messageIn(body, "Sample content could not be loaded now."),
-    };
-  }
-  if (!res.ok) {
-    return {
-      outcome: "failed",
-      failure:
-        typeof answer?.failure === "string"
-          ? answer.failure
-          : messageIn(body, `Loading failed (${res.status}).`),
-      ...(typeof answer?.startedAt === "string"
-        ? { startedAt: answer.startedAt }
-        : {}),
-    };
-  }
-  if (
-    answer?.outcome === "unrecorded" &&
-    typeof answer.run === "string" &&
-    typeof answer.startedAt === "string"
-  ) {
-    return {
-      outcome: "unrecorded",
-      run: answer.run,
-      startedAt: answer.startedAt,
-    };
-  }
-  // A route older than the runner answers its result alone, having recorded it itself.
-  const result =
-    answer?.outcome === "loaded" ? answer.result : (body as SeedResult | null);
-  return result ? { outcome: "loaded", result } : { outcome: "loaded" };
+  const body = (await res.json().catch(() => null)) as StartBody;
+  return res.ok ? started(body) : notStarted(res.status, body);
 }
 
 /** The type of {@link seedApi}. */

@@ -35,7 +35,7 @@ import type {
   SetupCardData,
   SetupStep,
 } from "nextly/config";
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { isApiError } from "@admin/lib/api/parseApiError";
@@ -49,7 +49,7 @@ const SETUP_PATH = "/dashboard/setup";
 /** The probe's answer, shared by every card that asks it. */
 const PROBE_KEY = ["seed", "probe"] as const;
 /** What this tab did with sample content, kept across the card being drawn again. */
-export const SAMPLE_RUN_KEY = ["dashboard", "setup", "sample-run"] as const;
+const SAMPLE_RUN_KEY = ["dashboard", "setup", "sample-run"] as const;
 /** The last setup answer that could be read, kept for while a run is on show. */
 const KEPT_SETUP_KEY = ["dashboard", "setup", "kept"] as const;
 
@@ -58,7 +58,7 @@ const KEPT_SETUP_KEY = ["dashboard", "setup", "kept"] as const;
  * for again over: taken by whichever card is drawn next, so a card drawn again
  * mid-request still asks.
  */
-export type SampleLocal =
+type SampleLocal =
   | { phase: "running" }
   | { phase: "loaded" }
   /** Continue was chosen: the outcome stays until the card's data shows the load. */
@@ -168,62 +168,76 @@ function serverView(
   }
 }
 
-/**
- * What the step shows. `mayLoadAgain` is whether this person may load and the
- * site still holds no entry: only then is a failed load offered Try again.
- */
-export function sampleView(
+/** A local phase's view, where this tab's own state decides what the step shows. */
+type LocalView<P extends SampleLocal["phase"]> = (
+  local: Extract<SampleLocal, { phase: P }>,
+  mayLoadAgain: boolean
+) => SampleView | undefined;
+
+/** What each of this tab's phases shows; a refusal shows the site's state, with its notice. */
+const LOCAL_VIEWS: { [P in SampleLocal["phase"]]: LocalView<P> } = {
+  running: () => ({ kind: "running" }),
+  declining: () => ({ kind: "declining" }),
+  loaded: () => ({ kind: "loaded", continuing: false }),
+  continuing: () => ({ kind: "loaded", continuing: true }),
+  unrecorded: local => ({
+    kind: "unrecorded",
+    run: local.run,
+    startedAt: local.startedAt,
+    recording: false,
+    again: local.again === true,
+  }),
+  recording: local => ({
+    kind: "unrecorded",
+    run: local.run,
+    startedAt: local.startedAt,
+    recording: true,
+    again: false,
+  }),
+  confirming: local => ({ kind: "confirming", failure: local.failure }),
+  failed: (local, mayLoadAgain) => ({
+    kind: "failed",
+    failure: local.failure,
+    ...(local.startedAt === undefined ? {} : { startedAt: local.startedAt }),
+    retry: mayLoadAgain,
+  }),
+  answered: () => ({ kind: "done" }),
+  refused: () => undefined,
+};
+
+function localView(
   local: SampleLocal | null,
+  mayLoadAgain: boolean
+): SampleView | undefined {
+  if (local === null) return undefined;
+  const view = LOCAL_VIEWS[local.phase] as LocalView<SampleLocal["phase"]>;
+  return view(local, mayLoadAgain);
+}
+
+/** The site's answer as the step shows it, while this tab has nothing of its own to say. */
+function siteView(
   step: SampleSetupStep | undefined,
   probe: SeedProbeResult | undefined,
   mayLoadAgain: boolean
 ): SampleView {
-  switch (local?.phase) {
-    case "running":
-      return { kind: "running" };
-    case "declining":
-      return { kind: "declining" };
-    case "loaded":
-      return { kind: "loaded", continuing: false };
-    case "continuing":
-      return { kind: "loaded", continuing: true };
-    case "unrecorded":
-      return {
-        kind: "unrecorded",
-        run: local.run,
-        startedAt: local.startedAt,
-        recording: false,
-        again: local.again === true,
-      };
-    case "recording":
-      return {
-        kind: "unrecorded",
-        run: local.run,
-        startedAt: local.startedAt,
-        recording: true,
-        again: false,
-      };
-    case "confirming":
-      return { kind: "confirming", failure: local.failure };
-    case "failed":
-      return {
-        kind: "failed",
-        failure: local.failure,
-        ...(local.startedAt === undefined
-          ? {}
-          : { startedAt: local.startedAt }),
-        retry: mayLoadAgain,
-      };
-    case "answered":
-      return { kind: "done" };
-    default:
-      break;
-  }
   if (step === undefined || step.status !== "open") return { kind: "done" };
   if (step.run !== undefined) return serverView(step.run, mayLoadAgain);
   if (step.unreadable) return { kind: "unreadable" };
   if (probe === undefined) return { kind: "checking" };
   return probe.available ? { kind: "offer" } : { kind: "done" };
+}
+
+/**
+ * What the step shows. `mayLoadAgain` is whether this person may load and the
+ * site still holds no entry: only then is a failed load offered Try again.
+ */
+function sampleView(
+  local: SampleLocal | null,
+  step: SampleSetupStep | undefined,
+  probe: SeedProbeResult | undefined,
+  mayLoadAgain: boolean
+): SampleView {
+  return localView(local, mayLoadAgain) ?? siteView(step, probe, mayLoadAgain);
 }
 
 /** The views with a panel of their own under the tiles. */
@@ -384,6 +398,111 @@ function useRefreshOnFocus(active: boolean, refresh: () => void): void {
   }, [active]);
 }
 
+/** This tab's own state, kept in the query cache so a card drawn again reads it. */
+function useLocal(): SampleCache {
+  return (
+    useQuery<SampleCache>({
+      queryKey: SAMPLE_RUN_KEY,
+      queryFn: () => null,
+      enabled: false,
+      initialData: null,
+      staleTime: Infinity,
+      gcTime: Infinity,
+    }).data ?? null
+  );
+}
+
+/** Phases that end once the card's data shows the site's answer as it is now. */
+const ENDS_ON_ANSWER: ReadonlySet<SampleLocal["phase"]> = new Set([
+  "continuing",
+  "answered",
+  "refused",
+  "failed",
+  "unrecorded",
+]);
+
+/**
+ * Takes a pending ask for the card's data, and ends a phase the site's answer has moved past:
+ * Continue, a confirmed answer, a refusal, or a failure or record somebody since answered. Ended
+ * only once the card's data is the site's as it is now, the step answered or no longer offered,
+ * never on an earlier answer still in the cache.
+ */
+function useSettleLocal(
+  local: SampleCache,
+  latestCard: SetupCardData,
+  refresh: () => void,
+  refreshing: boolean
+): void {
+  const client = useQueryClient();
+  useEffect(() => {
+    if (local?.refresh !== true) return;
+    const taken = { ...local };
+    delete taken.refresh;
+    writeLocal(client, taken);
+    refresh();
+  }, [local, client, refresh]);
+
+  const latestStep = sampleStepOf(latestCard);
+  const latestAnswered =
+    latestCard.setup.known &&
+    (latestStep === undefined || latestStep.status === "done");
+  const phase = local?.phase;
+  useEffect(() => {
+    if (refreshing || !latestAnswered || phase === undefined) return;
+    if (ENDS_ON_ANSWER.has(phase)) writeLocal(client, null);
+  }, [refreshing, latestAnswered, phase, client]);
+}
+
+/** The step's actions, each writing this tab's state to the cache. */
+function sampleActions(
+  client: QueryClient,
+  local: SampleCache,
+  view: SampleView
+): Pick<
+  SampleRunState,
+  | "load"
+  | "askAgain"
+  | "confirmAgain"
+  | "cancelAgain"
+  | "decline"
+  | "record"
+  | "continueOn"
+> {
+  return {
+    load: () => void startLoad(client, false),
+    askAgain: () => {
+      if (view.kind !== "failed" || !view.retry) return;
+      writeLocal(client, {
+        phase: "confirming",
+        failure: view.failure,
+        ...(view.startedAt === undefined ? {} : { startedAt: view.startedAt }),
+      });
+    },
+    confirmAgain: () => void startLoad(client, true),
+    cancelAgain: () => {
+      if (local?.phase !== "confirming") return;
+      writeLocal(client, {
+        phase: "failed",
+        failure: local.failure,
+        ...(local.startedAt === undefined
+          ? {}
+          : { startedAt: local.startedAt }),
+      });
+    },
+    decline: () => void declineSite(client),
+    record: () => {
+      if (view.kind === "unrecorded" && !view.recording) {
+        void recordRun(client, view.run, view.startedAt);
+      }
+    },
+    continueOn: () => {
+      if (local?.phase === "loaded") {
+        writeLocal(client, { phase: "continuing", refresh: true });
+      }
+    },
+  };
+}
+
 /**
  * The step's state and actions. `refresh` asks for the card's data again,
  * `refreshing` is whether it is on its way.
@@ -394,15 +513,7 @@ export function useSampleRun(
   refreshing: boolean
 ): SampleRunState {
   const client = useQueryClient();
-  const local =
-    useQuery<SampleCache>({
-      queryKey: SAMPLE_RUN_KEY,
-      queryFn: () => null,
-      enabled: false,
-      initialData: null,
-      staleTime: Infinity,
-      gcTime: Infinity,
-    }).data ?? null;
+  const local = useLocal();
   const probe = useQuery<SeedProbeResult>({
     queryKey: PROBE_KEY,
     queryFn: seedApi.probe,
@@ -413,62 +524,14 @@ export function useSampleRun(
   const { card, refreshFailed } = useKeptCard(latestCard, local !== null);
   const step = sampleStepOf(card);
   const entry = entryStepOf(card);
-  const siteEmpty = entry?.status !== "done";
-  const view = sampleView(
-    local,
-    step,
-    probe,
-    probe?.available === true && siteEmpty
-  );
+  const mayLoadAgain = probe?.available === true && entry?.status !== "done";
+  const view = sampleView(local, step, probe, mayLoadAgain);
 
-  // A change the card's data is asked for again over, taken once by whichever card is drawn.
-  useEffect(() => {
-    if (local?.refresh !== true) return;
-    const taken = { ...local };
-    delete taken.refresh;
-    writeLocal(client, taken);
-    refresh();
-  }, [local, client, refresh]);
-
-  // Continue, or a confirmed answer, ends once the card's data is the site's as it is now: the
-  // step answered (or no longer offered), never an earlier answer still in the cache.
-  const latestStep = sampleStepOf(latestCard);
-  const latestAnswered =
-    latestCard.setup.known &&
-    (latestStep === undefined || latestStep.status === "done");
-  useEffect(() => {
-    if (refreshing || !latestAnswered) return;
-    if (
-      local?.phase === "continuing" ||
-      local?.phase === "answered" ||
-      local?.phase === "refused"
-    ) {
-      writeLocal(client, null);
-    }
-  }, [refreshing, latestAnswered, local?.phase, client]);
-
-  // A local failure or record the site has since moved past gives way to the site's answer.
-  useEffect(() => {
-    if (
-      latestAnswered &&
-      !refreshing &&
-      (local?.phase === "failed" || local?.phase === "unrecorded")
-    ) {
-      writeLocal(client, null);
-    }
-  }, [latestAnswered, refreshing, local?.phase, client]);
-
+  useSettleLocal(local, latestCard, refresh, refreshing);
   useRefreshOnFocus(
     step?.status === "open" && view.kind !== "running",
     refresh
   );
-
-  const load = useCallback(() => void startLoad(client, false), [client]);
-  const confirmAgain = useCallback(
-    () => void startLoad(client, true),
-    [client]
-  );
-  const decline = useCallback(() => void declineSite(client), [client]);
 
   return {
     view,
@@ -481,40 +544,6 @@ export function useSampleRun(
     panelShown: PANEL_VIEWS.has(view.kind) || local?.phase === "refused",
     entryHref:
       entry?.status === "open" ? stepPresentation(entry).href : undefined,
-    load,
-    askAgain: () => {
-      if (view.kind === "failed" && view.retry) {
-        writeLocal(client, {
-          phase: "confirming",
-          failure: view.failure,
-          ...(view.startedAt === undefined
-            ? {}
-            : { startedAt: view.startedAt }),
-        });
-      }
-    },
-    confirmAgain,
-    cancelAgain: () => {
-      if (local?.phase === "confirming") {
-        writeLocal(client, {
-          phase: "failed",
-          failure: local.failure,
-          ...(local.startedAt === undefined
-            ? {}
-            : { startedAt: local.startedAt }),
-        });
-      }
-    },
-    decline,
-    record: () => {
-      if (view.kind === "unrecorded" && !view.recording) {
-        void recordRun(client, view.run, view.startedAt);
-      }
-    },
-    continueOn: () => {
-      if (local?.phase === "loaded") {
-        writeLocal(client, { phase: "continuing", refresh: true });
-      }
-    },
+    ...sampleActions(client, local, view),
   };
 }
