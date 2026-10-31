@@ -106,8 +106,18 @@ const USED = {
       title: "Launch",
       owner: "Posts",
       fields: [
-        { path: "cover", locales: [] },
-        { path: "body", locales: ["en"] },
+        {
+          path: "cover",
+          locales: [],
+          byAddress: false,
+          showsPreviousFile: false,
+        },
+        {
+          path: "body",
+          locales: ["en"],
+          byAddress: true,
+          showsPreviousFile: true,
+        },
       ],
     },
     {
@@ -116,7 +126,14 @@ const USED = {
       documentId: "",
       title: "Site settings",
       owner: "Site settings",
-      fields: [{ path: "logo", locales: [] }],
+      fields: [
+        {
+          path: "logo",
+          locales: [],
+          byAddress: false,
+          showsPreviousFile: false,
+        },
+      ],
     },
   ],
   hidden: 1,
@@ -157,7 +174,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   held.slugs = new Set(EDITOR);
   window.localStorage.setItem("nextly:admin:media:view-mode", "grid");
-  library.fetchMediaUsage.mockResolvedValue(USED);
+  // Every use, or only the address uses, as the request asks; by default
+  // nothing names the item by address.
+  library.fetchMediaUsage.mockImplementation(
+    (_id: string, options?: { byAddress?: boolean }) =>
+      Promise.resolve(options?.byAddress ? { items: [], hidden: 0 } : USED)
+  );
   library.fetchMediaLibraryCounts.mockResolvedValue({
     all: 3,
     missingAltText: 1,
@@ -254,6 +276,17 @@ describe("Used in", () => {
     expect(
       within(usedIn).getByText("And 1 more place you can't open.")
     ).toBeInTheDocument();
+    // The post's rich text still names the file the item had before.
+    expect(
+      within(within(usedIn).getByRole("link", { name: /Launch/ })).getByText(
+        "Shows the previous file until it is edited"
+      )
+    ).toBeInTheDocument();
+    expect(
+      within(
+        within(usedIn).getByRole("link", { name: /Site settings/ })
+      ).queryByText(/previous file/)
+    ).toBeNull();
   });
 });
 
@@ -400,6 +433,47 @@ describe("Replace", () => {
     fireEvent.click(within(ask).getByRole("button", { name: "Replace" }));
     await waitFor(() =>
       expect(library.replaceMediaFile).toHaveBeenCalledWith("m1", pdf)
+    );
+  });
+});
+
+describe("Replace with pages naming the item by address", () => {
+  it("says which keep the previous image, before replacing", async () => {
+    library.fetchMediaUsage.mockImplementation(
+      (_id: string, options?: { byAddress?: boolean }) =>
+        Promise.resolve(
+          options?.byAddress ? { items: [USED.items[0]], hidden: 1 } : USED
+        )
+    );
+    renderLibrary();
+    const panel = await openItem(1);
+    fireEvent.click(
+      within(panel).getByRole("button", { name: /Replace file/ })
+    );
+    const file = new File(["x"], "new-photo.jpg", { type: "image/jpeg" });
+    await userEvent.upload(screen.getByTestId("media-replace-input"), file);
+
+    const ask = await screen.findByRole("alertdialog", {
+      name: "Replace photo-1.jpg?",
+    });
+    expect(library.fetchMediaUsage).toHaveBeenCalledWith("m1", {
+      byAddress: true,
+    });
+    expect(ask).toHaveTextContent(
+      "2 places show this image by its address (rich text and email templates) and keep the previous image until they're edited."
+    );
+    // Listed as Used in lists them: the readable one named, the other counted.
+    expect(
+      within(ask).getByRole("link", { name: /Launch/ })
+    ).toBeInTheDocument();
+    expect(
+      within(ask).getByText("And 1 more place you can't open.")
+    ).toBeInTheDocument();
+    expect(library.replaceMediaFile).not.toHaveBeenCalled();
+
+    fireEvent.click(within(ask).getByRole("button", { name: "Replace" }));
+    await waitFor(() =>
+      expect(library.replaceMediaFile).toHaveBeenCalledWith("m1", file)
     );
   });
 });

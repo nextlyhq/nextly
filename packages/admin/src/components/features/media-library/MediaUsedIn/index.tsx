@@ -102,6 +102,11 @@ export function MediaUsageList({
                 <span className="truncate text-xs text-muted-foreground">
                   {fieldsText(use)}
                 </span>
+                {use.fields.some(field => field.showsPreviousFile) && (
+                  <span className="text-xs font-medium text-foreground">
+                    Shows the previous file until it is edited
+                  </span>
+                )}
               </Link>
             </li>
           ))}

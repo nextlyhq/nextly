@@ -32,6 +32,13 @@ export interface MediaUseField {
   path: string;
   /** The languages using it; empty when every language does. */
   locales: string[];
+  /**
+   * Whether it names the item by its address (rich text, an email
+   * template's image), which keeps the old file when the file is replaced.
+   */
+  byAddress: boolean;
+  /** Whether it still shows the file the item had before its last Replace. */
+  showsPreviousFile: boolean;
 }
 
 /** One document that uses an item, as the reader may read it. */
@@ -83,12 +90,19 @@ export function fetchMediaLibraryCounts(): Promise<MediaLibraryCounts> {
   return mediaJson<MediaLibraryCounts>("/counts");
 }
 
-/** The documents using an item that the reader may open, and how many more. */
-export async function fetchMediaUsage(mediaId: string): Promise<MediaUsage> {
+/**
+ * The documents using an item that the reader may open, and how many more;
+ * with `byAddress`, only those naming it by its address.
+ */
+export async function fetchMediaUsage(
+  mediaId: string,
+  options: { byAddress?: boolean } = {}
+): Promise<MediaUsage> {
+  const query = options.byAddress ? "?byAddress=true" : "";
   const body = await mediaJson<{
     items: MediaUse[];
     meta?: { hidden?: Array<{ count: number }> };
-  }>(`/${encodeURIComponent(mediaId)}/usage`);
+  }>(`/${encodeURIComponent(mediaId)}/usage${query}`);
   return {
     items: body.items,
     hidden: (body.meta?.hidden ?? []).reduce(
