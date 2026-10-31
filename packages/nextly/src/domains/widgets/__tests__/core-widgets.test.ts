@@ -135,30 +135,29 @@ describe("core widget definitions", () => {
    * of these hides a card every authenticated admin can see today, which is the
    * behaviour change that docblock exists to prevent.
    */
-  it("declares Get started visible by permission alone: first, full width, dismissible", () => {
-    // 🔴 No condition. Visibility is part of the token a layout write is
-    // checked against, so a card whose visibility followed its steps would
-    // turn a skip or a dismissal into a stale-scope refusal whenever a step
-    // changed between the read and the write. The layout read draws it or
-    // leaves it dormant instead.
-    const card = CORE_WIDGETS.find(w => w.id === "core/get-started");
+  it("declares the setup card first on the default, full width and two rows, shown by its own rule", () => {
+    const card = CORE_DECLARATIONS.find(w => w.id === "core/setup");
     expect(card).toBeDefined();
-    expect(card?.lifecycle ?? "always").toBe("always");
-    expect(card).not.toHaveProperty("visibleWhen");
-    expect(card?.dismissible).toBe(true);
-    // Full width only, and compact: its steps fold to the rows it has, so it may be as short
-    // as three rows without a step cut off.
-    expect(card && sizeBounds(card.size)).toEqual({
-      default: { w: 12, h: 4 },
-      min: { w: 12, h: 3 },
-      max: { w: 12, h: 12 },
+    // Whether it is there is its `shows`, judged per reader before it loads,
+    // never a condition or the frame's dismissal.
+    expect(card?.shows).toBeTypeOf("function");
+    expect(card).not.toHaveProperty("lifecycle");
+    expect(card).not.toHaveProperty("dismissible");
+    expect(card?.size).toEqual({
+      default: { w: 12, h: 2 },
+      min: { w: 12, h: 2 },
+      max: { w: 12, h: 4 },
     });
     // First on core's default: it addresses a reader who has just arrived.
-    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/get-started" });
+    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/setup" });
   });
 
-  it("no longer declares the two cards Get started replaced", () => {
-    const ids = CORE_WIDGETS.map(w => w.id);
+  it("no longer declares the old Get started card, or the cards it replaced", () => {
+    const ids = [
+      ...CORE_WIDGETS.map(w => w.id),
+      ...CORE_DECLARATIONS.map(w => w.id),
+    ];
+    expect(ids).not.toContain("core/get-started");
     expect(ids).not.toContain("core/seed-demo-content");
     expect(ids).not.toContain("core/onboarding-checklist");
   });
@@ -435,10 +434,10 @@ describe("the default dashboard", () => {
 
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });
 
-  it("is core's own defaultLayout: the onboarding card, then the agreed cards as agreed", () => {
+  it("is core's own defaultLayout: the setup card, then the agreed cards as agreed", () => {
     // Each at its widget's starting size: no entry states a size or settings of its own.
     expect(CORE_DEFAULT_LAYOUT).toEqual([
-      { widget: "core/get-started" },
+      { widget: "core/setup" },
       ...AGREED.map(([id]) => ({ widget: id })),
     ]);
   });
