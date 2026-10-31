@@ -11,8 +11,23 @@ import { describe, expect, it } from "vitest";
 
 import {
   ADMIN_NAME_PREFIX,
+  hasHostElementShield,
   isolateAdminStylesheet,
 } from "./admin-stylesheet.mjs";
+
+/** The shield's selectors' common start, as the source and a minifier print it. */
+const WEIGHTED = ":is(*,x x x x x x x x x x)";
+
+/**
+ * The shield as the admin's minified build ships it: the Tailwind CLI's
+ * lightningcss prints the `::before`/`::after` selectors with one colon and
+ * the `::marker` selector as a rule of its own.
+ */
+const MINIFIED_SHIELD =
+  `:where(.nextly-admin)${WEIGHTED},:where(.nextly-admin) ${WEIGHTED},` +
+  `:where(.nextly-admin) ${WEIGHTED}:before,:where(.nextly-admin) ${WEIGHTED}:after,` +
+  `:where(.nextly-admin) ${WEIGHTED}::placeholder{all:revert-layer}` +
+  `:where(.nextly-admin) ${WEIGHTED}::marker{all:revert-layer}`;
 
 const SHEET = [
   "@layer theme {",
@@ -72,6 +87,19 @@ describe("isolateAdminStylesheet", () => {
     expect(out).toContain("@property --zz-tw-rotate-x");
   });
 
+  it("adds the shield that reverts a host's element rules inside the admin", () => {
+    const out = isolateAdminStylesheet(SHEET);
+
+    // The control: the sheet before isolation has no shield, so the check
+    // below can tell a sheet with one from a sheet without.
+    expect(hasHostElementShield(SHEET)).toBe(false);
+    expect(hasHostElementShield(out)).toBe(true);
+    // Unlayered: outside every `@layer` block, after the last of them closes.
+    const shield = out.slice(out.lastIndexOf("}\n", out.indexOf("all:")));
+    expect(shield).not.toContain("@layer");
+    expect(out.trimEnd().endsWith("all: revert-layer;\n}")).toBe(true);
+  });
+
   it("refuses a sheet with a rule it could not scope, naming it", () => {
     // A selector list over several lines: the scoper reads one rule to a line,
     // so the lines before the brace stay as written and escape.
@@ -80,5 +108,39 @@ describe("isolateAdminStylesheet", () => {
     expect(() => isolateAdminStylesheet(escaped)).toThrow(
       /escaped the \.nextly-admin scope: .*\.a/
     );
+  });
+});
+
+describe("hasHostElementShield", () => {
+  it("finds the shield in the minified form the admin's build ships", () => {
+    expect(
+      hasHostElementShield(`.nextly-admin .a{color:red}${MINIFIED_SHIELD}`)
+    ).toBe(true);
+  });
+
+  it("refuses a shield a minifier simplified to the universal selector", () => {
+    // The rule kept, its weight gone: (0,0,0) loses to a host's `h2` (0,0,1).
+    const unweighted = MINIFIED_SHIELD.replaceAll(WEIGHTED, "*");
+
+    expect(unweighted).toContain("{all:revert-layer}");
+    expect(hasHostElementShield(unweighted)).toBe(false);
+  });
+
+  it("refuses a shield missing one of its selectors", () => {
+    const withoutMarker = MINIFIED_SHIELD.replace(
+      `:where(.nextly-admin) ${WEIGHTED}::marker{all:revert-layer}`,
+      ""
+    );
+
+    expect(hasHostElementShield(withoutMarker)).toBe(false);
+  });
+
+  it("refuses the selectors when they revert nothing", () => {
+    const otherDeclaration = MINIFIED_SHIELD.replaceAll(
+      "all:revert-layer",
+      "all:revert"
+    );
+
+    expect(hasHostElementShield(otherDeclaration)).toBe(false);
   });
 });

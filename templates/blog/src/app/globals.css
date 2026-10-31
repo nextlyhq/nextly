@@ -133,7 +133,13 @@ h3 {
    Accessibility & Micro-interactions
    =============================================================== */
 
-*:focus-visible {
+/* Inside `:where()`, so the selector weighs nothing. On this site's pages it
+   draws exactly as `*:focus-visible` would, since no other rule here sets these
+   properties on a focused element. The admin at /admin renders in this same
+   document, and it reverts a site's rules made of element names only; with
+   the pseudo-class counted, this one would outweigh that and redraw every
+   focused control in the admin with this ring and corner. */
+:where(*:focus-visible) {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
