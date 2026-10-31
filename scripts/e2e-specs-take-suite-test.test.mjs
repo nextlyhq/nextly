@@ -67,6 +67,47 @@ function importedFile(file, specifier) {
   return target.endsWith(".ts") ? target : `${target}.ts`;
 }
 
+/** The name an import specifier takes from its module. */
+function importedName(specifier) {
+  return specifier.imported.type === "Identifier"
+    ? specifier.imported.name
+    : specifier.imported.value;
+}
+
+/**
+ * How one import declaration reaches Playwright's own `test`, or null. A
+ * type-only import reaches nothing at run time.
+ */
+function playwrightTestReached(declaration) {
+  if (literalText(declaration.source) !== "@playwright/test") return null;
+  if (declaration.importKind === "type") return null;
+  for (const specifier of declaration.specifiers) {
+    if (specifier.type === "ImportDefaultSpecifier") {
+      return 'takes Playwright\'s `test` as the default export of "@playwright/test"';
+    }
+    if (specifier.type === "ImportNamespaceSpecifier") {
+      return 'imports "@playwright/test" whole, which reaches Playwright\'s `test`';
+    }
+    if (importedName(specifier) === "test" && specifier.importKind !== "type") {
+      return 'takes `test` from "@playwright/test"';
+    }
+  }
+  return null;
+}
+
+/** Whether one of the imports takes `test` from the module `expected`. */
+function takesTestFrom(file, imports, expected) {
+  return imports.some(
+    declaration =>
+      importedFile(file, literalText(declaration.source) ?? "") === expected &&
+      declaration.specifiers.some(
+        specifier =>
+          specifier.type === "ImportSpecifier" &&
+          importedName(specifier) === "test"
+      )
+  );
+}
+
 /**
  * What is wrong with how a spec takes its `test`, or null.
  *
@@ -78,39 +119,16 @@ export function testSourceProblem(file, text) {
     node => node.type === "ImportDeclaration"
   );
   for (const declaration of imports) {
-    if (literalText(declaration.source) !== "@playwright/test") continue;
-    if (declaration.importKind === "type") continue;
-    for (const specifier of declaration.specifiers) {
-      if (specifier.type === "ImportDefaultSpecifier") {
-        return 'takes Playwright\'s `test` as the default export of "@playwright/test"';
-      }
-      if (specifier.type === "ImportNamespaceSpecifier") {
-        return 'imports "@playwright/test" whole, which reaches Playwright\'s `test`';
-      }
-      const name =
-        specifier.imported.type === "Identifier"
-          ? specifier.imported.name
-          : specifier.imported.value;
-      if (name === "test" && specifier.importKind !== "type") {
-        return 'takes `test` from "@playwright/test"';
-      }
-    }
+    const reached = playwrightTestReached(declaration);
+    if (reached) return reached;
   }
   const expected = expectedTest(file);
   if (expected === null) {
     return "is outside e2e/tests, where no suite `test` is defined for it";
   }
-  const takesExpected = imports.some(
-    declaration =>
-      importedFile(file, literalText(declaration.source) ?? "") === expected &&
-      declaration.specifiers.some(
-        specifier =>
-          specifier.type === "ImportSpecifier" &&
-          specifier.imported.type === "Identifier" &&
-          specifier.imported.name === "test"
-      )
-  );
-  return takesExpected ? null : `does not take \`test\` from ${expected}`;
+  return takesTestFrom(file, imports, expected)
+    ? null
+    : `does not take \`test\` from ${expected}`;
 }
 
 describe("browser specs take the suite's test", () => {
