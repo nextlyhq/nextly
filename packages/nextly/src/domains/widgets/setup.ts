@@ -73,24 +73,32 @@ type StepAnswer = SetupStep | undefined | NotKnown;
  * when it refuses.
  */
 async function sampleStep(probe: ConditionProbe): Promise<StepAnswer> {
-  let state: SampleContentState | undefined;
-  try {
-    state = await probe.sampleContent();
-  } catch {
-    state = undefined;
-  }
+  const state: SampleContentState | undefined = await probe
+    .sampleContent()
+    .catch(() => undefined);
   if (state?.answer !== undefined) return { kind: "sample", status: "done" };
   if (state?.run !== undefined) {
     return { kind: "sample", status: "open", run: state.run };
   }
+  return sampleOffer(probe, state !== undefined);
+}
+
+/**
+ * The offer, while nobody has answered and no load stands: open on a site
+ * with no entry, with nothing to offer where the site's answer could not be
+ * read (`readable`), and not offered once there is an entry, unless the
+ * answer could not be read, which makes setup not known.
+ */
+async function sampleOffer(
+  probe: ConditionProbe,
+  readable: boolean
+): Promise<StepAnswer> {
   const content = await probe.hasContent();
   if (content === "unknown") return NOT_KNOWN;
-  if (state === undefined) {
-    return content
-      ? NOT_KNOWN
-      : { kind: "sample", status: "open", unreadable: true };
-  }
-  return content ? undefined : { kind: "sample", status: "open" };
+  if (content) return readable ? undefined : NOT_KNOWN;
+  return readable
+    ? { kind: "sample", status: "open" }
+    : { kind: "sample", status: "open", unreadable: true };
 }
 
 /**

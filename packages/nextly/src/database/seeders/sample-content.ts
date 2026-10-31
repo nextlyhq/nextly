@@ -50,7 +50,7 @@ import { getNextlyLogger } from "../../observability/logger";
 /** The key recording that the content loaded. */
 export const SAMPLE_LOADED_KEY = "seed.completedAt";
 /** The key recording that somebody declined. */
-export const SAMPLE_DECLINED_KEY = "seed.skippedAt";
+const SAMPLE_DECLINED_KEY = "seed.skippedAt";
 /** The key holding the latest answer anyone started: the one every read takes. */
 const CURRENT_KEY = "seed.current";
 /** The prefix of each answer's kept copy: `seed.run.1`, `seed.run.2`, … */

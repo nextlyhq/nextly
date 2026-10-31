@@ -385,6 +385,24 @@ function useKeptCard(
 }
 
 /**
+ * Whether the project's route refuses this person, for the steps the card draws. Only a refusal
+ * or a missing route is a no, and only once the probe has answered (while it is on its way the
+ * step is drawn "Checking…"); a probe that could not say is never read as one. Even a no
+ * withholds the offer only: a load the site started, or one this tab is showing, keeps the step
+ * drawn and setup open, whatever the probe says.
+ */
+function isSampleRefused(
+  probe: SeedProbeResult | undefined,
+  step: SampleSetupStep | undefined,
+  local: SampleCache
+): boolean {
+  if (probe === undefined || probe.available || probe.unknown) return false;
+  return (
+    step?.run === undefined && (local === null || local.phase === "refused")
+  );
+}
+
+/**
  * Asks the probe again, while its last answer was "not known" only: a no or a yes stands, and an
  * answer still on its way is not asked twice.
  */
@@ -574,17 +592,7 @@ export function useSampleRun(
   return {
     view,
     notice: local?.phase === "refused" ? local.message : undefined,
-    // The probe's no withholds the offer only, and only once it has answered (while it is on its
-    // way the step is drawn "Checking…"). It never takes a run's state off the card: a load the
-    // site started, or one this tab is showing, keeps the step drawn and setup open, whatever the
-    // probe says, a refusal as much as an outage.
-    // Only a refusal or a missing route is a no: a probe that could not say is never read as one.
-    sampleRefused:
-      probe !== undefined &&
-      !probe.available &&
-      !probeUnknown &&
-      step?.run === undefined &&
-      (local === null || local.phase === "refused"),
+    sampleRefused: isSampleRefused(probe, step, local),
     awaitingContinue: local?.phase === "loaded",
     answeredHere: local?.phase === "answered",
     card,
