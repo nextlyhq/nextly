@@ -5,10 +5,15 @@
  * for ten seconds, every card reading another source must already be drawn
  * while it is still waiting, and it must then arrive on its own, without a
  * reload: the batch's answer streams, one slot as each settles.
+ *
+ * A plugin places no card on core's default dashboard, so the spec places the
+ * fixture's card itself, at the top of the saved layout beside core's cards,
+ * and drops the saved layout again after each test.
  */
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { test } from "./support/test";
 import { LOCK } from "./support/locks";
 
@@ -17,6 +22,50 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.heavy] });
 
 const SLOW_CARD = "slow-widget-fixture/slow";
 const CELLS = '[data-testid^="widget-cell-"]';
+const LAYOUT = "/admin/api/dashboard/layout";
+
+interface Layout {
+  version: number;
+  scope: string;
+  /** Every widget this reader may see, by id: the layout write accepts any of them. */
+  widgets: Record<string, unknown>;
+  placements: Array<{ id: string; widgetId: string }>;
+}
+
+/** Puts the fixture's card first on the saved layout, ahead of every card already there. */
+async function placeSlowCard(page: Page): Promise<void> {
+  const read = await page.request.get(LAYOUT);
+  expect(read.ok()).toBe(true);
+  const layout = (await read.json()) as Layout;
+  // Fails here, naming the card, rather than later as a missing cell.
+  if (!(SLOW_CARD in layout.widgets))
+    throw new Error(`${SLOW_CARD} is not visible to this reader`);
+  const others = layout.placements.filter(p => p.widgetId !== SLOW_CARD);
+  const placements = [
+    {
+      id: "e2e-slow-card",
+      widgetId: SLOW_CARD,
+      // Its own default; the layout write holds a card to its widget's bounds.
+      ...(await defaultSizeOf(page, SLOW_CARD)),
+      removed: false,
+    },
+    ...others,
+  ];
+  const write = await page.request.put(LAYOUT, {
+    data: { placements, version: layout.version, scope: layout.scope },
+  });
+  expect(write.ok()).toBe(true);
+}
+
+/** Drops the saved layout, so the specs sharing the server see core's default again. */
+async function dropSavedLayout(page: Page): Promise<void> {
+  const read = await page.request.get(LAYOUT);
+  const body = (await read.json()) as Layout;
+  if (body.version === 0) return;
+  await page.request.delete(
+    `${LAYOUT}?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
+  );
+}
 
 /** How long the fixture's card takes to answer, in milliseconds; 0 answers at once. */
 async function holdSlowCard(page: Page, ms: number): Promise<void> {
@@ -42,11 +91,13 @@ async function cardStates(page: Page): Promise<Record<string, string>> {
 
 test.afterEach(async ({ page }) => {
   await holdSlowCard(page, 0);
+  await dropSavedLayout(page);
 });
 
 test("every other card is drawn while a slow one is still waiting, and the slow one arrives on its own", async ({
   page,
 }) => {
+  await placeSlowCard(page);
   await holdSlowCard(page, 10_000);
   const started = Date.now();
   await gotoAdmin(page, "/", "light");
