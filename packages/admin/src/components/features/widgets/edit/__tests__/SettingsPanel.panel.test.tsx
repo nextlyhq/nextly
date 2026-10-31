@@ -512,4 +512,56 @@ describe("one settings panel at a time", () => {
       screen.queryByRole("dialog", { name: "First card settings" })
     ).toBeNull();
   });
+  it("asks about a panel holding only a filter row added and left blank, and opens no second panel", async () => {
+    // The row writes nothing, so the stored draft is unchanged: the row alone is the change.
+    render(<TwoPanels />);
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open the second card's settings" })
+    );
+    const prompt = await screen.findByRole("alertdialog");
+    expect(prompt).toHaveTextContent("First card");
+    expect(second()).toBeNull();
+  });
+});
+
+describe("a filter row added and left blank, as the only change", () => {
+  const FILTERED = {
+    collection: "posts",
+    where: { title: { equals: "Hello" } },
+  };
+
+  it("refuses the dashboard's Save, saying so in the panel", async () => {
+    panel({ collection: "posts" });
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
+    let staged: Awaited<ReturnType<typeof stagePendingPanels>> | undefined;
+    await act(async () => {
+      staged = await stagePendingPanels();
+    });
+    expect(staged).toBe("invalid");
+    expect(
+      await screen.findByText("Finish this filter, or remove it.")
+    ).toBeTruthy();
+  });
+
+  it("asks before a leave, beside filters left as they were", async () => {
+    panel(FILTERED);
+    expect(screen.getByRole("button", { name: "Title is Hello" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
+    act(() => window.history.pushState(null, "", "/admin/elsewhere-blank-row"));
+    const prompt = await screen.findByRole("alertdialog");
+    expect(prompt).toHaveTextContent("Unsaved Changes");
+  });
+
+  it("holds nothing once the row is removed again", async () => {
+    // The control: the row gone, the panel is back to what it opened on, and a leave asks nothing.
+    panel(FILTERED);
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove this filter" })
+    );
+    act(() => window.history.pushState(null, "", "/admin/elsewhere-row-gone"));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
 });

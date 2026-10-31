@@ -35,6 +35,7 @@ import {
   whereToConditions,
 } from "./content-filter";
 import { fieldFits, sameSettingValue } from "./content-settings";
+import { useReportPendingRow } from "./pending-rows";
 
 export interface ContentSettingControlProps {
   setting: ContentSetting;
@@ -280,6 +281,9 @@ function FilterControl({
   );
   // Every row not yet complete, a row added and left blank included: each writes nothing.
   unfinished.current = conditions.some(condition => !isComplete(condition));
+  // Writing nothing, the row leaves the panel's draft as it was: said to the panel, so it counts
+  // the row as a change, and its Save and leave prompts ask about it rather than drop it unseen.
+  useReportPendingRow(setting.name, unfinished.current);
   // The chip open for editing, by its place in the list, or none.
   const [editing, setEditing] = useState<number | undefined>(undefined);
   // What the chips last wrote, so a change made elsewhere -- a reset, another collection, the

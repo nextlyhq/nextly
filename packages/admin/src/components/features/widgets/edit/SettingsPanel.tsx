@@ -89,6 +89,7 @@ import {
   toStoredConfig,
   type PanelKept,
 } from "./panel-values";
+import { PendingRowsContext, usePendingRows } from "./pending-rows";
 import {
   drawnSetting,
   overlongMessage,
@@ -1079,6 +1080,8 @@ function usePanelState(props: SettingsPanelProps) {
   const draft = usePanelDraft(formState.form, settings, config);
   const own = useOwnTitle(open, props.ownTitle);
   const doneState = usePanelDone(props);
+  // Rows begun and not finished write nothing to the draft, so they are counted on their own.
+  const pendingRows = usePendingRows();
 
   // What Done would keep, against what the panel opened on: the leave prompt asks only when the
   // two differ, and another card's panel opening closes this one only when they do not.
@@ -1092,7 +1095,8 @@ function usePanelState(props: SettingsPanelProps) {
   );
   const holdsChanges =
     !sameSettingValue(draft, opened) ||
-    kept.ownTitle !== (props.ownTitle ?? "");
+    kept.ownTitle !== (props.ownTitle ?? "") ||
+    pendingRows.anyPending;
   return {
     sources,
     stale,
@@ -1102,6 +1106,7 @@ function usePanelState(props: SettingsPanelProps) {
     ...doneState,
     kept,
     holdsChanges,
+    reportPendingRow: pendingRows.report,
   };
 }
 
@@ -1180,47 +1185,56 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
             </SheetDescription>
           </SheetHeader>
 
-          <FormProvider {...form}>
-            <form
-              ref={formRef}
-              // `handleSubmit` answers with a promise and `onSubmit` expects
-              // nothing back, so the result is voided deliberately rather than
-              // handed to an attribute that would ignore it silently.
-              onSubmit={event => {
-                void form.handleSubmit(
-                  keeping.done,
-                  keeping.refusedOnDone
-                )(event);
-              }}
-              className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4"
-            >
-              {renderPreview?.(kept, keeping.clearFilters)}
-              <PanelNotices {...{ blocked, failure, stale }} />
-              {/* Frozen while Done saves: the save carries the values Done was pressed on, so a
+          {/* Its controls say here which rows they hold unfinished, which `holdsChanges` counts. */}
+          <PendingRowsContext.Provider value={state.reportPendingRow}>
+            <FormProvider {...form}>
+              <form
+                ref={formRef}
+                // `handleSubmit` answers with a promise and `onSubmit` expects
+                // nothing back, so the result is voided deliberately rather than
+                // handed to an attribute that would ignore it silently.
+                onSubmit={event => {
+                  void form.handleSubmit(
+                    keeping.done,
+                    keeping.refusedOnDone
+                  )(event);
+                }}
+                className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4"
+              >
+                {renderPreview?.(kept, keeping.clearFilters)}
+                <PanelNotices {...{ blocked, failure, stale }} />
+                {/* Frozen while Done saves: the save carries the values Done was pressed on, so a
                   field changed after it would be dropped without a word when the panel closes.
                   A disabled fieldset disables every control inside it, the custom ones too. */}
-              <fieldset
-                ref={fieldsRef}
-                disabled={saving}
-                className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
-              >
-                <PanelSections
-                  {...{ settings, sources, saving, resetNotices, resetSection }}
-                  {...{ own, automatic }}
-                  widget={props.widget}
-                  advanced={{
-                    open: refusal.advancedOpen,
-                    onOpenChange: refusal.setAdvancedOpen,
-                  }}
+                <fieldset
+                  ref={fieldsRef}
+                  disabled={saving}
+                  className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
+                >
+                  <PanelSections
+                    {...{
+                      settings,
+                      sources,
+                      saving,
+                      resetNotices,
+                      resetSection,
+                    }}
+                    {...{ own, automatic }}
+                    widget={props.widget}
+                    advanced={{
+                      open: refusal.advancedOpen,
+                      onOpenChange: refusal.setAdvancedOpen,
+                    }}
+                  />
+                </fieldset>
+                <PanelActions
+                  saving={saving}
+                  blocked={blocked}
+                  onCancel={() => changeOpen(false)}
                 />
-              </fieldset>
-              <PanelActions
-                saving={saving}
-                blocked={blocked}
-                onCancel={() => changeOpen(false)}
-              />
-            </form>
-          </FormProvider>
+              </form>
+            </FormProvider>
+          </PendingRowsContext.Provider>
         </SheetContent>
       </Sheet>
     </UnsavedChangesGuard>
