@@ -130,11 +130,55 @@ function takesTestFrom(file, imports, expected) {
   );
 }
 
-/** Whether a call's callee is `test` or a member of it (`test.describe`). */
-function isTestCall(callee) {
+/**
+ * The local names a spec's `test` is reached by: each value import of a
+ * binding named `test` under whatever local name, the default export of
+ * "@playwright/test" (which is its `test`), and `test` itself; and the
+ * namespaces "@playwright/test" is imported whole as, reached as `pw.test`.
+ */
+function testBindings(program) {
+  const names = new Set(["test"]);
+  const namespaces = new Set();
+  for (const declaration of program.body) {
+    if (declaration.type !== "ImportDeclaration") continue;
+    if (declaration.importKind === "type") continue;
+    const fromPlaywright =
+      literalText(declaration.source) === "@playwright/test";
+    for (const specifier of declaration.specifiers) {
+      if (specifier.type === "ImportNamespaceSpecifier") {
+        if (fromPlaywright) namespaces.add(specifier.local.name);
+      } else if (specifier.type === "ImportDefaultSpecifier") {
+        if (fromPlaywright) names.add(specifier.local.name);
+      } else if (
+        specifier.importKind !== "type" &&
+        importedName(specifier) === "test"
+      ) {
+        names.add(specifier.local.name);
+      }
+    }
+  }
+  return { names, namespaces };
+}
+
+/**
+ * Whether a call's callee is the spec's `test`, or a member of it
+ * (`test.describe`, `pw.test.beforeEach`), by the bindings it has.
+ */
+function isTestCall(callee, { names, namespaces }) {
   let node = callee;
-  while (node?.type === "MemberExpression") node = node.object;
-  return node?.type === "Identifier" && node.name === "test";
+  while (node?.type === "MemberExpression") {
+    const { object, property } = node;
+    if (
+      object.type === "Identifier" &&
+      namespaces.has(object.name) &&
+      property.type === "Identifier" &&
+      property.name === "test"
+    ) {
+      return true;
+    }
+    node = object;
+  }
+  return node?.type === "Identifier" && names.has(node.name);
 }
 
 /** The fixture names one function's first parameter takes. */
@@ -150,8 +194,9 @@ function fixtureNames(fixtures) {
 
 /**
  * The fixtures a spec's tests and hooks take: the names destructured from the
- * first parameter of each function passed to `test` or one of its members,
- * with `*` for a parameter that reaches every fixture.
+ * first parameter of each function passed to the spec's `test`, by any name it
+ * is bound to, or one of its members, with `*` for a parameter that reaches
+ * every fixture.
  *
  * @param {string} file the spec's repository path
  * @param {string} text its source
@@ -159,8 +204,12 @@ function fixtureNames(fixtures) {
  */
 export function fixturesTaken(file, text) {
   const taken = new Set();
-  walk(parseSource(text, file).program, node => {
-    if (node.type !== "CallExpression" || !isTestCall(node.callee)) return;
+  const { program } = parseSource(text, file);
+  const bindings = testBindings(program);
+  walk(program, node => {
+    if (node.type !== "CallExpression" || !isTestCall(node.callee, bindings)) {
+      return;
+    }
     for (const argument of node.arguments) {
       const isFunction =
         argument.type === "ArrowFunctionExpression" ||
@@ -307,6 +356,24 @@ describe("browser specs take the suite's test", () => {
       expect(fixturesTaken(MAIN, 'test("x", async fixtures => {});')).toContain(
         "*"
       );
+      // Through whatever name Playwright's `test` is bound to.
+      const aliased = [
+        'import { test as it } from "@playwright/test";',
+        'it("draws", async ({ page }) => {});',
+      ].join("\n");
+      expect(fixturesTaken(MAIN, aliased)).toContain("page");
+      const namespaced = [
+        'import * as pw from "@playwright/test";',
+        'pw.test.describe("group", () => {',
+        '  pw.test("draws", async ({ context }) => {});',
+        "});",
+      ].join("\n");
+      expect(fixturesTaken(MAIN, namespaced)).toContain("context");
+      const byDefault = [
+        'import playwrightTest from "@playwright/test";',
+        "playwrightTest.beforeAll(async ({ browser }) => {});",
+      ].join("\n");
+      expect(fixturesTaken(MAIN, byDefault)).toContain("browser");
       expect(
         fixturesTaken(MAIN, 'test("x", async ({ ...rest }) => {});')
       ).toContain("*");
