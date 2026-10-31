@@ -38,6 +38,15 @@ export { SubmissionsView } from "./components/submissions/SubmissionsView";
 export { SubmissionSheet } from "./components/submissions/SubmissionSheet";
 
 // ============================================================================
+// Dashboard Widgets
+// ============================================================================
+
+// The New form submissions card's body, at the path its widget declares
+// ("@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard"). A site's
+// generated component map imports it from here.
+export { NewSubmissionsCard } from "../dashboard/NewSubmissionsCard";
+
+// ============================================================================
 // Builder Sub-Components
 // ============================================================================
 

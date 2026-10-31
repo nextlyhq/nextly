@@ -21,6 +21,7 @@ import type { CollectionConfig } from "nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
+import { newSubmissionsWidget } from "./dashboard/widget";
 import {
   asFormDocument,
   asSubmissionDocument,
@@ -201,6 +202,17 @@ export function formBuilder(
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
 
+  // The submissions slug the admin links a card's rows to: the declared one
+  // until `init` reads the slug the site installed it under.
+  let installedSubmissionsSlug = resolvedConfig.formSubmissionOverrides.slug;
+  const newSubmissions = newSubmissionsWidget(
+    {
+      forms: resolvedConfig.formOverrides.slug,
+      submissions: resolvedConfig.formSubmissionOverrides.slug,
+    },
+    () => installedSubmissionsSlug
+  );
+
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
     version: PLUGIN_VERSION,
@@ -217,6 +229,10 @@ export function formBuilder(
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
       collections: [formsCol, submissionsCol],
+      // New form submissions, the one plugin widget core's default dashboard
+      // names. Contributed, never suggested: where it goes is core's default's
+      // to say, and a site's own default may leave it out.
+      dashboard: { widgets: [newSubmissions] },
       // A visitor submits a form without an account, so the Public role, the
       // role visitors are judged by, may create submissions. Granted once;
       // an owner who takes it away closes public submissions for good.
@@ -439,6 +455,7 @@ export function formBuilder(
       const submissionSlug =
         nextly.self.collections[declaredSubmissionsSlug] ??
         declaredSubmissionsSlug;
+      installedSubmissionsSlug = submissionSlug;
 
       // Hook/event subscriptions are idempotent across HMR — the platform
       // clears a plugin's prior subscriptions before re-init (B2), so the old

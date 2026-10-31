@@ -387,6 +387,20 @@ export type {
  * outside the card it sits in.
  */
 export { FrameState, Widget } from "@nextlyhq/admin";
+/**
+ * @experimental A row's time as core's list cards word it, and the clock they
+ * move it on with, for a widget's own list:
+ *
+ * - `formatWidgetTime(iso, now)`: "just now", "5m ago", "3h ago", "2d ago",
+ *   and from a week on the date, in the timezone and date format the admin is
+ *   set to, with its year.
+ * - `useWidgetClock()`: the current time, moved on once a minute while the
+ *   card is mounted and stopped when it unmounts, the `now` to word times
+ *   from, so "just now" does not stay "just now".
+ *
+ * Core's own, so a plugin's times read and move as the cards beside it do.
+ */
+export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin";
 export type {
   CardEmptyContent,
   CardState,
