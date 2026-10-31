@@ -58,6 +58,7 @@ import {
   CustomizingFence,
 } from "./CustomizingFence";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import { LazyWidgetSettingsSheet } from "./LazyWidgetSettingsSheet";
 import { SettingsPreview } from "./SettingsPreview";
 import {
   useCardQuickSetting,
@@ -65,7 +66,7 @@ import {
   type CellSettingsWrite,
 } from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
-import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
+import type { WidgetSettingsSheetProps } from "./WidgetSettingsSheet";
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
@@ -395,7 +396,7 @@ function restingMenuFor(
  * closes when the save lands and says why in place when it does not.
  */
 function doneFor(props: ArrangedCellProps): {
-  done: ComponentProps<typeof WidgetSettingsSheet>["onDone"];
+  done: WidgetSettingsSheetProps["onDone"];
   blocked: string | undefined;
 } {
   const write = props.settingsWrite;
@@ -565,7 +566,7 @@ function CellSettings({
   focusFirstField: boolean;
 }) {
   return (
-    <WidgetSettingsSheet
+    <LazyWidgetSettingsSheet
       open={open}
       onOpenChange={onOpenChange}
       focusFirstField={focusFirstField}
@@ -603,6 +604,10 @@ function CellSettings({
  */
 function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Mounted from its first opening on, and kept: its code loads only once a reader opens it
+  // (`LazyWidgetSettingsSheet`), and once drawn it stays, so it can close as it opened.
+  const [mounted, setMounted] = useState(false);
+  if (settingsOpen && !mounted) setMounted(true);
   const [focusFirstField, setFocusFirstField] = useState(false);
   const changeSettingsOpen = (open: boolean) => {
     setSettingsOpen(open);
@@ -621,6 +626,8 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
     : undefined;
   return {
     settingsOpen,
+    // Drawn for a widget that offers settings, from the sheet's first opening.
+    drawn: hasSettings && mounted,
     setSettingsOpen,
     focusFirstField,
     changeSettingsOpen,
@@ -733,11 +740,12 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       style={cardRowStyle(rows)}
     >
       <CellEditActions actions={editActions} />
-      {/* Mounted whenever the widget offers settings, not only while
-          customising. A closed `Sheet` renders nothing, so this costs a card
-          nothing — and it is what lets the panel outlive customise mode rather
-          than being torn out from under a reader still filling it in. */}
-      {hasSettings ? (
+      {/* Mounted from the sheet's first opening, not only while
+          customising, and kept: a closed `Sheet` renders nothing, so this
+          costs a card nothing, and it is what lets the panel outlive customise
+          mode rather than being torn out from under a reader still filling it
+          in. */}
+      {sheet.drawn ? (
         <CellSettings
           {...{ row, widget, data, done }}
           open={sheet.settingsOpen}

@@ -32,7 +32,11 @@ import {
   filterOperatorsFor,
   whereToCondition,
 } from "./content-filter";
-import { fieldFits, sameSettingValue } from "./content-settings";
+import {
+  collectionOptions,
+  fieldFits,
+  sameSettingValue,
+} from "./content-settings";
 
 export interface ContentSettingControlProps {
   setting: ContentSetting;
@@ -173,33 +177,6 @@ export function ContentSettingControl({
   return (
     <FilterControl key={String(collection)} setting={setting} fields={fields} />
   );
-}
-
-/**
- * A Collection setting's choices: the collections the server sent, and its
- * own default when that names none of them. A widget may declare a default
- * that is not a collection (one meaning every collection, say); it is what
- * the card uses until the reader chooses, so it is offered by name rather
- * than left as a value the select cannot show or return to. A card's quick
- * popover offers the same choices.
- */
-export function collectionOptions(
-  setting: Extract<ContentSetting, { type: "collection" }>,
-  sources: readonly PublishedContentSource[]
-): { label: string; value: string }[] {
-  const options = sources.map(source => ({
-    label: source.label,
-    value: source.collection,
-  }));
-  const fallback = setting.defaultValue;
-  if (
-    fallback === undefined ||
-    fallback === "" ||
-    options.some(option => option.value === fallback)
-  ) {
-    return options;
-  }
-  return [{ label: "Default", value: fallback }, ...options];
 }
 
 /** The row's type for each field, by name, for reading a stored `where`. */

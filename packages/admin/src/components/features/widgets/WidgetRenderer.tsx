@@ -36,6 +36,7 @@ import type {
 import type { CellSlotLookup } from "./archetypes/types";
 import { DeclaredComponent, useComponentDraw } from "./declared-component";
 import { DREW_NOTHING, missingComponentMessage } from "./draw-failures";
+import { preloadWidgetSettingsSheet } from "./edit/LazyWidgetSettingsSheet";
 import type { CardState } from "./frame/card-state";
 import { listDensityOf } from "./frame/list-rows";
 import type { CardEmptyContent, SkeletonShape } from "./frame/states";
@@ -136,7 +137,8 @@ function answeredState(isFetching: boolean): CardState {
  * An empty card's content as the frame draws it: an action opening the card's settings becomes a
  * button that does, where the card can open them. Where it cannot (customising, or no settings
  * write), the button is left out and its words become the detail line, "Choose collection in the
- * card's settings.", so the card still says where the missing setting is chosen.
+ * card's settings.", so the card still says where the missing setting is chosen. The button
+ * starts loading the settings sheet as a reader heads for it.
  */
 function drawnEmpty(
   empty: Extract<WidgetOutcome, { state: "empty" }>["empty"],
@@ -148,7 +150,14 @@ function drawnEmpty(
   }
   return onOpenSettings === undefined
     ? { ...words, detail: `${action.label} in the card's settings.` }
-    : { ...words, action: { label: action.label, onSelect: onOpenSettings } };
+    : {
+        ...words,
+        action: {
+          label: action.label,
+          onSelect: onOpenSettings,
+          onIntent: preloadWidgetSettingsSheet,
+        },
+      };
 }
 
 /**
