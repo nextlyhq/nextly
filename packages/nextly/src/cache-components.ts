@@ -85,6 +85,18 @@ function warnedOptions(): Set<CacheComponentsOption> {
   return holder[WARNED];
 }
 
+/** Says `message` unless every option in `options` was already said in this process. */
+function warnOnceFor(
+  options: readonly CacheComponentsOption[],
+  message: (fresh: CacheComponentsOption[]) => string
+): void {
+  const warned = warnedOptions();
+  const fresh = options.filter(option => !warned.has(option));
+  if (fresh.length === 0) return;
+  for (const option of fresh) warned.add(option);
+  consoleLogger.warn(message(fresh));
+}
+
 /**
  * Warns once per process for each option `settings` shows off. Next.js loads
  * the config and runs `register()` more than once in some processes, and the
@@ -94,11 +106,30 @@ export function warnIfCacheComponentsOff(
   settings: CacheComponentsSettings,
   where: string
 ): void {
-  const warned = warnedOptions();
-  const off = cacheComponentsOptionsOff(settings).filter(
-    option => !warned.has(option)
+  warnOnceFor(cacheComponentsOptionsOff(settings), off =>
+    cacheComponentsOffWarning(off, where)
   );
-  if (off.length === 0) return;
-  for (const option of off) warned.add(option);
-  consoleLogger.warn(cacheComponentsOffWarning(off, where));
+}
+
+/**
+ * The start-time check for the value an app's `instrumentation.ts` passes
+ * `createRegister()`. A hook that passes none leaves Nextly unable to tell
+ * whether Cache Components is on, which it says as such rather than calling
+ * the option off.
+ */
+export function warnIfRegisteredWithCacheComponentsOff(value: unknown): void {
+  if (value !== undefined) {
+    warnIfCacheComponentsOff(
+      { cacheComponents: value },
+      "this app's build, as its instrumentation.ts passes it to createRegister()"
+    );
+    return;
+  }
+  warnOnceFor(
+    ["cacheComponents"],
+    () =>
+      "[Nextly] createRegister() was not passed the app's `cacheComponents` value, so Nextly cannot tell whether Cache Components is on. " +
+      "Pass `{ cacheComponents: process.env.__NEXT_CACHE_COMPONENTS }` to it from instrumentation.ts. " +
+      `Nextly supports only Cache Components and Partial Prefetching on: ${CACHE_COMPONENTS_DOCS_URL}`
+  );
 }

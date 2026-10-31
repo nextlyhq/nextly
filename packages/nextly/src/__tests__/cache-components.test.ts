@@ -123,21 +123,25 @@ describe("createRegister and Cache Components", () => {
     );
   });
 
-  it("warns at start, naming the option, when Next.js inlined it as off or the hook passed nothing, and says nothing at a read", async () => {
-    for (const host of [{ cacheComponents: "false" }, {}]) {
-      forgetWarnings();
-      warn.mockClear();
-      await createRegister(config, host)();
-      expect(warned()).toMatch(OFF);
-      expect(warned()).toMatch(/`cacheComponents` is off/);
-      // `register()` cannot see `partialPrefetching`, so it never names it.
-      expect(warned()).not.toMatch(/`partialPrefetching`/);
-      const nextlyWarn = spyNextlyWarn();
-      await read();
-      expect(nextlyWarn).not.toHaveBeenCalled();
-      vi.restoreAllMocks();
-      warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    }
+  it("warns at start, naming the option, when Next.js inlined it as off, and says nothing at a read", async () => {
+    await createRegister(config, { cacheComponents: "false" })();
+    expect(warned()).toMatch(OFF);
+    expect(warned()).toMatch(/`cacheComponents` is off/);
+    // `register()` cannot see `partialPrefetching`, so it never names it.
+    expect(warned()).not.toMatch(/`partialPrefetching`/);
+    const nextlyWarn = spyNextlyWarn();
+    await read();
+    expect(nextlyWarn).not.toHaveBeenCalled();
+  });
+
+  // An app may have Cache Components on and a hook that passes nothing:
+  // Nextly says it cannot tell, rather than calling the option off.
+  it("says it cannot tell, and how to pass the value, when the hook passed nothing", async () => {
+    await createRegister(config)();
+    expect(warned()).toMatch(
+      /createRegister\(\) was not passed the app's `cacheComponents` value, so Nextly cannot tell whether Cache Components is on\. Pass `\{ cacheComponents: process\.env\.__NEXT_CACHE_COMPONENTS \}`/
+    );
+    expect(warned()).not.toMatch(/is off/);
   });
 
   it("warns once, however many times the server registers", async () => {

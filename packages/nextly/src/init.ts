@@ -35,7 +35,7 @@
 
 import {
   cacheComponentsEnabled,
-  warnIfCacheComponentsOff,
+  warnIfRegisteredWithCacheComponentsOff,
 } from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
@@ -593,11 +593,7 @@ export function createRegister(
     // `cache-components.test.ts` pins it, so a rename fails loudly there.
     recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
     // Before Nextly starts, so the line comes first in the server's output.
-    // Always checked: a hook that passes no value is read as off, as above.
-    warnIfCacheComponentsOff(
-      { cacheComponents: host.cacheComponents },
-      "this app's build, as its instrumentation.ts passes it to createRegister()"
-    );
+    warnIfRegisteredWithCacheComponentsOff(host.cacheComponents);
     await getNextly({ config });
   };
 }

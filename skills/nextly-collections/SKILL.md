@@ -179,9 +179,11 @@ export default async function PostsPage() {
   a post is saved, so the page updates on publish. It also lets the page
   build: a Nextly app runs with `cacheComponents: true`, where an uncached
   database read outside `<Suspense>` fails `next build`. There the read goes
-  through the app's own `"use cache"` function, `src/nextly/cached-read.ts`:
-  import it (`import "@/nextly/cached-read";`) in the module that reads. A blog
-  ships it; for another app, copy it from the caching guide
+  through the app's own `"use cache"` function, `src/nextly/cached-read.ts`
+  (`nextly/cached-read.ts` without a `src/` folder): import it in the module
+  that reads, `import "@/nextly/cached-read";` with `src/`, or by a relative
+  path without one. A blog ships it; for another app, copy it from the caching
+  guide
   (<https://nextlyhq.com/docs/guides/isr-caching#cache-components>).
 - `keyParts` names the cache entry, and everyone whose read uses the same key
   gets the same rows. Cache only reads that are the same for every reader:

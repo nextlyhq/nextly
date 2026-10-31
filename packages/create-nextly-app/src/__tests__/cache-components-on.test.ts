@@ -47,6 +47,15 @@ const HANDLERS = `  cacheHandler: require.resolve("nextly/cache-handler"),
   cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
 `;
 
+/** What an ES module config is told to put at its top, before the config lines. */
+const REQUIRE_SETUP = `// At the top of the file:
+import { createRequire } from "node:module";
+// Resolves Nextly's cache handlers from this app's node_modules.
+const require = createRequire(import.meta.url);
+
+// In the config object:
+`;
+
 /** `create-next-app` 16.4's TypeScript config with its defaults, both on. */
 const CREATE_NEXT_APP_CONFIG = `import type { NextConfig } from "next";
 
@@ -349,8 +358,54 @@ describe("an existing app with a cache of its own", () => {
     expect(text).not.toMatch(/nextly\/cache-handler/);
     expect(files.skipped).toHaveLength(1);
     expect(files.skipped[0]?.why).toMatch(/already sets cacheHandler/);
-    expect(files.skipped[0]?.toAdd).toBe(HANDLERS.trimEnd());
+    expect(files.skipped[0]?.why).toMatch(/in place of the config's own/);
+    // An ES module: the lines need `require`, so the report says how to define it.
+    expect(files.skipped[0]?.toAdd).toBe(REQUIRE_SETUP + HANDLERS.trimEnd());
   });
+
+  // Next.js documents `cacheMaxMemorySize: 0` as the step before adding a
+  // handler, so on its own it is no cache of the app's own.
+  it("adds the handlers beside a `cacheMaxMemorySize: 0` already there, without repeating it", async () => {
+    await write(
+      "next.config.js",
+      "module.exports = {\n  cacheMaxMemorySize: 0,\n};\n"
+    );
+
+    const patch = await turnOnCacheComponents(dir);
+
+    expect(patch).toMatchObject({ kind: "turned-on", handlers: "added" });
+    const text = await read("next.config.js");
+    expect(text.match(/cacheMaxMemorySize/g)).toHaveLength(1);
+    expectNextlyHandlers(await load("next.config.js"));
+  });
+
+  it.each([
+    [
+      "a cacheMaxMemorySize other than 0",
+      "module.exports = {\n  cacheMaxMemorySize: 52428800,\n};\n",
+      /cacheMaxMemorySize to a value other than 0/,
+    ],
+    [
+      "a handler written as undefined",
+      "module.exports = {\n  cacheHandler: undefined,\n  cacheMaxMemorySize: 0,\n  cacheHandlers: undefined,\n};\n",
+      /sets cacheHandler, cacheHandlers to undefined/,
+    ],
+  ])(
+    "leaves the handlers out of a config with %s, and prints them",
+    async (_, config, reason) => {
+      await write("next.config.js", config);
+
+      const patch = await turnOnCacheComponents(dir);
+      const files = cacheComponentsFiles(patch);
+
+      expect(patch).toMatchObject({ kind: "turned-on" });
+      expect(await read("next.config.js")).not.toMatch(/nextly\/cache-handler/);
+      expect(files.skipped).toHaveLength(1);
+      expect(files.skipped[0]?.why).toMatch(reason);
+      // CommonJS has `require`: only the config lines are printed.
+      expect(files.skipped[0]?.toAdd).toBe(HANDLERS.trimEnd());
+    }
+  );
 
   it("does not define `require` in an ES module that already names it", async () => {
     const config =
@@ -401,10 +456,20 @@ describe("a config whose settings it cannot read or change safely", () => {
       expect(files.skipped).toHaveLength(1);
       expect(files.skipped[0]?.why).toMatch(reason);
       expect(files.skipped[0]?.toAdd).toBe(
-        `  cacheComponents: true,\n  partialPrefetching: true,\n${HANDLERS.trimEnd()}`
+        `${REQUIRE_SETUP}  cacheComponents: true,\n  partialPrefetching: true,\n${HANDLERS.trimEnd()}`
       );
     }
   );
+
+  it("prints no `require` setup for a TypeScript config, which Next.js compiles to CommonJS", async () => {
+    await write("next.config.ts", "export default { ...{} };\n");
+
+    const files = cacheComponentsFiles(await turnOnCacheComponents(dir));
+
+    expect(files.skipped[0]?.toAdd).toBe(
+      `  cacheComponents: true,\n  partialPrefetching: true,\n${HANDLERS.trimEnd()}`
+    );
+  });
 });
 
 describe("the page the notice links", () => {

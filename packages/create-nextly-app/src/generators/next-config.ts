@@ -927,9 +927,13 @@ export async function patchNextConfig(
 
 /**
  * What Nextly's cache handlers came to in an existing app's config: `added`,
- * already `present`, or left out, with why and what to add by hand.
+ * already `present`, or left out, with why, the lines to add by hand, and
+ * whether the file also needs `require` defined for them.
  */
-type HandlerOutcome = "added" | "present" | { skipped: string };
+type HandlerOutcome =
+  | "added"
+  | "present"
+  | { skipped: string; lines: string[]; needsRequire: boolean };
 
 /**
  * What turning Cache Components on in an existing app's config did.
@@ -949,7 +953,7 @@ export type CacheComponentsPatch =
       handlers: HandlerOutcome;
     }
   | { kind: "unchanged"; file: string; handlers: HandlerOutcome }
-  | { kind: "manual"; file: string; reason: string };
+  | { kind: "manual"; file: string; reason: string; esm: boolean };
 
 /**
  * The exported config object, when every setting this edits can be read in
@@ -1029,11 +1033,43 @@ function requireEdit(source: string, body: Statement[]): Edit {
   };
 }
 
+/** The settings that make a cache of the app's own: a handler for either cache. */
+const OWN_CACHE_SETTINGS = ["cacheHandler", "cacheHandlers"] as const;
+
+/** Whether the config gives `name` a value: written, and not `undefined`. */
+function setsValue(object: ObjectExpression, name: string): boolean {
+  const value = propertyValue(object, name);
+  return value !== undefined && !isNamed(value, "undefined");
+}
+
+/**
+ * Why Nextly's handlers cannot go into this config as it stands, or null when
+ * they can. A setting written as `undefined` is a placeholder to fill, not a
+ * value; a handler of the app's own is not replaced; and `cacheMaxMemorySize`
+ * must be 0, so Next.js keeps no second copy of the handlers' entries.
+ */
+function handlerConflict(object: ObjectExpression): string | null {
+  const placeholders = HANDLER_SETTINGS.filter(
+    name =>
+      propertyValue(object, name) !== undefined && !setsValue(object, name)
+  );
+  if (placeholders.length > 0) {
+    return `it sets ${placeholders.join(", ")} to undefined`;
+  }
+  const own = OWN_CACHE_SETTINGS.filter(name => setsValue(object, name));
+  if (own.length > 0) {
+    return `it already sets ${own.join(", ")}, a cache of its own, which Nextly does not replace`;
+  }
+  const memory = propertyValue(object, "cacheMaxMemorySize");
+  return memory && !(memory.type === "NumericLiteral" && memory.value === 0)
+    ? "it sets cacheMaxMemorySize to a value other than 0, which Nextly's handlers need so that Next.js keeps no second copy of their entries"
+    : null;
+}
+
 /**
  * How to install Nextly's cache handlers: the properties to add and any edit
- * that gives the file `require`, or why they are left out. A config that sets
- * any of their settings already has a cache of its own, which this does not
- * replace.
+ * that gives the file `require`, or why they are left out, with the lines to
+ * put in place of the config's own settings.
  */
 function handlerStep(
   source: string,
@@ -1042,21 +1078,27 @@ function handlerStep(
   esm: boolean
 ): { add: string[]; edits: Edit[]; outcome: HandlerOutcome } {
   const none = { add: [], edits: [] };
-  const set = HANDLER_SETTINGS.filter(
-    name => propertyValue(object, name) !== undefined
-  );
-  if (set.length === HANDLER_SETTINGS.length) {
+  const own = OWN_CACHE_SETTINGS.filter(name => setsValue(object, name));
+  const memorySet = propertyValue(object, "cacheMaxMemorySize") !== undefined;
+  if (own.length === OWN_CACHE_SETTINGS.length && memorySet) {
     return { ...none, outcome: "present" };
   }
-  if (set.length > 0) {
+  const conflict = handlerConflict(object);
+  if (conflict) {
     return {
       ...none,
       outcome: {
-        skipped: `it already sets ${set.join(", ")}, so Nextly's cache handlers were not added beside a cache of its own`,
+        skipped: conflict,
+        lines: HANDLER_PROPERTIES,
+        needsRequire: esm,
       },
     };
   }
-  if (!esm) return { add: HANDLER_PROPERTIES, edits: [], outcome: "added" };
+  // A `cacheMaxMemorySize: 0` the app already has stays as it is.
+  const add = HANDLER_PROPERTIES.filter(
+    property => !(memorySet && property.startsWith("cacheMaxMemorySize"))
+  );
+  if (!esm) return { add, edits: [], outcome: "added" };
   if (
     referenceCount("require", body) > 0 ||
     referenceCount("createRequire", body) > 0
@@ -1066,14 +1108,12 @@ function handlerStep(
       outcome: {
         skipped:
           "it is an ES module that already names require or createRequire, so the line that defines require for the handlers could clash",
+        lines: add,
+        needsRequire: false,
       },
     };
   }
-  return {
-    add: HANDLER_PROPERTIES,
-    edits: [requireEdit(source, body)],
-    outcome: "added",
-  };
+  return { add, edits: [requireEdit(source, body)], outcome: "added" };
 }
 
 /** The edits that turn Cache Components on in a config, or why it cannot be changed. */
@@ -1134,22 +1174,41 @@ export async function turnOnCacheComponents(
     .readFile(path.join(cwd, file), "utf-8")
     .catch(() => null);
   if (source === null) {
-    return { kind: "manual", file, reason: "the app has no Next config" };
+    return {
+      kind: "manual",
+      file,
+      reason: "the app has no Next config",
+      esm: loadsAsModule(file, []),
+    };
   }
   const body = parseBody(source, file);
-  if (!body) return { kind: "manual", file, reason: "it could not be parsed" };
+  if (!body) {
+    return {
+      kind: "manual",
+      file,
+      reason: "it could not be parsed",
+      esm: loadsAsModule(file, []),
+    };
+  }
   const esm = loadsAsModule(file, body);
   // Read structurally even when the file never names the options: a spread or
   // a wrapper can still set them, and only the parser can say it cannot tell.
   const plan = cacheComponentsPlan(source, file, esm);
-  if ("reason" in plan) return { kind: "manual", file, reason: plan.reason };
+  if ("reason" in plan) {
+    return { kind: "manual", file, reason: plan.reason, esm };
+  }
   if (plan.edits.length === 0) {
     return { kind: "unchanged", file, handlers: plan.handlers };
   }
   const text = applyEdits(source, plan.edits);
   const recheck = cacheComponentsPlan(text, file, esm);
   if ("reason" in recheck || recheck.edits.length > 0) {
-    return { kind: "manual", file, reason: "the edit could not be confirmed" };
+    return {
+      kind: "manual",
+      file,
+      reason: "the edit could not be confirmed",
+      esm,
+    };
   }
   await fs.writeFile(path.join(cwd, file), text, "utf-8");
   return {
@@ -1173,7 +1232,7 @@ export function cacheComponentsFiles(
     files.skipped.push({
       path: patch.file,
       why: `Cache Components was not turned on: ${patch.reason}. Nextly runs with Cache Components and Partial Prefetching on, with its cache handlers (${CACHE_COMPONENTS_DOCS_URL}); add these to the config object Next.js receives, in place of any value of theirs`,
-      toAdd: ON_LINES.join("\n"),
+      toAdd: linesToAdd(ON_LINES, patch.esm),
     });
     return files;
   }
@@ -1200,11 +1259,25 @@ export function cacheComponentsFiles(
   if (typeof patch.handlers === "object") {
     files.skipped.push({
       path: patch.file,
-      why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once (${CACHE_COMPONENTS_DOCS_URL}); in an ES module config, define require first with createRequire(import.meta.url) from node:module`,
-      toAdd: HANDLER_PROPERTIES.map(property => `  ${property},`).join("\n"),
+      why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once (${CACHE_COMPONENTS_DOCS_URL}); to use them, put these in place of the config's own cache settings`,
+      toAdd: linesToAdd(
+        patch.handlers.lines.map(property => `  ${property},`),
+        patch.handlers.needsRequire
+      ),
     });
   }
   return files;
+}
+
+/**
+ * The config lines to add by hand. An ES module config also needs `require`
+ * defined for the handlers, at the top of the file.
+ */
+function linesToAdd(lines: string[], needsRequire: boolean): string {
+  const config = lines.join("\n");
+  return needsRequire
+    ? `// At the top of the file:\n${REQUIRE_IMPORT}\n${REQUIRE_DECLARATION}\n\n// In the config object:\n${config}`
+    : config;
 }
 
 /** What to add by hand: the list, as the config's top-level option. */

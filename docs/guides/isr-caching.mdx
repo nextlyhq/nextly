@@ -236,8 +236,9 @@ unaffected); it just does not bust any cache tags.
 
 ## Cache Components
 
-Nextly runs with Cache Components and Partial Prefetching on, and an app made
-or joined by `create-nextly-app` has both
+Nextly runs with Cache Components and Partial Prefetching on. An app made by
+`create-nextly-app` has both, and so does one it joins, unless that app's
+config can't be changed safely: then the report prints the lines to add
 ([Installation](/docs/getting-started/installation#cache-components)). Three
 things keep its cached reads fresh; with only some of them, a page read right
 after a write can still show the previous version. A new blog has all three. An
