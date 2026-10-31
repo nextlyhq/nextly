@@ -38,9 +38,8 @@ import {
   declineSampleContent,
   readSampleContent,
   recordSampleContent,
-  SAMPLE_REFUSAL_MESSAGE,
+  sampleRefusalError,
   type SampleContentState,
-  type SampleRefusal,
 } from "../database/seeders/sample-content";
 import { getService } from "../di";
 import {
@@ -100,15 +99,6 @@ const setupChange = z
     }
   );
 
-/** A sample-content answer the site has moved past: refused, saying why. */
-function sampleRefused(refusal: SampleRefusal): NextlyError {
-  return NextlyError.conflict({
-    reason: "state",
-    message: SAMPLE_REFUSAL_MESSAGE[refusal.reason],
-    logContext: { sample: refusal.reason },
-  });
-}
-
 /**
  * Applies a sample-content answer for the whole site, as `by`, and answers
  * the site's answer after it. A refusal or a record that failed again throws.
@@ -120,11 +110,11 @@ async function answerSample(
   const store = getService("metaService");
   if (sample === "decline") {
     const declined = await declineSampleContent(store, { by });
-    if (declined.outcome === "refused") throw sampleRefused(declined);
+    if (declined.outcome === "refused") throw sampleRefusalError(declined);
     return readSampleContent(store);
   }
   const recorded = await recordSampleContent(store, { run: sample.record });
-  if (recorded.outcome === "refused") throw sampleRefused(recorded);
+  if (recorded.outcome === "refused") throw sampleRefusalError(recorded);
   if (recorded.outcome === "unrecorded") {
     throw NextlyError.internal({
       logContext: {

@@ -536,8 +536,15 @@ export function useSampleRun(
   return {
     view,
     notice: local?.phase === "refused" ? local.message : undefined,
-    // Only once the probe has answered no: while it is on its way the step is drawn "Checking…".
-    sampleRefused: probe !== undefined && !probe.available,
+    // The probe's no withholds the offer only, and only once it has answered (while it is on its
+    // way the step is drawn "Checking…"). It never takes a run's state off the card: a load the
+    // site started, or one this tab is showing, keeps the step drawn and setup open, whatever the
+    // probe says, a refusal as much as an outage.
+    sampleRefused:
+      probe !== undefined &&
+      !probe.available &&
+      step?.run === undefined &&
+      (local === null || local.phase === "refused"),
     answeredHere: local?.phase === "answered",
     card,
     refreshFailed,

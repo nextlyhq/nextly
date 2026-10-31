@@ -176,7 +176,7 @@ async function sampleStep(h: Handles): Promise<SampleSetupStep | undefined> {
 }
 
 /**
- * The real store, with every first read of the first claim held until both
+ * The real store, with every first read of the current claim held until both
  * starts have made it: so both find nobody started, and both claims reach the
  * database together, where its key alone can decide.
  */
@@ -189,7 +189,7 @@ function bothReadFirst(meta: MetaService): SampleContentStore {
   return {
     getEntry: async <T>(key: string) => {
       const entry = await meta.getEntry<T>(key);
-      if (key === "seed.run.1" && waiting < 2) {
+      if (key === "seed.current" && waiting < 2) {
         waiting += 1;
         if (waiting === 2) release();
         await bothRead;
@@ -197,7 +197,10 @@ function bothReadFirst(meta: MetaService): SampleContentStore {
       return entry;
     },
     insertIfAbsent: (key, value) => meta.insertIfAbsent(key, value),
+    compareAndSet: (key, expected, next) =>
+      meta.compareAndSet(key, expected, next),
     set: (key, value) => meta.set(key, value),
+    delete: key => meta.delete(key),
   };
 }
 
@@ -221,11 +224,56 @@ describe.each(getConfiguredTestDialects())(
       expect([one.status, two.status].sort()).toEqual([200, 409]);
       const refused = one.status === 409 ? one : two;
       expect(await refused.json()).toMatchObject({
-        outcome: "refused",
-        errors: [{ message: expect.any(String) }],
+        error: { code: "CONFLICT", data: { reason: "in-progress" } },
       });
       expect(await h.meta.get(SAMPLE_LOADED_KEY)).toEqual(expect.any(String));
       expect((await sampleStep(h))?.status).toBe("done");
+    });
+
+    it("runs exactly one load when two administrators confirm loading again over the same failure at once", async () => {
+      // A load over a failure is claimed by moving the current answer from the failure both read:
+      // the compare-and-set on the real row decides.
+      const h = await boot(dialect);
+      const failing = async () => {
+        throw new Error("boom");
+      };
+      expect((await start(h.meta, h.ownerId, failing)).status).toBe(500);
+      const store = bothReadFirst(h.meta);
+      let loads = 0;
+      const load = async () => {
+        loads += 1;
+        return { posts: 1 };
+      };
+      const [one, two] = await Promise.all([
+        start(store, "admin-a", load, { confirm: true }),
+        start(store, "admin-b", load, { confirm: true }),
+      ]);
+      expect(loads).toBe(1);
+      expect([one.status, two.status].sort()).toEqual([200, 409]);
+      expect((await sampleStep(h))?.status).toBe("done");
+    });
+
+    it("keeps one current answer and the last three copies however many loads were tried again", async () => {
+      const h = await boot(dialect);
+      const failing = async () => {
+        throw new Error("boom");
+      };
+      await start(h.meta, h.ownerId, failing);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect(
+          (await start(h.meta, h.ownerId, failing, { confirm: true })).status
+        ).toBe(500);
+      }
+      const rows = await h.meta.getAll();
+      expect(
+        Object.keys(rows)
+          .filter(key => key.startsWith("seed.run."))
+          .sort()
+      ).toEqual(["seed.run.4", "seed.run.5", "seed.run.6"]);
+      expect(rows["seed.current"]).toMatchObject({
+        generation: 6,
+        outcome: "failed",
+      });
     });
 
     it("keeps a load that never reported unfinished however long after it started, holding every other start and the decline", async () => {
@@ -246,11 +294,11 @@ describe.each(getConfiguredTestDialects())(
       });
       // Polled by hand: only the date is faked, and the claim lands within a few reads.
       for (let read = 0; read < 200; read += 1) {
-        if ((await h.meta.getEntry("seed.run.1")).present) break;
+        if ((await h.meta.getEntry("seed.current")).present) break;
         await new Promise(resolve => setTimeout(resolve, 10));
       }
       vi.useRealTimers();
-      expect((await h.meta.getEntry("seed.run.1")).present).toBe(true);
+      expect((await h.meta.getEntry("seed.current")).present).toBe(true);
 
       // Read now, long after: the step is open on the load, though the site holds an entry.
       await vi.waitFor(async () =>
@@ -263,7 +311,9 @@ describe.each(getConfiguredTestDialects())(
       const second = vi.fn(async () => "second");
       const refused = await start(h.meta, "admin-b", second, { confirm: true });
       expect(refused.status).toBe(409);
-      expect(await refused.json()).toMatchObject({ reason: "in-progress" });
+      expect(await refused.json()).toMatchObject({
+        error: { data: { reason: "in-progress" } },
+      });
       expect(second).not.toHaveBeenCalled();
       const decline = await putSetup(h.ownerId, { sample: "decline" });
       expect(decline.status).toBe(409);
@@ -290,7 +340,9 @@ describe.each(getConfiguredTestDialects())(
       };
       const loaded = await start(h.meta, h.ownerId, load);
       expect(loaded.status).toBe(200);
-      const body = (await loaded.json()) as { outcome: string; run: string };
+      const { item: body } = (await loaded.json()) as {
+        item: { outcome: string; run: string };
+      };
       expect(body.outcome).toBe("unrecorded");
       once.mockRestore();
 
@@ -302,7 +354,9 @@ describe.each(getConfiguredTestDialects())(
       });
       const again = await start(h.meta, "admin-b", load, { confirm: true });
       expect(again.status).toBe(409);
-      expect(await again.json()).toMatchObject({ reason: "unrecorded" });
+      expect(await again.json()).toMatchObject({
+        error: { data: { reason: "unrecorded" } },
+      });
 
       // A run that is not the waiting one records nothing.
       expect(
@@ -329,8 +383,12 @@ describe.each(getConfiguredTestDialects())(
       const failed = await start(h.meta, h.ownerId, failing);
       expect(failed.status).toBe(500);
       expect(await failed.json()).toMatchObject({
-        outcome: "failed",
-        failure: "post hello-world: media missing",
+        error: {
+          data: {
+            reason: "failed",
+            failure: "post hello-world: media missing",
+          },
+        },
       });
       // Kept for every reader, with what failed, though the failed load left an entry.
       expect((await sampleStep(h))?.run).toEqual({
@@ -342,7 +400,9 @@ describe.each(getConfiguredTestDialects())(
       const load = vi.fn(async () => "ok");
       const unconfirmed = await start(h.meta, h.ownerId, load);
       expect(unconfirmed.status).toBe(409);
-      expect(await unconfirmed.json()).toMatchObject({ reason: "confirm" });
+      expect(await unconfirmed.json()).toMatchObject({
+        error: { data: { reason: "confirm" } },
+      });
       expect(load).not.toHaveBeenCalled();
       expect(failing).toHaveBeenCalledTimes(1);
 
@@ -364,8 +424,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await start(h.meta, h.ownerId, load);
       expect(refused.status).toBe(409);
       expect(await refused.json()).toMatchObject({
-        reason: "answered",
-        state: { answer: "declined" },
+        error: { code: "CONFLICT", data: { reason: "answered" } },
       });
       expect(load).not.toHaveBeenCalled();
       // Declining again in the second session is the same answer, not a refusal.

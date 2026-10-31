@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { post } = vi.hoisted(() => ({ post: vi.fn() }));
+vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: { post } }));
+
 import { seedApi } from "../seedApi";
 
 describe("seedApi", () => {
@@ -12,6 +15,7 @@ describe("seedApi", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     vi.restoreAllMocks();
+    post.mockReset();
   });
 
   describe("probe", () => {
@@ -92,65 +96,72 @@ describe("seedApi", () => {
   });
 
   describe("start", () => {
-    const answer = (status: number, body: unknown) =>
-      vi.fn(async () => Response.json(body, { status }));
+    /** A refusal or failure as the admin's client throws it, from the error envelope. */
+    const apiError = (status: number, message: string, data: unknown) =>
+      Object.assign(new Error(message), {
+        status,
+        code: status === 409 ? "CONFLICT" : "INTERNAL_ERROR",
+        data,
+      });
 
-    it("posts no body for a first start, and the confirmation only when asked", async () => {
-      const fetchMock = answer(200, { outcome: "loaded", result: {} });
-      global.fetch = fetchMock as unknown as typeof fetch;
+    it("sends {} for a first start, and the confirmation only when asked, once each", async () => {
+      post.mockResolvedValue({
+        message: "Sample content loaded.",
+        item: { outcome: "loaded" },
+      });
       await seedApi.start(false);
       await seedApi.start(true);
-      const [first, second] = fetchMock.mock.calls as unknown as Array<
-        [string, RequestInit]
-      >;
-      expect(first?.[1]).not.toHaveProperty("body");
-      expect(second?.[1].body).toBe(JSON.stringify({ confirm: true }));
+      expect(post.mock.calls).toEqual([
+        ["/seed", {}],
+        ["/seed", { confirm: true }],
+      ]);
     });
 
-    it("reads loaded, loaded but not recorded, and a route older than the runner", async () => {
-      global.fetch = answer(200, {
-        outcome: "unrecorded",
-        run: "run-1",
-        startedAt: "2026-10-31T09:00:00.000Z",
-      }) as unknown as typeof fetch;
+    it("reads loaded and loaded-but-not-recorded from the mutation's item, and a route older than the runner as loaded", async () => {
+      post.mockResolvedValueOnce({
+        message: "Sample content loaded, but recording that failed.",
+        item: {
+          outcome: "unrecorded",
+          run: "run-1",
+          startedAt: "2026-10-31T09:00:00.000Z",
+        },
+      });
       expect(await seedApi.start(false)).toEqual({
         outcome: "unrecorded",
         run: "run-1",
         startedAt: "2026-10-31T09:00:00.000Z",
       });
-      // An older route answers its SeedResult alone, having recorded it itself.
-      const result = { message: "ok", summary: {}, warnings: [] };
-      global.fetch = answer(200, result) as unknown as typeof fetch;
-      expect(await seedApi.start(false)).toEqual({
-        outcome: "loaded",
-        result,
-      });
+      // An older route answers its result alone, having recorded it itself.
+      post.mockResolvedValueOnce({ message: "ok", summary: {}, warnings: [] });
+      expect(await seedApi.start(false)).toEqual({ outcome: "loaded" });
     });
 
-    it("reads a refusal's reason and words, and anything else failed as what failed", async () => {
-      global.fetch = answer(409, {
-        outcome: "refused",
-        reason: "in-progress",
-        errors: [{ message: "A sample-content load is already in progress." }],
-      }) as unknown as typeof fetch;
+    it("reads a refusal's reason and words, and a failure's what-failed, from the error envelope", async () => {
+      post.mockRejectedValueOnce(
+        apiError(409, "A sample-content load is already in progress.", {
+          reason: "in-progress",
+        })
+      );
       expect(await seedApi.start(false)).toEqual({
         outcome: "refused",
         reason: "in-progress",
         message: "A sample-content load is already in progress.",
       });
-      global.fetch = answer(500, {
-        outcome: "failed",
-        failure: "post hello: boom",
-        startedAt: "2026-10-31T09:00:00.000Z",
-      }) as unknown as typeof fetch;
+      post.mockRejectedValueOnce(
+        apiError(500, "Loading sample content failed.", {
+          reason: "failed",
+          failure: "post hello: boom",
+          startedAt: "2026-10-31T09:00:00.000Z",
+        })
+      );
       expect(await seedApi.start(false)).toEqual({
         outcome: "failed",
         failure: "post hello: boom",
         startedAt: "2026-10-31T09:00:00.000Z",
       });
-      global.fetch = answer(403, {
-        errors: [{ message: "You don't have permission." }],
-      }) as unknown as typeof fetch;
+      post.mockRejectedValueOnce(
+        apiError(403, "You don't have permission.", undefined)
+      );
       expect(await seedApi.start(false)).toEqual({
         outcome: "failed",
         failure: "You don't have permission.",
@@ -158,15 +169,12 @@ describe("seedApi", () => {
     });
 
     it("answers a request that never reached the server as failed, asked once", async () => {
-      const fetchMock = vi.fn(async () => {
-        throw new Error("network");
-      });
-      global.fetch = fetchMock as unknown as typeof fetch;
+      post.mockRejectedValueOnce(new TypeError("Failed to fetch"));
       expect(await seedApi.start(false)).toEqual({
         outcome: "failed",
         failure: "The server could not be reached.",
       });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenCalledTimes(1);
     });
   });
 });

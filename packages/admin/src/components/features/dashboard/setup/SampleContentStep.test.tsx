@@ -21,11 +21,15 @@ import {
   within,
 } from "@admin/__tests__/utils";
 
-const { put } = vi.hoisted(() => ({ put: vi.fn() }));
-vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: { put } }));
+const { put, post } = vi.hoisted(() => ({ put: vi.fn(), post: vi.fn() }));
+vi.mock("@admin/lib/api/protectedApi", () => ({
+  protectedApi: { put, post },
+}));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
   useSingles: () => ({ data: { items: [] } }),
 }));
+
+import { parseApiError } from "@admin/lib/api/parseApiError";
 
 import { SetupCard } from "../SetupCard";
 
@@ -80,24 +84,50 @@ function card(data: SetupCardData, refreshing = false): ReactElement {
   );
 }
 
-/** The route's answers: the probe by `probe`, and each POST by the next of `starts`. */
+/**
+ * The route's answers: the probe by `probe`, and each start by the next of `starts`, read as the
+ * admin's client reads an answer: the body of a success, the error envelope parsed and thrown.
+ * Answers the bodies the starts were sent with.
+ */
 function route(
   probe: () => Response | Promise<Response>,
   ...starts: Array<() => Response | Promise<Response>>
 ) {
-  const posts: RequestInit[] = [];
-  const fetchMock = vi.fn(
-    async (_url: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "HEAD") return probe();
-      posts.push(init ?? {});
-      const next = starts.shift();
-      if (next === undefined) throw new Error("an unexpected second load");
-      return next();
-    }
-  );
-  global.fetch = fetchMock as unknown as typeof fetch;
+  const posts: unknown[] = [];
+  global.fetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "HEAD") return probe();
+    throw new Error("only the probe is asked with fetch");
+  }) as unknown as typeof fetch;
+  post.mockImplementation(async (_path: string, body: unknown) => {
+    posts.push(body);
+    const next = starts.shift();
+    if (next === undefined) throw new Error("an unexpected second load");
+    const res = await next();
+    const json: unknown = await res.json().catch(() => null);
+    if (!res.ok) throw parseApiError(json, res.status);
+    return json;
+  });
   return posts;
 }
+
+/** The route's answer to a load, in the mutation envelope. */
+const loadedAnswer = () =>
+  Response.json({
+    message: "Sample content loaded.",
+    item: { outcome: "loaded" },
+  });
+
+/** The route's error envelope. */
+const errorAnswer = (
+  status: number,
+  code: string,
+  message: string,
+  data: Record<string, unknown>
+) =>
+  Response.json(
+    { error: { code, message, data, requestId: "req_test" } },
+    { status }
+  );
 
 const allowed = () =>
   new Response(null, {
@@ -131,6 +161,7 @@ const originalFetch = global.fetch;
 beforeEach(() => {
   put.mockReset();
   put.mockResolvedValue({});
+  post.mockReset();
   retry.mockClear();
 });
 afterEach(() => {
@@ -183,6 +214,33 @@ describe("who is offered sample content", () => {
     );
   });
 
+  it.each([
+    ["fails (503)", () => new Response(null, { status: 503 })],
+    ["refuses the person (403)", () => new Response(null, { status: 403 })],
+  ])(
+    "keeps a load the site started on the card when the route %s, and never retires over it",
+    async (_name, probe) => {
+      route(probe);
+      // Every other step done: dropped, the run would let the card say it is all set and retire.
+      render(
+        card(
+          dataOf(withRun({ state: "unfinished", startedAt: STARTED }), {
+            kind: "entry",
+            status: "done",
+          })
+        )
+      );
+      await panelSays("status", /has not finished/);
+      await act(async () => undefined);
+      expect(sampleTile()).toHaveAttribute("data-status", "open");
+      expect(screen.queryByTestId("setup-all-set")).toBeNull();
+      expect(put).not.toHaveBeenCalledWith(
+        "/dashboard/setup",
+        expect.objectContaining({ retire: expect.anything() })
+      );
+    }
+  );
+
   it("asks for the site's current answer whenever the dashboard regains focus", async () => {
     route(allowed);
     render(card(dataOf(OPEN)));
@@ -218,9 +276,7 @@ describe("a load and its outcome", () => {
     );
     expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
     // Its answer lands though the card that asked is gone.
-    await act(async () =>
-      land(Response.json({ outcome: "loaded", result: {} }))
-    );
+    await act(async () => land(loadedAnswer()));
     await panelSays("status", "Sample content loaded.");
     second.unmount();
     render(card(dataOf(OPEN)), { queryClient });
@@ -232,15 +288,11 @@ describe("a load and its outcome", () => {
 
   it("makes exactly one request for a failed load, says what failed, and offers Add your first entry", async () => {
     const posts = route(allowed, () =>
-      Response.json(
-        {
-          outcome: "failed",
-          failure: "post hello-world: media missing",
-          startedAt: STARTED,
-          errors: [{ message: "post hello-world: media missing" }],
-        },
-        { status: 500 }
-      )
+      errorAnswer(500, "INTERNAL_ERROR", "Loading sample content failed.", {
+        reason: "failed",
+        failure: "post hello-world: media missing",
+        startedAt: STARTED,
+      })
     );
     render(card(dataOf(OPEN)));
     fireEvent.click(
@@ -264,7 +316,7 @@ describe("a load and its outcome", () => {
   });
 
   it("loads again only once the person confirms, after warning that some content may be there", async () => {
-    const posts = route(allowed, () => Response.json({ outcome: "loaded" }));
+    const posts = route(allowed, loadedAnswer);
     render(
       card(
         dataOf(
@@ -295,7 +347,7 @@ describe("a load and its outcome", () => {
       })
     );
     await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]?.body).toBe(JSON.stringify({ confirm: true }));
+    expect(posts[0]).toEqual({ confirm: true });
   });
 
   it("offers no Try again on a failed load once the site holds an entry", async () => {
@@ -334,10 +386,8 @@ describe("a load and its outcome", () => {
   it("says loaded but not recorded, and its Try again records without loading again", async () => {
     const posts = route(allowed, () =>
       Response.json({
-        outcome: "unrecorded",
-        run: "run-1",
-        startedAt: STARTED,
-        result: {},
+        message: "Sample content loaded, but recording that failed.",
+        item: { outcome: "unrecorded", run: "run-1", startedAt: STARTED },
       })
     );
     render(card(dataOf(OPEN)));
@@ -398,15 +448,11 @@ describe("a load and its outcome", () => {
 
   it("says a load is already in progress when the route refuses the start, and asks for the card again", async () => {
     route(allowed, () =>
-      Response.json(
-        {
-          outcome: "refused",
-          reason: "in-progress",
-          errors: [
-            { message: "A sample-content load is already in progress." },
-          ],
-        },
-        { status: 409 }
+      errorAnswer(
+        409,
+        "CONFLICT",
+        "A sample-content load is already in progress.",
+        { reason: "in-progress" }
       )
     );
     render(card(dataOf(OPEN)));
@@ -420,7 +466,7 @@ describe("a load and its outcome", () => {
   });
 
   it("keeps the run on show when the other steps' check fails, with that failure and its own Retry", async () => {
-    route(allowed, () => Response.json({ outcome: "loaded" }));
+    route(allowed, loadedAnswer);
     const { rerender } = render(card(dataOf(OPEN)));
     fireEvent.click(
       await within(sampleTile()!).findByRole("button", { name: "Load" })
@@ -445,7 +491,7 @@ describe("a load and its outcome", () => {
   });
 
   it("shows the steps as they are now after Continue, never a stale cached answer", async () => {
-    route(allowed, () => Response.json({ outcome: "loaded" }));
+    route(allowed, loadedAnswer);
     const { rerender } = render(card(dataOf(OPEN)));
     fireEvent.click(
       await within(sampleTile()!).findByRole("button", { name: "Load" })

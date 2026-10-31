@@ -164,7 +164,10 @@ export interface SampleRoute {
 /**
  * The steps the setup card draws, counted: `answer` less an open sample step
  * where the project's route refuses this reader. A sample step already
- * answered stays, as someone on the site loaded or declined it.
+ * answered stays, as someone on the site loaded or declined it, and so does
+ * one holding a load nobody has seen through: the route's refusal withholds
+ * only the offer, never a run's state, which stays on the card and holds
+ * setup open.
  *
  * ONE function for the admin's "N of M done" and the host's "You're all set"
  * (`setupAllSet`), so a step the card leaves out never holds the card open,
@@ -177,7 +180,12 @@ export function drawnSetup(
   if (!answer.known || !sampleRefused) return answer;
   return talliedSetup(
     answer.steps.filter(
-      step => !(step.kind === "sample" && step.status === "open")
+      step =>
+        !(
+          step.kind === "sample" &&
+          step.status === "open" &&
+          step.run === undefined
+        )
     )
   );
 }

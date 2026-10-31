@@ -10,18 +10,25 @@
  *   on its own, so "loaded but not recorded" is a state the site can be in and
  *   recover from without loading again.
  * - `seed.skippedAt`: somebody declined.
- * - `seed.run.<n>`: the n-th answer anyone started, from 1: a load, or a
- *   decline. Each is CLAIMED by inserting its key only where no row holds it
- *   (`insertIfAbsent`) and reading the row back to see whose it is, so two
- *   starts at the same moment, on any dialect, give the key to exactly one:
- *   the database's primary key decides, not a read made before the write. The
- *   claim is never released and never expires. A load that reported neither
- *   success nor failure stays "unfinished" however long ago it started, as it
- *   may still be running; only a failed load lets the next key be claimed, and
- *   only once a person confirms it.
+ * - `seed.current`: the latest answer anyone started, a load or a decline, with
+ *   its generation (1, 2, …) and its outcome. Every read of the site's answer
+ *   is these three rows, however many loads were tried before.
+ * - `seed.run.<n>`: a copy of each of the last few answers, for whoever looks
+ *   into a failure; older ones are removed as new ones start. Nothing reads
+ *   them to decide anything.
  *
- * Only the run that claimed a key writes its outcome. A store that cannot be
- * read is said so to the caller, never read as "nobody answered".
+ * A new answer is CLAIMED by one conditional write of `seed.current`: inserted
+ * only where no row holds it, the first time, and afterwards moved only from
+ * the failed load it was read as (`compareAndSet`). Two starts at the same
+ * moment, on any dialect, cannot both make that write: the database decides,
+ * not a read made before it. A claim is never released and never expires. A
+ * load that reported neither success nor failure stays "unfinished" however
+ * long ago it started, as it may still be running; only a failed load may be
+ * claimed over, and only once a person confirms it.
+ *
+ * Only the run that claimed `seed.current` writes its outcome, and only over
+ * its own claim. A store that cannot be read is said so to the caller, never
+ * read as "nobody answered".
  *
  * The project's own route runs the load: it alone knows its content
  * (`templates/blog/src/app/admin/api/seed/route.ts`). It decides who may load
@@ -32,15 +39,23 @@
 
 import { z } from "zod";
 
+import { buildErrorResponse } from "../../api/error-response";
+import { readBoundedBytes } from "../../api/read-json-body";
+import { readOrGenerateRequestId } from "../../api/request-id";
+import { respondMutation } from "../../api/response-shapes";
 import type { SampleRun } from "../../domains/widgets/setup-steps";
-import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
+import { NextlyError } from "../../errors/nextly-error";
 
 /** The key recording that the content loaded. */
 export const SAMPLE_LOADED_KEY = "seed.completedAt";
 /** The key recording that somebody declined. */
 export const SAMPLE_DECLINED_KEY = "seed.skippedAt";
-/** The prefix of each answer's claim: `seed.run.1`, `seed.run.2`, … */
+/** The key holding the latest answer anyone started: the one every read takes. */
+const CURRENT_KEY = "seed.current";
+/** The prefix of each answer's kept copy: `seed.run.1`, `seed.run.2`, … */
 const RUN_PREFIX = "seed.run.";
+/** How many answers' copies are kept, the latest among them. */
+const KEPT_RUNS = 3;
 
 /** What a failure's message is cut to: enough to say what failed. */
 const MAX_FAILURE_LENGTH = 500;
@@ -51,11 +66,19 @@ export interface SampleContentStore {
     key: string
   ): Promise<{ present: true; value: T | null } | { present: false }>;
   insertIfAbsent(key: string, value: unknown): Promise<void>;
+  compareAndSet(
+    key: string,
+    expected: unknown,
+    next: unknown
+  ): Promise<boolean>;
   set(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
-/** One claim, as `seed.run.<n>` holds it. */
+/** One answer, as `seed.current` holds it. */
 interface RunRecord {
+  /** Which answer this is, from 1. */
+  generation: number;
   /** Who claimed it: a random token only the claiming request knows. */
   token: string;
   kind: "load" | "decline";
@@ -69,10 +92,13 @@ interface RunRecord {
   finishedAt?: string;
 }
 
-/** The latest claim and which one it is. */
+/**
+ * The latest answer: the record as read, and the value exactly as stored, which
+ * a claim over it names so the write lands only on what was read.
+ */
 interface LatestRun {
-  generation: number;
   record: RunRecord;
+  stored: unknown;
 }
 
 /** The site's answer to sample content, as every reader of it sees it. */
@@ -133,6 +159,7 @@ function isRunRecord(value: unknown): value is RunRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Partial<RunRecord>;
   return (
+    typeof record.generation === "number" &&
     typeof record.token === "string" &&
     (record.kind === "load" || record.kind === "decline") &&
     typeof record.startedAt === "string"
@@ -147,31 +174,24 @@ function holds(
 }
 
 /**
- * The latest claim, read from `seed.run.1` upward until a key holds none. Few
- * ever exist: one per load or decline anyone started, and a second load only
- * after a failure someone confirmed. A row that is not a claim is read as one
- * that started now and never finished, so it holds the site rather than being
- * passed over.
+ * The latest answer, from `seed.current`. A row that is not one is read as a
+ * load that started at the epoch and never finished, so it holds the site
+ * rather than being passed over.
  */
-async function latestRun(
-  store: SampleContentStore
-): Promise<LatestRun | undefined> {
-  let latest: LatestRun | undefined;
-  for (let generation = 1; ; generation += 1) {
-    const entry = await store.getEntry(runKey(generation));
-    if (!entry.present) return latest;
-    latest = {
-      generation,
-      record: isRunRecord(entry.value)
-        ? entry.value
-        : {
-            token: "",
-            kind: "load",
-            startedAt: new Date(0).toISOString(),
-            startedBy: "",
-          },
-    };
-  }
+function latestOf(
+  entry: { present: true; value: unknown } | { present: false }
+): LatestRun | undefined {
+  if (!entry.present) return undefined;
+  const record: RunRecord = isRunRecord(entry.value)
+    ? entry.value
+    : {
+        generation: 0,
+        token: "",
+        kind: "load",
+        startedAt: new Date(0).toISOString(),
+        startedBy: "",
+      };
+  return { record, stored: entry.value };
 }
 
 /** A load's claim as the card shows it, or none once it is answered. */
@@ -195,15 +215,16 @@ function runView(latest: LatestRun | undefined): SampleRun | undefined {
   return { state: "unfinished", startedAt: record.startedAt };
 }
 
-/** The site's answer and its latest claim, read together. */
+/** The site's answer and its latest claim: three rows, read together. */
 async function readAll(
   store: SampleContentStore
 ): Promise<{ state: SampleContentState; latest: LatestRun | undefined }> {
-  const [loaded, declined, latest] = await Promise.all([
+  const [loaded, declined, current] = await Promise.all([
     store.getEntry(SAMPLE_LOADED_KEY),
     store.getEntry(SAMPLE_DECLINED_KEY),
-    latestRun(store),
+    store.getEntry(CURRENT_KEY),
   ]);
+  const latest = latestOf(current);
   if (holds(loaded)) return { state: { answer: "loaded" }, latest };
   if (holds(declined) || latest?.record.kind === "decline") {
     return { state: { answer: "declined" }, latest };
@@ -237,31 +258,72 @@ function blocked(
 }
 
 /**
- * Claims the key after `latest` for `record`, answering whether this request
- * holds it: inserted only where no row holds it, then read back, so of two
- * claims at once exactly one finds its own token there.
+ * Keeps a copy of a claimed answer and removes the copy that falls out of the
+ * last {@link KEPT_RUNS}. Best effort: the copies decide nothing, so a write
+ * that fails here never fails the answer.
+ */
+async function keepCopy(
+  store: SampleContentStore,
+  record: RunRecord
+): Promise<void> {
+  try {
+    await store.set(runKey(record.generation), record);
+    const dropped = record.generation - KEPT_RUNS;
+    if (dropped >= 1) await store.delete(runKey(dropped));
+  } catch {
+    // Only the copy is lost: `seed.current` holds the answer.
+  }
+}
+
+/**
+ * Claims the next answer over `latest` with ONE conditional write of
+ * `seed.current`, answering the claimed record when this request holds it. The
+ * first is inserted only where no row holds the key, and read back to see
+ * whose it is; each later one replaces the record only while it still holds
+ * the value read, so of two claims at once exactly one lands.
  */
 async function claim(
   store: SampleContentStore,
   latest: LatestRun | undefined,
-  record: RunRecord
-): Promise<number | undefined> {
-  const generation = (latest?.generation ?? 0) + 1;
-  const key = runKey(generation);
-  await store.insertIfAbsent(key, record);
-  const held = await store.getEntry(key);
-  return held.present &&
-    isRunRecord(held.value) &&
-    held.value.token === record.token
-    ? generation
-    : undefined;
+  start: Omit<RunRecord, "generation">
+): Promise<RunRecord | undefined> {
+  const record: RunRecord = {
+    generation: (latest?.record.generation ?? 0) + 1,
+    ...start,
+  };
+  let won: boolean;
+  if (latest === undefined) {
+    await store.insertIfAbsent(CURRENT_KEY, record);
+    const held = await store.getEntry(CURRENT_KEY);
+    won =
+      held.present &&
+      isRunRecord(held.value) &&
+      held.value.token === record.token;
+  } else {
+    won = await store.compareAndSet(CURRENT_KEY, latest.stored, record);
+  }
+  if (!won) return undefined;
+  await keepCopy(store, record);
+  return record;
 }
 
-async function refusal(
+/**
+ * Writes a claimed load's outcome over its own claim, and its copy. Moved only
+ * from the record this run claimed, so it can never land on a later answer.
+ * Answers whether it was written.
+ */
+async function writeOutcome(
   store: SampleContentStore,
-  reason: SampleRefusal["reason"]
-): Promise<SampleRefusal> {
-  return { outcome: "refused", reason, state: await readSampleContent(store) };
+  claimed: RunRecord,
+  finished: RunRecord
+): Promise<boolean> {
+  try {
+    const written = await store.compareAndSet(CURRENT_KEY, claimed, finished);
+    if (written) await keepCopy(store, finished);
+    return written;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -272,19 +334,17 @@ async function refusal(
  */
 async function recordLoaded(
   store: SampleContentStore,
-  generation: number,
-  record: RunRecord,
+  claimed: RunRecord,
   now: () => Date
 ): Promise<{ recorded: true } | { recorded: false; failure: string }> {
-  try {
-    await store.set(runKey(generation), {
-      ...record,
+  if (claimed.outcome === undefined) {
+    // Not written, the claim reads as unfinished, which starts nothing else;
+    // the site-wide record below still closes the offer.
+    await writeOutcome(store, claimed, {
+      ...claimed,
       outcome: "loaded",
       finishedAt: now().toISOString(),
-    } satisfies RunRecord);
-  } catch {
-    // The site-wide record below still closes the offer; without it too, the
-    // claim reads as unfinished, which starts nothing else.
+    });
   }
   try {
     await store.set(SAMPLE_LOADED_KEY, now().toISOString());
@@ -292,6 +352,16 @@ async function recordLoaded(
   } catch (error) {
     return { recorded: false, failure: messageOf(error) };
   }
+}
+
+/** A start refused after this request's claim lost to someone else's. */
+async function lostClaim(store: SampleContentStore): Promise<SampleRefusal> {
+  const state = await readSampleContent(store);
+  return {
+    outcome: "refused",
+    reason: state.answer !== undefined ? "answered" : "in-progress",
+    state,
+  };
 }
 
 /**
@@ -323,50 +393,38 @@ export async function startSampleContent<Result>(
   const reason = blocked(state, options.confirm === true);
   if (reason !== undefined) return { outcome: "refused", reason, state };
 
-  const record: RunRecord = {
+  const claimed = await claim(store, latest, {
     token: options.token ?? crypto.randomUUID(),
     kind: "load",
     startedAt: now().toISOString(),
     startedBy: options.by,
-  };
-  const generation = await claim(store, latest, record);
-  if (generation === undefined) {
-    // Someone else's claim landed first: a load, or a decline.
-    const after = await readSampleContent(store);
-    return {
-      outcome: "refused",
-      reason: after.answer !== undefined ? "answered" : "in-progress",
-      state: after,
-    };
-  }
+  });
+  if (claimed === undefined) return lostClaim(store);
 
   let result: Result;
   try {
     result = await options.load();
   } catch (error) {
     const failure = messageOf(error);
-    try {
-      await store.set(runKey(generation), {
-        ...record,
-        outcome: "failed",
-        failure,
-        finishedAt: now().toISOString(),
-      } satisfies RunRecord);
-    } catch {
-      // Not written, the load reads as unfinished: it starts nothing else, as
-      // nobody can tell it apart from one still running.
-    }
-    return { outcome: "failed", failure, startedAt: record.startedAt };
+    // Not written, the load reads as unfinished: it starts nothing else, as
+    // nobody can tell it apart from one still running.
+    await writeOutcome(store, claimed, {
+      ...claimed,
+      outcome: "failed",
+      failure,
+      finishedAt: now().toISOString(),
+    });
+    return { outcome: "failed", failure, startedAt: claimed.startedAt };
   }
 
-  const recorded = await recordLoaded(store, generation, record, now);
+  const recorded = await recordLoaded(store, claimed, now);
   return recorded.recorded
     ? { outcome: "loaded", result }
     : {
         outcome: "unrecorded",
         result,
-        run: record.token,
-        startedAt: record.startedAt,
+        run: claimed.token,
+        startedAt: claimed.startedAt,
         failure: recorded.failure,
       };
 }
@@ -395,12 +453,7 @@ export async function recordSampleContent(
   ) {
     return { outcome: "refused", reason: "not-this-run", state };
   }
-  const recorded = await recordLoaded(
-    store,
-    latest.generation,
-    latest.record,
-    now
-  );
+  const recorded = await recordLoaded(store, latest.record, now);
   return recorded.recorded
     ? { outcome: "loaded" }
     : {
@@ -413,7 +466,7 @@ export async function recordSampleContent(
 
 /**
  * Declines sample content for the whole site. A decline is a claim like a
- * load, on the same keys, so a decline and a load started at the same moment
+ * load, on the same row, so a decline and a load started at the same moment
  * cannot both be taken: whichever claims first is the site's answer. Refused
  * once it is loaded, while a load is unfinished or unrecorded, and when
  * another claim lands first; declining again answers that it is.
@@ -430,16 +483,15 @@ export async function declineSampleContent(
   if (reason !== undefined) return { outcome: "refused", reason, state };
 
   const at = now().toISOString();
-  const generation = await claim(store, latest, {
+  const claimed = await claim(store, latest, {
     token: options.token ?? crypto.randomUUID(),
     kind: "decline",
     startedAt: at,
     startedBy: options.by,
   });
-  if (generation === undefined) {
-    const after = await readSampleContent(store);
-    if (after.answer === "declined") return { outcome: "declined" };
-    return refusal(store, after.answer ? "answered" : "in-progress");
+  if (claimed === undefined) {
+    const lost = await lostClaim(store);
+    return lost.state.answer === "declined" ? { outcome: "declined" } : lost;
   }
   try {
     // The claim already answers for the site; this keeps the key older readers know.
@@ -462,65 +514,99 @@ export const SAMPLE_REFUSAL_MESSAGE: Record<SampleRefusal["reason"], string> = {
 };
 
 /**
- * A start's outcome as the project's route answers it: 200 when it loaded
- * (recorded or not, as the body says), 500 when it failed, 409 when it was
- * refused. A body that is not a success carries `errors`, as every route
- * here answers a failure.
+ * A refusal as the error every route answers with: a conflict, as the site's
+ * answer has moved on from what the person saw, saying why in `data.reason`.
  */
-export function sampleStartResponse<Result>(
-  start: SampleStart<Result>
-): Response {
+export function sampleRefusalError(refusal: SampleRefusal): NextlyError {
+  return new NextlyError({
+    code: "CONFLICT",
+    publicMessage: SAMPLE_REFUSAL_MESSAGE[refusal.reason],
+    publicData: {
+      reason: refusal.reason,
+      ...(refusal.state.run === undefined
+        ? {}
+        : { startedAt: refusal.state.run.startedAt }),
+    },
+    logContext: { reason: "sample-content-refused", sample: refusal.reason },
+  });
+}
+
+/**
+ * A start's outcome as the project's route answers it: the mutation envelope,
+ * `{ message, item }`, with the outcome as the item when it loaded (recorded
+ * or not, as the item says); the error envelope otherwise, a conflict for a
+ * refusal and an internal error carrying what failed for a failed load, which
+ * the person who started it is told.
+ */
+function startAnswer<Result>(start: SampleStart<Result>): Response {
   switch (start.outcome) {
     case "loaded":
+      return respondMutation("Sample content loaded.", start);
     case "unrecorded":
-      return Response.json(start);
+      return respondMutation(
+        "Sample content loaded, but recording that failed.",
+        start
+      );
     case "failed":
-      return Response.json(
-        { ...start, errors: [{ message: start.failure }] },
-        { status: NEXTLY_ERROR_STATUS.INTERNAL_ERROR }
-      );
-    case "refused":
-      // A conflict: the site's answer has moved on from what the person saw.
-      return Response.json(
-        {
-          ...start,
-          errors: [{ message: SAMPLE_REFUSAL_MESSAGE[start.reason] }],
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "Loading sample content failed.",
+        publicData: {
+          reason: "failed",
+          failure: start.failure,
+          startedAt: start.startedAt,
         },
-        { status: NEXTLY_ERROR_STATUS.CONFLICT }
-      );
+        logContext: {
+          reason: "sample-content-failed",
+          failure: start.failure,
+        },
+      });
+    case "refused":
+      throw sampleRefusalError(start);
   }
 }
 
-/** The largest start body read: `{ "confirm": true }` and little else. */
+/** The largest start body read, in bytes: `{ "confirm": true }` and little else. */
 const MAX_START_BODY_BYTES = 512;
 
 /** What a POST to the project's route may ask: whether to load again after a failure. */
 const startBody = z.object({ confirm: z.boolean().optional() }).strict();
 
+function invalidStartBody(): NextlyError {
+  return NextlyError.invalidInput({
+    message: 'The body must be empty, `{}` or `{ "confirm": true }`.',
+  });
+}
+
 /**
  * Whether a POST to the project's route confirms loading again after a
- * failed load, or `undefined` when its body is not one it takes. No body, or
- * an empty one, is a first start, as older admins send.
+ * failed load. Read through the bounded reader, so a body past the cap is
+ * refused at the cap, counted in bytes, without being buffered whole. No
+ * body, or an empty one, is a first start, as older admins send.
  */
-async function confirmedIn(request: Request): Promise<boolean | undefined> {
-  const text = await request.text().catch(() => "");
+async function confirmedIn(request: Request): Promise<boolean> {
+  const bytes = await readBoundedBytes(request, MAX_START_BODY_BYTES, {
+    route: "sample-content",
+  });
+  const text = bytes === undefined ? "" : new TextDecoder().decode(bytes);
   if (text.trim() === "") return false;
-  if (text.length > MAX_START_BODY_BYTES) return undefined;
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    return undefined;
+    throw invalidStartBody();
   }
   const parsed = startBody.safeParse(body);
-  return parsed.success ? parsed.data.confirm === true : undefined;
+  if (!parsed.success) throw invalidStartBody();
+  return parsed.data.confirm === true;
 }
 
 /**
  * The whole POST of a project's sample-content route, once the route has
  * decided the person may load: reads whether they confirmed loading again,
- * starts the load, and answers. Recording a load on its own and declining are
- * core's (`PUT /api/dashboard/setup`), so they never reach a route that loads.
+ * starts the load, and answers in the canonical envelopes. Recording a load
+ * on its own and declining are core's (`PUT /api/dashboard/setup`), so they
+ * never reach a route that loads.
  */
 export async function sampleContentPost<Result>(
   request: Request,
@@ -530,22 +616,19 @@ export async function sampleContentPost<Result>(
     load: () => Promise<Result>;
   }
 ): Promise<Response> {
-  const confirm = await confirmedIn(request);
-  if (confirm === undefined) {
-    return Response.json(
-      {
-        errors: [
-          { message: 'The body must be empty or `{ "confirm": true }`.' },
-        ],
-      },
-      { status: NEXTLY_ERROR_STATUS.INVALID_INPUT }
+  try {
+    const confirm = await confirmedIn(request);
+    return startAnswer(
+      await startSampleContent(options.store, {
+        by: options.by,
+        confirm,
+        load: options.load,
+      })
     );
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    return buildErrorResponse(error, {
+      requestId: readOrGenerateRequestId(request),
+    });
   }
-  return sampleStartResponse(
-    await startSampleContent(options.store, {
-      by: options.by,
-      confirm,
-      load: options.load,
-    })
-  );
 }

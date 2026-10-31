@@ -25,7 +25,6 @@ export {
   SAMPLE_LOADED_KEY,
   SAMPLE_REFUSAL_MESSAGE,
   sampleContentPost,
-  sampleStartResponse,
   startSampleContent,
   type SampleContentState,
   type SampleContentStore,

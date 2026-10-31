@@ -37,9 +37,20 @@ function memoryStore(): SampleContentStore & {
     async insertIfAbsent(key: string, value: unknown) {
       if (!rows.has(key)) rows.set(key, structuredClone(value));
     },
+    async compareAndSet(key: string, expected: unknown, next: unknown) {
+      if (failSet.has(key)) throw new Error(`cannot write ${key}`);
+      if (JSON.stringify(rows.get(key)) !== JSON.stringify(expected)) {
+        return false;
+      }
+      rows.set(key, structuredClone(next));
+      return true;
+    },
     async set(key: string, value: unknown) {
       if (failSet.has(key)) throw new Error(`cannot write ${key}`);
       rows.set(key, structuredClone(value));
+    },
+    async delete(key: string) {
+      rows.delete(key);
     },
   };
   return store;
@@ -189,7 +200,7 @@ describe("starting a load", () => {
     });
     store.getEntry = async <T>(key: string) => {
       const entry = await realGet<T>(key);
-      if (key === "seed.run.1" && reads < 2) {
+      if (key === "seed.current" && reads < 2) {
         reads += 1;
         if (reads === 2) release();
         await bothRead;
@@ -201,6 +212,73 @@ describe("starting a load", () => {
       startSampleContent(store, { by: "b", load: loads, token: "B" }),
     ]);
     expect(loads).toHaveBeenCalledTimes(1);
+    expect([one.outcome, two.outcome].sort()).toEqual(["loaded", "refused"]);
+  });
+});
+
+describe("the site's answer after many loads", () => {
+  it("reads three rows however many loads failed and were tried again, and keeps the last three copies", async () => {
+    const store = memoryStore();
+    const failing = async () => {
+      throw new Error("boom");
+    };
+    await startSampleContent(store, { by: "a", load: failing });
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      expect(
+        await startSampleContent(store, {
+          by: "a",
+          confirm: true,
+          load: failing,
+        })
+      ).toMatchObject({ outcome: "failed" });
+    }
+    const reads = vi.spyOn(store, "getEntry");
+    expect(await readSampleContent(store)).toMatchObject({
+      run: { state: "failed" },
+    });
+    expect(reads).toHaveBeenCalledTimes(3);
+    // The copies are the last three answers, 11 to 13; the answer itself is one row.
+    const copies = [...store.rows.keys()].filter(key =>
+      key.startsWith("seed.run.")
+    );
+    expect(copies.sort()).toEqual([
+      "seed.run.11",
+      "seed.run.12",
+      "seed.run.13",
+    ]);
+    expect(store.rows.get("seed.current")).toMatchObject({ generation: 13 });
+  });
+
+  it("lets a confirmed load claim over a failure only from the failure it read", async () => {
+    // Two confirmed starts over one failure: both read it, one moves it, the other is refused.
+    const store = memoryStore();
+    await startSampleContent(store, {
+      by: "a",
+      load: async () => {
+        throw new Error("boom");
+      },
+    });
+    const realGet = store.getEntry.bind(store);
+    let reads = 0;
+    let release: () => void = () => undefined;
+    const bothRead = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    store.getEntry = async <T>(key: string) => {
+      const entry = await realGet<T>(key);
+      if (key === "seed.current" && reads < 2) {
+        reads += 1;
+        if (reads === 2) release();
+        await bothRead;
+      }
+      return entry;
+    };
+    const load = vi.fn(async () => "ok");
+    const [one, two] = await Promise.all([
+      startSampleContent(store, { by: "a", confirm: true, load }),
+      startSampleContent(store, { by: "b", confirm: true, load }),
+    ]);
+    expect(load).toHaveBeenCalledTimes(1);
     expect([one.outcome, two.outcome].sort()).toEqual(["loaded", "refused"]);
   });
 });
@@ -278,7 +356,7 @@ describe("declining", () => {
           finish = resolve;
         }),
     });
-    await vi.waitFor(() => expect(store.rows.has("seed.run.1")).toBe(true));
+    await vi.waitFor(() => expect(store.rows.has("seed.current")).toBe(true));
     expect(await declineSampleContent(store, { by: "b" })).toMatchObject({
       reason: "in-progress",
     });
@@ -306,30 +384,32 @@ describe("the project's POST", () => {
       ...(body === undefined ? {} : { body }),
     });
 
-  it("starts on an empty body, answers 409 with why on a refusal, and 500 with what failed", async () => {
+  it("answers a load in the mutation envelope, a refusal as a conflict saying why, and a failure with what failed", async () => {
     const store = memoryStore();
-    const failing = async () => {
-      throw new Error("tag news: duplicate");
-    };
     const failed = await sampleContentPost(post(), {
       store,
       by: "a",
-      load: failing,
+      load: async () => {
+        throw new Error("tag news: duplicate");
+      },
     });
     expect(failed.status).toBe(500);
     expect(await failed.json()).toMatchObject({
-      outcome: "failed",
-      failure: "tag news: duplicate",
-      errors: [{ message: "tag news: duplicate" }],
+      error: {
+        code: "INTERNAL_ERROR",
+        data: { reason: "failed", failure: "tag news: duplicate" },
+      },
     });
 
-    const unconfirmed = await sampleContentPost(post(), {
+    const unconfirmed = await sampleContentPost(post("{}"), {
       store,
       by: "a",
       load: async () => "ok",
     });
     expect(unconfirmed.status).toBe(409);
-    expect(await unconfirmed.json()).toMatchObject({ reason: "confirm" });
+    expect(await unconfirmed.json()).toMatchObject({
+      error: { code: "CONFLICT", data: { reason: "confirm" } },
+    });
 
     const confirmed = await sampleContentPost(post('{"confirm":true}'), {
       store,
@@ -338,12 +418,12 @@ describe("the project's POST", () => {
     });
     expect(confirmed.status).toBe(200);
     expect(await confirmed.json()).toEqual({
-      outcome: "loaded",
-      result: "ok",
+      message: "Sample content loaded.",
+      item: { outcome: "loaded", result: "ok" },
     });
   });
 
-  it("refuses a body it does not take, loading nothing", async () => {
+  it("refuses a body it does not take, or one past its byte cap, loading nothing", async () => {
     const load = vi.fn(async () => "ok");
     for (const body of [
       '{"record":"run-1"}',
@@ -357,6 +437,19 @@ describe("the project's POST", () => {
       });
       expect(res.status).toBe(400);
     }
+    // 300 two-byte characters: under the cap counted in UTF-16 units, past it in bytes. Refused
+    // as too large, not read and refused as a body it does not take.
+    const wide = JSON.stringify({ note: "é".repeat(300) });
+    expect(wide.length).toBeLessThan(512);
+    const res = await sampleContentPost(post(wide), {
+      store: memoryStore(),
+      by: "a",
+      load,
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: { data: { errors: [{ code: "too_large" }] } },
+    });
     expect(load).not.toHaveBeenCalled();
   });
 });
