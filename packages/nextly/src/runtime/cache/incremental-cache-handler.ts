@@ -20,9 +20,13 @@ interface StoredEntry {
   value: unknown;
   lastModified: number;
   tags: readonly string[];
+  // The lifetime Next.js derives a route's revalidation from, handed back as
+  // given: an entry without it would revalidate after a second.
+  cacheControl?: unknown;
 }
 
 interface CacheContext {
+  cacheControl?: unknown;
   tags?: readonly string[];
   softTags?: readonly string[];
 }
@@ -74,7 +78,11 @@ export default class NextlyIncrementalCacheHandler {
   async get(
     key: string,
     ctx?: CacheContext
-  ): Promise<{ lastModified: number; value: unknown } | null> {
+  ): Promise<{
+    lastModified: number;
+    value: unknown;
+    cacheControl?: unknown;
+  } | null> {
     const stored = entries().get(key);
     if (stored === undefined) return null;
     const tags = [
@@ -87,20 +95,31 @@ export default class NextlyIncrementalCacheHandler {
     // most one ledger read, and none while their answers are fresh.
     await refreshTagExpiries(tags);
     if (isEntryExpired(tags, stored.lastModified)) {
-      entries().delete(key);
+      entries().deleteIf(key, stored);
       return null;
     }
-    return { lastModified: stored.lastModified, value: stored.value };
+    return {
+      lastModified: stored.lastModified,
+      value: stored.value,
+      cacheControl: stored.cacheControl,
+    };
   }
 
   // Synchronous work behind the promise Next.js expects from a handler.
   set(key: string, data: unknown, ctx?: CacheContext): Promise<void> {
-    if (data === null || data === undefined) {
+    // `null` is a value: a not-found response, cached like any other so the
+    // route is not run again on every request.
+    if (data === undefined) {
       entries().delete(key);
     } else {
       entries().set(
         key,
-        { value: data, lastModified: Date.now(), tags: ctx?.tags ?? [] },
+        {
+          value: data,
+          lastModified: Date.now(),
+          tags: ctx?.tags ?? [],
+          cacheControl: ctx?.cacheControl,
+        },
         sizeOf(data)
       );
     }

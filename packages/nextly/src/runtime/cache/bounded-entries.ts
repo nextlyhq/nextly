@@ -11,11 +11,20 @@
 /** The default bound on the bytes one handler keeps: 50 MB. */
 const DEFAULT_MAX_ENTRY_BYTES = 50 * 1024 * 1024;
 
+/**
+ * What an entry costs beyond its value: its record, tags and map node. An
+ * empty value is not free, so a flood of them still reaches the bound.
+ */
+const ENTRY_OVERHEAD_BYTES = 256;
+
 export class BoundedEntries<V> {
   private readonly entries = new Map<string, { value: V; bytes: number }>();
   private total = 0;
 
-  constructor(private readonly maxBytes: number = DEFAULT_MAX_ENTRY_BYTES) {}
+  constructor(
+    private readonly maxBytes: number = DEFAULT_MAX_ENTRY_BYTES,
+    private readonly overheadBytes: number = ENTRY_OVERHEAD_BYTES
+  ) {}
 
   get(key: string): V | undefined {
     const found = this.entries.get(key);
@@ -26,8 +35,10 @@ export class BoundedEntries<V> {
     return found.value;
   }
 
-  set(key: string, value: V, bytes: number): void {
+  set(key: string, value: V, valueBytes: number): void {
     this.delete(key);
+    // The value, its key and the record around it.
+    const bytes = valueBytes + key.length + this.overheadBytes;
     // One entry larger than the whole bound is not kept at all.
     if (bytes > this.maxBytes) return;
     this.entries.set(key, { value, bytes });
@@ -37,6 +48,14 @@ export class BoundedEntries<V> {
       this.entries.delete(oldest);
       this.total -= size;
     }
+  }
+
+  /**
+   * Removes `key` only while it still holds `value`: a reader that judged an
+   * entry and then waited must not remove a newer one written meanwhile.
+   */
+  deleteIf(key: string, value: V): void {
+    if (this.entries.get(key)?.value === value) this.delete(key);
   }
 
   delete(key: string): void {

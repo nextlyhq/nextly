@@ -62,7 +62,7 @@ const useCacheHandler = {
     const tags = [...stored.entry.tags, ...softTags];
     await refreshTagExpiries(tags);
     if (isEntryExpired(tags, stored.entry.timestamp)) {
-      entries().delete(cacheKey);
+      entries().deleteIf(cacheKey, stored);
       return undefined;
     }
     return { ...stored.entry, value: replay(stored.chunks) };

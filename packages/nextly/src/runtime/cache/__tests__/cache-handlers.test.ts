@@ -228,6 +228,53 @@ describe("the incremental cache handler", () => {
     expect(await handler.get("k")).toBeNull();
   });
 
+  it("hands back the lifetime a route was stored with", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    const cacheControl = { revalidate: 60, expire: 300 };
+    await new IncrementalHandler().set("/r", page(1), {
+      tags: ["posts"],
+      cacheControl,
+    });
+    expect((await new IncrementalHandler().get("/r"))?.cacheControl).toEqual(
+      cacheControl
+    );
+  });
+
+  it("caches a not-found answer rather than forgetting the key", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    await new IncrementalHandler().set("/missing", null, { tags: ["posts"] });
+    const hit = await new IncrementalHandler().get("/missing");
+    expect(hit).not.toBeNull();
+    expect(hit?.value).toBeNull();
+  });
+
+  it("keeps a fresh entry written while an expired one was being judged", async () => {
+    const { ledger, recordElsewhere } = memoryLedger();
+    let answer!: () => void;
+    const gate = new Promise<void>(resolve => {
+      answer = resolve;
+    });
+    const expiriesOf = ledger.expiriesOf;
+    publishTagExpiryLedger({
+      ...ledger,
+      expiriesOf: async tags => {
+        await gate;
+        return expiriesOf(tags);
+      },
+    });
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    vi.advanceTimersByTime(1);
+    recordElsewhere("posts");
+    vi.advanceTimersByTime(1);
+    // The stale entry is judged while a regenerated one replaces it.
+    const judging = handler.get("k");
+    await handler.set("k", page(2), { tags: ["posts"] });
+    answer();
+    expect(await judging).toBeNull();
+    expect((await handler.get("k"))?.value).toEqual(page(2));
+  });
+
   it("expires its own writes with no ledger published, as one instance needs", async () => {
     publishTagExpiryLedger(null);
     const handler = new IncrementalHandler();
@@ -340,7 +387,8 @@ describe("the use cache handler", () => {
 
 describe("the handlers' bounded entries", () => {
   it("drops the least recently used once their size passes the bound", () => {
-    const entries = new BoundedEntries<string>(10);
+    // No per-entry overhead here: a value counts its bytes and its key.
+    const entries = new BoundedEntries<string>(10, 0);
     entries.set("a", "a", 4);
     entries.set("b", "b", 4);
     entries.get("a");
@@ -348,9 +396,30 @@ describe("the handlers' bounded entries", () => {
     expect(entries.get("b")).toBeUndefined();
     expect(entries.get("a")).toBe("a");
     expect(entries.get("c")).toBe("c");
-    expect(entries.bytes).toBe(8);
+    // Two entries of four bytes, each with its one-character key.
+    expect(entries.bytes).toBe(10);
     entries.set("huge", "x", 11);
     expect(entries.get("huge")).toBeUndefined();
+  });
+
+  it("removes a key only while it still holds the value it was asked about", () => {
+    const entries = new BoundedEntries<{ n: number }>();
+    const judged = { n: 1 };
+    entries.set("k", judged, 1);
+    const fresh = { n: 2 };
+    entries.set("k", fresh, 1);
+    entries.deleteIf("k", judged);
+    expect(entries.get("k")).toBe(fresh);
+    entries.deleteIf("k", fresh);
+    expect(entries.get("k")).toBeUndefined();
+  });
+
+  it("counts an empty value too, so a flood of them still reaches the bound", () => {
+    const entries = new BoundedEntries<string>(10_000);
+    for (let i = 0; i < 1_000; i += 1) entries.set(`k${i}`, "", 0);
+    expect(entries.get("k0")).toBeUndefined();
+    expect(entries.get("k999")).toBe("");
+    expect(entries.bytes).toBeLessThanOrEqual(10_000);
   });
 });
 
