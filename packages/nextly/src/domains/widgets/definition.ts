@@ -11,7 +11,8 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { requiredPermissionSlugs, type WidgetPermissionGate } from "./gate";
+import type { WidgetAccessGate } from "./declaration/define-widget";
+import { requiredPermissionSlugs } from "./gate";
 import {
   sizeDeclarationProblems,
   type WidgetSizeDeclaration,
@@ -52,7 +53,6 @@ export {
   requiredPermissionGroups,
   requiredPermissionSlugs,
   widgetGateHolds,
-  type WidgetPermissionGate,
 } from "./gate";
 
 /**
@@ -457,27 +457,22 @@ export interface WidgetDefinition {
    * A `PermissionSlug` spelling (`read-posts`), the same vocabulary
    * `WidgetSource.requiredPermission` carries.
    *
-   * 🔴 An ARRAY means ANY-OF, and it exists because a single slug cannot
-   * describe the rule the services behind these cards actually apply. Release
-   * authority is the worked example: `ReleasesService.authorize` treats `create`
-   * or `publish` as satisfying `read` -- deliberately, so a role granted only
-   * `create` can see the release it just made -- and the admin's
-   * `canViewReleases` capability lists all three. A card gated on the read slug
-   * alone is a THIRD encoding of that rule and the only one that disagrees, so
-   * the reader can open the releases screen and never see its dashboard card.
+   * Spelled as a declaration's `access` gate (`WidgetAccessGate`): one slug,
+   * `{ anyOf }` of several, or `{ allOf }`, whose entries are each a slug or
+   * `{ anyOf }`. A list is never a gate on its own, so no gate reads as both
+   * "any" and "all".
    *
-   * Any-of rather than all-of because that is the shape every consumer of this
-   * vocabulary already has -- `requireAnyPermission` at the route layer, the
-   * capability lists in the admin. A card that needs several grants together
-   * says so with the separate `{ allOf }` form (@experimental), whose entries
-   * are slugs or any-of arrays: the Team card needs a reader who may read people
-   * AND may add or change them. An array never means all-of, so no declaration
-   * reads two ways.
-   *
-   * `WidgetAction.requiredPermission` stays a single slug. It gates one
-   * shortcut rather than a card, and nothing has asked it for more.
+   * 🔴 `{ anyOf }` exists because a single slug cannot describe the rule the
+   * services behind these cards actually apply. Release authority is the
+   * worked example: `ReleasesService.authorize` treats `create` or `publish` as
+   * satisfying `read` -- deliberately, so a role granted only `create` can see
+   * the release it just made -- and the admin's `canViewReleases` capability
+   * lists all three. A card gated on the read slug alone is a THIRD encoding of
+   * that rule and the only one that disagrees. `{ allOf }` is how a card needs
+   * several grants together: the Team card needs a reader who may read people
+   * AND may add or change them.
    */
-  requiredPermission?: WidgetPermissionGate;
+  requiredPermission?: WidgetAccessGate;
   /**
    * Required for every data archetype unless `serverData` is set; forbidden
    * for `text` and `actions`.
@@ -743,15 +738,15 @@ export function widgetValueProblem(
   // only place the mistake is still visible to the person who made it.
   //
   // Asked through the same reader the GATE uses, rather than by restating the
-  // shape here. Widening this to accept an any-of array added a second way for
-  // a declaration to be unusable -- an empty array, or one member that is not a
-  // slug -- and a validator that admitted a form the gate then refuses would
-  // hide a card with no error anywhere.
+  // shape here. An any-of group is a second way for a declaration to be
+  // unusable -- an empty list, or one member that is not a slug -- and a
+  // validator that admitted a form the gate then refuses would hide a card
+  // with no error anywhere.
   if (
     widget.requiredPermission !== undefined &&
     requiredPermissionSlugs(widget.requiredPermission) === undefined
   ) {
-    return "requiredPermission, when given, must be a permission slug, a non-empty array of them, or { allOf: [...] } whose entries are each a slug or a non-empty array of slugs";
+    return "requiredPermission, when given, must be a permission slug, { anyOf: [...] } of a non-empty list of them, or { allOf: [...] } whose entries are each a slug or { anyOf: [...] }";
   }
 
   // A query is an OBJECT in every version, so it belongs here rather than

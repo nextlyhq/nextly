@@ -144,6 +144,10 @@ const REMOVED_WIDGET_SHAPE_NAMES = [
   "WidgetComponentProps",
   "WidgetSlot",
   "WidgetQueryBatchResponse",
+  // The registry's own gate type, whose bare list meant any-of: a gate is
+  // spelled as a declaration's `access` is (`WidgetAccessGate`), and the list
+  // form is gone with it.
+  "WidgetPermissionGate",
 ];
 
 /**

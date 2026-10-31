@@ -35,7 +35,7 @@
  * permission declared" failed OPEN, returning the card to every authenticated
  * caller.
  *
- * An empty array is unusable for the same reason and it is the member of that
+ * An empty `anyOf` is unusable for the same reason and it is the member of that
  * set most likely to be written on purpose. "Any of nothing" is satisfied by
  * nobody, so admitting it would gate a card for everyone while reading, to its
  * author, like a widened grant.
@@ -48,32 +48,20 @@ export function requiredPermissionSlugs(
 }
 
 /**
- * What a widget's `requiredPermission` may be: one slug, an ANY-of array of
- * slugs, or `{ allOf }`, whose entries must ALL hold, each a slug or an any-of
- * array of slugs.
- *
- * @experimental The `allOf` form. One level only: an entry is a slug or an
- * array of slugs, never another `allOf`, so a gate always reads as "every one
- * of these, each satisfied by any of its slugs" and never as a nested formula.
- */
-export type WidgetPermissionGate =
-  | string
-  | readonly string[]
-  | { readonly allOf: readonly (string | readonly string[])[] };
-
-/**
  * The gate as groups that must ALL hold, each satisfied by ANY of its slugs, or
  * `undefined` when the declaration cannot be used as a gate.
  *
- * Every form reads into this one shape, so the decision has one rule: a slug is
- * one group of one, an array is one any-of group, and `{ allOf }` is one group
- * per entry. A slug or an array therefore means exactly what it meant before
- * `allOf` existed.
+ * A gate is spelled as a widget's `access` spells it (`WidgetAccessGate`): one
+ * slug, `{ anyOf }` of several, or `{ allOf }`, whose entries are each a slug or
+ * `{ anyOf }`. Every form reads into this one shape, so the decision has one
+ * rule: a slug is one group of one, `{ anyOf }` is one any-of group, and
+ * `{ allOf }` is one group per entry. A list is never a gate on its own, so no
+ * gate reads as both "any" and "all".
  *
- * An empty `allOf`, an empty entry, an entry that is not a slug or an array of
- * slugs, and an object carrying anything but `allOf` are all unusable, for the
- * reason the empty array is above: each would gate a card for everyone, or for
- * nobody, while reading to its author like the opposite.
+ * An empty `allOf` or `anyOf`, an entry that is not a slug or `{ anyOf }`, a
+ * bare list, and an object carrying anything beside its one key are all
+ * unusable, for the reason the empty list is above: each would gate a card for
+ * everyone, or for nobody, while reading to its author like the opposite.
  */
 export function requiredPermissionGroups(
   value: unknown
@@ -101,20 +89,20 @@ export function requiredPermissionGroups(
   return group === undefined ? undefined : [group];
 }
 
-/** One any-of group: a slug, `{ anyOf }` of slugs, or a non-empty array of slugs. */
+/** One any-of group: a slug, or `{ anyOf }` of a non-empty list of slugs. */
 function anyOfGroup(value: unknown): readonly string[] | undefined {
   const usable = (slug: unknown): slug is string =>
     typeof slug === "string" && slug !== "";
 
   if (usable(value)) return [value];
-  // `{ anyOf }`, a declaration's spelling of the same group, holding that key
-  // alone: read as its list, by the same rule as a bare one.
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const keys = Object.keys(value);
-    if (keys.length !== 1 || keys[0] !== "anyOf") return undefined;
-    return anyOfList((value as { anyOf?: unknown }).anyOf, usable);
+  // `{ anyOf }`, holding that key alone. A bare list is not a gate: it would
+  // read as "any" to one author and "all" to the next.
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
   }
-  return anyOfList(value, usable);
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== "anyOf") return undefined;
+  return anyOfList((value as { anyOf?: unknown }).anyOf, usable);
 }
 
 /** A non-empty list of usable slugs, or `undefined`. */
@@ -122,7 +110,7 @@ function anyOfList(
   value: unknown,
   usable: (slug: unknown) => slug is string
 ): readonly string[] | undefined {
-  // Every member must be usable, rather than filtering the junk out: an array
+  // Every member must be usable, rather than filtering the junk out: a list
   // whose second entry is a number is a mistake its author can still see, and
   // silently gating on the first entry alone answers a narrower question than
   // they wrote.
@@ -138,16 +126,15 @@ function anyOfList(
  * 🔴 The two processes differ ONLY in that: the server holds a resolved verdict
  * map, the browser holds the session's permission predicate. Everything else --
  * that an absent gate admits everyone, that an unusable one admits nobody, that
- * an array is ANY-of, that `allOf` needs every entry -- is the same question,
- * so it is asked in one place and each caller supplies its own answerer.
+ * `{ anyOf }` needs one of its slugs, that `{ allOf }` needs every entry -- is
+ * the same question, so it is asked in one place and each caller supplies its
+ * own answerer.
  *
- * An array is any-of because that is the shape every consumer of this
- * vocabulary has: `requireAnyPermission` at the route layer, the capability
- * lists in the admin, and `ReleasesService.authorize`, which treats `create` or
- * `publish` as satisfying `read`. All-of is a separate, explicit form (`allOf`)
- * rather than a second meaning of the array, so no declaration can be read two
- * ways: the Team card needs a reader who may read people AND may add or change
- * them, which no any-of list can say.
+ * Any-of is what every consumer of this vocabulary has: `requireAnyPermission`
+ * at the route layer, the capability lists in the admin, and
+ * `ReleasesService.authorize`, which treats `create` or `publish` as satisfying
+ * `read`. All-of is its own form, so the Team card can need a reader who may
+ * read people AND may add or change them, which no any-of list can say.
  */
 export function widgetGateHolds(
   requiredPermission: unknown,

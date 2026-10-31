@@ -23,9 +23,6 @@
  */
 
 import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
-// The registry's own gate shape, which this file maps the declaration's
-// `WidgetAccessGate` (of `define-widget.ts`) onto.
-import type { WidgetPermissionGate as RequiredPermission } from "../gate";
 import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
 import type { WidgetCondition } from "../lifecycle";
 import {
@@ -336,22 +333,21 @@ function publishedGates(
  * `undefined` for an access that is no gate: absent, the collections it
  * reads, or a predicate.
  *
- * 🔴 Mapped, not passed through: the registry reads a bare list as any-of,
- * which a declaration spells `{ anyOf }`, so each form is rewritten into the
- * registry's spelling of the same rule, and every gate is judged by the one
- * path that judges core's own widgets. A fresh value, so nothing else the
- * author's object carries is published.
+ * 🔴 The registry spells a gate as a declaration does, so each form is copied
+ * as it is written, and every gate is judged by the one path that judges
+ * core's own widgets. A fresh value, so nothing else the author's object
+ * carries is published.
  */
 function requiredPermissionOf(
   access: DeclaredWidgetShape["access"]
-): RequiredPermission | undefined {
+): WidgetAccessGate | undefined {
   if (typeof access === "string") return access;
   if (typeof access !== "object" || access === null) return undefined;
-  if ("anyOf" in access) return [...access.anyOf];
+  if ("anyOf" in access) return { anyOf: [...access.anyOf] };
   if ("allOf" in access) {
     return {
       allOf: access.allOf.map(entry =>
-        typeof entry === "string" ? entry : [...entry.anyOf]
+        typeof entry === "string" ? entry : { anyOf: [...entry.anyOf] }
       ),
     };
   }

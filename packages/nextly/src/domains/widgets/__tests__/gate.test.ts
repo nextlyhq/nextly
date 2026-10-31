@@ -94,35 +94,26 @@ describe("an anyOf gate", () => {
   });
 });
 
-describe("the forms that came before allOf", () => {
-  it("keeps a slug and an array meaning what they meant: one, and any of", () => {
+describe("a slug, and a list", () => {
+  it("keeps a slug meaning one permission", () => {
     const held =
       (...slugs: string[]) =>
       (slug: string) =>
         slugs.includes(slug);
     expect(widgetGateHolds("read-users", held("read-users"))).toBe(true);
-    expect(widgetGateHolds(["a", "b"], held("b"))).toBe(true);
-    expect(widgetGateHolds(["a", "b"], held())).toBe(false);
-    expect(requiredPermissionGroups(["a", "b"])).toEqual([["a", "b"]]);
+    expect(widgetGateHolds("read-users", held())).toBe(false);
+  });
+
+  it("refuses a bare list, for everyone, as no gate a declaration may write", () => {
+    // A list would read as "any" to one author and "all" to the next, so it is
+    // refused rather than given either meaning; `{ anyOf }` says the one.
+    expect(requiredPermissionGroups(["a", "b"])).toBeUndefined();
+    expect(widgetGateHolds(["a", "b"], () => true)).toBe(false);
+    // The same list inside allOf is refused too: an entry is a slug or `{ anyOf }`.
+    expect(widgetGateHolds({ allOf: ["a", ["b"]] }, () => true)).toBe(false);
   });
 
   it("admits everyone when no gate is declared", () => {
     expect(widgetGateHolds(undefined, () => false)).toBe(true);
-  });
-});
-
-describe("an allOf gate that cannot be used", () => {
-  it.each([
-    ["an empty allOf", { allOf: [] }],
-    ["an empty entry", { allOf: ["read-users", []] }],
-    ["an entry that is not a slug", { allOf: ["read-users", 7] }],
-    ["an entry nested a level deeper", { allOf: [{ allOf: ["read-users"] }] }],
-    ["a key beside allOf", { allOf: ["read-users"], anyOf: ["x"] }],
-    ["an object with neither allOf nor anyOf", { oneOf: ["read-users"] }],
-  ])("refuses %s, for everyone", (_case, gate) => {
-    expect(requiredPermissionGroups(gate)).toBeUndefined();
-    expect(requiredPermissionSlugs(gate)).toBeUndefined();
-    // Refused, never read as no gate at all.
-    expect(widgetGateHolds(gate, () => true)).toBe(false);
   });
 });

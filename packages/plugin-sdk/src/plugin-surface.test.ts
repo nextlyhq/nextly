@@ -192,6 +192,7 @@ describe("plugin-sdk public export surface", () => {
       "WidgetComponentProps",
       "WidgetSlot",
       "WidgetQueryBatchResponse",
+      "WidgetPermissionGate",
     ]);
     const published = PUBLISHED_FILES.flatMap(file =>
       exportedNames(file).map(entry => ({

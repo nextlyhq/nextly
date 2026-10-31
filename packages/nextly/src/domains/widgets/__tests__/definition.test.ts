@@ -492,30 +492,31 @@ describe("a declared permission", () => {
     expect(widgetValueProblem({})).toBeUndefined();
   });
 
-  it("accepts an any-of list", () => {
+  it("accepts an anyOf gate", () => {
     expect(
       widgetValueProblem({
-        requiredPermission: [
-          "read-content-releases",
-          "create-content-releases",
-        ],
+        requiredPermission: {
+          anyOf: ["read-content-releases", "create-content-releases"],
+        },
       })
     ).toBeUndefined();
   });
 
   /*
-   * 🔴 The forms the array introduced, each refused for the same reason the
-   * object above is: they are PRESENT and unusable, and the gate reads an
-   * unusable declaration as a refusal. Admitting them here while the gate
-   * refuses them would hide a card with no error anywhere -- and admitting an
-   * empty array is worse than that, because "any of nothing" is satisfied by
-   * nobody, so `requiredPermission: []` would silently mean the opposite of
-   * what its author plainly wrote.
+   * 🔴 The forms an any-of group allows to go wrong, each refused for the same
+   * reason the object above is: they are PRESENT and unusable, and the gate
+   * reads an unusable declaration as a refusal. Admitting them here while the
+   * gate refuses them would hide a card with no error anywhere -- and admitting
+   * an empty `anyOf` is worse than that, because "any of nothing" is satisfied
+   * by nobody, so it would silently mean the opposite of what its author
+   * plainly wrote. A bare list is no gate at all: it reads as "any" to one
+   * author and "all" to the next.
    */
   it.each([
-    ["an empty array", []],
-    ["an array with an empty member", ["read-posts", ""]],
-    ["an array with a non-slug member", ["read-posts", 7]],
+    ["an empty anyOf", { anyOf: [] }],
+    ["an anyOf with an empty member", { anyOf: ["read-posts", ""] }],
+    ["an anyOf with a non-slug member", { anyOf: ["read-posts", 7] }],
+    ["a bare list", ["read-posts", "create-posts"]],
     ["an empty string", ""],
   ])("refuses %s", (_label, requiredPermission) => {
     expect(widgetValueProblem({ requiredPermission })).toMatch(

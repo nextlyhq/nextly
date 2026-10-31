@@ -356,14 +356,13 @@ describe("registering declared widgets", () => {
       ],
     });
     expect(getWidget("acme/one")?.requiredPermission).toBe("read-orders");
-    // The registry's any-of spelling: a list.
-    expect(getWidget("acme/any")?.requiredPermission).toEqual([
-      "read-orders",
-      "update-orders",
-    ]);
-    // Each entry a slug, or the registry's any-of list.
+    // Spelled as declared: the registry has no list form for a gate.
+    expect(getWidget("acme/any")?.requiredPermission).toEqual({
+      anyOf: ["read-orders", "update-orders"],
+    });
+    // Each entry a slug, or `{ anyOf }`, as declared.
     expect(getWidget("acme/all")?.requiredPermission).toEqual({
-      allOf: ["read-orders", ["update-orders", "create-orders"]],
+      allOf: ["read-orders", { anyOf: ["update-orders", "create-orders"] }],
     });
     // Judged per card, with the person: no gate is published for them.
     expect(getWidget("acme/reads")?.requiredPermission).toBeUndefined();
