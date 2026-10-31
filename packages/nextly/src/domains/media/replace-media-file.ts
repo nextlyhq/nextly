@@ -165,7 +165,11 @@ function replacementChanges(
     height: dimensions?.height ?? null,
     url: stored.url,
     thumbnailUrl: thumbnail?.url ?? null,
-    sizes: null,
+    // No `sizes`: the media table no longer declares it, and a database from
+    // before image sizes were removed keeps it as the only record of where
+    // the item's size files are. Left as it is, it goes on naming them for
+    // `nextly media remove-sizes`; cleared here, they would stay in storage
+    // with nothing pointing at them.
     focalX: null,
     focalY: null,
     updatedAt: new Date(),

@@ -19,6 +19,12 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  retiredSizesColumnDdl,
+  retiredSizesOn,
+  runOn,
+  setRetiredSizes,
+} from "../../../__tests__/helpers/retired-image-sizes";
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { defineCollection, richText, text, upload } from "../../../config";
 import {
@@ -633,6 +639,47 @@ describe.each(getConfiguredTestDialects())(
         await finaliser(PENDING_DELETE_WINDOW_MS + 1_000).finalizeDue()
       ).toEqual([logo.id]);
       expect(await getMediaStorage().exists(oldPath, "media")).toBe(false);
+    });
+
+    // Last in the file: the retired column it adds is dropped again after.
+    it("keeps an item's stored image sizes, and their files, on a database from before they were removed", async () => {
+      // As an earlier release left the media table: its retired `sizes`
+      // column, naming a size file stored beside the item's own files.
+      await t.adapter.executeQuery(retiredSizesColumnDdl(dialect));
+      try {
+        const logo = await usedLogo();
+        const small = await getMediaStorage().upload(PNG_1X1, {
+          filename: "logo-small.png",
+          mimeType: "image/png",
+          collection: "media",
+        });
+        const sizes = { small: { path: small.path, url: small.url } };
+        await runOn(
+          t.adapter.getDrizzle(),
+          dialect,
+          setRetiredSizes(logo.id, JSON.stringify(sizes))
+        );
+
+        const replaced = await replace(editor, logo.id, {
+          data: PNG_1X1,
+          name: "new-logo.png",
+          type: "image/png",
+        });
+
+        expect(replaced.status).toBe(200);
+        // The item still records its size file, still stored, for
+        // `nextly media remove-sizes` to remove. Cleared here, the file
+        // would stay in storage with nothing pointing at it.
+        expect(
+          await retiredSizesOn(t.adapter.getDrizzle(), dialect, logo.id)
+        ).toEqual(sizes);
+        expect(await getMediaStorage().exists(small.path, "media")).toBe(true);
+      } finally {
+        const q = dialect === "mysql" ? "`" : '"';
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${q}media${q} DROP COLUMN ${q}sizes${q}`
+        );
+      }
     });
   }
 );
