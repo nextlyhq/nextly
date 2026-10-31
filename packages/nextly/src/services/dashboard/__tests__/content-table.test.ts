@@ -535,8 +535,9 @@ describe("the Content table's rows", () => {
           subjectKind: "single",
           entryId: "doc-home",
         }),
-        // A save of the document About had before it was created again.
-        save("about", "2026-10-28T10:00:00.000Z", {
+        // A save of the document About had before it was created again, newer than About's own
+        // date, so only the rule that a Single's change must be of its own document keeps it off.
+        save("about", "2026-10-29T11:00:00.000Z", {
           subjectKind: "single",
           entryId: "doc-earlier-about",
         }),
