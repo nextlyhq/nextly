@@ -504,6 +504,68 @@ describe("a row of an earlier format is no saved arrangement", () => {
     ).toEqual(["core/a"]);
   });
 
+  it("keeps a size the reader chose while the write leaves it as stored, though the default now gives it", () => {
+    // The default caught up with the size the reader chose for core/a.
+    const defaults = [card("core/a", "core/a", { w: 8, h: 3 }), card("core/b")];
+    const row = readRow(
+      serializeLayout(
+        [card("core/a", "core/a", { w: 8, h: 3 }), card("core/b")],
+        false,
+        ["core/a"]
+      )
+    );
+    // An unrelated write: core/a's size is the one stored, so it stays theirs.
+    expect(
+      chosenSizeIds(
+        defaults,
+        [
+          card("core/a", "core/a", { w: 8, h: 3 }),
+          card("core/b", "core/b", { removed: true }),
+        ],
+        row
+      )
+    ).toEqual(["core/a"]);
+    // Resized to anything else at the default's size, or by another widget's card under the
+    // same id, it is not.
+    const elsewhere = [card("core/a", "core/a", { w: 6, h: 3 })];
+    expect(
+      chosenSizeIds([card("core/a", "core/a", { w: 6, h: 3 })], elsewhere, row)
+    ).toEqual([]);
+    expect(
+      chosenSizeIds(
+        [card("core/a", "core/x", { w: 8, h: 3 })],
+        [card("core/a", "core/x", { w: 8, h: 3 })],
+        row
+      )
+    ).toEqual([]);
+    // With no stored row, a size the default gives is not chosen.
+    expect(
+      chosenSizeIds(defaults, [card("core/a", "core/a", { w: 8, h: 3 })])
+    ).toEqual([]);
+  });
+
+  it("keeps a size the reader chose for a card the row stored under another id, matched by its widget", () => {
+    // The row holds core/a's one card under the id an earlier default gave it; the default now
+    // places it under its own id, at the size the reader chose.
+    const defaults = [card("core/a", "core/a", { w: 8, h: 3 })];
+    const row = readRow(
+      serializeLayout([card("old-id", "core/a", { w: 8, h: 3 })], false, [
+        "old-id",
+      ])
+    );
+    expect(
+      chosenSizeIds(defaults, [card("core/a", "core/a", { w: 8, h: 3 })], row)
+    ).toEqual(["core/a"]);
+    // The same card resized to anything else gives the choice up.
+    expect(
+      chosenSizeIds(
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        row
+      )
+    ).toEqual([]);
+  });
+
   it("starts a card afresh when its id was stored for another widget", () => {
     // The config now names `slot` a card of core/b; the row kept core/a's
     // removal and settings under it, which core/b must not take.

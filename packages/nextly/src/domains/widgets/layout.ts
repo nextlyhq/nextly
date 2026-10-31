@@ -533,20 +533,37 @@ function defaultCardsWithChoices(
 
 /**
  * The cards of an unarranged write whose size the reader chose: those whose size differs from the
- * size the default gives the card they stand for. A card at the default's size is not one, so it
- * goes on following that size; a card the default does not hold is not one either, as it is
- * drawn from the default or not at all.
+ * size the default gives the card they stand for, and those `stored` already names as chosen
+ * (`StoredLayout.sized`) that the write leaves at the size stored for them. A card at the
+ * default's size is otherwise not one, so it goes on following that size; a card the default does
+ * not hold is not one either, as it is drawn from the default or not at all.
+ *
+ * The stored choice is kept while the size is unchanged because a default can come to give the
+ * size a reader chose: the card then matches the default, but the size is still theirs, and the
+ * next change to the default must not move it. Resizing the card, to the default's size or any
+ * other, is what gives that choice up or makes a new one.
  */
 export function chosenSizeIds(
   defaults: readonly WidgetPlacement[],
-  placements: readonly WidgetPlacement[]
+  placements: readonly WidgetPlacement[],
+  stored?: StoredLayout
 ): string[] {
+  // The stored card each default card stands for, by the same matching as the write's, so a
+  // card the row holds under an id an earlier default gave it is still the reader's.
+  const before = defaultCardsWithChoices(defaults, stored?.placements ?? []);
+  const sized = new Set(stored?.sized ?? []);
   return defaultCardsWithChoices(defaults, placements).flatMap(
-    ([placement, choice]) =>
-      choice !== undefined &&
-      (choice.w !== placement.w || choice.h !== placement.h)
-        ? [choice.id]
-        : []
+    ([placement, choice], index) => {
+      if (choice === undefined) return [];
+      const departs = choice.w !== placement.w || choice.h !== placement.h;
+      const was = before[index]?.[1];
+      const unchanged =
+        was !== undefined &&
+        sized.has(was.id) &&
+        was.w === choice.w &&
+        was.h === choice.h;
+      return departs || unchanged ? [choice.id] : [];
+    }
   );
 }
 

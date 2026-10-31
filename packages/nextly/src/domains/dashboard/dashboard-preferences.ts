@@ -21,6 +21,7 @@ import {
 } from "../../schemas/dashboard-preferences/table-name";
 import { uuidV7 } from "../../utils/uuid-v7";
 import type { VersionsWhere } from "../versions/db-api";
+import type { SkippableSetupStepKind } from "../widgets/setup-steps";
 
 import {
   type DashboardLogger,
@@ -28,8 +29,18 @@ import {
   tablePresence,
 } from "./table-presence";
 
-/** The keys a dashboard remembers, each owned by the feature that reads it. */
-export type DashboardPreferenceKey = "new-type" | "setup-collapsed";
+/**
+ * The keys a dashboard remembers, each owned by the feature that reads it:
+ * the New type, and the setup card's (`domains/widgets/setup-reader`):
+ * collapsed, dismissed, when it said "You're all set", and one key per
+ * skippable step, so two skips never share a row.
+ */
+export type DashboardPreferenceKey =
+  | "new-type"
+  | "setup-collapsed"
+  | "setup-dismissed"
+  | `setup-skipped-${SkippableSetupStepKind}`
+  | "setup-retired";
 
 /** The database surface the repository reads and writes through. */
 export interface DashboardPreferencesDb extends TableProbe {

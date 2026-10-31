@@ -44,6 +44,7 @@ function answer(
     defaultPlacements: [],
     version: 0,
     source: "default",
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...(hidden === undefined ? {} : { hiddenWhileEmpty: hidden }),

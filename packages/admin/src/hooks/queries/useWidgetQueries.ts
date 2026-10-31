@@ -266,6 +266,15 @@ export interface UseWidgetQueriesResult {
    */
   updatedAt: Date | null;
   /**
+   * When the request this card was asked in last answered, or `null` before it has, or for a
+   * card in no request.
+   *
+   * The card's OWN request's time, where `updatedAt` is the oldest of them: past
+   * `MAX_QUERIES_PER_REQUEST` the requests answer separately, so the time of one card's newer
+   * answer is not the batch's while another request's older answer stands.
+   */
+  answeredAtFor: (placementId: string) => Date | null;
+  /**
    * The size a card's answer was fetched at, for a card whose request was sized; `undefined`
    * before its first fetch in this mount, or for a request that carried no size.
    *
@@ -1337,6 +1346,7 @@ export function useWidgetQueries(
   });
 
   const settledAt = results.map(answer => answer.dataUpdatedAt);
+  const answeredAtFor = usePartitionAnswerTimes(partitions, settledAt);
 
   // Stable while the sizes are, so a caller keyed on it does not run again on every render.
   const sizesKey = JSON.stringify(fetchedSizes);
@@ -1390,10 +1400,35 @@ export function useWidgetQueries(
       settledAt.length > 0 && settledAt.every(at => at > 0)
         ? new Date(Math.min(...settledAt))
         : null,
+    answeredAtFor,
     fetchedSizeFor,
     fetchedAppliedFor,
     fetchedCellsAppliedFor,
   };
+}
+
+/**
+ * Each card's own request's answer time (`UseWidgetQueriesResult.answeredAtFor`), from the
+ * partitions and each one's `dataUpdatedAt`, which is 0 until it has answered once. Stable while
+ * those times and the cards in each partition are, so a caller keyed on it does not run again on
+ * every render.
+ */
+function usePartitionAnswerTimes(
+  partitions: readonly (readonly WidgetQueryRequest[])[],
+  settledAt: readonly number[]
+): (placementId: string) => Date | null {
+  const timesKey = JSON.stringify(
+    partitions.flatMap((partition, index) =>
+      partition.map(entry => [entry.placementId, settledAt[index] ?? 0])
+    )
+  );
+  return useMemo(() => {
+    const times = new Map(JSON.parse(timesKey) as [string, number][]);
+    return (placementId: string): Date | null => {
+      const at = times.get(placementId) ?? 0;
+      return at > 0 ? new Date(at) : null;
+    };
+  }, [timesKey]);
 }
 
 /**
