@@ -1,8 +1,10 @@
 /**
  * The upgrade from a database with image sizes, end to end, on every dialect
  * with a database in this run: the command removes the size files while the
- * column still says where they are, and `nextly migrate` drops the column and
- * the table only once no item names a size file.
+ * column still says where they are, and then, asked with --drop, drops the
+ * column and the table, only once no item names a size file and only where
+ * each is shown to be what image sizes left. `nextly migrate`, from the
+ * command or at startup, never drops either.
  *
  * The database is built as a fresh install builds it, then given what one
  * from before the removal still holds: the media table's `sizes` column and
@@ -32,8 +34,16 @@ import {
 import { runRemoveSizes } from "../../../cli/commands/media";
 import { previewRetiredImageSizes } from "../../../cli/commands/migrate";
 import { ensureFirstRunSetup } from "../../../init/first-run";
+import type { OwnerRecord } from "../../schema/ownership/owner-registry";
+import { SchemaOwnersRepository } from "../../schema/ownership/schema-owners-repository";
 import { reconcileCore } from "../../schema/migrate/core-reconcile";
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
+import type { ReferencedNow } from "../orphan-thumbnails";
+import {
+  dropRetiredImageSizes,
+  readRetiredObjects,
+  storedSizesOf,
+} from "../retired-image-sizes-store";
 
 /** Every file under a folder, by its stored path. */
 async function filesIn(folder: string): Promise<string[]> {
@@ -97,20 +107,81 @@ async function bootWarnings(fresh: FreshDatabase): Promise<string[]> {
   return logger.warn.mock.calls.map(([message]) => String(message));
 }
 
-/** `nextly migrate`'s core reconcile, as the command or a startup runs it. */
-async function migrate(
-  fresh: FreshDatabase,
-  asked: boolean
-): Promise<string[]> {
-  const warn = vi.fn();
+/**
+ * `nextly migrate`'s core reconcile, as a startup runs it, or, with `asked`,
+ * with every drop and destructive flag the command can set, and the flag that
+ * once dropped the retired column and table, which nothing reads now.
+ */
+async function migrate(fresh: FreshDatabase, asked = false): Promise<void> {
+  const flags = asked
+    ? {
+        allowDestructive: true,
+        dropRetiredAuthTables: true,
+        allowDropNonEmptyRetired: true,
+        dropRetiredImageSizes: true,
+      }
+    : {};
   await reconcileCore({
     db: fresh.db,
     dialect: fresh.dialect,
-    logger: { info: () => {}, warn },
+    logger: { info: () => {}, warn: () => {} },
     executeSql: statement => fresh.exec(statement),
-    ...(asked ? { dropRetiredImageSizes: true } : {}),
+    ...flags,
   });
-  return warn.mock.calls.map(([message]) => String(message));
+}
+
+/**
+ * What items use now, as the command asks it just before each removal.
+ * Answered as "none" here: this suite's subject is the dialects' reads,
+ * writes and drops, and the check itself, over a real media table through
+ * the adapter, is covered beside the command (media-remove-sizes.test.ts).
+ */
+const nothingUsedNow: ReferencedNow = async () => new Set();
+
+/** `nextly media remove-sizes` with the given flags, and what it said. */
+async function removeSizes(
+  fresh: FreshDatabase,
+  storage: LocalStorageAdapter,
+  flags: { apply?: boolean; drop?: boolean }
+): Promise<{ code: number; lines: string[] }> {
+  const lines: string[] = [];
+  const code = await runRemoveSizes({
+    db: fresh.db,
+    dialect: fresh.dialect,
+    storage,
+    apply: flags.apply === true,
+    drop: flags.drop === true,
+    referencedNow: nothingUsedNow,
+    executeSql: statement => fresh.exec(statement),
+    say: line => lines.push(line),
+  });
+  return { code, lines };
+}
+
+/** Records a table, or one of its columns, as the app's in the owner registry. */
+async function claimForApp(
+  fresh: FreshDatabase,
+  tableName: string,
+  column?: string
+): Promise<void> {
+  const record: OwnerRecord = {
+    tableName,
+    ...(column === undefined
+      ? {}
+      : { elementKind: "column" as const, elementName: column }),
+    ownerKind: "app",
+    ownerId: "app",
+    migratedBy: "app",
+    ownerVersion: null,
+    schemaVersion: null,
+    state: "active",
+  };
+  await new SchemaOwnersRepository(fresh.db, fresh.dialect).upsert([record]);
+}
+
+/** A local-disk storage in a folder of the test's own. */
+function localStorageIn(folder: string): LocalStorageAdapter {
+  return new LocalStorageAdapter({ basePath: folder, baseUrl: "/uploads" });
 }
 
 /** What `nextly migrate --dry-run` says of the retired column and table. */
@@ -145,7 +216,7 @@ describe.each(availableDialects())(
       });
     });
 
-    it("removes the size files, then drops the column and table only once nothing would be lost", async () => {
+    it("removes the size files, then drops the column and table only when asked and nothing would be lost", async () => {
       const folder = await mkdtemp(path.join(tmpdir(), "nextly-sizes-up-"));
       try {
         await withFreshDatabase(dialect, "nextly_sizes_up", async fresh => {
@@ -153,10 +224,7 @@ describe.each(availableDialects())(
           await addRetiredImageSizes(dialect, statement =>
             fresh.exec(statement)
           );
-          const storage = new LocalStorageAdapter({
-            basePath: folder,
-            baseUrl: "/uploads",
-          });
+          const storage = localStorageIn(folder);
           const put = (name: string) =>
             storage.upload(Buffer.from(name), {
               filename: name,
@@ -192,65 +260,49 @@ describe.each(availableDialects())(
           const sizeFiles = [small.path, medium.path, wideLarge.path];
           const before = await filesIn(folder);
 
-          // Startup names both and the two steps, and changes nothing.
+          // Startup names both and the steps, and changes nothing.
           const notice = (await bootWarnings(fresh)).find(message =>
             message.includes("image sizes")
           );
           expect(notice).toContain("media.sizes");
           expect(notice).toContain("image_sizes: 1 row");
-          expect(notice).toContain("nextly media remove-sizes");
-          expect(notice).toContain("`nextly migrate`");
+          expect(notice).toContain("nextly media remove-sizes --apply --drop");
+          expect(notice).toContain("`nextly migrate` never drops them");
 
-          // `nextly migrate` keeps both while items name size files, and its
-          // dry run says so.
-          expect(await migrateDryRun(fresh)).toEqual([
-            "  • would keep the retired column media.sizes and table image_sizes: 2 items still name their image size files. Run `nextly media remove-sizes` first.",
-          ]);
-          const refused = await migrate(fresh, true);
-          expect(refused.join("\n")).toContain(
-            "2 items still name their image size files"
-          );
-          expect(refused.join("\n")).toContain("nextly media remove-sizes");
+          // `nextly migrate`, as a startup runs it and with every flag the
+          // command sets, keeps both, and its dry run says so.
+          const kept = [
+            "  • would keep the retired column media.sizes and table image_sizes: `nextly migrate` never drops them. Once this release is serving, run `nextly media remove-sizes`, then `nextly media remove-sizes --apply --drop`.",
+          ];
+          expect(await migrateDryRun(fresh)).toEqual(kept);
+          await migrate(fresh);
+          await migrate(fresh, true);
           expect(await retired(fresh)).toEqual({ column: true, table: true });
 
-          // The dry run lists and changes nothing.
-          const listed: string[] = [];
-          expect(
-            await runRemoveSizes({
-              db: fresh.db,
-              dialect,
-              storage,
-              apply: false,
-              say: line => listed.push(line),
-            })
-          ).toBe(0);
-          for (const file of sizeFiles) {
-            expect(listed).toContain(
-              `  remove ${file} (size "${
-                file === small.path
-                  ? "small"
-                  : file === medium.path
-                    ? "medium"
-                    : "large"
-              }")`
-            );
+          // The dry run lists and changes nothing, --drop included.
+          const listed = await removeSizes(fresh, storage, { drop: true });
+          expect(listed.code).toBe(0);
+          for (const [file, name] of [
+            [small.path, "small"],
+            [medium.path, "medium"],
+            [wideLarge.path, "large"],
+          ]) {
+            expect(listed.lines).toContain(`  remove ${file} (size "${name}")`);
           }
-          expect(listed.join("\n")).toContain(`keep   ${wideThumb.path}`);
+          expect(listed.lines.join("\n")).toContain(`keep   ${wideThumb.path}`);
+          expect(listed.lines.join("\n")).toContain(
+            "--drop drops nothing without --apply"
+          );
           expect(await filesIn(folder)).toEqual(before);
+          expect(await retired(fresh)).toEqual({ column: true, table: true });
           expect(
             await retiredSizesOn(fresh.db, dialect, "item-photo")
           ).not.toBeNull();
 
           // With --apply: exactly the size files go, every other file stays,
-          // and each item's sizes are cleared.
+          // each item's sizes are cleared, and both are still there.
           expect(
-            await runRemoveSizes({
-              db: fresh.db,
-              dialect,
-              storage,
-              apply: true,
-              say: () => {},
-            })
+            (await removeSizes(fresh, storage, { apply: true })).code
           ).toBe(0);
           expect(await filesIn(folder)).toEqual(
             before.filter(file => !sizeFiles.includes(file))
@@ -261,19 +313,25 @@ describe.each(availableDialects())(
           expect(await retiredSizesOn(fresh.db, dialect, "item-wide")).toBe(
             null
           );
-
-          // A startup's migration never drops them, even with nothing left.
-          await migrate(fresh, false);
           expect(await retired(fresh)).toEqual({ column: true, table: true });
 
-          // `nextly migrate` now drops both, keeping every media row; its dry
-          // run names each, first, and drops nothing.
-          expect(await migrateDryRun(fresh)).toEqual([
-            "  • would drop the retired column media.sizes (no item names a size file)",
-            "  • would drop the retired table image_sizes (1 row of size definitions)",
-          ]);
-          expect(await retired(fresh)).toEqual({ column: true, table: true });
+          // With nothing left to lose, `nextly migrate` still drops neither.
+          await migrate(fresh);
           await migrate(fresh, true);
+          expect(await retired(fresh)).toEqual({ column: true, table: true });
+
+          // --apply --drop drops both, keeping every media row and file.
+          const dropped = await removeSizes(fresh, storage, {
+            apply: true,
+            drop: true,
+          });
+          expect(dropped.code).toBe(0);
+          expect(dropped.lines).toEqual(
+            expect.arrayContaining([
+              "Dropped the `image_sizes` table (1 size definition nothing reads).",
+              "Dropped the `media.sizes` column: no media item named a size file in it.",
+            ])
+          );
           expect(await retired(fresh)).toEqual({ column: false, table: false });
           const rows = (await (
             fresh.db as {
@@ -293,24 +351,145 @@ describe.each(availableDialects())(
               message.includes("image sizes")
             )
           ).toEqual([]);
-          const again: string[] = [];
-          expect(
-            await runRemoveSizes({
-              db: fresh.db,
-              dialect,
-              storage,
-              apply: true,
-              say: line => again.push(line),
-            })
-          ).toBe(0);
-          expect(again[0]).toContain("no sizes column");
+          const again = await removeSizes(fresh, storage, {
+            apply: true,
+            drop: true,
+          });
+          expect(again.code).toBe(0);
+          expect(again.lines[0]).toContain("no sizes column");
+          expect(again.lines).toContain(
+            "Nothing to drop: neither the `sizes` column nor the `image_sizes` table is left."
+          );
           expect(await migrateDryRun(fresh)).toEqual([]);
-          await migrate(fresh, true);
-          expect(await retired(fresh)).toEqual({ column: false, table: false });
         });
       } finally {
         await rm(folder, { recursive: true, force: true });
       }
+    });
+
+    it("drops nothing while an item still names a size file", async () => {
+      await withFreshDatabase(dialect, "nextly_sizes_held", async fresh => {
+        await buildCurrentCoreSchema(fresh);
+        await addRetiredImageSizes(dialect, statement => fresh.exec(statement));
+        await insertItem(
+          fresh,
+          "item-held",
+          { path: "2026/10/a.png", url: "/uploads/2026/10/a.png" },
+          null
+        );
+        await runOn(
+          fresh.db,
+          dialect,
+          setRetiredSizes(
+            "item-held",
+            JSON.stringify({ small: { path: "2026/10/a-small.webp" } })
+          )
+        );
+        const lines: string[] = [];
+
+        const code = await dropRetiredImageSizes({
+          db: fresh.db,
+          dialect,
+          executeSql: statement => fresh.exec(statement),
+          say: line => lines.push(line),
+        });
+
+        expect(code).toBe(1);
+        expect(lines.join("\n")).toContain(
+          "Dropped nothing: 1 item still names its image size files"
+        );
+        expect(await retired(fresh)).toEqual({ column: true, table: true });
+        expect(await retiredSizesOn(fresh.db, dialect, "item-held")).toEqual({
+          small: { path: "2026/10/a-small.webp" },
+        });
+      });
+    });
+
+    it("never reads or drops a sizes column or an image_sizes table an app owns", async () => {
+      const folder = await mkdtemp(path.join(tmpdir(), "nextly-sizes-app-"));
+      try {
+        await withFreshDatabase(dialect, "nextly_sizes_app", async fresh => {
+          await buildCurrentCoreSchema(fresh);
+          // The very shape image sizes left, recorded as the app's own.
+          await addRetiredImageSizes(dialect, statement =>
+            fresh.exec(statement)
+          );
+          await claimForApp(fresh, "media", "sizes");
+          await claimForApp(fresh, "image_sizes");
+          const storage = localStorageIn(folder);
+          const report = await storage.upload(Buffer.from("r"), {
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+            collection: "media",
+          });
+          await insertItem(fresh, "item-app", report, null);
+          // The app's own value, whose `path` names a stored file.
+          const value = { invoice: { path: report.path, url: report.url } };
+          await runOn(
+            fresh.db,
+            dialect,
+            setRetiredSizes("item-app", JSON.stringify(value))
+          );
+          const before = await filesIn(folder);
+
+          expect(await readRetiredObjects(fresh.db, dialect)).toEqual({
+            column: false,
+            tableRows: null,
+            keptTable: 'nextly_schema_owners records it as app "app"\'s',
+          });
+          expect(await storedSizesOf(fresh.db, dialect, ["item-app"])).toEqual(
+            new Map()
+          );
+
+          const run = await removeSizes(fresh, storage, {
+            apply: true,
+            drop: true,
+          });
+
+          expect(run.code).toBe(1);
+          expect(run.lines[0]).toContain("no sizes column");
+          expect(run.lines.join("\n")).toContain(
+            "Kept the `image_sizes` table: nextly_schema_owners records it as app"
+          );
+          expect(await retired(fresh)).toEqual({ column: true, table: true });
+          expect(await retiredSizesOn(fresh.db, dialect, "item-app")).toEqual(
+            value
+          );
+          expect(await filesIn(folder)).toEqual(before);
+          expect(
+            (await bootWarnings(fresh)).filter(message =>
+              message.includes("image sizes")
+            )
+          ).toEqual([]);
+        });
+      } finally {
+        await rm(folder, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps an image_sizes table that is not exactly the one Nextly created, and names it", async () => {
+      await withFreshDatabase(dialect, "nextly_sizes_shape", async fresh => {
+        await buildCurrentCoreSchema(fresh);
+        await addRetiredImageSizes(dialect, statement => fresh.exec(statement));
+        const q = dialect === "mysql" ? "`" : '"';
+        await fresh.exec(
+          `ALTER TABLE ${q}image_sizes${q} ADD COLUMN ${q}tenant${q} ${dialect === "mysql" ? "varchar(50)" : "text"}`
+        );
+        const lines: string[] = [];
+
+        const code = await dropRetiredImageSizes({
+          db: fresh.db,
+          dialect,
+          executeSql: statement => fresh.exec(statement),
+          say: line => lines.push(line),
+        });
+
+        expect(code).toBe(1);
+        expect(lines).toContain(
+          "Kept the `image_sizes` table: its columns are not exactly the ones Nextly created it with. Check it, and drop it yourself if it is the one image sizes left."
+        );
+        expect(await retired(fresh)).toEqual({ column: false, table: true });
+      });
     });
 
     it("keeps the sizes column through a core change, with every item's sizes intact", async () => {
@@ -341,7 +520,7 @@ describe.each(availableDialects())(
             : `DROP INDEX "${index}"`
         );
 
-        await migrate(fresh, false);
+        await migrate(fresh);
 
         expect(await fresh.indexesOf("media")).toContain(index);
         expect(await retiredSizesOn(fresh.db, dialect, "item-kept")).toEqual(

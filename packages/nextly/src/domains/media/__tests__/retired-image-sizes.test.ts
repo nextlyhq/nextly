@@ -20,12 +20,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
 import { Bucket } from "../../../storage/__tests__/stand-in-bucket";
 import type { IStorageAdapter } from "../../../storage/types";
+import { canonicalStoredPath, type ReferencedNow } from "../orphan-thumbnails";
 import {
   holdsStoredSizes,
   removeStoredImageSizes,
   type MediaSizesRow,
   type RetiredSizesStore,
 } from "../retired-image-sizes";
+import { storedFilesOf } from "../stored-files";
 
 /** An in-memory media table: the rows, and which items had their sizes cleared. */
 class MemoryStore implements RetiredSizesStore {
@@ -42,6 +44,25 @@ class MemoryStore implements RetiredSizesStore {
     const row = this.table.find(entry => entry.id === id);
     if (row) row.sizes = null;
   }
+}
+
+/**
+ * What the in-memory table's items use now as originals and thumbnails, read
+ * from its rows when asked, through `storedFilesOf` as the database check
+ * reads each row, without the retired sizes. The check itself, over a real
+ * media table, is the CLI's (`referencedNowIn`), covered beside the command.
+ */
+function usedIn(store: MemoryStore): ReferencedNow {
+  return async paths => {
+    const used = new Set(
+      store.table.flatMap(row =>
+        storedFilesOf({ ...row, sizes: undefined }).paths.map(
+          canonicalStoredPath
+        )
+      )
+    );
+    return new Set(paths.filter(path => used.has(canonicalStoredPath(path))));
+  };
 }
 
 interface Storage {
@@ -195,7 +216,7 @@ async function library(storage: IStorageAdapter) {
   };
 }
 
-const objects = { column: true, tableRows: 3 };
+const objects = { column: true, tableRows: 3, keptTable: null };
 
 /** A storage that refuses to delete one path, with a secret in its error. */
 function refusing(adapter: IStorageAdapter, refused: string): IStorageAdapter {
@@ -236,6 +257,7 @@ describe.each(STORAGES)(
         storage: storage.adapter,
         objects,
         apply: false,
+        referencedNow: usedIn(store),
         say: line => lines.push(line),
       });
 
@@ -257,7 +279,7 @@ describe.each(STORAGES)(
         `  keep   ${paths.photo} (size "small": a media item uses it as an original or a thumbnail)`,
         "  clear  its stored sizes",
         "Would remove 5 files from storage, keep 2, and clear the stored sizes of 3 of 3 items.",
-        "Once no item holds sizes, `nextly migrate` drops the `sizes` column of the `media` table and the `image_sizes` table (3 rows, the size definitions).",
+        "Once no item holds sizes, `nextly media remove-sizes --apply --drop` drops the `sizes` column of the `media` table and the `image_sizes` table (3 rows, the size definitions).",
         "Back up the database and the media storage first, then run again with --apply.",
       ]);
       expect(await storage.files()).toEqual(before);
@@ -273,6 +295,7 @@ describe.each(STORAGES)(
         storage: storage.adapter,
         objects,
         apply: true,
+        referencedNow: usedIn(store),
         say: () => {},
       });
 
@@ -316,6 +339,7 @@ describe.each(STORAGES)(
         storage: storage.adapter,
         objects,
         apply: true,
+        referencedNow: usedIn(store),
         say: () => {},
       });
       const after = await storage.files();
@@ -326,6 +350,7 @@ describe.each(STORAGES)(
         storage: storage.adapter,
         objects,
         apply: true,
+        referencedNow: usedIn(store),
         say: line => lines.push(line),
       });
 
@@ -346,6 +371,7 @@ describe.each(STORAGES)(
         storage: refusing(storage.adapter, fixture.paths.photoMedium),
         objects,
         apply: true,
+        referencedNow: usedIn(store),
         say: line => lines.push(line),
       });
 
@@ -368,6 +394,7 @@ describe.each(STORAGES)(
         storage: storage.adapter,
         objects,
         apply: true,
+        referencedNow: usedIn(store),
         say: () => {},
       });
       expect(second).toBe(0);
@@ -396,8 +423,9 @@ describe("an item whose sizes cannot be read", () => {
     const { code } = await removeStoredImageSizes({
       store,
       storage: storage.adapter,
-      objects: { column: true, tableRows: null },
+      objects: { column: true, tableRows: null, keptTable: null },
       apply: true,
+      referencedNow: usedIn(store),
       say: line => lines.push(line),
     });
 
@@ -405,6 +433,245 @@ describe("an item whose sizes cannot be read", () => {
     expect(store.cleared).toEqual([]);
     expect(await storage.files()).toEqual(before);
     expect(lines.join("\n")).toContain("its stored sizes cannot be read");
+  });
+});
+
+/** One item holding two sizes, stored in `storage`. */
+async function oneItem(storage: IStorageAdapter) {
+  const original = await put(storage, "photo.png");
+  const small = await storedSize(storage, "photo-small.webp");
+  const large = await storedSize(storage, "photo-large.webp");
+  const store = new MemoryStore([
+    {
+      id: "item",
+      filename: original.path,
+      url: original.url,
+      thumbnailUrl: null,
+      sizes: JSON.stringify({ small, large }),
+    },
+  ]);
+  return { original, small, large, store };
+}
+
+describe("a delete that fails while the file may still be there", () => {
+  /**
+   * A storage whose delete of one path fails with `error`, and whose `exists`
+   * answers `false` for it, as Vercel Blob's and UploadThing's do for any
+   * failure to ask: a token refused or the service down.
+   */
+  function failingWith(
+    adapter: IStorageAdapter,
+    failing: string,
+    error: unknown
+  ): IStorageAdapter {
+    return Object.assign(Object.create(adapter) as IStorageAdapter, {
+      delete: async (filePath: string) => {
+        if (filePath === failing) throw error;
+        await adapter.delete(filePath);
+      },
+      exists: async (filePath: string) =>
+        filePath === failing ? false : adapter.exists(filePath),
+    });
+  }
+
+  it("keeps the item's sizes and exits non-zero, whatever exists() answers", async () => {
+    const storage = bucket("vercel-blob");
+    const { small, large, store } = await oneItem(storage.adapter);
+    const lines: string[] = [];
+
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage: failingWith(
+        storage.adapter,
+        large.path,
+        new Error("Vercel Blob: Access denied, please provide a valid token")
+      ),
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: line => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(store.cleared).toEqual([]);
+    expect(holdsStoredSizes(store.table[0].sizes)).toBe(true);
+    expect(report.itemsLeft.map(item => item.id)).toEqual(["item"]);
+    expect(lines.join("\n")).toContain(`could not remove ${large.path}`);
+    // The file that could go went; the record of both stays for a later run.
+    expect(await storage.files()).not.toContain(small.path);
+    expect(await storage.files()).toContain(large.path);
+  });
+
+  it("counts a file the storage's own error says is gone as removed (the control)", async () => {
+    const storage = bucket("s3");
+    const { large, store } = await oneItem(storage.adapter);
+    const gone = Object.assign(new Error("The specified key does not exist."), {
+      name: "NoSuchKey",
+      $metadata: { httpStatusCode: 404 },
+    });
+
+    const { code } = await removeStoredImageSizes({
+      store,
+      storage: failingWith(storage.adapter, large.path, gone),
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(store.cleared).toEqual(["item"]);
+  });
+});
+
+describe("sizes stored on another storage than the one configured now", () => {
+  it("are refused: nothing is sent to this storage, the item keeps its sizes and is named", async () => {
+    const adapter = new Bucket("s3");
+    const storage: Storage = {
+      adapter,
+      files: async () => [...adapter.files.keys()].sort(),
+    };
+    const original = await put(adapter, "photo.png");
+    // Uploaded when media was on another bucket. This bucket holds a file at
+    // the very same key, which a path sent here would delete.
+    const key = "2026/10/old-photo-small.webp";
+    adapter.files.set(key, Buffer.from("this bucket's own file"));
+    const store = new MemoryStore([
+      {
+        id: "moved",
+        filename: original.path,
+        url: original.url,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({
+          small: {
+            path: key,
+            url: `https://old-bucket.s3.us-east-1.amazonaws.com/${key}?X-Amz-Signature=sekrit`,
+          },
+        }),
+      },
+    ]);
+    const before = await storage.files();
+    const listed: string[] = [];
+    const applied: string[] = [];
+
+    const dry = await removeStoredImageSizes({
+      store,
+      storage: storage.adapter,
+      objects,
+      apply: false,
+      referencedNow: usedIn(store),
+      say: line => listed.push(line),
+    });
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage: storage.adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: line => applied.push(line),
+    });
+
+    expect(dry.code).toBe(0);
+    expect(listed.join("\n")).toContain(
+      'leave  its stored sizes as they are: the file of "small" is not on the media storage configured now (s3), but at https://old-bucket.s3.us-east-1.amazonaws.com/2026/10/old-photo-small.webp'
+    );
+    expect(code).toBe(1);
+    expect(await storage.files()).toEqual(before);
+    expect(store.cleared).toEqual([]);
+    expect(report.itemsLeft.map(item => item.id)).toEqual(["moved"]);
+    expect(applied.join("\n")).toContain("moved");
+    expect(applied.join("\n")).not.toContain("sekrit");
+  });
+
+  it("are removed when they are on this storage, under a site-relative or absolute URL (the control)", async () => {
+    const storage = await localDisk();
+    disposals.push(storage.dispose);
+    const original = await put(storage.adapter, "photo.png");
+    const small = await storedSize(storage.adapter, "photo-small.webp");
+    const store = new MemoryStore([
+      {
+        id: "here",
+        filename: original.path,
+        url: `https://www.example.com${original.url}`,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({
+          small: { ...small, url: `https://www.example.com${small.url}` },
+        }),
+      },
+    ]);
+
+    const { code } = await removeStoredImageSizes({
+      store,
+      storage: storage.adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(await storage.files()).not.toContain(small.path);
+    expect(store.cleared).toEqual(["here"]);
+  });
+});
+
+describe("what items use, asked again just before the removal", () => {
+  it("keeps a file an item came to use after the listing", async () => {
+    const storage = bucket("s3");
+    const { original, small, large, store } = await oneItem(storage.adapter);
+    // An upload committing between the listing and the removal, whose
+    // original is stored under the key one of the sizes has.
+    const rows = store.rows.bind(store);
+    store.rows = async function* () {
+      yield* rows();
+      store.table.push({
+        id: "new-upload",
+        filename: small.path,
+        url: small.url,
+        thumbnailUrl: null,
+        sizes: null,
+      });
+    };
+
+    const { code } = await removeStoredImageSizes({
+      store,
+      storage: storage.adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(await storage.files()).toEqual(
+      expect.arrayContaining([original.path, small.path])
+    );
+    expect(await storage.files()).not.toContain(large.path);
+  });
+
+  it("removes nothing more, and leaves every item not done, when it cannot be answered", async () => {
+    const storage = bucket("s3");
+    const { small, large, store } = await oneItem(storage.adapter);
+    const before = await storage.files();
+    const lines: string[] = [];
+
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage: storage.adapter,
+      objects,
+      apply: true,
+      referencedNow: async () => null,
+      say: line => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(await storage.files()).toEqual(before);
+    expect(await storage.files()).toEqual(
+      expect.arrayContaining([small.path, large.path])
+    );
+    expect(store.cleared).toEqual([]);
+    expect(report.itemsLeft.map(item => item.id)).toEqual(["item"]);
+    expect(lines.join("\n")).toContain("could not be checked");
   });
 });
 

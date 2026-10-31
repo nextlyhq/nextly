@@ -47,6 +47,17 @@ import { installRegistryResolver } from "../utils/registry-resolver";
 
 export type { MediaReferences };
 
+/** What counts as a media item referring to a file. */
+interface ReferenceOptions {
+  /**
+   * Whether the size files an item's retired `sizes` names count. They do for
+   * every question but one: `nextly media remove-sizes` removes exactly those
+   * files, so it asks only which a media item uses as an original or a
+   * thumbnail, and leaves the column out.
+   */
+  withRetiredSizes?: boolean;
+}
+
 /**
  * Every stored path a media item refers to, read a page of items at a time:
  * the one answer a delete uses for what an item's files are.
@@ -57,7 +68,8 @@ export type { MediaReferences };
  * there, whose thumbnail would read as left behind.
  */
 export async function referencedStoredPaths(
-  adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">
+  adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">,
+  options: ReferenceOptions = {}
 ): Promise<MediaReferences> {
   const referenced = new Set<string>();
   const unlocated: string[] = [];
@@ -77,11 +89,14 @@ export async function referencedStoredPaths(
     // The retired `sizes` column is not in the Drizzle definition the select
     // reads through: an item's size files count as referenced while it has
     // them, read from the column for as long as the database has it.
-    const sizes = await storedSizesOf(
-      adapter.getDrizzle(),
-      adapter.dialect,
-      rows.map(row => row.id)
-    );
+    const sizes =
+      options.withRetiredSizes === false
+        ? new Map<string, unknown>()
+        : await storedSizesOf(
+            adapter.getDrizzle(),
+            adapter.dialect,
+            rows.map(row => row.id)
+          );
     for (const row of rows) {
       const files = storedFilesOf({ ...row, sizes: sizes.get(row.id) });
       for (const path of files.paths) referenced.add(path);
@@ -100,11 +115,14 @@ export async function referencedStoredPaths(
  * a thumbnail whose stored location its record does not show: by a URL
  * under any name, it may refer to any listed file.
  */
-export function referencedNowIn(adapter: DrizzleAdapter): ReferencedNow {
+export function referencedNowIn(
+  adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">,
+  options: ReferenceOptions = {}
+): ReferencedNow {
   return async paths => {
     let now: MediaReferences;
     try {
-      now = await referencedStoredPaths(adapter);
+      now = await referencedStoredPaths(adapter, options);
     } catch (error) {
       console.warn(
         "[media orphans] Could not read what media items refer to:",
@@ -414,9 +432,10 @@ function otherUploaders(
  * upload-time thumbnails deletes before this release left in the media
  * storage, still publicly served. A dry run by default.
  *
- * `nextly media remove-sizes [--apply]`: lists, and with --apply removes, the
- * image size files items stored before sizes were removed, then clears each
- * item's sizes, so `nextly migrate` can drop the column. A dry run by default.
+ * `nextly media remove-sizes [--apply] [--drop]`: lists, and with --apply
+ * removes, the image size files items stored before sizes were removed, then
+ * clears each item's sizes; with --drop as well it then drops the column and
+ * the table. A dry run by default.
  */
 export function createMediaCommand(): Command {
   const media = new Command("media").description(
@@ -461,21 +480,38 @@ export function createMediaCommand(): Command {
   media
     .command("remove-sizes")
     .description(
-      "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply"
+      "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply; then drop the sizes column and the image_sizes table with --apply --drop"
     )
     .option("--apply", "Remove the size files listed", false)
-    .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
-      const apply = cmdOptions.apply === true;
-      await runMediaCommand(cmd, apply, ({ drizzle, dialect, mediaStorage }) =>
-        runRemoveSizes({
-          db: drizzle.getDrizzle(),
-          dialect,
-          storage: mediaStorage.getAdapterForCollection("media"),
+    .option(
+      "--drop",
+      "With --apply, once no item names a size file, drop the media table's sizes column and the image_sizes table",
+      false
+    )
+    .action(
+      async (cmdOptions: { apply?: boolean; drop?: boolean }, cmd: Command) => {
+        const apply = cmdOptions.apply === true;
+        await runMediaCommand(
+          cmd,
           apply,
-          say: line => console.log(line),
-        })
-      );
-    });
+          ({ drizzle, dialect, mediaStorage }) =>
+            runRemoveSizes({
+              db: drizzle.getDrizzle(),
+              dialect,
+              storage: mediaStorage.getAdapterForCollection("media"),
+              apply,
+              drop: cmdOptions.drop === true,
+              // The question `media orphans` asks just before its removals,
+              // without the retired sizes: those are the files being removed.
+              referencedNow: referencedNowIn(drizzle, {
+                withRetiredSizes: false,
+              }),
+              executeSql: statement => drizzle.executeQuery(statement),
+              say: line => console.log(line),
+            })
+        );
+      }
+    );
   return media;
 }
 
@@ -540,49 +576,63 @@ async function runMediaCommand(
 }
 
 /**
- * `nextly media remove-sizes [--apply]` over a database: says there is
- * nothing to do once the column is gone, and otherwise lists, or with
- * `apply` removes, the size files its items name. Returns the exit status.
+ * `nextly media remove-sizes [--apply] [--drop]` over a database: says there
+ * is nothing to remove once the column is gone, and otherwise lists, or with
+ * `apply` removes, the size files its items name. With `apply` and `drop`, and
+ * only once that left no item holding sizes, it then drops the column and the
+ * table (`dropRetiredImageSizes`). Returns the exit status.
  */
 export async function runRemoveSizes(options: {
   db: unknown;
   dialect: SupportedDialect;
   storage: IStorageAdapter;
   apply: boolean;
+  drop?: boolean;
+  referencedNow: ReferencedNow;
+  executeSql: (statement: string) => Promise<unknown>;
   say: (line: string) => void;
 }): Promise<number> {
   const { db, dialect, say } = options;
   const [
-    { hasRetiredSizesColumn, retiredImageSizesTableRows, sqlRetiredSizesStore },
-    { removeStoredImageSizes, retiredObjectsLine },
-    { liveColumnsOf },
+    { dropRetiredImageSizes, readRetiredObjects, sqlRetiredSizesStore },
+    { removeStoredImageSizes },
   ] = await Promise.all([
     import("../../domains/media/retired-image-sizes-store"),
     import("../../domains/media/retired-image-sizes"),
-    import("../../init/retired-auth-tables"),
   ]);
-  const objects = {
-    column: await hasRetiredSizesColumn(db, dialect),
-    tableRows: await retiredImageSizesTableRows(
-      db,
-      dialect,
-      liveColumnsOf(db, dialect)
-    ),
-  };
-  if (!objects.column) {
+  const objects = await readRetiredObjects(db, dialect);
+  let code = 0;
+  if (objects.column) {
+    ({ code } = await removeStoredImageSizes({
+      store: sqlRetiredSizesStore(db, dialect),
+      storage: options.storage,
+      objects,
+      apply: options.apply,
+      referencedNow: options.referencedNow,
+      say,
+    }));
+  } else {
     say(
       "The media table has no sizes column: no item names an image size file, so there is nothing to remove."
     );
-    const drops = retiredObjectsLine(objects);
-    if (drops) say(drops.replace(/^Once no item holds sizes, /, "Now "));
-    return 0;
   }
-  const { code } = await removeStoredImageSizes({
-    store: sqlRetiredSizesStore(db, dialect),
-    storage: options.storage,
-    objects,
-    apply: options.apply,
+  if (options.drop !== true) return code;
+  if (!options.apply) {
+    say(
+      "--drop drops nothing without --apply; with it, the column and the table go once no item names a size file."
+    );
+    return code;
+  }
+  if (code !== 0) {
+    say(
+      "Dropped nothing: the items above still name size files. Fix what stopped them and run again."
+    );
+    return code;
+  }
+  return dropRetiredImageSizes({
+    db,
+    dialect,
+    executeSql: options.executeSql,
     say,
   });
-  return code;
 }

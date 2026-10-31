@@ -23,10 +23,7 @@ import {
   bindIssuedTokens,
   type BindIssuedTokensResult,
 } from "../../auth/services/token-account-binding";
-import {
-  RETIRED_IMAGE_SIZES_TABLE,
-  RETIRED_SIZES_COLUMN,
-} from "../../media/retired-image-sizes-constants";
+import { RETIRED_SIZES_COLUMN } from "../../media/retired-image-sizes-constants";
 import { markUnrecordedVerifications } from "../../users/services/email-verification-write";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -74,13 +71,6 @@ export interface ReconcileCoreDeps {
    * removing an empty table.
    */
   allowDropNonEmptyRetired?: boolean;
-  /**
-   * Drop the media table's retired `sizes` column and the retired
-   * `image_sizes` table, once no media item names a size file in them. Set by
-   * `nextly migrate` alone: a migration run at startup never drops them, so
-   * their removal is always a command an operator ran.
-   */
-  dropRetiredImageSizes?: boolean;
   /** Whether a table is present. Supplied by the CLI; absent in tests that do not exercise the drop. */
   tableExists?: (table: string) => Promise<boolean>;
   /** Row count for a table, for deciding whether a retired one is empty. */
@@ -199,8 +189,9 @@ export async function reconcileCore(
   // diff never plans its drop, and composed into the state the push reaches,
   // so drizzle-kit plans nothing against it either. On SQLite a rebuild of
   // the media table would otherwise copy only the declared columns and lose
-  // every item's record of its size files. It goes only through
-  // `dropRetiredImageSizes`, once nothing names a file in it.
+  // every item's record of its size files. Neither this nor any migration
+  // drops it: `nextly media remove-sizes --apply --drop` does, once the
+  // release that no longer reads it is serving and nothing names a file in it.
   const contributions = withRetainedSizesColumn(
     deps.contributions,
     introspected
@@ -229,15 +220,12 @@ export async function reconcileCore(
       deps,
       await decideRetiredDrops(deps)
     );
-    const droppedSizes = await dropRetiredImageSizes(deps);
     logger?.info?.(
       dropped.length > 0
         ? `Core schema up to date; dropped retired auth tables: ${dropped.join(", ")}.`
         : "Core schema up to date."
     );
-    return {
-      changed: filled || dropped.length > 0 || droppedSizes.length > 0,
-    };
+    return { changed: filled || dropped.length > 0 };
   }
 
   const mode: ClassifierMode = deps.mode ?? "production-strict";
@@ -352,9 +340,6 @@ export async function reconcileCore(
   // counts taken after the apply, so a table that gained rows in the meantime
   // is kept rather than dropped on a stale count.
   await executeRetiredDrops(deps, await decideRetiredDrops(deps));
-  // Last, for the same reason: once the core apply has succeeded, on counts
-  // taken now rather than before the apply.
-  await dropRetiredImageSizes(deps);
   return { changed: true };
 }
 
@@ -389,88 +374,6 @@ function withRetainedSizesColumn(
     entityColumns,
     entityIndexes: source?.entityIndexes ?? new Map(),
   };
-}
-
-/**
- * Drops the retired `sizes` column and `image_sizes` table when `nextly
- * migrate` asked for it and no media item names a size file in the column.
- * Returns what it dropped.
- *
- * While any item does, both are KEPT, with a warning naming how many and the
- * command that removes their files: dropping the column then would leave
- * those files in storage, still publicly served, with nothing pointing at
- * them. Kept rather than refused, because failing the run would hold back
- * every other change in it, and an installation that never removes them keeps
- * working with both unused.
- */
-async function dropRetiredImageSizes(
-  deps: ReconcileCoreDeps
-): Promise<string[]> {
-  if (deps.dropRetiredImageSizes !== true || !deps.executeSql) return [];
-  const [
-    { readRetiredObjects },
-    { formatRetiredImageSizesKept },
-    { liveColumnsOf },
-  ] = await Promise.all([
-    import("../../media/retired-image-sizes-store"),
-    import("../../media/retired-image-sizes"),
-    import("../../../init/retired-auth-tables"),
-  ]);
-  const objects = await readRetiredObjects(
-    deps.db,
-    deps.dialect,
-    deps.columnsOf ?? liveColumnsOf(deps.db, deps.dialect)
-  );
-  if (!objects.column && objects.tableRows === null) return [];
-  if (objects.itemsWithSizes > 0) {
-    deps.logger?.warn?.(formatRetiredImageSizesKept(objects.itemsWithSizes));
-    return [];
-  }
-  const { generateSQL } = await import("../pipeline/sql-templates");
-  const drops: RetiredImageSizesDrop[] = [];
-  if (objects.column) {
-    drops.push({
-      statement: generateSQL(
-        {
-          type: "drop_column",
-          tableName: "media",
-          columnName: RETIRED_SIZES_COLUMN,
-          columnType: "json",
-        },
-        deps.dialect
-      ),
-      ledgerScope: "media",
-      what: `retired column media.${RETIRED_SIZES_COLUMN}`,
-      said: `Dropped the retired \`media.${RETIRED_SIZES_COLUMN}\` column: no media item named a size file in it.`,
-    });
-  }
-  if (objects.tableRows !== null) {
-    drops.push({
-      statement: generateSQL(
-        { type: "drop_table", tableName: RETIRED_IMAGE_SIZES_TABLE },
-        deps.dialect
-      ),
-      ledgerScope: RETIRED_IMAGE_SIZES_TABLE,
-      what: `retired table ${RETIRED_IMAGE_SIZES_TABLE}`,
-      said: `Dropped the retired \`${RETIRED_IMAGE_SIZES_TABLE}\` table (${objects.tableRows} size ${objects.tableRows === 1 ? "definition" : "definitions"} nothing reads).`,
-    });
-  }
-  for (const drop of drops) {
-    await deps.executeSql(drop.statement);
-    deps.logger?.warn?.(drop.said);
-    // Recorded as each one goes, so a later drop that fails leaves the
-    // earlier one on record.
-    await recordRetiredDrop(deps, drop.ledgerScope, drop.what);
-  }
-  return drops.map(drop => drop.what);
-}
-
-/** One retired image-sizes object to drop, and how its drop is reported. */
-interface RetiredImageSizesDrop {
-  statement: string;
-  ledgerScope: string;
-  what: string;
-  said: string;
 }
 
 /**
@@ -615,9 +518,7 @@ async function executeRetiredDrops(
  */
 async function recordRetiredDrop(
   deps: ReconcileCoreDeps,
-  table: string,
-  /** What was dropped, as the warning names it when the record fails. */
-  what = `retired auth table ${table}`
+  table: string
 ): Promise<void> {
   try {
     await deps.ensureLedger?.();
@@ -631,7 +532,7 @@ async function recordRetiredDrop(
     await repo.markApplied(id, { statementsExecuted: 1 });
   } catch (error) {
     deps.logger?.warn?.(
-      `Dropped ${what}, but could not record it in the schema ledger: ${error instanceof Error ? error.message : String(error)}`
+      `Dropped retired auth table ${table}, but could not record it in the schema ledger: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }

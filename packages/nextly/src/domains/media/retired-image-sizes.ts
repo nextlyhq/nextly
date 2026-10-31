@@ -15,14 +15,25 @@
  * size files are gone, so a run that stops part-way, or a file the storage
  * refuses, leaves that item as it was for the next run.
  *
+ * Three things leave an item as it is, named, for the run to exit non-zero:
+ * a size whose file is on another storage than the one configured now (its
+ * path means nothing to this one), a delete that fails for any reason but the
+ * file being definitely gone, and a check of what items use, asked again just
+ * before the removal, that cannot be answered.
+ *
  * @module domains/media/retired-image-sizes
  */
 import { isTransientError, withRetry } from "../../storage/retry";
 import { siblingStoredPath } from "../../storage/stored-path";
 
-import { canonicalStoredPath } from "./orphan-thumbnails";
+import {
+  canonicalStoredPath,
+  RECHECK_BATCH,
+  type ReferencedNow,
+} from "./orphan-thumbnails";
 import { errorForLog, storedPathForLog } from "./remove-stored-files";
 import {
+  DROP_SIZES_COMMAND,
   REMOVE_SIZES_COMMAND,
   RETIRED_IMAGE_SIZES_TABLE,
   RETIRED_SIZES_COLUMN,
@@ -109,10 +120,16 @@ export interface RetiredSizesStore {
   clearSizes(id: string): Promise<void>;
 }
 
-/** The storage surface the removal uses. */
+/**
+ * The storage surface the removal uses: the media storage configured now.
+ * `exists` is not part of it: two adapters answer `false` for any failure to
+ * ask, which cannot tell a removed file from an unreachable one.
+ */
 export interface SizeFileStorage {
   delete(filePath: string): Promise<void>;
-  exists(filePath: string): Promise<boolean>;
+  /** Where this storage serves a stored path, to tell its files from another's. */
+  getPublicUrl(filePath: string): string;
+  getType(): string;
 }
 
 /** A size whose file stays, and why. */
@@ -136,6 +153,13 @@ interface ItemPlan {
    * that cannot be read. Either leaves the item's `sizes` as it is.
    */
   unlocated: string[];
+  /**
+   * Sizes whose file was stored on another storage than the one configured
+   * now, by where it is served. Leaves the item's `sizes` as it is: a path
+   * of another storage, handed to this one, would delete nothing there, or
+   * this storage's file of the same name, and the record would be cleared.
+   */
+  elsewhere: Array<{ name: string; url: string }>;
 }
 
 /** The files media items use as originals or thumbnails, across the table. */
@@ -206,14 +230,68 @@ function isInUse(inUse: InUse, size: StoredSize, path: string): boolean {
   );
 }
 
+/**
+ * Where a URL serves its file: its origin, or none for a URL relative to the
+ * site, and its path, percent-encoded alike either way.
+ */
+function servedAt(url: string): { origin: string | null; path: string } {
+  const key = urlKey(url);
+  if (/^https?:\/\//i.test(key)) {
+    const parsed = new URL(key);
+    return { origin: parsed.origin, path: parsed.pathname };
+  }
+  return { origin: null, path: new URL(key, "http://site.invalid").pathname };
+}
+
+/**
+ * Whether a URL a record holds is where the storage configured now serves
+ * `path`. A URL relative to the site and an absolute one are compared by
+ * path, since local disk is served from the site under either spelling;
+ * otherwise by origin and path, so another bucket, account or host differs.
+ */
+function servedHere(
+  url: string,
+  path: string,
+  storage: SizeFileStorage
+): boolean {
+  const recorded = servedAt(url);
+  const here = servedAt(storage.getPublicUrl(path));
+  if (recorded.path !== here.path) return false;
+  return (
+    recorded.origin === null ||
+    here.origin === null ||
+    recorded.origin === here.origin
+  );
+}
+
+/**
+ * Whether a size's file is on the storage configured now: by the size's own
+ * URL, or, for a size recorded by path alone, by the item's original, which
+ * was stored with it.
+ */
+function onThisStorage(
+  size: StoredSize,
+  path: string,
+  row: MediaSizesRow,
+  storage: SizeFileStorage
+): boolean {
+  if (size.url) return servedHere(size.url, path, storage);
+  return servedHere(row.url, row.filename, storage);
+}
+
 /** One item's plan, judged against everything every item uses. */
-function planItem(row: MediaSizesRow, inUse: InUse): ItemPlan {
+function planItem(
+  row: MediaSizesRow,
+  inUse: InUse,
+  storage: SizeFileStorage
+): ItemPlan {
   const plan: ItemPlan = {
     id: row.id,
     filename: row.filename,
     remove: [],
     keep: [],
     unlocated: [],
+    elsewhere: [],
   };
   const read = readStoredSizes(row.sizes);
   if (!read.readable) {
@@ -222,22 +300,39 @@ function planItem(row: MediaSizesRow, inUse: InUse): ItemPlan {
   }
   const planned = new Set<string>();
   for (const size of read.sizes) {
-    const path = pathOfSize(size, row);
-    if (path === undefined) {
-      // A size with no file named and no URL had nothing stored for it.
-      if (size.url) plan.unlocated.push(size.name);
-      continue;
-    }
-    if (isOwnThumbnail(size, path, row)) {
-      plan.keep.push({ name: size.name, path, reason: "thumbnail" });
-    } else if (isInUse(inUse, size, path)) {
-      plan.keep.push({ name: size.name, path, reason: "in-use" });
-    } else if (!planned.has(canonicalStoredPath(path))) {
-      planned.add(canonicalStoredPath(path));
-      plan.remove.push({ name: size.name, path });
-    }
+    planSize(plan, size, { row, inUse, storage, planned });
   }
   return plan;
+}
+
+/** What one size of an item is judged against. */
+interface SizeContext {
+  row: MediaSizesRow;
+  inUse: InUse;
+  storage: SizeFileStorage;
+  /** The stored paths already planned for removal, canonically. */
+  planned: Set<string>;
+}
+
+/** Puts one size into its item's plan: removed, kept, or holding the item. */
+function planSize(plan: ItemPlan, size: StoredSize, at: SizeContext): void {
+  const { row } = at;
+  const path = pathOfSize(size, row);
+  if (path === undefined) {
+    // A size with no file named and no URL had nothing stored for it.
+    if (size.url) plan.unlocated.push(size.name);
+    return;
+  }
+  if (isOwnThumbnail(size, path, row)) {
+    plan.keep.push({ name: size.name, path, reason: "thumbnail" });
+  } else if (isInUse(at.inUse, size, path)) {
+    plan.keep.push({ name: size.name, path, reason: "in-use" });
+  } else if (!onThisStorage(size, path, row, at.storage)) {
+    plan.elsewhere.push({ name: size.name, url: size.url ?? row.url });
+  } else if (!at.planned.has(canonicalStoredPath(path))) {
+    at.planned.add(canonicalStoredPath(path));
+    plan.remove.push({ name: size.name, path });
+  }
 }
 
 /**
@@ -249,7 +344,8 @@ function planItem(row: MediaSizesRow, inUse: InUse): ItemPlan {
  * copy a record, and a content-addressed storage gives one file one key.
  */
 async function planSizeRemoval(
-  store: Pick<RetiredSizesStore, "rows">
+  store: Pick<RetiredSizesStore, "rows">,
+  storage: SizeFileStorage
 ): Promise<ItemPlan[]> {
   const inUse: InUse = { paths: new Set(), urls: new Set(), names: new Set() };
   const holding: MediaSizesRow[] = [];
@@ -259,19 +355,33 @@ async function planSizeRemoval(
       if (holdsStoredSizes(row.sizes)) holding.push(row);
     }
   }
-  return holding.map(row => planItem(row, inUse));
+  return holding.map(row => planItem(row, inUse, storage));
 }
 
 /** What the database objects left to drop hold, for the listing. */
 export interface RetiredObjects {
   /** Whether the media table still has its `sizes` column. */
   column: boolean;
-  /** The `image_sizes` table's rows, or null when there is no such table. */
+  /**
+   * The `image_sizes` table's rows, or null when there is no table of that
+   * name shown to be the one Nextly created.
+   */
   tableRows: number | null;
+  /**
+   * Why a table named `image_sizes` that is there is not shown to be the one
+   * Nextly created, so is never dropped; null when there is none, or it is.
+   */
+  keptTable: string | null;
 }
 
-/** The line naming what `nextly migrate` drops once no item holds sizes. */
-export function retiredObjectsLine(objects: RetiredObjects): string | null {
+/**
+ * The line naming what the drop removes, once no item holds sizes, or, with
+ * `now`, as what it removes from here.
+ */
+function retiredObjectsLine(
+  objects: RetiredObjects,
+  now = false
+): string | null {
   const parts: string[] = [];
   if (objects.column) {
     parts.push(`the \`${RETIRED_SIZES_COLUMN}\` column of the \`media\` table`);
@@ -282,7 +392,9 @@ export function retiredObjectsLine(objects: RetiredObjects): string | null {
     );
   }
   if (parts.length === 0) return null;
-  return `Once no item holds sizes, \`nextly migrate\` drops ${parts.join(" and ")}.`;
+  return now
+    ? `Now \`${DROP_SIZES_COMMAND}\` drops ${parts.join(" and ")}.`
+    : `Once no item holds sizes, \`${DROP_SIZES_COMMAND}\` drops ${parts.join(" and ")}.`;
 }
 
 /** How a size file is named in the output: never with a query or credentials. */
@@ -309,15 +421,39 @@ export interface SizeRemovalReport {
   itemsLeft: Array<{ id: string; reasons: string[] }>;
 }
 
+/**
+ * What leaves an item's stored sizes as they are before anything of it is
+ * removed: a size whose file cannot be located, or one on another storage.
+ */
+function blockers(plan: ItemPlan, storageType: string): string[] {
+  const reasons: string[] = [];
+  if (plan.unlocated.length > 0) {
+    reasons.push(
+      `the stored file of ${plan.unlocated.join(", ")} cannot be located from the record`
+    );
+  }
+  if (plan.elsewhere.length > 0) {
+    const where = [
+      ...new Set(plan.elsewhere.map(size => storedPathForLog(size.url))),
+    ];
+    reasons.push(
+      `the file of ${plan.elsewhere.map(size => `"${size.name}"`).join(", ")} is not on the media storage configured now (${storageType}), but at ${where.join(", ")}; run this with the storage it was uploaded to configured`
+    );
+  }
+  return reasons;
+}
+
 /** Lists what an `--apply` run would do, changing nothing. */
 function sayPlan(
   plans: readonly ItemPlan[],
   objects: RetiredObjects,
+  storage: SizeFileStorage,
   say: (line: string) => void
 ): void {
   say("Dry run: nothing is changed.");
   let removing = 0;
   let keeping = 0;
+  let clearing = 0;
   for (const plan of plans) {
     say(itemHeading(plan));
     for (const file of plan.remove) {
@@ -328,17 +464,18 @@ function sayPlan(
         `  keep   ${shown(kept.path)} (size "${kept.name}": ${keptReason(kept)})`
       );
     }
-    if (plan.unlocated.length > 0) {
-      say(
-        `  leave  its stored sizes as they are: the stored file of ${plan.unlocated.join(", ")} cannot be located from the record`
-      );
+    const reasons = blockers(plan, storage.getType());
+    if (reasons.length > 0) {
+      for (const reason of reasons) {
+        say(`  leave  its stored sizes as they are: ${reason}`);
+      }
     } else {
       say("  clear  its stored sizes");
+      clearing += 1;
     }
     removing += plan.remove.length;
     keeping += plan.keep.length;
   }
-  const clearing = plans.filter(plan => plan.unlocated.length === 0).length;
   say(
     `Would remove ${removing} ${removing === 1 ? "file" : "files"} from storage, keep ${keeping}, and clear the stored sizes of ${clearing} of ${plans.length} ${plans.length === 1 ? "item" : "items"}.`
   );
@@ -350,8 +487,33 @@ function sayPlan(
 }
 
 /**
- * Removes one size file, retrying a transient failure. A file the storage no
- * longer has counts as removed, so a run after a partial one goes on.
+ * Whether a storage's error says the file is not there, and nothing else:
+ * local disk's ENOENT, S3's NoSuchKey or 404, Vercel Blob's not-found error.
+ * Anything else, a refusal, an outage or an unknown shape, says nothing about
+ * the file.
+ */
+function isDefinitelyNotFound(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, name, $metadata } = error as {
+    code?: unknown;
+    name?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  return (
+    code === "ENOENT" ||
+    name === "NoSuchKey" ||
+    name === "NotFound" ||
+    name === "BlobNotFoundError" ||
+    $metadata?.httpStatusCode === 404
+  );
+}
+
+/**
+ * Removes one size file, retrying a transient failure. A delete of a file
+ * already gone succeeds on every adapter but one that says so in its error,
+ * and only that error counts as removed: whether the file is still there is
+ * never asked afterwards, since two adapters answer that `false` for any
+ * failure to ask.
  */
 async function removeSizeFile(
   storage: SizeFileStorage,
@@ -365,35 +527,36 @@ async function removeSizeFile(
     });
     return null;
   } catch (error) {
-    try {
-      if (!(await storage.exists(path))) return null;
-    } catch {
-      // Whether it is still there cannot be asked: the delete's own failure
-      // is what is reported.
-    }
-    return error;
+    return isDefinitelyNotFound(error) ? null : error;
   }
 }
 
-/** Carries out one item's plan, saying what happened to each file. */
+/**
+ * Carries out one item's plan, saying what happened to each file. A file in
+ * `usedNow`, which a media item came to use as its original or thumbnail
+ * after the listing, is kept.
+ */
 async function applyItem(
   plan: ItemPlan,
+  usedNow: ReadonlySet<string>,
   storage: SizeFileStorage,
   store: Pick<RetiredSizesStore, "clearSizes">,
   say: (line: string) => void,
   report: SizeRemovalReport
 ): Promise<void> {
   say(itemHeading(plan));
-  const reasons: string[] = [];
-  if (plan.unlocated.length > 0) {
-    reasons.push(
-      `the stored file of ${plan.unlocated.join(", ")} cannot be located from the record`
-    );
-  }
-  // Nothing of an item is removed when one of its sizes cannot be located:
-  // its `sizes` stays, and with it the record of every file it names.
+  // Nothing of an item is removed when one of its sizes cannot be located or
+  // is elsewhere: its `sizes` stays, and with it the record of every file.
+  const reasons = blockers(plan, storage.getType());
   if (reasons.length === 0) {
     for (const file of plan.remove) {
+      if (usedNow.has(file.path)) {
+        report.filesKept += 1;
+        say(
+          `  kept    ${shown(file.path)} (a media item uses it now as an original or a thumbnail)`
+        );
+        continue;
+      }
       const failure = await removeSizeFile(storage, file.path);
       if (failure === null) {
         report.filesRemoved += 1;
@@ -410,9 +573,7 @@ async function applyItem(
     say(`  kept    ${shown(kept.path)} (${keptReason(kept)})`);
   }
   if (reasons.length > 0) {
-    for (const reason of reasons) say(`  ${reason}`);
-    say("  its stored sizes are kept, so a later run can finish it");
-    report.itemsLeft.push({ id: plan.id, reasons });
+    leaveItem(plan, reasons, say, report);
     return;
   }
   await store.clearSizes(plan.id);
@@ -420,17 +581,60 @@ async function applyItem(
   say("  cleared its stored sizes");
 }
 
+/** Says why an item is left as it was, and records it. */
+function leaveItem(
+  plan: ItemPlan,
+  reasons: string[],
+  say: (line: string) => void,
+  report: SizeRemovalReport
+): void {
+  for (const reason of reasons) say(`  ${reason}`);
+  say("  its stored sizes are kept, so a later run can finish it");
+  report.itemsLeft.push({ id: plan.id, reasons });
+}
+
+/**
+ * The plans in batches of about {@link RECHECK_BATCH} files to remove, the
+ * number the orphan removal asks about at once: each batch is checked once,
+ * just before its files go, rather than each file or the whole run.
+ */
+function inBatches(plans: readonly ItemPlan[]): ItemPlan[][] {
+  const batches: ItemPlan[][] = [];
+  let current: ItemPlan[] = [];
+  let files = 0;
+  for (const plan of plans) {
+    current.push(plan);
+    files += plan.remove.length;
+    if (files >= RECHECK_BATCH) {
+      batches.push(current);
+      current = [];
+      files = 0;
+    }
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
 /**
  * Lists, and with `apply` removes, the size files stored for media items, then
  * clears each item's `sizes` once its files are gone. Says what it does
  * through `say` and returns the exit status: 1 when any item was left as it
  * was, 0 otherwise.
+ *
+ * The listing reads the whole table once. An upload or an import can then
+ * make a listed file an item's original or thumbnail before it is removed, so
+ * `referencedNow`, the question `nextly media orphans` asks just before its
+ * removals, is asked again for each batch's files just before they go; a file
+ * in use by then is kept, and an ask that cannot be answered stops the run,
+ * leaving every item not yet done as it was.
  */
 export async function removeStoredImageSizes(options: {
   store: RetiredSizesStore;
   storage: SizeFileStorage;
   objects: RetiredObjects;
   apply: boolean;
+  /** Which of a batch of files an item uses now, asked just before they go. */
+  referencedNow: ReferencedNow;
   say: (line: string) => void;
 }): Promise<{ code: number; report: SizeRemovalReport }> {
   const { store, storage, objects, apply, say } = options;
@@ -440,37 +644,89 @@ export async function removeStoredImageSizes(options: {
     filesKept: 0,
     itemsLeft: [],
   };
-  const plans = await planSizeRemoval(store);
+  const plans = await planSizeRemoval(store, storage);
   if (plans.length === 0) {
     say("No media item holds image sizes: there are no size files to remove.");
-    const drops = retiredObjectsLine(objects);
-    if (drops) say(drops.replace(/^Once no item holds sizes, /, "Now "));
+    const drops = retiredObjectsLine(objects, true);
+    if (drops) say(drops);
     return { code: 0, report };
   }
   if (!apply) {
-    sayPlan(plans, objects, say);
+    sayPlan(plans, objects, storage, say);
     return { code: 0, report };
   }
-  for (const plan of plans) {
-    await applyItem(plan, storage, store, say, report);
+  await applyPlans(plans, {
+    storage,
+    store,
+    referencedNow: options.referencedNow,
+    say,
+    report,
+  });
+  return { code: sayApplied(report, objects, say), report };
+}
+
+/** What carrying out the plans works with, and records into. */
+interface ApplyContext {
+  storage: SizeFileStorage;
+  store: Pick<RetiredSizesStore, "clearSizes">;
+  referencedNow: ReferencedNow;
+  say: (line: string) => void;
+  report: SizeRemovalReport;
+}
+
+/**
+ * Carries out the plans a batch at a time, asking `referencedNow` about each
+ * batch's files just before they go; an ask that cannot be answered leaves
+ * that batch's items, and every later one, as they were.
+ */
+async function applyPlans(
+  plans: readonly ItemPlan[],
+  { storage, store, referencedNow, say, report }: ApplyContext
+): Promise<void> {
+  const batches = inBatches(plans);
+  for (const [at, batch] of batches.entries()) {
+    const paths = batch.flatMap(plan => plan.remove.map(file => file.path));
+    const usedNow =
+      paths.length === 0 ? new Set<string>() : await referencedNow(paths);
+    if (usedNow === null) {
+      const reason =
+        "whether a media item uses its size files now could not be checked just before their removal";
+      for (const plan of batches.slice(at).flat()) {
+        say(itemHeading(plan));
+        leaveItem(plan, [reason], say, report);
+      }
+      return;
+    }
+    for (const plan of batch) {
+      await applyItem(plan, usedNow, storage, store, say, report);
+    }
   }
+}
+
+/** Says what an `--apply` run did, and answers its exit status. */
+function sayApplied(
+  report: SizeRemovalReport,
+  objects: RetiredObjects,
+  say: (line: string) => void
+): number {
   say(
     `Removed ${report.filesRemoved} ${report.filesRemoved === 1 ? "file" : "files"} and cleared the stored sizes of ${report.itemsCleared} ${report.itemsCleared === 1 ? "item" : "items"}; kept ${report.filesKept} ${report.filesKept === 1 ? "file" : "files"} still in use.`
   );
-  if (report.itemsLeft.length > 0) {
+  const left = report.itemsLeft.length;
+  if (left > 0) {
     say(
-      `${report.itemsLeft.length} ${report.itemsLeft.length === 1 ? "item was" : "items were"} left as ${report.itemsLeft.length === 1 ? "it was" : "they were"}: ${report.itemsLeft.map(item => item.id).join(", ")}. Run the command again once the cause is fixed.`
+      `${left} ${left === 1 ? "item was" : "items were"} left as ${left === 1 ? "it was" : "they were"}: ${report.itemsLeft.map(item => item.id).join(", ")}. Run the command again once the cause is fixed.`
     );
-    return { code: 1, report };
+    return 1;
   }
-  const drops = retiredObjectsLine(objects);
-  if (drops) say(drops.replace(/^Once no item holds sizes, /, "Now "));
-  return { code: 0, report };
+  const drops = retiredObjectsLine(objects, true);
+  if (drops) say(drops);
+  return 0;
 }
 
 /**
  * The startup notice while the retired column or table is still there: what
- * is left, and the two steps that remove it.
+ * is left, and the steps that remove it, in the order a deployment takes them.
  */
 export function formatRetiredImageSizesNotice(state: RetiredObjects): string {
   const lines = [
@@ -489,21 +745,10 @@ export function formatRetiredImageSizesNotice(state: RetiredObjects): string {
   }
   lines.push(
     "",
-    "  Back up the database and the media storage, then:",
+    "  Once this release is serving every request, back up the database and the media storage, then:",
     `  1. \`${REMOVE_SIZES_COMMAND}\` lists the size files; with --apply it removes them and clears each item's sizes.`,
-    "  2. `nextly migrate` then drops the column and the table. It keeps both while any item still names size files.",
-    "  Until then the site keeps working; nothing reads them."
+    `  2. \`${DROP_SIZES_COMMAND}\` then drops the column and the table. It drops nothing while any item still names size files.`,
+    "  `nextly migrate` never drops them. Until then the site keeps working; nothing reads them."
   );
   return lines.join("\n");
-}
-
-/**
- * The warning `nextly migrate` gives when it keeps the column and table
- * because items still name size files.
- */
-export function formatRetiredImageSizesKept(itemsWithSizes: number): string {
-  return [
-    `Kept the media table's \`${RETIRED_SIZES_COLUMN}\` column and the \`${RETIRED_IMAGE_SIZES_TABLE}\` table: ${itemsWithSizes} ${itemsWithSizes === 1 ? "item still names its" : "items still name their"} image size files, which dropping the column would leave in storage with nothing pointing at them.`,
-    `Run \`${REMOVE_SIZES_COMMAND}\` (then again with --apply) to remove those files, then run \`nextly migrate\` again.`,
-  ].join(" ");
 }
