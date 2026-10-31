@@ -31,6 +31,11 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import {
+  CardCollapseContext,
+  collapsedRows,
+  type CardCollapse,
+} from "../frame/collapse";
 import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
@@ -98,7 +103,7 @@ export interface ArrangedCellProps {
     slot: WidgetSlot | undefined;
     /** How a `stats` card reaches each cell's answer; absent otherwise. */
     slotFor?: CellSlotLookup;
-    /** `null` when this card took no part in the batch. */
+    /** When this card's own answer arrived; `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
     /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
@@ -623,6 +628,33 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
   };
 }
 
+/**
+ * The rows a card is drawn at, from what its body asks of the frame: the body height its content
+ * has asked for while its reader shows more of it (`frame/grow`), and whether the body has
+ * collapsed it to one line (`frame/collapse`), which is one row. Its stored rows in customise
+ * mode, where the arrangement is what is being edited, and never collapsed there.
+ */
+function useBodyRows(
+  storedRows: number,
+  isEditing: boolean
+): {
+  rows: number;
+  collapse: CardCollapse;
+  setContentHeight: (height: number | undefined) => void;
+} {
+  const [contentHeight, setContentHeight] = useState<number | undefined>();
+  const [bodyCollapsed, setBodyCollapsed] = useState(false);
+  const collapsed = bodyCollapsed && !isEditing;
+  const collapse = useMemo<CardCollapse>(
+    () => ({ collapsed, setCollapsed: setBodyCollapsed }),
+    [collapsed]
+  );
+  const rows = isEditing
+    ? storedRows
+    : collapsedRows(grownRows(storedRows, contentHeight), collapsed);
+  return { rows, collapse, setContentHeight };
+}
+
 export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const { row, isEditing, data } = props;
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
@@ -647,11 +679,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => drawnSize(row.size, row.widget.size),
     [row.size, row.widget.size]
   );
-  // The body height the card's content has asked for while its reader shows more of it
-  // (`frame/grow`), and the rows that holds. Its stored rows in customise mode, where the
-  // arrangement is what is being edited.
-  const [contentHeight, setContentHeight] = useState<number | undefined>();
-  const rows = isEditing ? size.h : grownRows(size.h, contentHeight);
+  const { rows, collapse, setContentHeight } = useBodyRows(size.h, isEditing);
   // The card's report, bound to this placement. Only the card drawn in the cell is told it: the
   // settings sheet's preview of the same placement is drawn outside it and reports nothing.
   const { reportHidden } = props;
@@ -717,17 +745,19 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           focusFirstField={sheet.focusFirstField}
         />
       ) : null}
-      <CardGrowContext.Provider value={setContentHeight}>
-        <CardHiddenReportContext.Provider value={reportCardHidden}>
-          <CardBody
-            {...{ widget, placement, headerAction, data, isEditing }}
-            subtitle={heading.subtitle}
-            quick={quick.inline}
-            titleTrigger={titleTrigger}
-            onOpenSettings={sheet.openFromEmpty}
-          />
-        </CardHiddenReportContext.Provider>
-      </CardGrowContext.Provider>
+      <CardCollapseContext.Provider value={collapse}>
+        <CardGrowContext.Provider value={setContentHeight}>
+          <CardHiddenReportContext.Provider value={reportCardHidden}>
+            <CardBody
+              {...{ widget, placement, headerAction, data, isEditing }}
+              subtitle={heading.subtitle}
+              quick={quick.inline}
+              titleTrigger={titleTrigger}
+              onOpenSettings={sheet.openFromEmpty}
+            />
+          </CardHiddenReportContext.Provider>
+        </CardGrowContext.Provider>
+      </CardCollapseContext.Provider>
     </DraggableWidgetCell>
   );
 }

@@ -189,6 +189,30 @@ describe("a quick setting that asks the card again", () => {
       "Activity: Date range saved as Last 30 days, but the card could not load it and still shows the earlier data.",
     ]);
   });
+
+  it("is said, with Undo, when the card's new answer arrived before the write reported landing", () => {
+    // The write lands only when the caller says so: the re-ask it starts can finish first.
+    let landed: (() => void) | undefined;
+    const { settingsWrite } = landingWrite({
+      write: vi.fn((_config, callbacks: CardSettingsWriteCallbacks) => {
+        landed = callbacks.onLanded;
+      }),
+    });
+    const props = base(settingsWrite);
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSetting(range, "30d"));
+    const asked = { ...props, config: { range: "30d" } };
+    settle(rerender, asked, REPLACED);
+    expect(toast.success).not.toHaveBeenCalled();
+
+    act(() => landed?.());
+    expect(toasts()).toEqual(["Activity: Date range set to Last 30 days."]);
+    expect(toast.success.mock.calls[0]?.[1]).toMatchObject({
+      action: { label: "Undo" },
+    });
+  });
 });
 
 describe("a quick setting changed at rest", () => {
@@ -390,6 +414,39 @@ describe("an Undo offered at rest, once customising begins", () => {
       updatedAt: new Date(2_000),
     });
     expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe("an Undo offered at rest, once its card is removed", () => {
+  it("is taken down with the card, and writes nothing when pressed anyway", () => {
+    const { settingsWrite, write } = landingWrite();
+    const props = base(settingsWrite, { config: { range: "30d" } });
+    const { result, rerender, unmount } = renderHook(
+      p => useCardQuickSetting(p),
+      { initialProps: props }
+    );
+    act(() => result.current.popover?.changeSetting(range, "90d"));
+    settle(rerender, { ...props, config: { range: "90d" } }, REPLACED);
+    expect(toasts()).toEqual(["Activity: Date range set to Last 90 days."]);
+
+    unmount();
+    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
+    pressUndo();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("does the same for a size", () => {
+    const { settingsWrite, resize } = landingWrite();
+    const { result, unmount } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: base(settingsWrite, { size: { w: 4, h: 3 } }),
+    });
+    act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
+    expect(toasts()).toEqual(["Activity: Size set to 12 columns by 3 rows."]);
+
+    unmount();
+    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
+    pressUndo();
+    expect(resize).toHaveBeenCalledTimes(1);
   });
 });
 
