@@ -29,7 +29,6 @@ import {
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
 import { evaluateConditions } from "../conditions";
-import { onboardingProgress } from "../onboarding";
 import { conditionProbe } from "../condition-probe";
 import { CONTENT_CHECK_BUDGET_MS } from "../reader-content";
 
@@ -97,11 +96,11 @@ describe("the content check, booted", () => {
     expect(most).toBe(AUTHORIZATION_CONCURRENCY);
     // Answered in time, setup is known and the first-entry step is offered,
     // still open: the half the case below must differ from.
-    const progress = await onboardingProgress(conditionProbe(admin));
-    expect(progress.unknown).toBe(false);
-    expect(progress.steps.find(step => step.id === "entry")?.complete).toBe(
-      false
-    );
+    const answer = await conditionProbe(admin).setup();
+    expect(answer.known).toBe(true);
+    expect(
+      answer.known && answer.steps.find(step => step.kind === "entry")?.status
+    ).toBe("open");
   });
 
   it('says "unknown" rather than "empty" when the counts outlast the budget', async () => {
@@ -119,23 +118,9 @@ describe("the content check, booted", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(
       CONTENT_CHECK_BUDGET_MS - 50
     );
-    // And the first-entry step is not ticked on a guess. On the Get started
-    // card, a step whose check could not finish is not offered at all, since
-    // that check is also what decides whether the reader could finish it, and
-    // the answer says setup is not known, which keeps the card offered.
-    // One probe for both reads, so they share one resolution and one wait.
-    const probe = conditionProbe(admin);
-    const answer = await probe.getStarted();
-    expect(answer.unknown).toBe(true);
-    expect(answer.steps.map(step => step.kind)).not.toContain("entry");
-    // The deprecated onboarding read answers as it always has: the step is a
-    // row still open, and "not known" means only that the collections or
-    // Singles could not be listed, which they were.
-    const progress = await onboardingProgress(probe);
-    expect(progress.unknown).toBe(false);
-    expect(progress.steps.find(step => step.id === "entry")).toEqual({
-      id: "entry",
-      complete: false,
-    });
+    // And the first-entry step is not shown as open on a guess: the setup
+    // card's answer is not known as a whole, so the card says it could not
+    // check setup and offers Retry, with no step drawn.
+    expect(await conditionProbe(admin).setup()).toEqual({ known: false });
   }, 20_000);
 });

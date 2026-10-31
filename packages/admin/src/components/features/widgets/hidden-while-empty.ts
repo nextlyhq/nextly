@@ -19,13 +19,26 @@
  * instead: its card leaves the dashboard while its own answer is empty, as it
  * is drawn (`useHidesWhenAnswerEmpty`).
  *
+ * Whichever rule takes a card off, the card decides it and reports it to its
+ * cell (`useReportCardHidden`), and the grid counts the cards on show from
+ * those reports alone.
+ *
  * @module components/features/widgets/hidden-while-empty
  */
 
 import { cardAnswerIsEmpty, type WidgetSlot } from "nextly/widget-result";
-import { createContext, useContext, useMemo, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type Context,
+} from "react";
 
-import type { DashboardLayoutResponse } from "../../../types/dashboard/widgets";
+import type { DashboardLayoutRead } from "../../../types/dashboard/widgets";
+
+import { tierBandAt } from "./frame/tier";
 
 const NONE: ReadonlySet<string> = new Set();
 
@@ -78,9 +91,40 @@ export function useRevealedWhileViewed(
 }
 
 /**
+ * Where a card tells the cell holding it whether it is off the dashboard, bound to that cell's
+ * placement by the cell; absent outside a grid. The grid counts the cards on show from these
+ * reports (`ArrangedGrid`), so the card's own decision, its body's reported state included, is
+ * the only one.
+ */
+export const CardHiddenReportContext: Context<
+  ((hidden: boolean) => void) | undefined
+> = createContext<((hidden: boolean) => void) | undefined>(undefined);
+
+/**
+ * Reports `hidden`, whether this card is off the dashboard as it decides it (`WidgetCard`), to
+ * the cell holding it: before paint, so the grid's count is right from the first frame, again
+ * whenever it changes, and withdrawn when the card unmounts.
+ */
+export function useReportCardHidden(hidden: boolean): void {
+  const report = useContext(CardHiddenReportContext);
+  useLayoutEffect(() => {
+    report?.(hidden);
+    return () => report?.(false);
+  }, [report, hidden]);
+}
+
+/** The cards held hidden and those revealed since, once the dashboard has a width to judge at. */
+type Held = Pick<HeldVerdict, "hidden" | "revealed">;
+
+/**
  * The verdict of the layout answer the dashboard is first drawn from, held for as long as it is
  * mounted: asked where the grid mounts, which waits for that answer. A cached answer on a return
  * visit is that answer, so a return is drawn as it was left and nothing on it moves.
+ *
+ * Taken once the dashboard has a width (`dashboardWidth`), which it has before its first paint,
+ * and only from an answer judged at a width that draws every card at the tier this one does
+ * (`tierBandAt` of its `askedAtWidth`). A cached answer read at another width, a narrower window
+ * or another device, judged each card at a tier it is not drawn at here, so it is no verdict.
  *
  * Each later answer (the refetch a return visit makes, a save, a focus) may only show a card,
  * never take one away. A card hidden at first that a later read finds with something waiting
@@ -92,45 +136,30 @@ export function useRevealedWhileViewed(
  * at first that a later read finds empty stays, saying nothing is waiting, until the next visit,
  * so what the reader is looking at never jumps up. A dashboard drawn without any answer (the
  * layout could not be read) hides nothing, and so does one drawn from an answer that judged no
- * card (no `hiddenWhileEmpty`: it was asked before the dashboard had a width); such an answer is
- * no verdict, so arriving later it shows nothing it hid either.
+ * card (no `hiddenWhileEmpty`: it was asked before the dashboard had a width, or at a width of
+ * another tier); such an answer is no verdict, so arriving later it shows nothing it hid either.
  */
 export function useHiddenWhileEmptyAtFirstPaint(
-  layout: DashboardLayoutResponse | undefined,
+  layout: DashboardLayoutRead | undefined,
+  dashboardWidth: number | undefined,
   answers: CardAnswers = NO_ANSWERS
 ): HeldVerdict {
-  const [held, setHeld] = useState<Pick<HeldVerdict, "hidden" | "revealed">>(
-    () => ({
-      hidden: (layout === undefined ? undefined : verdictOf(layout)) ?? NONE,
-      revealed: NONE,
-    })
+  const fresh = verdictAt(layout, dashboardWidth);
+  const [held, setHeld] = useState<Held | undefined>(() =>
+    firstHeld(fresh, dashboardWidth)
   );
   const ownAnswer = useMemo(
     () => new Set(layout?.hiddenWhenAnswerEmpty ?? []),
     [layout?.hiddenWhenAnswerEmpty]
   );
-  const fresh = layout === undefined ? undefined : verdictOf(layout);
-  const appearing = new Set(
-    [...held.hidden].filter(
-      id =>
-        (fresh !== undefined && !fresh.has(id)) ||
-        answeredSomething(answers, id)
-    )
-  );
   // Set during render, React's way to keep what an earlier render saw: it renders again before
   // anything is painted, so no frame draws the card hidden after its answer showed it.
-  const kept =
-    appearing.size > 0
-      ? {
-          hidden: new Set([...held.hidden].filter(id => !appearing.has(id))),
-          revealed: new Set([...held.revealed, ...appearing]),
-        }
-      : held;
+  const kept = nextHeld(held, fresh, dashboardWidth, answers);
   if (kept !== held) setHeld(kept);
   // Read from the held state: a render that changed it above is discarded and rendered again
   // with it before anything is painted.
   return useMemo(
-    () => ({ ...held, hiddenWhenAnswerEmpty: ownAnswer }),
+    () => ({ ...(held ?? NOTHING_HELD), hiddenWhenAnswerEmpty: ownAnswer }),
     [held, ownAnswer]
   );
 }
@@ -157,11 +186,60 @@ function answeredSomething(answers: CardAnswers, placementId: string): boolean {
   return slot?.ok === true && !cardAnswerIsEmpty(slot);
 }
 
-/** The cards an answer found empty, or `undefined` for an answer that judged none. */
-function verdictOf(
-  layout: DashboardLayoutResponse
-): ReadonlySet<string> | undefined {
-  return layout.hiddenWhileEmpty === undefined
+/** The verdict taken where the dashboard first has a width; nothing before it has one. */
+function firstHeld(
+  fresh: ReadonlySet<string> | undefined,
+  dashboardWidth: number | undefined
+): Held | undefined {
+  return dashboardWidth === undefined
     ? undefined
-    : new Set(layout.hiddenWhileEmpty);
+    : { hidden: fresh ?? NONE, revealed: NONE };
+}
+
+/**
+ * What the dashboard holds after `fresh`, the latest answer's verdict at this width: the first
+ * verdict once there is a width, and from then each card a later verdict finds with something
+ * waiting, or whose own batch answer holds something (`answeredSomething`), moved from hidden to
+ * revealed. `held` itself when nothing changes.
+ */
+function nextHeld(
+  held: Held | undefined,
+  fresh: ReadonlySet<string> | undefined,
+  dashboardWidth: number | undefined,
+  answers: CardAnswers
+): Held | undefined {
+  if (held === undefined) return firstHeld(fresh, dashboardWidth);
+  const appearing = new Set(
+    [...held.hidden].filter(
+      id =>
+        (fresh !== undefined && !fresh.has(id)) ||
+        answeredSomething(answers, id)
+    )
+  );
+  if (appearing.size === 0) return held;
+  return {
+    hidden: new Set([...held.hidden].filter(id => !appearing.has(id))),
+    revealed: new Set([...held.revealed, ...appearing]),
+  };
+}
+
+/**
+ * The cards an answer found empty, judged at the tier each is drawn at on a dashboard
+ * `dashboardWidth` wide; `undefined` for an answer that judged none, or one judged at a width
+ * that draws some card at another tier, and before the dashboard has a width.
+ */
+function verdictAt(
+  layout: DashboardLayoutRead | undefined,
+  dashboardWidth: number | undefined
+): ReadonlySet<string> | undefined {
+  const judgedAt = layout?.askedAtWidth;
+  if (
+    layout?.hiddenWhileEmpty === undefined ||
+    judgedAt === undefined ||
+    dashboardWidth === undefined ||
+    tierBandAt(judgedAt) !== tierBandAt(dashboardWidth)
+  ) {
+    return undefined;
+  }
+  return new Set(layout.hiddenWhileEmpty);
 }

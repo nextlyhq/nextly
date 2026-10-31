@@ -27,6 +27,7 @@ import { MAX_PLACEMENTS } from "nextly/config";
 
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
+import { FrameState } from "../../frame/card-state";
 import { WidgetGrid } from "../../WidgetGrid";
 import { DRAG_INSTRUCTIONS } from "../drag/drag-messages";
 import {
@@ -79,6 +80,14 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
 );
 
 const api = vi.mocked(protectedApi);
+
+/**
+ * How many times the arrangement was read. The dashboard's header also reads the setup card's
+ * own state (`/dashboard/setup`), which is not the arrangement.
+ */
+const layoutReads = () =>
+  api.get.mock.calls.filter(([path]) => path.startsWith("/dashboard/layout"))
+    .length;
 
 /** Full width three rows high by default, resizable from 3 by 2 up to 12 by 6. */
 const RESIZABLE = {
@@ -143,6 +152,8 @@ function layout(
     defaultPlacements: [],
     version: 3,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...patch,
@@ -1192,7 +1203,7 @@ describe("the guards a save is sent against", () => {
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["dashboard", "layout"] });
     });
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(layoutReads()).toBe(2);
 
     await user.click(screen.getByTestId("dashboard-edit-save"));
 
@@ -1461,6 +1472,7 @@ describe("resetting to the default dashboard", () => {
   it("is not offered when there is no stored row at all", async () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
       source: "default",
+      arranged: false,
       version: 0,
     });
     renderGrid();
@@ -1579,22 +1591,22 @@ describe("when the schema changes underneath an open dashboard", () => {
   it("re-reads the arrangement, so the add panel knows what exists now", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:schema-updated"));
       });
-      return waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+      return waitFor(() => expect(layoutReads()).toBe(2));
     });
   });
 
   it("does not re-read on an unrelated event", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:something-else"));
       });
-      expect(api.get).toHaveBeenCalledTimes(1);
+      expect(layoutReads()).toBe(1);
     });
   });
 });
@@ -1770,6 +1782,51 @@ describe("an arrangement whose every card is not shown for its reader", () => {
     expect(screen.getByTestId("hidden-while-empty")).toHaveTextContent(
       "Not shown for you right now"
     );
+  });
+});
+
+describe("an arrangement whose every card leaves by its own empty answer", () => {
+  /**
+   * One card of a widget drawn by its own component at `component`, which hides while empty and
+   * which the layout read names as leaving by its own answer.
+   */
+  function quietCard(component: string) {
+    mockBranding = branding(["acme/quiet"], {
+      "acme/quiet": { component, hidesWhenEmpty: true },
+    });
+    layoutResponse = layout([{ id: "p1", widgetId: "acme/quiet" }], {
+      hiddenWhenAnswerEmpty: ["acme/quiet"],
+    });
+    renderGrid();
+    return screen.findByTestId("widget-cell-acme/quiet");
+  }
+
+  it("tells the reader their dashboard is empty at rest, counting the card as it hid itself", async () => {
+    // The component reports its answer empty to the frame, which only the card can see: counted
+    // from the answer instead, the card was on show and the grid was left blank.
+    registerCoreComponent("core#ReportsEmpty", () => (
+      <FrameState
+        state={{ kind: "empty", empty: { title: "Nothing waiting" } }}
+      />
+    ));
+    const cell = await quietCard("core#ReportsEmpty");
+    expect(within(cell).getByRole("region")).toHaveAttribute(
+      "data-hidden-empty"
+    );
+    expect(await screen.findByTestId("widget-grid-empty")).toBeInTheDocument();
+  });
+
+  it("does not while the card has something to draw", async () => {
+    // The control: a grid that said every such dashboard was empty would pass the case above.
+    registerCoreComponent("core#DrawsALine", () => <p>One order waiting</p>);
+    const cell = await quietCard("core#DrawsALine");
+    expect(
+      await within(cell).findByText("One order waiting")
+    ).toBeInTheDocument();
+    expect(within(cell).getByRole("region")).not.toHaveAttribute(
+      "data-hidden-empty"
+    );
+    expect(screen.queryByTestId("widget-grid-empty")).toBeNull();
   });
 });
 

@@ -16,8 +16,8 @@ import type { DefaultLayoutCard } from "../declaration/dashboard";
 
 /** Each core widget's id, by name. */
 export const CORE_WIDGET_ID = {
-  getStarted: "core/get-started",
-  content: "core/content",
+  setup: "core/setup",
+  contentTable: "core/content-table",
   quickCreate: "core/quick-create",
   team: "core/team",
   needsAttention: "core/needs-attention",
@@ -29,6 +29,7 @@ export const CORE_WIDGET_ID = {
   note: "core/note",
   recentEntries: "core/recent-entries",
   overTime: "core/over-time",
+  systemHealth: "core/system-health",
 } as const;
 
 /** The id of one of core's widgets. */
@@ -40,8 +41,8 @@ export type CoreWidgetId = (typeof CORE_WIDGET_ID)[keyof typeof CORE_WIDGET_ID];
  * sorts. Which of them the default dashboard holds is `CORE_DEFAULT_LAYOUT`.
  */
 export const CORE_WIDGET_IDS = [
-  CORE_WIDGET_ID.getStarted,
-  CORE_WIDGET_ID.content,
+  CORE_WIDGET_ID.setup,
+  CORE_WIDGET_ID.contentTable,
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.team,
   CORE_WIDGET_ID.needsAttention,
@@ -53,7 +54,21 @@ export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.note,
   CORE_WIDGET_ID.recentEntries,
   CORE_WIDGET_ID.overTime,
+  CORE_WIDGET_ID.systemHealth,
 ] as const satisfies readonly CoreWidgetId[];
+
+/**
+ * Core's widgets only a super-admin is told exist: neither offered to anyone
+ * else, nor placed, nor handed as a card (`widgetAudience`). A super-admin is
+ * not a permission, so no `requiredPermission` gate can say it, and an
+ * `access` predicate is judged per card only, which would still offer the
+ * widget to everyone. Here, beside the ids and importing nothing, so the
+ * audience asks it without loading any card.
+ */
+export const SUPER_ADMIN_WIDGET_IDS: ReadonlySet<string> = new Set<string>([
+  CORE_WIDGET_ID.setup,
+  CORE_WIDGET_ID.systemHealth,
+]);
 
 // Every id named above is in the order: a widget added to the names but not
 // here fails to compile.
@@ -67,7 +82,7 @@ void everyIdOrdered;
 
 /**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
- * there is one path to the default whoever wrote it: the onboarding card, then
+ * there is one path to the default whoever wrote it: the setup card, then
  * Needs attention, Create, Continue where you left off, Team activity,
  * Content and Upcoming releases, each at its widget's starting size. The
  * cards that share a row share a height, so the default dashboard tiles: Needs
@@ -81,11 +96,11 @@ void everyIdOrdered;
  * and the default's builder read it without loading every core card.
  */
 export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
-  CORE_WIDGET_ID.getStarted,
+  CORE_WIDGET_ID.setup,
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.continue,
   CORE_WIDGET_ID.teamActivity,
-  CORE_WIDGET_ID.content,
+  CORE_WIDGET_ID.contentTable,
   CORE_WIDGET_ID.upcomingReleases,
 ].map(widget => ({ widget }));

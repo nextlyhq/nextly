@@ -23,7 +23,6 @@
 
 import type {
   AnyWidgetSetting,
-  GetStartedAnswer,
   WidgetAction,
   WidgetArchetype,
   SourcelessWidgetQuery,
@@ -285,6 +284,12 @@ export interface DashboardLayoutResponse {
    */
   source: DashboardLayoutSource;
   /**
+   * Whether the reader has arranged this dashboard. `false` for a reader with no row, and for
+   * one whose row holds only what they chose about the default's cards (a dismissal, a setting):
+   * `source` says `"own"` for both of those rows, so it cannot tell them apart.
+   */
+  arranged: boolean;
+  /**
    * An opaque token for the set of widgets this reader could see when the
    * arrangement was read. Echoed back on write; a mismatch is a 409.
    */
@@ -297,14 +302,6 @@ export interface DashboardLayoutResponse {
    * than this layout, and is read again.
    */
   audience: string;
-  /**
-   * The Get started card's steps, from the computation that decided whether
-   * the card is drawn, so the card and its steps cannot disagree. Absent from a
-   * server that predates the card.
-   *
-   * @experimental
-   */
-  getStarted?: GetStartedLayoutView;
   /**
    * The placement ids of the cards that hide while empty and were empty for
    * this reader when the layout was read, at the tier each is drawn at on a
@@ -334,14 +331,15 @@ export interface DashboardLayoutResponse {
   readAheadToken?: string;
 }
 
-/** What the layout read says of the Get started card. */
-export interface GetStartedLayoutView {
-  /** Whether the reader's card is drawn. */
-  drawn: boolean;
+/**
+ * A layout answer as the admin holds it: the server's answer, with the dashboard width its read
+ * was sent. Set by the admin's own read (`fetchDashboardLayout`), never by the server.
+ */
+export interface DashboardLayoutRead extends DashboardLayoutResponse {
   /**
-   * The steps with the reader's skips applied, or `null` when the server
-   * worked none out: the card is removed (and its answer not asked for), or
-   * not in this reader's dashboard.
+   * The dashboard width the read was sent, which its `hiddenWhileEmpty` was judged at; absent
+   * when it was sent none. The verdict holds only on a dashboard whose width draws every card at
+   * the tier this one does (`tierBandAt`), so an answer held from another width judges no card.
    */
-  answer: GetStartedAnswer | null;
+  askedAtWidth?: number;
 }

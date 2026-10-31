@@ -2,21 +2,26 @@ import { renderHook } from "@testing-library/react";
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
-import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
+import type { DashboardLayoutRead } from "@admin/types/dashboard/widgets";
 
 import {
   useHiddenWhileEmptyAtFirstPaint,
   type CardAnswers,
 } from "../hidden-while-empty";
 
+/** The dashboard width the answers below are read at, and the dashboard is drawn at. */
+const WIDE = 1200;
+
 /**
- * A layout answer whose read found `hidden` empty, or judged no card when `hidden` is not given;
- * naming `ownAnswer` as the widgets that leave by their own answer.
+ * A layout answer whose read, sent the dashboard width `askedAtWidth`, found `hidden` empty, or
+ * judged no card when `hidden` is not given; naming `ownAnswer` as the widgets that leave by their
+ * own answer.
  */
 function answer(
   hidden?: string[],
-  ownAnswer?: string[]
-): DashboardLayoutResponse {
+  ownAnswer?: string[],
+  askedAtWidth = WIDE
+): DashboardLayoutRead {
   return {
     placements: [
       {
@@ -39,18 +44,32 @@ function answer(
     defaultPlacements: [],
     version: 0,
     source: "default",
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...(hidden === undefined ? {} : { hiddenWhileEmpty: hidden }),
     ...(ownAnswer === undefined ? {} : { hiddenWhenAnswerEmpty: ownAnswer }),
+    askedAtWidth,
   };
 }
 
 describe("the cards a dashboard is drawn without while empty", () => {
-  function held(first: DashboardLayoutResponse | undefined) {
-    return renderHook(({ layout }) => useHiddenWhileEmptyAtFirstPaint(layout), {
-      initialProps: { layout: first as DashboardLayoutResponse | undefined },
-    });
+  /**
+   * The verdict held from `first` on a dashboard `width` wide, re-rendered with each later one;
+   * `"unmeasured"` for a dashboard not measured yet (named, since a default parameter would turn
+   * an `undefined` passed for it into the default width).
+   */
+  function held(
+    first: DashboardLayoutRead | undefined,
+    width: number | "unmeasured" = WIDE
+  ) {
+    const dashboardWidth: number | undefined =
+      width === "unmeasured" ? undefined : width;
+    return renderHook(
+      ({ layout, dashboardWidth }) =>
+        useHiddenWhileEmptyAtFirstPaint(layout, dashboardWidth),
+      { initialProps: { layout: first, dashboardWidth } }
+    );
   }
 
   it("are the first answer's, and a card a later read finds empty stays shown", () => {
@@ -59,7 +78,10 @@ describe("the cards a dashboard is drawn without while empty", () => {
 
     // The last item cleared while the reader looked: the card stays, saying
     // nothing is waiting, rather than leaving and moving the cards after it.
-    rerender({ layout: answer(["core/needs-attention"]) });
+    rerender({
+      dashboardWidth: WIDE,
+      layout: answer(["core/needs-attention"]),
+    });
     expect([...result.current.hidden]).toEqual([]);
     expect([...result.current.revealed]).toEqual([]);
   });
@@ -70,12 +92,15 @@ describe("the cards a dashboard is drawn without while empty", () => {
     expect([...result.current.revealed]).toEqual([]);
 
     // A return visit's refetch found new work: the card is shown, and says so.
-    rerender({ layout: answer([]) });
+    rerender({ dashboardWidth: WIDE, layout: answer([]) });
     expect([...result.current.hidden]).toEqual([]);
     expect([...result.current.revealed]).toEqual(["core/needs-attention"]);
 
     // Found empty again: once shown it stays shown for the visit.
-    rerender({ layout: answer(["core/needs-attention"]) });
+    rerender({
+      dashboardWidth: WIDE,
+      layout: answer(["core/needs-attention"]),
+    });
     expect([...result.current.hidden]).toEqual([]);
   });
 
@@ -83,7 +108,10 @@ describe("the cards a dashboard is drawn without while empty", () => {
     const { result, rerender } = held(undefined);
     expect(result.current.hidden.size).toBe(0);
 
-    rerender({ layout: answer(["core/needs-attention"]) });
+    rerender({
+      dashboardWidth: WIDE,
+      layout: answer(["core/needs-attention"]),
+    });
     expect(result.current.hidden.size).toBe(0);
   });
 
@@ -96,7 +124,55 @@ describe("the cards a dashboard is drawn without while empty", () => {
     const { result, rerender } = held(answer(["core/needs-attention"]));
     // A read sent no dashboard width judges no card: no verdict, not "none
     // empty", so the card it says nothing about stays off the page.
-    rerender({ layout: answer() });
+    rerender({ dashboardWidth: WIDE, layout: answer() });
+    expect([...result.current.hidden]).toEqual(["core/needs-attention"]);
+    expect(result.current.revealed.size).toBe(0);
+  });
+
+  it("are the answer's when it was judged at a width that draws every card at the tier this one does", () => {
+    // 1210 draws a card of every span at the tier 1200 does: the verdict holds.
+    const { result } = held(answer(["core/needs-attention"], [], WIDE), 1210);
+    expect([...result.current.hidden]).toEqual(["core/needs-attention"]);
+  });
+
+  it("are none for a cached answer judged at a width that draws a card at another tier", () => {
+    // Read on a wide dashboard, drawn now on one 500 wide, where the eight-column card is drawn
+    // across the dashboard at another tier: what was judged of it there says nothing here.
+    const { result, rerender } = held(
+      answer(["core/needs-attention"], [], WIDE),
+      500
+    );
+    expect(result.current.hidden.size).toBe(0);
+    expect(result.current.revealed.size).toBe(0);
+
+    // The refetch judged at this width finds it empty: shown at first, it stays shown.
+    rerender({
+      dashboardWidth: 500,
+      layout: answer(["core/needs-attention"], [], 500),
+    });
+    expect(result.current.hidden.size).toBe(0);
+  });
+
+  it("are taken once the dashboard has a width, from the answer judged at that width", () => {
+    // Drawn before the dashboard was measured: nothing is decided yet.
+    const { result, rerender } = held(
+      answer(["core/needs-attention"]),
+      "unmeasured"
+    );
+    expect(result.current.hidden.size).toBe(0);
+
+    // Measured, before the first paint: the verdict is taken now, not locked as none.
+    rerender({
+      dashboardWidth: WIDE,
+      layout: answer(["core/needs-attention"]),
+    });
+    expect([...result.current.hidden]).toEqual(["core/needs-attention"]);
+  });
+
+  it("are left as they are by a later answer judged at a width of another tier", () => {
+    const { result, rerender } = held(answer(["core/needs-attention"]));
+    // Found with something waiting, but judged for a dashboard 500 wide: no verdict here.
+    rerender({ dashboardWidth: WIDE, layout: answer([], [], 500) });
     expect([...result.current.hidden]).toEqual(["core/needs-attention"]);
     expect(result.current.revealed.size).toBe(0);
   });
@@ -106,7 +182,7 @@ describe("the cards a dashboard is drawn without while empty", () => {
     expect([...result.current.hiddenWhenAnswerEmpty]).toEqual([
       "acme/legacy-quiet",
     ]);
-    rerender({ layout: answer([], []) });
+    rerender({ dashboardWidth: WIDE, layout: answer([], []) });
     expect(result.current.hiddenWhenAnswerEmpty.size).toBe(0);
   });
 
@@ -136,7 +212,8 @@ describe("the cards a dashboard is drawn without while empty", () => {
 
     function heldWith(answers: CardAnswers) {
       return renderHook(
-        ({ layout, asked }) => useHiddenWhileEmptyAtFirstPaint(layout, asked),
+        ({ layout, asked }) =>
+          useHiddenWhileEmptyAtFirstPaint(layout, WIDE, asked),
         { initialProps: { layout: answer([CARD]), asked: answers } }
       );
     }

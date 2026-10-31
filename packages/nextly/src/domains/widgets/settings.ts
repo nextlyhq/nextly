@@ -83,7 +83,8 @@ export interface WidgetSettingBase {
   admin?: { description?: string };
   /**
    * Whether the setting sits on the card itself, changeable without opening
-   * the settings sheet, as Over time's date range does. At most one per widget.
+   * the settings sheet, as Over time's date range does. At most three per
+   * widget, held by the card's quick popover; its header draws the first.
    *
    * A top-level key the field configs do not have, deliberately: it is read by
    * the card's header, never by `FieldRenderer`, which ignores it.
@@ -608,17 +609,23 @@ export function widgetSettingsProblems(settings: unknown): string[] {
 }
 
 /**
+ * The most settings one widget may mark quick: what a card's quick popover holds of them, beside
+ * the card's Collection. The admin's popover caps at this same number.
+ */
+export const MAX_QUICK_SETTINGS = 3;
+
+/**
  * Why a widget's settings mark too many as quick, or nothing when they do not.
  *
- * A card's header holds one quick setting: two would each take the
- * header's one place, and which one a person saw would depend on the order
+ * A card's quick popover holds at most three settings: more would turn it into
+ * the settings sheet, and which of them a person saw would depend on the order
  * they were declared in.
  */
 function quickProblems(settings: readonly AnyWidgetSetting[]): string[] {
   const quick = settings.filter(setting => setting.quick === true);
-  if (quick.length <= 1) return [];
+  if (quick.length <= MAX_QUICK_SETTINGS) return [];
   return [
-    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most one`,
+    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most three`,
   ];
 }
 

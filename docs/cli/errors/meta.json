@@ -78,6 +78,7 @@
     "nextly-migration-partially-applied",
     "nextly-migration-snapshot-missing",
     "nextly-permission-collision",
+    "nextly-plugin-removed-widget-channel",
     "nextly-route-collision",
     "nextly-route-invalid-path",
     "nextly-schema-cross-plugin-relation",

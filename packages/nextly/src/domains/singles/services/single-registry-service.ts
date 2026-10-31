@@ -54,6 +54,7 @@ import {
   moveWebhookRecording,
   renameEntity,
 } from "../../entity-rename/rename-entity";
+import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
@@ -858,9 +859,9 @@ export class SingleRegistryService extends BaseRegistryService<
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
         mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
       };
-      const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "single", slug, tables);
-      });
+      const { deleted: count, expire } = await this.adapter.transaction(
+        async tx => deleteEntityRegistryRow(tx, "single", slug, tables)
+      );
       // The cached registry row is now out of date.
       clearRegistryRowCache();
 
@@ -879,6 +880,12 @@ export class SingleRegistryService extends BaseRegistryService<
       // Its document is gone with it, so a scheduled release holding it
       // cannot run: stopped now rather than at its instant.
       await this.recheckReleasesHolding(slug);
+
+      // Every cached read of it now describes content that is gone: expired
+      // here, the method every deletion path reaches, with the setting the
+      // deleted row held. A delete that found the row already gone has thrown
+      // above, so a retry never flushes a Single that opted out.
+      await flushContentChange(expire, this.logger, "a Single was deleted");
 
       if (this.permissionSeedService) {
         try {

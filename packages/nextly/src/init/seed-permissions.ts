@@ -13,12 +13,19 @@
  * @module init/seed-permissions
  */
 
+import { inArray } from "drizzle-orm";
+
 import type { AccessTarget } from "../auth/access/decide";
-import { seedRolePresets } from "../database/seeders/role-presets";
+import { getDialectTables } from "../database";
+import {
+  ROLE_PRESETS,
+  seedRolePresets,
+} from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
+  recordPublicReadNotice,
   seedPublicReadGrants,
   withdrawUndeclaredPluginGrants,
 } from "../domains/auth/services/public-read-grant";
@@ -218,6 +225,26 @@ export async function awaitBootSeeding(): Promise<void> {
 }
 
 async function seedEverything(): Promise<void> {
+  // Whether this site is told once which reads its visitors lost to the
+  // Public role: decided before anything is seeded, the one time a site an
+  // earlier release ran on can be told from a new install. The Public role
+  // waits for it: made first, it would leave such a site recorded as not due
+  // at the next boot, and never told. Tried again in a while, as a failure to
+  // make the role is.
+  const noticeRecorded = await seedingStep("public read notice", async () => {
+    try {
+      await recordPublicReadNotice({
+        meta: getService("metaService"),
+        publicRoleMade: () => publicRoleMade(getService("metaService")),
+        seededBefore: presetRoleExists,
+      });
+    } catch (error) {
+      if (!isMissingTableOnThisDatabase(error)) {
+        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+      }
+      throw error;
+    }
+  });
   const permissionsSeeded = await seedingStep(
     "permissions",
     seedAllPermissions
@@ -227,43 +254,45 @@ async function seedEverything(): Promise<void> {
   );
   // The role visitors are judged by. Made once and then left to the owner,
   // unlike a preset: only its permissions change after it exists.
-  const publicRoleSeeded = await seedingStep("public role", async () => {
-    const roles = new RoleMutationService(
-      getService("adapter"),
-      getService("logger")
-    );
-    const config = getService("config");
-    // The names roles the app and its plugins declare go by, which the
-    // built-in role leaves to them though they are made after it.
-    const declaredNames = [
-      ...(config.roles ?? []),
-      ...(config.plugins ?? []).flatMap(
-        plugin => plugin.contributes?.roles ?? []
-      ),
-    ].map(role => role.name);
-    try {
-      const seeded = await seedPublicRole({
-        publicSlugHolder: () => roles.publicSlugHolder(),
-        moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
-        ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
-        unlinkPublicRole: async () => {
-          const holder = await roles.publicSlugHolder();
-          if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
-        },
-        meta: getService("metaService"),
-        logger: getService("logger"),
-      });
-      if (!seeded.made) retrySeedingAt(seeded.retryAt);
-    } catch (error) {
-      // Not left unmade until the next start: tried again in a while, as
-      // when another boot holds the claim. A table not created yet is the
-      // migrations' to make, not this retry's.
-      if (!isMissingTableOnThisDatabase(error)) {
-        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+  const publicRoleSeeded =
+    noticeRecorded &&
+    (await seedingStep("public role", async () => {
+      const roles = new RoleMutationService(
+        getService("adapter"),
+        getService("logger")
+      );
+      const config = getService("config");
+      // The names roles the app and its plugins declare go by, which the
+      // built-in role leaves to them though they are made after it.
+      const declaredNames = [
+        ...(config.roles ?? []),
+        ...(config.plugins ?? []).flatMap(
+          plugin => plugin.contributes?.roles ?? []
+        ),
+      ].map(role => role.name);
+      try {
+        const seeded = await seedPublicRole({
+          publicSlugHolder: () => roles.publicSlugHolder(),
+          moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
+          ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
+          unlinkPublicRole: async () => {
+            const holder = await roles.publicSlugHolder();
+            if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
+          },
+          meta: getService("metaService"),
+          logger: getService("logger"),
+        });
+        if (!seeded.made) retrySeedingAt(seeded.retryAt);
+      } catch (error) {
+        // Not left unmade until the next start: tried again in a while, as
+        // when another boot holds the claim. A table not created yet is the
+        // migrations' to make, not this retry's.
+        if (!isMissingTableOnThisDatabase(error)) {
+          retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    }));
   // Public's read where code lets anyone read, and what plugins declare for
   // it, each granted once so an owner's change to it stands, and the startup
   // listing of what it lacks. Only after every permission seeded: a grant
@@ -322,6 +351,32 @@ async function seedEverything(): Promise<void> {
         "[nextly] Could not check for roles holding a retired manage permission: ",
     })
   );
+}
+
+/**
+ * Whether a boot's seeding has run on this database: a preset role exists,
+ * as every boot's seeding makes them and nothing else does.
+ */
+async function presetRoleExists(): Promise<boolean> {
+  const { roles } = getDialectTables();
+  const db = getService("adapter").getDrizzle<{
+    select(fields: Record<string, unknown>): {
+      from(table: unknown): {
+        where(condition: unknown): { limit(count: number): Promise<unknown[]> };
+      };
+    };
+  }>();
+  const found = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(
+      inArray(
+        roles.slug,
+        ROLE_PRESETS.map(({ slug }) => slug)
+      )
+    )
+    .limit(1);
+  return found.length > 0;
 }
 
 /** How long the retired manage check may hold a boot, as the schema check may. */

@@ -35,6 +35,7 @@ import {
   type VersionScope,
 } from "@admin/services/versionApi";
 
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 import { singleDocumentKeys, singleKeys } from "./useSingles";
 
 /** Page size for the history list. */
@@ -361,6 +362,9 @@ export function useSetVersionLabel({
     mutationFn: ({ versionNo, label }) =>
       versionApi.setLabel(scope, versionNo, label),
     onError: error => {
+      // A refusal because the entity was removed from code reads its schema
+      // again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
       onError?.(error);
     },
     onSuccess: result => {
@@ -398,6 +402,9 @@ export function useRestoreVersion({
     // restores of the same version.
     retry: false,
     onError: error => {
+      // A refusal because the entity was removed from code reads its schema
+      // again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
       onError?.(error);
     },
     onSuccess: result => {

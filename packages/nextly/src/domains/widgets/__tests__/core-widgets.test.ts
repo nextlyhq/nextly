@@ -22,11 +22,7 @@ import {
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
 import { DENSITY_OPTIONS } from "../declaration/setting-builders";
-import {
-  LIST_DENSITIES,
-  MAX_WIDGET_LIMIT,
-  MAX_WIDGET_ROWS,
-} from "../query-limits";
+import { LIST_DENSITIES, MAX_WIDGET_ROWS } from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { clearSystemResolvers } from "../system-sources";
@@ -137,30 +133,29 @@ describe("core widget definitions", () => {
    * of these hides a card every authenticated admin can see today, which is the
    * behaviour change that docblock exists to prevent.
    */
-  it("declares Get started visible by permission alone: first, full width, dismissible", () => {
-    // 🔴 No condition. Visibility is part of the token a layout write is
-    // checked against, so a card whose visibility followed its steps would
-    // turn a skip or a dismissal into a stale-scope refusal whenever a step
-    // changed between the read and the write. The layout read draws it or
-    // leaves it dormant instead.
-    const card = CORE_WIDGETS.find(w => w.id === "core/get-started");
+  it("declares the setup card first on the default, full width and two rows, shown by its own rule", () => {
+    const card = CORE_DECLARATIONS.find(w => w.id === "core/setup");
     expect(card).toBeDefined();
-    expect(card?.lifecycle ?? "always").toBe("always");
-    expect(card).not.toHaveProperty("visibleWhen");
-    expect(card?.dismissible).toBe(true);
-    // Full width only, and compact: its steps fold to the rows it has, so it may be as short
-    // as three rows without a step cut off.
-    expect(card && sizeBounds(card.size)).toEqual({
-      default: { w: 12, h: 4 },
-      min: { w: 12, h: 3 },
-      max: { w: 12, h: 12 },
+    // Whether it is there is its `shows`, judged per reader before it loads,
+    // never a condition or the frame's dismissal.
+    expect(card?.shows).toBeTypeOf("function");
+    expect(card).not.toHaveProperty("lifecycle");
+    expect(card).not.toHaveProperty("dismissible");
+    expect(card?.size).toEqual({
+      default: { w: 12, h: 2 },
+      min: { w: 12, h: 2 },
+      max: { w: 12, h: 4 },
     });
     // First on core's default: it addresses a reader who has just arrived.
-    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/get-started" });
+    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/setup" });
   });
 
-  it("no longer declares the two cards Get started replaced", () => {
-    const ids = CORE_WIDGETS.map(w => w.id);
+  it("no longer declares the old Get started card, or the cards it replaced", () => {
+    const ids = [
+      ...CORE_WIDGETS.map(w => w.id),
+      ...CORE_DECLARATIONS.map(w => w.id),
+    ];
+    expect(ids).not.toContain("core/get-started");
     expect(ids).not.toContain("core/seed-demo-content");
     expect(ids).not.toContain("core/onboarding-checklist");
   });
@@ -168,7 +163,7 @@ describe("core widget definitions", () => {
   it("offers the Content card only while there is a collection or a Single to list", () => {
     // One card for both: a reader with Singles and no collections still has
     // something it lists, which `collections:present` alone would hide.
-    const content = CORE_WIDGETS.find(w => w.id === "core/content");
+    const content = CORE_WIDGETS.find(w => w.id === "core/content-table");
     expect(content?.lifecycle).toBe("conditional");
     expect(content?.visibleWhen).toBe("content:present");
   });
@@ -183,6 +178,18 @@ describe("core widget definitions", () => {
     expect(shownWhen("core/upcoming-releases")).toBe("releases:present");
     // Its gate stays: the condition is about existence, the gate about access.
     expect(card("core/upcoming-releases").requiredPermission).toBeDefined();
+  });
+
+  it("no longer declares the Content tile card, which the Content table replaced", () => {
+    // Removed outright, not kept as an alias of the table: no core id, no
+    // definition and no place in core's default names it.
+    expect(CORE_WIDGETS.map(w => w.id)).not.toContain("core/content");
+    expect(CORE_WIDGET_IDS).not.toContain("core/content");
+    expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
+      "core/content"
+    );
+    // The control: the table is declared, so the absence above is the old id's.
+    expect(CORE_WIDGET_IDS).toContain("core/content-table");
   });
 
   it("no longer declares the Collections and Singles cards Content replaced", () => {
@@ -203,7 +210,7 @@ describe("core widget definitions", () => {
       w => w.lifecycle === "conditional"
     ).map(w => w.id);
     expect(conditional).toEqual([
-      "core/content",
+      "core/content-table",
       "core/quick-create",
       "core/upcoming-releases",
     ]);
@@ -261,13 +268,18 @@ describe("the list cards' Density", () => {
 });
 
 describe("the content card", () => {
-  it("asks for every collection, not the default five", () => {
-    // An omitted limit is materialized as the default 5, which would cut a
-    // site's sixth collection from the card.
-    expect(card("core/content").query).toEqual({
-      source: CONTENT_SOURCE_ID,
-      op: "list",
-      limit: MAX_WIDGET_LIMIT,
+  it("is the table, asked for the rows its size draws, never every collection", () => {
+    // 🔴 Asked at the most a query may return, the card's source counted fifty
+    // collections on every load. Sized, it is asked the rows the card draws and
+    // one more, and its source counts only those.
+    expect(card("core/content-table")).toMatchObject({
+      component: "core#ContentTable",
+      sizedQuery: true,
+      query: {
+        source: CONTENT_SOURCE_ID,
+        op: "list",
+        limit: MAX_WIDGET_ROWS,
+      },
     });
   });
 });
@@ -360,7 +372,7 @@ describe("the default dashboard", () => {
     // default.
     ["core/continue", [6, 5], [4, 4], [12, 8]],
     ["core/team-activity", [6, 5], [4, 4], [12, 8]],
-    ["core/content", [12, 4], [6, 3], [12, 6]],
+    ["core/content-table", [12, 4], [6, 3], [12, 6]],
     // Alone on its row: Team, for the people who manage the team, is not on the default.
     // Up to the full row, so the dashboard may widen it to 12 when it shows alone in its row.
     ["core/upcoming-releases", [4, 4], [4, 4], [12, 8]],
@@ -368,10 +380,10 @@ describe("the default dashboard", () => {
 
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });
 
-  it("is core's own defaultLayout: the onboarding card, then the agreed cards as agreed", () => {
+  it("is core's own defaultLayout: the setup card, then the agreed cards as agreed", () => {
     // Each at its widget's starting size: no entry states a size or settings of its own.
     expect(CORE_DEFAULT_LAYOUT).toEqual([
-      { widget: "core/get-started" },
+      { widget: "core/setup" },
       ...AGREED.map(([id]) => ({ widget: id })),
     ]);
   });

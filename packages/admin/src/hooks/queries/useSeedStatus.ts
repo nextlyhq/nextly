@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * useSeedStatus — state machine for the dashboard SeedDemoContentCard.
+ * useSeedStatus — state machine for the setup card's sample-content step.
  *
  * Composes two queries (probe + meta status) and two mutations (run seed,
  * skip) into a single discriminated-union state. The card consumes
@@ -34,12 +34,19 @@ export type SeedStatus =
   | { kind: "idle"; template: { slug: string; label: string } }
   | { kind: "seeding" }
   | { kind: "success"; result: SeedResult }
-  | { kind: "error"; message: string };
+  /** A decline on its way: the offer stays until the route confirms it. */
+  | { kind: "declining" }
+  /** A load or a decline that failed, and which, so Retry repeats it. */
+  | { kind: "error"; message: string; failed: "load" | "decline" };
 
 interface UseSeedStatusReturn {
   status: SeedStatus;
   startSeed: () => void;
-  skip: () => void;
+  /**
+   * Decline sample content for the site. `onRecorded` runs once the decline
+   * has landed, so a card drawn from it can ask for its steps again.
+   */
+  skip: (onRecorded?: () => void) => void;
 }
 
 const QK_PROBE = ["seed", "probe"] as const;
@@ -89,16 +96,22 @@ export function useSeedStatus(): UseSeedStatusReturn {
       void qc.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
     },
     onError: err => {
-      setOverlay({ kind: "error", message: err.message });
+      setOverlay({ kind: "error", message: err.message, failed: "load" });
     },
   });
 
   const skipMut = useMutation<void, Error, void>({
     mutationFn: seedApi.setSkipped,
+    // Declining, never declined, until the route confirms it: a decline that
+    // fails leaves the offer as the site still has it.
     onMutate: () => {
-      setOverlay({ kind: "hidden" });
+      setOverlay({ kind: "declining" });
+    },
+    onError: err => {
+      setOverlay({ kind: "error", message: err.message, failed: "decline" });
     },
     onSuccess: () => {
+      setOverlay({ kind: "hidden" });
       void qc.invalidateQueries({ queryKey: QK_STATUS });
       // Declining now closes the `seed:unanswered` condition, so the server
       // stops offering this card exactly as it does after a successful seed.
@@ -127,6 +140,9 @@ export function useSeedStatus(): UseSeedStatusReturn {
   return {
     status,
     startSeed: () => seedMut.mutate(),
-    skip: () => skipMut.mutate(),
+    skip: onRecorded =>
+      skipMut.mutate(undefined, {
+        ...(onRecorded === undefined ? {} : { onSuccess: () => onRecorded() }),
+      }),
   };
 }

@@ -23,8 +23,8 @@ describe("the group each widget is listed in", () => {
       CORE_WIDGET_IDS.map(id => [id, addPanelFacts(core(id)).group])
     );
     expect(groups).toEqual({
-      "core/get-started": "overview",
-      "core/content": "overview",
+      "core/setup": "overview",
+      "core/content-table": "overview",
       "core/quick-create": "overview",
       "core/team": "team",
       "core/needs-attention": "overview",
@@ -39,6 +39,8 @@ describe("the group each widget is listed in", () => {
       // Offered per collection, as Count is.
       "core/recent-entries": "content",
       "core/over-time": "content",
+      // Super-admins only, and one row of Overview for them.
+      "core/system-health": "overview",
     });
   });
 

@@ -2,7 +2,8 @@
  * The layout read is sent the dashboard's width as it measures when the read is asked, so the
  * server judges each card that hides while empty at the tier the card's first query will ask at
  * (`predictedTier` of the same width). With no dashboard drawn, or one with no width yet, none is
- * sent and the answer judges no card.
+ * sent and the answer judges no card. The answer is held with the width it was sent, so a cached
+ * one drawn at another width is known for what it is.
  */
 import { render } from "@testing-library/react";
 import { useRef, type JSX } from "react";
@@ -62,5 +63,21 @@ describe("the layout read", () => {
     render(<Dashboard />);
     await fetchDashboardLayout();
     expect(api.get).toHaveBeenLastCalledWith("/dashboard/layout");
+  });
+
+  it("is answered with the width it was sent, which its verdict was judged at", async () => {
+    api.get.mockResolvedValue({ hiddenWhileEmpty: ["p-1"] });
+    laidOut = 1199.5;
+    const { unmount } = render(<Dashboard />);
+    // Held beside the answer, so a cached answer drawn at another width can be told apart.
+    await expect(fetchDashboardLayout()).resolves.toEqual({
+      hiddenWhileEmpty: ["p-1"],
+      askedAtWidth: 1199.5,
+    });
+
+    // Sent no width, the answer carries none: it judged no card.
+    unmount();
+    const unjudged = await fetchDashboardLayout();
+    expect(unjudged).not.toHaveProperty("askedAtWidth");
   });
 });

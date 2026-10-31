@@ -1,5 +1,7 @@
 // Collection and dynamic content types for the admin app
 
+import type { RemovedFromCodeMark } from "./removed-from-code";
+
 /**
  * All supported field types in Nextly
  *
@@ -212,7 +214,7 @@ export interface CollectionAdminComponents {
   AfterEdit?: string;
 }
 
-export interface Collection {
+export interface Collection extends RemovedFromCodeMark {
   id: string;
   name: string;
   /** Slug for the collection (new API format) */

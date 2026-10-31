@@ -24,6 +24,7 @@ import {
   useTheme,
 } from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
+import { RoutedPathnameContext } from "../context/RoutedPathnameContext";
 import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
@@ -195,7 +196,11 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
               only once a route is resolved, so the host's own title stands
               until the admin knows which screen it is on. */}
           <DocumentTitleProvider route={route} pathname={pathname}>
-            {content}
+            {/* The address the router drew this screen for, which a screen
+                writing the address compares with the bar's. */}
+            <RoutedPathnameContext.Provider value={pathname}>
+              {content}
+            </RoutedPathnameContext.Provider>
           </DocumentTitleProvider>
         </BrandingProvider>
       </PortalProvider>
