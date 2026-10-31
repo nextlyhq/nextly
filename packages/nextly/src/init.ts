@@ -33,10 +33,7 @@
  * ```
  */
 
-import {
-  cacheComponentsEnabled,
-  warnIfCacheComponentsOn,
-} from "./cache-components";
+import { cacheComponentsEnabled } from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
 import { recordRegisteredLocalization } from "./di/registered-localization";
@@ -574,9 +571,9 @@ export async function getCachedNextly(): Promise<Nextly> {
  *
  * @param host - What the app's own `instrumentation.ts` knows about the Next.js
  *               build it runs in. `cacheComponents` is the value Next.js
- *               inlines there for `process.env.__NEXT_CACHE_COMPONENTS`; Nextly
- *               warns when it says Cache Components is on, which it does not
- *               support yet.
+ *               inlines there for `process.env.__NEXT_CACHE_COMPONENTS`. With
+ *               it on, a cached read finding no `"use cache"` read function
+ *               registered is said once, naming the file to add.
  */
 export function createRegister(
   config: SanitizedNextlyConfig,
@@ -585,12 +582,11 @@ export function createRegister(
   return async function register() {
     // Kept for the cached reads: under Cache Components they go through the
     // app's `"use cache"` function, and one that was never registered is said.
-    recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
-    // Before anything starts. Nextly cannot read this itself: Next.js inlines
-    // the setting only into code it bundles, and Nextly is a server-external
-    // package. `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
+    // Nextly cannot read this itself: Next.js inlines the setting only into
+    // code it bundles, and Nextly is a server-external package.
+    // `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
     // `cache-components.test.ts` pins it, so a rename fails loudly there.
-    warnIfCacheComponentsOn(host.cacheComponents, "this Next.js build");
+    recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
     await getNextly({ config });
   };
 }

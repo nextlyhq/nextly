@@ -4,13 +4,18 @@
  * `cachedRead` here stands in for the app's function: like the real one it
  * receives only the key, the tags and the lifetime, and reaches the reader
  * through `runRegisteredRead(key)`, holding one result per key as a cache would.
+ *
+ * Timers are faked so the deferred-fill window can be walked through, and each
+ * test ends by running out the removals it left pending, so no reader carries
+ * over into the next test.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as logger from "../../../observability/logger";
 import { applyCache, type UnstableCache } from "../cached-find";
 import {
   type CachedRead,
+  DEFERRED_FILL_WINDOW_MS,
   readThroughRegistered,
   recordCacheComponents,
   registerCachedRead,
@@ -18,7 +23,13 @@ import {
   setCachedRead,
 } from "../registered-read";
 
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
 afterEach(() => {
+  vi.runOnlyPendingTimers();
+  vi.useRealTimers();
   setCachedRead(undefined);
   recordCacheComponents(false);
   vi.restoreAllMocks();
@@ -88,8 +99,68 @@ describe("readThroughRegistered", () => {
     gate.release();
     expect(await first).toBeTypeOf("string");
     expect(warn).not.toHaveBeenCalled();
-    // Once both are done, the key is released.
+    // Once both are done and the deferred-fill window has passed, the key is released.
+    await vi.advanceTimersByTimeAsync(DEFERRED_FILL_WINDOW_MS);
     expect(() => runRegisteredRead("k")).toThrow();
+  });
+
+  it("lets a stale entry's background fill, run after the call returned, find the reader", async () => {
+    // As Next.js does past `revalidate`: the stale value is served, and the
+    // entry is regenerated in the background once the call has returned.
+    const store = new Map<string, unknown>();
+    const fills: Promise<void>[] = [];
+    const cachedRead: CachedRead = async key => {
+      if (store.has(key)) {
+        const stale = store.get(key);
+        fills.push(
+          new Promise<void>(resolve => setTimeout(resolve, 1000)).then(
+            async () => {
+              store.set(key, await runRegisteredRead(key));
+            }
+          )
+        );
+        return stale;
+      }
+      const value = await runRegisteredRead(key);
+      store.set(key, value);
+      return value;
+    };
+    let version = 1;
+    const read = () =>
+      readThroughRegistered(
+        cachedRead,
+        "stale",
+        async () => `v${version}`,
+        [],
+        60
+      );
+    expect(await read()).toBe("v1");
+    version = 2;
+    // Served stale, with the fill still to come.
+    expect(await read()).toBe("v1");
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(fills[0]).resolves.toBeUndefined();
+    // The next read gets what the background fill wrote.
+    expect(await read()).toBe("v2");
+    // That read was past `revalidate` too: its own fill finishes inside the test.
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(fills);
+  });
+
+  it("removes a reader once the window passes with nothing holding it, and a new read restarts it", async () => {
+    const cachedRead: CachedRead = async key => runRegisteredRead(key);
+    const read = () =>
+      readThroughRegistered(cachedRead, "w", async () => "w", [], false);
+    await read();
+    await vi.advanceTimersByTimeAsync(DEFERRED_FILL_WINDOW_MS - 1);
+    await expect(runRegisteredRead("w")).resolves.toBe("w");
+    // A read just before the end starts the window afresh, so the first
+    // window's end does not remove the reader the new read left.
+    await read();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(runRegisteredRead("w")).resolves.toBe("w");
+    await vi.advanceTimersByTimeAsync(DEFERRED_FILL_WINDOW_MS);
+    expect(() => runRegisteredRead("w")).toThrow();
   });
 
   it("reads directly, and says so, when the cached function finds no reader", async () => {
@@ -158,6 +229,33 @@ describe("applyCache under Cache Components", () => {
     });
     expect(used).toEqual([["posts", "y"]]);
   });
+
+  // Next.js's two refusals of a `"use cache"` call with no App Router scope:
+  // a plain Error for no WorkStore, an InvariantError for no WorkUnitStore.
+  it.each([
+    '"use cache" cannot be used outside of App Router. Expected a WorkStore.',
+    'Invariant: "use cache" cannot be used outside of App Router. Expected a WorkUnitStore. This is a bug in Next.js.',
+  ])(
+    "reads directly, and quietly, outside an App Router scope: %s",
+    async message => {
+      const warn = vi.fn();
+      vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
+        error: vi.fn(),
+        warn,
+        info: vi.fn(),
+        debug: vi.fn(),
+      } as never);
+      setCachedRead(async () => {
+        throw new Error(message);
+      });
+      const result = await applyCache(unused, async () => ({ id: "job" }), {
+        tags: ["nextly:posts"],
+        keyParts: ["posts", "job"],
+      });
+      expect(result).toEqual({ id: "job" });
+      expect(warn).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("Cache Components with no cached-read function registered", () => {

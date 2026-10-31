@@ -7,15 +7,21 @@
  * write can still be served the previous `unstable_cache` entry once. The
  * directive has to sit in code Next.js compiles, and nextly is a server
  * external, so the app hands nextly its own `"use cache"` function,
- * `cachedRead(key, tags, revalidate)`, through `createRegister`.
+ * `cachedRead(key, tags, revalidate)`, through `registerCachedRead`.
  *
  * A cached function's arguments must be serializable, so the reader itself
  * cannot be passed in. It is registered here under the read's key instead,
  * while the call is in flight. The app's function calls `runRegisteredRead(key)`
- * on a miss, in the same process and request. A key can be in flight for
- * several requests at once, and any of their readers answers it (the key names
- * everything the result varies by), so each entry is counted, and one
- * request's end never removes a reader another is about to run.
+ * on a miss, in the same process. A key can be in flight for several requests
+ * at once, and any of their readers answers it (the key names everything the
+ * result varies by), so each entry is counted, and one request's end never
+ * removes a reader another is about to run.
+ *
+ * A miss is not the only time the body runs. An entry past its `revalidate` is
+ * served stale, and Next.js regenerates it in the background after the call
+ * has returned, so a reader stays registered for `DEFERRED_FILL_WINDOW_MS`
+ * once nothing holds it: long enough for that fill to find it, short enough
+ * that a key read once is not kept for good.
  *
  * @module runtime/cache/registered-read
  */
@@ -33,7 +39,18 @@ export type CachedRead = (
 interface Registered {
   reader: () => Promise<unknown>;
   holders: number;
+  /** Removes the entry once the deferred-fill window ends, while nothing holds it. */
+  expiry: ReturnType<typeof setTimeout> | undefined;
 }
+
+/**
+ * How long a reader outlives the last call that registered it. Next.js starts
+ * a stale entry's background fill as the stale value is served, so the fill
+ * reaches `runRegisteredRead` within moments; a minute leaves room for a
+ * loaded process. A fill that comes later still finds nothing, and the entry
+ * stays stale until a later read past `revalidate` starts another.
+ */
+export const DEFERRED_FILL_WINDOW_MS = 60_000;
 
 interface RegistryState {
   cachedRead: CachedRead | undefined;
@@ -150,10 +167,60 @@ export function runRegisteredRead(key: string): Promise<unknown> {
 }
 
 /**
+ * Whether `error` is Next.js refusing a `"use cache"` call outside an App
+ * Router request or build: instrumentation, a background job, a script. It
+ * throws before the body runs, so the reader has not run yet. Matched by the
+ * phrase both of its refusals share (no WorkStore, no WorkUnitStore);
+ * `cache-components.test.ts` pins the phrase to the installed Next.js.
+ */
+function isOutsideAppRouter(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes('"use cache" cannot be used outside of App Router')
+  );
+}
+
+/**
+ * Registers `reader` under `key` for one more call. An entry already there
+ * takes the newest reader: any of them answers the key, and the newest comes
+ * from a request still under way.
+ */
+function hold(key: string, reader: () => Promise<unknown>): void {
+  const { readers } = state();
+  const held = readers.get(key);
+  if (held === undefined) {
+    readers.set(key, { reader, holders: 1, expiry: undefined });
+    return;
+  }
+  held.reader = reader;
+  held.holders++;
+  clearTimeout(held.expiry);
+  held.expiry = undefined;
+}
+
+/**
+ * Lets go of one call's hold on `key`. The last one leaves the reader for the
+ * deferred-fill window, then removes it unless a new call has taken it again.
+ */
+function release(key: string): void {
+  const { readers } = state();
+  const entry = readers.get(key);
+  if (entry === undefined || --entry.holders > 0) return;
+  entry.expiry = setTimeout(() => {
+    if (readers.get(key) === entry && entry.holders === 0) {
+      readers.delete(key);
+    }
+  }, DEFERRED_FILL_WINDOW_MS);
+  // A pending removal never keeps a script or a test process alive.
+  entry.expiry.unref?.();
+}
+
+/**
  * Reads through the app's `cachedRead`, with `reader` registered under `key`
- * for as long as this call is in flight. A body that finds no reader (which
- * should not happen, since registration precedes the call) falls back to the
- * reader here rather than failing the read.
+ * while this call is in flight and for the deferred-fill window after. A body
+ * that finds no reader (which should not happen, since registration precedes
+ * the call) falls back to the reader here rather than failing the read, and so
+ * does a call outside an App Router scope, which Next.js refuses to cache.
  */
 export async function readThroughRegistered<T>(
   cachedRead: CachedRead,
@@ -162,13 +229,13 @@ export async function readThroughRegistered<T>(
   tags: string[],
   revalidate: number | false
 ): Promise<T> {
-  const { readers } = state();
-  const held = readers.get(key);
-  if (held) held.holders++;
-  else readers.set(key, { reader, holders: 1 });
+  hold(key, reader);
   try {
     return (await cachedRead(key, tags, revalidate)) as T;
   } catch (error) {
+    // Read directly and without a warning, as the unstable_cache path reads
+    // outside a Next.js scope.
+    if (isOutsideAppRouter(error)) return reader();
     if (isUnregistered(error)) {
       // Said, since the read then goes uncached: it should never happen, as
       // the reader is registered before the cached function is called.
@@ -181,7 +248,6 @@ export async function readThroughRegistered<T>(
     }
     throw error;
   } finally {
-    const entry = readers.get(key);
-    if (entry && --entry.holders === 0) readers.delete(key);
+    release(key);
   }
 }

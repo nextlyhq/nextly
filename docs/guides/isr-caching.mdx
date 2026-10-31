@@ -259,8 +259,13 @@ still show the previous version.
    ): Promise<unknown> {
      "use cache";
      cacheTag(...tags);
-     if (revalidate === false) cacheLife("max");
-     else cacheLife({ revalidate, expire: Math.max(revalidate * 2, 60) });
+     // `revalidate: false` is tag-only, as everywhere in Nextly: only a write
+     // expires the entry, never time. Next.js's "max" profile revalidates monthly.
+     if (revalidate === false) {
+       cacheLife({ revalidate: Infinity, expire: Infinity });
+     } else {
+       cacheLife({ revalidate, expire: Math.max(revalidate * 2, 60) });
+     }
      return runRegisteredRead(key);
    }
 
@@ -272,7 +277,11 @@ still show the previous version.
    function only the read's key, tags and lifetime, which `"use cache"` can
    cache, and runs the reader itself. Register it from a module Next.js
    compiles as a server component: a copy imported from `instrumentation.ts`
-   is not a cached function.
+   is not a cached function. A read with `revalidate: false`, the default, is
+   cached until a write expires one of its tags, as with Cache Components off;
+   one with a number of seconds is served stale past it and refreshed in the
+   background. Outside a request or build, in a script or a background job,
+   the read runs directly, uncached.
 2. **Install Nextly's cache handlers** in `next.config.ts`. Next.js's default
    incremental cache serves a page's previous shell once after its tags are
    expired, so the first read after a write would still be the old version:

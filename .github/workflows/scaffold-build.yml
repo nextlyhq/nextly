@@ -182,8 +182,8 @@ jobs:
 
           # Not a scaffold: an EXISTING app, as `create-next-app` makes it with its defaults,
           # which since 16.4 turn Cache Components on (`cacheComponents: true` and
-          # `partialPrefetching: true`). Nextly does not support Cache Components yet, so
-          # adding Nextly to such an app must turn it off. The leg asserts that on the config
+          # `partialPrefetching: true`). Nextly keeps Cache Components off by default, so
+          # adding Nextly to such an app turns it off. The leg asserts that on the config
           # create-nextly-app leaves, then builds the app and boots it, so the user path
           # through the existing-app installer is exercised end to end: until this leg, no
           # job ran that installer at all.
