@@ -105,18 +105,6 @@ export interface ArrangedGridProps {
             bounds: WidgetSizeBounds,
             callbacks: CardSettingsWriteCallbacks
           ) => void;
-          /**
-           * Save a card's size at once: the card menu's and the quick popover's Size. Absent
-           * where only a card's settings are written, as a card body's own controls write them.
-           */
-          resize?: (
-            placementId: string,
-            title: string,
-            size: GridSize,
-            /** The card's widget's bounds, which the size is held to. */
-            bounds: WidgetSizeBounds,
-            callbacks: CardSettingsWriteCallbacks
-          ) => void;
           isWriting: boolean;
           unavailable?: string;
           /**
