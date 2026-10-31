@@ -11,6 +11,13 @@
  *
  * A request with no credential to a route that serves no visitor is still
  * refused before anything boots: being turned away needs no services.
+ *
+ * Both requests end at the route, so what serves an admitted one is mocked
+ * empty, keeping this file under the module budget's heavy line: the service
+ * graph, the dispatcher, the auth routes and their bridge, the plugins'
+ * contexts, and the version, dashboard, webhook, release and Single routes
+ * with the Direct API. An empty mock has no exports, so a request that reached
+ * any of them would fail on Vitest's missing-export error, not answer 401.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +42,21 @@ vi.mock("../auth/access/route-gate-adapters", async importOriginal => ({
     return { allowed: false, refusal: "unauthenticated" };
   }),
 }));
+
+vi.mock("../services/index", () => ({}));
+vi.mock("../dispatcher/dispatcher", () => ({}));
+vi.mock("../auth/handlers/deps-bridge", () => ({}));
+vi.mock("../plugins/plugin-context", () => ({}));
+vi.mock("../auth/handlers/router", () => ({}));
+vi.mock("../api/versions-access", () => ({}));
+vi.mock("../api/dashboard-summary", () => ({}));
+vi.mock("../services/dashboard/attention-source", () => ({}));
+vi.mock("../api/webhooks", () => ({}));
+vi.mock("../direct-api/nextly", () => ({}));
+vi.mock("../api/dashboard", () => ({}));
+vi.mock("../api/releases", () => ({}));
+vi.mock("../domains/singles/services/single-query-service", () => ({}));
+vi.mock("../domains/singles/services/single-document-access", () => ({}));
 
 import { createDynamicHandlers } from "../routeHandler";
 import { sanitizeConfig } from "../shared/types/config";

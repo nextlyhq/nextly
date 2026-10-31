@@ -45,6 +45,12 @@ import { MIGRATION_MERGED_CASES } from "./error-cases/migrations";
 import { PLUGIN_CONFIG_MERGED_CASES } from "./error-cases/plugin-config";
 import { PLUGIN_MERGED_CASES, uninstallRefused } from "./error-cases/plugins";
 
+// The service graph, which only creating the first administrator loads and no
+// case here reaches: mocked empty, it keeps this file under the module
+// budget's heavy line, and a case that did reach it would end in Vitest's
+// missing-export error, not the error code it expects.
+vi.mock("../../services/index", () => ({}));
+
 /** `process.exit`, stopped: the test's run ends where the command's would. */
 class Exited extends Error {
   constructor(readonly code: number | undefined) {
