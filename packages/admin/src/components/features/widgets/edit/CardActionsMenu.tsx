@@ -65,7 +65,7 @@ import {
   widthChoices,
 } from "../sizes";
 
-import { settingsIntent } from "./LazyWidgetSettingsSheet";
+import { settingsIntent } from "./settings-sheet-code";
 
 export interface CardActionsMenuProps {
   /** What the reader calls this card, which the button's name says. */

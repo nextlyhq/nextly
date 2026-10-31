@@ -40,8 +40,8 @@ import { cn } from "@admin/lib/utils";
 import { useCardTier } from "../frame/tier";
 
 import { sizeAxes, type SizeAxis } from "./CardActionsMenu";
-import { settingsIntent } from "./LazyWidgetSettingsSheet";
 import type { PopoverSetting, QuickSetting } from "./quick-setting";
+import { settingsIntent } from "./settings-sheet-code";
 import type { CardQuickPopoverModel } from "./useCardQuickSetting";
 
 export interface CardQuickSettingProps {
