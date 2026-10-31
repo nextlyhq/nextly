@@ -43,16 +43,16 @@ export const SETUP_ROW_BODY_PX = SETUP_BAR.px + SETUP_GAP.px + SETUP_TILE.px;
  *   own tile's content, its name, its words and its actions (`minmax(max-content, 1fr)`), so
  *   every tile reads in full;
  * - where the body is narrower than the tiles, a phone's or a narrow card's, the row scrolls
- *   sideways inside the card, a tile at a time, the next one cut by the card's edge to show there
- *   is more. Its scrollbar is not drawn, since the row has no height to spare for one:
- *   a tile's links and buttons scroll it into view as they take focus, and a touch or a trackpad
- *   scrolls it directly;
+ *   sideways inside the card, a tile at a time, the next one cut by the card's edge. Its scrollbar
+ *   is not drawn, since the row has no height to spare for one; the row says it scrolls in its
+ *   place (`setup/StepRow`): a fade and a scroll button on each side with more, and the row a
+ *   keyboard stop that arrow keys scroll, while it overflows;
  * - positioned (`relative`), so what a tile holds for assistive technology alone (`sr-only`, placed
  *   absolutely) is placed and clipped inside the row with its tile: unpositioned, the card's cell
  *   would place it, and a tile scrolled out of view would carry it past the card's edge.
  */
 export const SETUP_ROW = {
   className:
-    "relative grid-flow-col auto-cols-[minmax(max-content,1fr)] overflow-x-auto overscroll-x-contain snap-x snap-proximity [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+    "relative grid grid-flow-col auto-cols-[minmax(max-content,1fr)] overflow-x-auto overscroll-x-contain snap-x snap-proximity scroll-smooth motion-reduce:scroll-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
   tile: "snap-start",
 } as const;

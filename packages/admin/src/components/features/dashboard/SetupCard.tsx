@@ -92,6 +92,7 @@ import {
   stepPresentation,
   type StepPresentation,
 } from "./setup/step-presentation";
+import { StepRow } from "./setup/StepRow";
 import { useSampleRun } from "./setup/useSampleRun";
 import { useSetupState, type SetupStateWrite } from "./setup/useSetupState";
 
@@ -803,10 +804,7 @@ function ExpandedSetup({
       {failure}
       {/* One row of tiles across the body's whole width, at every width: sharing it where each
           reads in full, scrolling sideways inside the card where the body is narrower. */}
-      <ol
-        className={cn("grid min-w-0", SETUP_ROW.className, SETUP_GAP.className)}
-        aria-label="Setup steps"
-      >
+      <StepRow label="Setup steps">
         {counted.steps.map((step, index) => (
           <StepTile
             key={step.kind}
@@ -817,7 +815,7 @@ function ExpandedSetup({
             sample={sample}
           />
         ))}
-      </ol>
+      </StepRow>
       {samplePanel}
       {singles !== undefined && singlesList.open && (
         <SinglesList step={singles} id={singlesList.listId} />

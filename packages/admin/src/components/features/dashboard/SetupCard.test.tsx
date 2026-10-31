@@ -217,9 +217,11 @@ describe("the setup card", () => {
       );
       const row = screen.getByRole("list", { name: "Setup steps" });
       const classes = [...row.classList];
-      // Flowing along the row, a column per tile, scrolling sideways where they do not fit.
+      // A grid (without it the flow and columns below do nothing, and the tiles stack in a
+      // column), flowing along the row, a column per tile, scrolling sideways where they do not
+      // fit. Spelled out here rather than read from `SETUP_ROW`, so the constant is what is tested.
       expect(classes).toEqual(
-        expect.arrayContaining(["grid-flow-col", "overflow-x-auto"])
+        expect.arrayContaining(["grid", "grid-flow-col", "overflow-x-auto"])
       );
       expect(classes).toContain("auto-cols-[minmax(max-content,1fr)]");
       // Positioned, so a scrolled-away tile's screen-reader text stays inside the row's clip.
