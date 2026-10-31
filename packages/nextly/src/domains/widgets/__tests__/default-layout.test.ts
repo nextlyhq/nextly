@@ -1,14 +1,14 @@
 /**
  * The one default dashboard, built from one `defaultLayout` whoever wrote it:
  * core's own or the site's, its entries at their sizes and settings, an
- * optional entry left out where its widget is absent, then the plugins'
- * suggestions unless the site turns them off. Varied per person only by the
+ * optional entry left out where its widget is absent, and nothing after it:
+ * no widget is placed that it does not name. Varied per person only by the
  * cards each may not see.
  */
 import { describe, expect, it } from "vitest";
 
 import type { CanonicalWidget } from "../canonical";
-import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
+import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
   defaultLayoutPlacements,
   type DefaultLayoutPlan,
@@ -27,33 +27,59 @@ const widget = (
 
 const plan = (patch: Partial<DefaultLayoutPlan>): DefaultLayoutPlan => ({
   cards: [],
-  suggestions: true,
-  suggested: [],
   ...patch,
 });
 
 const ids = (widgets: readonly CanonicalWidget[], p: DefaultLayoutPlan) =>
   defaultLayoutPlacements(widgets, p).map(placement => placement.widgetId);
 
-/** Core's own widgets, each at the starting size the case gives none. */
-const core = CORE_DEFAULT_LAYOUT.map(card => widget(card.widget));
+/**
+ * Core's own widgets, every one of them and nothing else, each at the starting size the case
+ * gives none: an install without the form-builder plugin.
+ */
+const core = CORE_WIDGET_IDS.map(id => widget(id));
+
+/** The one widget core's default names that is not core's own. */
+const FORM_SUBMISSIONS = "form-builder/new-submissions";
 
 describe("the base of the default", () => {
-  it("is core's own defaultLayout, in its order, each card at its widget's starting size", () => {
+  it("is core's own defaultLayout, in its order, each card at its entry's size, the form submissions card left out without its plugin", () => {
     const placements = defaultLayoutPlacements(
       [...core].reverse(),
       plan({ cards: CORE_DEFAULT_LAYOUT })
     );
-    expect(placements.map(p => p.widgetId)).toEqual(
-      CORE_DEFAULT_LAYOUT.map(card => card.widget)
-    );
+    expect(placements.map(p => [p.widgetId, `${p.w}x${p.h}`])).toEqual([
+      ["core/setup", "12x2"],
+      ["core/needs-attention", "8x4"],
+      ["core/upcoming-releases", "4x4"],
+      ["core/continue", "6x4"],
+      ["core/content-table", "6x4"],
+      ["core/team-activity", "6x4"],
+    ]);
+    // Each at its entry's size, not the widget's starting size (6x3 in this case).
     expect(placements[0]).toEqual({
       id: "core/setup",
       widgetId: "core/setup",
-      w: 6,
-      h: 3,
+      w: 12,
+      h: 2,
       removed: false,
     });
+  });
+
+  it("places the form submissions card in its place where the plugin provides it", () => {
+    const placements = defaultLayoutPlacements(
+      [...core, widget(FORM_SUBMISSIONS)],
+      plan({ cards: CORE_DEFAULT_LAYOUT })
+    );
+    expect(placements.map(p => [p.widgetId, `${p.w}x${p.h}`])).toEqual([
+      ["core/setup", "12x2"],
+      ["core/needs-attention", "8x4"],
+      ["core/upcoming-releases", "4x4"],
+      ["core/continue", "6x4"],
+      ["core/content-table", "6x4"],
+      [FORM_SUBMISSIONS, "6x4"],
+      ["core/team-activity", "6x4"],
+    ]);
   });
 
   it("is the site's defaultLayout in place of core's whole, at its sizes and with its settings", () => {
@@ -98,64 +124,30 @@ describe("the base of the default", () => {
   });
 });
 
-describe("the plugins' suggestions", () => {
+describe("what follows the default's own cards", () => {
   const cards = [{ widget: "core/upcoming-releases" }];
-  const declared = widget("acme/revenue", { serverData: true });
 
-  it("are placed after the base, the named ones in order, then the older shape's by defaultOrder", () => {
+  it("is nothing: no widget is placed that the default does not name", () => {
+    // 🔴 Whatever kind it is: a plugin's declared widget (whose `suggest` places nothing), one
+    // written as a plain definition with an order of its own, and one offered per collection.
+    // The add panel offers each of them; only the default's entries are placed.
     const widgets = [
       ...core,
-      declared,
-      widget("acme/orders", { serverData: true }),
-      widget("old/late", { defaultOrder: 50 }),
-      widget("old/none"),
+      widget("acme/revenue", { serverData: true }),
       widget("old/early", { defaultOrder: 5 }),
+      widget("old/none"),
+      widget("acme/per-collection", { offered: "per-collection" }),
     ];
-    expect(
-      ids(widgets, plan({ cards, suggested: ["acme/revenue", "acme/orders"] }))
-    ).toEqual([
-      "core/upcoming-releases",
-      "acme/revenue",
-      "acme/orders",
-      "old/early",
-      "old/late",
-      "old/none",
-    ]);
-  });
-
-  it("place nothing the base already places, and never another of core's widgets", () => {
-    const widgets = [...core, declared];
+    expect(ids(widgets, plan({ cards }))).toEqual(["core/upcoming-releases"]);
+    // The control: the same widgets are placed, in the default's order, once it names them.
     expect(
       ids(
         widgets,
         plan({
-          cards: [
-            { widget: "acme/revenue" },
-            { widget: "core/upcoming-releases" },
-          ],
-          suggested: ["acme/revenue"],
+          cards: [{ widget: "old/none" }, ...cards, { widget: "acme/revenue" }],
         })
       )
-    ).toEqual(["acme/revenue", "core/upcoming-releases"]);
-  });
-
-  it("leave out what is offered and never placed: a declared widget no plugin suggests, one offered per collection", () => {
-    const widgets = [
-      ...core,
-      declared,
-      widget("acme/per-collection", { offered: "per-collection" }),
-    ];
-    expect(ids(widgets, plan({ cards }))).toEqual(["core/upcoming-releases"]);
-  });
-
-  it("are all ignored when the site sets suggestions: false", () => {
-    const widgets = [...core, declared, widget("old/card")];
-    expect(
-      ids(
-        widgets,
-        plan({ cards, suggestions: false, suggested: ["acme/revenue"] })
-      )
-    ).toEqual(["core/upcoming-releases"]);
+    ).toEqual(["old/none", "core/upcoming-releases", "acme/revenue"]);
   });
 });
 
@@ -187,8 +179,12 @@ describe("one default for everyone", () => {
 
   it("names each card after its widget, so repeated reads are identical", () => {
     const p = plan({ cards: CORE_DEFAULT_LAYOUT });
-    expect(defaultLayoutPlacements(core, p).map(each => each.id)).toEqual(
-      CORE_DEFAULT_LAYOUT.map(card => card.widget)
+    expect(
+      defaultLayoutPlacements(core, p).map(each => [each.id, each.widgetId])
+    ).toEqual(
+      CORE_DEFAULT_LAYOUT.filter(card => card.widget !== FORM_SUBMISSIONS).map(
+        card => [card.widget, card.widget]
+      )
     );
     expect(defaultLayoutPlacements(core, p)).toEqual(
       defaultLayoutPlacements(core, p)

@@ -520,8 +520,7 @@ describe("a plugin's suggestions and alternatives", () => {
   });
 
   it("refuses a key a plugin's dashboard contribution does not take, naming the one it most likely meant", () => {
-    // 🔴 Dropped, a misspelt `suggest` would never place anything, and
-    // nothing would say so.
+    // 🔴 Dropped, a misspelt key would be ignored, and nothing would say so.
     const message = refusal(() =>
       resetWidgetRegistries([
         plainPlugin("@other/stats", {
@@ -639,7 +638,7 @@ describe("the default the site config asks for", () => {
     ]);
   });
 
-  it("is set at startup from the copy checked: its defaultLayout, suggestions off, and what plugins suggest", () => {
+  it("is set at startup from the copy checked: its defaultLayout, with suggestions: false accepted and changing nothing", () => {
     resetWidgetRegistries([shop], {
       defaultLayout: [
         "core/team",
@@ -652,18 +651,24 @@ describe("the default the site config asks for", () => {
         { widget: "core/team" },
         { widget: "acme/orders-by-state", w: 4, settings: { top: 3 } },
       ],
-      suggestions: false,
-      suggested: ["acme/orders-by-state"],
     });
   });
 
-  it("is core's own defaultLayout, with suggestions on, when the site gives none", () => {
+  it("is core's own defaultLayout when the site gives none", () => {
     resetWidgetRegistries([shop], {});
-    expect(defaultLayoutPlan()).toEqual({
-      cards: CORE_DEFAULT_LAYOUT,
-      suggestions: true,
-      suggested: ["acme/orders-by-state"],
-    });
+    expect(defaultLayoutPlan()).toEqual({ cards: CORE_DEFAULT_LAYOUT });
+  });
+
+  it("places nothing a plugin suggests: its widget is offered from the add panel, never placed", () => {
+    // `shop` suggests acme/orders-by-state, declared with `defineWidget`.
+    resetWidgetRegistries([shop], {});
+    const widgets = allWidgets();
+    // The control: the widget is installed, so its absence below is the default's doing.
+    expect(widgets.map(widget => widget.id)).toContain("acme/orders-by-state");
+    const placed = defaultLayoutPlacements(widgets).map(p => p.widgetId);
+    // And the default did materialise: core's own cards are there.
+    expect(placed).toContain("core/continue");
+    expect(placed).not.toContain("acme/orders-by-state");
   });
 
   it("starts, saying nothing, with an optional card whose widget is not installed", () => {

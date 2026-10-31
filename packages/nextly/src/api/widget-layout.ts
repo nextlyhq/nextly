@@ -142,7 +142,7 @@ type LayoutSource = "own" | "default" | "unreadable";
 /**
  * The whole arrangement a reader without an arranged row follows: the one
  * default (`defaultLayoutPlacements`, from the site's `defaultLayout` or
- * core's, and the plugins' suggestions), with their removals applied.
+ * core's), with their removals applied.
  *
  * ONE materialization over every widget the install has, split afterwards, so
  * the cards a caller may see and the ones they may not keep one order between
