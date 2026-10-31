@@ -18,6 +18,10 @@ import * as prefsPg from "../../dashboard-preferences/postgres";
 import * as prefsSl from "../../dashboard-preferences/sqlite";
 import { DASHBOARD_PREFERENCES_TABLE } from "../../dashboard-preferences/table-name";
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
+import * as usageMy from "../../media-usage/mysql";
+import * as usagePg from "../../media-usage/postgres";
+import * as usageSl from "../../media-usage/sqlite";
+import { MEDIA_USAGE_TABLE } from "../../media-usage/table-name";
 import * as pinsMy from "../mysql";
 import * as pinsPg from "../postgres";
 import * as pinsSl from "../sqlite";
@@ -49,6 +53,15 @@ describe("the dashboard tables are identical across dialects", () => {
       prefsPg.nextlyDashboardPreferencesPg,
       prefsMy.nextlyDashboardPreferencesMysql,
       prefsSl.nextlyDashboardPreferencesSqlite,
+    ],
+    // The media library's record of where each item is used: hand-mirrored
+    // the same way, so held to the same check here rather than a file of its
+    // own that would load the dialect bundles a second time.
+    [
+      "media usage",
+      usagePg.nextlyMediaUsagePg,
+      usageMy.nextlyMediaUsageMysql,
+      usageSl.nextlyMediaUsageSqlite,
     ],
   ] as const)(
     "the %s table has the same columns everywhere",
@@ -84,6 +97,19 @@ describe("the dashboard tables are registered as core tables", () => {
   it("are named in CORE_TABLE_NAMES", () => {
     expect(CORE_TABLE_NAMES).toContain(DASHBOARD_PINS_TABLE);
     expect(CORE_TABLE_NAMES).toContain(DASHBOARD_PREFERENCES_TABLE);
+    expect(CORE_TABLE_NAMES).toContain(MEDIA_USAGE_TABLE);
+  });
+
+  it("keys a use of a media item by its document, field and language", () => {
+    expect(columnNames(usagePg.nextlyMediaUsagePg)).toEqual([
+      "documentId:document_id",
+      "fieldPath:field_path",
+      "id:id",
+      "locale:locale",
+      "mediaId:media_id",
+      "subjectKind:subject_kind",
+      "subjectSlug:subject_slug",
+    ]);
   });
 
   it.each(["postgresql", "mysql", "sqlite"] as const)(
@@ -96,7 +122,11 @@ describe("the dashboard tables are registered as core tables", () => {
       const bundled = Object.values(getDialectTables(dialect))
         .filter(isTable)
         .map(table => getTableName(table));
-      for (const table of [DASHBOARD_PINS_TABLE, DASHBOARD_PREFERENCES_TABLE]) {
+      for (const table of [
+        DASHBOARD_PINS_TABLE,
+        DASHBOARD_PREFERENCES_TABLE,
+        MEDIA_USAGE_TABLE,
+      ]) {
         expect(names).toContain(table);
         expect(bundled).toContain(table);
       }

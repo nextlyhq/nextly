@@ -504,6 +504,68 @@ describe("a row of an earlier format is no saved arrangement", () => {
     ).toEqual(["core/a"]);
   });
 
+  it("keeps a size the reader chose while the write leaves it as stored, though the default now gives it", () => {
+    // The default caught up with the size the reader chose for core/a.
+    const defaults = [card("core/a", "core/a", { w: 8, h: 3 }), card("core/b")];
+    const row = readRow(
+      serializeLayout(
+        [card("core/a", "core/a", { w: 8, h: 3 }), card("core/b")],
+        false,
+        ["core/a"]
+      )
+    );
+    // An unrelated write: core/a's size is the one stored, so it stays theirs.
+    expect(
+      chosenSizeIds(
+        defaults,
+        [
+          card("core/a", "core/a", { w: 8, h: 3 }),
+          card("core/b", "core/b", { removed: true }),
+        ],
+        row
+      )
+    ).toEqual(["core/a"]);
+    // Resized to anything else at the default's size, or by another widget's card under the
+    // same id, it is not.
+    const elsewhere = [card("core/a", "core/a", { w: 6, h: 3 })];
+    expect(
+      chosenSizeIds([card("core/a", "core/a", { w: 6, h: 3 })], elsewhere, row)
+    ).toEqual([]);
+    expect(
+      chosenSizeIds(
+        [card("core/a", "core/x", { w: 8, h: 3 })],
+        [card("core/a", "core/x", { w: 8, h: 3 })],
+        row
+      )
+    ).toEqual([]);
+    // With no stored row, a size the default gives is not chosen.
+    expect(
+      chosenSizeIds(defaults, [card("core/a", "core/a", { w: 8, h: 3 })])
+    ).toEqual([]);
+  });
+
+  it("keeps a size the reader chose for a card the row stored under another id, matched by its widget", () => {
+    // The row holds core/a's one card under the id an earlier default gave it; the default now
+    // places it under its own id, at the size the reader chose.
+    const defaults = [card("core/a", "core/a", { w: 8, h: 3 })];
+    const row = readRow(
+      serializeLayout([card("old-id", "core/a", { w: 8, h: 3 })], false, [
+        "old-id",
+      ])
+    );
+    expect(
+      chosenSizeIds(defaults, [card("core/a", "core/a", { w: 8, h: 3 })], row)
+    ).toEqual(["core/a"]);
+    // The same card resized to anything else gives the choice up.
+    expect(
+      chosenSizeIds(
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        row
+      )
+    ).toEqual([]);
+  });
+
   it("starts a card afresh when its id was stored for another widget", () => {
     // The config now names `slot` a card of core/b; the row kept core/a's
     // removal and settings under it, which core/b must not take.
@@ -527,6 +589,95 @@ describe("a row of an earlier format is no saved arrangement", () => {
         )
       ).toBeUndefined();
     }
+  });
+});
+
+describe("a card of a widget core renamed", () => {
+  const getStarted = (
+    patch: Partial<WidgetPlacement> = {}
+  ): WidgetPlacement => ({
+    id: "core/get-started",
+    widgetId: "core/get-started",
+    w: 12,
+    h: 4,
+    removed: false,
+    ...patch,
+  });
+  const others = (setup: WidgetPlacement): WidgetPlacement[] => [
+    { id: "a", widgetId: "core/a", w: 6, h: 3, removed: false },
+    setup,
+    { id: "b", widgetId: "core/b", w: 6, h: 3, removed: false },
+  ];
+
+  it("is read as the current widget's, in its place, its id following the widget's own", () => {
+    const row = readStoredLayout(serializeLayout(others(getStarted())));
+    expect(row?.placements).toEqual(
+      others({
+        id: "core/setup",
+        widgetId: "core/setup",
+        w: 12,
+        h: 4,
+        removed: false,
+      })
+    );
+  });
+
+  it("keeps an id that was not the widget's own, and whether it was removed, but not its settings", () => {
+    const row = readStoredLayout(
+      serializeLayout([
+        getStarted({ id: "mine", removed: true, config: { compact: true } }),
+      ])
+    );
+    expect(row?.placements).toEqual([
+      { id: "mine", widgetId: "core/setup", w: 12, h: 4, removed: true },
+    ]);
+  });
+
+  it("gives way to a card of the current widget the row already holds", () => {
+    const current: WidgetPlacement = {
+      id: "core/setup",
+      widgetId: "core/setup",
+      w: 12,
+      h: 2,
+      removed: false,
+    };
+    const row = readStoredLayout(serializeLayout([getStarted(), current]));
+    expect(row?.placements).toEqual([current]);
+  });
+
+  it("carries a size the reader chose for it, on a row that follows the default", () => {
+    const row = readStoredLayout(
+      serializeLayout([getStarted()], false, ["core/get-started"])
+    );
+    expect(row?.sized).toEqual(["core/setup"]);
+  });
+
+  it("moves a chosen size only for the card it renamed, never onto a setup card the row holds", () => {
+    const setup: WidgetPlacement = {
+      id: "core/setup",
+      widgetId: "core/setup",
+      w: 12,
+      h: 2,
+      removed: false,
+    };
+    // The former card was resized and is dropped; the setup card kept was not resized.
+    const both = readStoredLayout(
+      serializeLayout([getStarted(), setup], false, ["core/get-started"])
+    );
+    expect(both?.placements).toEqual([setup]);
+    expect(both?.sized ?? []).not.toContain("core/setup");
+    // A card that only bears the former id as its own opaque id keeps its marker to itself.
+    const other: WidgetPlacement = {
+      id: "core/get-started",
+      widgetId: "core/a",
+      w: 6,
+      h: 3,
+      removed: false,
+    };
+    const unrelated = readStoredLayout(
+      serializeLayout([other], false, ["core/get-started"])
+    );
+    expect(unrelated?.sized).toEqual(["core/get-started"]);
   });
 });
 

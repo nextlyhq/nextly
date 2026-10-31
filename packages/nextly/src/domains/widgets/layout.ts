@@ -59,6 +59,7 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { FORMER_CORE_WIDGET_IDS } from "./core-widgets/ids";
 import {
   clampSize,
   GRID_COLUMNS,
@@ -405,8 +406,10 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
   // writes nothing; a write merges over these placements, so the reader's
   // next save of any kind stores the row without them. Before the repeat
   // check below, so a dropped card claims no placement id.
-  const placements = readPlacements(decoded.placements).filter(
-    placement => !inRetiredWidgetNamespace(placement.widgetId)
+  const { placements, renamedIds } = underCurrentIds(
+    readPlacements(decoded.placements).filter(
+      placement => !inRetiredWidgetNamespace(placement.widgetId)
+    )
   );
   // 🔴 REPORTS a repeat rather than resolving one. Resolving across the whole
   // row would let a card this caller may not know exists claim an id and push a
@@ -419,9 +422,48 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
     // `=== true` rather than truthiness: anything else this core did not
     // write is the ordinary, arranged row.
     ...(decoded.unarranged === true ? { unarranged: true as const } : {}),
-    ...sizedOf(decoded),
+    ...sizedOf(decoded, renamedIds),
     ...(rekeyed.length === 0 ? {} : { duplicatePlacementIds: rekeyed }),
   };
+}
+
+/**
+ * A row's cards with each card of a widget core renamed read as the current widget's, in its
+ * place (`FORMER_CORE_WIDGET_IDS`). Its id follows the widget's where it was the widget's own, the
+ * default a card is given, and is kept where it was not; its size and whether it is removed are
+ * kept, and its settings, the former widget's own vocabulary, are not. A row that already holds a
+ * card of the current widget keeps that one alone. The read still writes nothing: a write merges
+ * over these placements, so the reader's next save stores the current id. Before the repeat check,
+ * so a renamed card's id is resolved like any other.
+ */
+function underCurrentIds(placements: WidgetPlacement[]): {
+  placements: WidgetPlacement[];
+  /**
+   * The card ids the rename changed, each to its new id: only cards it renamed, never a dropped
+   * one, so the sizes a reader chose follow exactly those (`sizedOf`).
+   */
+  renamedIds: ReadonlyMap<string, string>;
+} {
+  const held = new Set(placements.map(placement => placement.widgetId));
+  const renamedIds = new Map<string, string>();
+  const current = placements.flatMap(placement => {
+    const widgetId = FORMER_CORE_WIDGET_IDS.get(placement.widgetId);
+    if (widgetId === undefined) return [placement];
+    if (held.has(widgetId)) return [];
+    held.add(widgetId);
+    const id = placement.id === placement.widgetId ? widgetId : placement.id;
+    if (id !== placement.id) renamedIds.set(placement.id, id);
+    return [
+      {
+        id,
+        widgetId,
+        w: placement.w,
+        h: placement.h,
+        removed: placement.removed,
+      },
+    ];
+  });
+  return { placements: current, renamedIds };
 }
 
 /**
@@ -429,11 +471,16 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
  * as a list of ids. Anything else this core did not write is a reader who chose no size.
  */
 function sizedOf(
-  decoded: Record<string, unknown>
+  decoded: Record<string, unknown>,
+  renamedIds: ReadonlyMap<string, string>
 ): Pick<StoredLayout, "sized"> {
   const { sized } = decoded;
   if (decoded.unarranged !== true || !Array.isArray(sized)) return {};
-  const ids = sized.filter((id): id is string => typeof id === "string");
+  // A size chosen for a card the rename gave a new id follows that card (`underCurrentIds`); any
+  // other id, a card of the current widget's among them, keeps its own.
+  const ids = sized
+    .filter((id): id is string => typeof id === "string")
+    .map(id => renamedIds.get(id) ?? id);
   return ids.length === 0 ? {} : { sized: ids };
 }
 
@@ -533,20 +580,37 @@ function defaultCardsWithChoices(
 
 /**
  * The cards of an unarranged write whose size the reader chose: those whose size differs from the
- * size the default gives the card they stand for. A card at the default's size is not one, so it
- * goes on following that size; a card the default does not hold is not one either, as it is
- * drawn from the default or not at all.
+ * size the default gives the card they stand for, and those `stored` already names as chosen
+ * (`StoredLayout.sized`) that the write leaves at the size stored for them. A card at the
+ * default's size is otherwise not one, so it goes on following that size; a card the default does
+ * not hold is not one either, as it is drawn from the default or not at all.
+ *
+ * The stored choice is kept while the size is unchanged because a default can come to give the
+ * size a reader chose: the card then matches the default, but the size is still theirs, and the
+ * next change to the default must not move it. Resizing the card, to the default's size or any
+ * other, is what gives that choice up or makes a new one.
  */
 export function chosenSizeIds(
   defaults: readonly WidgetPlacement[],
-  placements: readonly WidgetPlacement[]
+  placements: readonly WidgetPlacement[],
+  stored?: StoredLayout
 ): string[] {
+  // The stored card each default card stands for, by the same matching as the write's, so a
+  // card the row holds under an id an earlier default gave it is still the reader's.
+  const before = defaultCardsWithChoices(defaults, stored?.placements ?? []);
+  const sized = new Set(stored?.sized ?? []);
   return defaultCardsWithChoices(defaults, placements).flatMap(
-    ([placement, choice]) =>
-      choice !== undefined &&
-      (choice.w !== placement.w || choice.h !== placement.h)
-        ? [choice.id]
-        : []
+    ([placement, choice], index) => {
+      if (choice === undefined) return [];
+      const departs = choice.w !== placement.w || choice.h !== placement.h;
+      const was = before[index]?.[1];
+      const unchanged =
+        was !== undefined &&
+        sized.has(was.id) &&
+        was.w === choice.w &&
+        was.h === choice.h;
+      return departs || unchanged ? [choice.id] : [];
+    }
   );
 }
 

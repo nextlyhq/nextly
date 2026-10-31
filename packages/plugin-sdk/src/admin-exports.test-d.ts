@@ -194,10 +194,11 @@ expectTypeOf(Widget.Table<{ id: string }>)
 expectTypeOf(adminEntry.useRefreshDashboard).returns.toEqualTypeOf<
   () => void
 >();
-// The title count is a hook of a count or none, and answers nothing.
+// The title count is a hook of a count, a short phrase or none, with a floor flag, and answers
+// nothing.
 expectTypeOf(Widget.useTitleCount)
   .parameter(0)
-  .toEqualTypeOf<number | undefined>();
+  .toEqualTypeOf<number | string | undefined>();
 expectTypeOf(Widget.useTitleCount)
   .parameter(1)
   .toEqualTypeOf<boolean | undefined>();

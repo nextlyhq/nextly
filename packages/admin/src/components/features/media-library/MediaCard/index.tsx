@@ -129,9 +129,8 @@ export function MediaCard({
       )}
     >
       {/* The thumbnail: a square of neutral backdrop with the image fitted
-          inside it, so a whole-image size keeps a wide or tall picture's
-          edges; the stored square thumbnail, used when there is none, is
-          already a centre crop. The
+          inside it, so a fitted thumbnail keeps a wide or tall picture's
+          edges, and an older item's square one sits whole beside it. The
           focus ring and the open tile's ring sit on this square, which is
           what a person reads as the tile. */}
       <div

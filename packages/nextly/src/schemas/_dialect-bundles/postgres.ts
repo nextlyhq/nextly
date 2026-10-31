@@ -46,6 +46,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/postgres";
 export { nextlyPluginSettings } from "../plugin-settings/postgres";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/postgres";
 export { nextlyLimitStore } from "../limit-store/postgres";
+export { nextlyCacheTagExpiries } from "../cache-tag-expiries/postgres";
 export { nextlySpentChallenges } from "../spent-challenges/postgres";
 export { nextlySchemaOwners } from "../schema-owners/postgres";
 export { nextlyWidgetLayout } from "../widget-layout/postgres";
@@ -141,6 +142,9 @@ export { nextlyNoticesPg as nextlyNotices } from "../notices/postgres";
 // creates.
 export { nextlyDashboardPinsPg as nextlyDashboardPins } from "../dashboard-pins/postgres";
 export { nextlyDashboardPreferencesPg as nextlyDashboardPreferences } from "../dashboard-preferences/postgres";
+// Which media items each document uses; in the bundle for the reason the
+// releases note above gives — this map is what the push creates.
+export { nextlyMediaUsagePg as nextlyMediaUsage } from "../media-usage/postgres";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

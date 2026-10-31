@@ -76,7 +76,8 @@ export interface WidgetKit {
   readonly FooterLink: typeof WidgetFooterLink;
   /**
    * @experimental A count beside the card's title while the body is drawn, `undefined` for none:
-   * `Widget.useTitleCount(total)`.
+   * `Widget.useTitleCount(total)`, a short phrase (`"2 of 5 done"`), or a floor
+   * (`Widget.useTitleCount(total, true)`, drawn "N+").
    */
   readonly useTitleCount: typeof useCardTitleCount;
 }
@@ -94,7 +95,8 @@ export interface WidgetKit {
  *   place of the widget's own link while it is there, so the footer holds one link.
  * - `useTitleCount`: a hook, the frame's own: the count it is given is drawn beside the card's
  *   title, muted, and read with it ("New form submissions, 3 items"), from the first paint and
- *   until the body unmounts; `undefined` shows none.
+ *   until the body unmounts; a short phrase is drawn and read as written, a floor reads "N+"
+ *   ("N or more items"), and `undefined` shows none.
  */
 export const Widget: WidgetKit = Object.freeze({
   Figure: CardFigure,

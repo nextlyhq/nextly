@@ -311,32 +311,32 @@ export {
   type WidgetLifecycle,
   type WidgetCondition,
 } from "./domains/widgets/lifecycle";
-// The onboarding step ids the dashboard checklist draws. Published here rather
-// than only from the root because the admin reads this entry point, and a
-// union it restates instead of importing is a contract with nothing holding
-// the two halves together.
-export {
-  ONBOARDING_STEPS,
-  isOnboardingStepId,
-  type OnboardingStepId,
-  type OnboardingStep,
-} from "./domains/widgets/onboarding-steps";
 /**
- * The Get started steps the layout read answers, for the card that draws them:
- * the admin names each kind of step, and restating the shapes there would be
- * a second answer to the host's.
+ * The setup steps the setup card's `load` answers, for the card that draws
+ * them: the admin names each kind of step, and restating the shapes there would
+ * be a second answer to the host's.
  *
  * @experimental The card is new, and these shapes may change before it settles.
  */
 export {
-  GET_STARTED_SKIPPABLE_KINDS,
-  GET_STARTED_STEP_KINDS,
-  GET_STARTED_WIDGET_ID,
-  type GetStartedAnswer,
-  type GetStartedStep,
-  type GetStartedStepKind,
-  type GetStartedStepStatus,
-} from "./domains/widgets/get-started-steps";
+  SETUP_SKIPPABLE_KINDS,
+  SETUP_STEP_KINDS,
+  drawnSetup,
+  isSkippableKind,
+  setupAllSet,
+  stepFinished,
+  talliedSetup,
+  type SampleRoute,
+  type SampleRun,
+  type SampleSetupStep,
+  type SetupAnswer,
+  type SetupCardData,
+  type SetupSingle,
+  type SetupStep,
+  type SetupStepKind,
+  type SetupStepStatus,
+  type SkippableSetupStepKind,
+} from "./domains/widgets/setup-steps";
 export type {
   SourcelessWidgetQuery,
   TimeseriesRange,

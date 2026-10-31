@@ -554,25 +554,6 @@ export interface WidgetSizeFacts {
 }
 
 /**
- * Whether a widget of the older shape is placed on the default by being
- * declared, as a suggestion after the default's own cards
- * (`default-layout.ts`): the ONE answer, for every reader that follows the
- * default.
- *
- * A plugin's declared widget is offered, never placed this way: where a plugin
- * may put one is its suggestion (`contributes.dashboard.suggest`), which the
- * site may decline, and an unsuggested one stays in the add panel.
- *
- * Nor does a widget that is offered (`offered`): one offered per collection
- * reads the collection a card is set to, and the default arrangement places a
- * widget once, set to nothing; one offered on request, a note, has nothing to
- * show until its reader writes it.
- */
-export function placedByDefault(widget: CanonicalWidget): boolean {
-  return widget.serverData !== true && widget.offered === undefined;
-}
-
-/**
  * The ONE reading of a widget's size, for the default arrangement, the layout
  * read and the check on a write alike.
  *

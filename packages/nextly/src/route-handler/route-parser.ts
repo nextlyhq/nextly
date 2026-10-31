@@ -2772,15 +2772,16 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
-    onboarding: { operation: "list", method: "getDashboardOnboarding" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
     },
     activity: { operation: "list", method: "getDashboardActivity" },
     layout: { operation: "list", method: "getWidgetLayout" },
+    gallery: { operation: "list", method: "getDashboardGallery" },
     pins: { operation: "list", method: "getDashboardPins" },
     summary: { operation: "list", method: "getDashboardSummary" },
+    setup: { operation: "list", method: "getDashboardSetup" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
@@ -2788,6 +2789,7 @@ const DASHBOARD_ROUTES: Readonly<
   },
   PUT: {
     layout: { operation: "update", method: "putWidgetLayout" },
+    setup: { operation: "update", method: "putDashboardSetup" },
   },
   DELETE: {
     layout: { operation: "delete", method: "deleteWidgetLayout" },
@@ -2799,10 +2801,10 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
- *   GET  /api/dashboard/onboarding     → getDashboardOnboarding
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   GET  /api/dashboard/gallery        → getDashboardGallery
  *   GET  /api/dashboard/summary        → getDashboardSummary
  *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   DELETE /api/dashboard/layout       → deleteWidgetLayout
@@ -2810,6 +2812,8 @@ const DASHBOARD_ROUTES: Readonly<
  *   GET  /api/dashboard/pins           → getDashboardPins
  *   POST /api/dashboard/pins           → postDashboardPin
  *   DELETE /api/dashboard/pins         → deleteDashboardPin
+ *   GET  /api/dashboard/setup          → getDashboardSetup
+ *   PUT  /api/dashboard/setup          → putDashboardSetup
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.
@@ -3293,33 +3297,7 @@ export function parseRestRoute(
     return { service: "generalSettings", operation, method, routeParams };
   }
 
-  // Handle Image Sizes endpoints
-  if (resource === "image-sizes") {
-    // Sub-routes for regeneration
-    if (id === "regeneration-status") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerationStatus",
-        routeParams,
-      };
-    }
-    if (id === "regenerate") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerate",
-        routeParams,
-      };
-    }
-    if (id) routeParams.imageId = id;
-    return {
-      service: "imageSizes",
-      operation: "list",
-      method: "imageSizes",
-      routeParams,
-    };
-  }
-
+  // Nothing matched: answered as an unknown route. `image-sizes` is among
+  // these, since image sizes are no longer made or offered.
   return {};
 }

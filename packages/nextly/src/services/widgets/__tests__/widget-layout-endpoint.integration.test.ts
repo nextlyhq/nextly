@@ -27,6 +27,12 @@ import {
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
+import { CORE_DEFAULT_LAYOUT } from "../../../domains/widgets/core-widgets/ids";
+import {
+  defaultLayoutPlan,
+  setDefaultLayoutPlan,
+  type DefaultLayoutPlan,
+} from "../../../domains/widgets/default-layout";
 import {
   deregisterWidget,
   listWidgets,
@@ -77,9 +83,12 @@ interface LayoutRead {
 const ours = (placements: readonly Placement[]) =>
   placements.filter(p => p.widgetId.startsWith("test/"));
 
+/** This suite's widgets, each with the place it takes on the default, in registration order. */
+const testOrder = new Map<string, number>();
+
 function testWidget(
   id: string,
-  defaultOrder: number,
+  order: number,
   extra: Record<string, unknown> = {}
 ) {
   registerWidget(
@@ -88,13 +97,30 @@ function testWidget(
       title: id,
       archetype: "text",
       size: { default: { w: 4, h: 3 } },
-      defaultOrder,
       content: id,
       ...extra,
     },
     { source: "@test/layout" }
   );
+  testOrder.set(`test/${id}`, order);
 }
+
+/**
+ * The default these cases follow: core's own cards, then this suite's widgets still registered,
+ * by the place each was given. A stand-in for a site's `defaultLayout` naming them, read when
+ * the default is built, so a widget registered during a case joins it, as a site's changed
+ * default would: nothing is placed that the default does not name.
+ */
+const SUITE_DEFAULT: DefaultLayoutPlan = {
+  get cards() {
+    const registered = new Set(listWidgets().map(widget => widget.id));
+    const ours = [...testOrder]
+      .filter(([id]) => registered.has(id))
+      .sort(([, a], [, b]) => a - b)
+      .map(([widget]) => ({ widget }));
+    return [...CORE_DEFAULT_LAYOUT, ...ours];
+  },
+};
 
 describe.each(getConfiguredTestDialects())(
   "the layout endpoint (%s)",
@@ -233,9 +259,12 @@ describe.each(getConfiguredTestDialects())(
     // test's widgets registered anew, beside the widgets the boot registered.
     let accounts = 0;
     let bootWidgets: string[] = [];
+    /** The default the boot set, put back after each case. */
+    let bootPlan: DefaultLayoutPlan = defaultLayoutPlan();
     beforeAll(async () => {
       handle = await createTestNextly({ dialect });
       bootWidgets = listWidgets().map(w => w.id);
+      bootPlan = defaultLayoutPlan();
       // The first account of an instance is its super admin.
       admin = await account("admin@example.com");
     }, 120_000);
@@ -254,6 +283,7 @@ describe.each(getConfiguredTestDialects())(
       if (stored.version > 0) {
         await service().deleteLayout("user", admin, stored.version);
       }
+      setDefaultLayoutPlan(SUITE_DEFAULT);
       testWidget("first", 1000);
       testWidget("gated", 1010, { requiredPermission: "manage-the-vault" });
       testWidget("last", 1020, { size: { default: { w: 3, h: 2 } } });
@@ -265,6 +295,8 @@ describe.each(getConfiguredTestDialects())(
       for (const { id } of listWidgets()) {
         if (id.startsWith("test/")) deregisterWidget(id);
       }
+      testOrder.clear();
+      setDefaultLayoutPlan(bootPlan);
     });
 
     it("gives two people with no arrangement the same default, less what one may not see", async () => {
@@ -731,137 +763,6 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(ok.status).toBe(200);
       expect((await read(editor)).source).toBe("default");
-    });
-
-    describe("the Get started card", () => {
-      const STARTED = "core/get-started";
-
-      interface StartedRead extends LayoutRead {
-        defaultPlacements: Placement[];
-        getStarted: {
-          drawn: boolean;
-          answer: {
-            unknown: boolean;
-            steps: Array<{ key: string; status: string }>;
-          } | null;
-        };
-      }
-
-      /** A read, held to its one rule: the card is handed exactly when it is said to be drawn. */
-      async function readStarted(
-        userId: string,
-        query?: Record<string, string>
-      ): Promise<StartedRead> {
-        const res = await call(userId, "GET", query ? { query } : {});
-        expect(res.status).toBe(200);
-        const body = (await res.json()) as StartedRead;
-        const handed = body.placements.some(
-          p => p.widgetId === STARTED && !p.removed
-        );
-        expect(handed).toBe(body.getStarted.drawn);
-        return body;
-      }
-
-      it("is drawn first, at full width, while a step waits, with its steps from the same read", async () => {
-        const seen = await readStarted(admin);
-        expect(seen.placements[0]).toMatchObject({
-          widgetId: STARTED,
-          w: 12,
-          removed: false,
-        });
-        expect(seen.defaultPlacements[0]?.widgetId).toBe(STARTED);
-        expect(
-          seen.getStarted.answer?.steps.some(s => s.status === "open")
-        ).toBe(true);
-        expect(seen.available).not.toContain(STARTED);
-      });
-
-      it("keeps a dismissal and its skips on the server, answers its steps only when asked, and comes back with them", async () => {
-        const seen = await readStarted(admin);
-        const card = seen.placements.find(p => p.widgetId === STARTED)!;
-        const settings = { acted: true, skipped: ["invite"] };
-        const dismissed = seen.placements.map(p =>
-          p.id === card.id ? { ...p, removed: true, config: settings } : p
-        );
-        expect(
-          (await save(admin, seen, dismissed, { arranged: false })).status
-        ).toBe(200);
-
-        const after = await readStarted(admin);
-        expect(after.placements.find(p => p.id === card.id)).toMatchObject({
-          removed: true,
-          config: settings,
-        });
-        expect(after.getStarted).toEqual({ drawn: false, answer: null });
-        const asked = await readStarted(admin, { getStarted: "1" });
-        expect(asked.getStarted.answer).not.toBeNull();
-
-        const restored = after.placements.map(p =>
-          p.id === card.id ? { ...p, removed: false } : p
-        );
-        expect(
-          (await save(admin, after, restored, { arranged: false })).status
-        ).toBe(200);
-        const back = await readStarted(admin);
-        expect(back.getStarted.drawn).toBe(true);
-        expect(back.placements.find(p => p.id === card.id)?.config).toEqual(
-          settings
-        );
-      });
-
-      it("comes back, drawn and with no skips, for a reader whose earlier-format row removed it", async () => {
-        // 🔴 Nothing of an earlier row is carried: not its removal of the
-        // card, not the steps it skipped.
-        const seen = await read(admin);
-        expect((await save(admin, seen, seen.placements)).status).toBe(200);
-        await (
-          await rawRow(admin)
-        ).overwrite(
-          JSON.stringify({
-            schemaVersion: 3,
-            placements: [
-              {
-                id: "started",
-                widgetId: STARTED,
-                width: "full",
-                removed: true,
-                config: { acted: true, skipped: ["invite"] },
-              },
-            ],
-          })
-        );
-        const after = await readStarted(admin);
-        const card = after.placements.find(p => p.widgetId === STARTED);
-        expect(card).toEqual(
-          expect.objectContaining({ id: STARTED, removed: false })
-        );
-        expect(card?.config).toBeUndefined();
-        expect(after.getStarted.drawn).toBe(true);
-      });
-
-      it("says setup could not be checked, and stays drawn, when the registry cannot be listed", async () => {
-        const registry = handle.getService(
-          "collectionRegistryService"
-        ) as unknown as { getAllSlugs: () => Promise<string[]> };
-        const failing = vi
-          .spyOn(registry, "getAllSlugs")
-          .mockRejectedValue(new Error("registry down"));
-        try {
-          const seen = await readStarted(admin);
-          expect(seen.getStarted.drawn).toBe(true);
-          expect(seen.getStarted.answer?.unknown).toBe(true);
-          // Never shown as waiting on the strength of a registry that did not answer.
-          expect(
-            seen.getStarted.answer?.steps.some(
-              s =>
-                (s.key === "collection" || s.key === "entry") &&
-                s.status === "open"
-            )
-          ).toBe(false);
-        } finally {
-          failing.mockRestore();
-        }
-      });
     });
   }
 );

@@ -305,10 +305,6 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `GET`           | `/admin/api/dashboard/activity`                        | Activity feed.                                                                                                                                                                                       | Cookie                                                          |
 | `GET`           | `/admin/api/schema/journal`                            | Schema migration journal (super-admin only).                                                                                                                                                         | Cookie + super admin                                            |
 | `GET` / `PATCH` | `/admin/api/general-settings`                          | Project-wide settings.                                                                                                                                                                               | `read-settings` to read, `update-settings` to change                                               |
-| `GET`           | `/admin/api/image-sizes`                               | List image-size presets.                                                                                                                                                                             | Cookie                                                          |
-| `POST`          | `/admin/api/image-sizes`                               | Create image-size preset.                                                                                                                                                                            | `create-settings`                                               |
-| `PATCH`         | `/admin/api/image-sizes/{id}`                          | Update preset.                                                                                                                                                                                       | `update-settings`                                               |
-| `DELETE`        | `/admin/api/image-sizes/{id}`                          | Delete preset.                                                                                                                                                                                       | `delete-settings`                                               |
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
 
@@ -362,7 +358,7 @@ curl -i -X POST http://localhost:3000/admin/api/auth/login \
   -d '{"email":"user@example.com","password":"secure-password"}'
 ```
 
-A successful login responds 200 with the action envelope `{ message, user, token, exp }` and sets the `nextly_session` and `nextly_refresh` cookies on the response. Browsers handle these automatically; for API clients you can ignore them and use the returned `token` as a Bearer token instead.
+A successful login responds 200 with the action envelope `{ message, user, accessToken, refreshToken, expiresAt }` and sets the `nextly_session` and `nextly_refresh` cookies on the response. The REST routes authenticate a session by those cookies: browsers send them automatically, and an API client keeps them, as `curl` does with a cookie jar (`-c` and `-b`). An `Authorization: Bearer` header carries an [API key](#api-key-server-to-server), not the login's `accessToken`.
 
 ```bash
 # Register
@@ -569,7 +565,7 @@ The admin's test send, `PATCH /admin/api/email-templates/{id}/send-test`, sends 
 
 The media collection is just a normal collection (`/admin/api/collections/media/entries`) with extra plumbing for binary uploads. The `POST /admin/api/collections/media/entries` endpoint accepts `multipart/form-data` with the file under `file` and any other fields alongside.
 
-Image-size presets are managed under `/admin/api/image-sizes`. The `regeneration-status` and `regenerate` sub-routes return a "coming soon" placeholder today (see [`packages/nextly/src/routeHandler.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/routeHandler.ts)).
+An uploaded image is stored as the original and one thumbnail, the whole image fitted inside 480 by 480; no other size is made. See [Images and thumbnails](/docs/guides/media-storage#images-and-thumbnails).
 
 ### API keys
 

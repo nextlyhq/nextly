@@ -1419,14 +1419,12 @@ export {
 } from "./utils/validate-external-url";
 
 // ============================================================
-// MEDIA VARIANT HELPERS
+// MEDIA URL HELPERS
 // ============================================================
 
+// Image sizes are no longer made, so no helper picks one: an item's `url`
+// goes to `next/image`, and its `thumbnailUrl` serves a small preview.
 export {
-  getMediaVariant,
-  getSmallestMediaVariant,
   // @experimental: an absolute media URL for a consumer outside the app.
   toPublicMediaUrl,
-  type MediaLike,
-  type GetMediaVariantOptions,
 } from "./lib/media-variant";

@@ -122,8 +122,29 @@ export type NotMigratedPublicData = {
   table?: string;
 };
 
+/**
+ * Why a sample-content load, decline or record was not done, for the person
+ * who asked: refused because the site's answer moved on (`answered`, a load
+ * `in-progress`, one loaded but `unrecorded`, a failed one awaiting `confirm`,
+ * or `not-this-run` for a record of a run that is not the one waiting), or
+ * `failed`, with what failed and when that load started. A super-admin's own
+ * load reports what failed, so the card can say it.
+ */
+export type SampleContentPublicData = {
+  reason:
+    | "answered"
+    | "in-progress"
+    | "unrecorded"
+    | "confirm"
+    | "not-this-run"
+    | "failed";
+  failure?: string;
+  startedAt?: string;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | SampleContentPublicData
   | RemovedFromCodePublicData
   | NotMigratedPublicData
   | ReleaseNotDeletablePublicData

@@ -51,15 +51,12 @@ import {
 } from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import { CORE_WIDGET_ID } from "../domains/widgets/core-widgets/ids";
 import { staleFieldSettings } from "../domains/widgets/declaration/card-settings";
-import { defaultLayoutPlacements } from "../domains/widgets/default-layout";
 import {
-  getStartedDrawn,
-  getStartedPlacement,
-  getStartedView,
-  withoutDormantCard,
-} from "../domains/widgets/get-started-card";
-import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
+  defaultLayoutPlacements,
+  pairHasItsOwnRow,
+} from "../domains/widgets/default-layout";
 import { sizeWithinBounds } from "../domains/widgets/grid-size";
 import {
   LAYOUT_SCHEMA_VERSION,
@@ -148,7 +145,7 @@ type LayoutSource = "own" | "default" | "unreadable";
 /**
  * The whole arrangement a reader without an arranged row follows: the one
  * default (`defaultLayoutPlacements`, from the site's `defaultLayout` or
- * core's, and the plugins' suggestions), with their removals applied.
+ * core's), with their removals applied.
  *
  * ONE materialization over every widget the install has, split afterwards, so
  * the cards a caller may see and the ones they may not keep one order between
@@ -410,8 +407,7 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * decides what this reader may be told exists; the second decides which
  * transient cards are worth showing now, and a lapsed card is not a refusal.
  *
- * The probe the conditions read through is returned, so the Get started steps
- * share its reads rather than resolving the same collections again.
+ * The probe the conditions read through is returned with them.
  */
 async function visibleWidgets(auth: AuthContext) {
   const reader = await readCaller(auth);
@@ -613,38 +609,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   const arranged =
     stored.layout !== undefined && layoutIsArranged(stored.layout);
   const notShown = arranged ? NOTHING_WITHHELD : judged.forReader;
-  const arrangement = visibleArrangement(stored.layout, view, notShown);
-  // The Get started card is drawn or left dormant from its step answer and its
-  // own settings, which is why this is decided here, after the row is read,
-  // and not by a condition before it. `?getStarted=1` asks for the answer of a
-  // removed card, which the admin needs as it restores one.
-  const searchParams = new URL(req.url).searchParams;
-  const askedForSteps = searchParams.get("getStarted") === "1";
-  const getStarted = await getStartedView(
-    view.probe,
-    getStartedPlacement(arrangement),
-    askedForSteps
-  );
-  const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
+  const placements = visibleArrangement(stored.layout, view, notShown);
   // Which cards that hide while empty this reader's dashboard is drawn
   // without, and which leave by their own answer (`whileEmpty`).
   const emptyCards = await whileEmpty(auth, view, placements, {
     signal: req.signal,
-    searchParams,
+    searchParams: new URL(req.url).searchParams,
   });
-  // The default as a reader following it would be handed it: their card has
-  // no settings yet, so it is drawn from the answer alone. The steps are
-  // worked out when this read worked them out, or when the admin asks
-  // (`?getStarted=1`), as it does before staging a reset: an arrangement with
-  // no card of its own still resets onto a default that may draw one.
-  const steps =
-    getStarted.answer === null && !askedForSteps
-      ? null
-      : await view.probe.getStarted();
-  const defaults = withoutDormantCard(
-    visibleArrangement(undefined, view, judged.inDefault),
-    card => steps !== null && getStartedDrawn(steps, card.config)
-  );
+  // The default as a reader following it would be handed it, without the
+  // cards its own rules (`shows`) leave out for them, the setup card among
+  // them once it is dismissed or done.
+  const defaults = visibleArrangement(undefined, view, judged.inDefault);
   const sizes = sizesOf(view.widgets);
 
   // Widgets this caller may see and may still add. A saved arrangement is a
@@ -658,15 +633,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
   //
-  // Never Get started: it is offered back only from Removed, as the card the
-  // reader removed, with its progress and skips.
-  const placed = new Set(placements.map(placement => placement.widgetId));
+  // The setup card only while it would show for this reader, as it comes and
+  // goes on its own, from the site's state and the reader's own choices:
+  // offered where their arrangement lacks it, as one saved before it existed
+  // does, exactly when the default handed in this same response holds it
+  // (`defaults`, cut by the card's own `shows`, judged once above). So the
+  // two never disagree, and nothing about it is read twice. Never once they
+  // dismissed it or were told "You're all set", and only a super-admin's
+  // widgets hold it at all. A card removed in customise mode is placed, and
+  // offered back only from Removed.
   const available = inAddPanelOrder(
-    view.widgets.filter(
-      widget =>
-        widget.id !== GET_STARTED_WIDGET_ID &&
-        (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
-    )
+    offeredWidgets(view.widgets, placements, defaults, sizes)
   ).map(widget => widget.id);
 
   return respondData(
@@ -676,6 +653,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // reader following it is shown: a staged reset draws it, and the admin
       // never works the default out for itself.
       defaultPlacements: defaults,
+      // Whether the default as configured gives Needs attention and Upcoming releases a row of
+      // their own: judged before this reader's cards are left out, so the admin draws the one of
+      // the two on show across that row whether the other is hidden or not this reader's to see.
+      pairedRow: pairHasItsOwnRow(defaultLayoutPlacements(allWidgets())),
       widgets: widgetFactsOf(view.widgets),
       available,
       version: stored.version,
@@ -690,14 +671,89 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
       audience: view.audience.token,
-      // The Get started steps, from the computation that decided whether the
-      // card is drawn, so the card and its steps cannot disagree.
-      getStarted,
       ...emptyCards,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
 });
+
+/**
+ * The widgets this reader may add as a new card now, of those they may see
+ * (`widgets`), against the arrangement they were handed (`placements`) and the
+ * default as they would see it (`defaults`): one not placed, or one that
+ * allows several. The setup card only while the default holds it for them.
+ * The one rule the layout read's `available` and the add gallery's offer are
+ * both taken from, so the two cannot disagree.
+ */
+function offeredWidgets(
+  widgets: readonly CanonicalWidget[],
+  placements: readonly WidgetPlacement[],
+  defaults: readonly WidgetPlacement[],
+  sizes: Readonly<Record<string, WidgetSizeFacts>>
+): CanonicalWidget[] {
+  const placed = new Set(placements.map(placement => placement.widgetId));
+  const setupOffered = defaults.some(
+    placement => placement.widgetId === CORE_WIDGET_ID.setup
+  );
+  return widgets.filter(
+    widget =>
+      (widget.id !== CORE_WIDGET_ID.setup || setupOffered) &&
+      (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
+  );
+}
+
+/** What the add gallery is offered from, for one reader (`galleryOffer`). */
+export interface GalleryOffer {
+  auth: AuthContext;
+  reader: ReadCaller;
+  /** Every widget this reader may see now, by the layout read's two passes. */
+  widgets: readonly CanonicalWidget[];
+  /** The arrangement they were handed, removed cards included. */
+  placements: readonly WidgetPlacement[];
+  /** The ids of those widgets they may add a new card of now. */
+  offered: ReadonlySet<string>;
+  /** The collections they may read, as the audience pass answered it. */
+  readableCollections: ReadonlySet<string>;
+}
+
+/**
+ * What the add gallery offers this reader, by the layout read's own steps:
+ * the same two passes (`visibleWidgets`), the same arrangement they are
+ * handed and the same rule for which widgets may be added (`offeredWidgets`).
+ * The gallery then judges each declared widget with the person, and reads
+ * their collections; nothing here is decided a second way.
+ */
+export async function galleryOffer(
+  auth: AuthContext,
+  signal: AbortSignal
+): Promise<GalleryOffer> {
+  const service = await getLayoutService();
+  const view = await visibleWidgets(auth);
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  const judged = await notShownInDefault(auth, view, signal, stored.layout);
+  const arranged =
+    stored.layout !== undefined && layoutIsArranged(stored.layout);
+  const placements = visibleArrangement(
+    stored.layout,
+    view,
+    arranged ? NOTHING_WITHHELD : judged.forReader
+  );
+  const defaults = visibleArrangement(undefined, view, judged.inDefault);
+  const offered = offeredWidgets(
+    view.widgets,
+    placements,
+    defaults,
+    sizesOf(view.widgets)
+  );
+  return {
+    auth,
+    reader: view.reader,
+    widgets: view.widgets,
+    placements,
+    offered: new Set(offered.map(widget => widget.id)),
+    readableCollections: view.audience.readableCollections,
+  };
+}
 
 /**
  * Reads the `version` a write is guarded by.
@@ -1146,14 +1202,20 @@ function refuseExtraCards(
 /**
  * The cards of an unarranged write whose size the reader chose, refusing one whose chosen size
  * lies outside its widget's bounds: a size chosen outside customise mode is one the card menu
- * offered, inside them, and is judged in the write that stores it.
+ * offered, inside them, and is judged in the write that stores it. `stored` is the row the write
+ * replaces, whose chosen sizes stay chosen while the write leaves them as stored.
  */
 function chosenSizesWithinBounds(
   saved: readonly WidgetPlacement[],
   submitted: readonly WidgetPlacement[],
-  sizes: Readonly<Record<string, WidgetSizeFacts>>
+  sizes: Readonly<Record<string, WidgetSizeFacts>>,
+  stored: StoredLayout | undefined
 ): string[] {
-  const chosen = chosenSizeIds(defaultLayoutPlacements(allWidgets()), saved);
+  const chosen = chosenSizeIds(
+    defaultLayoutPlacements(allWidgets()),
+    saved,
+    stored
+  );
   const own = new Map(submitted.map(placement => [placement.id, placement]));
   for (const id of chosen) {
     const placement = own.get(id);
@@ -1203,23 +1265,6 @@ function refuseUnconfirmedReplacement(
       ? "Your saved dashboard could not be loaded. Saving replaces it; confirm to save."
       : "Your saved dashboard could not be loaded. Save it from customise mode first.",
   });
-}
-
-/**
- * The widget ids a save replaces, as opposed to carries.
- *
- * Every visible widget, except a Get started card the submission does not
- * hold: a dormant card is never handed to the reader, so their save cannot
- * hold it, and replacing it would delete it with its skips. Carried instead,
- * in place, as a card the reader could not see is. A submission that holds
- * the card replaces it as usual.
- */
-function carriedUnlessSubmitted(
-  submitted: readonly WidgetPlacement[],
-  visibleIds: ReadonlySet<string>
-): ReadonlySet<string> {
-  if (getStartedPlacement(submitted) !== undefined) return visibleIds;
-  return new Set([...visibleIds].filter(id => id !== GET_STARTED_WIDGET_ID));
 }
 
 export const putWidgetLayout = withErrorHandler(async (req: Request) => {
@@ -1310,14 +1355,19 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const saved = mergePreservingHidden(
     submitted,
     wholeArrangement(stored.layout),
-    carriedUnlessSubmitted(submitted, view.visibleIds),
+    view.visibleIds,
     withheldFrom(stored.layout, view, notShown)
   );
   // A row that still follows the default keeps only the sizes its reader chose; an arranged
   // row's sizes are all theirs.
   const sized = arranged
     ? []
-    : chosenSizesWithinBounds(saved, submitted, sizesOf(view.widgets));
+    : chosenSizesWithinBounds(
+        saved,
+        submitted,
+        sizesOf(view.widgets),
+        stored.layout
+      );
   const version = await service.saveLayout(
     SCOPE_KIND,
     view.caller.userId,

@@ -379,7 +379,8 @@ export type {
  *   card's own footer, where core's cards draw "View all") and
  *   `Widget.useTitleCount` (a hook: the count it is given is drawn beside the
  *   card's title and read with it, as the Needs your attention card shows its
- *   items; `undefined` shows none).
+ *   items: a number, a short phrase such as "2 of 5 done", or with `true`
+ *   after it a floor drawn "N+"; `undefined` shows none).
  *
  * The number and change formatters and the chart colour accessor are exported
  * from this package's root, not here: every module of the admin is a client

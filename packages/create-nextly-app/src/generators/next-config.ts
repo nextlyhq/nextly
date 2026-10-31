@@ -22,8 +22,8 @@ import type { DatabaseConfig } from "../types";
 import type { GeneratedFiles } from "./generated-files";
 
 /**
- * Where Nextly explains why Cache Components is off and when it will be
- * supported: the same page `nextly` links from the error it stops with.
+ * Where Nextly explains that Cache Components is off by default, and how an
+ * app turns it on.
  */
 export const CACHE_COMPONENTS_DOCS_URL =
   "https://nextlyhq.com/docs/getting-started/installation#cache-components";
@@ -79,8 +79,8 @@ function packageListLiteral(database: DatabaseConfig): string {
  * The setting every config this writes carries, with its reason in the file:
  * the developer who finds it is the one deciding whether to change it.
  */
-const CACHE_COMPONENTS_OFF = `  // Nextly does not support Cache Components yet: it caches with
-  // unstable_cache, and Cache Components refuses \`runtime\` route exports.
+const CACHE_COMPONENTS_OFF = `  // Off by default in a Nextly app. Turning it on takes a "use cache" read
+  // function of the app's own and Nextly's cache handlers:
   // ${CACHE_COMPONENTS_DOCS_URL}
   cacheComponents: false,`;
 
@@ -986,8 +986,8 @@ function definesPartialPrefetching(source: string, file: string): boolean {
 }
 
 /**
- * Turn Next.js Cache Components off in an existing app's config, which
- * Nextly does not support yet; `create-next-app` 16.4 turns it on by default.
+ * Turn Next.js Cache Components off in an existing app's config, Nextly's
+ * default; `create-next-app` 16.4 turns it on by default.
  *
  * Only `cacheComponents: true` written in place is changed, and
  * `partialPrefetching` goes with it, since Next.js refuses that option once
@@ -1035,13 +1035,13 @@ export function cacheComponentsFiles(
       ? `, and removed ${patch.removed.join(", ")}, which Next.js accepts only with it on`
       : "";
     files.notices = [
-      `Turned Cache Components off in ${patch.file}: Nextly does not support it yet${removed}. ` +
-        `Why, and the plan to support it: ${CACHE_COMPONENTS_DOCS_URL}`,
+      `Turned Cache Components off in ${patch.file}: Nextly keeps it off by default${removed}. ` +
+        `How to turn it on: ${CACHE_COMPONENTS_DOCS_URL}`,
     ];
   } else if (patch.kind === "manual") {
     files.skipped.push({
       path: patch.file,
-      why: `Nextly could not confirm Cache Components is off: ${patch.reason}. Nextly does not support it yet (${CACHE_COMPONENTS_DOCS_URL}); make sure the config Next.js receives leaves it unset or sets it to false, with no ${PARTIAL_PREFETCHING}`,
+      why: `Nextly could not confirm Cache Components is off: ${patch.reason}. Nextly keeps it off by default (${CACHE_COMPONENTS_DOCS_URL}); make sure the config Next.js receives leaves it unset or sets it to false, with no ${PARTIAL_PREFETCHING}`,
       toAdd: `  ${CACHE_COMPONENTS}: false,`,
     });
   }

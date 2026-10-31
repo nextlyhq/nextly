@@ -23,7 +23,6 @@
 
 import type {
   AnyWidgetSetting,
-  GetStartedAnswer,
   WidgetAction,
   WidgetArchetype,
   SourcelessWidgetQuery,
@@ -291,6 +290,13 @@ export interface DashboardLayoutResponse {
    */
   arranged: boolean;
   /**
+   * Whether the default as configured gives Needs attention and Upcoming releases a row of their
+   * own, side by side: judged by the server before this reader's cards are left out, so it is
+   * the same for a reader who may not see one of the two. Absent from a server that predates
+   * it, which reads as no.
+   */
+  pairedRow?: boolean;
+  /**
    * An opaque token for the set of widgets this reader could see when the
    * arrangement was read. Echoed back on write; a mismatch is a 409.
    */
@@ -303,14 +309,6 @@ export interface DashboardLayoutResponse {
    * than this layout, and is read again.
    */
   audience: string;
-  /**
-   * The Get started card's steps, from the computation that decided whether
-   * the card is drawn, so the card and its steps cannot disagree. Absent from a
-   * server that predates the card.
-   *
-   * @experimental
-   */
-  getStarted?: GetStartedLayoutView;
   /**
    * The placement ids of the cards that hide while empty and were empty for
    * this reader when the layout was read, at the tier each is drawn at on a
@@ -351,16 +349,4 @@ export interface DashboardLayoutRead extends DashboardLayoutResponse {
    * the tier this one does (`tierBandAt`), so an answer held from another width judges no card.
    */
   askedAtWidth?: number;
-}
-
-/** What the layout read says of the Get started card. */
-export interface GetStartedLayoutView {
-  /** Whether the reader's card is drawn. */
-  drawn: boolean;
-  /**
-   * The steps with the reader's skips applied, or `null` when the server
-   * worked none out: the card is removed (and its answer not asked for), or
-   * not in this reader's dashboard.
-   */
-  answer: GetStartedAnswer | null;
 }

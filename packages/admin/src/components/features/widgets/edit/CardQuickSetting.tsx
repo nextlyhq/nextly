@@ -41,6 +41,7 @@ import { useCardTier } from "../frame/tier";
 
 import { sizeAxes, type SizeAxis } from "./CardActionsMenu";
 import type { PopoverSetting, QuickSetting } from "./quick-setting";
+import { settingsIntent } from "./settings-sheet-code";
 import type { CardQuickPopoverModel } from "./useCardQuickSetting";
 
 export interface CardQuickSettingProps {
@@ -390,6 +391,7 @@ export function CardQuickPopover({
                 onMoreSettings();
               }}
               data-testid="card-quick-more-settings"
+              {...settingsIntent}
             >
               More settings
             </Button>

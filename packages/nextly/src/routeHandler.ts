@@ -49,16 +49,17 @@ import {
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
-  getDashboardOnboarding,
   getDashboardStats,
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import { getDashboardGallery } from "./api/dashboard-gallery";
 import {
   deleteDashboardPin,
   getDashboardPins,
   postDashboardPin,
 } from "./api/dashboard-pins";
+import { getDashboardSetup, putDashboardSetup } from "./api/dashboard-setup";
 import { getDashboardSummary } from "./api/dashboard-summary";
 import {
   acquireLock,
@@ -71,13 +72,6 @@ import {
   getGeneralSettings,
   updateGeneralSettings,
 } from "./api/general-settings";
-import {
-  listImageSizes,
-  getImageSizeById,
-  createImageSize,
-  updateImageSize,
-  deleteImageSize,
-} from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { changeLanguages, getLanguages } from "./api/languages";
@@ -136,6 +130,10 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
+import {
+  isSampleContentPath,
+  sampleContentNotShipped,
+} from "./database/seeders/sample-content";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
@@ -396,7 +394,6 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "languages",
   "previewLinks",
   "previewUrl",
-  "imageSizes",
   "dashboard",
   "documentLock",
   "translations",
@@ -509,40 +506,6 @@ async function handleGeneralSettingsRequest(
   }
 }
 
-/**
- * Delegate image sizes requests to the named handlers.
- * Handlers manage their own auth + body parsing.
- */
-async function handleImageSizesRequest(
-  req: Request,
-  httpMethod: string,
-  imageId?: string
-): Promise<Response> {
-  switch (httpMethod) {
-    case "GET":
-      return imageId ? getImageSizeById(req, imageId) : listImageSizes(req);
-    case "POST":
-      return createImageSize(req);
-    case "PATCH":
-      if (!imageId)
-        return new Response(JSON.stringify({ error: "ID required" }), {
-          status: 400,
-        });
-      return updateImageSize(req, imageId);
-    case "DELETE":
-      if (!imageId)
-        return new Response(JSON.stringify({ error: "ID required" }), {
-          status: 400,
-        });
-      return deleteImageSize(req, imageId);
-    default:
-      return new Response(JSON.stringify({ error: "Method not allowed" }), {
-        status: 405,
-        headers: { "Content-Type": "application/json" },
-      });
-  }
-}
-
 // ============================================================================
 // Dashboard Direct Dispatch
 // ============================================================================
@@ -551,7 +514,7 @@ async function handleImageSizesRequest(
  * Delegate a dashboard request directly to the named handler.
  *
  * Dashboard handlers manage their own auth (requireAuthentication) and read
- * their own bodies (the layout's and a pin's). Intercepting here — before
+ * their own bodies (the layout's, a pin's and the setup card's). Intercepting here — before
  * req.text() — keeps the pattern consistent with API keys and general settings.
  */
 async function handleDashboardRequest(
@@ -561,8 +524,6 @@ async function handleDashboardRequest(
   switch (method) {
     case "getDashboardStats":
       return getDashboardStats(req);
-    case "getDashboardOnboarding":
-      return getDashboardOnboarding(req);
     case "getDashboardRecentEntries":
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
@@ -571,6 +532,8 @@ async function handleDashboardRequest(
       return postWidgetQuery(req);
     case "getWidgetLayout":
       return getWidgetLayout(req);
+    case "getDashboardGallery":
+      return getDashboardGallery(req);
     case "getDashboardSummary":
       return getDashboardSummary(req);
     case "putWidgetLayout":
@@ -583,6 +546,10 @@ async function handleDashboardRequest(
       return postDashboardPin(req);
     case "deleteDashboardPin":
       return deleteDashboardPin(req);
+    case "getDashboardSetup":
+      return getDashboardSetup(req);
+    case "putDashboardSetup":
+      return putDashboardSetup(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -1096,7 +1063,7 @@ async function resolveAuthorization(
     }
     // Definition mutations (create/update/delete collection). The grant is
     // declared once, in `auth/collection-definition-policy`, because the
-    // onboarding checklist asks the same question to decide whether to OFFER
+    // setup card asks the same question to decide whether to OFFER
     // the step -- and a copy there would go on asking for a grant this route
     // had stopped requiring.
     return requireAllPermissions(req, COLLECTION_DEFINITION_PERMISSIONS);
@@ -1559,6 +1526,15 @@ async function serveServiceRequest(
     );
     if (rootAnswer) return rootAnswer;
 
+    // The project's sample-content route, where the project ships none: a
+    // missing route, which the setup card's probe reads as "no sample
+    // content", rather than a malformed one.
+    if (isSampleContentPath(params)) {
+      return withinBuiltInLimit(() =>
+        Promise.resolve(sampleContentNotShipped(req))
+      );
+    }
+
     return withinBuiltInLimit(() =>
       Promise.resolve(
         new Response(
@@ -1714,28 +1690,6 @@ async function serveServiceRequest(
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
   if (service === "generalSettings") {
     return handleGeneralSettingsRequest(req, httpMethod);
-  }
-
-  // ==================== IMAGE SIZES DIRECT DISPATCH ====================
-  if (service === "imageSizes") {
-    // Handle regeneration sub-routes
-    // Regeneration endpoints return "not yet available" until the service
-    // can actually download and reprocess original images from all adapters.
-    if (method === "regenerationStatus" || method === "regenerate") {
-      return Response.json(
-        {
-          data: {
-            pending: 0,
-            total: 0,
-            inProgress: false,
-            message: "Batch regeneration coming soon",
-          },
-        },
-        { status: 200 }
-      );
-    }
-    const imageId = routeParams?.imageId;
-    return handleImageSizesRequest(req, httpMethod, imageId);
   }
 
   // ==================== DASHBOARD DIRECT DISPATCH ====================

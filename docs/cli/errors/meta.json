@@ -58,6 +58,7 @@
     "localization-not-provisioned",
     "media-apply-outside-project",
     "media-config-outside-project",
+    "media-reindex-outside-project",
     "media-storage-unlistable",
     "media-thumbnails-not-removed",
     "migration-apply-failed",
@@ -176,6 +177,7 @@
     "upgrade-backup-not-confirmed",
     "upgrade-cancelled",
     "upgrade-events-table-taken",
+    "widget-generate-cancelled",
     "workflow-cannot-attach"
   ]
 }

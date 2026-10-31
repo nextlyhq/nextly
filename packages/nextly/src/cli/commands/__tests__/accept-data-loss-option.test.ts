@@ -34,7 +34,6 @@ vi.mock("../../program", () => ({
 // `migrate` is the largest command module, and nothing here runs it.
 vi.mock("../migrate", () => ({
   runMigrate: vi.fn(),
-  parseSqlSections: vi.fn(),
 }));
 
 vi.mock("../plugin-lifecycle-runner", () => ({

@@ -27,6 +27,8 @@ import {
 import { createDynamicHandlers } from "../../../routeHandler";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
+import { setDefaultLayoutPlan } from "../default-layout";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery, type WidgetQuery } from "../query";
 import { deregisterWidget, getWidget, registerWidget } from "../registry";
@@ -52,8 +54,12 @@ interface LayoutRead {
   scope: string;
 }
 
-/** The notes card, its `limit` defaulting to `defaultLimit`. */
+/**
+ * The notes card, its `limit` defaulting to `defaultLimit`, on the default after core's own cards
+ * (as a site's `defaultLayout` names it: nothing is placed that the default does not name).
+ */
 function declare(defaultLimit: number): void {
+  setDefaultLayoutPlan({ cards: [...CORE_DEFAULT_LAYOUT, { widget: WIDGET }] });
   if (getWidget(WIDGET)) deregisterWidget(WIDGET);
   registerWidget(
     {
@@ -61,7 +67,6 @@ function declare(defaultLimit: number): void {
       title: "Notes",
       archetype: "list",
       size: { default: { w: 4, h: 3 } },
-      defaultOrder: 1000,
       query: { source: `collection:${NOTES}`, op: "list", limit: 5 },
       settings: [
         {

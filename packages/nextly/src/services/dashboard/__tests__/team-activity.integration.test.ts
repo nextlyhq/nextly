@@ -247,6 +247,48 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("states a settings change written before the kind was recorded as one, and leaves an entry's such row a collection's", async () => {
+      const t = await boot(dialect);
+      const id = await writesTo(t, POSTS).create(at(3), { title: "Post" });
+      const log = t.getService("activityLogService");
+      // Both recorded with no kind and no title, as rows from before the kind was recorded are.
+      await written(t, at(2), () =>
+        log.logActivity({
+          actorType: "user",
+          userId: ANA.id,
+          action: "update",
+          collection: POSTS,
+          entryId: id,
+          metadata: { changedFields: ["title"] },
+        })
+      );
+      await written(t, at(1), () =>
+        log.logActivity({
+          actorType: "user",
+          userId: ANA.id,
+          action: "update",
+          collection: EMAIL_PROVIDER_ACTIVITY_COLLECTION,
+          metadata: { changedFields: ["host"] },
+        })
+      );
+
+      const { activities } = await log.getRecentActivity({
+        limit: 10,
+        scope: someResources([POSTS, EMAIL_PROVIDER_ACTIVITY_COLLECTION]),
+        caller: as(BOSS),
+        ...(await readActivitySubjects()),
+      });
+      // The settings row says what it is, so a reader need not know the settings namespaces; the
+      // entry's row of the same shape, and the entry's stated create, are the controls.
+      expect(
+        activities.map(row => [row.collection, row.subjectKind, row.entryTitle])
+      ).toEqual([
+        [EMAIL_PROVIDER_ACTIVITY_COLLECTION, "settings", null],
+        [POSTS, null, null],
+        [POSTS, "collection", "Post"],
+      ]);
+    });
+
     it("answers each reader only events about collections they may read, and none they may not", async () => {
       const t = await boot(dialect);
       const post = await writesTo(t, POSTS).create(at(4), { title: "Post" });
