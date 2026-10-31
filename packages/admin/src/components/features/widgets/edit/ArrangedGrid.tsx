@@ -22,13 +22,7 @@
  * @module components/features/widgets/edit/ArrangedGrid
  */
 import type { GridSize, WidgetSizeBounds } from "nextly/config";
-import {
-  useContext,
-  useMemo,
-  type ComponentProps,
-  type JSX,
-  type RefObject,
-} from "react";
+import { useContext, useMemo, type JSX, type RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
@@ -47,7 +41,7 @@ import { widenLoneOfPair, WidenLonePairContext } from "../lone-pair";
 import { useReportedPlacements } from "../reported-placements";
 import { cardRowStyle, GRID_CLASS } from "../sizes";
 
-import { ArrangedCell } from "./ArrangedCell";
+import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CellDrag } from "./DraggableWidgetCell";
@@ -128,6 +122,8 @@ export interface ArrangedGridProps {
   requested: ReadonlySet<string>;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
+  answeredAtFor: (placementId: string) => Date | null;
   /** The size the answer one card shows was fetched at. */
   fetchedSizeFor: (placementId: string) => AnswerSize | undefined;
   /** The placements whose OWN request is still in flight. */
@@ -290,6 +286,38 @@ function oldestAnswer(
   return oldest;
 }
 
+/** What the batch answered for one card, as its cell draws it (`ArrangedCellProps.data`). */
+function cellData(
+  placementId: string,
+  answers: Pick<
+    ArrangedGridProps,
+    | "slots"
+    | "cellSlots"
+    | "requested"
+    | "answeredAtFor"
+    | "fetchingPlacementIds"
+    | "fetchedSizeFor"
+    | "retry"
+  >
+): ArrangedCellProps["data"] {
+  const asked = answers.requested.has(placementId);
+  return {
+    slot: answers.slots[placementId],
+    // This card's own answers, by cell key.
+    slotFor: key => answers.cellSlots[placementId]?.[key],
+    // Only a card that actually ASKED can be waiting on an answer. Its own answer's time, not
+    // the page's oldest: its quick change is said once its own answer is in.
+    updatedAt: asked ? answers.answeredAtFor(placementId) : null,
+    // 🔴 This card's own request, not the batch's: partitions settle independently, and a
+    // settled card must not dim.
+    isFetching: answers.fetchingPlacementIds.has(placementId),
+    answerSize: answers.fetchedSizeFor(placementId),
+    // Retry only for a card in the batch: one rejected before it was asked has no question to
+    // ask again, so the button could change nothing.
+    onRetry: asked ? () => answers.retry(placementId) : undefined,
+  };
+}
+
 /**
  * The rows as they are drawn: at rest on the default dashboard, the lone card of the pair drawn
  * across its row (`widenLoneOfPair`), a card being on show unless it reported itself off the
@@ -309,19 +337,15 @@ function drawnRows(
 /**
  * What the grid draws its cards from: the cards that reported themselves off the dashboard
  * (`useReportedPlacements`), the oldest answer on show, and the rows as drawn ({@link drawnRows}),
- * widened only at rest on the default dashboard. The rows are memoised, so a widened card is
- * handed the same row until a report or the arrangement moves.
+ * widened only where `WidenLonePairContext` says so and never while customising. The rows are
+ * memoised, so a widened card is handed the same row until a report or the arrangement moves.
  */
 function useGridRows(
   rows: ArrangedWidget[],
-  {
-    isEditing,
-    requested,
-    updatedAtFor,
-  }: Pick<ArrangedGridProps, "isEditing" | "requested" | "updatedAtFor">
+  isEditing: boolean,
+  answers: Omit<Parameters<typeof oldestAnswer>[1], "hidden">
 ) {
   const { placements: hidden, report: reportHidden } = useReportedPlacements();
-  // On the default dashboard only (`WidenLonePairContext`), and never while customising.
   const widen = useContext(WidenLonePairContext) && !isEditing;
   const drawn = useMemo(
     () => drawnRows(rows, widen, hidden),
@@ -331,41 +355,7 @@ function useGridRows(
     hidden,
     reportHidden,
     drawn,
-    answeredAt: oldestAnswer(rows, { hidden, requested, updatedAtFor }),
-  };
-}
-
-/** The batch's answers and state the grid hands each card, by placement. */
-type CellAnswers = Pick<
-  ArrangedGridProps,
-  | "slots"
-  | "cellSlots"
-  | "requested"
-  | "updatedAtFor"
-  | "fetchingPlacementIds"
-  | "fetchedSizeFor"
-  | "retry"
->;
-
-/** One card's answer and its state, from the batch's (`ArrangedCell`'s `data`). */
-function cellDataFor(
-  placementId: string,
-  answers: CellAnswers
-): ComponentProps<typeof ArrangedCell>["data"] {
-  const asked = answers.requested.has(placementId);
-  return {
-    slot: answers.slots[placementId],
-    // This card's own answers, by cell key.
-    slotFor: key => answers.cellSlots[placementId]?.[key],
-    // Only a card that actually ASKED can be waiting on an answer.
-    updatedAt: asked ? answers.updatedAtFor(placementId) : null,
-    // 🔴 This card's own request, not the batch's: partitions
-    // settle independently, and a settled card must not dim.
-    isFetching: answers.fetchingPlacementIds.has(placementId),
-    answerSize: answers.fetchedSizeFor(placementId),
-    // Retry only for a card in the batch: one rejected before it was asked has no
-    // question to ask again, so the button could change nothing.
-    onRetry: asked ? () => answers.retry(placementId) : undefined,
+    answeredAt: oldestAnswer(rows, { hidden, ...answers }),
   };
 }
 
@@ -377,24 +367,19 @@ export function ArrangedGrid({
   highlightedId = null,
   drag,
   writes,
-  slots,
-  cellSlots,
-  requested,
-  updatedAtFor,
-  fetchedSizeFor,
-  fetchingPlacementIds,
-  retry,
   announcement,
   focus,
   gridRef,
   on,
+  // What the batch answered, handed to each card as one (`cellData`).
+  ...answers
 }: ArrangedGridProps): JSX.Element {
   // The cards that reported themselves off the dashboard, each as it is drawn, and the rows.
-  const { hidden, reportHidden, drawn, answeredAt } = useGridRows(rows, {
+  const { hidden, reportHidden, drawn, answeredAt } = useGridRows(
+    rows,
     isEditing,
-    requested,
-    updatedAtFor,
-  });
+    answers
+  );
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -443,15 +428,7 @@ export function ArrangedGrid({
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}
-            data={cellDataFor(row.placementId, {
-              slots,
-              cellSlots,
-              requested,
-              updatedAtFor,
-              fetchingPlacementIds,
-              fetchedSizeFor,
-              retry,
-            })}
+            data={cellData(row.placementId, answers)}
             refs={{
               menu: focus.menuRef(row.placementId),
               dismiss: focus.dismissRef(row.placementId),

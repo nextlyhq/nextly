@@ -554,6 +554,7 @@ export function WidgetGrid(): JSX.Element {
     cellSlots,
     fetchingPlacementIds,
     updatedAtFor,
+    answeredAtFor,
     fetchedSizeFor,
     requested,
     counted,
@@ -689,6 +690,7 @@ export function WidgetGrid(): JSX.Element {
                   cellSlots={cellSlots}
                   requested={requested}
                   updatedAtFor={updatedAtFor}
+                  answeredAtFor={answeredAtFor}
                   fetchedSizeFor={fetchedSizeFor}
                   fetchingPlacementIds={fetchingPlacementIds}
                   retry={retry}
