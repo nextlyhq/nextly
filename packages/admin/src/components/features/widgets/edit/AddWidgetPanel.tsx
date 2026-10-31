@@ -992,6 +992,59 @@ function useGalleryActions({
   };
 }
 
+/**
+ * The side sheet the panel is drawn in: focus starts in the search as it opens, and where it goes
+ * as it closes is the dashboard's to say (`onClosed`). Its own polite live region says what the
+ * panel is saying (`spoken`), since a modal sheet takes the dashboard's region out of reach.
+ */
+function PanelSheet({
+  open,
+  onOpenChange,
+  contentRef,
+  searchRef,
+  onClosed,
+  header,
+  spoken,
+  children,
+}: Pick<AddWidgetPanelProps, "open" | "onOpenChange" | "onClosed"> & {
+  contentRef: RefObject<HTMLDivElement | null>;
+  searchRef: RefObject<HTMLInputElement | null>;
+  header: ReactNode;
+  spoken: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        ref={contentRef}
+        side="right"
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
+        data-testid="add-widget-panel"
+        onOpenAutoFocus={event => {
+          event.preventDefault();
+          searchRef.current?.focus();
+        }}
+        onCloseAutoFocus={event => {
+          // Where focus goes is the dashboard's to say: the last card added, or Add widget.
+          event.preventDefault();
+          onClosed();
+        }}
+      >
+        {header}
+        <div className="flex-1 space-y-6 overflow-y-auto p-4">{children}</div>
+        <div
+          role="status"
+          aria-live="polite"
+          className="sr-only"
+          data-testid="add-panel-live"
+        >
+          {spoken}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 /** The panel's header: its title and Close, the search when it is shown, and the limit's note. */
 function PanelHeader({
   onClose,
@@ -1224,59 +1277,46 @@ export function AddWidgetPanel({
     />
   );
 
+  const galleryBody = (
+    <GalleryBody
+      gallery={gallery}
+      found={found}
+      query={query}
+      chip={chip}
+      onClear={clear}
+      onShowAll={() => setChip("all")}
+    >
+      <GalleryLists
+        found={found}
+        suggestions={shownSuggestions}
+        atCapacity={atCapacity}
+        tileFor={tileFor}
+        onAddBack={actions.addBack}
+        onSuggestion={actions.suggest}
+        onPair={actions.addPair}
+      />
+    </GalleryBody>
+  );
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        ref={contentRef}
-        side="right"
-        className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
-        data-testid="add-widget-panel"
-        onOpenAutoFocus={event => {
-          event.preventDefault();
-          searchRef.current?.focus();
-        }}
-        onCloseAutoFocus={event => {
-          // Where focus goes is the dashboard's to say: the last card added, or Add widget.
-          event.preventDefault();
-          onClosed();
-        }}
-      >
+    <PanelSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      contentRef={contentRef}
+      searchRef={searchRef}
+      onClosed={onClosed}
+      header={
         <PanelHeader
           onClose={() => onOpenChange(false)}
           search={step === null ? search : null}
           atCapacity={atCapacity}
         />
-        <div className="flex-1 space-y-6 overflow-y-auto p-4">
-          <PanelBody step={step} stepView={stepView}>
-            <GalleryBody
-              gallery={gallery}
-              found={found}
-              query={query}
-              chip={chip}
-              onClear={clear}
-              onShowAll={() => setChip("all")}
-            >
-              <GalleryLists
-                found={found}
-                suggestions={shownSuggestions}
-                atCapacity={atCapacity}
-                tileFor={tileFor}
-                onAddBack={actions.addBack}
-                onSuggestion={actions.suggest}
-                onPair={actions.addPair}
-              />
-            </GalleryBody>
-          </PanelBody>
-        </div>
-        <div
-          role="status"
-          aria-live="polite"
-          className="sr-only"
-          data-testid="add-panel-live"
-        >
-          {voice.spoken}
-        </div>
-      </SheetContent>
-    </Sheet>
+      }
+      spoken={voice.spoken}
+    >
+      <PanelBody step={step} stepView={stepView}>
+        {galleryBody}
+      </PanelBody>
+    </PanelSheet>
   );
 }
