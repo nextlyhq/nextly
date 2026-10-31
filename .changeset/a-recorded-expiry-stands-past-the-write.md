@@ -29,6 +29,8 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
+Fixed: in an app without nextly's cache handlers, a write made outside a request (a job, a script) or one whose cache expiry failed inside a request is expired in Next.js's own cache again at the next request, as before the cache tag expiry ledger was connected at startup. The ledger records it for nextly's handlers, and Next.js's own cache never reads that record, so a read cached without a revalidate time could otherwise keep the previous version.
+
 Other instances now treat a recorded cache tag expiry as standing for one second past the write, the time an instance may keep a collection's settings cached. An entry another instance fills from settings cached before a schema change is therefore not served once the change is recorded. The instance that made the write isn't held to that second, since it cleared its own cached settings at once, and a tag that expires again never has its recorded time moved back.
 
 A write made while nextly is restarting, after one registration released the ledger and before the next one connects it, is now kept and recorded by the next ledger, instead of reaching only the instance that made it.

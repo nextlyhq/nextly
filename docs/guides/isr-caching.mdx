@@ -68,20 +68,26 @@ revalidator, and their writes would not refresh cached pages. A write in a
 context with no adapter registered is a silent no-op for revalidation (never an
 error), so it is safe but stale.
 
-### Writes must run inside a request
+### Writes outside a request
 
 Automatic revalidation fires for a write that runs **inside a Next.js request or
 render** — a Route Handler, a Server Action, or the admin API. That is where
 Next.js can expire a tag, and it covers how content is normally edited.
 
 A write from **outside** a request — a cron job, a CLI, or a background worker
-with no request in flight — cannot expire a tag: Next.js has no cache scope to
-invalidate there. The write still succeeds, and Nextly keeps its tags pending
-in that process and expires them with the next write that runs inside a
-request. It logs one line per process the first time that happens. To refresh
-pages straight away, run the write in a Route Handler or a Server Action
-instead. This mirrors how on-demand ISR works in Next.js generally:
-revalidation is request-scoped.
+with no request in flight — cannot expire a tag through Next.js: it has no
+cache scope to invalidate there. The write still succeeds, and Nextly records
+its tags in the database, in a table `nextly migrate` creates:
+
+- **With Nextly's cache handlers installed** (see Cache Components below),
+  every instance reads that record and stops serving the previous version
+  within about five seconds, whichever process made the write.
+- **Without them,** Next.js's own cache never reads the record. A write made
+  in the app's own process is expired there with the next write that runs
+  inside a request, and Nextly logs one line per process the first time that
+  happens. A write from a separate process, such as the CLI, does not reach
+  the app's cache. To refresh pages straight away, install the handlers, or
+  run the write in a Route Handler or a Server Action.
 
 ### When the new version shows
 

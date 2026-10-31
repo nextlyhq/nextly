@@ -36,6 +36,7 @@ beforeEach(() => {
     "__nextly_tag_expiry_view",
     "__nextly_expiry_handoff",
     "__nextly_expiry_fallback",
+    "__nextly_expiry_for_request",
     "__nextly_tag_ledger_withdrawn",
   ]) {
     delete (globalThis as Record<string, unknown>)[key];

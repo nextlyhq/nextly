@@ -11,6 +11,7 @@ import { setNextlyLogger } from "../../../observability/logger";
 import {
   expiryHandoff,
   isPendingExpiryHandoff,
+  takeHeldForNextRequest,
   takePendingExpiries,
 } from "../../../revalidation/expiry-handoff";
 import useCacheHandler from "../use-cache-handler";
@@ -55,6 +56,7 @@ beforeEach(() => {
     "__nextly_cache_reads",
     "__nextly_expiry_handoff",
     "__nextly_expiry_fallback",
+    "__nextly_expiry_for_request",
   ]) {
     delete (globalThis as Record<string, unknown>)[key];
   }
@@ -154,6 +156,12 @@ describe("installing and withdrawing the ledger", () => {
     // while the table is missing; left in the replaced hand-off, they would be
     // in neither and lost.
     await vi.waitFor(() => expect(takePendingExpiries()).toEqual(["posts"]));
+  });
+
+  it("keeps those tags for Next.js's own cache too, which the ledger does not reach", async () => {
+    await expiryHandoff().handOff(["posts"], "outside a request");
+    installTagExpiryLedger(adapterWithoutTheTable());
+    expect(takeHeldForNextRequest()).toEqual(["posts"]);
   });
 
   it("installs the ledger's hand-off, and withdrawing restores the in-process one", () => {

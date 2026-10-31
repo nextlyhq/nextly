@@ -4,8 +4,8 @@
  * The cache handlers are handed the ledger, so they ask it what expired and
  * record what this instance expires. The expiry hand-off records into it too:
  * a write made outside a request (a job, the CLI, a script), whose tags
- * Next.js cannot expire there, reaches every instance through the ledger
- * instead of waiting for this process's next request. Both are withdrawn when
+ * Next.js cannot expire there, reaches every instance through the ledger,
+ * and is still expired in Next.js's own cache at this process's next request. Both are withdrawn when
  * nextly's services are released, so a later registration starts from its own
  * adapter.
  *
@@ -14,6 +14,7 @@
 import {
   expiryHandoff,
   holdForNextFlush,
+  holdForNextRequest,
   isPendingExpiryHandoff,
   setExpiryHandoff,
   type ExpiryHandoff,
@@ -67,8 +68,12 @@ export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
   const handoff = new LedgerExpiryHandoff();
   setExpiryHandoff(handoff);
   globalForWiring.__nextly_tag_ledger_withdrawn = false;
-  if (waiting.length > 0)
+  if (waiting.length > 0) {
     void handoff.handOff(waiting, "waiting at registration");
+    // The default kept them for Next.js's own cache too, which the ledger
+    // does not reach.
+    holdForNextRequest(waiting);
+  }
 }
 
 /** Withdraws the ledger and restores the in-process hand-off. */
