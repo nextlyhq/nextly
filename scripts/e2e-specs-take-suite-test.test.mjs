@@ -139,25 +139,32 @@ function takesTestFrom(file, imports, expected) {
 function testBindings(program) {
   const names = new Set(["test"]);
   const namespaces = new Set();
-  for (const declaration of program.body) {
-    if (declaration.type !== "ImportDeclaration") continue;
-    if (declaration.importKind === "type") continue;
+  const values = program.body.filter(
+    node => node.type === "ImportDeclaration" && node.importKind !== "type"
+  );
+  for (const declaration of values) {
     const fromPlaywright =
       literalText(declaration.source) === "@playwright/test";
     for (const specifier of declaration.specifiers) {
-      if (specifier.type === "ImportNamespaceSpecifier") {
-        if (fromPlaywright) namespaces.add(specifier.local.name);
-      } else if (specifier.type === "ImportDefaultSpecifier") {
-        if (fromPlaywright) names.add(specifier.local.name);
-      } else if (
-        specifier.importKind !== "type" &&
-        importedName(specifier) === "test"
-      ) {
-        names.add(specifier.local.name);
-      }
+      bindTest(specifier, fromPlaywright, names, namespaces);
     }
   }
   return { names, namespaces };
+}
+
+/** Records the name, or namespace, one import specifier binds `test` to. */
+function bindTest(specifier, fromPlaywright, names, namespaces) {
+  if (specifier.type === "ImportNamespaceSpecifier") {
+    if (fromPlaywright) namespaces.add(specifier.local.name);
+    return;
+  }
+  if (specifier.type === "ImportDefaultSpecifier") {
+    if (fromPlaywright) names.add(specifier.local.name);
+    return;
+  }
+  if (specifier.importKind !== "type" && importedName(specifier) === "test") {
+    names.add(specifier.local.name);
+  }
 }
 
 /**
