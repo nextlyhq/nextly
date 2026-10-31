@@ -8,7 +8,7 @@
  * A person who may not create releases finds Schedule publish… held, with
  * the reason on its row.
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Response } from "@playwright/test";
 
 import { STORAGE_STATE } from "../global-setup";
 
@@ -61,24 +61,27 @@ test("schedules a post from the Publish split, and shows the release in the bann
     new URL(response.url()).pathname.endsWith("/releases/schedule-document")
   );
   await dialog.getByRole("button", { name: "Schedule publish" }).click();
-  const body = (await sent).postDataJSON() as Record<string, unknown>;
-  expect(body).toMatchObject({
-    into: "own",
-    document: {
-      scopeKind: "collection",
-      scopeSlug: "posts",
-      entryId: id,
-      action: "publish",
-    },
-    title,
-  });
   const response = await answered;
-  expect(response.ok(), await response.text()).toBe(true);
-  const { item } = (await response.json()) as {
-    item: { release: { id: string } };
-  };
+  // The release's id before any assertion: once the server has answered, a
+  // release may exist, and a failure from here on must still cancel it, or
+  // it stays scheduled in the database the rest of the suite shares.
+  const releaseId = await scheduledReleaseId(response);
 
   try {
+    const body = (await sent).postDataJSON() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      into: "own",
+      document: {
+        scopeKind: "collection",
+        scopeSlug: "posts",
+        entryId: id,
+        action: "publish",
+      },
+      title,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    expect(releaseId).toBeDefined();
+
     await expect(dialog).toHaveCount(0);
     // Back where the person reached for it.
     await expect(arrow).toBeFocused();
@@ -97,9 +100,21 @@ test("schedules a post from the Publish split, and shows the release in the bann
     await expect(publishing).toContainText("Goes live");
     await expect(publishing).not.toContainText("Not scheduled.");
   } finally {
-    await cancel(page, item.release.id);
+    if (releaseId !== undefined) await cancel(page, releaseId);
   }
 });
+
+/** The id of the release a schedule made, or undefined when it made none. */
+async function scheduledReleaseId(
+  response: Response
+): Promise<string | undefined> {
+  if (!response.ok()) return undefined;
+  const answer = (await response.json().catch(() => null)) as {
+    item?: { release?: { id?: unknown } };
+  } | null;
+  const id = answer?.item?.release?.id;
+  return typeof id === "string" ? id : undefined;
+}
 
 test.describe("without permission to create releases", () => {
   let reader: LimitedUser;
