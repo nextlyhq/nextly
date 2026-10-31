@@ -7,10 +7,14 @@
  *   usage record is still being built rather than listing items;
  * - an item's details list where it is used, each a link, and count what
  *   the reader cannot open;
- * - Delete asks first with the uses, then offers Undo for ten seconds, one
- *   Undo for a bulk delete too, and says each in a polite live region;
+ * - Delete asks first with the uses, then offers Undo for what is left of
+ *   the server's window, none once it has ended, one Undo for a bulk delete
+ *   too, and says each in a polite live region;
+ * - switching views never shows the previous view's items while the new
+ *   ones load;
  * - Replace swaps the file at once for the same kind, and asks first for
- *   another kind;
+ *   another kind, for an avatar or a logo keeping the address, and while the
+ *   usage record is still being built;
  * - a reader is offered neither Replace nor Delete.
  */
 import {
@@ -137,7 +141,23 @@ const USED = {
     },
   ],
   hidden: 1,
+  heldByAddress: 0,
+  usageRecorded: true,
 };
+
+/** The uses by address, as `fetchMediaUsage` reads them. */
+function byAddress(
+  items: unknown[],
+  hidden: number,
+  extra: { heldByAddress?: number; usageRecorded?: boolean } = {}
+) {
+  return {
+    items,
+    hidden,
+    heldByAddress: extra.heldByAddress ?? 0,
+    usageRecorded: extra.usageRecorded ?? true,
+  };
+}
 
 function renderLibrary() {
   api.fetchMedia.mockResolvedValue({
@@ -178,7 +198,7 @@ beforeEach(() => {
   // nothing names the item by address.
   library.fetchMediaUsage.mockImplementation(
     (_id: string, options?: { byAddress?: boolean }) =>
-      Promise.resolve(options?.byAddress ? { items: [], hidden: 0 } : USED)
+      Promise.resolve(options?.byAddress ? byAddress([], 0) : USED)
   );
   library.fetchMediaLibraryCounts.mockResolvedValue({
     all: 3,
@@ -188,8 +208,12 @@ beforeEach(() => {
     root: 3,
     folders: {},
   });
+  // The server's window, from the moment it answers.
   library.deleteMediaLater.mockImplementation((ids: string[]) =>
-    Promise.resolve({ ids, deleteAfter: new Date().toISOString() })
+    Promise.resolve({
+      ids,
+      deleteAfter: new Date(Date.now() + 10_000).toISOString(),
+    })
   );
   library.undoMediaDelete.mockImplementation((ids: string[]) =>
     Promise.resolve({ restored: ids, gone: [] })
@@ -237,6 +261,25 @@ describe("a view beside the folders", () => {
     expect(api.fetchMedia.mock.calls[0]?.[0]).toMatchObject({
       view: undefined,
     });
+  });
+
+  it("never shows the previous view's items while the new view loads", async () => {
+    renderLibrary();
+    await waitFor(() => tile(1));
+    // The new view's request is held: nothing answers it.
+    api.fetchMedia.mockImplementation(() => new Promise(() => undefined));
+
+    act(() => setMediaLibraryView("missing-alt"));
+
+    await waitFor(() =>
+      expect(api.fetchMedia).toHaveBeenLastCalledWith(
+        expect.objectContaining({ view: "missing-alt" })
+      )
+    );
+    expect(screen.queryByRole("button", { name: /^photo-1\.jpg/ })).toBeNull();
+    expect(
+      screen.queryByRole("checkbox", { name: "Select photo-1.jpg" })
+    ).toBeNull();
   });
 
   it("says Unused is still being built, rather than listing items content may use", async () => {
@@ -291,7 +334,7 @@ describe("Used in", () => {
 });
 
 describe("delete with Undo", () => {
-  it("asks first with where the item is used, then offers Undo for ten seconds", async () => {
+  it("asks first with where the item is used, then offers Undo until the server's deadline", async () => {
     renderLibrary();
     const panel = await openItem(1);
     fireEvent.click(within(panel).getByRole("button", { name: /Delete/ }));
@@ -312,10 +355,11 @@ describe("delete with Undo", () => {
     await waitFor(() =>
       expect(library.deleteMediaLater).toHaveBeenCalledWith(["m1"])
     );
+    // Offered until the server's deadline, ten seconds after it answered.
     expect(toasts.toast).toHaveBeenCalledWith(
       '"photo-1.jpg" deleted',
       expect.objectContaining({
-        duration: 10_000,
+        duration: expect.closeTo(10_000, -3),
         action: expect.objectContaining({ label: "Undo" }),
       })
     );
@@ -332,6 +376,59 @@ describe("delete with Undo", () => {
       expect(announcer()).toHaveTextContent('"photo-1.jpg" restored.')
     );
     expect(toasts.toast.success).toHaveBeenCalledWith('"photo-1.jpg" restored');
+  });
+
+  /** Delete item 1 through its details, answered `lateBy` after marking. */
+  async function deleteAnsweredLate(lateBy: number) {
+    library.deleteMediaLater.mockImplementation((ids: string[]) => {
+      const deleteAfter = new Date(Date.now() + 10_000).toISOString();
+      // The answer reaches the page `lateBy` after the server marked it.
+      vi.setSystemTime(Date.now() + lateBy);
+      return Promise.resolve({ ids, deleteAfter });
+    });
+    renderLibrary();
+    const panel = await openItem(1);
+    fireEvent.click(within(panel).getByRole("button", { name: /Delete/ }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(toasts.toast).toHaveBeenCalled());
+  }
+
+  it("offers Undo for only what is left of the server's window when the answer is slow", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await deleteAnsweredLate(6_000);
+
+      expect(toasts.toast).toHaveBeenCalledWith(
+        '"photo-1.jpg" deleted',
+        expect.objectContaining({
+          duration: 4_000,
+          action: expect.objectContaining({ label: "Undo" }),
+        })
+      );
+      expect(announcer()).toHaveTextContent(
+        '"photo-1.jpg" deleted. You can undo this for 4 seconds.'
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("offers no Undo once the server's window has already ended", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await deleteAnsweredLate(11_000);
+
+      const [title, options] = toasts.toast.mock.calls[0] as [
+        string,
+        { action?: unknown } | undefined,
+      ];
+      expect(title).toBe('"photo-1.jpg" deleted');
+      expect(options?.action).toBeUndefined();
+      expect(announcer().textContent).toBe('"photo-1.jpg" deleted.');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says when Undo came too late", async () => {
@@ -442,7 +539,7 @@ describe("Replace with pages naming the item by address", () => {
     library.fetchMediaUsage.mockImplementation(
       (_id: string, options?: { byAddress?: boolean }) =>
         Promise.resolve(
-          options?.byAddress ? { items: [USED.items[0]], hidden: 1 } : USED
+          options?.byAddress ? byAddress([USED.items[0]], 1) : USED
         )
     );
     renderLibrary();
@@ -475,6 +572,78 @@ describe("Replace with pages naming the item by address", () => {
     await waitFor(() =>
       expect(library.replaceMediaFile).toHaveBeenCalledWith("m1", file)
     );
+  });
+});
+
+describe("Replace with an avatar or a logo keeping the address", () => {
+  /** Choose a file of the same kind for item 1. */
+  async function replaceItemOne() {
+    renderLibrary();
+    const panel = await openItem(1);
+    fireEvent.click(
+      within(panel).getByRole("button", { name: /Replace file/ })
+    );
+    const file = new File(["x"], "new-photo.jpg", { type: "image/jpeg" });
+    await userEvent.upload(screen.getByTestId("media-replace-input"), file);
+    return file;
+  }
+
+  it("counts them among the places keeping the previous image", async () => {
+    library.fetchMediaUsage.mockImplementation(
+      (_id: string, options?: { byAddress?: boolean }) =>
+        Promise.resolve(
+          options?.byAddress ? byAddress([], 0, { heldByAddress: 1 }) : USED
+        )
+    );
+    const file = await replaceItemOne();
+
+    const ask = await screen.findByRole("alertdialog", {
+      name: "Replace photo-1.jpg?",
+    });
+    expect(ask).toHaveTextContent(
+      "1 place shows this image by its address (avatars and logos) and keeps the previous image until it's edited."
+    );
+    expect(library.replaceMediaFile).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole("button", { name: "Replace" }));
+    await waitFor(() =>
+      expect(library.replaceMediaFile).toHaveBeenCalledWith("m1", file)
+    );
+  });
+
+  it("names every kind when content and an avatar both keep it", async () => {
+    library.fetchMediaUsage.mockImplementation(
+      (_id: string, options?: { byAddress?: boolean }) =>
+        Promise.resolve(
+          options?.byAddress
+            ? byAddress([USED.items[0]], 0, { heldByAddress: 2 })
+            : USED
+        )
+    );
+    await replaceItemOne();
+
+    expect(
+      await screen.findByRole("alertdialog", { name: "Replace photo-1.jpg?" })
+    ).toHaveTextContent(
+      "3 places show this image by its address (rich text, email templates, avatars and logos) and keep the previous image until they're edited."
+    );
+  });
+
+  it("says the previous file is kept while the usage record is still being built", async () => {
+    library.fetchMediaUsage.mockImplementation(
+      (_id: string, options?: { byAddress?: boolean }) =>
+        Promise.resolve(
+          options?.byAddress ? byAddress([], 0, { usageRecorded: false }) : USED
+        )
+    );
+    await replaceItemOne();
+
+    const ask = await screen.findByRole("alertdialog", {
+      name: "Replace photo-1.jpg?",
+    });
+    expect(ask).toHaveTextContent(
+      "The usage record is still being built, so the previous file is kept."
+    );
+    expect(library.replaceMediaFile).not.toHaveBeenCalled();
   });
 });
 

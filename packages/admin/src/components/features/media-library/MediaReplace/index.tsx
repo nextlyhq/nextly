@@ -7,10 +7,11 @@
  * a file of the same kind, for an item nothing names by its address,
  * replaces the old one at once. Otherwise the person is asked first: a file
  * of another kind (an image replaced by a PDF) leaves the alt text and the
- * focus point behind, and rich text and email templates naming the item by
- * its address keep showing the previous image until they are edited, each
- * listed as Used in lists them. The library owns the request; this owns the
- * chooser and the question.
+ * focus point behind; rich text, email templates, avatars and logos naming
+ * the item by its address keep showing the previous image until they are
+ * edited, the documents listed as Used in lists them; and while the usage
+ * record is still being built, the previous file is kept whatever it lists.
+ * The library owns the request; this owns the chooser and the question.
  */
 
 import {
@@ -53,6 +54,23 @@ interface PendingReplace {
   addressUses: MediaUsage | null;
 }
 
+/**
+ * How many places name the item by its address: the documents, readable or
+ * not, and the avatars and logos.
+ */
+function addressUseCount(usage: MediaUsage): number {
+  return usageTotal(usage) + usage.heldByAddress;
+}
+
+/** What names the item by its address, as the question says it. */
+function addressUseKinds(usage: MediaUsage): string {
+  const documents = usageTotal(usage) > 0;
+  if (usage.heldByAddress === 0) return "rich text and email templates";
+  return documents
+    ? "rich text, email templates, avatars and logos"
+    : "avatars and logos";
+}
+
 /** What the person is told before a Replace that needs asking about. */
 function ReplaceQuestion({
   pending,
@@ -60,7 +78,7 @@ function ReplaceQuestion({
   pending: PendingReplace;
 }): React.JSX.Element {
   const { media, file, kindChanges, addressUses } = pending;
-  const kept = addressUses ? usageTotal(addressUses) : 0;
+  const kept = addressUses ? addressUseCount(addressUses) : 0;
   return (
     <>
       <AlertDialogHeader>
@@ -78,12 +96,18 @@ function ReplaceQuestion({
                 .
               </p>
             )}
-            {kept > 0 && (
+            {addressUses && kept > 0 && (
               <p>
                 {placesText(kept)} {kept === 1 ? "shows" : "show"} this image by
-                its address (rich text and email templates) and{" "}
+                its address ({addressUseKinds(addressUses)}) and{" "}
                 {kept === 1 ? "keeps" : "keep"} the previous image until{" "}
                 {kept === 1 ? "it's" : "they're"} edited.
+              </p>
+            )}
+            {addressUses?.usageRecorded === false && (
+              <p>
+                The usage record is still being built, so the previous file is
+                kept.
               </p>
             )}
             {addressUses === null && (
@@ -96,7 +120,7 @@ function ReplaceQuestion({
           </div>
         </AlertDialogDescription>
       </AlertDialogHeader>
-      {addressUses && kept > 0 && (
+      {addressUses && usageTotal(addressUses) > 0 && (
         <div className="max-h-56 overflow-y-auto rounded-md border border-border px-3 py-1">
           <MediaUsageList usage={addressUses} />
         </div>
@@ -130,7 +154,14 @@ export function useMediaReplace(
       byAddress: true,
     }).catch(() => null);
     const kindChanges = changesKind(media, file);
-    if (!kindChanges && addressUses && usageTotal(addressUses) === 0) {
+    // At once only when nothing keeps the previous file: no use by address,
+    // and a usage record that can say so.
+    if (
+      !kindChanges &&
+      addressUses &&
+      addressUseCount(addressUses) === 0 &&
+      addressUses.usageRecorded
+    ) {
       onReplace(media, file);
       return;
     }

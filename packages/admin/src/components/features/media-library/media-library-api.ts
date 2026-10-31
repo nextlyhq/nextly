@@ -57,6 +57,16 @@ export interface MediaUsage {
   items: MediaUse[];
   /** Documents using the item that the reader may not open. */
   hidden: number;
+  /**
+   * Avatars and logos keeping the item's address, which a Replace keeps the
+   * previous file for; asked only with the uses by address.
+   */
+  heldByAddress: number;
+  /**
+   * Whether the usage record has been built. Until it has, a Replace keeps
+   * the previous file whatever the record lists.
+   */
+  usageRecorded: boolean;
 }
 
 /** A delete that can be undone, as the server took it. */
@@ -101,7 +111,11 @@ export async function fetchMediaUsage(
   const query = options.byAddress ? "?byAddress=true" : "";
   const body = await mediaJson<{
     items: MediaUse[];
-    meta?: { hidden?: Array<{ count: number }> };
+    meta?: {
+      hidden?: Array<{ count: number }>;
+      heldByAddress?: number;
+      usageRecorded?: boolean;
+    };
   }>(`/${encodeURIComponent(mediaId)}/usage${query}`);
   return {
     items: body.items,
@@ -109,6 +123,9 @@ export async function fetchMediaUsage(
       (sum, scope) => sum + scope.count,
       0
     ),
+    // Said only of the uses by address; none, and a built record, otherwise.
+    heldByAddress: body.meta?.heldByAddress ?? 0,
+    usageRecorded: body.meta?.usageRecorded ?? true,
   };
 }
 

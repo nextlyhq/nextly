@@ -124,12 +124,6 @@ export interface MediaLibraryProps {
   className?: string;
 }
 
-/**
- * How long a delete can be undone: the server keeps a deleted item for ten
- * seconds before it removes it for good.
- */
-const MEDIA_UNDO_WINDOW_MS = 10_000;
-
 /** What a view's listing is, said after its count: "3 files missing alt text". */
 const VIEW_NOTES: Record<MediaLibraryView, string> = {
   "missing-alt": "missing alt text",
@@ -445,19 +439,30 @@ export function MediaLibrary({
     [undoDelete]
   );
 
-  // Deletes the items, then offers Undo for the ten seconds the server keeps
-  // them, as one toast for however many there are.
+  // Deletes the items, then offers Undo until the deadline the server set,
+  // as one toast for however many there are. The time left is read from
+  // that deadline, so a slow answer leaves less of it, and one arriving
+  // after it offers no Undo at all.
   const deleteWithUndo = React.useCallback(
     async (ids: readonly string[], label: string) => {
-      await deleteLater(ids);
+      const pending = await deleteLater(ids);
       setSelectedIds(prev => {
         const next = new Set(prev);
         for (const id of ids) next.delete(id);
         return next;
       });
-      setAnnouncement(`${label} deleted. You can undo this for 10 seconds.`);
+      const left = Date.parse(pending.deleteAfter) - Date.now();
+      if (!(left > 0)) {
+        setAnnouncement(`${label} deleted.`);
+        toast(`${label} deleted`);
+        return;
+      }
+      const seconds = Math.max(1, Math.round(left / 1000));
+      setAnnouncement(
+        `${label} deleted. You can undo this for ${seconds} ${seconds === 1 ? "second" : "seconds"}.`
+      );
       toast(`${label} deleted`, {
-        duration: MEDIA_UNDO_WINDOW_MS,
+        duration: left,
         action: {
           label: "Undo",
           onClick: () => void handleUndoDelete(ids, label),
