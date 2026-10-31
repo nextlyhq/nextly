@@ -7,6 +7,8 @@
  * an entry older than the ledger keeps an expiry is refused; and `use cache`
  * streams are replayed.
  */
+import { readFileSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setNextlyLogger } from "../../../observability/logger";
@@ -291,4 +293,22 @@ describe("the handlers' bounded entries", () => {
     entries.set("huge", "x", 11);
     expect(entries.get("huge")).toBeUndefined();
   });
+});
+
+describe("the handlers' subpaths", () => {
+  // A `next.config.ts` in an app without `"type": "module"` runs as CommonJS,
+  // where the install line's `require.resolve` matches only `require` or
+  // `default`; an `import`-only entry refuses it. Next.js then loads the path
+  // it is given with `import()`, so both name the same ES module.
+  const exportsOf = JSON.parse(
+    readFileSync(new URL("../../../../package.json", import.meta.url), "utf8")
+  ).exports as Record<string, Record<string, string>>;
+
+  it.each(["./cache-handler", "./cache-handlers"])(
+    "%s resolves for a CommonJS next.config, to the module an import gets",
+    subpath => {
+      expect(exportsOf[subpath]?.default).toBeDefined();
+      expect(exportsOf[subpath]?.default).toBe(exportsOf[subpath]?.import);
+    }
+  );
 });
