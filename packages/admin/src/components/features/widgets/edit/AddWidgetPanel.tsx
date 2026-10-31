@@ -917,6 +917,78 @@ function usePanelFocus(
   return { focusTile, keepFocusInPanel };
 }
 
+/** What the gallery's controls do: open the add step, add a card, add one back, go back. */
+function useGalleryActions({
+  byId,
+  starting,
+  onAdd,
+  onAddBack,
+  say,
+  step,
+  setStep,
+  focusTile,
+  keepFocusInPanel,
+}: Pick<AddWidgetPanelProps, "byId" | "onAdd" | "onAddBack"> & {
+  /** The collection a new card starts on. */
+  starting: string | undefined;
+  say: (sentence: string) => void;
+  step: AddStep | null;
+  setStep: (step: AddStep | null) => void;
+  focusTile: (tileId: string | null) => void;
+  keepFocusInPanel: () => void;
+}) {
+  // The tile an add step was opened from, where Back and an add return focus.
+  const openedFrom = useRef<string | null>(null);
+  const openStep = (tile: GalleryTile, collection?: string) => {
+    openedFrom.current = tile.id;
+    setStep(
+      startingStep(tile, byId.get(tile.id), collection ?? starting ?? "")
+    );
+  };
+  const addNow = (widgetId: string, settings?: Record<string, unknown>) => {
+    say(addedSentence(onAdd(widgetId, settings), "Added"));
+    keepFocusInPanel();
+  };
+  const leaveStep = () => {
+    setStep(null);
+    focusTile(openedFrom.current);
+  };
+  return {
+    // A widget that reads a collection opens its step; one that reads none is added as it is.
+    choose: (view: GalleryTileView) =>
+      view.tile.collectionSetting === undefined
+        ? addNow(view.tile.id)
+        : openStep(view.tile),
+    suggest: (suggestion: SuggestionView) =>
+      openStep(suggestion.view.tile, suggestion.collection),
+    addPair: (pair: GalleryPair) =>
+      addNow(
+        pair.view.tile.id,
+        newCardSettings(pair.view.tile, { collection: pair.collection.slug })
+      ),
+    addBack: (card: RemovedCard) => {
+      say(addedSentence(onAddBack(card.placementId), "Added back"));
+      keepFocusInPanel();
+    },
+    // Back to the gallery, the panel open for the next card, focus on the tile it came from.
+    addFromStep: () => {
+      if (step === null || step.collection === "") return;
+      say(
+        addedSentence(
+          onAdd(
+            step.tile.id,
+            stepSettings(step, byId.get(step.tile.id)),
+            chosenWidth(step)
+          ),
+          "Added"
+        )
+      );
+      leaveStep();
+    },
+    back: leaveStep,
+  };
+}
+
 /** The sentence an add, or an add refused at the limit, is announced with. */
 function addedSentence(added: AddedCard | null, verb: string): string {
   return added === null
@@ -1009,8 +1081,6 @@ export function AddWidgetPanel({
   const [step, setStep] = useState<AddStep | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  // The tile an add step was opened from, where Back and an add return focus.
-  const openedFrom = useRef<string | null>(null);
 
   const read = gallery.read;
   const { tiles, removed, collections, found, suggestions, starting } =
@@ -1029,49 +1099,17 @@ export function AddWidgetPanel({
 
   const { focusTile, keepFocusInPanel } = usePanelFocus(contentRef, searchRef);
 
-  const said = (added: AddedCard | null, verb: string) => {
-    voice.say(addedSentence(added, verb));
-  };
-
-  const openStep = (tile: GalleryTile, collection?: string) => {
-    openedFrom.current = tile.id;
-    setStep(
-      startingStep(tile, byId.get(tile.id), collection ?? starting ?? "")
-    );
-  };
-
-  const choose = (view: GalleryTileView) => {
-    if (view.tile.collectionSetting !== undefined) {
-      openStep(view.tile);
-      return;
-    }
-    // A widget that reads no collection has nothing to choose: added as it is.
-    said(onAdd(view.tile.id), "Added");
-    keepFocusInPanel();
-  };
-
-  const addPair = (tile: GalleryTile, collection: string) => {
-    said(onAdd(tile.id, newCardSettings(tile, { collection })), "Added");
-    keepFocusInPanel();
-  };
-
-  const addFromStep = () => {
-    if (step === null || step.collection === "") return;
-    const added = onAdd(
-      step.tile.id,
-      stepSettings(step, byId.get(step.tile.id)),
-      chosenWidth(step)
-    );
-    said(added, "Added");
-    // Back to the gallery, the panel open for the next card, focus on the tile it came from.
-    setStep(null);
-    focusTile(openedFrom.current);
-  };
-
-  const back = () => {
-    setStep(null);
-    focusTile(openedFrom.current);
-  };
+  const actions = useGalleryActions({
+    byId,
+    starting,
+    onAdd,
+    onAddBack,
+    say: sentence => voice.say(sentence),
+    step,
+    setStep,
+    focusTile,
+    keepFocusInPanel,
+  });
 
   const clear = () => {
     setQuery("");
@@ -1086,7 +1124,7 @@ export function AddWidgetPanel({
       widget={byId.get(view.tile.id)}
       collection={starting}
       atCapacity={atCapacity}
-      onChoose={choose}
+      onChoose={actions.choose}
     />
   );
 
@@ -1157,8 +1195,8 @@ export function AddWidgetPanel({
               mostEdited={read?.mostEdited}
               atCapacity={atCapacity}
               onChange={setStep}
-              onBack={back}
-              onAdd={addFromStep}
+              onBack={actions.back}
+              onAdd={actions.addFromStep}
             />
           ) : (
             <GalleryBody
@@ -1174,14 +1212,9 @@ export function AddWidgetPanel({
                 suggestions={!searching && chip === "all" ? suggestions : []}
                 atCapacity={atCapacity}
                 tileFor={tileFor}
-                onAddBack={card => {
-                  said(onAddBack(card.placementId), "Added back");
-                  keepFocusInPanel();
-                }}
-                onSuggestion={suggestion =>
-                  openStep(suggestion.view.tile, suggestion.collection)
-                }
-                onPair={pair => addPair(pair.view.tile, pair.collection.slug)}
+                onAddBack={actions.addBack}
+                onSuggestion={actions.suggest}
+                onPair={actions.addPair}
               />
             </GalleryBody>
           )}

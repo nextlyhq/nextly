@@ -522,7 +522,7 @@ describe("the add step", () => {
     const user = userEvent.setup();
     const all = renderPanel();
     await user.click(screen.getByRole("button", { name: "Add Note" }));
-    expect(all.onAdd).toHaveBeenCalledWith("core/note");
+    expect(all.onAdd).toHaveBeenCalledWith("core/note", undefined);
     expect(screen.queryByTestId("add-panel-step")).toBeNull();
     expect(live()).toHaveTextContent("Added Note.");
     expect(panel()).toBeInTheDocument();
