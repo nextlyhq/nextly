@@ -8,6 +8,7 @@ import { Toaster } from "@nextlyhq/ui";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { MAX_QUERIES_PER_REQUEST } from "nextly/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DASHBOARD_HEADING_ID } from "@admin/components/features/dashboard/WelcomeHeader";
@@ -200,5 +201,100 @@ describe("a quick setting's change, saved at rest", () => {
     expect(screen.getByTestId("widget-grid-live")).not.toHaveTextContent(
       sentence
     );
+  });
+});
+
+describe("a quick change to a card asked in a later request than the dashboard's first", () => {
+  // Past `MAX_QUERIES_PER_REQUEST` the batch is split into requests that each answer at their
+  // own time. Each card asks a count; the last card's Collection names what it counts, so a new
+  // one asks its request again under a new question.
+  const others = Array.from({ length: MAX_QUERIES_PER_REQUEST }, (_, i) => ({
+    id: `core/n${String(i).padStart(2, "0")}`,
+    title: `Count ${i}`,
+    archetype: "custom",
+    size: RESIZABLE,
+    component: "core#SaidOnceBody",
+    query: { source: "collection:posts", op: "count" },
+  }));
+  const counting = {
+    id: "core/counting",
+    title: "Counting",
+    archetype: "custom",
+    size: RESIZABLE,
+    component: "core#SaidOnceBody",
+    query: { op: "count" },
+    settings: [{ name: "collection", type: "collection", label: "Collection" }],
+  };
+  const source = (collection: string, label: string) => ({
+    collection,
+    label,
+    lifecycle: false,
+    fields: [],
+  });
+
+  beforeEach(() => {
+    // Only the clock is faked, so each request's answer time is the one the case sets.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000);
+    mockBranding = {
+      widgets: [...others, counting],
+      widgetSources: [source("posts", "Posts"), source("pages", "Pages")],
+    } as unknown as AdminBranding;
+    layoutResponse = {
+      ...layout(),
+      // Placed after every other card, so it is asked in the last request, alone.
+      placements: [
+        ...others.map(widget => ({
+          id: widget.id,
+          widgetId: widget.id,
+          w: 4,
+          h: 3,
+          removed: false,
+        })),
+        {
+          id: "zz-counting",
+          widgetId: counting.id,
+          w: 4,
+          h: 3,
+          removed: false,
+          config: { collection: "posts" },
+        },
+      ],
+    };
+    api.post.mockImplementation((_path: string, body: unknown) =>
+      Promise.resolve({
+        results: (body as { queries: unknown[] }).queries.map(() => ({
+          ok: true,
+          result: { op: "count", total: 1 },
+        })),
+      })
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is said as shown, with Undo, once that card's own request answers, though the first has not since", async () => {
+    renderGrid();
+    const user = userEvent.setup();
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
+    // The card is titled by the collection it counts.
+    await user.click(await screen.findByRole("button", { name: "Posts" }));
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Posts",
+    });
+    // The first request answered at 1 000 and is not asked again; the card's own request
+    // answers again later.
+    vi.setSystemTime(5_000);
+    await user.click(
+      within(popover).getByRole("combobox", { name: "Collection" })
+    );
+    await user.click(await screen.findByRole("option", { name: "Pages" }));
+
+    expect(
+      await screen.findByText(/Collection set to Pages\.$/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
   });
 });
