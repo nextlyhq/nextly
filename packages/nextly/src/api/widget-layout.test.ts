@@ -60,6 +60,15 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
   return { ...actual, callerHoldsPermission, callerIsSuperAdmin };
 });
 
+// Whether the setup card shows for this reader (not dismissed, not retired): the case states it,
+// since the card's own rule has its own tests.
+const { setupShownTo } = vi.hoisted(() => ({ setupShownTo: vi.fn() }));
+vi.mock("../domains/widgets/setup-card", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../domains/widgets/setup-card")>();
+  return { ...actual, setupShownTo };
+});
+
 import { requireAuthentication } from "../auth/middleware";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
@@ -269,6 +278,7 @@ beforeEach(() => {
   readCaller.mockResolvedValue({ user: { id: "user-1", roles: ["editor"] } });
   callerHoldsPermission.mockResolvedValue(true);
   callerIsSuperAdmin.mockResolvedValue(true);
+  setupShownTo.mockResolvedValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "widgetLayoutService") return fakeService;
     throw new Error(`unexpected container.get("${name}") in this test`);
@@ -2478,9 +2488,48 @@ describe("the setup card in the layout read", () => {
     expect(body).not.toHaveProperty("getStarted");
   });
 
-  it("is never offered in the add panel, where it would come back after being dismissed or retired", async () => {
+  const arrangedWithout = () => ({
+    layout: serializeLayout([
+      {
+        id: "releases",
+        widgetId: "core/upcoming-releases",
+        w: 12,
+        h: 3,
+        removed: false,
+      },
+    ]),
+    version: 3,
+  });
+
+  it("is offered in the add panel where an arrangement lacks it and it would show", async () => {
+    stored = arrangedWithout();
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      "core/upcoming-releases",
+    ]);
+    expect(body.available).toContain(SETUP);
+  });
+
+  it("is never offered once dismissed or retired, where it would draw nothing", async () => {
+    // The must-differ half of the case above: the same arrangement, the card not shown.
+    stored = arrangedWithout();
+    setupShownTo.mockResolvedValue(false);
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.available).not.toContain(SETUP);
+  });
+
+  it("is never offered to a reader who is not a super-admin, and their preferences are not read", async () => {
+    stored = arrangedWithout();
+    callerIsSuperAdmin.mockResolvedValue(false);
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.available).not.toContain(SETUP);
+    expect(setupShownTo).not.toHaveBeenCalled();
+  });
+
+  it("is not offered while placed, removed or not: Removed puts a removed one back", async () => {
     stored = {
       layout: serializeLayout([
+        { id: SETUP, widgetId: SETUP, w: 12, h: 2, removed: true },
         {
           id: "releases",
           widgetId: "core/upcoming-releases",
@@ -2492,10 +2541,67 @@ describe("the setup card in the layout read", () => {
       version: 3,
     };
     const body = await bodyOf(await getWidgetLayout(getReq()));
-    expect(body.placements?.map(p => p.widgetId)).toEqual([
-      "core/upcoming-releases",
-    ]);
     expect(body.available).not.toContain(SETUP);
+  });
+
+  it("keeps a pre-upgrade arrangement's Get started card as the setup card, in its place, and the next save stores it", async () => {
+    // A row saved by a core before the rename: its card is still `core/get-started`, with the
+    // settings that widget had, between two other cards.
+    stored = {
+      layout: serializeLayout([
+        {
+          id: "releases",
+          widgetId: "core/upcoming-releases",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+        {
+          id: "core/get-started",
+          widgetId: "core/get-started",
+          w: 12,
+          h: 4,
+          removed: false,
+          config: { compact: true },
+        },
+        {
+          id: "activity",
+          widgetId: "core/team-activity",
+          w: 6,
+          h: 3,
+          removed: false,
+        },
+      ]),
+      version: 3,
+    };
+    registerWidget(widget({ id: "core/team-activity", defaultOrder: 20 }));
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.placements?.map(p => [p.id, p.widgetId])).toEqual([
+      ["releases", "core/upcoming-releases"],
+      [SETUP, SETUP],
+      ["activity", "core/team-activity"],
+    ]);
+    const card = body.placements!.find(p => p.widgetId === SETUP)!;
+    // Its size kept; the former widget's settings not carried to the new one.
+    expect(card).toMatchObject({ w: 12, h: 4, removed: false });
+    expect(card).not.toHaveProperty("config");
+    expect(body.available).not.toContain(SETUP);
+
+    // The reader's next save stores the current id.
+    const res = await putWidgetLayout(
+      putReq({
+        placements: body.placements,
+        version: body.version,
+        scope: body.scope,
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "core/upcoming-releases",
+      SETUP,
+      "core/team-activity",
+    ]);
+    expect(JSON.stringify(saved)).not.toContain("core/get-started");
   });
 });
 

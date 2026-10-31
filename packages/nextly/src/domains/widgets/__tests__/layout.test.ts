@@ -530,6 +530,67 @@ describe("a row of an earlier format is no saved arrangement", () => {
   });
 });
 
+describe("a card of a widget core renamed", () => {
+  const getStarted = (
+    patch: Partial<WidgetPlacement> = {}
+  ): WidgetPlacement => ({
+    id: "core/get-started",
+    widgetId: "core/get-started",
+    w: 12,
+    h: 4,
+    removed: false,
+    ...patch,
+  });
+  const others = (setup: WidgetPlacement): WidgetPlacement[] => [
+    { id: "a", widgetId: "core/a", w: 6, h: 3, removed: false },
+    setup,
+    { id: "b", widgetId: "core/b", w: 6, h: 3, removed: false },
+  ];
+
+  it("is read as the current widget's, in its place, its id following the widget's own", () => {
+    const row = readStoredLayout(serializeLayout(others(getStarted())));
+    expect(row?.placements).toEqual(
+      others({
+        id: "core/setup",
+        widgetId: "core/setup",
+        w: 12,
+        h: 4,
+        removed: false,
+      })
+    );
+  });
+
+  it("keeps an id that was not the widget's own, and whether it was removed, but not its settings", () => {
+    const row = readStoredLayout(
+      serializeLayout([
+        getStarted({ id: "mine", removed: true, config: { compact: true } }),
+      ])
+    );
+    expect(row?.placements).toEqual([
+      { id: "mine", widgetId: "core/setup", w: 12, h: 4, removed: true },
+    ]);
+  });
+
+  it("gives way to a card of the current widget the row already holds", () => {
+    const current: WidgetPlacement = {
+      id: "core/setup",
+      widgetId: "core/setup",
+      w: 12,
+      h: 2,
+      removed: false,
+    };
+    const row = readStoredLayout(serializeLayout([getStarted(), current]));
+    expect(row?.placements).toEqual([current]);
+  });
+
+  it("carries a size the reader chose for it, on a row that follows the default", () => {
+    const row = readStoredLayout(
+      serializeLayout([getStarted()], false, ["core/get-started"])
+    );
+    expect(row?.sized).toEqual(["core/setup"]);
+  });
+});
+
 describe("partitioning by what a reader may see", () => {
   const row = [card("a"), card("hidden1"), card("b"), card("hidden2")];
   const visible = new Set(["core/a", "core/b"]);

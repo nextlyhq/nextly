@@ -578,6 +578,23 @@ async function whileEmpty(
 }
 
 /**
+ * Whether the add panel offers this reader the setup card: one of their widgets (a super-admin's
+ * only), absent from their dashboard, and shown to them as the card itself decides. Its
+ * preferences are read only when the first two hold. Loaded lazily, as the card's own module is.
+ */
+async function setupOfferedTo(
+  view: { widgets: readonly { id: string }[]; reader: ReadCaller },
+  placed: ReadonlySet<string>
+): Promise<boolean> {
+  if (placed.has(CORE_WIDGET_ID.setup)) return false;
+  if (!view.widgets.some(widget => widget.id === CORE_WIDGET_ID.setup)) {
+    return false;
+  }
+  const { setupShownTo } = await import("../domains/widgets/setup-card");
+  return setupShownTo(view.reader);
+}
+
+/**
  * The version the client must echo back.
  *
  * An unreadable row keeps its real version rather than reporting 0, and so
@@ -630,14 +647,18 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
   //
-  // Never the setup card: it comes and goes on its own, from the site's
-  // state and the reader's own choices (`domains/widgets/setup-card`), and a
-  // card removed in customise mode is offered back only from Removed.
+  // The setup card only while it would show for this reader, as it comes and
+  // goes on its own, from the site's state and the reader's own choices
+  // (`setupShownTo`): offered where their arrangement lacks it, as one saved
+  // before it existed does, and never once they dismissed it or were told
+  // "You're all set". Only a super-admin's widgets hold it at all. A card
+  // removed in customise mode is placed, and offered back only from Removed.
   const placed = new Set(placements.map(placement => placement.widgetId));
+  const setupOffered = await setupOfferedTo(view, placed);
   const available = inAddPanelOrder(
     view.widgets.filter(
       widget =>
-        widget.id !== CORE_WIDGET_ID.setup &&
+        (widget.id !== CORE_WIDGET_ID.setup || setupOffered) &&
         (!placed.has(widget.id) || sizes[widget.id].allowsSeveral)
     )
   ).map(widget => widget.id);
