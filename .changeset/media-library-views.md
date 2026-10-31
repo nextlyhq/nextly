@@ -45,6 +45,10 @@ Replace.
   person has left the page. `POST /admin/api/media/deletions` and `/deletions/undo` take a list of
   ids and need the delete permission. The existing `DELETE` routes still delete at once.
 - Replace file stores a new file under the same item: the same id, name, alt text, caption, folder
-  and usage, with a new address and thumbnail, so every document using it shows the new file. The
-  focus point is cleared. A page cached with the old address shows a broken image until it is
-  rebuilt. `POST /admin/api/media/:id/replace` answers it, with the upload's own checks.
+  and usage, with a new address and thumbnail, so every document using it by id (upload fields,
+  block documents, attachments) shows the new file at once. Rich text and email-template images
+  name the item by its address, so while any does, the old file is kept and they go on showing
+  the previous image until they are edited; the Replace dialog says how many and lists them, and
+  Used in marks each. The kept file goes when the item is deleted. The focus point is cleared.
+  `POST /admin/api/media/:id/replace` answers it, with the upload's own checks, and
+  `GET /admin/api/media/:id/usage?byAddress=true` lists the uses by address.
