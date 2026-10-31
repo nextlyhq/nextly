@@ -18,7 +18,6 @@ import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
 import { teamWidget } from "../core-widgets/team";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
-  chromeFieldProblem,
   requiredPermissionSlugs,
   validateWidgetDefinition,
   type WidgetDefinition,
@@ -264,15 +263,6 @@ describe("core widget definitions", () => {
     expect(teamWidget.access).toBe(TEAM_GATE);
     // Its data is its `load`'s, so it asks no query of its own.
     expect(card("core/team").query).toBeUndefined();
-  });
-
-  // Every card is drawn in the dashboard's one frame, which draws its header
-  // and every state, so no core widget may decline it -- by the same rule the
-  // registry refuses a plugin's that tries.
-  it("declines the grid's frame nowhere", () => {
-    for (const widget of published()) {
-      expect(chromeFieldProblem(widget), widget.id).toBeUndefined();
-    }
   });
 });
 

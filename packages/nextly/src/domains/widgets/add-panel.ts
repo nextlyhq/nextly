@@ -62,16 +62,18 @@ const CORE_ORDER = new Map<string, number>(
   CORE_WIDGET_IDS.map((id, index) => [id, index])
 );
 
-/** What the add panel shows about a widget beside its name. */
-export interface AddPanelFacts {
+/** Where the add panel lists a widget: its group, and within it its sub-group. */
+interface AddPanelPlace {
   group: AddPanelGroup;
   /** The collection a Content card reads, or the plugin a Plugins one comes from. */
   subgroup?: string;
+}
+
+/** What the add panel shows about a widget beside its name. */
+export interface AddPanelFacts {
   description?: string;
   /** The widget's declared category: searched, and shown as a label. */
   category?: string;
-  /** Which sketch draws its row: the widget's archetype. */
-  sketch: string;
   /**
    * Listed once per collection the reader may read, each row adding a card
    * set to that collection. @experimental
@@ -83,10 +85,11 @@ function isCoreWidgetId(id: string): id is CoreWidgetId {
   return Object.prototype.hasOwnProperty.call(CORE_GROUPS, id);
 }
 
-/** The group and sub-group, before the labels are added. */
-function placeOf(
-  widget: CanonicalWidget
-): Pick<AddPanelFacts, "group" | "subgroup"> {
+/**
+ * The group and sub-group, which order the panel's rows (`inAddPanelOrder`).
+ * Exported so the rule is tested on its own, beside the order it decides.
+ */
+export function addPanelPlace(widget: CanonicalWidget): AddPanelPlace {
   // A plugin's widget first: a plugin that overrides a built-in's id is still
   // the plugin's, and is found under it.
   if (widget.plugin !== undefined) {
@@ -104,12 +107,10 @@ function placeOf(
 /** Where the panel lists `widget`, and what it shows beside its name. */
 export function addPanelFacts(widget: CanonicalWidget): AddPanelFacts {
   return {
-    ...placeOf(widget),
     ...(widget.description === undefined
       ? {}
       : { description: widget.description }),
     ...(widget.category === undefined ? {} : { category: widget.category }),
-    sketch: widget.sketch ?? widget.archetype ?? "custom",
     ...(widget.offered === "per-collection" ? { perCollection: true } : {}),
   };
 }
@@ -125,7 +126,7 @@ export function addPanelFacts(widget: CanonicalWidget): AddPanelFacts {
  *   in the order it declared them.
  */
 function keyOf(
-  place: Pick<AddPanelFacts, "group" | "subgroup">,
+  place: AddPanelPlace,
   widget: CanonicalWidget,
   index: number,
   pluginOrder: ReadonlyMap<string, number>
@@ -164,7 +165,7 @@ export function inAddPanelOrder<W extends CanonicalWidget>(
   const pluginOrder = pluginOrderOf(widgets);
   const keyed = widgets.map((widget, index) => ({
     widget,
-    key: keyOf(placeOf(widget), widget, index, pluginOrder),
+    key: keyOf(addPanelPlace(widget), widget, index, pluginOrder),
   }));
   keyed.sort(
     (a, b) =>

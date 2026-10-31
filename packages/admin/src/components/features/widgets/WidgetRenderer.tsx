@@ -23,7 +23,6 @@
  */
 
 import type { GridSize } from "nextly/config";
-import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX, ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
@@ -46,7 +45,6 @@ import {
   useHidesWhenAnswerEmpty,
 } from "./hidden-while-empty";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
-import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
 
 /**
@@ -346,72 +344,28 @@ function sharedCardProps(
   };
 }
 
+/** What a self-drawn card's component is handed: which card it is, and its reader's settings. */
+type SelfDrawnProps = {
+  widgetId: string;
+  placementId: string;
+  settings: Record<string, unknown>;
+};
+
 /**
- * The props a self-drawn widget's component receives.
- *
- * 🔴 RETURNS the published type rather than an inferred one. `PluginSlot`
- * forwards `Record<string, unknown>`, so nothing downstream would object to a
- * renamed, dropped or retyped prop here -- and plugin authors compile against
- * `WidgetComponentProps`, which would go on describing the old shape. That is
- * the same parallel-definition drift this contract exists to end, so the
- * producer is held to it here, where a mismatch fails to compile.
+ * The props a self-drawn widget's component receives: Create's, core's one
+ * card still written as a definition, which asks for nothing and draws from
+ * the session alone. A widget declared with `defineWidget` is drawn by
+ * `DeclaredComponent` instead, handed its data.
  */
 function componentPropsFor(
   definition: WidgetRendererProps["definition"],
-  slot: WidgetRendererProps["slot"],
-  placement: WidgetRendererProps["placement"],
-  live: {
-    isFetching: boolean;
-    onRetry?: () => void;
-    cells?: Record<string, WidgetSlot>;
-  }
-): WidgetComponentProps {
+  placement: WidgetRendererProps["placement"]
+): SelfDrawnProps {
   return {
     widgetId: definition.id,
     placementId: placement?.id ?? definition.id,
     settings: placement?.settings ?? {},
-    slot,
-    // Each declared read's answer by key, for a custom card that declares
-    // several; absent for every other card.
-    ...(live.cells === undefined ? {} : { cells: live.cells }),
-    isFetching: live.isFetching,
-    // The Retry the frame's error offers, for a component whose own data reports an error.
-    ...(live.onRetry ? { onRetry: live.onRetry } : {}),
-    // The query as asked, which `definition` already is: the grid draws each card
-    // from the same declaration the batch sent. One with no source yet was not
-    // asked, so it is not handed on.
-    ...(askableQuery(definition.query) ? { query: definition.query } : {}),
   };
-}
-
-/**
- * A custom card's answers by cell key, for a card that declares several reads;
- * `undefined` for any other card, which is handed `slot` alone.
- */
-function customCellAnswers(
-  definition: WidgetRendererProps["definition"],
-  slotFor: CellSlotLookup | undefined
-): Record<string, WidgetSlot> | undefined {
-  if (definition.archetype !== "custom" || !definition.cells?.length) {
-    return undefined;
-  }
-  return cellAnswersOf(
-    definition.cells.map(cell => cell.key),
-    slotFor
-  );
-}
-
-/** Each cell's answer by key, leaving out the keys with none yet. */
-function cellAnswersOf(
-  keys: readonly string[],
-  slotFor: CellSlotLookup | undefined
-): Record<string, WidgetSlot> {
-  const answers: Record<string, WidgetSlot> = Object.create(null);
-  for (const key of keys) {
-    const answer = slotFor?.(key);
-    if (answer !== undefined) answers[key] = answer;
-  }
-  return answers;
 }
 
 /**
@@ -422,7 +376,7 @@ function cellAnswersOf(
 function selfDrawnCard(
   definition: WidgetRendererProps["definition"],
   shared: ReturnType<typeof sharedCardProps>,
-  componentProps: WidgetComponentProps,
+  componentProps: SelfDrawnProps,
   isFetching: boolean
 ): JSX.Element {
   return (
@@ -520,12 +474,9 @@ function missingCard(
  * The card for its outcome: its error where its component is missing, the component with no
  * answer to wait for, a declared widget's component with its answer, or the frame's own state.
  *
- * A component drawn with the batch's answer: `custom` may carry a query, which the grid puts in
- * the batch rather than leaving the component to ask again. `undefined` while that answer is on
- * the way, which the component reports as loading; a failed answer never reaches it
- * (`resolveWidgetOutcome`). It is told when a refetch is in flight, because `slot` alone cannot
- * say it: the slot holds the PREVIOUS answer during a refetch and is indistinguishable from
- * idle. The frame marks the card busy then, as for any card.
+ * A declared widget's component is drawn with the answer its `load` gave, the frame marking the
+ * card busy through a refetch as for any card; a failed answer never reaches it
+ * (`resolveWidgetOutcome`).
  */
 function cardFor(
   definition: WidgetRendererProps["definition"],
@@ -534,7 +485,7 @@ function cardFor(
   live: {
     missing: string | undefined;
     draw: ReturnType<typeof useComponentDraw>;
-    componentProps: WidgetComponentProps;
+    componentProps: SelfDrawnProps;
     placement: WidgetRendererProps["placement"];
     isFetching: boolean;
     onRetry: (() => void) | undefined;
@@ -611,16 +562,8 @@ export function WidgetRenderer({
     placementId: placement?.id ?? definition.id,
     missing: missing !== undefined,
   });
-  // A custom card that declares several reads is handed each answer by key; a
-  // key with no answer yet is left out, as `slot` is.
-  const cellAnswers = customCellAnswers(definition, slotFor);
-
-  // Built once, so every card drawn by a component is handed the same props.
-  const componentProps = componentPropsFor(definition, slot, placement, {
-    ...(cellAnswers === undefined ? {} : { cells: cellAnswers }),
-    isFetching,
-    onRetry,
-  });
+  // Built once, so every render of a self-drawn card is handed the same props.
+  const componentProps = componentPropsFor(definition, placement);
 
   return cardFor(definition, shared, outcome, {
     missing,

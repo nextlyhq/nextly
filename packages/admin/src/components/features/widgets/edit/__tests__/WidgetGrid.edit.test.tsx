@@ -122,14 +122,10 @@ function branding(
   } as unknown as AdminBranding;
 }
 
-/**
- * Facts for a widget, one card only unless told otherwise. Listed in the add panel's Overview
- * group, as core lists every widget a reader may see under one of its groups.
- */
+/** Facts for a widget, one card only unless told otherwise. */
 function facts(patch: Partial<WidgetLayoutFacts> = {}): WidgetLayoutFacts {
   return {
     allowsSeveral: false,
-    group: "overview",
     ...patch,
   };
 }

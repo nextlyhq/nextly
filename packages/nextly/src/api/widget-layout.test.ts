@@ -497,7 +497,7 @@ describe("GET /api/dashboard/layout", () => {
 });
 
 describe("where the add panel lists each widget", () => {
-  it("says each widget's group, sub-group, description, category and sketch", async () => {
+  it("says each widget's description and category, and nothing of where the panel lists it", async () => {
     registerWidget(
       widget({
         id: "core/team",
@@ -509,20 +509,20 @@ describe("where the add panel lists each widget", () => {
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
-    // Core's group, beside the sizes the editor already reads.
-    expect(body.widgets?.["core/team"]).toMatchObject({
-      group: "team",
+    // Beside the sizes the editor already reads.
+    expect(body.widgets?.["core/team"]).toEqual({
       description: "How many users and roles the project has.",
-      sketch: "custom",
       allowsSeveral: false,
     });
     expect(body.widgets?.["forms/latest"]).toMatchObject({
-      group: "plugins",
-      subgroup: "@acme/forms",
       description: "The newest submissions.",
       category: "Forms",
-      sketch: "list",
     });
+    // Where the panel lists a widget, and in what order, is `available`'s
+    // order: no group, sub-group, sketch or rank is sent beside it.
+    for (const key of ["group", "subgroup", "sketch", "rank"]) {
+      expect(body.widgets?.["forms/latest"]).not.toHaveProperty(key);
+    }
   });
 
   it("offers widgets in the panel's order: the built-ins, the site's own, Team, then each plugin's", async () => {
@@ -544,29 +544,6 @@ describe("where the add panel lists each widget", () => {
       "core/team",
       "forms/latest",
     ]);
-  });
-
-  it("ranks every offered widget in that order, a placed one too", async () => {
-    // 🔴 `available` leaves out a placed widget that allows one card, but the panel still lists
-    // it, as on the dashboard, and needs its place. Without a rank it could only guess one.
-    registerWidget(widget({ id: "site/zeta" }));
-    registerWidget(widget({ id: "core/team" }));
-    registerWidget(widget({ id: "core/continue" }));
-    stored = {
-      version: 1,
-      layout: serializeLayout([
-        { id: "p-team", widgetId: "core/team", w: 12, h: 3, removed: false },
-      ]),
-    };
-
-    const body = await bodyOf(await getWidgetLayout(getReq()));
-
-    expect(body.available).not.toContain("core/team");
-    const ranked = Object.entries(body.widgets ?? {})
-      .filter(([, facts]) => typeof facts.rank === "number")
-      .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0))
-      .map(([id]) => id);
-    expect(ranked).toEqual(["core/continue", "site/zeta", "core/team"]);
   });
 });
 
@@ -2296,22 +2273,11 @@ describe("the sizes a card may take", () => {
   it("are not repeated in the widget facts: the admin reads them from the declaration", async () => {
     registerWidget(widget({ id: "core/any" }));
     const body = await bodyOf(await getWidgetLayout(getReq()));
-    // Whether a second card may be added, and where the add panel lists each
-    // one: neither is a built-in core knows, so both are the site's own,
-    // under Overview.
+    // Whether a second card may be added, and nothing else neither declares:
+    // where the add panel lists each is `available`'s order.
     expect(body.widgets).toEqual({
-      "core/narrow": {
-        allowsSeveral: false,
-        group: "overview",
-        sketch: "custom",
-        rank: 0,
-      },
-      "core/any": {
-        allowsSeveral: false,
-        group: "overview",
-        sketch: "custom",
-        rank: 1,
-      },
+      "core/narrow": { allowsSeveral: false },
+      "core/any": { allowsSeveral: false },
     });
   });
 

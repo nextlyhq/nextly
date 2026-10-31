@@ -426,17 +426,6 @@ describe("every widget is framed", () => {
   it("accepts a widget that says nothing about its frame", () => {
     expect(() => validateWidgetDefinition(custom)).not.toThrow();
   });
-
-  it("refuses a widget that names chrome, whatever its value", () => {
-    // The frame draws every card's header and every state, so no widget may
-    // decline it; a plain-JavaScript declaration that still names the field
-    // learns so at startup. Cast, because the field is no longer typed.
-    for (const chrome of ["none", "card", 42]) {
-      expect(() =>
-        validateWidgetDefinition({ ...custom, chrome } as never)
-      ).toThrow(/chrome is not a widget field/);
-    }
-  });
 });
 
 describe("hidesWhenEmpty", () => {

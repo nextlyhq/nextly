@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { addPanelFacts, inAddPanelOrder } from "../add-panel";
+import { addPanelFacts, addPanelPlace, inAddPanelOrder } from "../add-panel";
 import type { CanonicalWidget } from "../canonical";
 import { CORE_WIDGET_IDS } from "../core-widgets";
 
@@ -20,7 +20,7 @@ describe("the group each widget is listed in", () => {
   it("puts the team's two built-ins under Team, the content widgets under Content, and every other built-in under Overview", () => {
     // Every one of core's, its declarations included: the group is read by id.
     const groups = Object.fromEntries(
-      CORE_WIDGET_IDS.map(id => [id, addPanelFacts(core(id)).group])
+      CORE_WIDGET_IDS.map(id => [id, addPanelPlace(core(id)).group])
     );
     expect(groups).toEqual({
       "core/setup": "overview",
@@ -46,21 +46,22 @@ describe("the group each widget is listed in", () => {
 
   it("puts a plugin's widget under Plugins, by its plugin, whatever it declares as its category", () => {
     // 🔴 The separating case: a category naming a core group must not move it.
-    const facts = addPanelFacts({
+    const widget = {
       id: "forms/latest",
       plugin: "@acme/forms",
       category: "Team",
+    };
+    expect(addPanelPlace(widget)).toEqual({
+      group: "plugins",
+      subgroup: "@acme/forms",
     });
-    expect(facts.group).toBe("plugins");
-    expect(facts.subgroup).toBe("@acme/forms");
-    expect(facts.category).toBe("Team");
+    expect(addPanelFacts(widget).category).toBe("Team");
   });
 
   it("puts any other widget the site has under Overview", () => {
-    const facts = addPanelFacts({ id: "site/sales-target", category: "Shop" });
-    expect(facts.group).toBe("overview");
-    expect(facts.subgroup).toBeUndefined();
-    expect(facts.category).toBe("Shop");
+    const widget = { id: "site/sales-target", category: "Shop" };
+    expect(addPanelPlace(widget)).toEqual({ group: "overview" });
+    expect(addPanelFacts(widget).category).toBe("Shop");
   });
 
   it("names nothing a widget did not declare", () => {
@@ -69,10 +70,11 @@ describe("the group each widget is listed in", () => {
     const facts = addPanelFacts(core("core/team"));
     expect(facts).not.toHaveProperty("description");
     expect(facts).not.toHaveProperty("category");
-    expect(facts).not.toHaveProperty("subgroup");
   });
 
-  it("carries the description and the sketch kind", () => {
+  it("carries the description, and nothing of where the panel lists it", () => {
+    // Where the panel lists a widget orders `available`, which the layout read
+    // sends in the panel's order; the facts beside each widget do not repeat it.
     expect(
       addPanelFacts({
         id: "core/continue",
@@ -80,20 +82,8 @@ describe("the group each widget is listed in", () => {
         archetype: "list",
       })
     ).toEqual({
-      group: "overview",
       description: "The documents most recently left with unpublished edits.",
-      sketch: "list",
     });
-    // A widget that names no kind is drawn as a component's sketch.
-    expect(addPanelFacts(core("site/x")).sketch).toBe("custom");
-  });
-
-  it("draws a widget's own sketch where it names one in place of its archetype's", () => {
-    // A declared widget drawn by its own component says what it most looks like.
-    expect(
-      addPanelFacts({ id: "acme/orders", archetype: "custom", sketch: "bars" })
-        .sketch
-    ).toBe("bars");
   });
 });
 

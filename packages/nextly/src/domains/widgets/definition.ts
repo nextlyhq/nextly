@@ -681,8 +681,6 @@ function presentationProblem(
   if (widget.title !== undefined && typeof widget.title !== "string") {
     return "title, when given, must be a string";
   }
-  const framed = chromeFieldProblem(widget);
-  if (framed !== undefined) return framed;
   const field = BOOLEAN_FIELDS.find(
     name => widget[name] !== undefined && typeof widget[name] !== "boolean"
   );
@@ -1093,21 +1091,6 @@ function querylessQueryProblem(
  * end and compares equal to every other infinity, so two of them order
  * arbitrarily against each other.
  */
-/**
- * Why a declaration that still names `chrome` is refused, or `undefined`.
- *
- * Every card is drawn in the dashboard's one frame, which draws its header and
- * every state; no widget may decline it. A declaration naming the field is
- * refused rather than ignored, so a plain-JavaScript author who wrote it learns
- * at startup that their card will be framed, rather than from the dashboard.
- * Exported, so the contributions channel asks the same question.
- */
-export function chromeFieldProblem(widget: object): string | undefined {
-  return Object.hasOwn(widget, "chrome")
-    ? "chrome is not a widget field: every card is drawn in the dashboard's frame"
-    : undefined;
-}
-
 /**
  * Why this value cannot serve as a `defaultOrder`, or `undefined`.
  *

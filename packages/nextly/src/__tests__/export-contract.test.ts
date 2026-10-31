@@ -154,12 +154,13 @@ const REMOVED_WIDGET_SHAPE_NAMES = [
  * The entry points the admin reads the registry's wire shapes from, and the
  * older names each still carries for it alone.
  *
- * 🔴 Named, so the list can only shrink: core's own Content, Create, Team,
- * Continue, Upcoming releases and Team activity cards are still written as
- * definitions and drawn by the admin from their query's answer, so the admin
- * still needs the definition, its actions and cells, and the component props.
- * Each name leaves with the last card that uses it. A name here on another
- * entry point, or a new entry, fails below.
+ * 🔴 Named, so the list can only shrink: core's Create card is still written
+ * as a definition, so the admin reads the registry's definition shape, and
+ * the admin still draws the stats, text and actions archetypes, whose cells
+ * and actions it reads by these types. Every card's answer travels in the
+ * batch's slot and response shapes, declared cards' included. Each name
+ * leaves with the last reader that needs it. A name here on another entry
+ * point, or a new entry, fails below.
  */
 const ADMIN_WIRE_NAMES: Readonly<Record<string, readonly string[]>> = {
   "nextly/config": [
@@ -168,11 +169,7 @@ const ADMIN_WIRE_NAMES: Readonly<Record<string, readonly string[]>> = {
     "WidgetStatCell",
     "WidgetQueryCell",
   ],
-  "nextly/widget-result": [
-    "WidgetComponentProps",
-    "WidgetSlot",
-    "WidgetQueryBatchResponse",
-  ],
+  "nextly/widget-result": ["WidgetSlot", "WidgetQueryBatchResponse"],
 };
 
 /**
