@@ -185,6 +185,17 @@ describe("who is offered sample content", () => {
     ["refuses the person (401)", () => new Response(null, { status: 401 })],
     ["refuses the person (403)", () => new Response(null, { status: 403 })],
     ["is not there (404)", () => new Response(null, { status: 404 })],
+  ])(
+    "offers nothing, and draws no step, when the route %s",
+    async (_name, probe) => {
+      route(probe);
+      render(card(dataOf(OPEN)));
+      await waitFor(() => expect(sampleTile()).toBeNull());
+      expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+    }
+  );
+
+  it.each([
     ["fails (503)", () => new Response(null, { status: 503 })],
     [
       "cannot be reached",
@@ -192,12 +203,17 @@ describe("who is offered sample content", () => {
         throw new Error("network");
       },
     ],
-  ])("offers nothing when the route %s", async (_name, probe) => {
-    route(probe);
-    render(card(dataOf(OPEN)));
-    await waitFor(() => expect(sampleTile()).toBeNull());
-    expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
-  });
+  ])(
+    "offers nothing, but keeps the step, when the route %s",
+    async (_name, probe) => {
+      route(probe);
+      render(card(dataOf(OPEN)));
+      expect(
+        await within(sampleTile()!).findByText("Couldn't check")
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+    }
+  );
 
   it("offers no load where the site's answer could not be read, and keeps Add your first entry", async () => {
     route(allowed);
@@ -240,6 +256,31 @@ describe("who is offered sample content", () => {
       );
     }
   );
+
+  it("never retires over a probe that could not say, and offers the load once it answers yes", async () => {
+    // A 503 first, then a 200: the route was starting.
+    const answers = [() => new Response(null, { status: 503 }), allowed];
+    route(() => (answers.shift() ?? allowed)());
+    // Every other step done: read as a no, the 503 would drop the step and retire the card.
+    render(card(dataOf(OPEN, { kind: "entry", status: "done" })));
+    expect(
+      await within(sampleTile()!).findByText("Couldn't check")
+    ).toBeInTheDocument();
+    await act(async () => undefined);
+    expect(screen.queryByTestId("setup-all-set")).toBeNull();
+    expect(put).not.toHaveBeenCalledWith(
+      "/dashboard/setup",
+      expect.objectContaining({ retire: expect.anything() })
+    );
+    expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+    // Asked again when the dashboard regains focus: now it says yes.
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(
+      await within(sampleTile()!).findByRole("button", { name: "Load" })
+    ).toBeInTheDocument();
+  });
 
   it("asks for the site's current answer whenever the dashboard regains focus", async () => {
     route(allowed);
@@ -507,23 +548,62 @@ describe("a load and its outcome", () => {
     await panelSays("status", "Checking your steps…");
     rerender(card(dataOf(OPEN)));
     expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
-    // The site's answer now: sample content and the first entry done.
+    // The site's answer now: sample content and the first entry done, an invitation still open.
+    const now = dataOf(
+      { kind: "sample", status: "done" },
+      { kind: "entry", status: "done" }
+    );
+    if (!now.setup.known) throw new Error("known");
+    const steps: SetupStep[] = [
+      ...now.setup.steps,
+      { kind: "invite", status: "open" },
+    ];
     rerender(
-      card(
-        dataOf(
-          { kind: "sample", status: "done" },
-          {
-            kind: "entry",
-            status: "done",
-          }
-        )
-      )
+      card({
+        ...now,
+        setup: { known: true, steps, done: 3, total: 4 },
+      })
     );
     await waitFor(() => expect(panel()).toBeNull());
     expect(document.querySelector('[data-setup-step="entry"]')).toHaveAttribute(
       "data-status",
       "done"
     );
+  });
+});
+
+describe("the outcome until Continue", () => {
+  it("keeps a load that finished setup on the card, never retiring under it, until the person continues", async () => {
+    route(allowed, loadedAnswer);
+    const { rerender } = render(
+      card(dataOf(OPEN, { kind: "entry", status: "done" }))
+    );
+    fireEvent.click(
+      await within(sampleTile()!).findByRole("button", { name: "Load" })
+    );
+    await panelSays("status", "Sample content loaded.");
+    // Nothing is read again, and nothing retired, while the outcome waits.
+    await act(async () => undefined);
+    expect(retry).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    // The site's answer, read meanwhile from elsewhere, is all set: the outcome still shows.
+    const allSet = {
+      ...dataOf(
+        { kind: "sample", status: "done" },
+        { kind: "entry", status: "done" }
+      ),
+      allSet: true,
+    };
+    rerender(card(allSet));
+    expect(screen.queryByTestId("setup-all-set")).toBeNull();
+    fireEvent.click(
+      await within(await shownPanel()).findByRole("button", {
+        name: "Continue",
+      })
+    );
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    rerender(card(allSet));
+    expect(await screen.findByTestId("setup-all-set")).toBeInTheDocument();
   });
 });
 

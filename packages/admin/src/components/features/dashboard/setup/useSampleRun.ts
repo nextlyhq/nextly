@@ -111,6 +111,11 @@ export interface SampleRunState {
   card: SetupCardData;
   /** True when `card` is the one kept because the latest could not check setup. */
   refreshFailed: boolean;
+  /**
+   * A load's outcome waits for the person to continue: the card shows it, in place of "You're
+   * all set" if the site's answer already says so, until they do.
+   */
+  awaitingContinue: boolean;
   /** Whether the step's own panel is on show under the tiles. */
   panelShown: boolean;
   /** Where "Add your first entry" leads, while that step is open. */
@@ -224,7 +229,9 @@ function siteView(
   if (step.run !== undefined) return serverView(step.run, mayLoadAgain);
   if (step.unreadable) return { kind: "unreadable" };
   if (probe === undefined) return { kind: "checking" };
-  return probe.available ? { kind: "offer" } : { kind: "done" };
+  if (probe.available) return { kind: "offer" };
+  // Not known is not a no: nothing is offered, and the step stays open.
+  return probe.unknown ? { kind: "unreadable" } : { kind: "done" };
 }
 
 /**
@@ -265,8 +272,8 @@ async function startLoad(client: QueryClient, confirm: boolean): Promise<void> {
   const answer = await seedApi.start(confirm);
   switch (answer.outcome) {
     case "loaded":
-      // The arrangement's scope moves with the site's content, so the layout is read again.
-      void client.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
+      // Nothing is read again yet: the outcome stays until the person continues, and a read now
+      // could find setup all set and retire the card under it. Continue reads the layout again.
       writeLocal(client, { phase: "loaded" });
       return;
     case "unrecorded":
@@ -375,6 +382,21 @@ function useKeptCard(
   return holding || keptStep?.run !== undefined
     ? { card: kept, refreshFailed: true }
     : { card, refreshFailed: false };
+}
+
+/**
+ * Asks the probe again, while its last answer was "not known" only: a no or a yes stands, and an
+ * answer still on its way is not asked twice.
+ */
+function useProbeAgain(
+  unknown: boolean,
+  refetch: () => Promise<unknown>
+): () => void {
+  const latest = useRef({ unknown, refetch });
+  latest.current = { unknown, refetch };
+  return useRef(() => {
+    if (latest.current.unknown) void latest.current.refetch();
+  }).current;
 }
 
 /**
@@ -496,9 +518,10 @@ function sampleActions(
       }
     },
     continueOn: () => {
-      if (local?.phase === "loaded") {
-        writeLocal(client, { phase: "continuing", refresh: true });
-      }
+      if (local?.phase !== "loaded") return;
+      // The arrangement's scope moves with the site's content, so the layout is read again.
+      void client.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
+      writeLocal(client, { phase: "continuing", refresh: true });
     },
   };
 }
@@ -514,12 +537,20 @@ export function useSampleRun(
 ): SampleRunState {
   const client = useQueryClient();
   const local = useLocal();
-  const probe = useQuery<SeedProbeResult>({
+  const probeQuery = useQuery<SeedProbeResult>({
     queryKey: PROBE_KEY,
     queryFn: seedApi.probe,
     staleTime: Infinity,
     retry: false,
-  }).data;
+  });
+  const probe = probeQuery.data;
+  const probeUnknown = probe?.available === false && probe.unknown === true;
+  const askProbeAgain = useProbeAgain(probeUnknown, probeQuery.refetch);
+  // Asked again once per new reading of the card's data while it could not say: on the next
+  // setup read, never in a loop on its own answer.
+  useEffect(() => {
+    askProbeAgain();
+  }, [latestCard, askProbeAgain]);
 
   const { card, refreshFailed } = useKeptCard(latestCard, local !== null);
   const step = sampleStepOf(card);
@@ -528,9 +559,16 @@ export function useSampleRun(
   const view = sampleView(local, step, probe, mayLoadAgain);
 
   useSettleLocal(local, latestCard, refresh, refreshing);
+  // Not while a load runs, nor while its outcome waits for Continue: a read then could find
+  // setup all set and retire the card under the outcome.
   useRefreshOnFocus(
-    step?.status === "open" && view.kind !== "running",
-    refresh
+    step?.status === "open" &&
+      view.kind !== "running" &&
+      local?.phase !== "loaded",
+    () => {
+      askProbeAgain();
+      refresh();
+    }
   );
 
   return {
@@ -540,11 +578,14 @@ export function useSampleRun(
     // way the step is drawn "Checking…"). It never takes a run's state off the card: a load the
     // site started, or one this tab is showing, keeps the step drawn and setup open, whatever the
     // probe says, a refusal as much as an outage.
+    // Only a refusal or a missing route is a no: a probe that could not say is never read as one.
     sampleRefused:
       probe !== undefined &&
       !probe.available &&
+      !probeUnknown &&
       step?.run === undefined &&
       (local === null || local.phase === "refused"),
+    awaitingContinue: local?.phase === "loaded",
     answeredHere: local?.phase === "answered",
     card,
     refreshFailed,

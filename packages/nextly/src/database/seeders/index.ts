@@ -21,8 +21,6 @@ export {
   declineSampleContent,
   readSampleContent,
   recordSampleContent,
-  SAMPLE_DECLINED_KEY,
-  SAMPLE_LOADED_KEY,
   SAMPLE_REFUSAL_MESSAGE,
   sampleContentPost,
   startSampleContent,

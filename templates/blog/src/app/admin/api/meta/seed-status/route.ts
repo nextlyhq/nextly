@@ -7,9 +7,9 @@
  *
  * Both verbs require a super-admin session.
  *
- * GET answers `{ completedAt, skippedAt, answer, run }`: the two nextly_meta
- * flags, and the site's answer as Nextly reads it (`readSampleContent`),
- * with a load nobody has seen through in `run`.
+ * GET answers `{ completedAt, skippedAt, answer, run }`, all from one read of
+ * the site's answer (`readSampleContent`): when it was loaded or declined, the
+ * answer, and a load nobody has seen through in `run`.
  *
  * PUT `{ skippedAt: string }` declines sample content for the whole site
  * through Nextly (`declineSampleContent`), which refuses with 409 once the
@@ -23,8 +23,6 @@ import { getSession, isSuperAdmin } from "nextly/auth";
 import {
   declineSampleContent,
   readSampleContent,
-  SAMPLE_DECLINED_KEY,
-  SAMPLE_LOADED_KEY,
   SAMPLE_REFUSAL_MESSAGE,
 } from "nextly/database/seeders";
 import config from "@nextly-config";
@@ -68,14 +66,13 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     const nextly = await getNextly({ config });
-    const [completedAt, skippedAt, state] = await Promise.all([
-      nextly.meta.get<string>(SAMPLE_LOADED_KEY),
-      nextly.meta.get<string>(SAMPLE_DECLINED_KEY),
-      readSampleContent(nextly.meta),
-    ]);
+    // ONE read of the site's answer: the older fields are derived from it, so
+    // the four can never describe two different moments.
+    const state = await readSampleContent(nextly.meta);
+    const at = state.answeredAt ?? null;
     return Response.json({
-      completedAt: completedAt ?? null,
-      skippedAt: skippedAt ?? null,
+      completedAt: state.answer === "loaded" ? at : null,
+      skippedAt: state.answer === "declined" ? at : null,
       answer: state.answer ?? null,
       run: state.run ?? null,
     });

@@ -67,7 +67,7 @@ describe("starting a load", () => {
       result: { posts: 3 },
     });
     expect(load).toHaveBeenCalledTimes(1);
-    expect(await readSampleContent(store)).toEqual({ answer: "loaded" });
+    expect(await readSampleContent(store)).toMatchObject({ answer: "loaded" });
     // Answered: a second start loads nothing.
     const again = await startSampleContent(store, { by: "b", load });
     expect(again).toMatchObject({ outcome: "refused", reason: "answered" });
@@ -108,10 +108,13 @@ describe("starting a load", () => {
     expect(await first).toEqual({ outcome: "loaded", result: "done" });
   });
 
-  it("reports a failed load with what failed, and loads again only once confirmed", async () => {
+  it("reports a failed load in safe words, never the loader's own message, and loads again only once confirmed", async () => {
     const store = memoryStore();
+    // A driver's message, as a loader's database write throws it: kept off the wire and the card.
     const failing = vi.fn(async () => {
-      throw new Error("post hello-world: column missing");
+      throw new Error(
+        'insert into "posts" ("title") values ($1) - relation "posts" does not exist'
+      );
     });
     const failed = await startSampleContent(store, {
       by: "a",
@@ -120,7 +123,8 @@ describe("starting a load", () => {
     });
     expect(failed).toEqual({
       outcome: "failed",
-      failure: "post hello-world: column missing",
+      failure:
+        "The sample content could not be loaded. The server log says what failed.",
       startedAt: "2026-10-31T09:00:00.000Z",
     });
     // Asked once, never again on its own.
@@ -129,9 +133,13 @@ describe("starting a load", () => {
       run: {
         state: "failed",
         startedAt: "2026-10-31T09:00:00.000Z",
-        failure: "post hello-world: column missing",
+        failure:
+          "The sample content could not be loaded. The server log says what failed.",
       },
     });
+    expect(JSON.stringify([...store.rows.values()])).not.toContain(
+      "insert into"
+    );
 
     const load = vi.fn(async () => "ok");
     expect(await startSampleContent(store, { by: "b", load })).toMatchObject({
@@ -152,21 +160,21 @@ describe("starting a load", () => {
     const start = await startSampleContent(store, {
       by: "a",
       load,
-      token: "run-1",
       now: at("2026-10-31T09:00:00.000Z"),
     });
     expect(start).toEqual({
       outcome: "unrecorded",
       result: "ok",
-      run: "run-1",
+      run: expect.any(String),
       startedAt: "2026-10-31T09:00:00.000Z",
-      failure: "cannot write seed.completedAt",
+      failure: "The sample content loaded, but the site could not record it.",
     });
+    const run = start.outcome === "unrecorded" ? start.run : "";
     expect(await readSampleContent(store)).toEqual({
       run: {
         state: "unrecorded",
         startedAt: "2026-10-31T09:00:00.000Z",
-        run: "run-1",
+        run,
       },
     });
     for (const confirm of [false, true]) {
@@ -208,8 +216,8 @@ describe("starting a load", () => {
       return entry;
     };
     const [one, two] = await Promise.all([
-      startSampleContent(store, { by: "a", load: loads, token: "A" }),
-      startSampleContent(store, { by: "b", load: loads, token: "B" }),
+      startSampleContent(store, { by: "a", load: loads }),
+      startSampleContent(store, { by: "b", load: loads }),
     ]);
     expect(loads).toHaveBeenCalledTimes(1);
     expect([one.outcome, two.outcome].sort()).toEqual(["loaded", "refused"]);
@@ -288,30 +296,31 @@ describe("recording a load on its own", () => {
     const store = memoryStore();
     store.failSet.add(SAMPLE_LOADED_KEY);
     const load = vi.fn(async () => "ok");
-    await startSampleContent(store, { by: "a", load, token: "run-1" });
+    const start = await startSampleContent(store, { by: "a", load });
     store.failSet.clear();
-    return { store, load };
+    if (start.outcome !== "unrecorded") throw new Error("not unrecorded");
+    return { store, load, run: start.run };
   }
 
   it("records the run it names without loading again", async () => {
-    const { store, load } = await unrecorded();
-    expect(await recordSampleContent(store, { run: "run-1" })).toEqual({
+    const { store, load, run } = await unrecorded();
+    expect(await recordSampleContent(store, { run })).toEqual({
       outcome: "loaded",
     });
     expect(load).toHaveBeenCalledTimes(1);
-    expect(await readSampleContent(store)).toEqual({ answer: "loaded" });
+    expect(await readSampleContent(store)).toMatchObject({ answer: "loaded" });
   });
 
   it("refuses a run that is not the one waiting, and says when recording fails again", async () => {
-    const { store } = await unrecorded();
+    const { store, run } = await unrecorded();
     expect(await recordSampleContent(store, { run: "other" })).toMatchObject({
       outcome: "refused",
       reason: "not-this-run",
     });
     store.failSet.add(SAMPLE_LOADED_KEY);
-    expect(await recordSampleContent(store, { run: "run-1" })).toMatchObject({
+    expect(await recordSampleContent(store, { run })).toMatchObject({
       outcome: "unrecorded",
-      run: "run-1",
+      run,
     });
   });
 
@@ -319,12 +328,14 @@ describe("recording a load on its own", () => {
     const store = memoryStore();
     await startSampleContent(store, {
       by: "a",
-      token: "run-1",
       load: async () => {
         throw new Error("boom");
       },
     });
-    expect(await recordSampleContent(store, { run: "run-1" })).toMatchObject({
+    const current = store.rows.get("seed.current") as { token: string };
+    expect(
+      await recordSampleContent(store, { run: current.token })
+    ).toMatchObject({
       outcome: "refused",
       reason: "not-this-run",
     });
@@ -338,7 +349,9 @@ describe("declining", () => {
     expect(await declineSampleContent(store, { by: "a" })).toEqual({
       outcome: "declined",
     });
-    expect(await readSampleContent(store)).toEqual({ answer: "declined" });
+    expect(await readSampleContent(store)).toMatchObject({
+      answer: "declined",
+    });
     const load = vi.fn(async () => "ok");
     expect(await startSampleContent(store, { by: "b", load })).toMatchObject({
       reason: "answered",
@@ -373,7 +386,9 @@ describe("declining", () => {
     expect(await declineSampleContent(store, { by: "a" })).toEqual({
       outcome: "declined",
     });
-    expect(await readSampleContent(store)).toEqual({ answer: "declined" });
+    expect(await readSampleContent(store)).toMatchObject({
+      answer: "declined",
+    });
   });
 });
 
@@ -390,14 +405,24 @@ describe("the project's POST", () => {
       store,
       by: "a",
       load: async () => {
-        throw new Error("tag news: duplicate");
+        throw new Error(
+          'duplicate key value violates unique constraint "tags_slug_key" on insert into "tags"'
+        );
       },
     });
     expect(failed.status).toBe(500);
-    expect(await failed.json()).toMatchObject({
+    const failedBody = await failed.text();
+    // The driver's words never reach the response.
+    expect(failedBody).not.toContain("insert into");
+    expect(failedBody).not.toContain("tags_slug_key");
+    expect(JSON.parse(failedBody)).toMatchObject({
       error: {
         code: "INTERNAL_ERROR",
-        data: { reason: "failed", failure: "tag news: duplicate" },
+        data: {
+          reason: "failed",
+          failure:
+            "The sample content could not be loaded. The server log says what failed.",
+        },
       },
     });
 

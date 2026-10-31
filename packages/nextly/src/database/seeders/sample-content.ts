@@ -45,6 +45,7 @@ import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondMutation } from "../../api/response-shapes";
 import type { SampleRun } from "../../domains/widgets/setup-steps";
 import { NextlyError } from "../../errors/nextly-error";
+import { getNextlyLogger } from "../../observability/logger";
 
 /** The key recording that the content loaded. */
 export const SAMPLE_LOADED_KEY = "seed.completedAt";
@@ -57,8 +58,18 @@ const RUN_PREFIX = "seed.run.";
 /** How many answers' copies are kept, the latest among them. */
 const KEPT_RUNS = 3;
 
-/** What a failure's message is cut to: enough to say what failed. */
-const MAX_FAILURE_LENGTH = 500;
+/**
+ * What a failed load says to the person, whatever the load threw. A loader's
+ * own message can hold SQL, table names, paths or a provider's answer, so it
+ * goes to the server's log alone (`sample-content-load-failed`). A load that
+ * throws a `NextlyError` says its public message instead, which is safe by
+ * that error's own contract.
+ */
+const LOAD_FAILED =
+  "The sample content could not be loaded. The server log says what failed.";
+/** What a record that could not be written says; the store's own error is logged. */
+const RECORD_FAILED =
+  "The sample content loaded, but the site could not record it.";
 
 /** The slice of `MetaService` the site's answer is read and written through. */
 export interface SampleContentStore {
@@ -88,6 +99,9 @@ interface RunRecord {
   startedBy: string;
   /** A load's outcome; absent until it reports one. */
   outcome?: "loaded" | "failed";
+  /** A failed load's stable code: what the server log names it by. */
+  failureCode?: "load-failed";
+  /** A failed load's words for the person: never the loader's own message. */
   failure?: string;
   finishedAt?: string;
 }
@@ -105,6 +119,8 @@ interface LatestRun {
 export interface SampleContentState {
   /** Loaded and recorded, or declined: the offer is closed for everyone. */
   answer?: "loaded" | "declined";
+  /** When it was answered, as recorded, while `answer` is set. */
+  answeredAt?: string;
   /** While nobody has answered: a load started and not seen through. */
   run?: SampleRun;
 }
@@ -148,11 +164,19 @@ function runKey(generation: number): string {
   return `${RUN_PREFIX}${generation}`;
 }
 
-function messageOf(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.length > MAX_FAILURE_LENGTH
-    ? `${message.slice(0, MAX_FAILURE_LENGTH - 1)}…`
-    : message;
+/** A thrown value's own message, for the server's log alone. */
+function rawMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * What a failed load says to the person: a `NextlyError`'s public message,
+ * which is safe by contract, else the fixed words. The raw error is logged on
+ * the server under `kind`, and never returned or stored.
+ */
+function publicFailure(error: unknown, kind: string, fallback: string): string {
+  getNextlyLogger().error({ kind, reason: rawMessage(error) });
+  return NextlyError.is(error) ? error.publicMessage : fallback;
 }
 
 function isRunRecord(value: unknown): value is RunRecord {
@@ -215,6 +239,15 @@ function runView(latest: LatestRun | undefined): SampleRun | undefined {
   return { state: "unfinished", startedAt: record.startedAt };
 }
 
+/** An answer, with when it was recorded where the row holds an instant. */
+function answered(
+  answer: "loaded" | "declined",
+  entry: { present: true; value: unknown } | { present: false }
+): SampleContentState {
+  const at = entry.present ? entry.value : undefined;
+  return typeof at === "string" ? { answer, answeredAt: at } : { answer };
+}
+
 /** The site's answer and its latest claim: three rows, read together. */
 async function readAll(
   store: SampleContentStore
@@ -225,9 +258,17 @@ async function readAll(
     store.getEntry(CURRENT_KEY),
   ]);
   const latest = latestOf(current);
-  if (holds(loaded)) return { state: { answer: "loaded" }, latest };
-  if (holds(declined) || latest?.record.kind === "decline") {
-    return { state: { answer: "declined" }, latest };
+  if (holds(loaded)) {
+    return { state: answered("loaded", loaded), latest };
+  }
+  if (holds(declined)) {
+    return { state: answered("declined", declined), latest };
+  }
+  if (latest?.record.kind === "decline") {
+    return {
+      state: { answer: "declined", answeredAt: latest.record.startedAt },
+      latest,
+    };
   }
   const run = runView(latest);
   return { state: run === undefined ? {} : { run }, latest };
@@ -295,10 +336,9 @@ async function claim(
   if (latest === undefined) {
     await store.insertIfAbsent(CURRENT_KEY, record);
     const held = await store.getEntry(CURRENT_KEY);
-    won =
-      held.present &&
-      isRunRecord(held.value) &&
-      held.value.token === record.token;
+    // The whole record, not a field of it: the row this request inserted, and
+    // no other, holds every one of its values.
+    won = held.present && JSON.stringify(held.value) === JSON.stringify(record);
   } else {
     won = await store.compareAndSet(CURRENT_KEY, latest.stored, record);
   }
@@ -350,7 +390,10 @@ async function recordLoaded(
     await store.set(SAMPLE_LOADED_KEY, now().toISOString());
     return { recorded: true };
   } catch (error) {
-    return { recorded: false, failure: messageOf(error) };
+    return {
+      recorded: false,
+      failure: publicFailure(error, "sample-content-unrecorded", RECORD_FAILED),
+    };
   }
 }
 
@@ -384,8 +427,6 @@ export async function startSampleContent<Result>(
     /** The project's own load. */
     load: () => Promise<Result>;
     now?: () => Date;
-    /** The claim's token; random unless a test names it. */
-    token?: string;
   }
 ): Promise<SampleStart<Result>> {
   const now = options.now ?? (() => new Date());
@@ -394,7 +435,9 @@ export async function startSampleContent<Result>(
   if (reason !== undefined) return { outcome: "refused", reason, state };
 
   const claimed = await claim(store, latest, {
-    token: options.token ?? crypto.randomUUID(),
+    // Minted here for each start, never named by a caller: two starts can
+    // never claim with the same one.
+    token: crypto.randomUUID(),
     kind: "load",
     startedAt: now().toISOString(),
     startedBy: options.by,
@@ -405,12 +448,17 @@ export async function startSampleContent<Result>(
   try {
     result = await options.load();
   } catch (error) {
-    const failure = messageOf(error);
+    const failure = publicFailure(
+      error,
+      "sample-content-load-failed",
+      LOAD_FAILED
+    );
     // Not written, the load reads as unfinished: it starts nothing else, as
     // nobody can tell it apart from one still running.
     await writeOutcome(store, claimed, {
       ...claimed,
       outcome: "failed",
+      failureCode: "load-failed",
       failure,
       finishedAt: now().toISOString(),
     });
@@ -473,7 +521,7 @@ export async function recordSampleContent(
  */
 export async function declineSampleContent(
   store: SampleContentStore,
-  options: { by: string; now?: () => Date; token?: string }
+  options: { by: string; now?: () => Date }
 ): Promise<SampleDecline> {
   const now = options.now ?? (() => new Date());
   const { state, latest } = await readAll(store);
@@ -484,7 +532,7 @@ export async function declineSampleContent(
 
   const at = now().toISOString();
   const claimed = await claim(store, latest, {
-    token: options.token ?? crypto.randomUUID(),
+    token: crypto.randomUUID(),
     kind: "decline",
     startedAt: at,
     startedBy: options.by,

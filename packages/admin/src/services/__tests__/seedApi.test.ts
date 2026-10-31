@@ -27,18 +27,24 @@ describe("seedApi", () => {
       expect(result).toEqual({ available: false });
     });
 
-    it("returns { available: false } on 503 (transient init failure)", async () => {
+    it("returns not known on 503 (transient init failure): no offer, and no refusal either", async () => {
       global.fetch = vi.fn(
         async () => new Response(null, { status: 503 })
       ) as unknown as typeof fetch;
-      expect(await seedApi.probe()).toEqual({ available: false });
+      expect(await seedApi.probe()).toEqual({
+        available: false,
+        unknown: true,
+      });
     });
 
-    it("returns { available: false } if fetch throws", async () => {
+    it("returns not known if fetch throws", async () => {
       global.fetch = vi.fn(async () => {
         throw new Error("network");
       }) as unknown as typeof fetch;
-      expect(await seedApi.probe()).toEqual({ available: false });
+      expect(await seedApi.probe()).toEqual({
+        available: false,
+        unknown: true,
+      });
     });
 
     it("returns { available: true, template } on 200 with headers", async () => {
@@ -64,24 +70,27 @@ describe("seedApi", () => {
     // only with a 200: without them, a probe that offered on the headers rather
     // than on the status would pass these too.
     it.each([
-      [401, "no session"],
-      [403, "a person the route refuses"],
-      [404, "no sample-content route in this project"],
-      [500, "the route failing"],
-      [503, "the server still starting"],
-    ])("returns { available: false } on %i (%s)", async status => {
-      global.fetch = vi.fn(
-        async () =>
-          new Response(null, {
-            status,
-            headers: {
-              "x-nextly-seed-template": "blog",
-              "x-nextly-seed-template-label": "Blog",
-            },
-          })
-      ) as unknown as typeof fetch;
-      expect(await seedApi.probe()).toEqual({ available: false });
-    });
+      [401, "no session", {}],
+      [403, "a person the route refuses", {}],
+      [404, "no sample-content route in this project", {}],
+      [500, "the route failing", { unknown: true }],
+      [503, "the server still starting", { unknown: true }],
+    ])(
+      "returns no offer on %i (%s), not known unless it is a refusal or no route",
+      async (status, _why, extra) => {
+        global.fetch = vi.fn(
+          async () =>
+            new Response(null, {
+              status,
+              headers: {
+                "x-nextly-seed-template": "blog",
+                "x-nextly-seed-template-label": "Blog",
+              },
+            })
+        ) as unknown as typeof fetch;
+        expect(await seedApi.probe()).toEqual({ available: false, ...extra });
+      }
+    );
 
     it("falls back to 'unknown'/'Template' if headers missing", async () => {
       global.fetch = vi.fn(

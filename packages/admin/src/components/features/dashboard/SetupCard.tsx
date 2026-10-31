@@ -850,6 +850,10 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   );
 
   if (!card.setup.known) return <NotKnown retry={retry} />;
+  // A load's outcome stays until the person continues, though the site is all set by it.
+  if (allSet && sample.awaitingContinue) {
+    return <SampleContentPanel sample={sample} retry={retry} />;
+  }
   if (allSet) return <AllSet write={write} />;
   if (counted === undefined || progress === undefined) return null;
   const controls = (

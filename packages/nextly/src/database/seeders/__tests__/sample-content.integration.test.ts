@@ -382,19 +382,24 @@ describe.each(getConfiguredTestDialects())(
       });
       const failed = await start(h.meta, h.ownerId, failing);
       expect(failed.status).toBe(500);
-      expect(await failed.json()).toMatchObject({
+      const failedBody = await failed.text();
+      // What the loader threw stays in the server's log.
+      expect(failedBody).not.toContain("media missing");
+      expect(JSON.parse(failedBody)).toMatchObject({
         error: {
           data: {
             reason: "failed",
-            failure: "post hello-world: media missing",
+            failure:
+              "The sample content could not be loaded. The server log says what failed.",
           },
         },
       });
-      // Kept for every reader, with what failed, though the failed load left an entry.
+      // Kept for every reader, in the same safe words, though the failed load left an entry.
       expect((await sampleStep(h))?.run).toEqual({
         state: "failed",
         startedAt: expect.any(String),
-        failure: "post hello-world: media missing",
+        failure:
+          "The sample content could not be loaded. The server log says what failed.",
       });
 
       const load = vi.fn(async () => "ok");

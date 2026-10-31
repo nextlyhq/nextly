@@ -20,9 +20,19 @@ import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { MutationResponse } from "@admin/lib/api/response-types";
 
+/**
+ * The probe's answer. `available: false` alone is a definitive no: the route
+ * refuses this person (401, 403) or the project ships none (404). With
+ * `unknown`, the route could not say (a 5xx while it starts, a network
+ * failure): nothing is offered, but setup is not judged on it, and the probe
+ * is asked again.
+ */
 export type SeedProbeResult =
-  | { available: false }
+  | { available: false; unknown?: true }
   | { available: true; template: { slug: string; label: string } };
+
+/** The answers that say no for good: no session, refused, or no sample content at all. */
+const DEFINITIVE_NO = new Set([401, 403, 404]);
 
 /**
  * What starting a load came to, as this person is told it. Never a throw: a
@@ -51,7 +61,7 @@ async function probe(): Promise<SeedProbeResult> {
   try {
     res = await fetch(PROBE_PATH, { method: "HEAD", credentials: "include" });
   } catch {
-    return { available: false };
+    return { available: false, unknown: true };
   }
   // Offered only on a 2xx, because "available" means THIS person may load
   // sample content. The route answers the probe with the authorization its
@@ -59,8 +69,13 @@ async function probe(): Promise<SeedProbeResult> {
   // 404 where the project ships no sample content, 503 while it is still
   // starting. Read as "the endpoint exists", a refusal drew a button whose
   // every press fails, in place of an action the person could take. Every
-  // other failure fails closed too: no answer is never a yes.
-  if (!res.ok) return { available: false };
+  // other failure fails closed too: no answer is never a yes. But it is not a
+  // no either: only a refusal or a missing route is.
+  if (!res.ok) {
+    return DEFINITIVE_NO.has(res.status)
+      ? { available: false }
+      : { available: false, unknown: true };
+  }
   // Template metadata from headers, so the offer names the template without
   // hardcoding it.
   const slug = res.headers.get("x-nextly-seed-template") ?? "unknown";

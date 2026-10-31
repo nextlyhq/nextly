@@ -24,7 +24,7 @@ import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
 
-import type { SampleRunState } from "./useSampleRun";
+import type { SampleRunState, SampleView } from "./useSampleRun";
 
 /**
  * A failure's words: the darker shade in light mode, as the base red at this size falls short of
@@ -126,74 +126,102 @@ function FirstEntry({ href }: { href: string | undefined }) {
   );
 }
 
+/** A view of one kind, with the step's state and actions. */
+type ViewProps<K extends SampleView["kind"]> = {
+  view: Extract<SampleView, { kind: K }>;
+  sample: SampleRunState;
+};
+
+function Running() {
+  return <p role="status">Loading sample content…</p>;
+}
+
+function Unfinished({ view, sample }: ViewProps<"unfinished">) {
+  return (
+    <p role="status">
+      A load started at {startedWhen(view.startedAt)} has not finished. It may
+      still be running, so no other load will start.
+      <FirstEntry href={sample.entryHref} />
+    </p>
+  );
+}
+
+function Failed({ view, sample }: ViewProps<"failed">) {
+  return (
+    <p role="alert">
+      <span className={FAILED_TEXT}>
+        Loading sample content failed: {view.failure}
+      </span>
+      <FirstEntry href={sample.entryHref} />
+      {view.retry && (
+        <>
+          <Dot />
+          <SampleAction onClick={sample.askAgain}>Try again</SampleAction>
+        </>
+      )}
+    </p>
+  );
+}
+
+function Confirming({ sample }: ViewProps<"confirming">) {
+  return (
+    <p role="alert">
+      Some sample content may already be there from the load that failed. Load
+      it again?
+      <Dot />
+      <SampleAction onClick={sample.confirmAgain}>Load again</SampleAction>
+      <Dot />
+      <SampleAction onClick={sample.cancelAgain}>Cancel</SampleAction>
+    </p>
+  );
+}
+
+function Unrecorded({ view, sample }: ViewProps<"unrecorded">) {
+  return (
+    <p role="alert">
+      <span className={FAILED_TEXT}>
+        The sample content loaded, but recording that failed
+        {view.again ? " again" : ""}.
+      </span>
+      <Dot />
+      <SampleAction onClick={sample.record} disabled={view.recording}>
+        {view.recording ? "Recording…" : "Try again"}
+      </SampleAction>
+    </p>
+  );
+}
+
+function Loaded({ view, sample }: ViewProps<"loaded">) {
+  if (view.continuing) return <p role="status">Checking your steps…</p>;
+  return (
+    <p role="status">
+      Sample content loaded.
+      <Dot />
+      <SampleAction onClick={sample.continueOn}>Continue</SampleAction>
+    </p>
+  );
+}
+
+/** What the panel says of each kind of view; a kind with no panel says nothing here. */
+const RUN_MESSAGES: {
+  [K in SampleView["kind"]]?: (props: ViewProps<K>) => React.ReactNode;
+} = {
+  running: Running,
+  unfinished: Unfinished,
+  failed: Failed,
+  confirming: Confirming,
+  unrecorded: Unrecorded,
+  loaded: Loaded,
+};
+
 /** What the panel says of the load, and its actions. */
 function RunMessage({ sample }: { sample: SampleRunState }) {
-  const { view } = sample;
-  switch (view.kind) {
-    case "running":
-      return <p role="status">Loading sample content…</p>;
-    case "unfinished":
-      return (
-        <p role="status">
-          A load started at {startedWhen(view.startedAt)} has not finished. It
-          may still be running, so no other load will start.
-          <FirstEntry href={sample.entryHref} />
-        </p>
-      );
-    case "failed":
-      return (
-        <p role="alert">
-          <span className={FAILED_TEXT}>
-            Loading sample content failed: {view.failure}
-          </span>
-          <FirstEntry href={sample.entryHref} />
-          {view.retry && (
-            <>
-              <Dot />
-              <SampleAction onClick={sample.askAgain}>Try again</SampleAction>
-            </>
-          )}
-        </p>
-      );
-    case "confirming":
-      return (
-        <p role="alert">
-          Some sample content may already be there from the load that failed.
-          Load it again?
-          <Dot />
-          <SampleAction onClick={sample.confirmAgain}>Load again</SampleAction>
-          <Dot />
-          <SampleAction onClick={sample.cancelAgain}>Cancel</SampleAction>
-        </p>
-      );
-    case "unrecorded":
-      return (
-        <p role="alert">
-          <span className={FAILED_TEXT}>
-            The sample content loaded, but recording that failed
-            {view.again ? " again" : ""}.
-          </span>
-          <Dot />
-          <SampleAction onClick={sample.record} disabled={view.recording}>
-            {view.recording ? "Recording…" : "Try again"}
-          </SampleAction>
-        </p>
-      );
-    case "loaded":
-      return (
-        <p role="status">
-          {view.continuing ? "Checking your steps…" : "Sample content loaded."}
-          {!view.continuing && (
-            <>
-              <Dot />
-              <SampleAction onClick={sample.continueOn}>Continue</SampleAction>
-            </>
-          )}
-        </p>
-      );
-    default:
-      return null;
-  }
+  const Message = RUN_MESSAGES[sample.view.kind] as
+    | ((props: ViewProps<SampleView["kind"]>) => React.ReactNode)
+    | undefined;
+  return Message === undefined ? null : (
+    <Message view={sample.view} sample={sample} />
+  );
 }
 
 /**
