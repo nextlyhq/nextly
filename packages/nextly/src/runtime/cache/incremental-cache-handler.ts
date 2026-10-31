@@ -103,14 +103,15 @@ function reads(): Map<string, number> {
 
 function rememberRead(key: string): void {
   const remembered = reads();
-  const now = localNow();
-  if (remembered.size >= MAX_REMEMBERED_READS) {
-    for (const [old, at] of remembered) {
-      if (now - at > FILL_WINDOW_MS) remembered.delete(old);
-    }
-  }
   remembered.delete(key);
-  remembered.set(key, now);
+  // Full: the oldest read goes, even one still inside the window, so a burst
+  // of distinct keys cannot grow the map past its bound. Its fill, if one
+  // follows, is stamped when stored, as one with no read.
+  if (remembered.size >= MAX_REMEMBERED_READS) {
+    const oldest = remembered.keys().next().value;
+    if (oldest !== undefined) remembered.delete(oldest);
+  }
+  remembered.set(key, localNow());
 }
 
 /** When the fill being stored for `key` began: its read, or now if none. */

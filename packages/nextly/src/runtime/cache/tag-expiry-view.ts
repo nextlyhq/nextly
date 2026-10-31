@@ -237,16 +237,21 @@ export function latestExpiry(tags: Iterable<string>): number {
 
 /**
  * Expires `tags` now: in this process at once, so this instance never serves
- * its own write stale, and in the ledger for every other instance. A ledger
- * that cannot take them is warned about once; this instance stays correct.
+ * its own write stale, and in the ledger for every other instance. Resolves
+ * whether the ledger took them: `false` with no ledger published, with no
+ * table yet, or when it refused, which is warned about once. This instance
+ * stays correct either way; a caller that must reach other instances keeps
+ * the tags on `false`.
  */
-export async function expireTags(tags: readonly string[]): Promise<void> {
+export async function expireTags(tags: readonly string[]): Promise<boolean> {
   const view = state();
   const now = localNow();
   for (const tag of tags) view.own.set(tag, now);
+  if (view.ledger === undefined) return false;
   try {
-    await view.ledger?.record(tags);
+    return await view.ledger.record(tags);
   } catch (error) {
     warnOnce("the cache tag expiry ledger could not record an expiry", error);
+    return false;
   }
 }

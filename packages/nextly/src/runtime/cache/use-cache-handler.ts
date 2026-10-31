@@ -71,6 +71,13 @@ const useCacheHandler = {
   set(cacheKey: string, pendingEntry: Promise<CacheEntry>): Promise<void> {
     const write = (async () => {
       const { value, ...entry } = await pendingEntry;
+      // Outside development an `expire: 0` entry is dynamic: Next.js
+      // regenerates it on every read and never serves the stored copy, so it
+      // is not stored, and an entry already there is left as it was. In
+      // development (`next dev`) it is kept, as Next.js's own handler does.
+      if (process.env.NODE_ENV !== "development" && entry.expire === 0) {
+        return;
+      }
       const chunks: Uint8Array[] = [];
       let bytes = 0;
       const reader = value.getReader();
