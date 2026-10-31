@@ -89,6 +89,7 @@ import { registerActivityWidgetSource } from "../../services/dashboard/activity-
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
 import { registerContinueWidgetSource } from "../../services/dashboard/continue-widget-source";
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
+import { registerSystemHealthSource } from "../../services/dashboard/system-health-source";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = [],
@@ -152,6 +153,8 @@ export function resetWidgetRegistries(
   // Needs attention's source, which combines the releases' and versions' reads
   // with the entry list's counts and so belongs to no one domain.
   registerAttentionWidgetSource();
+  // System health's read, which the card and the attention digest share.
+  registerSystemHealthSource();
   registerSummaryWidgetSources();
   registerContinueWidgetSource();
 

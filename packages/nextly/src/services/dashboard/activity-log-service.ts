@@ -42,6 +42,7 @@ import {
   activityEventOf,
   activityMetadataOf,
   isContentSave,
+  isSettingsChange,
   isSettingsNamespace,
   type ActivityEvent,
 } from "./activity-changes";
@@ -96,11 +97,13 @@ export interface ActivityLogEntry {
   entryId: string | null;
   entryTitle: string | null;
   /**
-   * What the row is about, as it was recorded: a collection's entry, a
-   * Single, or an install-level settings change. NULL on a row written before
-   * the kind was recorded, which is a collection's or a settings change's.
-   * Lets a reader head a Single's row by its label rather than read
-   * `collection` as a collection's slug.
+   * What the row is about: a collection's entry, a Single, or an
+   * install-level settings change. A row written before the kind was recorded
+   * and filed under a settings namespace is a settings change, and says so
+   * (`isSettingsChange`, the rule the feed's runs and events read it by); any
+   * other such row is NULL, which is a collection's. Lets a reader head a
+   * Single's row by its label, and a settings change by what it changed,
+   * rather than read `collection` as a collection's slug.
    */
   subjectKind?: ActivitySubjectKind | null;
   metadata: Record<string, unknown> | null;
@@ -380,6 +383,37 @@ function collectionsKeptOffClause(
 }
 
 /**
+ * The conditions narrowing the saves to one subject's, by its slug AND its
+ * kind, since a collection and a Single may share a slug: a collection's
+ * entries, by a row stating that kind or none (a row written before the kind
+ * was recorded is a collection's), and a Single's document, by a row stating
+ * it is a Single's. None when neither is asked for.
+ */
+function oneSubjectConditions(
+  options: Pick<RecentEditsOptions, "collection" | "single">
+): NonNullable<WhereClause["and"]> {
+  const conditions: NonNullable<WhereClause["and"]> = [];
+  if (options.collection !== undefined) {
+    conditions.push(
+      { column: "collection", op: "=", value: options.collection },
+      {
+        or: [
+          { column: "subjectKind", op: "IS NULL" },
+          { column: "subjectKind", op: "=", value: "collection" },
+        ],
+      }
+    );
+  }
+  if (options.single !== undefined) {
+    conditions.push(
+      { column: "collection", op: "=", value: options.single },
+      { column: "subjectKind", op: "=", value: "single" }
+    );
+  }
+  return conditions;
+}
+
+/**
  * The conditions that keep the saves of one person (`savedBy`) or every save
  * but theirs (`notSavedBy`), from one statement of what "a person's save" is,
  * so the two are exact complements: a row written before the kind was
@@ -434,6 +468,11 @@ export interface RecentEditsOptions {
   /** Only this collection's entries: never a Single, which may share its slug. */
   collection?: string;
   /**
+   * Only this Single's document: never a collection's entries, which may share
+   * its slug. Given with `collection`, both narrow, and no save is of both.
+   */
+  single?: string;
+  /**
    * Only saves this person made. A PERSON's id: a row whose actor is an API
    * key never matches it, though a key's id and a person's could be equal.
    */
@@ -443,6 +482,15 @@ export interface RecentEditsOptions {
    * key's, whatever its id. The exact complement of `savedBy` for the same id.
    */
   notSavedBy?: string;
+  /**
+   * Whether a publish or an unpublish on its own counts as its document's
+   * latest change. Off by default, as the cards that list what someone edited
+   * read the trail: there a publish never takes the row of the person who made
+   * the edits. On, each document's latest create or update is its row,
+   * whatever it changed, for a reader asking who last changed a document and
+   * when, which a status change does.
+   */
+  statusChanges?: boolean;
 }
 
 /**
@@ -995,16 +1043,19 @@ function feedWhere(
  * Each document's newest save among `rows`, newest first: rows that are not a
  * save are passed over, and a document is the kind, the slug and the id
  * together, since a Single and a collection may share a slug. A row whose id
- * was redacted names no document, and is passed over too.
+ * was redacted names no document, and is passed over too. With
+ * `statusChanges`, a publish or an unpublish on its own is a save as well (see
+ * `RecentEditsOptions.statusChanges`).
  */
 function latestSaves(
-  rows: readonly Record<string, unknown>[]
+  rows: readonly Record<string, unknown>[],
+  statusChanges = false
 ): Record<string, unknown>[] {
   const seen = new Set<string>();
   const latest: Record<string, unknown>[] = [];
   for (const row of rows) {
     if (typeof row.entryId !== "string" || row.entryId.length === 0) continue;
-    if (!isContentSave(row.action, row.metadata)) continue;
+    if (!statusChanges && !isContentSave(row.action, row.metadata)) continue;
     const document = JSON.stringify([
       row.subjectKind ?? "collection",
       row.collection,
@@ -1383,8 +1434,9 @@ export class ActivityLogService extends BaseService {
    * row, which keeps a readable save behind a newer one the caller may not
    * read (another language's, say).
    *
-   * A save is what `isContentSave` says it is. A publish or an unpublish on its
-   * own never takes the row of the person who made the edits, and a deletion
+   * A save is what `isContentSave` says it is, unless `statusChanges` asks for
+   * every change. A publish or an unpublish on its own otherwise never takes
+   * the row of the person who made the edits, and a deletion
    * and the redacted history of a removed document name no document to list.
    * Settings changes name none either, and are left out by kind.
    */
@@ -1413,25 +1465,7 @@ export class ActivityLogService extends BaseService {
             },
           ],
         },
-        ...(options.collection === undefined
-          ? []
-          : [
-              {
-                column: "collection",
-                op: "=" as const,
-                value: options.collection,
-              },
-              {
-                or: [
-                  { column: "subjectKind", op: "IS NULL" as const },
-                  {
-                    column: "subjectKind",
-                    op: "=" as const,
-                    value: "collection",
-                  },
-                ],
-              },
-            ]),
+        ...oneSubjectConditions(options),
         ...saverConditions(options),
       ],
     };
@@ -1442,9 +1476,9 @@ export class ActivityLogService extends BaseService {
         where,
         0,
         options.caller,
-        rows => latestSaves(rows).length > limit
+        rows => latestSaves(rows, options.statusChanges).length > limit
       );
-      const saves = latestSaves(visible.rows);
+      const saves = latestSaves(visible.rows, options.statusChanges);
       return {
         edits: saves.slice(0, limit).map(row => ({
           ...this.mapRow(row, options.singles?.labels),
@@ -1855,7 +1889,11 @@ export class ActivityLogService extends BaseService {
       // Object#toString for non-primitive driver values.
       entryId: toNullableString(row.entryId),
       entryTitle: headingOf(row, singleLabels),
-      subjectKind: statedKindOf(row) ?? null,
+      // Classified here, by the one rule, so a reader that tells a settings
+      // change from an entry need not know the settings namespaces.
+      subjectKind: isSettingsChange(row)
+        ? "settings"
+        : (statedKindOf(row) ?? null),
       metadata,
       createdAt: instantText(createdAt),
       count: 1,

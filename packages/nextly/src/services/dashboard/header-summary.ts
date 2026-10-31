@@ -1,7 +1,8 @@
 /**
  * The dashboard header's live summary, part by part, from what each part's own
- * source answered for the reader: the attention total, the releases due within
- * a week, and each widget on the reader's dashboard that declares a `summary`.
+ * source answered for the reader: the items of the attention digest, the
+ * releases due within a week, and each widget on the reader's dashboard that
+ * declares a `summary`.
  *
  * Each part is read from the source its card reads, as the same reader, so the
  * header and the card cannot disagree. A part with nothing to say is left out;
@@ -15,11 +16,8 @@
  */
 
 import type { DashboardSummaryPart } from "../../api/dashboard-summary-types";
-import {
-  attentionTotalOf,
-  type AttentionKind,
-  type AttentionTotalBucket,
-} from "../../domains/widgets/attention-keys";
+import type { AttentionDigestItem } from "../../domains/widgets/attention/digest-item";
+import { digestTotal } from "../../domains/widgets/attention-keys";
 
 /** One part of the summary line, before it is worded: the wire shape's part. */
 export type HeaderSummaryPart = DashboardSummaryPart;
@@ -31,32 +29,29 @@ export type PartRead = HeaderSummaryPart | null | "failed";
 export const RELEASES_WITHIN_DAYS = 7;
 
 /**
- * The attention part from the Needs attention card's own grouped answer: its
- * total, by the one rule the card draws its total by (`attentionTotalOf`), so
- * the header counts exactly what the card counts.
+ * The attention part from the attention digest the Needs your attention card
+ * draws, read for the same reader: how many items it holds, by the one rule
+ * that counts them (`digestTotal`), which is the number the card's title shows.
  *
- * Failed when the total is none but a floor: some lists went unread, so the
- * card says "Not all checked" rather than "All clear", and the line must not
- * call the reader caught up. Nothing to say when nothing is waiting.
+ * A floor ("N+") when any item failed or its count stopped at a bound: the
+ * card then says "Not all checked" or "99+" on that row, and the line must not
+ * read as exact. Nothing to say when the digest holds no item, failed ones
+ * included, since a failed item is an item.
  *
- * @param overdueLink where the overdue releases are listed: the line's link
- * when the answer holds overdue releases, the kind with one list of its own.
+ * Linked to the overdue releases, by that item's own link, when they are
+ * waiting: the line's one link to a list of its own.
  */
-export function attentionPart(
-  buckets: readonly AttentionTotalBucket[],
-  overdueLink: string
-): PartRead {
-  const { count, atLeast } = attentionTotalOf(buckets);
-  if (count === 0) return atLeast ? "failed" : null;
-  const overdueKind: AttentionKind = "overdue";
-  const overdue = buckets.some(
-    bucket => bucket.value === overdueKind && bucket.count > 0
+export function attentionPart(items: readonly AttentionDigestItem[]): PartRead {
+  const { count, atLeast } = digestTotal(items);
+  if (count === 0) return null;
+  const overdue = items.find(
+    item => item.kind === "overdue" && item.failed !== true
   );
   return {
     kind: "attention",
     count,
     ...(atLeast ? { atLeast: true } : {}),
-    ...(overdue ? { link: overdueLink } : {}),
+    ...(overdue?.link === undefined ? {} : { link: overdue.link }),
   };
 }
 

@@ -26,7 +26,12 @@ import {
   RELEASES_TABLE,
 } from "../../domains/releases/release-tables";
 import { releaseMemberKey } from "../../domains/releases/release-member-key";
+import {
+  clearAttentionItems,
+  registerAttentionItems,
+} from "../../domains/widgets/attention/items";
 import { needsAttentionWidget } from "../../domains/widgets/core-widgets/needs-attention";
+import type { AttentionItem } from "../../domains/widgets/declaration/dashboard";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
 import { setting } from "../../domains/widgets/declaration/setting-builders";
 import { clearSources } from "../../domains/widgets/sources";
@@ -37,7 +42,6 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
-import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { ServiceContainer } from "../../services";
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -52,7 +56,7 @@ const inbox = defineCollection({
   fields: [text({ name: "state" })],
 });
 
-/** Entries with unpublished changes, and entries a release will publish. */
+/** Entries a release will publish. */
 const DRAFTED = "drafted";
 const drafted = defineCollection({
   slug: DRAFTED,
@@ -144,6 +148,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
   afterEach(async () => {
     clearSources();
+    clearAttentionItems();
     await handle?.destroy();
     handle = undefined;
     ownerId = undefined;
@@ -216,26 +221,6 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     const id = (created.data as { id?: string } | undefined)?.id;
     expect(typeof id, "the entry must be created").toBe("string");
     return id!;
-  }
-
-  /** A working draft of `entryId`: an unpublished change. */
-  async function draftOf(entryId: string): Promise<void> {
-    await handle!.adapter.insert(VERSIONS_TABLE, {
-      id: crypto.randomUUID(),
-      scopeKind: "collection",
-      scopeSlug: DRAFTED,
-      entryId,
-      versionNo: null,
-      status: "draft",
-      isAutosave: false,
-      snapshot: JSON.stringify({ title: "edited" }),
-      label: null,
-      locale: null,
-      sourceVersionNo: null,
-      createdBy: null,
-      createdAt: new Date("2026-01-01T00:00:00Z"),
-      updatedAt: new Date("2026-01-01T00:00:00Z"),
-    });
   }
 
   /** A scheduled release at `at` that publishes `entryId`. */
@@ -422,52 +407,136 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       expect(await response.json()).toEqual({ parts: [], failed: 0 });
     });
 
-    it("counts what the Needs attention card counts, with unpublished, scheduled and overdue work waiting", async () => {
-      // Each boot's sources are cleared before the case runs; the card's own
-      // source is published again, as boot publishes it.
-      registerAttentionWidgetSource();
-      const soon = await publishedEntry("Publishing soon");
-      const late = await publishedEntry("Overdue");
-      await draftOf(soon);
-      await draftOf(late);
-      await releaseAt(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000), soon);
-      await releaseAt(new Date(Date.now() - 60 * 60 * 1000), late);
-      const session = await sessionOf(ownerId!);
+    /**
+     * A plugin's attention items, kept as startup keeps them, each shown to a
+     * reader of the inbox and counted as `counts` says.
+     */
+    function attentionItems(
+      counts: Record<string, AttentionItem["count"]>
+    ): void {
+      registerAttentionItems([
+        {
+          owner: 'plugin "@test/forms"',
+          widgets: [],
+          suggest: undefined,
+          alternatives: undefined,
+          attention: Object.entries(counts).map(([name, count]) => ({
+            id: `acme/${name}`,
+            label: `Inbox ${name}`,
+            collections: [INBOX],
+            count,
+            link: `collections/${INBOX}`,
+          })),
+          unknownKeys: [],
+        },
+      ]);
+    }
 
-      // The card's own answer, asked by the dashboard's own query.
-      const card = (await slotFor(session, needsAttentionWidget.query)) as {
+    /**
+     * The Needs your attention card's items and the header's attention part,
+     * each asked by the dashboard's own request for `cookie`, the card from
+     * its place on the reader's dashboard.
+     */
+    async function cardAndHeader(cookie: string) {
+      const card = (await slotFor(cookie, {
+        widget: needsAttentionWidget.id,
+        card: "attention-card",
+      })) as {
         ok: boolean;
         result: {
           op: string;
-          buckets: { value: string; count: number; atLeast?: boolean }[];
+          data: { items: { id: string; kind: string; link: string }[] };
         };
       };
       expect(card, JSON.stringify(card)).toMatchObject({
         ok: true,
-        result: { op: "groupBy" },
+        result: { op: "data" },
       });
-      const kinds = new Map(
-        card.result.buckets
-          .filter(bucket =>
-            ["unpublished", "scheduled", "overdue"].includes(bucket.value)
-          )
-          .map(bucket => [bucket.value, bucket.count])
-      );
-      // Every kind has work in it: entries waiting that the release digest
-      // alone (overdue and stopped releases) would never count.
-      expect(kinds.get("unpublished")).toBe(2);
-      expect(kinds.get("scheduled")).toBe(1);
-      expect(kinds.get("overdue")).toBe(1);
-      const cardTotal = [...kinds.values()].reduce((sum, n) => sum + n, 0);
-
-      const header = (await (await summaryRequest(session)).json()) as {
-        parts: { kind: string; count: number; link?: string }[];
+      const header = (await (await summaryRequest(cookie)).json()) as {
+        parts: { kind: string }[];
         failed: number;
       };
       expect(header.failed).toBe(0);
-      expect(header.parts.find(part => part.kind === "attention")).toEqual({
+      return {
+        items: card.result.data.items,
+        attention: header.parts.find(part => part.kind === "attention"),
+      };
+    }
+
+    /** The card on `userId`'s dashboard, its source published as boot publishes it, and an overdue release. */
+    async function attentionWaiting(userId: string): Promise<void> {
+      // Each boot's sources are cleared before the case runs; the card's own
+      // digest read is handed over again, as boot hands it.
+      registerAttentionWidgetSource();
+      await place(userId, [
+        {
+          id: "attention-card",
+          widgetId: needsAttentionWidget.id,
+          w: 8,
+          h: 3,
+          removed: false,
+        },
+      ]);
+      const late = await publishedEntry("Overdue");
+      await releaseAt(new Date(Date.now() - 60 * 60 * 1000), late);
+    }
+
+    it("counts the items the Needs your attention card draws, one number from the one digest", async () => {
+      await attentionWaiting(ownerId!);
+      // Two of the inbox's: with the overdue release, three in all, held by
+      // two items. A header that summed the items' counts would say 3.
+      attentionItems({ waiting: async () => 2 });
+
+      const { items, attention } = await cardAndHeader(
+        await sessionOf(ownerId!)
+      );
+
+      expect(items.map(item => item.id).sort()).toEqual([
+        "acme/waiting",
+        "core/overdue-releases",
+      ]);
+      const overdue = items.find(item => item.kind === "overdue");
+      expect(attention).toEqual({
         kind: "attention",
-        count: cardTotal,
+        count: items.length,
+        // The overdue item's own link, the list it opens on the card.
+        link: overdue?.link,
+      });
+      expect(attention).toMatchObject({
+        count: 2,
+        link: "releases?tab=attention&reason=overdue",
+      });
+    });
+
+    it("says N+ for the card's items when one stopped at a bound, and when one could not be counted", async () => {
+      await attentionWaiting(ownerId!);
+      const session = await sessionOf(ownerId!);
+
+      attentionItems({ backlog: async () => ({ count: 40, atLeast: true }) });
+      const floor = await cardAndHeader(session);
+      expect(floor.items).toHaveLength(2);
+      expect(floor.attention).toEqual({
+        kind: "attention",
+        count: floor.items.length,
+        atLeast: true,
+        link: "releases?tab=attention&reason=overdue",
+      });
+
+      attentionItems({
+        unchecked: async () => {
+          throw new Error("the inbox's store is down");
+        },
+      });
+      const unknown = await cardAndHeader(session);
+      // The failed item is drawn, "Not all checked", so it is counted.
+      expect(unknown.items.map(item => item.id).sort()).toEqual([
+        "acme/unchecked",
+        "core/overdue-releases",
+      ]);
+      expect(unknown.attention).toEqual({
+        kind: "attention",
+        count: unknown.items.length,
+        atLeast: true,
         link: "releases?tab=attention&reason=overdue",
       });
     });

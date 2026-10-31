@@ -40,6 +40,10 @@ import type { CardState } from "./frame/card-state";
 import { listDensityOf } from "./frame/list-rows";
 import type { CardEmptyContent, SkeletonShape } from "./frame/states";
 import type { AnswerSize } from "./frame/tier";
+import {
+  useHiddenWhileEmpty,
+  useHidesWhenAnswerEmpty,
+} from "./hidden-while-empty";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
@@ -217,6 +221,12 @@ export interface WidgetRendererProps {
   subtitle?: string | undefined;
   /** The card's one quick setting, which the frame draws before `headerAction`. */
   quick?: ReactNode;
+  /**
+   * Draws the card's title as a control: the dashboard's cards open their quick popover from it.
+   *
+   * @internal Set by the dashboard grid only, never part of the widget kit.
+   */
+  titleTrigger?: ((title: string) => ReactNode) | undefined;
   /** The drag handle in customise mode, drawn before the title. */
   leading?: ReactNode;
   /** Customise mode: the card's content stays visible but out of reach. */
@@ -294,17 +304,21 @@ function sharedCardProps(
     WidgetRendererProps,
     | "headerAction"
     | "quick"
+    | "titleTrigger"
     | "leading"
     | "customizing"
     | "answerSize"
     | "subtitle"
-  >
+  > & { hiddenWhileEmpty: boolean; hidesWhenAnswerEmpty: boolean }
 ) {
+  const { hiddenWhileEmpty, hidesWhenAnswerEmpty, ...rest } = controls;
+  const hides = definition.hidesWhenEmpty === true;
   return {
     title: definition.title,
     link: definition.link,
-    ...controls,
-    hidesWhenEmpty: definition.hidesWhenEmpty === true,
+    ...rest,
+    hiddenWhileEmpty: hides && hiddenWhileEmpty,
+    hidesWhenAnswerEmpty: hides && hidesWhenAnswerEmpty,
     cardId: placement?.id ?? definition.id,
     widgetId: definition.id,
     // The card's height, which its list rows are counted from.
@@ -552,6 +566,7 @@ export function WidgetRenderer({
   placement,
   headerAction,
   quick,
+  titleTrigger,
   leading,
   customizing = false,
   onRetry,
@@ -560,13 +575,20 @@ export function WidgetRenderer({
   answerSize,
   subtitle,
 }: WidgetRendererProps): JSX.Element {
+  // Taken off the dashboard while empty by the layout read's verdict, held for the visit; or, for
+  // a widget the layout read cannot answer, by its own answer as it is drawn.
+  const hiddenWhileEmpty = useHiddenWhileEmpty(placement?.id);
+  const hidesWhenAnswerEmpty = useHidesWhenAnswerEmpty(definition.id);
   const shared = sharedCardProps(definition, placement, {
     headerAction,
     quick,
+    titleTrigger,
     leading,
     customizing,
     answerSize,
     subtitle,
+    hiddenWhileEmpty,
+    hidesWhenAnswerEmpty,
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);

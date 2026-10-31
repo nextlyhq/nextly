@@ -390,6 +390,9 @@ importers:
       '@nextlyhq/plugin-sdk':
         specifier: workspace:^
         version: link:../../packages/plugin-sdk
+      '@nextlyhq/plugin-seo':
+        specifier: workspace:^
+        version: link:../../packages/plugin-seo
       '@nextlyhq/ui':
         specifier: workspace:^
         version: link:../../packages/ui

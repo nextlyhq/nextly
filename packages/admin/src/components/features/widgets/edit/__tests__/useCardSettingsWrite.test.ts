@@ -14,7 +14,13 @@ import type {
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock("@admin/components/ui", () => ({ toast: { error: toastError } }));
 
-import { useCardSettingsWrite } from "../useCardSettingsWrite";
+import { useCardSettingsWrite, type CardChange } from "../useCardSettingsWrite";
+
+/** A settings change, as the quick setting and the sheet's Done make one. */
+const settings = (config: Record<string, unknown>): CardChange => ({
+  kind: "settings",
+  config,
+});
 
 const PLACEMENTS: WidgetPlacement[] = [
   { id: "p1", widgetId: "core/a", w: 6, h: 3, removed: false },
@@ -29,6 +35,7 @@ function stored(placements = PLACEMENTS): DashboardLayoutResponse {
     defaultPlacements: [],
     version: 3,
     source: "default",
+    arranged: false,
     scope: "s",
     audience: "aud",
   } as DashboardLayoutResponse;
@@ -80,7 +87,7 @@ describe("saving a card's settings outside customise mode", () => {
     const onLanded = vi.fn();
     act(() =>
       result.current.write(
-        { placementId: "p2", title: "B", config: { limit: 7 } },
+        { placementId: "p2", title: "B", change: settings({ limit: 7 }) },
         { onLanded }
       )
     );
@@ -101,7 +108,7 @@ describe("saving a card's settings outside customise mode", () => {
     const onFailed = vi.fn();
     act(() =>
       result.current.write(
-        { placementId: "p1", title: "A", config: { limit: 7 } },
+        { placementId: "p1", title: "A", change: settings({ limit: 7 }) },
         { onLanded, onFailed }
       )
     );
@@ -118,7 +125,7 @@ describe("saving a card's settings outside customise mode", () => {
     const onLanded = vi.fn();
     act(() =>
       result.current.write(
-        { placementId: "p1", title: "A", config: { limit: 7 } },
+        { placementId: "p1", title: "A", change: settings({ limit: 7 }) },
         { onLanded }
       )
     );
@@ -133,7 +140,11 @@ describe("saving a card's settings outside customise mode", () => {
     const { result } = renderHook(() => useCardSettingsWrite(layout));
     expect(result.current.unavailable).toMatch(/cannot be read/);
     act(() =>
-      result.current.write({ placementId: "p1", title: "A", config: {} })
+      result.current.write({
+        placementId: "p1",
+        title: "A",
+        change: settings({}),
+      })
     );
     expect(mutate).not.toHaveBeenCalled();
   });
@@ -145,7 +156,7 @@ describe("saving a card's settings outside customise mode", () => {
     const onFailed = vi.fn();
     act(() =>
       result.current.write(
-        { placementId: "p1", title: "A", config: {} },
+        { placementId: "p1", title: "A", change: settings({}) },
         { onFailed }
       )
     );
@@ -161,7 +172,7 @@ describe("saving a card's settings outside customise mode", () => {
     const onFailed = vi.fn();
     act(() =>
       result.current.write(
-        { placementId: "gone", title: "Old card", config: {} },
+        { placementId: "gone", title: "Old card", change: settings({}) },
         { onFailed }
       )
     );
@@ -177,7 +188,7 @@ describe("saving a card's settings outside customise mode", () => {
     const onFailed = vi.fn();
     act(() =>
       result.current.write(
-        { placementId: "p1", title: "A", config: { limit: 7 } },
+        { placementId: "p1", title: "A", change: settings({ limit: 7 }) },
         { onFailed, showsFailure: true }
       )
     );
@@ -185,5 +196,77 @@ describe("saving a card's settings outside customise mode", () => {
       "A changed elsewhere, so this change was not saved."
     );
     expect(toastError).not.toHaveBeenCalled();
+  });
+});
+
+describe("saving a card's size outside customise mode", () => {
+  /** Resizable from 3 by 2 to 12 by 6. */
+  const BOUNDS = {
+    default: { w: 6, h: 3 },
+    min: { w: 3, h: 2 },
+    max: { w: 12, h: 6 },
+  };
+
+  it("sends the whole arrangement with only that card's size changed, not arranged", () => {
+    const { layout, mutate } = fakeLayout();
+    const { result } = renderHook(() => useCardSettingsWrite(layout));
+    const onLanded = vi.fn();
+    act(() =>
+      result.current.write(
+        {
+          // The first card, so a write that put it anywhere else in the list would differ.
+          placementId: "p1",
+          title: "A",
+          change: { kind: "size", size: { w: 12, h: 4 }, bounds: BOUNDS },
+        },
+        { onLanded }
+      )
+    );
+    expect(mutate.mock.calls[0]?.[0]).toEqual({
+      placements: [{ ...PLACEMENTS[0], w: 12, h: 4 }, PLACEMENTS[1]],
+      version: 3,
+      scope: "s",
+      arranged: false,
+    });
+    expect(onLanded).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing, and says so, for a size outside the widget's bounds", () => {
+    const { layout, mutate } = fakeLayout();
+    const { result } = renderHook(() => useCardSettingsWrite(layout));
+    const onFailed = vi.fn();
+    act(() =>
+      result.current.write(
+        {
+          placementId: "p2",
+          title: "B",
+          change: { kind: "size", size: { w: 2, h: 3 }, bounds: BOUNDS },
+        },
+        { onFailed }
+      )
+    );
+    expect(mutate).not.toHaveBeenCalled();
+    expect(onFailed).toHaveBeenCalledWith(
+      "B can't be that size, so it was not resized."
+    );
+  });
+
+  it("names the size, not the settings, when the card is no longer on the dashboard", () => {
+    const { layout } = fakeLayout();
+    const { result } = renderHook(() => useCardSettingsWrite(layout));
+    const onFailed = vi.fn();
+    act(() =>
+      result.current.write(
+        {
+          placementId: "gone",
+          title: "Old card",
+          change: { kind: "size", size: { w: 6, h: 3 }, bounds: BOUNDS },
+        },
+        { onFailed }
+      )
+    );
+    expect(onFailed).toHaveBeenCalledWith(
+      "Old card is no longer on your dashboard, so its size was not saved."
+    );
   });
 });

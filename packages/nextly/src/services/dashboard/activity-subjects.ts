@@ -46,7 +46,12 @@ async function readSingles(): Promise<ActivitySingles> {
   try {
     const registry = container.get<{
       getAllSingles: () => Promise<
-        Array<{ slug: string; label?: unknown; admin?: unknown }>
+        Array<{
+          slug: string;
+          label?: unknown;
+          source?: unknown;
+          admin?: unknown;
+        }>
       >;
     }>("singleRegistryService");
     const labels = new Map<string, string>();
@@ -55,7 +60,7 @@ async function readSingles(): Promise<ActivitySingles> {
       if (typeof single.label === "string" && single.label !== "") {
         labels.set(single.slug, single.label);
       }
-      if (keptOffDashboard(single)) keptOff.add(single.slug);
+      if (keptOffDashboard("single", single)) keptOff.add(single.slug);
     }
     return { labels, keptOff, complete: true };
   } catch {
@@ -71,12 +76,18 @@ async function readKeptOffCollections(): Promise<ActivityKeptOffCollections> {
   try {
     const registry = container.get<{
       getAllCollections: () => Promise<
-        Array<{ slug: string; admin?: unknown }>
+        Array<{
+          slug: string;
+          source?: unknown;
+          admin?: unknown;
+        }>
       >;
     }>("collectionRegistryService");
     const slugs = new Set<string>();
     for (const collection of await registry.getAllCollections()) {
-      if (keptOffDashboard(collection)) slugs.add(collection.slug);
+      if (keptOffDashboard("collection", collection)) {
+        slugs.add(collection.slug);
+      }
     }
     return { slugs, complete: true };
   } catch {

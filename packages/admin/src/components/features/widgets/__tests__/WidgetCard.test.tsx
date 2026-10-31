@@ -6,6 +6,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FrameState, type CardState } from "../frame/card-state";
+import { useCardSubtitle } from "../frame/header-subtitle";
 import { WidgetCard } from "../WidgetCard";
 
 /** Every state the frame draws, each as the renderer hands it. */
@@ -224,6 +225,45 @@ describe("the header", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("draws the line a body reports beneath the title, and withdraws it with the body", () => {
+    function Summary({ line }: { line: string }) {
+      useCardSubtitle(line);
+      return <p>rows</p>;
+    }
+    const { rerender } = render(
+      <WidgetCard title="Content">
+        <Summary line="8 collections · 5 Singles" />
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-subtitle")).toHaveTextContent(
+      "8 collections · 5 Singles"
+    );
+    rerender(
+      <WidgetCard title="Content">
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.queryByTestId("widget-card-subtitle")
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the subtitle it is given over the line a body reports", () => {
+    function Summary() {
+      useCardSubtitle("8 collections");
+      return <p>rows</p>;
+    }
+    render(
+      <WidgetCard title="Posts" subtitle="Count">
+        <Summary />
+      </WidgetCard>
+    );
+    // 🔴 The widget's own name is what tells two cards about one subject apart.
+    expect(screen.getByTestId("widget-card-subtitle")).toHaveTextContent(
+      /^Count$/
+    );
+  });
+
   it("fits a long title to one line and keeps all of it on hover and for assistive technology", () => {
     const title =
       "Every post this team has written for the spring product launch";
@@ -233,7 +273,8 @@ describe("the header", () => {
       </WidgetCard>
     );
     const heading = screen.getByRole("heading", { name: title });
-    expect(heading).toHaveClass("truncate");
+    // Drawn on one line, shortened, beside room for a count the body may show after it.
+    expect(within(heading).getByText(title)).toHaveClass("truncate");
     expect(heading).toHaveAttribute("title", title);
   });
 
@@ -418,37 +459,64 @@ describe("an empty card's action in a short card", () => {
   });
 });
 
-describe("a card that hides when its data is empty", () => {
+describe("a card that hides while empty", () => {
   const empty: CardState = { kind: "empty", empty: { title: "Nothing" } };
 
-  it("marks itself for the grid to take out while its answer is empty", () => {
-    render(
-      <WidgetCard title="Needs attention" state={empty} hidesWhenEmpty>
-        <p>rows</p>
-      </WidgetCard>
-    );
-    expect(
-      screen.getByRole("region", { name: "Needs attention" })
-    ).toHaveAttribute("data-hidden-empty");
-  });
-
-  it("is never hidden while it is failed, not available or still loading", () => {
-    for (const state of [
-      { kind: "error", message: "Failed." },
-      { kind: "no-access" },
-      { kind: "loading" },
-    ] satisfies CardState[]) {
+  it("marks itself for the grid to take out when the layout read found it empty, from its first state", () => {
+    for (const state of [empty, { kind: "loading" }] satisfies CardState[]) {
       const { unmount } = render(
-        <WidgetCard title="Needs attention" state={state} hidesWhenEmpty>
+        <WidgetCard title="Needs attention" state={state} hiddenWhileEmpty>
           <p>rows</p>
         </WidgetCard>
       );
       expect(
         screen.getByRole("region", { name: "Needs attention" }),
         state.kind
+      ).toHaveAttribute("data-hidden-empty");
+      unmount();
+    }
+  });
+
+  it("of a widget the layout read cannot answer, is taken out while its own answer is empty, never while it is failed, not available or loading", () => {
+    const { unmount: drop } = render(
+      <WidgetCard title="Plugin list" state={empty} hidesWhenAnswerEmpty>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(screen.getByRole("region", { name: "Plugin list" })).toHaveAttribute(
+      "data-hidden-empty"
+    );
+    drop();
+    for (const state of [
+      { kind: "error", message: "Failed." },
+      { kind: "no-access" },
+      { kind: "loading" },
+    ] satisfies CardState[]) {
+      const { unmount } = render(
+        <WidgetCard title="Plugin list" state={state} hidesWhenAnswerEmpty>
+          <p>rows</p>
+        </WidgetCard>
+      );
+      expect(
+        screen.getByRole("region", { name: "Plugin list" }),
+        state.kind
       ).not.toHaveAttribute("data-hidden-empty");
       unmount();
     }
+  });
+
+  it("stays in place when its answer turns out empty after the first paint, saying so", () => {
+    render(
+      <WidgetCard title="Needs attention" state={empty}>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    // An answer that empties while the reader looks never takes the card off
+    // the page: that would move every card after it.
+    expect(
+      screen.getByRole("region", { name: "Needs attention" })
+    ).not.toHaveAttribute("data-hidden-empty");
+    expect(screen.getByText("Nothing")).toBeInTheDocument();
   });
 
   it("stays in reach in customise mode, marked as hidden while empty", () => {
@@ -456,7 +524,7 @@ describe("a card that hides when its data is empty", () => {
       <WidgetCard
         title="Needs attention"
         state={empty}
-        hidesWhenEmpty
+        hiddenWhileEmpty
         customizing
       >
         <p>rows</p>

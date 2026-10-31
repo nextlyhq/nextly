@@ -41,7 +41,7 @@ export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
  */
 const CORE_GROUPS = {
   [CORE_WIDGET_ID.getStarted]: "overview",
-  [CORE_WIDGET_ID.content]: "overview",
+  [CORE_WIDGET_ID.contentTable]: "overview",
   [CORE_WIDGET_ID.quickCreate]: "overview",
   [CORE_WIDGET_ID.team]: "team",
   [CORE_WIDGET_ID.needsAttention]: "overview",
@@ -53,6 +53,7 @@ const CORE_GROUPS = {
   [CORE_WIDGET_ID.note]: "overview",
   [CORE_WIDGET_ID.recentEntries]: "content",
   [CORE_WIDGET_ID.overTime]: "content",
+  [CORE_WIDGET_ID.systemHealth]: "overview",
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */
