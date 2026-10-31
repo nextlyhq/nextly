@@ -38,4 +38,4 @@ What an app loses, and what to use instead:
 - Removed from `nextly`: `getMediaVariant`, `getSmallestMediaVariant`, `GetMediaVariantOptions` and `MediaLike`. Removed from `nextly/storage`: `generateImageSizes`, `deleteImageSizes`, `ImageSizeConfig`, `GenerateImageSizesOptions`, `UploadFn`, and `ImageProcessor.resizeWithFocalPoint`. Removed from `nextly/schemas` (and the root): the `imageSizes` table.
 - Instead: give an item's `url` to `next/image`, which resizes it on request (a custom loader can send that to an image CDN); use `thumbnailUrl` for a small preview; and use `focalX` and `focalY` with `object-position` to keep the subject in frame.
 
-Nothing stored is removed by this release. Items uploaded before it keep their `sizes`, their size files and their square thumbnail, and the `image_sizes` table and its rows stay; none of it is read. Deleting such an item still removes its size files.
+Nothing stored is removed automatically by this release. Items uploaded before it keep their `sizes`, their size files and their square thumbnail, and the `image_sizes` table and its rows stay; none of it is read. Deleting such an item still removes its size files.
