@@ -1146,14 +1146,20 @@ function refuseExtraCards(
 /**
  * The cards of an unarranged write whose size the reader chose, refusing one whose chosen size
  * lies outside its widget's bounds: a size chosen outside customise mode is one the card menu
- * offered, inside them, and is judged in the write that stores it.
+ * offered, inside them, and is judged in the write that stores it. `stored` is the row the write
+ * replaces, whose chosen sizes stay chosen while the write leaves them as stored.
  */
 function chosenSizesWithinBounds(
   saved: readonly WidgetPlacement[],
   submitted: readonly WidgetPlacement[],
-  sizes: Readonly<Record<string, WidgetSizeFacts>>
+  sizes: Readonly<Record<string, WidgetSizeFacts>>,
+  stored: StoredLayout | undefined
 ): string[] {
-  const chosen = chosenSizeIds(defaultLayoutPlacements(allWidgets()), saved);
+  const chosen = chosenSizeIds(
+    defaultLayoutPlacements(allWidgets()),
+    saved,
+    stored
+  );
   const own = new Map(submitted.map(placement => [placement.id, placement]));
   for (const id of chosen) {
     const placement = own.get(id);
@@ -1317,7 +1323,12 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // row's sizes are all theirs.
   const sized = arranged
     ? []
-    : chosenSizesWithinBounds(saved, submitted, sizesOf(view.widgets));
+    : chosenSizesWithinBounds(
+        saved,
+        submitted,
+        sizesOf(view.widgets),
+        stored.layout
+      );
   const version = await service.saveLayout(
     SCOPE_KIND,
     view.caller.userId,
