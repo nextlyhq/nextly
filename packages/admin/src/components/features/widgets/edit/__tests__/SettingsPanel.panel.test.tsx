@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PanelKept } from "../panel-values";
 import {
+  discardOpenPanels,
   requestSettingsPanel,
   stagePendingPanels,
 } from "../settings-panel-registry";
@@ -451,7 +452,13 @@ describe("one settings panel at a time", () => {
       <>
         <button
           type="button"
-          onClick={() => requestSettingsPanel("second", () => setSecond(true))}
+          onClick={() =>
+            requestSettingsPanel(
+              "second",
+              () => setSecond(true),
+              () => setSecond(false)
+            )
+          }
         >
           Open the second card's settings
         </button>
@@ -512,6 +519,31 @@ describe("one settings panel at a time", () => {
       screen.queryByRole("dialog", { name: "First card settings" })
     ).toBeNull();
   });
+  it("closes a card whose panel is still loading for the one opened, so two never open", async () => {
+    // A panel's module is fetched on its first opening, and nothing of it is mounted until it
+    // arrives: the opening itself holds the card's place meanwhile.
+    const first = { open: vi.fn(), close: vi.fn() };
+    const next = { open: vi.fn(), close: vi.fn() };
+    requestSettingsPanel("loading-first", first.open, first.close);
+    expect(first.open).toHaveBeenCalledTimes(1);
+    requestSettingsPanel("loading-next", next.open, next.close);
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(next.open).toHaveBeenCalledTimes(1);
+    // A reservation is no panel to stage: it holds nothing yet.
+    let staged: Awaited<ReturnType<typeof stagePendingPanels>> | undefined;
+    await act(async () => {
+      staged = await stagePendingPanels();
+    });
+    expect(staged).toEqual([]);
+    // Cleared, so later tests start from no open panel.
+    requestSettingsPanel(
+      "loading-last",
+      () => undefined,
+      () => undefined
+    );
+    discardOpenPanels();
+  });
+
   it("asks about a panel holding only a filter row added and left blank, and opens no second panel", async () => {
     // The row writes nothing, so the stored draft is unchanged: the row alone is the change.
     render(<TwoPanels />);

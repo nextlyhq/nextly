@@ -287,8 +287,11 @@ function useCardControls(
     openSettings,
     // Where focus goes back to as the panel closes: the control the popover was opened from,
     // when the panel was reached through it, else the card's menu button, which opens the
-    // panel itself on a card with no popover.
-    panelReturnFocusTo: () => popover.returnFocusTo() ?? menus.button.current,
+    // panel itself on a card with no popover. Read as the panel closes, not as it opened: the
+    // panel outlives customise mode, whose controls are gone once it ends, so a control no
+    // longer on the page gives way to the menu the card draws now.
+    panelReturnFocusTo: () =>
+      onPage(popover.returnFocusTo()) ?? onPage(menus.button.current),
     customiseMenuRef: menus.customise,
     // The menu is the one control a card's header holds at rest: its Remove is the dismissal.
     header: restingMenuFor(props, widget, {
@@ -335,6 +338,11 @@ function settingsOpener(
   openPanel: () => void
 ): () => void {
   return openPopover ?? openPanel;
+}
+
+/** `element` while it is still on the page, else `null`: focus on a removed node is lost. */
+function onPage(element: HTMLElement | null): HTMLElement | null {
+  return element?.isConnected === true ? element : null;
 }
 
 /** Whether a card's settings cannot be saved at rest right now: a write is in flight, or none is possible. */
@@ -578,7 +586,11 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
         setOpenNow(false);
         return;
       }
-      requestSettingsPanel(placementId, () => setOpenNow(true));
+      requestSettingsPanel(
+        placementId,
+        () => setOpenNow(true),
+        () => setOpenNow(false)
+      );
     },
     [placementId]
   );
@@ -593,10 +605,14 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
     !settingsBlocked(props.settingsWrite);
   const openFromEmpty = offersFromEmpty
     ? () =>
-        requestSettingsPanel(placementId, () => {
-          setFocusFirstField(true);
-          setOpenNow(true);
-        })
+        requestSettingsPanel(
+          placementId,
+          () => {
+            setFocusFirstField(true);
+            setOpenNow(true);
+          },
+          () => setOpenNow(false)
+        )
     : undefined;
   return {
     settingsOpen,

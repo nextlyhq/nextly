@@ -898,6 +898,31 @@ describe("leaving with unsaved changes", () => {
     expect(writes()).toBe(0);
   });
 
+  it("hands focus to the card's menu at rest when a panel opened while customising closes after the mode ended", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    await user.type(within(panel).getByLabelText(/Heading/), "Mine");
+    // Saved, the panel's change with it: customise mode ends, and the controls the popover was
+    // opened from go with it, while the panel stays open.
+    await user.click(saveButton());
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.getByRole("dialog", { name: /settings$/ })).toBe(panel);
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Card menu for Notes" })
+      ).toHaveFocus()
+    );
+  });
+
   it("lets the reader leave without asking when nothing changed", async () => {
     renderDashboard();
     await beginEditing();

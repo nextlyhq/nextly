@@ -41,21 +41,58 @@ function panelsChanged(): void {
 }
 
 /**
+ * A card's place, held from the moment its panel is asked for until the panel mounts and
+ * registers itself (`useOnePanelOpen`), which replaces it. The panel's module is fetched on its
+ * first opening, and the dashboard stays usable meanwhile: without the place held, another card
+ * opened in that gap would find no panel open, and both would open once the module arrived.
+ * It holds nothing to lose, so another card's opening closes it.
+ */
+function reservation(close: () => void): OpenPanel {
+  const held: OpenPanel = {
+    holdsChanges: () => false,
+    close,
+    askToLeave: then => then(),
+    stage: () => Promise.resolve(undefined),
+    focusRefused: () => undefined,
+  };
+  reservations.add(held);
+  return held;
+}
+
+/** The places held for panels not mounted yet, told apart from the panels themselves. */
+const reservations = new WeakSet<OpenPanel>();
+
+/** Hold the card's place, unless its panel already has it, and open it. */
+function openHeld(placementId: string, open: () => void, close: () => void) {
+  if (!openPanels.has(placementId)) {
+    openPanels.set(placementId, reservation(close));
+  }
+  open();
+}
+
+/**
  * Open the panel of `placementId` through `open`, one panel at a time: every opener of a card's
- * settings panel asks through this, so no panel opens over another holding a change.
+ * settings panel asks through this, so no panel opens over another holding a change. `close`
+ * closes it again, should another card be opened before its panel has mounted.
  */
 export function requestSettingsPanel(
   placementId: string,
-  open: () => void
+  open: () => void,
+  close: () => void
 ): void {
   const others = [...openPanels].filter(([id]) => id !== placementId);
   const holding = others.find(([, panel]) => panel.holdsChanges());
   if (holding !== undefined) {
-    holding[1].askToLeave(open);
+    holding[1].askToLeave(() => openHeld(placementId, open, close));
     return;
   }
-  for (const [, panel] of others) panel.close();
-  open();
+  for (const [id, panel] of others) {
+    panel.close();
+    // A place held for a panel that never mounted is let go here; a mounted panel lets go of
+    // its own as it closes, and keeps it where it refuses to close mid-save.
+    if (reservations.has(panel)) openPanels.delete(id);
+  }
+  openHeld(placementId, open, close);
 }
 
 /** One open panel's change, staged by the dashboard's prompt to be saved with the rest. */
@@ -98,7 +135,11 @@ export function bringRefusedPanelForward(): void {
  * a panel's change as well as the draft's, and no Done is left to keep one after it.
  */
 export function discardOpenPanels(): void {
-  for (const panel of openPanels.values()) panel.close();
+  for (const [id, panel] of openPanels) {
+    panel.close();
+    // A place held for a panel still loading goes too; a mounted panel lets go as it closes.
+    if (reservations.has(panel)) openPanels.delete(id);
+  }
 }
 
 function subscribePanels(listener: () => void): () => void {
