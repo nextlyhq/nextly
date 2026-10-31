@@ -1285,6 +1285,9 @@ export function SingleForm({
     canEdit: mayEdit,
     writesRefused: removedFromCode,
     contributedActions: documentActions,
+    // The Single as the form holds it when a contribution is chosen, as the
+    // entry editor hands it.
+    currentValues: () => form.getValues(),
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
     onCancel: handleCancel,

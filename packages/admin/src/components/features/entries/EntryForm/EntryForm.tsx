@@ -958,6 +958,9 @@ export function EntryForm({
     canEdit: mayEdit,
     writesRefused: removedFromCode,
     contributedActions: documentActions,
+    // Read when a contribution is chosen: the page above holds only the
+    // saved entry, and an unsaved title names a scheduled release.
+    currentValues: () => form.getValues(),
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
