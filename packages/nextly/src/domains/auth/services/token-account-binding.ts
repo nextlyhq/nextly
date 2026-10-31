@@ -43,6 +43,22 @@ import { affectedRowCount } from "../../../shared/lib/affected-row-count";
  */
 export const AUTH_TOKEN_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * An expiry as the database keeps it: the whole second the instant falls in.
+ *
+ * An expiry computed as `now + lifetime` carries milliseconds, and a column
+ * that keeps whole seconds — MySQL's `DATETIME` — rounds rather than cuts,
+ * so the stored instant could sit up to half a second after the one the
+ * code computed, and a check comparing that stored value with a
+ * millisecond-resolution clock accepted a password-reset token briefly past
+ * its end. Bring the instant down to its own second before it is written or
+ * handed on: the stored value is then never later than the one computed,
+ * and a credential can only end early, by less than a second.
+ */
+export function wholeSecondExpiry(computed: Date): Date {
+  return new Date(Math.floor(computed.getTime() / 1000) * 1000);
+}
+
 /** The two kinds of token bound to an account. */
 export type AuthTokenKind = "password-reset" | "email-verification";
 
