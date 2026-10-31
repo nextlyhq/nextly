@@ -2194,6 +2194,7 @@ jobs:
       NEXTLY_E2E_SLOW_WIDGET: "1"
       NEXTLY_E2E_SHELL_HARNESS: "1"
       NEXTLY_E2E_CANVAS_HARNESS: "1"
+      NEXTLY_E2E_SITE_HARNESS: "1"
     timeout-minutes: 25
 
     steps:
