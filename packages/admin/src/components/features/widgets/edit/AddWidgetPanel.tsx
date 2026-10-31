@@ -239,29 +239,32 @@ function tileMeta(view: GalleryTileView): string {
   return parts.join(" · ");
 }
 
-/** One widget's tile: its preview, name, description and widths, all one button. */
-function Tile({
+/** The settings a tile's preview is drawn with: the collection a new card starts on, if it reads one. */
+function tileSettings(
+  tile: GalleryTile,
+  collection: string | undefined
+): Record<string, unknown> | undefined {
+  if (tile.collectionSetting === undefined || collection === undefined) {
+    return undefined;
+  }
+  return { [tile.collectionSetting]: collection };
+}
+
+/** What a tile shows: its preview, name, description, and its widths or that it is placed. */
+function TileBody({
   view,
   widget,
   collection,
-  atCapacity,
-  onChoose,
+  descriptionId,
 }: {
   view: GalleryTileView;
   widget: DashboardWidget | undefined;
-  /** The collection a new card starts on, which the preview is drawn with. */
   collection: string | undefined;
-  atCapacity: boolean;
-  onChoose: (view: GalleryTileView) => void;
+  descriptionId: string;
 }): JSX.Element {
-  const { tile, action } = view;
-  const onDashboard = action.kind === "on-dashboard";
-  const descriptionId = useId();
-  const settings =
-    tile.collectionSetting !== undefined && collection !== undefined
-      ? { [tile.collectionSetting]: collection }
-      : undefined;
-  const body = (
+  const { tile } = view;
+  const settings = tileSettings(tile, collection);
+  return (
     <>
       <WidgetTilePreview
         widget={widget}
@@ -280,7 +283,7 @@ function Tile({
         </span>
       ) : null}
       <span className="block text-xs text-muted-foreground">
-        {onDashboard ? (
+        {view.action.kind === "on-dashboard" ? (
           <span
             className="inline-flex items-center gap-1"
             data-testid={`add-panel-on-dashboard-${tile.id}`}
@@ -294,30 +297,63 @@ function Tile({
       </span>
     </>
   );
-  const frame =
-    "flex h-full w-full flex-col gap-2 rounded-lg border border-border bg-card p-2.5 text-left";
+}
+
+/** A tile's frame, whether it is a control or not. */
+const TILE_FRAME =
+  "flex h-full w-full flex-col gap-2 rounded-lg border border-border bg-card p-2.5 text-left";
+
+/** One widget's tile: its preview, name, description and widths, all one button. */
+function Tile({
+  view,
+  widget,
+  collection,
+  atCapacity,
+  onChoose,
+}: {
+  view: GalleryTileView;
+  widget: DashboardWidget | undefined;
+  /** The collection a new card starts on, which the preview is drawn with. */
+  collection: string | undefined;
+  atCapacity: boolean;
+  onChoose: (view: GalleryTileView) => void;
+}): JSX.Element {
+  const { tile, action } = view;
+  const descriptionId = useId();
+  const body = (
+    <TileBody
+      view={view}
+      widget={widget}
+      collection={collection}
+      descriptionId={descriptionId}
+    />
+  );
+  if (action.kind === "on-dashboard") {
+    // Not a control: a one-card widget already on the dashboard is not added again.
+    return (
+      <li className="min-w-0" data-testid={`add-panel-tile-${tile.id}`}>
+        <div className={cn(TILE_FRAME, "opacity-80")}>{body}</div>
+      </li>
+    );
+  }
+  const verb = action.kind === "add-another" ? "Add another" : "Add";
   return (
     <li className="min-w-0" data-testid={`add-panel-tile-${tile.id}`}>
-      {onDashboard ? (
-        // Not a control: a one-card widget already on the dashboard is not added again.
-        <div className={cn(frame, "opacity-80")}>{body}</div>
-      ) : (
-        <button
-          type="button"
-          disabled={atCapacity}
-          aria-label={`${action.kind === "add-another" ? "Add another" : "Add"} ${tile.name}`}
-          {...(tile.description ? { "aria-describedby": descriptionId } : {})}
-          data-gallery-tile={tile.id}
-          data-testid={`add-panel-add-${tile.id}`}
-          onClick={() => onChoose(view)}
-          className={cn(
-            frame,
-            "transition-colors hover:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-          )}
-        >
-          {body}
-        </button>
-      )}
+      <button
+        type="button"
+        disabled={atCapacity}
+        aria-label={`${verb} ${tile.name}`}
+        {...(tile.description ? { "aria-describedby": descriptionId } : {})}
+        data-gallery-tile={tile.id}
+        data-testid={`add-panel-add-${tile.id}`}
+        onClick={() => onChoose(view)}
+        className={cn(
+          TILE_FRAME,
+          "transition-colors hover:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        )}
+      >
+        {body}
+      </button>
     </li>
   );
 }
@@ -651,80 +687,81 @@ const NOTHING_SHOWN = {
   isFetching: false,
 } as const;
 
-/** The add step: the collection, the period and the width, with the card previewed. */
-function AddStepView({
-  step,
-  widget,
+/** What the line under the collection picker says. */
+function collectionHint(
+  collections: readonly GalleryCollection[],
+  mostEdited: string | undefined,
+  chosen: string
+): string {
+  if (collections.length === 0) {
+    return "There is no collection you can read yet.";
+  }
+  if (mostEdited === undefined) {
+    return "Starts on the first collection you can read.";
+  }
+  return chosen === mostEdited
+    ? "The collection you edit most."
+    : "Defaults to the collection you edit most.";
+}
+
+/** The add step's collection picker, with the line that says where it started. */
+function CollectionPicker({
+  value,
   collections,
   mostEdited,
-  atCapacity,
   onChange,
-  onBack,
-  onAdd,
+}: {
+  value: string;
+  collections: readonly GalleryCollection[];
+  mostEdited: string | undefined;
+  onChange: (collection: string) => void;
+}): JSX.Element {
+  const collectionId = useId();
+  const hintId = useId();
+  return (
+    <div className="space-y-1.5">
+      <label
+        htmlFor={collectionId}
+        className="text-xs font-medium text-muted-foreground"
+      >
+        Collection
+      </label>
+      <select
+        id={collectionId}
+        value={value}
+        aria-describedby={hintId}
+        onChange={event => onChange(event.target.value)}
+        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-testid="add-panel-collection"
+      >
+        <option value="">Choose a collection</option>
+        {collections.map(collection => (
+          <option key={collection.slug} value={collection.slug}>
+            {collection.label}
+          </option>
+        ))}
+      </select>
+      <p id={hintId} className="text-xs text-muted-foreground">
+        {collectionHint(collections, mostEdited, value)}
+      </p>
+    </div>
+  );
+}
+
+/** The add step's period, where the widget has one, and its widths, where it allows several. */
+function StepChoices({
+  step,
+  widget,
+  onChange,
 }: {
   step: AddStep;
   widget: DashboardWidget | undefined;
-  collections: readonly GalleryCollection[];
-  mostEdited: string | undefined;
-  atCapacity: boolean;
   onChange: (step: AddStep) => void;
-  onBack: () => void;
-  onAdd: () => void;
 }): JSX.Element {
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  const collectionId = useId();
-  const hintId = useId();
   const period = periodOf(widget);
   const widths = addWidths(step.tile.size);
-  // Into the step as it opens, so a reader hears where they are.
-  useEffect(() => {
-    headingRef.current?.focus();
-  }, [step.tile.id]);
-  const settings = stepSettings(step, widget);
-  const chosen = step.collection !== "";
   return (
-    <div className="space-y-4" data-testid="add-panel-step">
-      <h3
-        ref={headingRef}
-        tabIndex={-1}
-        className="text-sm font-semibold text-foreground focus-visible:outline-none"
-      >
-        Add “{step.tile.name}”
-      </h3>
-      <div className="space-y-1.5">
-        <label
-          htmlFor={collectionId}
-          className="text-xs font-medium text-muted-foreground"
-        >
-          Collection
-        </label>
-        <select
-          id={collectionId}
-          value={step.collection}
-          aria-describedby={hintId}
-          onChange={event =>
-            onChange({ ...step, collection: event.target.value })
-          }
-          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          data-testid="add-panel-collection"
-        >
-          <option value="">Choose a collection</option>
-          {collections.map(collection => (
-            <option key={collection.slug} value={collection.slug}>
-              {collection.label}
-            </option>
-          ))}
-        </select>
-        <p id={hintId} className="text-xs text-muted-foreground">
-          {collections.length === 0
-            ? "There is no collection you can read yet."
-            : mostEdited === undefined
-              ? "Starts on the first collection you can read."
-              : step.collection === mostEdited
-                ? "The collection you edit most."
-                : "Defaults to the collection you edit most."}
-        </p>
-      </div>
+    <>
       {period !== undefined && step.period !== undefined ? (
         <RadioChips
           legend="Period"
@@ -750,12 +787,58 @@ function AddStepView({
           glyphs
         />
       ) : null}
+    </>
+  );
+}
+
+/** The add step: the collection, the period and the width, with the card previewed. */
+function AddStepView({
+  step,
+  widget,
+  collections,
+  mostEdited,
+  atCapacity,
+  onChange,
+  onBack,
+  onAdd,
+}: {
+  step: AddStep;
+  widget: DashboardWidget | undefined;
+  collections: readonly GalleryCollection[];
+  mostEdited: string | undefined;
+  atCapacity: boolean;
+  onChange: (step: AddStep) => void;
+  onBack: () => void;
+  onAdd: () => void;
+}): JSX.Element {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  // Into the step as it opens, so a reader hears where they are.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [step.tile.id]);
+  const chosen = step.collection !== "";
+  return (
+    <div className="space-y-4" data-testid="add-panel-step">
+      <h3
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-sm font-semibold text-foreground focus-visible:outline-none"
+      >
+        Add “{step.tile.name}”
+      </h3>
+      <CollectionPicker
+        value={step.collection}
+        collections={collections}
+        mostEdited={mostEdited}
+        onChange={collection => onChange({ ...step, collection })}
+      />
+      <StepChoices step={step} widget={widget} onChange={onChange} />
       {widget !== undefined && chosen ? (
         <SettingsPreview
           widget={widget}
           placementId={`gallery-add:${step.tile.id}`}
           stored={undefined}
-          draft={settings ?? {}}
+          draft={stepSettings(step, widget) ?? {}}
           shown={NOTHING_SHOWN}
         />
       ) : null}
@@ -776,26 +859,25 @@ function AddStepView({
   );
 }
 
-export function AddWidgetPanel({
-  open,
-  onOpenChange,
-  gallery,
-  placements,
-  byId,
-  atCapacity,
-  onAdd,
-  onAddBack,
-  onClosed,
-}: AddWidgetPanelProps): JSX.Element {
-  const [query, setQuery] = useState("");
-  const [chip, setChip] = useState<GalleryChip>("all");
-  const [step, setStep] = useState<AddStep | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  // The tile an add step was opened from, where Back and an add return focus.
-  const openedFrom = useRef<string | null>(null);
+/** The sentence an add, or an add refused at the limit, is announced with. */
+function addedSentence(added: AddedCard | null, verb: string): string {
+  return added === null
+    ? `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones). Nothing was added.`
+    : `${verb} ${added.title}.`;
+}
 
-  const read = gallery.read;
+/**
+ * Everything the gallery lists, worked out from the read and the draft (`add-panel-model`): the
+ * tiles and removed cards, what the chip and the search keep, the suggestions the draft has room
+ * for, and the collection a new card starts on.
+ */
+function useGalleryModel(
+  read: GalleryRead | undefined,
+  placements: readonly WidgetPlacement[],
+  byId: ReadonlyMap<string, DashboardWidget>,
+  chip: GalleryChip,
+  query: string
+) {
   const tiles = useMemo(
     () => (read === undefined ? [] : galleryTiles(read, placements)),
     [read, placements]
@@ -818,6 +900,63 @@ export function AddWidgetPanel({
     [read, tiles, placements]
   );
   const starting = read === undefined ? undefined : startingCollection(read);
+  return { tiles, removed, collections, found, suggestions, starting };
+}
+
+/** The gallery's body: waiting for the read, nothing found, or what it lists (`children`). */
+function GalleryBody({
+  gallery,
+  found,
+  query,
+  chip,
+  onClear,
+  onShowAll,
+  children,
+}: {
+  gallery: GalleryAnswer;
+  found: GallerySearch;
+  query: string;
+  chip: GalleryChip;
+  onClear: () => void;
+  onShowAll: () => void;
+  children: ReactNode;
+}): JSX.Element {
+  if (gallery.read === undefined) return <GalleryPending gallery={gallery} />;
+  if (foundCount(found) === 0) {
+    return (
+      <NothingFound
+        query={query}
+        chip={chip}
+        onClear={onClear}
+        onShowAll={onShowAll}
+      />
+    );
+  }
+  return <>{children}</>;
+}
+
+export function AddWidgetPanel({
+  open,
+  onOpenChange,
+  gallery,
+  placements,
+  byId,
+  atCapacity,
+  onAdd,
+  onAddBack,
+  onClosed,
+}: AddWidgetPanelProps): JSX.Element {
+  const [query, setQuery] = useState("");
+  const [chip, setChip] = useState<GalleryChip>("all");
+  const [step, setStep] = useState<AddStep | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // The tile an add step was opened from, where Back and an add return focus.
+  const openedFrom = useRef<string | null>(null);
+
+  const read = gallery.read;
+  const { tiles, removed, collections, found, suggestions, starting } =
+    useGalleryModel(read, placements, byId, chip, query);
   const voice = usePanelVoice(foundCount(found), query, open);
   const searching = query.trim() !== "";
 
@@ -861,11 +1000,7 @@ export function AddWidgetPanel({
     }, 0);
 
   const said = (added: AddedCard | null, verb: string) => {
-    voice.say(
-      added === null
-        ? `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones). Nothing was added.`
-        : `${verb} ${added.title}.`
-    );
+    voice.say(addedSentence(added, verb));
   };
 
   const openStep = (tile: GalleryTile, collection?: string) => {
@@ -999,30 +1134,30 @@ export function AddWidgetPanel({
               onBack={back}
               onAdd={addFromStep}
             />
-          ) : read === undefined ? (
-            <GalleryPending gallery={gallery} />
-          ) : foundCount(found) === 0 ? (
-            <NothingFound
+          ) : (
+            <GalleryBody
+              gallery={gallery}
+              found={found}
               query={query}
               chip={chip}
               onClear={clear}
               onShowAll={() => setChip("all")}
-            />
-          ) : (
-            <GalleryLists
-              found={found}
-              suggestions={!searching && chip === "all" ? suggestions : []}
-              atCapacity={atCapacity}
-              tileFor={tileFor}
-              onAddBack={card => {
-                said(onAddBack(card.placementId), "Added back");
-                keepFocusInPanel();
-              }}
-              onSuggestion={suggestion =>
-                openStep(suggestion.view.tile, suggestion.collection)
-              }
-              onPair={pair => addPair(pair.view.tile, pair.collection.slug)}
-            />
+            >
+              <GalleryLists
+                found={found}
+                suggestions={!searching && chip === "all" ? suggestions : []}
+                atCapacity={atCapacity}
+                tileFor={tileFor}
+                onAddBack={card => {
+                  said(onAddBack(card.placementId), "Added back");
+                  keepFocusInPanel();
+                }}
+                onSuggestion={suggestion =>
+                  openStep(suggestion.view.tile, suggestion.collection)
+                }
+                onPair={pair => addPair(pair.view.tile, pair.collection.slug)}
+              />
+            </GalleryBody>
           )}
         </div>
 
