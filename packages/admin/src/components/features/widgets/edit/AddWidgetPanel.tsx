@@ -120,6 +120,16 @@ export interface AddWidgetPanelProps {
   onClosed: () => void;
 }
 
+/**
+ * One sentence the panel says, and which saying of it this is. The live region draws each saying
+ * as a node of its own (keyed by `id`), so a sentence equal to the last one, "1 widget." for two
+ * chips in turn or "Added Note." twice, still changes the region and is announced again.
+ */
+interface Utterance {
+  text: string;
+  id: number;
+}
+
 /** How long typing has to pause before the count is announced. */
 const COUNT_ANNOUNCE_DELAY_MS = 500;
 
@@ -155,13 +165,18 @@ function usePanelVoice(
   ready: boolean,
   inStep: boolean
 ) {
-  const [spoken, setSpoken] = useState("");
+  const [spoken, setSpoken] = useState<Utterance>({ text: "", id: 0 });
+  // Each sentence a new saying, even one equal to the last.
+  const utter = useCallback(
+    (text: string) => setSpoken(last => ({ text, id: last.id + 1 })),
+    []
+  );
   // Cleared as the panel opens or closes, during render (React's pattern for state that follows
   // a prop), so no frame of a new visit draws the old sentence.
   const [visit, setVisit] = useState(open);
   if (visit !== open) {
     setVisit(open);
-    setSpoken("");
+    setSpoken(last => ({ text: "", id: last.id + 1 }));
   }
   const count = galleryCount(found, query);
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -174,7 +189,7 @@ function usePanelVoice(
   const said = useRef<string | null>(null);
   // Read when the announcement fires, so a later count is said without the count itself being
   // what schedules one.
-  const sayCount = useEffectEvent(() => setSpoken(`${count}.`));
+  const sayCount = useEffectEvent(() => utter(`${count}.`));
   // Announced once typing pauses, so each keystroke does not interrupt the last. Never while
   // closed: closing clears a count still waiting, and none starts until the panel opens again.
   useEffect(() => {
@@ -196,10 +211,13 @@ function usePanelVoice(
   }, [narrowing, open, ready, inStep]);
   // A sentence said on purpose (an add, a cleared search) cancels a count still waiting, which
   // would otherwise land on top of it.
-  const say = useCallback((sentence: string) => {
-    clearTimeout(pending.current);
-    setSpoken(sentence);
-  }, []);
+  const say = useCallback(
+    (sentence: string) => {
+      clearTimeout(pending.current);
+      utter(sentence);
+    },
+    [utter]
+  );
   return { count, spoken, say };
 }
 
@@ -1071,7 +1089,7 @@ function PanelSheet({
   contentRef: RefObject<HTMLDivElement | null>;
   searchRef: RefObject<HTMLInputElement | null>;
   header: ReactNode;
-  spoken: string;
+  spoken: Utterance;
   children: ReactNode;
 }): JSX.Element {
   return (
@@ -1099,7 +1117,7 @@ function PanelSheet({
           className="sr-only"
           data-testid="add-panel-live"
         >
-          {spoken}
+          <span key={spoken.id}>{spoken.text}</span>
         </div>
       </SheetContent>
     </Sheet>

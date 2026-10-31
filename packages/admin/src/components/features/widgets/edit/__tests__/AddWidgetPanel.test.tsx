@@ -431,6 +431,22 @@ describe("what the gallery says for a chip", () => {
     expect(live()).toHaveTextContent("4 widgets.");
   });
 
+  it("says the count again for each chip, even when two chips hold as many widgets", () => {
+    vi.useFakeTimers();
+    renderPanel();
+    // The sentence as a node of its own: the region's text replaced, not left as it was.
+    const saying = () => live().firstElementChild;
+    fireEvent.click(screen.getByRole("button", { name: "Trends" }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(live().textContent).toBe("1 widget.");
+    const trends = saying();
+    fireEvent.click(screen.getByRole("button", { name: "Content" }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(live().textContent).toBe("1 widget.");
+    expect(saying()).not.toBe(trends);
+    expect(saying()).toHaveTextContent("1 widget.");
+  });
+
   it("says the chip's count after Clear, not every widget's", async () => {
     const user = userEvent.setup();
     renderPanel();

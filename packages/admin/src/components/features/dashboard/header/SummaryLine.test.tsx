@@ -17,6 +17,7 @@ const needing = (count: number): DashboardSummary => ({
 });
 
 describe("the summary line's live region", () => {
+  // Exact text after each change, so a line that kept the last one's words beside the new ones fails.
   it("is polite and read whole, and holds the new line once the count changes", () => {
     const view = render(
       <SummaryLine summary={needing(2)} cards={{}} now={now} />
@@ -24,17 +25,17 @@ describe("the summary line's live region", () => {
     const line = screen.getByTestId("dashboard-summary");
     expect(line).toHaveAttribute("aria-live", "polite");
     expect(line).toHaveAttribute("aria-atomic", "true");
-    expect(line).toHaveTextContent("2 things need you");
+    expect(line.textContent).toBe("2 things need you");
 
     view.rerender(<SummaryLine summary={needing(1)} cards={{}} now={now} />);
     // The same region, so the change is announced rather than a new region appearing silent.
     expect(screen.getByTestId("dashboard-summary")).toBe(line);
-    expect(line).toHaveTextContent("1 thing needs you");
+    expect(line.textContent).toBe("1 thing needs you");
 
     view.rerender(
       <SummaryLine summary={{ parts: [], failed: 0 }} cards={{}} now={now} />
     );
     expect(screen.getByTestId("dashboard-summary")).toBe(line);
-    expect(line).toHaveTextContent("You're all caught up");
+    expect(line.textContent).toBe("You're all caught up");
   });
 });

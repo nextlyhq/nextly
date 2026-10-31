@@ -44,6 +44,10 @@ describe("Refresh and focus", () => {
     refresh.focus();
     fireEvent.click(refresh);
     expect(onRefresh).toHaveBeenCalledOnce();
+    // While the answers are on their way the line stays, and so does focus on Refresh: it moves
+    // only once the button it was on is gone.
+    expect(screen.getByTestId("dashboard-freshness")).toBeInTheDocument();
+    expect(refresh).toHaveFocus();
 
     view.rerender(<Header oldestAnswerAt={FRESH} onRefresh={onRefresh} />);
     expect(screen.queryByTestId("dashboard-freshness")).toBeNull();
