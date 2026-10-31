@@ -13,12 +13,15 @@ import { sharedEntries } from "./bounded-entries";
 import {
   expireTags,
   isEntryExpired,
+  localNow,
   refreshTagExpiries,
 } from "./tag-expiry-view";
 
 interface StoredEntry {
   value: unknown;
   lastModified: number;
+  /** When the fill that made it began, on `localNow`'s clock: what it is judged by. */
+  begunAt: number;
   tags: readonly string[];
   // The lifetime Next.js derives a route's revalidation from, handed back as
   // given: an entry without it would revalidate after a second.
@@ -74,6 +77,51 @@ function sizeOf(value: unknown, seen = new WeakSet<object>()): number {
 // Looked up on each use, so the store a test resets is the one read.
 const entries = () => sharedEntries<StoredEntry>("incremental");
 
+/**
+ * How long after a read of its key a `set` is taken as that read's fill. A
+ * fill longer than this is stamped when it is stored, as one with no read.
+ */
+const FILL_WINDOW_MS = 60_000;
+
+/** At most this many reads are remembered before the old ones are dropped. */
+const MAX_REMEMBERED_READS = 10_000;
+
+const globalForReads = globalThis as unknown as {
+  __nextly_cache_reads?: Map<string, number>;
+};
+
+/**
+ * When each key was last read, by any handler Next.js makes. Next.js fills a
+ * key after a read misses it or finds it stale, so the read marks when the
+ * fill began: an expiry recorded while it ran then judges what it stores,
+ * instead of the fill passing for fresh because it finished later.
+ */
+function reads(): Map<string, number> {
+  globalForReads.__nextly_cache_reads ??= new Map();
+  return globalForReads.__nextly_cache_reads;
+}
+
+function rememberRead(key: string): void {
+  const remembered = reads();
+  const now = localNow();
+  if (remembered.size >= MAX_REMEMBERED_READS) {
+    for (const [old, at] of remembered) {
+      if (now - at > FILL_WINDOW_MS) remembered.delete(old);
+    }
+  }
+  remembered.delete(key);
+  remembered.set(key, now);
+}
+
+/** When the fill being stored for `key` began: its read, or now if none. */
+function fillBegan(key: string): number {
+  const remembered = reads();
+  const readAt = remembered.get(key);
+  remembered.delete(key);
+  const now = localNow();
+  return readAt !== undefined && now - readAt <= FILL_WINDOW_MS ? readAt : now;
+}
+
 export default class NextlyIncrementalCacheHandler {
   async get(
     key: string,
@@ -83,6 +131,7 @@ export default class NextlyIncrementalCacheHandler {
     value: unknown;
     cacheControl?: unknown;
   } | null> {
+    rememberRead(key);
     const stored = entries().get(key);
     if (stored === undefined) return null;
     const tags = [
@@ -94,7 +143,7 @@ export default class NextlyIncrementalCacheHandler {
     // Only the tags this entry carries are asked about, so a hit costs at
     // most one ledger read, and none while their answers are fresh.
     await refreshTagExpiries(tags);
-    if (isEntryExpired(tags, stored.lastModified)) {
+    if (isEntryExpired(tags, stored.begunAt)) {
       entries().deleteIf(key, stored);
       return null;
     }
@@ -117,6 +166,7 @@ export default class NextlyIncrementalCacheHandler {
         {
           value: data,
           lastModified: Date.now(),
+          begunAt: fillBegan(key),
           tags: ctx?.tags ?? [],
           cacheControl: ctx?.cacheControl,
         },
