@@ -60,8 +60,8 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
   return { ...actual, callerHoldsPermission, callerIsSuperAdmin };
 });
 
-// Whether the setup card shows for this reader (not dismissed, not retired): the case states it,
-// since the card's own rule has its own tests.
+// The setup card's own rule, watched: the layout read answers from the verdict it already judged
+// (`defaultCardsNotShown`), and never asks this a second time.
 const { setupShownTo } = vi.hoisted(() => ({ setupShownTo: vi.fn() }));
 vi.mock("../domains/widgets/setup-card", async importOriginal => {
   const actual =
@@ -2627,19 +2627,36 @@ describe("the setup card in the layout read", () => {
   });
 
   it("is never offered once dismissed or retired, where it would draw nothing", async () => {
-    // The must-differ half of the case above: the same arrangement, the card not shown.
+    // The must-differ half of the case above: the same arrangement, the card's own rule saying no.
     stored = arrangedWithout();
-    setupShownTo.mockResolvedValue(false);
+    defaultCardsNotShown.mockResolvedValue(new Set([SETUP]));
     const body = await bodyOf(await getWidgetLayout(getReq()));
     expect(body.available).not.toContain(SETUP);
   });
 
-  it("is never offered to a reader who is not a super-admin, and their preferences are not read", async () => {
+  it("answers its offer and its place in the default from one verdict, read once", async () => {
+    for (const notShown of [new Set<string>(), new Set([SETUP])]) {
+      stored = arrangedWithout();
+      defaultCardsNotShown.mockClear();
+      defaultCardsNotShown.mockResolvedValue(notShown);
+      const body = await bodyOf(await getWidgetLayout(getReq()));
+      // The add panel offers it exactly when the default handed with it holds it.
+      const inDefault = (body.defaultPlacements ?? []).some(
+        p => p.widgetId === SETUP
+      );
+      expect(inDefault).toBe(notShown.size === 0);
+      expect(body.available?.includes(SETUP)).toBe(inDefault);
+      // Judged once for the response, and the reader's setup never read a second time.
+      expect(defaultCardsNotShown).toHaveBeenCalledTimes(1);
+    }
+    expect(setupShownTo).not.toHaveBeenCalled();
+  });
+
+  it("is never offered to a reader who is not a super-admin", async () => {
     stored = arrangedWithout();
     callerIsSuperAdmin.mockResolvedValue(false);
     const body = await bodyOf(await getWidgetLayout(getReq()));
     expect(body.available).not.toContain(SETUP);
-    expect(setupShownTo).not.toHaveBeenCalled();
   });
 
   it("is not offered while placed, removed or not: Removed puts a removed one back", async () => {

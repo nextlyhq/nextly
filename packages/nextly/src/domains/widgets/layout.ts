@@ -406,7 +406,7 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
   // writes nothing; a write merges over these placements, so the reader's
   // next save of any kind stores the row without them. Before the repeat
   // check below, so a dropped card claims no placement id.
-  const placements = underCurrentIds(
+  const { placements, renamedIds } = underCurrentIds(
     readPlacements(decoded.placements).filter(
       placement => !inRetiredWidgetNamespace(placement.widgetId)
     )
@@ -422,7 +422,7 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
     // `=== true` rather than truthiness: anything else this core did not
     // write is the ordinary, arranged row.
     ...(decoded.unarranged === true ? { unarranged: true as const } : {}),
-    ...sizedOf(decoded),
+    ...sizedOf(decoded, renamedIds),
     ...(rekeyed.length === 0 ? {} : { duplicatePlacementIds: rekeyed }),
   };
 }
@@ -436,23 +436,34 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
  * over these placements, so the reader's next save stores the current id. Before the repeat check,
  * so a renamed card's id is resolved like any other.
  */
-function underCurrentIds(placements: WidgetPlacement[]): WidgetPlacement[] {
+function underCurrentIds(placements: WidgetPlacement[]): {
+  placements: WidgetPlacement[];
+  /**
+   * The card ids the rename changed, each to its new id: only cards it renamed, never a dropped
+   * one, so the sizes a reader chose follow exactly those (`sizedOf`).
+   */
+  renamedIds: ReadonlyMap<string, string>;
+} {
   const held = new Set(placements.map(placement => placement.widgetId));
-  return placements.flatMap(placement => {
-    const current = FORMER_CORE_WIDGET_IDS.get(placement.widgetId);
-    if (current === undefined) return [placement];
-    if (held.has(current)) return [];
-    held.add(current);
+  const renamedIds = new Map<string, string>();
+  const current = placements.flatMap(placement => {
+    const widgetId = FORMER_CORE_WIDGET_IDS.get(placement.widgetId);
+    if (widgetId === undefined) return [placement];
+    if (held.has(widgetId)) return [];
+    held.add(widgetId);
+    const id = placement.id === placement.widgetId ? widgetId : placement.id;
+    if (id !== placement.id) renamedIds.set(placement.id, id);
     return [
       {
-        id: placement.id === placement.widgetId ? current : placement.id,
-        widgetId: current,
+        id,
+        widgetId,
         w: placement.w,
         h: placement.h,
         removed: placement.removed,
       },
     ];
   });
+  return { placements: current, renamedIds };
 }
 
 /**
@@ -460,14 +471,16 @@ function underCurrentIds(placements: WidgetPlacement[]): WidgetPlacement[] {
  * as a list of ids. Anything else this core did not write is a reader who chose no size.
  */
 function sizedOf(
-  decoded: Record<string, unknown>
+  decoded: Record<string, unknown>,
+  renamedIds: ReadonlyMap<string, string>
 ): Pick<StoredLayout, "sized"> {
   const { sized } = decoded;
   if (decoded.unarranged !== true || !Array.isArray(sized)) return {};
-  // A card id that was a renamed widget's own follows it, as its placement's does (`underCurrentIds`).
+  // A size chosen for a card the rename gave a new id follows that card (`underCurrentIds`); any
+  // other id, a card of the current widget's among them, keeps its own.
   const ids = sized
     .filter((id): id is string => typeof id === "string")
-    .map(id => FORMER_CORE_WIDGET_IDS.get(id) ?? id);
+    .map(id => renamedIds.get(id) ?? id);
   return ids.length === 0 ? {} : { sized: ids };
 }
 

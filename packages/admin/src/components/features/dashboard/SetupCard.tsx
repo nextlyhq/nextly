@@ -150,10 +150,10 @@ type Retirement = "unasked" | "asked" | "recorded" | "refused";
  *
  * Asked once per answer the card is drawn from (`answer`): a write that failed is asked again
  * when the card's data is next read, on the next load or refocus, never in a loop on its own
- * failure. One the host refused, as it finds a step open (409), is not asked again while the card
- * is drawn from the same steps: the card's data is read once more (`refresh`) to draw the steps as
- * the host now has them, and once those have a step open, the next time they are all done asks
- * again.
+ * failure. One the host refused, as it finds a step open (409), is never asked again over the same
+ * answer: the card's data is read once more (`refresh`) to draw the steps as the host now has them,
+ * and any new answer read after the refusal is asked about once more when every step it draws is
+ * done.
  */
 function useRetirement(
   due: boolean,
@@ -167,24 +167,31 @@ function useRetirement(
   // The latest refresh, read when an answer lands, so a new one each draw never asks again.
   const latestRefresh = useRef(refresh);
   latestRefresh.current = refresh;
-  // Refused, and the steps read again have one open: asked afresh once that step is done, so a
-  // card that finishes while it is drawn is still retired, never left all done for good. Its own
-  // effect, so a failed write, which also leaves the guard unasked, is not asked again at once.
+  // The answer a refusal was about: never asked again over that one.
+  const refusedAnswer = useRef<SetupCardData | undefined>(undefined);
+  // Refused, and a new answer has been read since: it may be all done, finished on another device
+  // before the read, or have a step open that is done later. Either way it earns one more ask, so
+  // a card that finishes while it is drawn is still retired, never left all done for good. A
+  // refetch that answers the same leaves the same object (the query keeps it), so this never
+  // loops. Its own effect, so a failed write, which also leaves the guard unasked, is not asked
+  // again at once.
   useEffect(() => {
-    if (due || retirement !== "refused") return;
+    if (retirement !== "refused" || answer === refusedAnswer.current) return;
     asked.current = false;
     setRetirement("unasked");
-  }, [due, retirement]);
+  }, [answer, retirement]);
   useEffect(() => {
     if (!due || asked.current) return;
     asked.current = true;
     setRetirement("asked");
+    const askedAbout = answer;
     retire(
       { sampleRefused },
       {
         onDone: () => setRetirement("recorded"),
         onFailed: error => {
           if (isApiError(error) && error.status === 409) {
+            refusedAnswer.current = askedAbout;
             setRetirement("refused");
             latestRefresh.current();
             return;
@@ -828,28 +835,46 @@ function ExpandedSetup({
 }
 
 /**
- * Collapsed as the server says, then as the reader sets it here while the write lands. Once the
- * server holds what the reader set, its answer is drawn again, so a later change made elsewhere
- * (another device, read on refocus) wins over this one. A write that fails puts back what was
- * drawn before it, which is what the server still holds, and the header says the change was not
- * saved.
+ * Collapsed as the server says, then as the reader sets it here while the write lands and the
+ * card's data is read again. Once the write has landed and that read has answered (`refreshing`
+ * went on and off again), or an answer after it already holds what the reader set, the server's
+ * answer is drawn again, whatever it says: a change another device made meanwhile wins over this
+ * one, never masked by it. A write that fails puts back what was drawn before it, which is what
+ * the server still holds, and the header says the change was not saved.
  */
 function useCollapsedHere(
   stored: boolean,
+  refreshing: boolean,
   write: SetupStateWrite
 ): { collapsed: boolean; toggle: () => void } {
   const [here, setHere] = useState<boolean | undefined>();
-  // The server confirmed the reader's choice: drop the override, so its next answer is drawn.
+  // The reader's write has landed, and the card's data is being asked for again.
+  const [landed, setLanded] = useState(false);
+  // Whether that read has started since the write landed, so its end is the fresh answer.
+  const readStarted = useRef(false);
   useEffect(() => {
-    if (here !== undefined && here === stored) setHere(undefined);
-  }, [here, stored]);
+    if (!landed) return;
+    if (refreshing) {
+      readStarted.current = true;
+      return;
+    }
+    if (!readStarted.current && here !== stored) return;
+    readStarted.current = false;
+    setLanded(false);
+    setHere(undefined);
+  }, [landed, refreshing, here, stored]);
   const collapsed = here ?? stored;
   return {
     collapsed,
     toggle: () => {
       const before = here;
+      readStarted.current = false;
+      setLanded(false);
       setHere(!collapsed);
-      write.setCollapsed(!collapsed, () => setHere(before));
+      write.setCollapsed(!collapsed, {
+        onDone: () => setLanded(true),
+        onFailed: () => setHere(before),
+      });
     },
   };
 }
@@ -911,12 +936,17 @@ function NotKnown({ retry }: { retry: () => void }) {
 
 export const SetupCard: React.FC<DeclaredComponentProps> = ({
   data,
+  refreshing,
   retry,
 }) => {
   const card = data as SetupCardData;
   const write = useSetupState(retry);
   const { status: seed, startSeed, skip } = useSeedStatus();
-  const { collapsed, toggle } = useCollapsedHere(card.collapsed, write);
+  const { collapsed, toggle } = useCollapsedHere(
+    card.collapsed,
+    refreshing,
+    write
+  );
   const [singlesOpen, setSinglesOpen] = useState(false);
   const sample = useSampleAnsweredHere(retry);
   const singlesListId = useId();

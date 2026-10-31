@@ -651,6 +651,34 @@ describe("a card of a widget core renamed", () => {
     );
     expect(row?.sized).toEqual(["core/setup"]);
   });
+
+  it("moves a chosen size only for the card it renamed, never onto a setup card the row holds", () => {
+    const setup: WidgetPlacement = {
+      id: "core/setup",
+      widgetId: "core/setup",
+      w: 12,
+      h: 2,
+      removed: false,
+    };
+    // The former card was resized and is dropped; the setup card kept was not resized.
+    const both = readStoredLayout(
+      serializeLayout([getStarted(), setup], false, ["core/get-started"])
+    );
+    expect(both?.placements).toEqual([setup]);
+    expect(both?.sized ?? []).not.toContain("core/setup");
+    // A card that only bears the former id as its own opaque id keeps its marker to itself.
+    const other: WidgetPlacement = {
+      id: "core/get-started",
+      widgetId: "core/a",
+      w: 6,
+      h: 3,
+      removed: false,
+    };
+    const unrelated = readStoredLayout(
+      serializeLayout([other], false, ["core/get-started"])
+    );
+    expect(unrelated?.sized).toEqual(["core/get-started"]);
+  });
 });
 
 describe("partitioning by what a reader may see", () => {

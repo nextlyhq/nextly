@@ -98,7 +98,9 @@ const retry = vi.fn();
 function tree(
   data: SetupCardData,
   grow?: (px: number | undefined) => void,
-  collapse?: CardCollapse
+  collapse?: CardCollapse,
+  /** A newer answer is on its way, as the frame says while the card's data is read again. */
+  refreshing = false
 ) {
   const body = (
     <SetupCard
@@ -107,7 +109,7 @@ function tree(
       settings={{}}
       size={{ w: 12, h: 2, tier: "large" }}
       data={data}
-      refreshing={false}
+      refreshing={refreshing}
       retry={retry}
     />
   );
@@ -634,10 +636,51 @@ describe("the setup card", () => {
     expect(
       screen.getByRole("list", { name: "Setup steps" })
     ).toBeInTheDocument();
-    // A refusal is not asked again, whatever is read next.
-    rerender(tree({ ...data }));
+    // A refusal is never asked again over the same answer, however often it is drawn.
+    rerender(tree(data));
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(put).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks once more after a refusal when a new answer is all done, finished elsewhere before the read", async () => {
+    put.mockRejectedValueOnce(
+      Object.assign(new Error("Setup is not all set: a step is still open."), {
+        status: 409,
+        code: "CONFLICT",
+      })
+    );
+    seed.status = { kind: "hidden" };
+    const asked: SetupStep[] = [
+      { kind: "sample", status: "open" },
+      { kind: "invite", status: "skipped" },
+    ];
+    const data = dataOf({
+      setup: { known: true, steps: asked, done: 1, total: 2 },
+    });
+    const { rerender } = draw(data);
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(put).toHaveBeenCalledTimes(1);
+    // The read the refusal asked for answers all done again: Invite was finished on another
+    // device meanwhile, so the card never draws a step open in between.
+    rerender(
+      tree(
+        dataOf({
+          setup: {
+            known: true,
+            steps: [
+              { kind: "sample", status: "open" },
+              { kind: "invite", status: "done" },
+            ],
+            done: 1,
+            total: 2,
+          },
+        })
+      )
+    );
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(put).toHaveBeenLastCalledWith("/dashboard/setup", {
+      retire: { sampleRefused: true },
+    });
   });
 
   it("asks again after a refusal once the steps read again had one open and it is then done", async () => {
@@ -753,6 +796,23 @@ describe("the setup card", () => {
         collapsed: false,
       })
     );
+  });
+
+  it("draws the server's answer once the collapse has landed and been read again, even when another device changed it in between", async () => {
+    const { rerender } = draw(dataOf());
+    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/dashboard/setup", { collapsed: true })
+    );
+    // Landed: the card's data is asked for again, and the read is on its way.
+    await waitFor(() => expect(retry).toHaveBeenCalled());
+    rerender(tree(dataOf(), undefined, undefined, true));
+    expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
+    // The read answers expanded: another device expanded it after this write landed.
+    rerender(tree(dataOf({ collapsed: false }), undefined, undefined, false));
+    expect(
+      screen.getByRole("list", { name: "Setup steps" })
+    ).toBeInTheDocument();
   });
 
   it("draws the server's answer again once it holds the reader's collapse, so a later change from elsewhere wins", async () => {
