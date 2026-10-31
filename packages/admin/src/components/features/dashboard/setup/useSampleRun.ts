@@ -40,7 +40,11 @@ import { useEffect, useRef } from "react";
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
-import { seedApi, type SeedProbeResult } from "@admin/services/seedApi";
+import {
+  seedApi,
+  type SampleStartAnswer,
+  type SeedProbeResult,
+} from "@admin/services/seedApi";
 
 import { stepPresentation } from "./step-presentation";
 
@@ -260,6 +264,42 @@ const PANEL_VIEWS: ReadonlySet<SampleView["kind"]> = new Set([
   "loaded",
 ]);
 
+/**
+ * This tab's state after a start's answer. Every answer but a load's success asks for the card's
+ * data again; a success reads nothing yet, as the outcome stays until the person continues, and a
+ * read now could find setup all set and retire the card under it (Continue reads it again).
+ */
+function localAfter(answer: SampleStartAnswer): SampleCache {
+  switch (answer.outcome) {
+    case "loaded":
+      return { phase: "loaded" };
+    case "unfinished":
+      return {
+        phase: "unfinished",
+        startedAt: answer.startedAt,
+        refresh: true,
+      };
+    case "unrecorded":
+      return {
+        phase: "unrecorded",
+        run: answer.run,
+        startedAt: answer.startedAt,
+        refresh: true,
+      };
+    case "failed":
+      return {
+        phase: "failed",
+        failure: answer.failure,
+        ...(answer.startedAt === undefined
+          ? {}
+          : { startedAt: answer.startedAt }),
+        refresh: true,
+      };
+    case "refused":
+      return { phase: "refused", message: answer.message, refresh: true };
+  }
+}
+
 /** Each client's latest start, so an answer to an older one is set aside. */
 const latestStart = new WeakMap<QueryClient, number>();
 
@@ -289,45 +329,7 @@ async function startLoad(client: QueryClient, confirm: boolean): Promise<void> {
   const answer = await seedApi.start(confirm);
   // An answer to a start that a newer one has replaced never overwrites the newer one's.
   if (asked !== latestStart.get(client)) return;
-  switch (answer.outcome) {
-    case "unfinished":
-      writeLocal(client, {
-        phase: "unfinished",
-        startedAt: answer.startedAt,
-        refresh: true,
-      });
-      return;
-    case "loaded":
-      // Nothing is read again yet: the outcome stays until the person continues, and a read now
-      // could find setup all set and retire the card under it. Continue reads the layout again.
-      writeLocal(client, { phase: "loaded" });
-      return;
-    case "unrecorded":
-      writeLocal(client, {
-        phase: "unrecorded",
-        run: answer.run,
-        startedAt: answer.startedAt,
-        refresh: true,
-      });
-      return;
-    case "failed":
-      writeLocal(client, {
-        phase: "failed",
-        failure: answer.failure,
-        ...(answer.startedAt === undefined
-          ? {}
-          : { startedAt: answer.startedAt }),
-        refresh: true,
-      });
-      return;
-    case "refused":
-      writeLocal(client, {
-        phase: "refused",
-        message: answer.message,
-        refresh: true,
-      });
-      return;
-  }
+  writeLocal(client, localAfter(answer));
 }
 
 /** A refusal's or failure's words, as the server said them. */

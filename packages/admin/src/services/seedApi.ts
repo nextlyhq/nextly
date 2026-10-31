@@ -40,7 +40,7 @@ const DEFINITIVE_NO = new Set([401, 403, 404]);
  * load that could not be asked for is `failed` with why, so the card says so
  * and starts nothing on its own.
  */
-type SampleStartAnswer =
+export type SampleStartAnswer =
   /** Loaded and recorded. */
   | { outcome: "loaded" }
   /** Loaded, but recording that failed: `run` records it on its own. */
