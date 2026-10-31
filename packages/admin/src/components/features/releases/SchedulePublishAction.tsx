@@ -31,6 +31,7 @@ import {
   SCHEDULE_PUBLISH_LABEL,
   schedulePublishRefusal,
 } from "./schedule-publish";
+import { useOpenForDocument } from "./useOpenForDocument";
 
 const SchedulePublishDialog = lazy(() =>
   import("./SchedulePublishDialog").then(module => ({
@@ -78,20 +79,15 @@ export function useSchedulePublishAction({
   const canCreateReleases = useCan("create-content-releases");
   const canScheduleReleases = useCan("publish-content-releases");
   const canPublishDocument = useCan(`publish-${scopeSlug}`);
-  /*
-   * Which document the dialog is open for, rather than whether it is open.
-   * The router keeps this page mounted from one document to the next, and a
-   * plain boolean would reopen the dialog over a document nobody asked about.
-   */
+  // Open only for the document it was opened for, and closed by leaving it.
   const documentKey = `${scopeKind}:${scopeSlug}:${entryId}`;
-  const [openFor, setOpenFor] = useState<string | null>(null);
+  const { open, setOpen } = useOpenForDocument(documentKey);
   // Each opening starts afresh: a new key mounts a new form.
   const [opening, setOpening] = useState(0);
   // Where focus goes back to when the dialog closes.
   const [opener, setOpener] = useState<HTMLElement | null>(null);
   // The title as it stood when the action was chosen.
   const [title, setTitle] = useState<string | undefined>(undefined);
-  const open = openFor === documentKey;
 
   if (lifecycleEnabled !== true || !scopeSlug || !entryId) {
     return { contributed: null, dialog: null };
@@ -118,7 +114,7 @@ export function useSchedulePublishAction({
         setOpener(dialogOpenerOf(globalThis.document?.activeElement ?? null));
         setTitle(documentTitle(edited));
         setOpening(count => count + 1);
-        setOpenFor(documentKey);
+        setOpen(true);
       },
     },
   };
@@ -130,7 +126,7 @@ export function useSchedulePublishAction({
         <SchedulePublishDialog
           key={opening}
           open={open}
-          onOpenChange={next => setOpenFor(next ? documentKey : null)}
+          onOpenChange={setOpen}
           document={{ scopeKind, scopeSlug, entryId }}
           documentTitle={title}
           opener={opener}

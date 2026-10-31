@@ -47,6 +47,7 @@ import type { Release, ReleaseMemberAction } from "@admin/types/releases";
 import { dialogOpenerOf, returnFocusTo } from "./dialog-opener";
 import { releaseErrorMessage } from "./release-error";
 import { describeRelease } from "./release-schedule";
+import { useOpenForDocument } from "./useOpenForDocument";
 
 /**
  * Choosing the release, with its schedule shown beneath.
@@ -480,25 +481,13 @@ export function useAddToReleaseAction({
   // they learn is that it failed.
   const canPublishDocument = useCan(`publish-${scopeSlug}`);
   const canUnpublishDocument = useCan(`unpublish-${scopeSlug}`);
-  /*
-   * Which DOCUMENT the picker is open for, rather than whether it is open.
-   *
-   * This hook is called from the page, and the router renders the same page
-   * component for every entry of a route without a key — so navigating from one
-   * document to another keeps this state alive. A plain boolean would survive
-   * that move and the picker would reappear over a document nobody opened it
-   * for, aimed at the new one.
-   *
-   * Scoping the state to the document makes that unrepresentable rather than
-   * cleaning up after it: an identity from another document simply is not open,
-   * with no effect to fire and nothing to forget on a later route.
-   */
-  const documentKey = `${scopeKind}:${scopeSlug}:${entryId}`;
-  const [openFor, setOpenFor] = useState<string | null>(null);
-  const open = openFor === documentKey;
+  // Open only for the document it was opened for, and closed by leaving it:
+  // the page stays mounted from one document to the next.
+  const { open, setOpen } = useOpenForDocument(
+    `${scopeKind}:${scopeSlug}:${entryId}`
+  );
   // Where focus goes back to when the dialog closes.
   const [opener, setOpener] = useState<HTMLElement | null>(null);
-  const setOpen = (next: boolean) => setOpenFor(next ? documentKey : null);
 
   /*
    * EXISTENCE is decided by authority over the feature; USABILITY by facts

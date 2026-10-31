@@ -222,6 +222,20 @@ describe("the picker's open state", () => {
     expect(picker()).toBeNull();
   });
 
+  it("stays closed on coming back to the document it was open for", async () => {
+    // Leaving closes it: a picker the author left behind by navigating away
+    // does not reappear, unasked, when they return.
+    const { rerender } = render(<Probe entryId="e1" />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /add to release/i })
+    );
+    expect(picker()).not.toBeNull();
+
+    rerender(<Probe entryId="e2" />);
+    rerender(<Probe entryId="e1" />);
+    expect(picker()).toBeNull();
+  });
+
   it("stays open while the document does not change", async () => {
     // The control: a hook reporting closed on every re-render would satisfy the
     // case above while making the picker impossible to keep open at all.

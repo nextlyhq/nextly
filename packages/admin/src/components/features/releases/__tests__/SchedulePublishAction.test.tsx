@@ -163,6 +163,34 @@ describe("the dialog", () => {
   });
 });
 
+describe("the dialog's open state", () => {
+  const dialog = () => screen.queryByRole("dialog");
+
+  it("does not carry over to another document, nor reopen on coming back", async () => {
+    // The page stays mounted from one document to the next. A dialog left
+    // open by navigating away is closed by leaving, so returning does not
+    // bring it back unasked.
+    const { rerender } = render(<Probe entryId="e1" />);
+    await userEvent.click(screen.getByRole("button", { name: "open" }));
+    expect(await screen.findByRole("dialog")).not.toBeNull();
+
+    rerender(<Probe entryId="e2" />);
+    expect(dialog()).toBeNull();
+    rerender(<Probe entryId="e1" />);
+    expect(dialog()).toBeNull();
+  });
+
+  it("stays open while the document does not change", async () => {
+    // The control: a hook closing on every render would pass the case above
+    // and could never be kept open.
+    const { rerender } = render(<Probe entryId="e1" />);
+    await userEvent.click(screen.getByRole("button", { name: "open" }));
+    await screen.findByRole("dialog");
+    rerender(<Probe entryId="e1" />);
+    expect(dialog()).not.toBeNull();
+  });
+});
+
 describe("the release's name", () => {
   it("is read from the document as the editor holds it when the action is chosen", async () => {
     // The title being typed is in the form, not the saved entry, and the
