@@ -23,6 +23,7 @@ import {
   databaseCatalogUnreadable,
   mediaApplyOutsideProject,
   mediaConfigOutsideProject,
+  mediaReindexOutsideProject,
   mediaStorageUnlistable,
   mediaThumbnailsNotRemoved,
   packageInstallFailed,
@@ -87,6 +88,7 @@ export const COMMAND_CASES = {
   MEDIA_CONFIG_OUTSIDE_PROJECT: () =>
     mediaConfigOutsideProject("../other-project/nextly.config.ts", PROJECT),
   MEDIA_APPLY_OUTSIDE_PROJECT: () => mediaApplyOutsideProject(PROJECT),
+  MEDIA_REINDEX_OUTSIDE_PROJECT: () => mediaReindexOutsideProject(PROJECT),
   SETUP_IN_PROGRESS: () => setupInProgress("setup-token"),
   SETUP_ALREADY_COMPLETE: () => setupAlreadyComplete("users:create-admin"),
   SETUP_TOKEN_SET_BY_ENV: () => setupTokenSetByEnv("NEXTLY_SETUP_TOKEN"),

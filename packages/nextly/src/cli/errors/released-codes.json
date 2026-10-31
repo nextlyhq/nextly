@@ -55,6 +55,7 @@
   "LOCALIZATION_NOT_PROVISIONED": "`db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read.",
   "MEDIA_APPLY_OUTSIDE_PROJECT": "`nextly media orphans --apply` was run from outside the project `--cwd` names, so the database settings it read may be another project's.",
   "MEDIA_CONFIG_OUTSIDE_PROJECT": "`nextly media orphans --apply` was given a configuration from outside the project, whose storage may be another project's.",
+  "MEDIA_REINDEX_OUTSIDE_PROJECT": "`nextly media reindex-usage` was run from outside the project `--cwd` names, or given a configuration from outside it, so the database it would rebuild or the content it would read may be another project's.",
   "MEDIA_STORAGE_UNLISTABLE": "The media storage cannot list its files, so it cannot be searched for left-behind thumbnails.",
   "MEDIA_THUMBNAILS_NOT_REMOVED": "Some left-behind thumbnails could not be removed, or could not be checked just before their removal.",
   "MIGRATION_APPLY_FAILED": "The database refused a statement of a migration or of a schema change.",
