@@ -13,6 +13,7 @@ import {
   callerHoldsPermission,
   readAccessCaller,
 } from "../../../auth/entity-read-access";
+import type { FieldConfig } from "../../../collections/fields/types";
 import { container } from "../../../di/container";
 import {
   bootedHeadingRegistries,
@@ -22,7 +23,12 @@ import {
 } from "../../../services/dashboard/readable-headings";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 
-import { listMediaUsage } from "./media-usage-store";
+import {
+  addressPathsFrom,
+  readReplacedRecord,
+  type AddressPaths,
+} from "./address-uses";
+import { listIdentifiedMediaUsage } from "./media-usage-store";
 import {
   mediaUseDocumentKey,
   type MediaUseDocument,
@@ -111,13 +117,53 @@ function isContentDocument(
   return document.kind !== "email-template";
 }
 
+/** A registry that answers with a document's fields. */
+interface FieldsRegistry {
+  getCollectionBySlug?(slug: string): Promise<{ fields?: unknown } | null>;
+  getSingleBySlug?(slug: string): Promise<{ fields?: unknown } | null>;
+}
+
+/** The fields a registry answers with, when it answers with a list. */
+function fieldsOf(
+  found: { fields?: unknown } | null
+): FieldConfig[] | undefined {
+  return Array.isArray(found?.fields)
+    ? (found.fields as FieldConfig[])
+    : undefined;
+}
+
+/**
+ * Which fields of each kind of document name an item by its address, read
+ * from the booted instance's registries.
+ */
+export function bootedAddressPaths(): AddressPaths {
+  return addressPathsFrom({
+    collectionFields: async slug =>
+      fieldsOf(
+        (await container
+          .get<FieldsRegistry>("collectionRegistryService")
+          .getCollectionBySlug?.(slug)) ?? null
+      ),
+    singleFields: async slug =>
+      fieldsOf(
+        (await container
+          .get<FieldsRegistry>("singleRegistryService")
+          .getSingleBySlug?.(slug)) ?? null
+      ),
+  });
+}
+
 /** The usage of items, as `caller` may be told it, on this instance. */
 export function bootedMediaUsesSource(
   adapter: DrizzleAdapter,
   caller: ReadCaller
 ): MediaUsesSource {
   return {
-    rows: mediaId => listMediaUsage(adapter, mediaId),
+    rows: mediaId => listIdentifiedMediaUsage(adapter, mediaId),
+    addressPaths: bootedAddressPaths(),
+    // The rows recorded at the last Replace that are still there unchanged.
+    previousRows: async mediaId =>
+      new Set((await readReplacedRecord(adapter, mediaId))?.rows ?? []),
     headings: async documents => {
       const content = documents.filter(isContentDocument);
       const templates = documents

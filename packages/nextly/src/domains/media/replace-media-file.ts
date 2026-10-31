@@ -7,8 +7,9 @@
  * once, and the same name (its extension following the new file), alt text,
  * caption, folder and usage. The focus point is cleared, since it marked a
  * spot on the old picture. Once that has committed, the old files are
- * removed, except any another item still refers to; if it does not commit,
- * the new files are removed instead.
+ * removed, except any another item still refers to, and except while a
+ * document names the item by its address (`usage/address-uses`), when they
+ * are kept for it; if it does not commit, the new files are removed instead.
  *
  * A new address rather than the old one overwritten: a CDN or an image cache
  * holding the old address would otherwise go on serving the old picture with
@@ -35,6 +36,12 @@ import {
 import { revalidateMedia } from "./revalidate-media";
 import { StoredFileSearchReader } from "./stored-file-search";
 import { storedFilesOf } from "./stored-files";
+import {
+  addressUseRows,
+  recordKeptFiles,
+  type AddressPaths,
+} from "./usage/address-uses";
+import { listIdentifiedMediaUsage } from "./usage/media-usage-store";
 
 /** The new file, as the upload checks have passed it. */
 export interface ReplacementFile {
@@ -60,6 +67,8 @@ export interface ReplaceMediaFileDeps {
     generateThumbnail(buffer: Buffer): Promise<{ buffer: Buffer } | null>;
   };
   logger: Logger;
+  /** Which fields of each kind of document name an item by its address. */
+  addressPaths: AddressPaths;
 }
 
 /**
@@ -238,12 +247,27 @@ export async function replaceMediaFile(
 
   await revalidateMedia([mediaId], deps.logger);
 
-  // The old files, now that nothing in this item refers to them, except any
-  // another item still does.
+  // The old files, now that nothing in this item refers to them: kept while
+  // any document names the item by its address (rich text, an email
+  // template's image), which goes on naming the old file; removed, except
+  // any another item still refers to, when none does.
   const { previous, next } = replaced;
   const oldPaths = storedFilesOf(previous).paths.filter(
     path => !replacement.paths.includes(path)
   );
+  const addressUses = await addressUseRows(
+    await listIdentifiedMediaUsage(deps.adapter, mediaId),
+    deps.addressPaths
+  );
+  if (addressUses.length > 0) {
+    await recordKeptFiles(
+      deps.adapter,
+      mediaId,
+      oldPaths.map(path => ({ path, url: previous.url })),
+      addressUses.map(row => row.id)
+    );
+    return next;
+  }
   const kept = await filesKeptByOthers(
     new StoredFileSearchReader(deps.adapter, deps.logger).search,
     oldPaths,

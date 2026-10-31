@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { MediaUsageRow } from "../media-usage-store";
+import type { IdentifiedUsageRow } from "../media-usage-store";
 import {
   mediaUseDocumentKey,
   mediaUsesOf,
@@ -19,13 +19,15 @@ import {
 const ITEM = "item-1";
 
 function row(
-  subjectKind: MediaUsageRow["subjectKind"],
+  subjectKind: IdentifiedUsageRow["subjectKind"],
   subjectSlug: string,
   documentId: string,
   fieldPath: string,
-  locale = ""
-): MediaUsageRow {
+  locale = "",
+  id = `${subjectSlug}-${documentId}-${fieldPath}-${locale}`
+): IdentifiedUsageRow {
   return {
+    id,
     mediaId: ITEM,
     subjectKind,
     subjectSlug,
@@ -35,15 +37,25 @@ function row(
   };
 }
 
-/** A source over these rows, where the reader may read `readable`. */
+/**
+ * A source over these rows, where the reader may read `readable`, rich text
+ * (`body`) and a template's HTML name items by address, and `previous` are
+ * the rows that stood when the item's file was last replaced.
+ */
 function source(
-  rows: MediaUsageRow[],
-  readable: Array<[MediaUseDocument, MediaUseHeading]>
+  rows: IdentifiedUsageRow[],
+  readable: Array<[MediaUseDocument, MediaUseHeading]>,
+  previous: string[] = []
 ): MediaUsesSource & { asked: MediaUseDocument[][] } {
   const asked: MediaUseDocument[][] = [];
   return {
     asked,
     rows: () => Promise.resolve(rows),
+    addressPaths: kind =>
+      Promise.resolve(
+        new Set(kind === "email-template" ? ["htmlContent"] : ["body"])
+      ),
+    previousRows: () => Promise.resolve(new Set(previous)),
     headings: documents => {
       asked.push([...documents]);
       return Promise.resolve(
@@ -105,23 +117,52 @@ describe("mediaUsesOf", () => {
           owner: "Posts",
           fields: [
             // Only some languages use it, so they are named.
-            { path: "body", locales: ["en", "es"] },
-            { path: "cover", locales: [] },
+            {
+              path: "body",
+              locales: ["en", "es"],
+              byAddress: true,
+              showsPreviousFile: false,
+            },
+            {
+              path: "cover",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
             // A shared value uses it, so every language does.
-            { path: "gallery", locales: [] },
+            {
+              path: "gallery",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
           ],
         },
         {
           ...site,
           title: "Site",
           owner: "Site",
-          fields: [{ path: "logo", locales: [] }],
+          fields: [
+            {
+              path: "logo",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+          ],
         },
         {
           ...welcome,
           title: "Welcome",
           owner: "Email templates",
-          fields: [{ path: "attachments", locales: [] }],
+          fields: [
+            {
+              path: "attachments",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+          ],
         },
       ],
       hidden: [],
@@ -163,5 +204,71 @@ describe("mediaUsesOf", () => {
     const read = source([], []);
     expect(await mediaUsesOf(ITEM, read)).toEqual({ items: [], hidden: [] });
     expect(read.asked).toEqual([]);
+  });
+
+  it("marks the uses naming the item by address, and those still showing the file it had before a Replace", async () => {
+    const answer = await mediaUsesOf(
+      ITEM,
+      source(
+        [
+          row("collection", "posts", "p1", "body", "en", "kept-row"),
+          row("collection", "posts", "p1", "cover"),
+          row("email-template", "", "t1", "htmlContent", "", "rewritten-row"),
+        ],
+        [
+          [post, { title: "Hello", owner: "Posts" }],
+          [welcome, { title: "Welcome", owner: "Email templates" }],
+        ],
+        // The post's row stood at the Replace; the template was saved since.
+        ["kept-row", "row-gone-since"]
+      )
+    );
+
+    expect(answer.items.map(item => item.fields)).toEqual([
+      [
+        {
+          path: "body",
+          locales: ["en"],
+          byAddress: true,
+          showsPreviousFile: true,
+        },
+        {
+          path: "cover",
+          locales: [],
+          byAddress: false,
+          showsPreviousFile: false,
+        },
+      ],
+      [
+        {
+          path: "htmlContent",
+          locales: [],
+          byAddress: true,
+          showsPreviousFile: false,
+        },
+      ],
+    ]);
+  });
+
+  it("tells only the uses naming the item by address when asked, counting the unreadable ones", async () => {
+    const answer = await mediaUsesOf(
+      ITEM,
+      source(
+        [
+          row("collection", "posts", "p1", "cover"),
+          row("collection", "secrets", "s1", "body", "en"),
+          row("email-template", "", "t1", "htmlContent"),
+        ],
+        [[welcome, { title: "Welcome", owner: "Email templates" }]]
+      ),
+      { byAddressOnly: true }
+    );
+
+    expect(answer.items.map(item => [item.kind, item.documentId])).toEqual([
+      ["email-template", "t1"],
+    ]);
+    expect(answer.hidden).toEqual([
+      { scopeKind: "collection", scopeSlug: "secrets", count: 1 },
+    ]);
   });
 });

@@ -220,17 +220,23 @@ export async function removeEntityUsage(
   });
 }
 
+/** One stored row, with its own id, which a rewrite of its document renews. */
+export interface IdentifiedUsageRow extends MediaUsageRow {
+  id: string;
+}
+
 /**
- * Every document field that uses one media item, from the record alone: one
- * query on the item's index, reading no content table. Ordered so one
- * document's rows are together.
+ * Every row of the record for one media item, ids included: one query on
+ * the item's index, reading no content table. Ordered so one document's
+ * rows are together.
  */
-export async function listMediaUsage(
+export async function listIdentifiedMediaUsage(
   db: Pick<UsageDb, "select">,
   mediaId: string
-): Promise<MediaUsageRow[]> {
+): Promise<IdentifiedUsageRow[]> {
   const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
     columns: [
+      "id",
       "mediaId",
       "subjectKind",
       "subjectSlug",
@@ -248,6 +254,7 @@ export async function listMediaUsage(
     ],
   });
   return rows.map(row => ({
+    id: columnOf(row, "id", "id"),
     mediaId: columnOf(row, "mediaId", "media_id"),
     subjectKind: columnOf(
       row,
@@ -259,6 +266,18 @@ export async function listMediaUsage(
     fieldPath: columnOf(row, "fieldPath", "field_path"),
     locale: columnOf(row, "locale", "locale"),
   }));
+}
+
+/**
+ * Every document field that uses one media item, from the record alone:
+ * {@link listIdentifiedMediaUsage} without the rows' own ids.
+ */
+export async function listMediaUsage(
+  db: Pick<UsageDb, "select">,
+  mediaId: string
+): Promise<MediaUsageRow[]> {
+  const rows = await listIdentifiedMediaUsage(db, mediaId);
+  return rows.map(({ id: _id, ...row }) => row);
 }
 
 /**

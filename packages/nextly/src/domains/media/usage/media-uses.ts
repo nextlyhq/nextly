@@ -14,7 +14,8 @@
  * @module domains/media/usage/media-uses
  */
 
-import type { MediaUsageRow, UsageSubjectKind } from "./media-usage-store";
+import { addressUseRows, type AddressPaths } from "./address-uses";
+import type { IdentifiedUsageRow, UsageSubjectKind } from "./media-usage-store";
 
 /** One field of a document that uses the item. */
 export interface MediaUseField {
@@ -25,6 +26,16 @@ export interface MediaUseField {
    * language shares uses it, so no language needs naming.
    */
   locales: string[];
+  /**
+   * Whether the field names the item by its address (rich text, an email
+   * template's image) rather than its id.
+   */
+  byAddress: boolean;
+  /**
+   * Whether the field still shows the file the item had before its file was
+   * replaced: an address use whose content has not changed since.
+   */
+  showsPreviousFile: boolean;
 }
 
 /** One document that uses the item, as the reader may read it. */
@@ -77,8 +88,16 @@ export interface MediaUseDocument {
 
 /** What answering needs: the record, and the reader's view of documents. */
 export interface MediaUsesSource {
-  /** Every row of the record for the item. */
-  rows(mediaId: string): Promise<MediaUsageRow[]>;
+  /** Every row of the record for the item, with its id. */
+  rows(mediaId: string): Promise<IdentifiedUsageRow[]>;
+  /** Which fields of each kind of document name an item by its address. */
+  addressPaths: AddressPaths;
+  /**
+   * The rows that still named the item's old address when its file was last
+   * replaced, and have not been written since: none for an item never
+   * replaced.
+   */
+  previousRows(mediaId: string): Promise<ReadonlySet<string>>;
   /**
    * The heading of each document the reader may read, by
    * {@link mediaUseDocumentKey}. One absent is one they may not read.
@@ -93,16 +112,27 @@ export function mediaUseDocumentKey(document: MediaUseDocument): string {
   return JSON.stringify([document.kind, document.slug, document.documentId]);
 }
 
-/** A document's fields as they are gathered: each path's languages. */
+/** One field as it is gathered: its languages, and how it names the item. */
+interface GatheredField {
+  locales: Set<string>;
+  byAddress: boolean;
+  showsPreviousFile: boolean;
+}
+
+/** A document's fields as they are gathered, by path. */
 interface GatheredDocument extends MediaUseDocument {
-  fields: Map<string, Set<string>>;
+  fields: Map<string, GatheredField>;
 }
 
 /**
  * The record's rows gathered into documents, in the record's order, each with
  * its fields and the languages that use each.
  */
-function gathered(rows: readonly MediaUsageRow[]): GatheredDocument[] {
+function gathered(
+  rows: readonly IdentifiedUsageRow[],
+  address: ReadonlySet<IdentifiedUsageRow>,
+  previous: ReadonlySet<string>
+): GatheredDocument[] {
   const documents = new Map<string, GatheredDocument>();
   for (const row of rows) {
     const document: MediaUseDocument = {
@@ -112,9 +142,14 @@ function gathered(rows: readonly MediaUsageRow[]): GatheredDocument[] {
     };
     const key = mediaUseDocumentKey(document);
     const found = documents.get(key) ?? { ...document, fields: new Map() };
-    const locales = found.fields.get(row.fieldPath) ?? new Set<string>();
-    locales.add(row.locale);
-    found.fields.set(row.fieldPath, locales);
+    const field = found.fields.get(row.fieldPath) ?? {
+      locales: new Set<string>(),
+      byAddress: address.has(row),
+      showsPreviousFile: false,
+    };
+    field.locales.add(row.locale);
+    if (previous.has(row.id)) field.showsPreviousFile = true;
+    found.fields.set(row.fieldPath, field);
     documents.set(key, found);
   }
   return [...documents.values()];
@@ -128,12 +163,26 @@ function namedLocales(locales: ReadonlySet<string>): string[] {
   return locales.has("") ? [] : [...locales].sort();
 }
 
+/** Which uses to tell: every one, or only those naming the item by address. */
+export interface MediaUsesQuery {
+  byAddressOnly?: boolean;
+}
+
 /** Where `mediaId` is used, as the reader may be told it. */
 export async function mediaUsesOf(
   mediaId: string,
-  source: MediaUsesSource
+  source: MediaUsesSource,
+  query: MediaUsesQuery = {}
 ): Promise<MediaUses> {
-  const documents = gathered(await source.rows(mediaId));
+  const rows = await source.rows(mediaId);
+  const address = new Set(await addressUseRows(rows, source.addressPaths));
+  const told = query.byAddressOnly
+    ? rows.filter(row => address.has(row))
+    : rows;
+  const previous = told.some(row => address.has(row))
+    ? await source.previousRows(mediaId)
+    : new Set<string>();
+  const documents = gathered(told, address, previous);
   if (documents.length === 0) return { items: [], hidden: [] };
   const headings = await source.headings(
     documents.map(({ kind, slug, documentId }) => ({ kind, slug, documentId }))
@@ -160,9 +209,11 @@ export async function mediaUsesOf(
       documentId: document.documentId,
       title: heading.title,
       owner: heading.owner,
-      fields: [...document.fields].map(([path, locales]) => ({
+      fields: [...document.fields].map(([path, field]) => ({
         path,
-        locales: namedLocales(locales),
+        locales: namedLocales(field.locales),
+        byAddress: field.byAddress,
+        showsPreviousFile: field.showsPreviousFile,
       })),
     });
   }

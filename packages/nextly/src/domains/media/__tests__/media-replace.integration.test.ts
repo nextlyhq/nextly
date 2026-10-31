@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
-import { defineCollection, text, upload } from "../../../config";
+import { defineCollection, richText, text, upload } from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -32,6 +32,12 @@ import {
 } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { getMediaStorage } from "../../../storage/storage";
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
+import { isMediaThumbnail } from "../orphan-thumbnails";
+import {
+  PENDING_DELETE_WINDOW_MS,
+  PendingMediaDeletes,
+} from "../pending-delete";
+import { removeKeptFiles } from "../usage/address-uses";
 
 type Doc = Record<string, unknown>;
 
@@ -102,6 +108,30 @@ async function keyWith(t: TestNextly, grants: string[]): Promise<string> {
   return key;
 }
 
+/** A rich-text value showing one image, by its address. */
+function imageText(url: string): Doc {
+  return {
+    root: {
+      type: "root",
+      version: 1,
+      children: [{ type: "image", version: 1, src: url, altText: "" }],
+    },
+  };
+}
+
+/** `GET /admin/api/media/:id/usage`, optionally only the address uses. */
+async function usageOf(key: string, mediaId: string, query = ""): Promise<Doc> {
+  const path = [mediaId, "usage"];
+  const res = await createMediaHandlers({ requireAuth: true }).GET(
+    new Request(`http://localhost/admin/api/media/${path.join("/")}${query}`, {
+      headers: { authorization: `Bearer ${key}` },
+    }),
+    { params: Promise.resolve({ path }) }
+  );
+  expect(res.status).toBe(200);
+  return (await res.json()) as Doc;
+}
+
 /** `POST /admin/api/media/:id/replace` with one file, as the holder of `key`. */
 async function replace(
   key: string,
@@ -141,6 +171,7 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               upload({ name: "cover", relationTo: "media" }),
+              richText({ name: "body" }),
             ],
           }),
         ],
@@ -296,6 +327,148 @@ describe.each(getConfiguredTestDialects())(
       expect((await replace(reader, logo.id, file)).status).toBe(403);
       expect(await row(logo.id)).toEqual(before);
       expect((await replace(editor, randomUUID(), file)).status).toBe(404);
+    });
+
+    it("keeps the old file while rich text or a template names the item by its address", async () => {
+      const logo = await usedLogo();
+      const before = (await row(logo.id))!;
+      const oldPath = String(before.filename);
+      const oldUrl = String(before.url);
+      const handler = t.getService("collectionsHandler");
+      const byAddress = await handler.createEntry(
+        { collectionName: "replaceposts", overrideAccess: true },
+        { title: "Story", body: imageText(oldUrl) }
+      );
+      const storyId = String((byAddress.data as { id?: unknown }).id);
+      const template = await t
+        .getService("emailTemplateService")
+        .createTemplate({
+          name: "Newsletter",
+          slug: `replace-news-${dialect}`,
+          subject: "News",
+          htmlContent: `<p>Hi</p><img alt="" src="${oldUrl}">`,
+        });
+      const reader = await keyWith(t, [
+        "read-media",
+        "update-media",
+        "read-replaceposts",
+        "read-email-templates",
+      ]);
+
+      // Asked before replacing: the uses that keep the old file.
+      const asked = await usageOf(reader, logo.id, "?byAddress=true");
+      expect(
+        (asked.items as Doc[]).map(item => item.documentId).sort()
+      ).toEqual([storyId, template.id].sort());
+
+      const replaced = await replace(reader, logo.id, {
+        data: PNG_1X1,
+        name: "new-logo.png",
+        type: "image/png",
+      });
+      expect(replaced.status).toBe(200);
+      const after = (await row(logo.id))!;
+
+      // By id: the upload field shows the new file.
+      expect(await coverOf(logo.postId)).toMatchObject({
+        id: logo.id,
+        url: after.url,
+      });
+      // By address: the old file is kept, whole, for the pages naming it.
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+      expect(
+        await getMediaStorage().getAdapterForCollection("media").read?.(oldPath)
+      ).toEqual(PNG_1X1);
+      // `media orphans` looks only at thumbnails, so never at this file.
+      expect(isMediaThumbnail({ path: oldPath })).toBe(false);
+
+      // Used in says which uses still show the previous file.
+      const used = (await usageOf(reader, logo.id)).items as Array<{
+        documentId: string;
+        fields: Array<{ path: string; showsPreviousFile: boolean }>;
+      }>;
+      const shows = Object.fromEntries(
+        used.flatMap(item =>
+          item.fields.map(field => [
+            `${item.documentId}:${field.path}`,
+            field.showsPreviousFile,
+          ])
+        )
+      );
+      expect(shows).toEqual({
+        [`${logo.postId}:cover`]: false,
+        [`${storyId}:body`]: true,
+        [`${template.id}:htmlContent`]: true,
+      });
+
+      // Saved again with the new address, the story shows the new file.
+      await handler.updateEntry(
+        {
+          collectionName: "replaceposts",
+          entryId: storyId,
+          overrideAccess: true,
+        },
+        { body: imageText(String(after.url)) }
+      );
+      const story = (
+        (await usageOf(reader, logo.id)).items as Array<{
+          documentId: string;
+          fields: Array<{ showsPreviousFile: boolean }>;
+        }>
+      ).find(item => item.documentId === storyId);
+      expect(story?.fields[0]?.showsPreviousFile).toBe(false);
+
+      // Deleting the item takes the kept file with it.
+      await t.getService("mediaService").delete(logo.id, {});
+      await removeKeptFiles(
+        t.adapter,
+        getMediaStorage(),
+        t.getService("logger"),
+        logo.id
+      );
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(false);
+    });
+
+    it("removes the kept file when a deleted item's window ends", async () => {
+      const logo = await usedLogo();
+      const oldPath = String((await row(logo.id))!.filename);
+      const handler = t.getService("collectionsHandler");
+      await handler.createEntry(
+        { collectionName: "replaceposts", overrideAccess: true },
+        { title: "Kept", body: imageText(String((await row(logo.id))!.url)) }
+      );
+      expect(
+        (
+          await replace(editor, logo.id, {
+            data: PNG_1X1,
+            name: "again.png",
+            type: "image/png",
+          })
+        ).status
+      ).toBe(200);
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+
+      const finaliser = (later: number) =>
+        new PendingMediaDeletes({
+          db: t.adapter,
+          deleteItem: async id => {
+            await t.getService("mediaService").delete(id, {});
+          },
+          afterDelete: id =>
+            removeKeptFiles(
+              t.adapter,
+              getMediaStorage(),
+              t.getService("logger"),
+              id
+            ),
+          now: () => new Date(Date.now() + later),
+        });
+      // Deleted now, finished once the window has passed.
+      await finaliser(0).mark([logo.id]);
+      expect(
+        await finaliser(PENDING_DELETE_WINDOW_MS + 1_000).finalizeDue()
+      ).toEqual([logo.id]);
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(false);
     });
   }
 );

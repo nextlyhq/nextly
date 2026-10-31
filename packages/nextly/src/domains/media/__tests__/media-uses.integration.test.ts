@@ -236,9 +236,24 @@ describe.each(getConfiguredTestDialects())(
           owner: "Posts",
           fields: [
             // The translated rich text uses it in English alone.
-            { path: "body", locales: ["en"] },
-            { path: "cover", locales: [] },
-            { path: "layout", locales: [] },
+            {
+              path: "body",
+              locales: ["en"],
+              byAddress: true,
+              showsPreviousFile: false,
+            },
+            {
+              path: "cover",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+            {
+              path: "layout",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
           ],
         },
         {
@@ -247,7 +262,14 @@ describe.each(getConfiguredTestDialects())(
           documentId: secretId,
           title: "Hidden",
           owner: "Secrets",
-          fields: [{ path: "image", locales: [] }],
+          fields: [
+            {
+              path: "image",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+          ],
         },
         {
           kind: "email-template",
@@ -255,7 +277,14 @@ describe.each(getConfiguredTestDialects())(
           documentId: templateId,
           title: "Welcome",
           owner: "Email templates",
-          fields: [{ path: "attachments", locales: [] }],
+          fields: [
+            {
+              path: "attachments",
+              locales: [],
+              byAddress: false,
+              showsPreviousFile: false,
+            },
+          ],
         },
       ]);
       expect(body.meta).not.toHaveProperty("hidden");

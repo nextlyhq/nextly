@@ -826,6 +826,14 @@ async function handleMediaCounts(): Promise<Response> {
   return respondData(counts as unknown as Record<string, unknown>);
 }
 
+/** The Used in query: every use, or only those naming the item by address. */
+const usageQuerySchema = z.object({
+  byAddress: z
+    .enum(["true", "false"])
+    .optional()
+    .transform(value => value === "true"),
+});
+
 /** The ids a delete or its Undo names: one to a hundred items. */
 const deletionBodySchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(100),
@@ -850,6 +858,19 @@ async function pendingDeletes(): Promise<PendingMediaDeletes> {
     db: getService("adapter"),
     deleteItem: (mediaId, actor) =>
       mediaService.delete(mediaId, createRequestContext(), actor),
+    // The files a Replace kept for pages naming the item's old address.
+    afterDelete: async mediaId => {
+      const [{ removeKeptFiles }, { getMediaStorage }] = await Promise.all([
+        import("../domains/media/usage/address-uses"),
+        import("../storage/storage"),
+      ]);
+      await removeKeptFiles(
+        getService("adapter"),
+        getMediaStorage(),
+        getService("logger"),
+        mediaId
+      );
+    },
     logger: getNextlyLogger(),
   });
 }
@@ -925,6 +946,7 @@ async function handleUndoDeleteMedia(request: Request): Promise<Response> {
  * unknown path. Per caller, so it is never cached for another.
  */
 async function handleMediaUsage(
+  request: Request,
   mediaId: string,
   auth: AuthContext | undefined
 ): Promise<Response> {
@@ -940,9 +962,16 @@ async function handleMediaUsage(
       import("../domains/media/usage/media-uses"),
       import("../domains/media/usage/media-uses-source"),
     ]);
+  // `?byAddress=true` asks only for the uses naming the item by its
+  // address, which keep the old file when it is replaced.
+  const { byAddress } = parseAtBoundary(
+    usageQuerySchema,
+    Object.fromEntries(new URL(request.url).searchParams)
+  );
   const uses = await mediaUsesOf(
     mediaId,
-    source.bootedMediaUsesSource(getService("adapter"), await readCaller(auth))
+    source.bootedMediaUsesSource(getService("adapter"), await readCaller(auth)),
+    { byAddressOnly: byAddress }
   );
   return respondList(
     uses.items,
@@ -1034,7 +1063,11 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             response = await handleMediaCounts();
             break;
           case "media-usage":
-            response = await handleMediaUsage(route.mediaId!, gate.auth);
+            response = await handleMediaUsage(
+              request,
+              route.mediaId!,
+              gate.auth
+            );
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "GET");

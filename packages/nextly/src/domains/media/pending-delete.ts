@@ -60,6 +60,11 @@ export interface PendingDeleteDeps {
    * files. Throws not-found for an item already gone.
    */
   deleteItem(mediaId: string, actor?: RequestActor): Promise<void>;
+  /**
+   * What else goes once the item is deleted: the files a Replace kept for
+   * pages that name the item by its old address.
+   */
+  afterDelete?(mediaId: string): Promise<void>;
   /** Where a delete that could not finish is reported. */
   logger?: { warn(payload: object): void };
   now?: () => Date;
@@ -207,6 +212,7 @@ export class PendingMediaDeletes {
   ): Promise<boolean> {
     try {
       await this.deps.deleteItem(mediaId, actor);
+      await this.deps.afterDelete?.(mediaId);
       return true;
     } catch (error) {
       if (NextlyError.isNotFound(error)) return true;
