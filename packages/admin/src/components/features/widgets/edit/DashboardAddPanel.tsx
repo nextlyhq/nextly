@@ -69,16 +69,19 @@ const DASHBOARD_GALLERY_KEY = ["dashboard", "gallery"] as const;
 const GALLERY_PATH = "/dashboard/gallery";
 
 /**
- * What the gallery offers this reader, read each time the panel opens: an answer kept from an
- * earlier visit is drawn at once and asked again, since a grant, a collection or a save of the
- * reader's may have changed what it holds.
+ * How long a gallery read is reused: opening the panel again within it asks nothing. What changes
+ * within a visit, a card added or removed, the panel works out from the draft; a grant or a
+ * collection changed meanwhile is picked up on the next read after it.
  */
+const GALLERY_STALE_MS = 60_000;
+
+/** What the gallery offers this reader, read as the panel opens. */
 function useDashboardGallery(open: boolean) {
   return useQuery({
     queryKey: DASHBOARD_GALLERY_KEY,
     queryFn: () => protectedApi.get<GalleryRead>(GALLERY_PATH),
     enabled: open,
-    staleTime: 0,
+    staleTime: GALLERY_STALE_MS,
   });
 }
 

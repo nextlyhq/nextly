@@ -96,7 +96,9 @@ export interface GalleryTileView {
 }
 
 /**
- * Each tile the server sent, with what its control does in the draft as it stands:
+ * Each tile the server sent that this admin can draw, named as this admin names the widget, with
+ * what its control does in the draft as it stands. A widget it holds no definition for has no
+ * tile: a card of it would be added, saved and never drawn, with no controls to remove it.
  *
  * - one card only, and the draft holds it: "On your dashboard", not addable;
  * - one card only, and it was removed this session: no tile, since its card is listed under
@@ -105,9 +107,14 @@ export interface GalleryTileView {
  */
 export function galleryTiles(
   read: Pick<GalleryRead, "tiles">,
-  placements: readonly WidgetPlacement[]
+  placements: readonly WidgetPlacement[],
+  byId: ReadonlyMap<string, DashboardWidget>
 ): GalleryTileView[] {
-  return read.tiles.flatMap((tile): GalleryTileView[] => {
+  return read.tiles.flatMap((sent): GalleryTileView[] => {
+    const widget = byId.get(sent.id);
+    if (widget === undefined) return [];
+    // The title the dashboard draws the card with, whichever channel declared it.
+    const tile = { ...sent, name: widget.title };
     const mine = placements.filter(p => p.widgetId === tile.id);
     const placed = mine.filter(p => !p.removed).length;
     if (!tile.allowsSeveral && placed > 0) {

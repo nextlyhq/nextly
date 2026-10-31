@@ -258,6 +258,29 @@ describe("opening", () => {
     expect(within(seo).getByTestId("tile-sketch")).toBeInTheDocument();
   });
 
+  it("names a tile as the dashboard titles its card, and lists none this admin cannot draw", () => {
+    renderPanel({
+      gallery: {
+        read: {
+          ...READ,
+          tiles: [
+            // Sent under its id: a widget the server has no declared title for.
+            { ...TILES[1]!, name: "core/note" },
+            { ...TILES[0]!, id: "acme/unknown", name: "acme/unknown" },
+          ],
+          suggested: [],
+        },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+    expect(
+      screen.getByRole("button", { name: "Add Note" })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("core/note")).toBeNull();
+    expect(screen.queryByTestId("add-panel-tile-acme/unknown")).toBeNull();
+  });
+
   it("shows a loading state, then an error with Try again, before the read answers", async () => {
     const user = userEvent.setup();
     const retry = vi.fn();
@@ -629,6 +652,19 @@ describe("each visit", () => {
       "aria-pressed",
       "true"
     );
+  });
+
+  it("opens again on the gallery with focus in its search, after closing in an add step", async () => {
+    const user = userEvent.setup();
+    const all = renderPanel();
+    await user.click(screen.getByRole("button", { name: "Add Over time" }));
+    expect(screen.getByTestId("add-panel-step")).toBeInTheDocument();
+    all.rerender(<AddWidgetPanel {...all} open={false} />);
+    await waitFor(() => expect(all.onClosed).toHaveBeenCalledTimes(1));
+    all.rerender(<AddWidgetPanel {...all} open />);
+    // The first frame of the new visit already draws the search the sheet focuses.
+    await waitFor(() => expect(search()).toHaveFocus());
+    expect(screen.queryByTestId("add-panel-step")).toBeNull();
   });
 
   it("never says the last visit's add again on opening", () => {

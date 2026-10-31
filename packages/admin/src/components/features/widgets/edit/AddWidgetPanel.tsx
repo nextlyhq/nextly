@@ -1178,13 +1178,17 @@ function useAddGallery({
   const model = useGalleryModel(read, placements, byId, chip, query);
   const voice = usePanelVoice(foundCount(model.found), query, open);
   // A fresh gallery each time it opens: an old search, chip or step would hide what the reader
-  // came to find.
-  useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setChip("all");
-    setStep(null);
-  }, [open]);
+  // came to find. Reset during the render that opens it (React's pattern for state that follows
+  // a prop), so the sheet's first frame already draws the search its focus goes to.
+  const [visit, setVisit] = useState(open);
+  if (visit !== open) {
+    setVisit(open);
+    if (open) {
+      setQuery("");
+      setChip("all");
+      setStep(null);
+    }
+  }
   const { focusTile, keepFocusInPanel } = usePanelFocus(contentRef, searchRef);
   const actions = useGalleryActions({
     byId,
@@ -1241,8 +1245,8 @@ function useGalleryModel(
   query: string
 ) {
   const tiles = useMemo(
-    () => (read === undefined ? [] : galleryTiles(read, placements)),
-    [read, placements]
+    () => (read === undefined ? [] : galleryTiles(read, placements, byId)),
+    [read, placements, byId]
   );
   const removed = useMemo(
     () => removedCards(placements, byId),

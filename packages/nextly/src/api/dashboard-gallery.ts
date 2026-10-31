@@ -51,6 +51,7 @@ import type { WidgetSizeBounds } from "../domains/widgets/grid-size";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import { publishableContentSources } from "../domains/widgets/publish";
 import { MAX_WIDGET_LIMIT } from "../domains/widgets/query-limits";
+import { getWidget } from "../domains/widgets/registry";
 import type { WidgetResult } from "../domains/widgets/result";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import { readActivitySubjects } from "../services/dashboard/activity-subjects";
@@ -97,8 +98,12 @@ export interface GalleryRead extends Record<string, unknown> {
   suggested: GallerySuggestion[];
 }
 
-/** The most collections whose entries one gallery read counts. */
-const MAX_COUNTED_COLLECTIONS = MAX_WIDGET_LIMIT;
+/**
+ * The most collections whose entries one gallery read counts, and only when
+ * the suggestions fall back to entries: the first this many in the sources'
+ * order.
+ */
+const MAX_COUNTED_COLLECTIONS = 10;
 
 /** How many of those counts run at once. */
 const COUNT_CONCURRENCY = 4;
@@ -157,11 +162,25 @@ function withPlugin(widget: CanonicalWidget): CanonicalWidget {
   return { ...widget, plugin: owner };
 }
 
-/** A declared widget's first preview case as its card would carry it, or none. */
+/**
+ * Core's own widget's first preview case as its card would carry it, or none.
+ *
+ * 🔴 Core's alone: its cases are sample data written for its gallery tiles. A
+ * plugin's or the site's cases are their authors' fixtures, which the
+ * declaration's contract keeps on the server for the development preview read
+ * (`DeclaredWidgetShape.preview`), so they never reach this read, whoever
+ * asks; such a tile is drawn as its sketch.
+ */
 function previewOf(widgetId: string): GalleryTileItem["preview"] {
   const declared = declaredWidget(widgetId);
   const first = declared?.declaration.preview?.[0];
-  if (declared === undefined || first === undefined) return undefined;
+  if (
+    declared === undefined ||
+    declared.owner !== CORE_OWNER ||
+    first === undefined
+  ) {
+    return undefined;
+  }
   try {
     return {
       result: cardAnswerResult(declared.display, first.data, {
@@ -184,7 +203,9 @@ function tileOf(widget: CanonicalWidget, offer: GalleryOffer): GalleryTileItem {
   const preview = previewOf(widget.id);
   return {
     id: widget.id,
-    name: declared?.declaration.title ?? widget.id,
+    // The title the admin resolves too, from either channel, before the id.
+    name:
+      declared?.declaration.title ?? getWidget(widget.id)?.title ?? widget.id,
     ...(widget.description === undefined
       ? {}
       : { description: widget.description }),
@@ -206,17 +227,27 @@ function tileOf(widget: CanonicalWidget, offer: GalleryOffer): GalleryTileItem {
   };
 }
 
+/** The collections the reader may read that the dashboard shows, in the sources' order. */
+function readableCollections(offer: GalleryOffer): GalleryCollection[] {
+  return publishableContentSources(offer.readableCollections).map(source => ({
+    slug: source.collection,
+    label: source.label,
+    lifecycle: source.lifecycle,
+  }));
+}
+
 /**
- * The collections the reader may read that the dashboard shows, in the
- * sources' order, each counted as the reader through the read services a card
- * is handed, so a count is exactly what a Count card of it would say. A count
- * that fails, and every collection past the bound, is left uncounted.
+ * `collections` with the entries the reader may read in each of the first
+ * `MAX_COUNTED_COLLECTIONS`, counted as the reader through the read services a
+ * card is handed, so a count is exactly what a Count card of it would say. A
+ * count that fails, and every collection past the bound, is left uncounted.
+ * Asked only when the suggestions fall back to entries (`galleryFor`).
  */
-async function readableCollections(
+async function withEntries(
   offer: GalleryOffer,
+  collections: readonly GalleryCollection[],
   signal: AbortSignal
 ): Promise<GalleryCollection[]> {
-  const sources = publishableContentSources(offer.readableCollections);
   const batch = cardBatchFor(offer.auth, offer.reader);
   const services = bindReadServices({
     caller: batch.caller,
@@ -234,22 +265,20 @@ async function readableCollections(
   // A few at a time, in order, so a site with many collections does not ask
   // the database for every count at once.
   const counted: (number | undefined)[] = [];
-  const counting = sources.slice(0, MAX_COUNTED_COLLECTIONS);
+  const counting = collections.slice(0, MAX_COUNTED_COLLECTIONS);
   for (let at = 0; at < counting.length; at += COUNT_CONCURRENCY) {
     counted.push(
       ...(await Promise.all(
         counting
           .slice(at, at + COUNT_CONCURRENCY)
-          .map(source => countOne(source.collection))
+          .map(collection => countOne(collection.slug))
       ))
     );
   }
-  return sources.map((source, index) => ({
-    slug: source.collection,
-    label: source.label,
-    lifecycle: source.lifecycle,
-    ...(counted[index] === undefined ? {} : { entries: counted[index] }),
-  }));
+  return collections.map((collection, index) => {
+    const entries = counted[index];
+    return entries === undefined ? collection : { ...collection, entries };
+  });
 }
 
 /** The person a caller is, or none for an API key. */
@@ -318,11 +347,16 @@ async function galleryFor(
 ): Promise<GalleryRead> {
   const offer = await galleryOffer(auth, signal);
   const now = new Date();
-  const [widgets, collections, edits] = await Promise.all([
+  const [widgets, edits] = await Promise.all([
     tileWidgets(offer, signal),
-    readableCollections(offer, signal),
     readerEdits(offer.reader, now),
   ]);
+  const readable = readableCollections(offer);
+  // Counted only when the suggestions fall back to entries: a reader who
+  // edited a readable collection in the window is suggested from their edits.
+  const collections = readable.some(c => (edits.get(c.slug) ?? 0) > 0)
+    ? readable
+    : await withEntries(offer, readable, signal);
   const tiles = inGalleryOrder(widgets.map(withPlugin)).map(widget =>
     tileOf(widget, offer)
   );

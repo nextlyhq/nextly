@@ -96,7 +96,8 @@ const gallery = definePlugin({
           access: { collections: [POSTS] },
           load: figure,
           view: "figure",
-          preview: [{ name: "Sample", data: { total: 7 } }],
+          // An author's fixture, which only the development preview read may send.
+          preview: [{ name: "Fixture", data: { total: 73_317 } }],
         }),
         // Its own rule leaves it out for everyone.
         defineWidget({
@@ -223,13 +224,12 @@ describe.each(getConfiguredTestDialects())(
       });
       // Its preview, as its card carries an answer.
       expect(overTime?.preview?.result).toMatchObject({ op: "data" });
-      expect(
-        read.tiles.find(tile => tile.id === "acme/posts-readers")
-      ).toMatchObject({
-        category: "plugins",
-        // Carried as its view's answer: a figure's is a count.
-        preview: { result: { op: "count", total: 7 } },
-      });
+      const plugins = read.tiles.find(tile => tile.id === "acme/posts-readers");
+      expect(plugins).toMatchObject({ category: "plugins" });
+      // A plugin's preview case never leaves the development preview read:
+      // its tile is drawn as its sketch.
+      expect(plugins).not.toHaveProperty("preview");
+      expect(JSON.stringify(read)).not.toContain("73317");
       // A one-card widget the default holds is offered as on the dashboard.
       expect(
         read.tiles.find(tile => tile.id === "core/team-activity")
@@ -265,14 +265,17 @@ describe.each(getConfiguredTestDialects())(
       expect(slugs).toEqual(expect.arrayContaining([POSTS, PAGES]));
       expect(slugs).not.toContain(INTERNAL);
       expect(slugs).not.toContain(HIDDEN);
-      expect(mine.find(c => c.slug === POSTS)?.entries).toBe(5);
-      expect(mine.find(c => c.slug === PAGES)?.entries).toBe(3);
+      // Suggested from their edits, so nothing is counted for them.
+      expect(mine.filter(c => c.entries !== undefined)).toEqual([]);
 
-      const theirs = (await galleryOf(editor)).collections.map(c => c.slug);
-      expect(theirs).toContain(PAGES);
-      expect(theirs).not.toContain(POSTS);
-      expect(theirs).not.toContain(INTERNAL);
-      expect(theirs).not.toContain(HIDDEN);
+      const theirs = (await galleryOf(editor)).collections;
+      const theirSlugs = theirs.map(c => c.slug);
+      expect(theirSlugs).toContain(PAGES);
+      expect(theirSlugs).not.toContain(POSTS);
+      expect(theirSlugs).not.toContain(INTERNAL);
+      expect(theirSlugs).not.toContain(HIDDEN);
+      // They edited nothing, so their suggestions rank by entries, counted as them.
+      expect(theirs.find(c => c.slug === PAGES)?.entries).toBe(3);
     });
 
     it("suggests from the collections the reader saved most in the last 30 days", async () => {

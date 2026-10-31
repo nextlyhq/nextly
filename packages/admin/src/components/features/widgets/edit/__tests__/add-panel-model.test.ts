@@ -63,6 +63,23 @@ const READ: GalleryRead = {
   ],
 };
 
+/** The widgets this admin can draw, each titled as the dashboard titles its card. */
+const drawn = (id: string, title: string): [string, DashboardWidget] => [
+  id,
+  {
+    id,
+    title,
+    archetype: "custom",
+    size: sizeBounds({ default: { w: 4, h: 3 } }),
+  },
+];
+const BY_ID = new Map<string, DashboardWidget>([
+  drawn("core/count", "Count"),
+  drawn("core/team", "Team"),
+  drawn("seo/score", "SEO score"),
+  drawn("core/single", "Single"),
+]);
+
 const card = (over: Partial<WidgetPlacement>): WidgetPlacement => ({
   id: "p1",
   widgetId: "core/team",
@@ -74,32 +91,54 @@ const card = (over: Partial<WidgetPlacement>): WidgetPlacement => ({
 
 describe("galleryTiles", () => {
   it("offers Add, then Add another for a widget that allows several", () => {
-    const [count] = galleryTiles(READ, [
-      card({ widgetId: "core/count", config: { collection: "posts" } }),
-    ]);
+    const [count] = galleryTiles(
+      READ,
+      [card({ widgetId: "core/count", config: { collection: "posts" } })],
+      BY_ID
+    );
     expect(count.action).toEqual({ kind: "add-another" });
     expect(count.placed).toBe(1);
-    expect(galleryTiles(READ, [])[0].action).toEqual({ kind: "add" });
+    expect(galleryTiles(READ, [], BY_ID)[0].action).toEqual({ kind: "add" });
   });
 
   it("says a one-card widget the draft holds is on the dashboard", () => {
-    const team = galleryTiles(READ, [card({})]).find(
+    const team = galleryTiles(READ, [card({})], BY_ID).find(
       view => view.tile.id === "core/team"
     );
     expect(team?.action).toEqual({ kind: "on-dashboard" });
   });
 
   it("has no tile for a one-card widget removed this session: its card comes back from Removed", () => {
-    const ids = galleryTiles(READ, [card({ removed: true })]).map(
+    const ids = galleryTiles(READ, [card({ removed: true })], BY_ID).map(
       view => view.tile.id
     );
     expect(ids).toEqual(["core/count", "seo/score"]);
   });
 
+  it("names each tile as the dashboard titles its card, never by its id", () => {
+    const named = galleryTiles(
+      { tiles: [tile({ id: "acme/open-orders", name: "acme/open-orders" })] },
+      [],
+      new Map([drawn("acme/open-orders", "Open orders")])
+    );
+    expect(named.map(view => view.tile.name)).toEqual(["Open orders"]);
+  });
+
+  it("has no tile for a widget this admin cannot draw", () => {
+    const ids = galleryTiles(
+      READ,
+      [],
+      new Map([...BY_ID].filter(([id]) => id !== "seo/score"))
+    ).map(view => view.tile.id);
+    expect(ids).toEqual(["core/count", "core/team"]);
+  });
+
   it("counts a removed card of a several-card widget as not placed", () => {
-    const [count] = galleryTiles(READ, [
-      card({ widgetId: "core/count", removed: true }),
-    ]);
+    const [count] = galleryTiles(
+      READ,
+      [card({ widgetId: "core/count", removed: true })],
+      BY_ID
+    );
     expect(count.action).toEqual({ kind: "add" });
   });
 });
@@ -131,7 +170,7 @@ describe("removedCards", () => {
 });
 
 describe("tilesInChip", () => {
-  const views = galleryTiles(READ, []);
+  const views = galleryTiles(READ, [], BY_ID);
   it("keeps every tile under All, and a chip's own under the chip", () => {
     expect(tilesInChip(views, "all")).toHaveLength(3);
     expect(tilesInChip(views, "plugins").map(v => v.tile.id)).toEqual([
@@ -144,7 +183,7 @@ describe("tilesInChip", () => {
 describe("searchGallery", () => {
   const input = {
     removed: [{ placementId: "r", widgetId: "core/team", title: "Team" }],
-    tiles: galleryTiles(READ, []),
+    tiles: galleryTiles(READ, [], BY_ID),
     collections: READ.collections,
   };
 
@@ -187,9 +226,11 @@ describe("searchGallery", () => {
     const found = searchGallery(
       {
         ...input,
-        tiles: galleryTiles({ tiles: [oneCard] }, [
-          card({ widgetId: "core/single" }),
-        ]),
+        tiles: galleryTiles(
+          { tiles: [oneCard] },
+          [card({ widgetId: "core/single" })],
+          BY_ID
+        ),
       },
       "posts"
     );
@@ -211,7 +252,7 @@ describe("galleryCount", () => {
 });
 
 describe("suggestionsFor", () => {
-  const views = galleryTiles(READ, []);
+  const views = galleryTiles(READ, [], BY_ID);
   it("keeps a pair whose widget reads a collection and can be added", () => {
     expect(suggestionsFor(READ, views, []).map(s => s.label)).toEqual([
       "Posts count",
