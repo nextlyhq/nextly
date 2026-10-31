@@ -50,10 +50,8 @@ import {
 } from "@nextlyhq/ui";
 import {
   MAX_CARD_TITLE_LENGTH,
-  resolveWidgetSettings,
   textLength,
   type AnyWidgetSetting,
-  type PublishedContentSource,
 } from "nextly/config";
 import {
   useCallback,
@@ -62,7 +60,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type ReactNode,
   type RefObject,
   type JSX,
@@ -79,7 +76,6 @@ import { askableWith, titleAsAsked } from "../widget-as-asked";
 import {
   dependentsOf,
   isContentSetting,
-  isDependentSetting,
   sameSettingValue,
   sectionOf,
   staleContentValues,
@@ -88,18 +84,21 @@ import {
 } from "./content-settings";
 import { ContentSettingControl } from "./ContentSettingControl";
 import {
+  initialValues,
+  resetToDefaults,
+  toStoredConfig,
+  type PanelKept,
+} from "./panel-values";
+import {
   drawnSetting,
   overlongMessage,
   overlongSetting,
 } from "./setting-length";
 import { SettingEditorControl } from "./SettingEditorControl";
-
-/** What Done keeps: the settings, as `toStoredConfig` builds them, and the card's own title. */
-export interface PanelKept {
-  config: Record<string, unknown>;
-  /** The title the reader gave the card, trimmed; `""` titles it automatically. */
-  ownTitle: string;
-}
+import {
+  bringRefusedPanelForward,
+  useOnePanelOpen,
+} from "./settings-panel-registry";
 
 export interface SettingsPanelProps {
   /** The card this configures, by its placement: one panel is open at a time (`useOnePanelOpen`). */
@@ -173,133 +172,6 @@ const SECTIONS: readonly { section: SettingSection; label: string }[] = [
 ];
 
 /**
- * The values the form opens with.
- *
- * 🔴 Built from the DECLARATION rather than from the stored config, so a
- * setting the reader has never touched still opens at its default instead of
- * blank — and a key the declaration no longer knows about does not appear as a
- * ghost field. Read through `resolveWidgetSettings`, the server's own reader,
- * so what the form shows is what the card is actually using: a stored value
- * the setting no longer accepts (a retired option, a number past a narrowed
- * bound, a value of another kind) opens at the default the card fell back to,
- * not at the value it set aside. A note's own text over its bound is the
- * exception, opened as written so it can be shortened.
- */
-export function initialValues(
-  settings: readonly AnyWidgetSetting[],
-  config: Record<string, unknown> | undefined
-): Record<string, unknown> {
-  /*
-   * 🔴 Prototype-free, because the KEYS are setting names a plugin chose. On a
-   * `{}` dictionary `__proto__` is not data: assigning it invokes the legacy
-   * prototype setter, so a setting of that name never reached the form and
-   * opened blank instead of at its default. `resolveWidgetSettings` is
-   * prototype-free for the same reason, and this function exists to mirror it.
-   */
-  const values: Record<string, unknown> = Object.create(null);
-  const resolved = resolveWidgetSettings(settings, config);
-  for (const setting of settings) {
-    const stored = config?.[setting.name];
-    // A note over its bound is the one stale value kept as written: it is the
-    // reader's own text, so they shorten it rather than lose it, and Done
-    // refuses it until it fits (`overlongSetting`).
-    values[setting.name] =
-      setting.type === "textarea" && typeof stored === "string"
-        ? stored
-        : (resolved[setting.name] ?? "");
-  }
-  return values;
-}
-
-/**
- * What to store, given what the form holds.
- *
- * 🔴 A value equal to its declared default is DROPPED rather than written. The
- * stored config is the reader's departure from the author's intent, so writing
- * the default back would pin today's default forever — a card would stop
- * following a later change to it, silently, and only for readers who happened
- * to open the panel.
- */
-export function toStoredConfig(
-  settings: readonly AnyWidgetSetting[],
-  values: Record<string, unknown>,
-  existing: Record<string, unknown> | undefined
-): Record<string, unknown> {
-  const stored: Record<string, unknown> = Object.create(null);
-
-  /*
-   * 🔴 A stored key the declaration does not know is CARRIED, not dropped.
-   * `resolveWidgetSettings` keeps such a key deliberately — a plugin that
-   * renames a setting or is uninstalled must not cost a reader the values they
-   * chose, because reinstalling it restores them. This form is built from the
-   * DECLARATION, so it never sees those keys; rebuilding the config from it
-   * alone, and writing that back over the whole `config`, discarded exactly
-   * what the reading layer went out of its way to preserve. Opening the panel
-   * and pressing Save was enough to lose them.
-   */
-  const declared = new Set(settings.map(setting => setting.name));
-  for (const key of Object.keys(existing ?? {})) {
-    if (!declared.has(key)) stored[key] = existing?.[key];
-  }
-
-  for (const setting of settings) {
-    /*
-     * 🔴 Read through `hasOwn`, not by indexing. `values` comes back from the
-     * form, and on an ordinary object `values["__proto__"]` answers
-     * `Object.prototype` rather than `undefined` — so a setting of that name
-     * passed both guards below and was written to storage as the prototype
-     * object, for a field the reader never filled in.
-     */
-    if (!Object.hasOwn(values, setting.name)) continue;
-    const value = values[setting.name];
-    if (value === undefined || value === "") continue;
-    if (sameSettingValue(value, setting.defaultValue)) continue;
-    stored[setting.name] = value;
-  }
-  return stored;
-}
-
-/**
- * What the form holds after "Reset to defaults" of the settings in `settings`, one section's.
- *
- * Every one goes back to its declared default, its dependents with it, except a Collection
- * setting that declares no default, which Reset leaves as it is. Such a setting names the card's
- * collection: it is the card's identity rather than a preference, chosen when the card was
- * placed and changed with the Collection control itself, so Reset does not undo it, and does not
- * empty it into a card of no collection at all. A Collection setting that declares a default
- * (Recently edited's "All collections") resets like any other.
- *
- * A dependent goes back to its default only where the default names a field it may use over the
- * collection kept, read from `values` where the collection is in another section; otherwise to
- * none, so Reset never draws a choice the collection does not have.
- */
-export function resetToDefaults(
-  settings: readonly AnyWidgetSetting[],
-  values: Record<string, unknown>,
-  sources?: readonly PublishedContentSource[]
-): Record<string, unknown> {
-  const reset: Record<string, unknown> = Object.create(null);
-  for (const setting of settings) {
-    const kept =
-      setting.type === "collection" &&
-      setting.defaultValue === undefined &&
-      Object.hasOwn(values, setting.name);
-    reset[setting.name] = kept
-      ? values[setting.name]
-      : (setting.defaultValue ?? "");
-  }
-  for (const setting of settings) {
-    if (isDependentSetting(setting)) {
-      const collection = Object.hasOwn(reset, setting.of)
-        ? reset[setting.of]
-        : values[setting.of];
-      reset[setting.name] = startingValue(setting, collection, sources);
-    }
-  }
-  return reset;
-}
-
-/**
  * A copy of `values` the form may own.
  *
  * 🔴 The form must never be handed the panel's memoised baseline itself.
@@ -346,6 +218,25 @@ function usePanelBaseline(
     return values;
   }, [settings, config, stale, sources]);
   return { stale, defaultValues };
+}
+
+/**
+ * The form's values once the card's stored settings moved from `previous` to `next` behind the
+ * open panel: each value the reader left as it opened takes the card's new one, and each they
+ * changed stays theirs. Judged by value, as the stored config is compared everywhere.
+ */
+function followBaseline(
+  current: Record<string, unknown>,
+  previous: Record<string, unknown>,
+  next: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = Object.create(null);
+  for (const name of Object.keys(next)) {
+    merged[name] = sameSettingValue(current[name], previous[name])
+      ? next[name]
+      : current[name];
+  }
+  return merged;
 }
 
 /** Whether a setting's value is a choice the reader made, rather than none. */
@@ -398,8 +289,22 @@ function usePanelForm(
   // what it opens with, a value a notice says was reset is the value Done
   // keeps, and a change the reader cancelled is gone. Never while it stays
   // open, where it would discard the reader's edits.
+  //
+  // While it is open, the card can still change behind it (the panel is not modal, so its quick
+  // setting saves at once): a setting the reader has not touched here follows the card, and one
+  // they changed keeps their change, so Done never puts back a value the card has moved on from.
+  const lastBaseline = useRef(defaultValues);
   useEffect(() => {
-    if (open) return;
+    const previous = lastBaseline.current;
+    lastBaseline.current = defaultValues;
+    if (open) {
+      if (previous !== defaultValues) {
+        form.reset(
+          formCopy(followBaseline(form.getValues(), previous, defaultValues))
+        );
+      }
+      return;
+    }
     form.reset(formCopy(defaultValues));
     setResetNotices({});
   }, [open, defaultValues, form]);
@@ -483,9 +388,18 @@ function usePanelDraft(
 function useOwnTitle(open: boolean, stored: string | undefined) {
   const [ownTitle, setOwnTitle] = useState(stored ?? "");
   const [problem, setProblem] = useState<string | undefined>(undefined);
+  // The stored title the panel last took up, so a title stored behind the open panel replaces
+  // the field only while the reader has not changed it there.
+  const taken = useRef(stored ?? "");
   useEffect(() => {
-    if (open) return;
-    setOwnTitle(stored ?? "");
+    const next = stored ?? "";
+    const previous = taken.current;
+    taken.current = next;
+    if (open) {
+      setOwnTitle(current => (current === previous ? next : current));
+      return;
+    }
+    setOwnTitle(next);
     setProblem(undefined);
   }, [open, stored]);
   /** Why the title cannot be kept, said beside it, or `undefined` when it can. */
@@ -550,143 +464,6 @@ function usePanelDone(
     [saving, onOpenChange]
   );
   return { saving, failure, submit, changeOpen };
-}
-
-/** An open panel, as the others and the dashboard ask about it. */
-interface OpenPanel {
-  /** Whether it holds a change Done has not kept. */
-  holdsChanges: () => boolean;
-  close: () => void;
-  /** Ask the reader what to do with its change, and run `then` once it is kept or discarded. */
-  askToLeave: (then: () => void) => void;
-  /**
-   * Its change as Done would keep it, `"invalid"` when Done would refuse it (the panel then
-   * shows why), or `undefined` when it holds none.
-   */
-  stage: () => Promise<PanelKept | "invalid" | undefined>;
-  /** Take focus on the first field its last refused staging named, if one was refused. */
-  focusRefused: () => void;
-}
-
-/**
- * The panels open now, by placement.
- *
- * Non-modal panels do not close one another the way a modal one closes by being covered, so the
- * one rule for opening is kept here: ONE panel at a time. Another card's panel that holds nothing
- * unsaved closes for the new one; one holding a change keeps it, is brought forward asking what
- * to do with it, and the new one opens only once that is answered.
- */
-const openPanels = new Map<string, OpenPanel>();
-const panelListeners = new Set<() => void>();
-
-function panelsChanged(): void {
-  for (const listener of panelListeners) listener();
-}
-
-/**
- * Open the panel of `placementId` through `open`, one panel at a time: every opener of a card's
- * settings panel asks through this, so no panel opens over another holding a change.
- */
-export function requestSettingsPanel(
-  placementId: string,
-  open: () => void
-): void {
-  const others = [...openPanels].filter(([id]) => id !== placementId);
-  const holding = others.find(([, panel]) => panel.holdsChanges());
-  if (holding !== undefined) {
-    holding[1].askToLeave(open);
-    return;
-  }
-  for (const [, panel] of others) panel.close();
-  open();
-}
-
-/** One open panel's change, staged by the dashboard's prompt to be saved with the rest. */
-export interface StagedPanel {
-  placementId: string;
-  kept: PanelKept;
-}
-
-/**
- * Every open panel's change as its Done would keep it, for the dashboard's prompt to save with
- * the rest while customising, or `"invalid"` when any panel's own checks refuse its change: that
- * panel then shows why, and nothing is to be saved until the reader fixes it or discards.
- */
-export async function stagePendingPanels(): Promise<
-  readonly StagedPanel[] | "invalid"
-> {
-  const staged: StagedPanel[] = [];
-  for (const [placementId, panel] of openPanels) {
-    const kept = await panel.stage();
-    if (kept === "invalid") return "invalid";
-    if (kept !== undefined) staged.push({ placementId, kept });
-  }
-  return staged;
-}
-
-/**
- * Bring forward the panel whose change the dashboard's prompt could not stage, with focus on the
- * first field it refused. Asked once that prompt has closed, after its own focus has gone back,
- * so the panel's is the focus that stays.
- */
-export function bringRefusedPanelForward(): void {
-  window.setTimeout(() => {
-    for (const panel of openPanels.values()) panel.focusRefused();
-  }, 0);
-}
-
-function subscribePanels(listener: () => void): () => void {
-  panelListeners.add(listener);
-  return () => {
-    panelListeners.delete(listener);
-  };
-}
-
-function anyPanelHoldsChanges(): boolean {
-  return [...openPanels.values()].some(panel => panel.holdsChanges());
-}
-
-/**
- * Whether an open settings panel holds a change Done has not kept: what the dashboard's own leave
- * prompt also asks about while customising, where a panel leaves the asking to it.
- */
-export function useSettingsPanelHoldsChanges(): boolean {
-  return useSyncExternalStore(
-    subscribePanels,
-    anyPanelHoldsChanges,
-    () => false
-  );
-}
-
-function useOnePanelOpen(
-  placementId: string,
-  open: boolean,
-  holdsChanges: boolean,
-  handlers: Pick<OpenPanel, "close" | "askToLeave" | "stage" | "focusRefused">
-) {
-  const changes = useRef(holdsChanges);
-  changes.current = holdsChanges;
-  const latest = useRef(handlers);
-  latest.current = handlers;
-  useEffect(() => {
-    if (!open) return undefined;
-    openPanels.set(placementId, {
-      holdsChanges: () => changes.current,
-      close: () => latest.current.close(),
-      askToLeave: then => latest.current.askToLeave(then),
-      stage: () => latest.current.stage(),
-      focusRefused: () => latest.current.focusRefused(),
-    });
-    panelsChanged();
-    return () => {
-      openPanels.delete(placementId);
-      panelsChanged();
-    };
-  }, [open, placementId]);
-  // The dashboard's leave prompt follows whether this panel holds a change as it changes.
-  useEffect(() => {
-    if (open) panelsChanged();
-  }, [open, holdsChanges]);
 }
 
 /**
@@ -1104,7 +881,19 @@ function usePanelKeeping(args: {
       }
     }
   };
-  return { done, stage, focusRefused, clearFilters };
+  /**
+   * Save the panel's change from a prompt, judged by Done's own checks: `true` once kept, or with
+   * nothing to keep; `false`, keeping the reader in the panel, when a check refuses it.
+   */
+  const saveChecked = async (): Promise<boolean> => {
+    const staged = await stage();
+    if (staged === "invalid") {
+      bringRefusedPanelForward();
+      return false;
+    }
+    return staged === undefined ? true : submit(staged);
+  };
+  return { done, stage, focusRefused, clearFilters, saveChecked };
 }
 
 /**
@@ -1117,16 +906,15 @@ function PanelLeavePrompt({
   title,
   saving,
   changeOpen,
-  submit,
-  kept,
+  save,
 }: {
   leaving: (() => void) | undefined;
   setLeaving: (then: (() => void) | undefined) => void;
   title: string;
   saving: boolean;
   changeOpen: (open: boolean) => void;
-  submit: (kept: PanelKept) => Promise<boolean>;
-  kept: PanelKept;
+  /** Keep the panel's change by Done's own checks, answering whether it was kept. */
+  save: () => Promise<boolean>;
 }) {
   return (
     <LeavePrompt
@@ -1140,7 +928,7 @@ function PanelLeavePrompt({
         leaving?.();
       }}
       onSave={() => {
-        void submit(kept).then(landed => {
+        void save().then(landed => {
           setLeaving(undefined);
           if (landed) leaving?.();
         });
@@ -1295,10 +1083,13 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
       // Installed only while the panel is open: a closed panel holds nothing to lose. And not
       // while customising, where the dashboard's own prompt asks for it, so a leave is asked once.
       disabled={!open || props.defersLeave === true}
-      onSave={() => submit(kept)}
+      onSave={keeping.saveChecked}
+      // A Save the prompt could not make keeps the reader in the panel, on what it refused.
+      onCancel={bringRefusedPanelForward}
     >
       <PanelLeavePrompt
-        {...{ leaving, title, saving, changeOpen, submit, kept }}
+        {...{ leaving, title, saving, changeOpen }}
+        save={keeping.saveChecked}
         setLeaving={next => setLeaving(() => next)}
       />
       <Sheet open={open} onOpenChange={changeOpen} modal={false}>

@@ -59,7 +59,7 @@ import { RemovalNotice } from "./edit/RemovalNotice";
 import {
   bringRefusedPanelForward,
   useSettingsPanelHoldsChanges,
-} from "./edit/SettingsPanel";
+} from "./edit/settings-panel-registry";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
 import { useCardRemoval } from "./edit/useCardRemoval";
 import { useCardSettingsWrite } from "./edit/useCardSettingsWrite";

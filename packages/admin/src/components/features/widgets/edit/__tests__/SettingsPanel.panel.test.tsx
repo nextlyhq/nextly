@@ -13,11 +13,9 @@ import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  requestSettingsPanel,
-  SettingsPanel,
-  type PanelKept,
-} from "../SettingsPanel";
+import type { PanelKept } from "../panel-values";
+import { requestSettingsPanel } from "../settings-panel-registry";
+import { SettingsPanel } from "../SettingsPanel";
 
 const sources: PublishedContentSource[] = [
   {
@@ -137,6 +135,57 @@ describe("the panel's sections", () => {
     expect(screen.queryByRole("region", { name: "Data" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Advanced" })).toBeNull();
     expect(screen.getByRole("region", { name: "Display" })).toBeTruthy();
+  });
+});
+
+describe("a change made to the card behind the open panel", () => {
+  /** The panel open over `config`, re-drawn as the card's stored settings change. */
+  function openOver(config: Record<string, unknown>, ownTitle?: string) {
+    const onDone = vi.fn((_kept: PanelKept, settled: { saved: () => void }) =>
+      settled.saved()
+    );
+    const draw = (stored: Record<string, unknown>, title?: string) => (
+      <SettingsPanel
+        placementId="p1"
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={LIST}
+        config={stored}
+        ownTitle={title}
+        onDone={onDone}
+      />
+    );
+    const view = render(draw(config, ownTitle));
+    return {
+      onDone,
+      storedBecomes: (next: Record<string, unknown>, title?: string) =>
+        view.rerender(draw(next, title)),
+    };
+  }
+
+  it("keeps a setting the card changed meanwhile, where the panel left it untouched", async () => {
+    const { onDone, storedBecomes } = openOver({ collection: "posts" });
+    // The reader changes the title in the panel, and the card's quick setting saves its rows.
+    await userEvent.type(screen.getByLabelText("Title"), "Mine");
+    storedBecomes({ collection: "posts", limit: 9 });
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(kept(onDone)).toEqual({
+      config: { collection: "posts", limit: 9 },
+      ownTitle: "Mine",
+    });
+  });
+
+  it("keeps the reader's own change over the card's, for a setting the panel changed", async () => {
+    const { onDone, storedBecomes } = openOver({ collection: "posts" });
+    const rows = screen.getByRole("spinbutton", { name: /Number of items/ });
+    await userEvent.clear(rows);
+    await userEvent.type(rows, "7");
+    storedBecomes({ collection: "posts", limit: 9 });
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(kept(onDone)?.config).toEqual({ collection: "posts", limit: 7 });
   });
 });
 
@@ -292,6 +341,28 @@ describe("leaving with changes still in the panel", () => {
     act(() => window.history.pushState(null, "", "/admin/elsewhere"));
     const prompt = await screen.findByRole("alertdialog");
     expect(prompt).toHaveTextContent("Unsaved Changes");
+  });
+
+  it("refuses the prompt's Save, as Done would, for a change the panel's checks refuse", async () => {
+    const { onDone } = panel({ collection: "posts" });
+    // A chip begun and not finished: Done refuses it, so the prompt's Save must too.
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Condition field" })
+    );
+    await userEvent.click(screen.getByRole("option", { name: "Title" }));
+    await userEvent.type(screen.getByLabelText("Title"), "Mine");
+    const before = window.location.pathname;
+    act(() => window.history.pushState(null, "", "/admin/elsewhere-refused"));
+    const prompt = await screen.findByRole("alertdialog");
+    await userEvent.click(
+      within(prompt).getByRole("button", { name: "Save Changes" })
+    );
+    expect(
+      await screen.findByText("Finish this filter, or remove it.")
+    ).toBeTruthy();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(before);
   });
 
   it("lets the reader leave a panel that holds no change", async () => {

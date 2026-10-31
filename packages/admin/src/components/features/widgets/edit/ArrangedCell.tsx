@@ -12,6 +12,8 @@
 
 import type { GridSize } from "nextly/config";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -33,12 +35,10 @@ import type {
 import type { CellSlotLookup } from "../archetypes/types";
 import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
-import { cardOuterWidth } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
 import type { MoveDirection } from "../layout-editor";
 import type { PlacementReport } from "../reported-placements";
 import { cardRowStyle, cardSpanClass, drawnSize } from "../sizes";
-import { useDashboardWidthAround } from "../useDashboardWidth";
 import {
   settingsAsAsked,
   titleAsAsked,
@@ -55,14 +55,17 @@ import {
   CustomizingFence,
 } from "./CustomizingFence";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
-import { requestSettingsPanel, SettingsPanel } from "./SettingsPanel";
-import { SettingsPreview } from "./SettingsPreview";
+import { requestSettingsPanel } from "./settings-panel-registry";
+import type { SettingsPanelProps } from "./SettingsPanel";
 import {
   useCardQuickSetting,
   useQuickPopoverOpening,
   type CellSettingsWrite,
 } from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
+
+/** A card's settings panel, fetched when a reader first opens one (`CellSettings`). */
+const CellSettings = lazy(() => import("./CellSettings"));
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
@@ -243,7 +246,6 @@ function useCardControls(
   props: ArrangedCellProps,
   widget: DashboardWidget,
   size: GridSize,
-  hasSettings: boolean,
   setSettingsOpen: (open: boolean) => void
 ) {
   // From the DECLARED widget, so the change is judged against the reader's stored settings.
@@ -271,8 +273,6 @@ function useCardControls(
   const { onOpenChange } = popover;
   useEffect(() => onOpenChange(false), [props.isEditing, onOpenChange]);
   const openSettings = settingsOpener(
-    quick.popover?.settings.length ?? 0,
-    hasSettings,
     quick.popover ? () => popover.openFrom(menus.button.current) : undefined,
     () => setSettingsOpen(true)
   );
@@ -317,18 +317,15 @@ function useMenuButtons(props: ArrangedCellProps) {
 }
 
 /**
- * What the menus' Settings does: opens the quick popover where the card has one, else the
- * settings panel. Offered where the card has a setting to change, so a card whose popover holds
- * only its Size, which the menu lists itself, offers none.
+ * What the menus' Settings does: opens the quick popover where the card has one (its More
+ * settings leads on to the panel), else the settings panel itself. Offered on every card, since
+ * every card has a title its reader can give it in the panel.
  */
 function settingsOpener(
-  popoverSettings: number,
-  hasSettings: boolean,
   openPopover: (() => void) | undefined,
-  openSheet: () => void
-): (() => void) | undefined {
-  if (popoverSettings === 0 && !hasSettings) return undefined;
-  return openPopover ?? openSheet;
+  openPanel: () => void
+): () => void {
+  return openPopover ?? openPanel;
 }
 
 /** Whether a card's settings cannot be saved at rest right now: a write is in flight, or none is possible. */
@@ -392,7 +389,7 @@ function restingMenuFor(
  * closes when the save lands and says why in place when it does not.
  */
 function doneFor(props: ArrangedCellProps): {
-  done: ComponentProps<typeof SettingsPanel>["onDone"];
+  done: SettingsPanelProps["onDone"];
   blocked: string | undefined;
 } {
   const write = props.settingsWrite;
@@ -545,76 +542,6 @@ function CellEditActions({ actions }: { actions: ReactNode }) {
 }
 
 /**
- * The card's settings panel, with the card at its top as the panel's values would draw it: the
- * declared widget, the reader's stored settings it was asked with, the answer it shows now, and
- * the size and width it is drawn at on the dashboard.
- */
-function CellSettings({
-  row,
-  widget,
-  data,
-  done,
-  open,
-  onOpenChange,
-  focusFirstField,
-  size,
-  returnFocusTo,
-  isEditing,
-}: {
-  row: ArrangedCellProps["row"];
-  widget: DashboardWidget;
-  data: ArrangedCellProps["data"];
-  done: ReturnType<typeof doneFor>;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  focusFirstField: boolean;
-  size: GridSize;
-  returnFocusTo: () => HTMLElement | null;
-  isEditing: boolean;
-}) {
-  // The card's width on the dashboard, from the dashboard's own and the card's span, the rule
-  // its first query is sized by: the width it has once the panel closes.
-  const dashboardWidth = useDashboardWidthAround();
-  const cardWidth =
-    dashboardWidth === undefined
-      ? undefined
-      : cardOuterWidth(size.w, dashboardWidth);
-  return (
-    <SettingsPanel
-      placementId={row.placementId}
-      open={open}
-      onOpenChange={onOpenChange}
-      focusFirstField={focusFirstField}
-      returnFocusTo={returnFocusTo}
-      // While customising, the dashboard's own leave prompt asks for the panel too.
-      defersLeave={isEditing}
-      title={widget.title}
-      settings={widget.settings ?? []}
-      // The declaration, not the card as asked: each candidate collection is
-      // judged from it, so this card's own grouping is not carried to another.
-      widget={row.widget}
-      config={row.config}
-      ownTitle={row.ownTitle}
-      onDone={done.done}
-      {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
-      renderPreview={(draft, clearFilters) => (
-        <SettingsPreview
-          widget={row.widget}
-          placementId={row.placementId}
-          stored={row.config}
-          draft={draft.config}
-          ownTitle={draft.ownTitle}
-          shown={data}
-          size={size}
-          cardWidth={cardWidth}
-          onClearFilters={clearFilters}
-        />
-      )}
-    />
-  );
-}
-
-/**
  * The card's settings sheet: whether it is open, whether it opens on its first field, and the
  * empty state's way into it.
  *
@@ -627,6 +554,11 @@ function CellSettings({
  */
 function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
   const [settingsOpen, setOpenNow] = useState(false);
+  // Whether the panel has opened yet: until it has, its module is not loaded at all.
+  const [everOpened, setEverOpened] = useState(false);
+  useEffect(() => {
+    if (settingsOpen) setEverOpened(true);
+  }, [settingsOpen]);
   const [focusFirstField, setFocusFirstField] = useState(false);
   const { placementId } = props.row;
   // Every way into the panel asks through `requestSettingsPanel`, so it never opens over another
@@ -659,6 +591,7 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
     : undefined;
   return {
     settingsOpen,
+    everOpened: everOpened || settingsOpen,
     setSettingsOpen,
     focusFirstField,
     changeSettingsOpen,
@@ -716,21 +649,15 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     }),
     [row.placementId, row.widget, row.config, size, sources]
   );
-  const controls = useCardControls(
-    props,
-    widget,
-    size,
-    hasSettings,
-    setSettingsOpen
-  );
+  const controls = useCardControls(props, widget, size, setSettingsOpen);
   const { quick, header: restingControls, done } = controls;
   const { titleTrigger, editActions } = popoverPlaces(
     props,
     controls,
     size,
     widget.title,
-    // More settings, in the popover: the panel, where the widget declares settings.
-    hasSettings ? () => setSettingsOpen(true) : undefined
+    // More settings, in the popover: the panel, which every card has for its own title.
+    () => setSettingsOpen(true)
   );
   // While customising, the card's header keeps the room its controls are drawn
   // over; at rest it holds the menu.
@@ -748,18 +675,20 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       style={cardRowStyle(rows)}
     >
       <CellEditActions actions={editActions} />
-      {/* Mounted whenever the widget offers settings, not only while
-          customising. A closed `Sheet` renders nothing, so this costs a card
-          nothing — and it is what lets the panel outlive customise mode rather
+      {/* On every card, since every card has its own title to set, once its reader first opens
+          it: the panel's module is fetched then, not with the dashboard. Kept mounted after, not
+          only while customising, which is what lets the panel outlive customise mode rather
           than being torn out from under a reader still filling it in. */}
-      {hasSettings ? (
-        <CellSettings
-          {...{ row, widget, data, done, size, isEditing }}
-          open={sheet.settingsOpen}
-          onOpenChange={sheet.changeSettingsOpen}
-          focusFirstField={sheet.focusFirstField}
-          returnFocusTo={controls.popover.returnFocusTo}
-        />
+      {sheet.everOpened ? (
+        <Suspense fallback={null}>
+          <CellSettings
+            {...{ row, widget, data, done, size, isEditing }}
+            open={sheet.settingsOpen}
+            onOpenChange={sheet.changeSettingsOpen}
+            focusFirstField={sheet.focusFirstField}
+            returnFocusTo={controls.popover.returnFocusTo}
+          />
+        </Suspense>
       ) : null}
       <CardGrowContext.Provider value={setContentHeight}>
         <CardHiddenReportContext.Provider value={reportCardHidden}>

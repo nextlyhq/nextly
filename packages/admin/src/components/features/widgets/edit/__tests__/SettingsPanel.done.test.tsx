@@ -11,6 +11,7 @@ import type { AnyWidgetSetting } from "nextly/config";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { PanelKept } from "../panel-values";
 import { SettingsPanel, type DoneSettled } from "../SettingsPanel";
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -29,7 +30,7 @@ const SETTINGS: AnyWidgetSetting[] = [
 /** The sheet over an `onDone` that waits, and how to end that wait. */
 function sheet(blocked?: string) {
   let settled: DoneSettled | undefined;
-  const onDone = vi.fn((_config: Record<string, unknown>, s: DoneSettled) => {
+  const onDone = vi.fn((_kept: PanelKept, s: DoneSettled) => {
     settled = s;
   });
   const onOpenChange = vi.fn();

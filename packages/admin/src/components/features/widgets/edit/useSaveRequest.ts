@@ -16,7 +16,10 @@
 
 import { useCallback, useRef, useState } from "react";
 
-import { bringRefusedPanelForward, stagePendingPanels } from "./SettingsPanel";
+import {
+  bringRefusedPanelForward,
+  stagePendingPanels,
+} from "./settings-panel-registry";
 import type {
   SaveOptions,
   SaveOutcome,
@@ -52,6 +55,30 @@ function stagedSettings({
   return { placementId, config: kept.config, ownTitle: kept.ownTitle };
 }
 
+/**
+ * Save with every open settings panel's change staged, as each panel's Done would keep it, and
+ * answer whether the reader's work is now stored. A change a panel refuses saves nothing: that
+ * panel says why and takes focus. The one path every Save of the customised dashboard takes.
+ */
+async function withPanelsStaged(
+  save: (options?: SaveOptions) => Promise<SaveOutcome>,
+  options: SaveOptions = {}
+): Promise<boolean> {
+  const staged = await stagePendingPanels();
+  if (staged === "invalid") {
+    bringRefusedPanelForward();
+    return false;
+  }
+  const outcome = await save(
+    staged.length === 0
+      ? Object.keys(options).length === 0
+        ? undefined
+        : options
+      : { ...options, staged: staged.map(stagedSettings) }
+  );
+  return outcome === "saved";
+}
+
 export function useSaveRequest(
   save: (options?: SaveOptions) => Promise<SaveOutcome>,
   isUnreadable: boolean
@@ -71,17 +98,7 @@ export function useSaveRequest(
     }
     // Pending from the first step, the panels' staging included, so a second
     // request while they are judged waits for this one too.
-    const saving = (async () => {
-      const staged = await stagePendingPanels();
-      if (staged === "invalid") {
-        bringRefusedPanelForward();
-        return false;
-      }
-      const outcome = await save(
-        staged.length === 0 ? undefined : { staged: staged.map(stagedSettings) }
-      );
-      return outcome === "saved";
-    })();
+    const saving = withPanelsStaged(save);
     pending.current = saving;
     try {
       return await saving;
@@ -90,8 +107,9 @@ export function useSaveRequest(
     }
   }, [isUnreadable, save]);
 
+  // The confirmed replacement saves an open panel's change too, judged as any Save's is.
   const confirmReplace = useCallback(() => {
-    void save({ replaceUnreadable: true });
+    void withPanelsStaged(save, { replaceUnreadable: true });
   }, [save]);
 
   return { request, askingReplace, setAskingReplace, confirmReplace };

@@ -49,13 +49,13 @@ import { sizeAxes } from "./CardActionsMenu";
 import { CardQuickSetting } from "./CardQuickSetting";
 import { dependentsOf, startingValue } from "./content-settings";
 import { collectionOptions } from "./ContentSettingControl";
+import { initialValues, toStoredConfig } from "./panel-values";
 import {
   popoverSettingsOf,
   quickSettingOf,
   quickValueLabel,
   type PopoverSetting,
 } from "./quick-setting";
-import { initialValues, toStoredConfig } from "./SettingsPanel";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 
 /** How a cell at rest saves its card's settings and size, bound to that card by the grid. */

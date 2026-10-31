@@ -150,6 +150,7 @@ function followedDefault(
       h: choice.h,
       removed: choice.removed,
       ...(choice.config === undefined ? {} : { config: choice.config }),
+      ...(choice.title === undefined ? {} : { title: choice.title }),
     };
   });
 }
@@ -383,5 +384,46 @@ describe("the quick popover at rest", () => {
     expect(
       await screen.findByRole("dialog", { name: "Quick settings for Styled" })
     ).toBeInTheDocument();
+  });
+});
+
+describe("what a card's own write says it is", () => {
+  it("names the card by the title its reader gave it, as the card shows it", async () => {
+    // Two copies of one widget are told apart by their own titles: so is what a write says.
+    layoutResponse = {
+      ...layout(),
+      placements: [
+        layout().placements[0]!,
+        { ...DEFAULTS[1]!, title: "Drafts board" },
+      ],
+    };
+    // The write fails, so what is said comes from the write itself.
+    api.put.mockRejectedValue(new Error("network down"));
+    renderGrid();
+    const user = userEvent.setup();
+    await chooseWidthAtRest(user, "Drafts board", "Half width, 6 columns");
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toast.error.mock.calls.at(-1)?.[0]).toMatch(
+      /^Could not save Drafts board's size/
+    );
+  });
+});
+
+describe("Settings for a card whose widget declares none", () => {
+  it("opens the card's settings panel, where its own title is set", async () => {
+    // Every card has a title its reader can give it, so every card has Settings.
+    renderGrid();
+    const user = userEvent.setup();
+    const menu = await openMenu(user, "Plain");
+    await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+    // Its popover holds its Size, and More settings leads on to the panel.
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Plain",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: "Plain settings" });
+    expect(within(panel).getByLabelText("Title")).toBeInTheDocument();
   });
 });

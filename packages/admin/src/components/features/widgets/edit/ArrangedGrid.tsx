@@ -24,6 +24,7 @@
 import type { GridSize, WidgetSizeBounds } from "nextly/config";
 import type { JSX, RefObject } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
 import type {
@@ -39,6 +40,7 @@ import {
 } from "../layout-editor";
 import { useReportedPlacements } from "../reported-placements";
 import { cardRowStyle, GRID_CLASS } from "../sizes";
+import { titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
@@ -226,7 +228,9 @@ function cellDragFor(
  */
 function cellSettingsWrite(
   settingsWrite: ArrangedGridProps["writes"]["settings"],
-  row: ArrangedWidget
+  row: ArrangedWidget,
+  /** The title the card is drawn under, which what a write says names it by. */
+  shownTitle: string
 ): { settingsWrite?: CellSettingsWrite } {
   if (!settingsWrite) return {};
   const { resize } = settingsWrite;
@@ -235,7 +239,7 @@ function cellSettingsWrite(
       write: (config, callbacks, ownTitle) =>
         settingsWrite.write(
           row.placementId,
-          row.widget.title,
+          shownTitle,
           config,
           callbacks,
           ownTitle
@@ -246,7 +250,7 @@ function cellSettingsWrite(
             resize: (size: GridSize, callbacks: CardSettingsWriteCallbacks) =>
               resize(
                 row.placementId,
-                row.widget.title,
+                shownTitle,
                 size,
                 row.widget.size,
                 callbacks
@@ -320,6 +324,11 @@ export function ArrangedGrid({
   gridRef,
   on,
 }: ArrangedGridProps): JSX.Element {
+  // The title each card is drawn under, as its cell draws it (`titleAsAsked`): what a write or
+  // a removal says names the card by it, so two copies of one widget are told apart.
+  const sources = useBranding().widgetSources;
+  const shownTitle = (row: ArrangedWidget) =>
+    titleAsAsked(row.widget, row.config, sources, row.ownTitle).title;
   // The cards that reported themselves off the dashboard, each as it is drawn.
   const { placements: hidden, report: reportHidden } = useReportedPlacements();
   const answeredAt = oldestAnswer(rows, { hidden, requested, updatedAtFor });
@@ -366,7 +375,7 @@ export function ArrangedGrid({
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
-            {...cellSettingsWrite(writes.settings, row)}
+            {...cellSettingsWrite(writes.settings, row, shownTitle(row))}
             reportHidden={reportHidden}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
@@ -400,7 +409,7 @@ export function ArrangedGrid({
               ...(on.dismiss
                 ? {
                     dismiss: () =>
-                      on.dismiss?.(row.placementId, row.widget.title),
+                      on.dismiss?.(row.placementId, shownTitle(row)),
                   }
                 : {}),
               saveSettings: (config, ownTitle) =>

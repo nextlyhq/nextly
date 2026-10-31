@@ -28,7 +28,7 @@ import { useState } from "react";
 import * as Icons from "@admin/components/icons";
 
 import { DashboardEditBar } from "./DashboardEditBar";
-import { useSettingsPanelHoldsChanges } from "./SettingsPanel";
+import { useSettingsPanelHoldsChanges } from "./settings-panel-registry";
 import type { DashboardFocus } from "./useDashboardFocus";
 import type { LayoutEditor } from "./useLayoutEditor";
 import type { SaveRequest } from "./useSaveRequest";
