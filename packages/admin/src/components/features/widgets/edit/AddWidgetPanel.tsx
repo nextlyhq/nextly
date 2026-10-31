@@ -42,6 +42,7 @@ import {
   useState,
   type JSX,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -69,6 +70,8 @@ import {
   widthsLabel,
   type GalleryChip,
   type GalleryCollection,
+  type GalleryPair,
+  type GallerySearch,
   type GalleryRead,
   type GalleryTile,
   type GalleryTileView,
@@ -415,6 +418,232 @@ function RadioChips({
   );
 }
 
+/** The settings a card added from the step starts with: what the reader chose there. */
+function stepSettings(
+  step: AddStep,
+  widget: DashboardWidget | undefined
+): Record<string, unknown> | undefined {
+  const period = periodOf(widget);
+  return newCardSettings(step.tile, {
+    ...(step.collection === "" ? {} : { collection: step.collection }),
+    ...(period === undefined || step.period === undefined
+      ? {}
+      : { period: { name: period.name, value: step.period } }),
+  });
+}
+
+/** The gallery before its read has answered: loading, or failed with Try again. */
+function GalleryPending({ gallery }: { gallery: GalleryAnswer }): JSX.Element {
+  if (gallery.isError) {
+    return (
+      <div
+        className="space-y-2 text-sm text-muted-foreground"
+        data-testid="add-panel-error"
+      >
+        <p className="font-medium text-foreground">
+          The widgets could not be loaded.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={gallery.retry}
+        >
+          Try again
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <ul
+      aria-busy="true"
+      aria-label="Loading widgets"
+      className="grid grid-cols-2 gap-2.5"
+      data-testid="add-panel-loading"
+    >
+      {[0, 1, 2, 3].map(index => (
+        <li
+          key={index}
+          className="h-44 animate-pulse rounded-lg border border-border bg-muted/40"
+        />
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * What the gallery says when it lists nothing: that a search matched nothing, with Clear; or,
+ * before any search, that the chip has nothing under it, with the way back to every widget.
+ */
+function NothingFound({
+  query,
+  chip,
+  onClear,
+  onShowAll,
+}: {
+  query: string;
+  chip: GalleryChip;
+  onClear: () => void;
+  onShowAll: () => void;
+}): JSX.Element {
+  if (query.trim() === "") {
+    return (
+      <div
+        className="space-y-2 text-sm text-muted-foreground"
+        data-testid="add-panel-chip-empty"
+      >
+        <p className="font-medium text-foreground">
+          No {GALLERY_CHIPS.find(each => each.id === chip)?.label} widgets to
+          add.
+        </p>
+        <Button type="button" variant="outline" size="sm" onClick={onShowAll}>
+          Show all widgets
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="space-y-2 text-sm text-muted-foreground"
+      data-testid="add-panel-none"
+    >
+      <p className="font-medium text-foreground">
+        No widgets match “{query.trim()}”
+      </p>
+      <p>Try another word, or clear the search to see every widget.</p>
+      <Button type="button" variant="outline" size="sm" onClick={onClear}>
+        Clear
+      </Button>
+    </div>
+  );
+}
+
+/** The search, the chips and the count line, which describes the search to a screen reader. */
+function SearchAndChips({
+  searchRef,
+  query,
+  onQuery,
+  chip,
+  onChip,
+  count,
+}: {
+  searchRef: RefObject<HTMLInputElement | null>;
+  query: string;
+  onQuery: (query: string) => void;
+  chip: GalleryChip;
+  onChip: (chip: GalleryChip) => void;
+  count: string;
+}): JSX.Element {
+  const countId = useId();
+  return (
+    <>
+      <div role="search" className="relative">
+        <Icons.Search
+          aria-hidden
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+        />
+        <Input
+          ref={searchRef}
+          type="search"
+          value={query}
+          onChange={event => onQuery(event.target.value)}
+          placeholder="Search widgets or collections"
+          aria-label="Search widgets or collections"
+          aria-describedby={countId}
+          autoComplete="off"
+          className="pl-9"
+          data-testid="add-panel-search"
+        />
+      </div>
+      <Chips chip={chip} onChip={onChip} />
+      <p
+        id={countId}
+        className="text-xs text-muted-foreground"
+        data-testid="add-panel-count"
+      >
+        {count}
+      </p>
+    </>
+  );
+}
+
+/** One suggestion, with the tile it adds. */
+type SuggestionView = ReturnType<typeof suggestionsFor>[number];
+
+/** What the gallery lists: the removed cards, the suggestions, a search's pairs, then the tiles. */
+function GalleryLists({
+  found,
+  suggestions,
+  atCapacity,
+  tileFor,
+  onAddBack,
+  onSuggestion,
+  onPair,
+}: {
+  found: GallerySearch;
+  /** The suggestions to show; none while a search or a chip narrows the gallery. */
+  suggestions: readonly SuggestionView[];
+  atCapacity: boolean;
+  tileFor: (view: GalleryTileView) => JSX.Element;
+  onAddBack: (card: RemovedCard) => void;
+  onSuggestion: (suggestion: SuggestionView) => void;
+  onPair: (pair: GalleryPair) => void;
+}): JSX.Element {
+  return (
+    <>
+      {found.removed.length > 0 ? (
+        <RemovedList cards={found.removed} onAddBack={onAddBack} />
+      ) : null}
+      {suggestions.length > 0 ? (
+        <Section title="Suggested for you" testId="add-panel-suggested">
+          <ul className="flex flex-wrap gap-1.5">
+            {suggestions.map(suggestion => (
+              <li key={`${suggestion.widgetId}:${suggestion.collection}`}>
+                <button
+                  type="button"
+                  className={CHIP_CLASS}
+                  disabled={atCapacity}
+                  onClick={() => onSuggestion(suggestion)}
+                >
+                  {suggestion.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+      {found.pairs.length > 0 ? (
+        <Section title="With a collection" testId="add-panel-pairs">
+          <ul className="flex flex-wrap gap-1.5">
+            {found.pairs.map(pair => (
+              <li key={pair.key}>
+                <button
+                  type="button"
+                  className={CHIP_CLASS}
+                  disabled={atCapacity}
+                  aria-label={`Add ${pair.label}`}
+                  onClick={() => onPair(pair)}
+                  data-testid={`add-panel-pair-${pair.key}`}
+                >
+                  <Icons.Plus aria-hidden className="size-3.5" />
+                  {pair.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+      {found.tiles.length > 0 ? (
+        <Section title="Widgets" testId="add-panel-tiles">
+          <ul className="grid grid-cols-2 gap-2.5">
+            {found.tiles.map(tileFor)}
+          </ul>
+        </Section>
+      ) : null}
+    </>
+  );
+}
+
 /** The answer a preview of a card not yet placed starts from: none, so it asks its own. */
 const NOTHING_SHOWN = {
   slot: undefined,
@@ -451,12 +680,7 @@ function AddStepView({
   useEffect(() => {
     headingRef.current?.focus();
   }, [step.tile.id]);
-  const settings = newCardSettings(step.tile, {
-    ...(step.collection === "" ? {} : { collection: step.collection }),
-    ...(period === undefined || step.period === undefined
-      ? {}
-      : { period: { name: period.name, value: step.period } }),
-  });
+  const settings = stepSettings(step, widget);
   const chosen = step.collection !== "";
   return (
     <div className="space-y-4" data-testid="add-panel-step">
@@ -570,7 +794,6 @@ export function AddWidgetPanel({
   const contentRef = useRef<HTMLDivElement>(null);
   // The tile an add step was opened from, where Back and an add return focus.
   const openedFrom = useRef<string | null>(null);
-  const countId = useId();
 
   const read = gallery.read;
   const tiles = useMemo(
@@ -673,16 +896,9 @@ export function AddWidgetPanel({
 
   const addFromStep = () => {
     if (step === null || step.collection === "") return;
-    const period = periodOf(byId.get(step.tile.id));
-    const settings = newCardSettings(step.tile, {
-      collection: step.collection,
-      ...(period === undefined || step.period === undefined
-        ? {}
-        : { period: { name: period.name, value: step.period } }),
-    });
     const added = onAdd(
       step.tile.id,
-      settings,
+      stepSettings(step, byId.get(step.tile.id)),
       step.width === step.tile.size.default.w ? undefined : step.width
     );
     said(added, "Added");
@@ -712,8 +928,6 @@ export function AddWidgetPanel({
       onChoose={choose}
     />
   );
-
-  const nothingFound = read !== undefined && foundCount(found) === 0;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -752,34 +966,14 @@ export function AddWidgetPanel({
             </Button>
           </div>
           {step === null ? (
-            <>
-              <div role="search" className="relative">
-                <Icons.Search
-                  aria-hidden
-                  className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                />
-                <Input
-                  ref={searchRef}
-                  type="search"
-                  value={query}
-                  onChange={event => setQuery(event.target.value)}
-                  placeholder="Search widgets or collections"
-                  aria-label="Search widgets or collections"
-                  aria-describedby={countId}
-                  autoComplete="off"
-                  className="pl-9"
-                  data-testid="add-panel-search"
-                />
-              </div>
-              <Chips chip={chip} onChip={setChip} />
-              <p
-                id={countId}
-                className="text-xs text-muted-foreground"
-                data-testid="add-panel-count"
-              >
-                {read === undefined ? "" : voice.count}
-              </p>
-            </>
+            <SearchAndChips
+              searchRef={searchRef}
+              query={query}
+              onQuery={setQuery}
+              chip={chip}
+              onChip={setChip}
+              count={read === undefined ? "" : voice.count}
+            />
           ) : null}
           {atCapacity ? (
             <p
@@ -806,137 +1000,29 @@ export function AddWidgetPanel({
               onAdd={addFromStep}
             />
           ) : read === undefined ? (
-            gallery.isError ? (
-              <div
-                className="space-y-2 text-sm text-muted-foreground"
-                data-testid="add-panel-error"
-              >
-                <p className="font-medium text-foreground">
-                  The widgets could not be loaded.
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={gallery.retry}
-                >
-                  Try again
-                </Button>
-              </div>
-            ) : (
-              <ul
-                aria-busy="true"
-                aria-label="Loading widgets"
-                className="grid grid-cols-2 gap-2.5"
-                data-testid="add-panel-loading"
-              >
-                {[0, 1, 2, 3].map(index => (
-                  <li
-                    key={index}
-                    className="h-44 animate-pulse rounded-lg border border-border bg-muted/40"
-                  />
-                ))}
-              </ul>
-            )
-          ) : nothingFound && !searching ? (
-            // A chip with nothing under it, before any search: nothing to match, so no Clear.
-            <div
-              className="space-y-2 text-sm text-muted-foreground"
-              data-testid="add-panel-chip-empty"
-            >
-              <p className="font-medium text-foreground">
-                No {GALLERY_CHIPS.find(each => each.id === chip)?.label} widgets
-                to add.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setChip("all")}
-              >
-                Show all widgets
-              </Button>
-            </div>
-          ) : nothingFound ? (
-            <div
-              className="space-y-2 text-sm text-muted-foreground"
-              data-testid="add-panel-none"
-            >
-              <p className="font-medium text-foreground">
-                No widgets match “{query.trim()}”
-              </p>
-              <p>Try another word, or clear the search to see every widget.</p>
-              <Button type="button" variant="outline" size="sm" onClick={clear}>
-                Clear
-              </Button>
-            </div>
+            <GalleryPending gallery={gallery} />
+          ) : foundCount(found) === 0 ? (
+            <NothingFound
+              query={query}
+              chip={chip}
+              onClear={clear}
+              onShowAll={() => setChip("all")}
+            />
           ) : (
-            <>
-              {found.removed.length > 0 ? (
-                <RemovedList
-                  cards={found.removed}
-                  onAddBack={card => {
-                    said(onAddBack(card.placementId), "Added back");
-                    keepFocusInPanel();
-                  }}
-                />
-              ) : null}
-              {!searching && chip === "all" && suggestions.length > 0 ? (
-                <Section title="Suggested for you" testId="add-panel-suggested">
-                  <ul className="flex flex-wrap gap-1.5">
-                    {suggestions.map(suggestion => (
-                      <li
-                        key={`${suggestion.widgetId}:${suggestion.collection}`}
-                      >
-                        <button
-                          type="button"
-                          className={CHIP_CLASS}
-                          disabled={atCapacity}
-                          onClick={() =>
-                            openStep(
-                              suggestion.view.tile,
-                              suggestion.collection
-                            )
-                          }
-                        >
-                          {suggestion.label}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </Section>
-              ) : null}
-              {found.pairs.length > 0 ? (
-                <Section title="With a collection" testId="add-panel-pairs">
-                  <ul className="flex flex-wrap gap-1.5">
-                    {found.pairs.map(pair => (
-                      <li key={pair.key}>
-                        <button
-                          type="button"
-                          className={CHIP_CLASS}
-                          disabled={atCapacity}
-                          aria-label={`Add ${pair.label}`}
-                          onClick={() =>
-                            addPair(pair.view.tile, pair.collection.slug)
-                          }
-                          data-testid={`add-panel-pair-${pair.key}`}
-                        >
-                          <Icons.Plus aria-hidden className="size-3.5" />
-                          {pair.label}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </Section>
-              ) : null}
-              {found.tiles.length > 0 ? (
-                <Section title="Widgets" testId="add-panel-tiles">
-                  <ul className="grid grid-cols-2 gap-2.5">
-                    {found.tiles.map(tileFor)}
-                  </ul>
-                </Section>
-              ) : null}
-            </>
+            <GalleryLists
+              found={found}
+              suggestions={!searching && chip === "all" ? suggestions : []}
+              atCapacity={atCapacity}
+              tileFor={tileFor}
+              onAddBack={card => {
+                said(onAddBack(card.placementId), "Added back");
+                keepFocusInPanel();
+              }}
+              onSuggestion={suggestion =>
+                openStep(suggestion.view.tile, suggestion.collection)
+              }
+              onPair={pair => addPair(pair.view.tile, pair.collection.slug)}
+            />
           )}
         </div>
 

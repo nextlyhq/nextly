@@ -23,24 +23,25 @@ import { widthChoiceName, widthChoices } from "../sizes";
 /** The chips past All, as the server names a tile's. */
 export type GalleryCategory = "content" | "activity" | "trends" | "plugins";
 
-/** One widget's tile, as the gallery read sends it. */
+/**
+ * One widget's tile, as the gallery read sends it: the parts of the server's `GalleryTileItem`
+ * this admin reads. What is placed is read from the draft instead, which a card added or removed a
+ * moment ago has changed and the read has not.
+ */
 export interface GalleryTile {
   id: string;
   name: string;
   description?: string;
-  /** The chip it is listed under past All; absent for a widget under All alone. */
+  /** Its chip past All; none for a widget listed under All alone. */
   category?: GalleryCategory;
-  /** The declaration's own free-text category, which search reads too. */
+  /** Its own free-text category, searched beside the chip's label. */
   declaredCategory?: string;
+  /** The widths its cards may take, and the size a new one starts at. */
   size: WidgetSizeBounds;
-  /** The Collection setting its card reads, by name; absent when it reads none. */
-  collectionSetting?: string;
   allowsSeveral: boolean;
-  /** Whether the server would take a new card of it now. */
-  offered: boolean;
-  /** How many of its cards the reader's saved dashboard holds. */
-  placed: number;
-  /** Its first declared preview case, as its card carries an answer. */
+  /** Its Collection setting's name, which a new card stores the collection under. */
+  collectionSetting?: string;
+  /** Its first declared preview case, carried as a card's answer is. */
   preview?: { result: WidgetResult; settings?: Record<string, unknown> };
 }
 

@@ -167,11 +167,11 @@ describe.each(getConfiguredTestDialects())(
 
     /** An entry of `collection`, and a save of it by `userId` on the activity trail. */
     async function savedBy(userId: string, collection: string): Promise<void> {
-      const created = (await handle.nextly.create({
+      const created = await handle.nextly.create({
         collection,
         data: { title: `Sample ${collection}` },
-      })) as { item?: { id: string }; id?: string };
-      const entryId = created.item?.id ?? created.id ?? "";
+      });
+      const entryId = String(created.item.id);
       await handle.getService("activityLogService").logActivity({
         actorType: "user",
         userId,

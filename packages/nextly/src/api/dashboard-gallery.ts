@@ -311,8 +311,8 @@ function placedOn(
   };
 }
 
-/** The gallery for one signed-in reader. Exported for its tests. */
-export async function galleryFor(
+/** The gallery for one signed-in reader. */
+async function galleryFor(
   auth: AuthContext,
   signal: AbortSignal
 ): Promise<GalleryRead> {

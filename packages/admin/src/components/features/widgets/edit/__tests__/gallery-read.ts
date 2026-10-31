@@ -40,8 +40,6 @@ export function galleryFromLayout(
         name: widget?.title ?? id,
         size: sizeBounds(widget?.size ?? { default: { w: 12, h: 3 } }),
         allowsSeveral: layout.widgets[id]?.allowsSeveral ?? false,
-        offered,
-        placed,
       },
     ];
   });

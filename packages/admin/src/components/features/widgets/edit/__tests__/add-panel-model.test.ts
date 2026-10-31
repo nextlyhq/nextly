@@ -31,8 +31,6 @@ const tile = (over: Partial<GalleryTile> & { id: string }): GalleryTile => ({
   name: over.id,
   size: sizeBounds({ default: { w: 4, h: 3 } }),
   allowsSeveral: false,
-  offered: true,
-  placed: 0,
   ...over,
 });
 

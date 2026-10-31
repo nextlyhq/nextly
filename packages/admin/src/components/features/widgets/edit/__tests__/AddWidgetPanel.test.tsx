@@ -105,8 +105,6 @@ const TILES: GalleryTile[] = [
     size: OVER_TIME_SIZE,
     collectionSetting: "collection",
     allowsSeveral: true,
-    offered: true,
-    placed: 0,
   },
   {
     id: "core/note",
@@ -115,8 +113,6 @@ const TILES: GalleryTile[] = [
     category: "content",
     size: sizeBounds({ default: { w: 4, h: 3 } }),
     allowsSeveral: true,
-    offered: true,
-    placed: 0,
     preview: {
       result: { op: "data", data: { text: "**This week:** review drafts." } },
     },
@@ -128,8 +124,6 @@ const TILES: GalleryTile[] = [
     category: "activity",
     size: sizeBounds({ default: { w: 6, h: 5 } }),
     allowsSeveral: false,
-    offered: true,
-    placed: 0,
   },
   {
     id: "seo/score",
@@ -139,8 +133,6 @@ const TILES: GalleryTile[] = [
     declaredCategory: "Marketing",
     size: sizeBounds({ default: { w: 3, h: 2 }, max: { w: 3, h: 2 } }),
     allowsSeveral: false,
-    offered: true,
-    placed: 0,
   },
 ];
 

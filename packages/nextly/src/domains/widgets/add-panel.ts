@@ -144,16 +144,24 @@ function keyOf(
   return coreIndex === undefined ? [rank, "1", index] : [rank, "0", coreIndex];
 }
 
-/** The widgets the panel offers, every one of them, in the order it lists them. */
-export function inAddPanelOrder<W extends CanonicalWidget>(
-  widgets: readonly W[]
-): W[] {
+/** Each plugin's place among the plugins, in the order their widgets first came. */
+function pluginOrderOf(
+  widgets: readonly CanonicalWidget[]
+): ReadonlyMap<string, number> {
   const pluginOrder = new Map<string, number>();
   for (const widget of widgets) {
     if (widget.plugin !== undefined && !pluginOrder.has(widget.plugin)) {
       pluginOrder.set(widget.plugin, pluginOrder.size);
     }
   }
+  return pluginOrder;
+}
+
+/** The widgets the panel offers, every one of them, in the order it lists them. */
+export function inAddPanelOrder<W extends CanonicalWidget>(
+  widgets: readonly W[]
+): W[] {
+  const pluginOrder = pluginOrderOf(widgets);
   const keyed = widgets.map((widget, index) => ({
     widget,
     key: keyOf(placeOf(widget), widget, index, pluginOrder),
@@ -176,7 +184,7 @@ export function inAddPanelOrder<W extends CanonicalWidget>(
 // ────────────────────────────────────────────────────────────────────────
 
 /** The gallery's filter chips past All, in their order. */
-export const GALLERY_CATEGORIES = [
+const GALLERY_CATEGORIES = [
   "content",
   "activity",
   "trends",
@@ -239,12 +247,7 @@ export function galleryCategoryOf(
 export function inGalleryOrder<W extends CanonicalWidget>(
   widgets: readonly W[]
 ): W[] {
-  const pluginOrder = new Map<string, number>();
-  for (const widget of widgets) {
-    if (widget.plugin !== undefined && !pluginOrder.has(widget.plugin)) {
-      pluginOrder.set(widget.plugin, pluginOrder.size);
-    }
-  }
+  const pluginOrder = pluginOrderOf(widgets);
   const keyOfWidget = (widget: W, index: number): [number, number, number] => {
     if (widget.plugin !== undefined) {
       return [2, pluginOrder.get(widget.plugin) ?? 0, index];

@@ -13,15 +13,21 @@ import { overTimeWidget } from "../core-widgets/over-time";
 import { cardAnswerResult } from "../declaration/card-answer";
 import { displayOfView } from "../declaration/displays";
 
+/** A widget's one case, failing the test when it declares none. */
+function onlyCase<C>(cases: readonly C[] | undefined): C {
+  expect(cases).toHaveLength(1);
+  const [first] = cases ?? [];
+  if (first === undefined) throw new Error("no preview case declared");
+  return first;
+}
+
 const WIDGETS = [countWidget, overTimeWidget, breakdownWidget, noteWidget];
 
 describe("core's add-only previews", () => {
   it.each(WIDGETS.map(widget => [widget.id, widget] as const))(
     "%s declares one case its card carries as an answer",
     (id, widget) => {
-      const cases = widget.preview ?? [];
-      expect(cases).toHaveLength(1);
-      const [first] = cases;
+      const first = onlyCase<{ data: unknown }>(widget.preview);
       const result = cardAnswerResult(displayOfView(widget.view), first.data, {
         widget: id,
         owner: "core",
@@ -30,30 +36,35 @@ describe("core's add-only previews", () => {
     }
   );
 
-  it("is plainly sample data: no address or real name in any case", () => {
+  it("is plainly sample data: no address or link in any case", () => {
     const text = JSON.stringify(WIDGETS.map(widget => widget.preview));
     expect(text).not.toMatch(/@/);
     expect(text).not.toMatch(/https?:/);
   });
 
-  it("draws each case as the widget's view reads it", () => {
-    const [count] = countWidget.preview ?? [];
-    expect(count.data.total).toBe(
-      (count.data.split?.published ?? 0) + (count.data.split?.draft ?? 0)
+  it("gives Count a total its split adds up to", () => {
+    const { data } = onlyCase(countWidget.preview);
+    expect(data.total).toBe(
+      (data.split?.published ?? 0) + (data.split?.draft ?? 0)
     );
-    const [overTime] = overTimeWidget.preview ?? [];
-    expect(overTime.data.interval).toBe("day");
-    expect(overTime.data.points).toHaveLength(30);
-    // Oldest first, a day apart, as a range's points are answered.
-    const starts = overTime.data.points.map(point => Date.parse(point.start));
-    expect(
-      starts.every((at, i) => i === 0 || at - starts[i - 1] === 86_400_000)
-    ).toBe(true);
-    const [breakdown] = breakdownWidget.preview ?? [];
-    // Largest first, as a read answers groups.
-    const counts = (breakdown.data.buckets ?? []).map(bucket => bucket.count);
+  });
+
+  it("gives Over time a month of days, oldest first, a day apart", () => {
+    const { data } = onlyCase(overTimeWidget.preview);
+    expect(data.interval).toBe("day");
+    expect(data.points).toHaveLength(30);
+    const starts = data.points.map(point => Date.parse(point.start));
+    const gaps = starts.slice(1).map((at, i) => at - (starts[i] ?? 0));
+    expect(new Set(gaps)).toEqual(new Set([86_400_000]));
+  });
+
+  it("gives Breakdown its groups largest first, as a read answers them", () => {
+    const { data } = onlyCase(breakdownWidget.preview);
+    const counts = (data.buckets ?? []).map(bucket => bucket.count);
     expect(counts).toEqual([...counts].sort((a, b) => b - a));
-    const [note] = noteWidget.preview ?? [];
-    expect(note.data.text.trim()).not.toBe("");
+  });
+
+  it("gives Note some text to draw", () => {
+    expect(onlyCase(noteWidget.preview).data.text.trim()).not.toBe("");
   });
 });
