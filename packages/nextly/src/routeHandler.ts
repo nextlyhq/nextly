@@ -53,6 +53,7 @@ import {
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import { getDashboardGallery } from "./api/dashboard-gallery";
 import {
   deleteDashboardPin,
   getDashboardPins,
@@ -527,6 +528,8 @@ async function handleDashboardRequest(
       return postWidgetQuery(req);
     case "getWidgetLayout":
       return getWidgetLayout(req);
+    case "getDashboardGallery":
+      return getDashboardGallery(req);
     case "getDashboardSummary":
       return getDashboardSummary(req);
     case "putWidgetLayout":

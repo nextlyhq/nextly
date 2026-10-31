@@ -303,22 +303,18 @@ async function openAddPanel(page: Page) {
   await bar(page).getByRole("button", { name: "Add widget" }).click();
   const panel = page.getByRole("dialog", { name: "Add widget" });
   await expect(
-    panel.getByRole("searchbox", { name: "Search widgets" })
+    panel.getByRole("searchbox", { name: "Search widgets or collections" })
   ).toBeFocused();
   return panel;
 }
 
 /**
- * The next control in the panel that puts a card on the dashboard: a new card (Add, Add
- * another) where one is offered, else a removed card back. Whichever widgets the site offers,
- * so the visit does not depend on them.
+ * The next control in the panel that puts a card on the dashboard at once: a removed card back,
+ * which the gallery lists first. Whichever widgets the site offers, so the visit does not depend
+ * on them; adding new cards, some through their add step, is `dashboard-gallery.spec.ts`'s.
  */
 function nextAdd(panel: Locator): Locator {
-  const fresh = panel.locator(
-    '[data-testid^="add-panel-add-"]:not([data-testid^="add-panel-add-back-"]):enabled'
-  );
-  const back = panel.locator('[data-testid^="add-panel-add-back-"]');
-  return fresh.or(back).first();
+  return panel.locator('[data-testid^="add-panel-add-back-"]').first();
 }
 
 test("the add panel adds three cards in one visit, each said and ringed, and closing lands on the last", async ({
@@ -344,7 +340,7 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
     await nextAdd(panel).click();
     await expect(page.locator(CELLS)).toHaveCount(before + added);
     await expect(panel.getByTestId("add-panel-live")).toHaveText(
-      new RegExp(`^Added (back )?.+ at position \\d+ of ${before + added}\\.$`)
+      /^Added back .+\.$/
     );
     // Still open, and focus still inside it.
     await expect(panel).toBeVisible();
