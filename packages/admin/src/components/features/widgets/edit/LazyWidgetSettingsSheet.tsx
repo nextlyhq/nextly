@@ -16,23 +16,27 @@
  */
 
 import {
+  Button,
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
 } from "@nextlyhq/ui";
-import { lazy, Suspense, type JSX } from "react";
+import type { JSX } from "react";
+
+import { useRetryableModule } from "@admin/hooks/useRetryableModule";
+import { retryableModule } from "@admin/lib/retryable-module";
 
 import type { WidgetSettingsSheetProps } from "./WidgetSettingsSheet";
 
-/** The sheet's module. The module loader fetches it once, so a preload and an opening share it. */
-function loadSheet() {
-  return import("./WidgetSettingsSheet");
-}
-
-const WidgetSettingsSheet = lazy(() =>
-  loadSheet().then(m => ({ default: m.WidgetSettingsSheet }))
+/**
+ * The sheet's code: one fetch shared by a preload and an opening, and, unlike
+ * `React.lazy`, a failed fetch is not kept, so opening again fetches afresh
+ * rather than throwing the dashboard into its error boundary.
+ */
+const sheetModule = retryableModule(() =>
+  import("./WidgetSettingsSheet").then(m => m.WidgetSettingsSheet)
 );
 
 /**
@@ -40,7 +44,7 @@ const WidgetSettingsSheet = lazy(() =>
  * nothing here: opening the sheet asks again.
  */
 export function preloadWidgetSettingsSheet(): void {
-  loadSheet().catch(() => undefined);
+  sheetModule.preload();
 }
 
 /**
@@ -67,15 +71,22 @@ function SheetLoading({
   onOpenChange,
   title,
   renderPreview,
+  failure,
 }: Pick<
   WidgetSettingsSheetProps,
   "open" | "onOpenChange" | "title" | "renderPreview"
->): JSX.Element {
+> & {
+  /**
+   * Set once the fetch has failed: the panel says so, with Try again, or,
+   * once a retry has failed as well, Reload the page.
+   */
+  failure?: { exhausted: boolean; onRetry: () => void };
+}): JSX.Element {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        aria-busy="true"
+        aria-busy={failure ? undefined : true}
         // The loaded sheet's width, so the panel does not jump once the form arrives.
         className={
           renderPreview
@@ -90,9 +101,33 @@ function SheetLoading({
             its own.
           </SheetDescription>
         </SheetHeader>
-        <p role="status" className="px-4 text-sm text-muted-foreground">
-          Loading settings…
-        </p>
+        {failure ? (
+          // Contained in the panel: a failed fetch leaves the dashboard and
+          // its cards as they were, and closing the panel still works.
+          <div role="alert" className="flex flex-col items-start gap-3 px-4">
+            <p className="text-sm text-muted-foreground">
+              {failure.exhausted
+                ? "Settings still could not be loaded. Reload to start over."
+                : "Settings could not be loaded. Check your connection and try again."}
+            </p>
+            {failure.exhausted ? (
+              <Button
+                variant="outline"
+                onClick={() => window.location.reload()}
+              >
+                Reload the page
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={failure.onRetry}>
+                Try again
+              </Button>
+            )}
+          </div>
+        ) : (
+          <p role="status" className="px-4 text-sm text-muted-foreground">
+            Loading settings…
+          </p>
+        )}
       </SheetContent>
     </Sheet>
   );
@@ -100,23 +135,28 @@ function SheetLoading({
 
 /**
  * {@link WidgetSettingsSheet} once its code has arrived, and {@link SheetLoading}
- * in its place until then.
+ * in its place until then, or saying the code could not be fetched.
  */
 export function LazyWidgetSettingsSheet(
   props: WidgetSettingsSheetProps
 ): JSX.Element {
+  const { state, attempt, retry } = useRetryableModule(
+    sheetModule,
+    "The card settings sheet's code"
+  );
+  if (state.status === "ok") {
+    const WidgetSettingsSheet = state.value;
+    return <WidgetSettingsSheet {...props} />;
+  }
   return (
-    <Suspense
-      fallback={
-        <SheetLoading
-          open={props.open}
-          onOpenChange={props.onOpenChange}
-          title={props.title}
-          renderPreview={props.renderPreview}
-        />
-      }
-    >
-      <WidgetSettingsSheet {...props} />
-    </Suspense>
+    <SheetLoading
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      title={props.title}
+      renderPreview={props.renderPreview}
+      {...(state.status === "error"
+        ? { failure: { exhausted: attempt > 0, onRetry: retry } }
+        : {})}
+    />
   );
 }
