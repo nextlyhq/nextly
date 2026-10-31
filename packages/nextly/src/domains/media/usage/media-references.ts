@@ -30,6 +30,7 @@ import {
   isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { ComponentSchemaInfo } from "../../versions/restore-snapshot";
 
 /** One reference a value makes: to an item's id, or to its address. */
@@ -45,10 +46,15 @@ export interface MediaReference {
   url?: string;
 }
 
-/** The field-group schemas a walk reads, by the slug a field names. */
+/**
+ * The field-group schemas a walk reads, by the slug a field names, with
+ * whether each is translated where the walk asks
+ * ({@link collectFieldGroupReferences}).
+ */
 export type FieldGroupSchemas = ReadonlyMap<
   string,
-  Pick<ComponentSchemaInfo, "fields">
+  Pick<ComponentSchemaInfo, "fields"> &
+    Partial<Pick<ComponentSchemaInfo, "localized">>
 >;
 
 /**
@@ -353,4 +359,110 @@ export function collectMediaReferences(
   const into: MediaReference[] = [];
   collectFields(fields, values, "", schemas, into);
   return into;
+}
+
+/** A reference a field group's value makes, and whether a translation makes it. */
+export interface FieldGroupReference extends MediaReference {
+  /**
+   * Whether the value is one each language holds its own of: a translatable
+   * field (`isFieldLocalized`) of a translated field group. Any other value
+   * in it is one every language shares.
+   */
+  translated: boolean;
+}
+
+/**
+ * The references one field-group field's value makes, each marked with
+ * whether a translated value makes it. A translated field group keeps only
+ * its translatable fields per language; its other fields hold one value
+ * every language reads, so a reference one of them makes belongs to no
+ * language. A field group nested in one is judged by its own schema, and is
+ * translated too when the field holding it is.
+ */
+export function collectFieldGroupReferences(
+  field: FieldConfig,
+  raw: unknown,
+  schemas: FieldGroupSchemas
+): FieldGroupReference[] {
+  const into: FieldGroupReference[] = [];
+  const name = (field as { name?: unknown }).name;
+  if (typeof name === "string" && name !== "") {
+    fieldGroupReferencesAt(field, raw, name, false, schemas, into);
+  }
+  return into;
+}
+
+/**
+ * The schema one field-group instance is read by: the one its stored type
+ * names, else the one the field names for every instance.
+ */
+function instanceSchema(
+  field: FieldConfig,
+  instance: Record<string, unknown>,
+  schemas: FieldGroupSchemas
+): ReturnType<FieldGroupSchemas["get"]> {
+  const slug =
+    readFieldGroupType(instance) ?? extractFieldGroupReferences(field).single;
+  return slug === undefined ? undefined : schemas.get(slug);
+}
+
+/** Whether a field of a field group holds one value per language. */
+function translatedChild(
+  child: FieldConfig,
+  schemaLocalized: boolean | undefined
+): boolean {
+  return (
+    schemaLocalized === true &&
+    isFieldLocalized(child as Parameters<typeof isFieldLocalized>[0], true)
+  );
+}
+
+function fieldGroupReferencesAt(
+  field: FieldConfig,
+  raw: unknown,
+  path: string,
+  heldTranslated: boolean,
+  schemas: FieldGroupSchemas,
+  into: FieldGroupReference[]
+): void {
+  if (raw === null || raw === undefined) return;
+  const value = parsed(raw);
+  const instances = Array.isArray(value) ? value : [value];
+  for (const instance of instances.filter(isRecord)) {
+    const schema = instanceSchema(field, instance, schemas);
+    if (!schema) continue;
+    for (const child of schema.fields) {
+      const childName = (child as { name?: unknown }).name;
+      if (typeof childName !== "string" || childName === "") continue;
+      childReferences(
+        child,
+        instance[childName],
+        joinPath(path, childName),
+        heldTranslated || translatedChild(child, schema.localized),
+        schemas,
+        into
+      );
+    }
+  }
+}
+
+/**
+ * One field of a field-group instance: a nested field group read the same
+ * way, by its own schema; any other field by its kind.
+ */
+function childReferences(
+  child: FieldConfig,
+  raw: unknown,
+  path: string,
+  translated: boolean,
+  schemas: FieldGroupSchemas,
+  into: FieldGroupReference[]
+): void {
+  if (isFieldGroupFieldType((child as { type?: unknown }).type)) {
+    fieldGroupReferencesAt(child, raw, path, translated, schemas, into);
+    return;
+  }
+  const found: MediaReference[] = [];
+  collectField(child, raw, path, schemas, found);
+  for (const ref of found) into.push({ ...ref, translated });
 }

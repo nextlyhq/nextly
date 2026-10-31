@@ -78,6 +78,7 @@ export async function recordSingleMediaUsage(
       {
         fieldGroupDataService: deps.fieldGroupDataService,
         locales: deps.localization?.locales.map(l => l.code) ?? [],
+        maxParams: deps.adapter.getCapabilities().maxParamsPerQuery,
       },
       // A Single is one document, so it has no entry id of its own.
       { kind: "single", slug: single.slug, documentId: "" },

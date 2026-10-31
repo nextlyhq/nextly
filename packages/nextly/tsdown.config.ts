@@ -191,6 +191,10 @@ const clientEntries = [
   // the server, so neither keeps a copy; it imports nothing. Internal: not a
   // public API.
   "src/collections/fields/field-label.ts",
+  // Which kind of file a MIME type is, as its own entry: the admin badges an
+  // item by it and the library query narrows to a kind by it, so neither
+  // keeps a copy; it imports nothing. Internal: not a public API.
+  "src/domains/media/media-categories.ts",
   // The data each of core's declared cards answers, as their own entry: the
   // card's server `load` is typed to answer it and its admin component to draw
   // it, and the module holds types alone, so the admin takes nothing more.

@@ -23,6 +23,12 @@ import {
 
 import type { MediaView } from "../../types/media";
 
+import {
+  DOCUMENT_MIME_TYPES,
+  MEDIA_TYPE_PREFIXES,
+  type MediaCategory,
+} from "./media-categories";
+
 /** The `media` columns the narrowing reads. */
 export interface MediaQueryColumns {
   id: AnyColumn;
@@ -42,14 +48,45 @@ export interface MediaQueryFilter {
   /** A folder's id; `null` or "root" for the items in no folder. */
   folderId?: string | null;
   search?: string;
-  /** A kind of file: the first part of its type, such as "image". */
-  type?: string;
+  /** A kind of file, as the library names it (`media-categories`). */
+  type?: MediaCategory;
   view?: MediaView;
 }
 
 /** An image whose alt text is missing or blank. */
 export function missingAltText(media: MediaQueryColumns): SQL {
   return sql`(${media.mimeType} LIKE ${"image/%"} AND (${media.altText} IS NULL OR TRIM(${media.altText}) = ${""}))`;
+}
+
+/** A MIME type that starts with `prefix`, which holds no LIKE wildcard. */
+function mimeStartsWith(media: MediaQueryColumns, prefix: string): SQL {
+  return sql`${media.mimeType} LIKE ${`${prefix}%`}`;
+}
+
+/** The items of one kind of file, as `mediaCategoryOf` names each item. */
+function mediaCategoryCondition(
+  media: MediaQueryColumns,
+  category: MediaCategory
+): SQL {
+  const named = Object.entries(MEDIA_TYPE_PREFIXES) as Array<
+    [MediaCategory, string]
+  >;
+  const document = or(
+    ...DOCUMENT_MIME_TYPES.exact.map(type => sql`${media.mimeType} = ${type}`),
+    ...DOCUMENT_MIME_TYPES.prefixes.map(prefix => mimeStartsWith(media, prefix))
+  ) as SQL;
+  if (category === "document") {
+    // An image's type is never a document's, so the order of the checks
+    // `mediaCategoryOf` makes does not change which items this is.
+    return document;
+  }
+  const prefix = named.find(([name]) => name === category)?.[1];
+  if (prefix !== undefined) return mimeStartsWith(media, prefix);
+  // What no kind names, a missing type included.
+  return or(
+    sql`${media.mimeType} IS NULL`,
+    sql`NOT (${or(...named.map(([, p]) => mimeStartsWith(media, p)), document)})`
+  ) as SQL;
 }
 
 /** An item no document uses, by the usage record's index on the item. */
@@ -91,7 +128,7 @@ export function mediaQueryCondition(
     if (search) conditions.push(search);
   }
   if (filter.type) {
-    conditions.push(sql`${media.mimeType} LIKE ${`${filter.type}/%`}`);
+    conditions.push(mediaCategoryCondition(media, filter.type));
   }
   if (filter.view === "missing-alt") conditions.push(missingAltText(media));
   if (filter.view === "unused") {

@@ -92,11 +92,12 @@ function emailTemplateSubject(templateId: string): UsageSubject {
 /**
  * Rewrite the record of which media items the template uses from its stored
  * row, on `db`: the transaction of the write that changed it. A template that
- * is gone keeps no record.
+ * is gone keeps no record. `maxParams` is the adapter's `maxParamsPerQuery`.
  */
 export async function recordEmailTemplateUsage(
   db: UsageDb,
-  templateId: string
+  templateId: string,
+  maxParams: number
 ): Promise<void> {
   const subject = emailTemplateSubject(templateId);
   const [row] = await db.select<Record<string, unknown>>(
@@ -114,5 +115,5 @@ export async function recordEmailTemplateUsage(
   const refs: LocatedMediaReference[] = emailTemplateReferences(row).map(
     ref => ({ ...ref, locale: "" })
   );
-  await replaceDocumentUsage(db, subject, refs);
+  await replaceDocumentUsage(db, subject, refs, maxParams);
 }

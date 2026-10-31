@@ -1296,6 +1296,7 @@ export class CollectionMutationService extends BaseService {
         {
           fieldGroupDataService: this.fieldGroupDataService,
           locales: this.localization?.locales.map(l => l.code) ?? [],
+          maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
         },
         { kind: "collection", slug: args.collectionName, documentId: entryId },
         {
@@ -1316,9 +1317,10 @@ export class CollectionMutationService extends BaseService {
   /**
    * Rebuild the record of which media items every entry of a collection uses,
    * from what its tables hold, for `nextly media reindex-usage`. A page of
-   * entries at a time, each page on one transaction, read by id after the
-   * last one read, so an entry created or deleted while it runs moves no
-   * other entry onto a page already read. Returns how many entries it read.
+   * entries' ids at a time, read by id after the last one read, so an entry
+   * created or deleted while it runs moves no other entry onto a page already
+   * read; each entry on a transaction of its own. Returns how many entries it
+   * read.
    */
   async rebuildMediaUsage(collectionName: string): Promise<number> {
     const collection =
@@ -1328,6 +1330,10 @@ export class CollectionMutationService extends BaseService {
     // The translations' readiness is remembered here, off any transaction,
     // for the reads inside each page's (see `warmLocalizedReadiness`).
     await this.warmLocalizedReadiness(collectionName);
+    // Loaded by the rebuild, not with the service.
+    const { lockDocument } = await import(
+      "../../media/usage/media-usage-store"
+    );
     const pageSize = 200;
     let read = 0;
     let after: string | number | undefined;
@@ -1343,17 +1349,21 @@ export class CollectionMutationService extends BaseService {
           limit: pageSize,
         }
       );
-      if (rows.length > 0) {
+      for (const row of rows) {
+        // Each entry on a transaction of its own that locks its row before
+        // it reads anything, so an entry being saved is read as the save
+        // leaves it (`lockDocument`).
         await this.adapter.transaction(async tx => {
-          for (const row of rows) {
-            await this.recordEntryMediaUsage(tx, {
-              collectionName,
-              entryId: String(row.id),
-              tableName,
-              fields,
-            });
-          }
+          await lockDocument(tx, tableName, String(row.id));
+          await this.recordEntryMediaUsage(tx, {
+            collectionName,
+            entryId: String(row.id),
+            tableName,
+            fields,
+          });
         });
+      }
+      if (rows.length > 0) {
         read += rows.length;
         after = rows[rows.length - 1].id;
       }

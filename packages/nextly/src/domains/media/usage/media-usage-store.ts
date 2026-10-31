@@ -18,13 +18,17 @@
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
+import {
+  MEDIA_USAGE_FIELD_PATH_LENGTH,
+  MEDIA_USAGE_TABLE,
+} from "../../../schemas/media-usage/table-name";
 import { uuidV7 } from "../../../utils/uuid-v7";
 import {
   tablePresence,
   type DashboardLogger,
   type TableProbe,
 } from "../../dashboard/table-presence";
+import { boundedValue } from "../../schema/services/index-name";
 
 import type { MediaReference } from "./media-references";
 
@@ -75,16 +79,16 @@ export interface UsageDeleteDb {
 }
 
 /**
- * How many ids or addresses one lookup names, and how many rows one insert
- * writes. Kept well under the bound-parameter limits of every dialect
- * (SQLite's is the lowest) whatever a document holds.
+ * `items` in runs of at most `size`, the most one statement may bind: the
+ * adapter's `maxParamsPerQuery` over what each item binds. SQLite's limit is
+ * the lowest, so a document using many items is written in several inserts
+ * there and in one elsewhere.
  */
-const CHUNK = 200;
-
-function chunks<T>(items: readonly T[]): T[][] {
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const run = Number.isFinite(size) ? Math.max(1, Math.floor(size)) : 1;
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += CHUNK) {
-    out.push(items.slice(i, i + CHUNK));
+  for (let i = 0; i < items.length; i += run) {
+    out.push(items.slice(i, i + run));
   }
   return out;
 }
@@ -125,7 +129,8 @@ function subjectWhere(subject: UsageSubject): {
  */
 async function resolveItems(
   db: UsageDb,
-  refs: readonly MediaReference[]
+  refs: readonly MediaReference[],
+  maxParams: number
 ): Promise<{ ids: Set<string>; byUrl: Map<string, string[]> }> {
   const wantedIds = [
     ...new Set(refs.flatMap(r => (r.mediaId ? [r.mediaId] : []))),
@@ -133,14 +138,15 @@ async function resolveItems(
   const wantedUrls = [...new Set(refs.flatMap(r => (r.url ? [r.url] : [])))];
   const ids = new Set<string>();
   const byUrl = new Map<string, string[]>();
-  for (const part of chunks(wantedIds)) {
+  // Each id or address is one bound value.
+  for (const part of chunks(wantedIds, maxParams)) {
     const rows = await db.select<Record<string, unknown>>("media", {
       columns: ["id"],
       where: { and: [{ column: "id", op: "IN", value: part }] },
     });
     for (const row of rows) ids.add(columnOf(row, "id", "id"));
   }
-  for (const part of chunks(wantedUrls)) {
+  for (const part of chunks(wantedUrls, maxParams)) {
     const rows = await db.select<Record<string, unknown>>("media", {
       columns: ["id", "url"],
       where: { and: [{ column: "url", op: "IN", value: part }] },
@@ -156,18 +162,29 @@ async function resolveItems(
 }
 
 /**
+ * The field path as the table stores it: whole when it fits the column, else
+ * bounded to it with a hash of the whole path, so a field nested deeply
+ * enough to pass it is still one row of its own, apart from every other.
+ */
+function storedFieldPath(fieldPath: string): string {
+  return boundedValue(fieldPath, MEDIA_USAGE_FIELD_PATH_LENGTH);
+}
+
+/**
  * Replace everything the record holds for `subject` with `refs`, on `db`,
  * which is the transaction of the write that made the document what `refs`
  * describe. A reference made twice, by one field in one language, is one row.
+ * `maxParams` is the adapter's `maxParamsPerQuery`: no statement binds more.
  */
 export async function replaceDocumentUsage(
   db: UsageDb,
   subject: UsageSubject,
-  refs: readonly LocatedMediaReference[]
+  refs: readonly LocatedMediaReference[],
+  maxParams: number
 ): Promise<void> {
   const { ids, byUrl } =
     refs.length > 0
-      ? await resolveItems(db, refs)
+      ? await resolveItems(db, refs, maxParams)
       : { ids: new Set<string>(), byUrl: new Map<string, string[]>() };
   const rows = new Map<string, Record<string, unknown>>();
   for (const ref of refs) {
@@ -185,15 +202,36 @@ export async function replaceDocumentUsage(
         subjectKind: subject.kind,
         subjectSlug: subject.slug,
         documentId: subject.documentId,
-        fieldPath: ref.fieldPath,
+        fieldPath: storedFieldPath(ref.fieldPath),
         locale: ref.locale,
       });
     }
   }
   await db.delete(MEDIA_USAGE_TABLE, subjectWhere(subject));
-  for (const part of chunks([...rows.values()])) {
+  const values = [...rows.values()];
+  // Every row binds one value for each of its columns.
+  const perRow = values.length > 0 ? Object.keys(values[0]).length : 1;
+  for (const part of chunks(values, maxParams / perRow)) {
     await db.insertMany(MEDIA_USAGE_TABLE, part);
   }
+}
+
+/**
+ * Lock one document's row on `tx` for the rest of the transaction, as the
+ * first thing the transaction does: for the rebuild, which reads a document
+ * that a write may be changing. The lock waits for that write to commit, and
+ * nothing read before it fixes what the transaction sees, so on MySQL, whose
+ * transaction reads from a snapshot taken at its first read, as on
+ * PostgreSQL, the reads after it see what the write committed. SQLite runs
+ * one write transaction at a time, so the two never overlap there and the
+ * lock is nothing.
+ */
+export async function lockDocument(
+  tx: Pick<TransactionContext, "lockRow">,
+  table: string,
+  rowId: string
+): Promise<void> {
+  await tx.lockRow(table, rowId);
 }
 
 /** Remove everything the record holds for `subject`, which is gone. */

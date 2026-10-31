@@ -12,8 +12,10 @@
  * taken away until the rebuild has read every document, so a rebuild that
  * stops part way leaves the record saying it is still being built rather
  * than reading as complete. A write made while it runs records its own
- * document as it always does; the rebuild reading that document again
- * writes the same rows.
+ * document as it always does. The rebuild reads each document on a
+ * transaction that first locks its row, so it waits for a write to it that
+ * is still open and reads what that write committed, rather than reading
+ * the document as it was and writing that over the write's record.
  *
  * @module domains/media/usage/reindex-usage
  */
@@ -24,13 +26,18 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 
 import { recordEmailTemplateUsage } from "./email-template-usage";
-import { MEDIA_USAGE_RECORDED_KEY } from "./media-usage-store";
+import { lockDocument, MEDIA_USAGE_RECORDED_KEY } from "./media-usage-store";
 
 /** What the rebuild reads and writes through. */
 export interface ReindexUsageDeps {
   adapter: Pick<
     DrizzleAdapter,
-    "select" | "delete" | "transaction" | "tableExists" | "count"
+    | "select"
+    | "delete"
+    | "transaction"
+    | "tableExists"
+    | "count"
+    | "getCapabilities"
   >;
   /** Each collection's slug, and the rebuild of its entries. */
   collections: {
@@ -59,7 +66,7 @@ export interface ReindexUsageResult {
   rows: number;
 }
 
-/** How many templates one transaction reads. */
+/** How many templates' ids one read pages through. */
 const TEMPLATE_PAGE = 200;
 
 async function rebuildTemplates(
@@ -77,12 +84,17 @@ async function rebuildTemplates(
       orderBy: [{ column: "id", direction: "asc" }],
       limit: TEMPLATE_PAGE,
     });
-    if (rows.length > 0) {
+    const { maxParamsPerQuery } = adapter.getCapabilities();
+    for (const row of rows) {
+      // Each template on a transaction of its own that locks its row first,
+      // before it reads anything, so a save of it that is in flight finishes
+      // before the rebuild reads what the save left (`lockDocument`).
       await adapter.transaction(async tx => {
-        for (const row of rows) {
-          await recordEmailTemplateUsage(tx, String(row.id));
-        }
+        await lockDocument(tx, "email_templates", String(row.id));
+        await recordEmailTemplateUsage(tx, String(row.id), maxParamsPerQuery);
       });
+    }
+    if (rows.length > 0) {
       read += rows.length;
       after = String(rows[rows.length - 1].id);
     }

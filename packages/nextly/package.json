@@ -91,6 +91,10 @@
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"
     },
+    "./media-categories": {
+      "types": "./dist/domains/media/media-categories.d.mts",
+      "import": "./dist/domains/media/media-categories.mjs"
+    },
     "./core-widget-data": {
       "types": "./dist/domains/widgets/core-widgets/data.d.mts",
       "import": "./dist/domains/widgets/core-widgets/data.mjs"
