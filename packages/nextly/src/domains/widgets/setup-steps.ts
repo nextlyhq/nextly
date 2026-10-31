@@ -55,9 +55,40 @@ export interface SetupSingle {
   filledIn: boolean;
 }
 
+/**
+ * A sample-content load the site has started and nobody has seen through: kept
+ * for the whole site (`database/seeders/sample-content`), so every tab, session
+ * and person reads the same one.
+ *
+ * - `unfinished`: started, and has reported neither success nor failure. It is
+ *   never taken as ended, however long ago it started, since it may still be
+ *   running, and no other load starts while it stands.
+ * - `failed`: the load failed, with what failed. Another load starts only once
+ *   a person confirms it, as some of the content may already be there.
+ * - `unrecorded`: the content loaded, but recording that failed. `run` names
+ *   the load, which recording on its own takes, without loading again.
+ */
+export type SampleRun =
+  | { state: "unfinished"; startedAt: string }
+  | { state: "failed"; startedAt: string; failure: string }
+  | { state: "unrecorded"; startedAt: string; run: string };
+
+/**
+ * "Start with sample content", as the host answers it. Open with a `run` while
+ * a load the site started stands unanswered; open with `unreadable` where the
+ * site's answer could not be read but the site holds no entry, so the card
+ * offers no load and shows "Add your first entry" beside it.
+ */
+export interface SampleSetupStep {
+  kind: "sample";
+  status: SetupStepStatus;
+  run?: SampleRun;
+  unreadable?: true;
+}
+
 /** One step, as the host answers it: copy and links are the admin's. */
 export type SetupStep =
-  | { kind: "sample"; status: SetupStepStatus }
+  | SampleSetupStep
   | { kind: "collection"; status: SetupStepStatus }
   | {
       kind: "entry";
@@ -133,7 +164,10 @@ export interface SampleRoute {
 /**
  * The steps the setup card draws, counted: `answer` less an open sample step
  * where the project's route refuses this reader. A sample step already
- * answered stays, as someone on the site loaded or declined it.
+ * answered stays, as someone on the site loaded or declined it, and so does
+ * one holding a load nobody has seen through, or whose answer could not be
+ * read: the route's refusal withholds only the offer, never a run's state nor
+ * a step it cannot vouch for, which stays on the card and holds setup open.
  *
  * ONE function for the admin's "N of M done" and the host's "You're all set"
  * (`setupAllSet`), so a step the card leaves out never holds the card open,
@@ -146,7 +180,13 @@ export function drawnSetup(
   if (!answer.known || !sampleRefused) return answer;
   return talliedSetup(
     answer.steps.filter(
-      step => !(step.kind === "sample" && step.status === "open")
+      step =>
+        !(
+          step.kind === "sample" &&
+          step.status === "open" &&
+          step.run === undefined &&
+          step.unreadable !== true
+        )
     )
   );
 }

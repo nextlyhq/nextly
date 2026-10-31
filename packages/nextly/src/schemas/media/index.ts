@@ -19,7 +19,9 @@ import { loadedDialect } from "../../database/dialect-tables";
  */
 export function mediaTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
-  // imported; `createAdapter` loads them.
+  // imported; `createAdapter` loads them. `image_sizes` is no longer read or
+  // written, but stays declared in the core schema so an existing database
+  // keeps the table, and its rows, until they are removed on purpose.
   const { media, mediaFolders, imageSizes } = loadedDialect(dialect).tables;
   return { media, mediaFolders, imageSizes };
 }

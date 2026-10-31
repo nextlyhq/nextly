@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The add panel as the dashboard drives it: its rows from the draft, what an add puts where, and
- * where focus goes once the panel closes.
+ * The add gallery as the dashboard drives it: the server's gallery read, what an add puts where,
+ * and where focus goes once the panel closes.
  *
  * Kept apart from the grid, which already composes the arrangement, its data and its chrome:
  * everything the panel needs from them is handed in.
@@ -10,20 +10,19 @@
  * @module components/features/widgets/edit/DashboardAddPanel
  */
 
+import { useQuery } from "@tanstack/react-query";
 import type { JSX } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
-import type {
-  DashboardWidget,
-  WidgetPlacement,
-} from "@admin/types/dashboard/widgets";
+import { protectedApi } from "@admin/lib/api/protectedApi";
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import type { IsDrawn } from "../layout-editor";
+import { titleAsAsked } from "../widget-as-asked";
 
-import { addPanelRows } from "./add-panel-model";
+import type { GalleryRead } from "./add-panel-model";
 import { AddWidgetPanel, type AddedCard } from "./AddWidgetPanel";
+import { CELL_PLACEMENT_ATTRIBUTE } from "./drag/cell-placement";
 import type { DashboardFocus } from "./useDashboardFocus";
 import type { LayoutEditor } from "./useLayoutEditor";
 
@@ -32,34 +31,14 @@ export interface DashboardAddPanelProps {
   onOpenChange: (open: boolean) => void;
   editor: Pick<
     LayoutEditor,
-    "isEditing" | "placements" | "available" | "atCapacity" | "add"
+    "isEditing" | "placements" | "atCapacity" | "add" | "setSize"
   >;
-  /** The layout read, whose widget facts (group and rank) the rows are built from. */
-  layout: Pick<UseDashboardLayoutResult, "layout">;
   byId: ReadonlyMap<string, DashboardWidget>;
-  isDrawn: IsDrawn;
   /** Put a removed card back where it was. */
   restore: (placementId: string) => void;
   /** Ring the card that was just added, or none. */
   highlight: (placementId: string | null) => void;
   focus: Pick<DashboardFocus, "request">;
-}
-
-/**
- * Where a card sits among the cards drawn once `change` has happened: its position counted from
- * one, and how many are drawn. Read from the list as it will be, so the sentence says where the
- * card lands rather than where the list was.
- */
-function placeAmongDrawn(
-  placements: readonly WidgetPlacement[],
-  placementId: string,
-  isDrawn: IsDrawn
-): Pick<AddedCard, "position" | "count"> {
-  const drawn = placements.filter(isDrawn);
-  return {
-    position: drawn.findIndex(p => p.id === placementId) + 1,
-    count: drawn.length,
-  };
 }
 
 /** Whether the add panel is open, as the grid holds it. */
@@ -84,8 +63,54 @@ export function useAddPanelState(isEditing: boolean): AddPanelState {
   return { open, setOpen };
 }
 
-/** No widget described yet: the panel's facts before the layout read has answered. */
-const NO_WIDGET_FACTS: Readonly<Record<string, never>> = {};
+/** The gallery read's own query key. */
+const DASHBOARD_GALLERY_KEY = ["dashboard", "gallery"] as const;
+
+const GALLERY_PATH = "/dashboard/gallery";
+
+/**
+ * How long a gallery read is reused: opening the panel again within it asks nothing. What changes
+ * within a visit, a card added or removed, the panel works out from the draft; a grant or a
+ * collection changed meanwhile is picked up on the next read after it.
+ */
+const GALLERY_STALE_MS = 60_000;
+
+/** What the gallery offers this reader, read as the panel opens. */
+function useDashboardGallery(open: boolean) {
+  return useQuery({
+    queryKey: DASHBOARD_GALLERY_KEY,
+    queryFn: () => protectedApi.get<GalleryRead>(GALLERY_PATH),
+    enabled: open,
+    staleTime: GALLERY_STALE_MS,
+  });
+}
+
+/**
+ * Brings the card just added into view once it is drawn, without moving focus out of the panel:
+ * the card is found by the placement its cell carries (`CELL_PLACEMENT_ATTRIBUTE`), after the
+ * render that draws it.
+ */
+function useScrollIntoView(): (placementId: string) => void {
+  const pending = useRef<string | null>(null);
+  const [, setAsked] = useState(0);
+  // No dependency list: a held request is tried after every render, which is when the card can
+  // have appeared.
+  useEffect(() => {
+    const id = pending.current;
+    if (id === null) return;
+    const card = document.querySelector(
+      `[${CELL_PLACEMENT_ATTRIBUTE}="${CSS.escape(id)}"]`
+    );
+    if (card === null) return;
+    pending.current = null;
+    // `nearest`, so a card already in view does not jump.
+    card.scrollIntoView({ block: "nearest" });
+  });
+  return useCallback((placementId: string) => {
+    pending.current = placementId;
+    setAsked(count => count + 1);
+  }, []);
+}
 
 /** The add panel, which exists only while customising. */
 export function DashboardAddPanel(
@@ -98,9 +123,7 @@ function CustomizingAddPanel({
   open,
   onOpenChange,
   editor,
-  layout,
   byId,
-  isDrawn,
   restore,
   highlight,
   focus,
@@ -113,46 +136,48 @@ function CustomizingAddPanel({
     if (open) lastAdded.current = null;
   }, [open]);
 
-  // The collections the reader may read: a widget offered per collection is listed once for each.
+  const gallery = useDashboardGallery(open);
   const sources = useBranding().widgetSources;
-  const rows = useMemo(
-    () =>
-      addPanelRows({
-        placements: editor.placements,
-        offered: editor.available,
-        widgets: layout.layout?.widgets ?? NO_WIDGET_FACTS,
-        byId,
-        collections: sources ?? [],
-      }),
-    [editor.placements, editor.available, layout.layout, byId, sources]
+  const scrollIntoView = useScrollIntoView();
+
+  /** The card's title as the dashboard will draw it, its collection named where it has one. */
+  const titleOf = useCallback(
+    (widgetId: string, settings?: Record<string, unknown>) => {
+      const widget = byId.get(widgetId);
+      return widget === undefined
+        ? widgetId
+        : titleAsAsked(widget, settings, sources).title;
+    },
+    [byId, sources]
   );
 
-  const titleOf = useCallback(
-    (widgetId: string) => byId.get(widgetId)?.title ?? widgetId,
-    [byId]
+  const landed = useCallback(
+    (placementId: string) => {
+      lastAdded.current = placementId;
+      highlight(placementId);
+      scrollIntoView(placementId);
+    },
+    [highlight, scrollIntoView]
   );
 
   const onAdd = useCallback(
     (
       widgetId: string,
-      settings?: Record<string, unknown>
+      settings?: Record<string, unknown>,
+      width?: number
     ): AddedCard | null => {
+      // At the end of the order, at its widget's starting size; then at the width chosen, held
+      // to the widget's bounds as every resize is.
       const id = editor.add(widgetId, settings);
       if (id === null) return null;
-      lastAdded.current = id;
-      highlight(id);
-      // At the end: the list as it will be once the add lands. A size counts for nothing in a
-      // position, so the card stands in at any.
-      const after = [
-        ...editor.placements,
-        { id, widgetId, w: 12, h: 2, removed: false },
-      ];
-      return {
-        title: titleOf(widgetId),
-        ...placeAmongDrawn(after, id, isDrawn),
-      };
+      const start = byId.get(widgetId)?.size.default;
+      if (width !== undefined && start !== undefined && width !== start.w) {
+        editor.setSize(id, { w: width, h: start.h });
+      }
+      landed(id);
+      return { title: titleOf(widgetId, settings) };
     },
-    [editor, highlight, titleOf, isDrawn]
+    [editor, byId, landed, titleOf]
   );
 
   const onAddBack = useCallback(
@@ -160,18 +185,10 @@ function CustomizingAddPanel({
       const card = editor.placements.find(p => p.id === placementId);
       if (card === undefined) return null;
       restore(placementId);
-      lastAdded.current = placementId;
-      highlight(placementId);
-      // Back where it was: the list with this card no longer removed.
-      const after = editor.placements.map(p =>
-        p.id === placementId ? { ...p, removed: false } : p
-      );
-      return {
-        title: titleOf(card.widgetId),
-        ...placeAmongDrawn(after, placementId, isDrawn),
-      };
+      landed(placementId);
+      return { title: titleOf(card.widgetId, card.config) };
     },
-    [editor.placements, restore, highlight, titleOf, isDrawn]
+    [editor.placements, restore, landed, titleOf]
   );
 
   const onClosed = useCallback(() => {
@@ -187,7 +204,13 @@ function CustomizingAddPanel({
     <AddWidgetPanel
       open={open}
       onOpenChange={onOpenChange}
-      rows={rows}
+      gallery={{
+        read: gallery.data,
+        isError: gallery.isError,
+        retry: () => void gallery.refetch(),
+      }}
+      placements={editor.placements}
+      byId={byId}
       atCapacity={editor.atCapacity}
       onAdd={onAdd}
       onAddBack={onAddBack}

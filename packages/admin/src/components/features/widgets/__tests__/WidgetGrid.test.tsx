@@ -879,7 +879,7 @@ describe("WidgetGrid — sizing", () => {
     ).toBe(screen.getByTestId("dashboard-container"));
   });
 
-  it("draws a card its body collapsed one row tall, with its title kept for assistive technology only, and its own rows again once opened", () => {
+  it("draws a card its body collapsed one row tall, its header the one line, and its own rows again once opened", () => {
     // A body that collapses itself to one line, as the setup card does, with a control to open it.
     function Collapsible() {
       const [collapsed, setCollapsed] = useState(true);
@@ -899,20 +899,19 @@ describe("WidgetGrid — sizing", () => {
     expect(card).toHaveAttribute("data-collapsed");
     // Its border, padding and one header-high line make exactly one row.
     expect(card).toHaveClass("py-[15px]");
-    // The title still names the card, out of sight; no footer takes room under the line.
-    expect(within(cell).getByTestId("widget-card-header")).toHaveClass(
+    // The header is the one line, drawn, so the title names the card on screen and no control in
+    // it is hidden yet focusable; no footer takes room under the line.
+    expect(within(cell).getByTestId("widget-card-header")).not.toHaveClass(
       "sr-only"
     );
     expect(card).toHaveAccessibleName(/Bar/);
     expect(within(cell).queryByTestId("widget-card-footer")).toBeNull();
 
-    // The must-differ half: opened, the card spans its stored rows and draws its frame.
+    // The must-differ half: opened, the card spans its stored rows and draws its whole frame.
     fireEvent.click(within(cell).getByRole("button", { name: "Expand" }));
     expect(cell.style.gridRow).toBe("span 3 / span 3");
     expect(card).not.toHaveAttribute("data-collapsed");
-    expect(within(cell).getByTestId("widget-card-header")).not.toHaveClass(
-      "sr-only"
-    );
+    expect(card).not.toHaveClass("py-[15px]");
     expect(within(cell).getByTestId("widget-card-footer")).toBeInTheDocument();
   });
 

@@ -80,6 +80,13 @@ export interface PgDrizzleKit {
   generateMigration: (prev: unknown, cur: unknown) => Promise<string[]>;
 }
 
+// The tables MySQL's pushSchema may see in the live database. The kit's
+// MySQL entrypoint takes no filter of its own, so this one is applied to
+// the rows its introspection reads (see `scopeMysqlIntrospection`).
+export interface MySqlEntitiesFilter {
+  tables: readonly string[];
+}
+
 // MySQL drizzle-kit API surface (drizzle-kit/payload/mysql).
 // Accepts the DRIZZLE instance; the raw `{ query }` client the v1 kit
 // wants is derived from `drizzleInstance.$client` internally.
@@ -87,7 +94,8 @@ export interface MySQLDrizzleKit {
   pushSchema: (
     imports: Record<string, unknown>,
     drizzleInstance: unknown,
-    databaseName: string
+    databaseName: string,
+    entitiesConfig?: MySqlEntitiesFilter
   ) => Promise<PushSchemaResult>;
   generateDrizzleJson: (
     imports: Record<string, unknown>,
@@ -195,6 +203,62 @@ function mysqlKitClient(drizzleInstance: unknown): MySqlKitClient {
   };
 }
 
+// The two introspection reads that decide which relations drizzle-kit's
+// MySQL push believes exist: its table list and its view list. `TABLES\b`
+// does not match `TABLE_CONSTRAINTS`, and STATISTICS, COLUMNS and the
+// constraint reads are left alone because the kit already narrows each of
+// them to the tables the first read returned.
+const RELATION_LISTING = /\bFROM\s+INFORMATION_SCHEMA\.(TABLES|VIEWS)\b/i;
+
+/**
+ * Limit what drizzle-kit's MySQL introspection sees to `tables`, the scoping
+ * PostgreSQL gets from the kit's own `entitiesConfig.tables`.
+ *
+ * The MySQL payload `pushSchema` takes no filter: it introspects with an
+ * accept-everything predicate, so every live table outside the desired
+ * schema (a site's `dc_*` content, the migrate lock) reads as dropped. When
+ * the desired schema also ADDS a table, the kit pairs the two as a possible
+ * rename and its resolver throws `resolver(table) was called without a
+ * HintsHandler` before emitting anything.
+ *
+ * The kit applies its predicate to exactly two reads, the table list and the
+ * view list, and narrows every later read (columns, indexes, keys, checks)
+ * to the tables those returned. Dropping the same rows here is therefore the
+ * same filter, applied one step earlier. Both reads page 100,000 rows at a
+ * time and stop at the first short page, so the filtered read is complete
+ * for any schema holding fewer relations than that.
+ *
+ * A listing row without a string `TABLE_NAME` means the kit changed how it
+ * reads the catalog; that fails here, naming the cause, rather than reading
+ * as an empty database that the push would then try to create from scratch.
+ */
+export function scopeMysqlIntrospection(
+  client: MySqlKitClient,
+  tables: readonly string[]
+): MySqlKitClient {
+  const allowed = new Set(tables);
+  return {
+    query: async <T>(sql: string, params?: unknown[]): Promise<T[]> => {
+      const rows = await client.query<T>(sql, params);
+      if (!RELATION_LISTING.test(sql)) return rows;
+      return rows.filter(row => {
+        const name = (row as { TABLE_NAME?: unknown }).TABLE_NAME;
+        if (typeof name !== "string") {
+          throw NextlyError.internal({
+            logContext: {
+              reason:
+                "scopeMysqlIntrospection: a drizzle-kit catalog listing row " +
+                "has no TABLE_NAME, so the push cannot be limited to the " +
+                "desired tables. The kit's MySQL introspection has changed.",
+            },
+          });
+        }
+        return allowed.has(name);
+      });
+    },
+  };
+}
+
 // Derives the v1 `{ query, run, batch }` client from a
 // drizzle-orm/better-sqlite3 instance.
 //
@@ -277,8 +341,16 @@ export function getMySQLDrizzleKit(): Promise<MySQLDrizzleKit> {
     return Promise.resolve(g.__nextly_drizzleKitMySQL);
   const m = requireMySqlKit() as PayloadMySqlModule;
   g.__nextly_drizzleKitMySQL = {
-    pushSchema: (imports, db, databaseName) =>
-      m.pushSchema(imports, mysqlKitClient(db), databaseName),
+    // Unscoped when no filter is given: the pipeline's Phase D relies on
+    // its own pre-creation of planned tables rather than on this scoping.
+    pushSchema: (imports, db, databaseName, entitiesConfig) =>
+      m.pushSchema(
+        imports,
+        entitiesConfig
+          ? scopeMysqlIntrospection(mysqlKitClient(db), entitiesConfig.tables)
+          : mysqlKitClient(db),
+        databaseName
+      ),
     generateDrizzleJson: m.generateDrizzleJson,
     generateMigration: m.generateMigration,
   };

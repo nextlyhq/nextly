@@ -65,6 +65,8 @@ import {
   widthChoices,
 } from "../sizes";
 
+import { settingsIntent } from "./settings-sheet-code";
+
 export interface CardActionsMenuProps {
   /** What the reader calls this card, which the button's name says. */
   title: string;
@@ -286,6 +288,9 @@ export function CardActionsMenu({
       <DropdownMenuTrigger asChild>
         <Button
           ref={triggerRef}
+          // With Settings in this menu, the sheet's code starts loading as
+          // the reader heads for the menu.
+          {...(on.openSettings ? settingsIntent : {})}
           type="button"
           variant="ghost"
           size="icon"

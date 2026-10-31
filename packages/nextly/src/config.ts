@@ -308,6 +308,8 @@ export {
   stepFinished,
   talliedSetup,
   type SampleRoute,
+  type SampleRun,
+  type SampleSetupStep,
   type SetupAnswer,
   type SetupCardData,
   type SetupSingle,

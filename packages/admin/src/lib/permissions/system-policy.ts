@@ -36,13 +36,17 @@ function onlySlugOf(grant: RouteGrant): string {
 /** Seeing any settings page: `read-settings`. */
 export const READ_SETTINGS = onlySlugOf(SYSTEM_READ_POLICY.settings.read);
 
-/** Adding, changing and removing settings, as their routes ask it. */
+/**
+ * Adding, changing and removing settings, as their routes ask it. Adding and
+ * removing are read from the user fields' routes, the settings created and
+ * deleted one by one.
+ */
 export const CREATE_SETTINGS = onlySlugOf(
-  SYSTEM_WRITE_POLICY.imageSizes.create
+  SYSTEM_WRITE_POLICY.userFields.create
 );
 export const UPDATE_SETTINGS = onlySlugOf(SYSTEM_WRITE_POLICY.settings.update);
 export const DELETE_SETTINGS = onlySlugOf(
-  SYSTEM_WRITE_POLICY.imageSizes.delete
+  SYSTEM_WRITE_POLICY.userFields.delete
 );
 
 /** Any change to settings: the plugins area, which configures them. */

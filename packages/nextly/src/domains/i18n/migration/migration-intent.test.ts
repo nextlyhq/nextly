@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
-import { parseSqlSections } from "../../../cli/commands/migrate";
+import { parseSqlSections } from "../../schema/migrate/sql-sections";
 
 import {
   formatLocalizationIntent,

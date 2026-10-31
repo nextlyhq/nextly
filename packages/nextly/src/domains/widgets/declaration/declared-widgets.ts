@@ -120,7 +120,10 @@ interface DeclaredWidgetShape {
    * every field the registry carries and this is not one of them, so the
    * admin's workspace payload never holds a case. Only the preview read, which
    * answers in development alone, sends them, and only for the widgets its
-   * reader may see.
+   * reader may see. The one other reader is the dashboard's add gallery
+   * (`api/dashboard-gallery`), and for core's own widgets alone, whose cases
+   * are core's sample data and draw their gallery tiles; a plugin's or the
+   * site's cases never leave the development preview read.
    */
   readonly preview?: readonly DeclaredPreviewCase[];
   /** A label and a count for the dashboard's header, counted as the reader. */

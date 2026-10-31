@@ -67,7 +67,10 @@ import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
-import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
+import {
+  deleteEntityRegistryRow,
+  mediaUsageTablePresent,
+} from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 
@@ -938,17 +941,20 @@ export class CollectionSyncService extends BaseService {
             // Asked before the transaction opens: see `DashboardTables`.
             const tables = {
               dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+              mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
             };
             const { expire } = await this.adapter.transaction(tx =>
               deleteEntityRegistryRow(tx, "collection", slug, tables)
             );
             // Its cached reads describe a collection that is gone from the
-            // registry: expired now, before the table drop, which can fail
-            // and would otherwise leave them live.
-            await flushContentChange(
-              expire,
-              this.logger,
-              "an orphaned collection was deleted"
+            // registry: expired once that is durable, before the table drop,
+            // which can fail and would otherwise leave them live.
+            await this.afterCommit(() =>
+              flushContentChange(
+                expire,
+                this.logger,
+                "an orphaned collection was deleted"
+              )
             );
 
             const capabilities = this.adapter.getCapabilities();
