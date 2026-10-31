@@ -41,7 +41,7 @@ export const SETUP_ROW_BODY_PX = SETUP_BAR.px + SETUP_GAP.px + SETUP_TILE.px;
  * of ink at the label's size) and the Singles' hint ("2 of 5 · Open · Skip") read in full beside
  * its mark, with the tile's padding.
  */
-export const SETUP_TILE_MIN_PX = 160;
+const SETUP_TILE_MIN_PX = 160;
 
 /**
  * The classes that lay `count` tiles out as one row where the body (an `@container`) is at least

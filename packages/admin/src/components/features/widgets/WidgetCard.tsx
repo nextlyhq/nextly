@@ -756,10 +756,37 @@ function WidgetCardHeader({
           </p>
         )}
       </div>
-      {headerSlotRef && (
+      <HeaderControls
+        slotRef={headerSlotRef}
+        quick={quick}
+        quickInert={quickInert}
+        headerAction={headerAction}
+      />
+    </CardHeader>
+  );
+}
+
+/**
+ * The header's right end, always in this order: the body's own controls (`frame/header-slot`),
+ * the card's one quick control, then its menu, so the menu is in the same place on every card.
+ */
+function HeaderControls({
+  slotRef,
+  quick,
+  quickInert,
+  headerAction,
+}: {
+  slotRef: ((element: HTMLElement | null) => void) | undefined;
+  quick: ReactNode;
+  quickInert: boolean;
+  headerAction: ReactNode;
+}) {
+  return (
+    <>
+      {slotRef && (
         // Hidden while empty, so a card whose body draws nothing here keeps its header as it was.
         <span
-          ref={headerSlotRef}
+          ref={slotRef}
           className="flex shrink-0 items-center gap-1 empty:hidden"
           data-testid="widget-card-header-slot"
         />
@@ -774,7 +801,7 @@ function WidgetCardHeader({
         </span>
       )}
       {headerAction && <span className="shrink-0">{headerAction}</span>}
-    </CardHeader>
+    </>
   );
 }
 
