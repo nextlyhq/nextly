@@ -149,18 +149,12 @@ jobs:
           # the Direct API, a generated build script with a search-index step, and migrations
           # shipped as per-dialect SQL variants. `blank` exercises none of it, so a change that
           # breaks the blog template alone reaches users through a green run without these.
-          #
-          # It is also the leg that serves the blog under Cache Components, which every
-          # scaffold has on: on an empty database and again on seeded content (`serveChecks`).
-          # Rendering under Cache Components does not depend on the dialect or the package
-          # manager, so one SQLite leg covers it.
           - name: blog-code-first
             template: blog
             approach: code-first
             pm: npm
             source: local
             core: workspace
-            serveChecks: "on"
 
           # The SAME template through the schema-builder approach, which is a different config
           # (`collections: []`, so the schema lives in the database) reaching the same query
@@ -176,6 +170,18 @@ jobs:
             pm: pnpm
             source: local
             core: workspace
+
+          # The blog served under Cache Components, which every scaffold has on: on an empty
+          # database and again on seeded content (`serveChecks`), each from a build of its own.
+          # Rendering under Cache Components does not depend on the dialect or the package
+          # manager, so one SQLite leg covers it.
+          - name: blog-cache-components
+            template: blog
+            approach: code-first
+            pm: npm
+            source: local
+            core: workspace
+            serveChecks: "on"
 
           # Not a scaffold: an EXISTING app, as `create-next-app` makes it with its defaults,
           # which since 16.4 turn Cache Components on (`cacheComponents: true` and
