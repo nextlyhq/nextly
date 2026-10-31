@@ -2,8 +2,9 @@
  * A card's settings in a browser: the quick setting on the card, saved at once for the reader
  * and announced, at each reference width; the quick popover, opened from the card's title,
  * applying a change at once with Undo; the card menu at rest, with Settings, Size, Refresh and
- * Remove; and the settings sheet, opened through the popover's More settings, beside a live
- * preview, saving on Done at rest, restoring on Cancel, and holding its change with the
+ * Remove; and the More settings panel, opened through the popover's More settings, beside a
+ * dashboard that stays usable, with a live preview at the card's own tier, saving on Done at
+ * rest (the card's own title with it), restoring on Cancel, and holding its change with the
  * dashboard's other unsaved changes while customising.
  *
  * Drawn with the style fixture's settings card (`style-fixture/recent`), which the suite's
@@ -39,6 +40,7 @@ interface Layout {
     h: number;
     removed?: boolean;
     config?: Record<string, unknown>;
+    title?: string;
   }>;
 }
 
@@ -413,7 +415,44 @@ test.describe("the settings sheet", () => {
     await field.press("Tab");
   }
 
-  test("shows the card beside the form, as the form's values would draw it", async ({
+  test("leaves the dashboard usable beside it, and previews the card at the tier its width gives it", async ({
+    page,
+  }) => {
+    const sheet = await openSettings(page);
+    const box = await sheet.boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(480);
+    expect(box?.width).toBeLessThanOrEqual(560);
+    // The card is as wide as it may be on a 1,440 px dashboard: drawn large, scaled to fit.
+    const card = cell(page).locator("[data-tier]").first();
+    await expect(card).toHaveAttribute("data-tier", "large");
+    const preview = sheet.getByTestId("settings-preview");
+    await expect(preview.locator("[data-tier]").first()).toHaveAttribute(
+      "data-tier",
+      "large"
+    );
+    expect(Number(await preview.getAttribute("data-scale"))).toBeLessThan(1);
+    // Not modal: the card behind it can still be reached, and reaching it keeps the panel open.
+    // Found by its test id, not its name, which follows the card's title.
+    await cell(page).getByTestId("card-menu").click();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeVisible();
+  });
+
+  test("keeps the card's own title on Done, and draws the card under it", async ({
+    page,
+  }) => {
+    const sheet = await openSettings(page);
+    await sheet.getByLabel("Title").fill("  Posts to review ");
+    await sheet.getByRole("button", { name: "Done" }).click();
+    await expect(sheet).toBeHidden();
+    // The card's own region, found within its cell, is now named by the reader's title.
+    await expect(cell(page).getByRole("region").first()).toHaveAccessibleName(
+      /^Posts to review/
+    );
+    expect((await storedCard(page))?.title).toBe("Posts to review");
+  });
+
+  test("shows the card at the top of the panel, as the panel's values would draw it", async ({
     page,
   }) => {
     const sheet = await openSettings(page);

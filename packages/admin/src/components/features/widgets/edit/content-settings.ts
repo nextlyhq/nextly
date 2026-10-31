@@ -18,7 +18,7 @@ import {
   unfitContentField,
 } from "nextly/config";
 
-import { whereToCondition } from "./content-filter";
+import { filterFieldNames } from "./content-filter";
 
 /** A content setting that works over a Collection setting of the widget. */
 export type DependentSetting = Extract<ContentSetting, { of: string }>;
@@ -62,10 +62,9 @@ export function fieldsNamedBy(
   setting: DependentSetting,
   value: unknown
 ): string[] {
-  if (setting.type === "filter") {
-    const field = whereToCondition(value, () => undefined)?.field;
-    return field === undefined ? [] : [field];
-  }
+  // Every field of every condition: a chip naming a field the collection no
+  // longer offers is stale whichever chip it is.
+  if (setting.type === "filter") return filterFieldNames(value);
   if (setting.type === "fields") {
     return Array.isArray(value)
       ? value.filter((name): name is string => typeof name === "string")
@@ -300,4 +299,21 @@ function staleCollection(
         ? setting.defaultValue
         : "",
   };
+}
+
+/** A section of a card's settings panel: Data, Display or Advanced. */
+export type SettingSection = NonNullable<AnyWidgetSetting["section"]>;
+
+/**
+ * The section of the settings panel a setting is drawn in: the one it names,
+ * else Data for a setting over the card's content (its Collection, Filter,
+ * Sort, Group by and Field), and Display for every other, the fields each row
+ * shows included. A setting is folded under Advanced only when it says so.
+ * The one reading of where a setting goes.
+ */
+export function sectionOf(setting: AnyWidgetSetting): SettingSection {
+  if (setting.section !== undefined) return setting.section;
+  return isContentSetting(setting) && setting.type !== "fields"
+    ? "data"
+    : "display";
 }

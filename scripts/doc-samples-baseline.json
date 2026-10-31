@@ -157,7 +157,7 @@
       "compiled": 2
     },
     "docs/permissions/index.mdx": {
-      "samples": 9,
+      "samples": 10,
       "compiled": 6
     },
     "docs/plugins/admin-ui.mdx": {
@@ -249,7 +249,7 @@
       "compiled": 1
     },
     "docs/widgets/index.mdx": {
-      "samples": 8,
+      "samples": 9,
       "compiled": 7
     },
     "packages/adapter-mysql/README.md": {

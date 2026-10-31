@@ -21,7 +21,11 @@
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
-import type { GridSize, WidgetSizeBounds } from "nextly/config";
+import type {
+  GridSize,
+  PublishedContentSource,
+  WidgetSizeBounds,
+} from "nextly/config";
 import type { JSX, RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
@@ -39,6 +43,7 @@ import {
 } from "../layout-editor";
 import { useReportedPlacements } from "../reported-placements";
 import { cardRowStyle, GRID_CLASS } from "../sizes";
+import { titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
@@ -75,6 +80,11 @@ export interface ArrangedGridProps {
   writes: {
     /** Whether a layout write is in flight anywhere on this dashboard. */
     isWriting: boolean;
+    /**
+     * The reader's collections, as the server published them: what a card is titled by, and so
+     * what a write or a removal names it by (`shownTitleOf`).
+     */
+    sources?: readonly PublishedContentSource[] | undefined;
     /** Why a single-card write is unavailable right now, when it is. */
     singleCardWriteBlocked?: string | undefined;
     /**
@@ -87,7 +97,9 @@ export interface ArrangedGridProps {
             placementId: string,
             title: string,
             config: Record<string, unknown>,
-            callbacks: CardSettingsWriteCallbacks
+            callbacks: CardSettingsWriteCallbacks,
+            /** The title the reader gave the card, where the change sets it. */
+            ownTitle?: string
           ) => void;
           /**
            * Save a card's size at once: the card menu's and the quick popover's Size. Absent
@@ -139,9 +151,11 @@ export interface ArrangedGridProps {
     remove: (placementId: string) => void;
     /** ABSENT before an arrangement has been read. */
     dismiss?: (placementId: string, title: string) => void;
+    /** A card's settings, and its own title where the change sets one. */
     saveSettings: (
       placementId: string,
-      config: Record<string, unknown>
+      config: Record<string, unknown>,
+      ownTitle?: string
     ) => void;
   };
 }
@@ -212,18 +226,21 @@ function cellDragFor(
  */
 function cellSettingsWrite(
   settingsWrite: ArrangedGridProps["writes"]["settings"],
-  row: ArrangedWidget
+  row: ArrangedWidget,
+  /** The title the card is drawn under, which what a write says names it by. */
+  shownTitle: string
 ): { settingsWrite?: CellSettingsWrite } {
   if (!settingsWrite) return {};
   const { resize } = settingsWrite;
   return {
     settingsWrite: {
-      write: (config, callbacks) =>
+      write: (config, callbacks, ownTitle) =>
         settingsWrite.write(
           row.placementId,
-          row.widget.title,
+          shownTitle,
           config,
-          callbacks
+          callbacks,
+          ownTitle
         ),
       ...(resize === undefined
         ? {}
@@ -231,7 +248,7 @@ function cellSettingsWrite(
             resize: (size: GridSize, callbacks: CardSettingsWriteCallbacks) =>
               resize(
                 row.placementId,
-                row.widget.title,
+                shownTitle,
                 size,
                 row.widget.size,
                 callbacks
@@ -283,6 +300,17 @@ function oldestAnswer(
     if (at !== null && (oldest === undefined || at < oldest)) oldest = at;
   }
   return oldest;
+}
+
+/**
+ * The title a card is drawn under, as its cell draws it (`titleAsAsked`): what a write or a
+ * removal says names the card by it, so two copies of one widget are told apart.
+ */
+function shownTitleOf(
+  row: ArrangedWidget,
+  sources: ArrangedGridProps["writes"]["sources"]
+): string {
+  return titleAsAsked(row.widget, row.config, sources, row.ownTitle).title;
 }
 
 /** What the batch answered for one card, as its cell draws it (`ArrangedCellProps.data`). */
@@ -378,7 +406,11 @@ export function ArrangedGrid({
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
-            {...cellSettingsWrite(writes.settings, row)}
+            {...cellSettingsWrite(
+              writes.settings,
+              row,
+              shownTitleOf(row, writes.sources)
+            )}
             reportHidden={reportHidden}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
@@ -395,10 +427,14 @@ export function ArrangedGrid({
               ...(on.dismiss
                 ? {
                     dismiss: () =>
-                      on.dismiss?.(row.placementId, row.widget.title),
+                      on.dismiss?.(
+                        row.placementId,
+                        shownTitleOf(row, writes.sources)
+                      ),
                   }
                 : {}),
-              saveSettings: config => on.saveSettings(row.placementId, config),
+              saveSettings: (config, ownTitle) =>
+                on.saveSettings(row.placementId, config, ownTitle),
             }}
           />
         ))}

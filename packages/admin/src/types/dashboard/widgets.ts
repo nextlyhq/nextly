@@ -247,6 +247,11 @@ export interface WidgetPlacement {
    */
   removed: boolean;
   config?: Record<string, unknown>;
+  /**
+   * The title the reader gave this card, as stored: trimmed, and absent when
+   * the card is titled automatically from its widget and settings.
+   */
+  title?: string;
 }
 
 /** Which arrangement a read handed the reader. */

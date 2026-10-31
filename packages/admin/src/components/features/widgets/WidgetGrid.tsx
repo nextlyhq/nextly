@@ -56,6 +56,10 @@ import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
 import { useCardDrag } from "./edit/drag/useCardDrag";
 import { RemovalNotice } from "./edit/RemovalNotice";
+import {
+  bringRefusedPanelForward,
+  useSettingsPanelHoldsChanges,
+} from "./edit/settings-panel-registry";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
 import { useCardRemoval } from "./edit/useCardRemoval";
 import { useCardSettingsWrite } from "./edit/useCardSettingsWrite";
@@ -75,7 +79,7 @@ import {
 } from "./hidden-while-empty";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
-import { useDashboardWidth } from "./useDashboardWidth";
+import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
 import { widgetAsAsked } from "./widget-as-asked";
@@ -279,6 +283,50 @@ function useCardsAtDashboardWidth(
   };
 }
 
+/**
+ * Whether leaving the dashboard asks first: while customising, when the draft or a card's open
+ * settings panel holds a change, since the panel leaves the asking to this prompt then.
+ */
+function leaveAsks(
+  editor: { hasUnsavedChanges: boolean; isEditing: boolean },
+  panelHoldsChanges: boolean
+): boolean {
+  return editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges);
+}
+
+/**
+ * The admin's own unsaved-changes prompt, over the dashboard: Save, Discard and Keep editing
+ * before the reader leaves with changes in customise mode.
+ */
+function DashboardLeaveGuard({
+  editor,
+  saveRequest,
+  children,
+}: {
+  editor: LayoutEditor;
+  saveRequest: ReturnType<typeof useSaveRequest>;
+  children: ReactNode;
+}): JSX.Element {
+  // Whether a card's settings panel holds a change Done has not kept.
+  const panelHoldsChanges = useSettingsPanelHoldsChanges();
+  return (
+    <UnsavedChangesGuard
+      // A card's settings panel holding a change counts while customising, where the panel
+      // leaves the asking to this prompt: one leave, one question.
+      isDirty={leaveAsks(editor, panelHoldsChanges)}
+      onDiscard={editor.cancel}
+      // The bar's Save and this prompt's are one request, which keeps an open settings
+      // panel's change with the draft (`useSaveRequest`).
+      onSave={saveRequest.request}
+      // A Save the prompt could not make, because a settings panel refused its change, leaves
+      // the reader in that panel, on what it refused.
+      onCancel={bringRefusedPanelForward}
+    >
+      {children}
+    </UnsavedChangesGuard>
+  );
+}
+
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
 const UNREADABLE_SINGLE_CARD =
   "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize first.";
@@ -352,9 +400,17 @@ function useSettingsWriteAtRest(
   const cardSettingsWrite = useCardSettingsWrite(layout);
   if (!layout.layout || editor.isEditing) return undefined;
   return {
-    write: (placementId, title, config, callbacks) =>
+    write: (placementId, title, config, callbacks, ownTitle) =>
       cardSettingsWrite.write(
-        { placementId, title, change: { kind: "settings", config } },
+        {
+          placementId,
+          title,
+          change: {
+            kind: "settings",
+            config,
+            ...(ownTitle === undefined ? {} : { ownTitle }),
+          },
+        },
         callbacks
       ),
     // The same write, of the card's size: the request customise mode's Save sends for it.
@@ -421,7 +477,10 @@ function CardContexts({
   return (
     <DrawFailureContext.Provider value={reportDraw}>
       <HiddenWhileEmptyContext.Provider value={hiddenWhileEmpty}>
-        {children}
+        {/* The width a card's settings panel previews it at (`cardOuterWidth`). */}
+        <DashboardWidthProvider value={dashboardWidth}>
+          {children}
+        </DashboardWidthProvider>
       </HiddenWhileEmptyContext.Provider>
     </DrawFailureContext.Provider>
   );
@@ -629,11 +688,7 @@ export function WidgetGrid(): JSX.Element {
           was pending lost them when it failed. Discarding says nothing, because
           the page is leaving and the next one speaks for itself; reload and
           close get the browser's own prompt. */}
-      <UnsavedChangesGuard
-        isDirty={editor.hasUnsavedChanges}
-        onDiscard={editor.cancel}
-        onSave={saveRequest.request}
-      >
+      <DashboardLeaveGuard editor={editor} saveRequest={saveRequest}>
         <div className="space-y-4">
           <DashboardEditChrome
             editor={editor}
@@ -667,6 +722,7 @@ export function WidgetGrid(): JSX.Element {
                   isEditing={editor.isEditing}
                   writes={{
                     isWriting: editor.isWriting,
+                    sources: branding?.widgetSources,
                     singleCardWriteBlocked: singleCardWriteBlocked(
                       layout.isUnreadable
                     ),
@@ -711,7 +767,7 @@ export function WidgetGrid(): JSX.Element {
             onClose={removal.close}
           />
         </div>
-      </UnsavedChangesGuard>
+      </DashboardLeaveGuard>
     </div>
   );
 }

@@ -78,10 +78,11 @@ describe("a built setting is core's setting definition", () => {
     });
   });
 
-  it("names each date range for the reader, the last 30 days by default", () => {
+  it("names each date range for the reader, the last 30 days by default, drawn with the card's data", () => {
     expect(setting.dateRange({ label: "Period" })).toEqual({
       type: "select",
       label: "Period",
+      section: "data",
       defaultValue: "30d",
       options: [
         { label: "Last 7 days", value: "7d" },
@@ -90,6 +91,12 @@ describe("a built setting is core's setting definition", () => {
         { label: "Last 12 months", value: "12m" },
       ],
     });
+  });
+
+  it("draws a date range in the section its author names", () => {
+    expect(
+      setting.dateRange({ label: "Period", section: "display" }).section
+    ).toBe("display");
   });
 
   it("keeps a select's options as label and value alone", () => {
