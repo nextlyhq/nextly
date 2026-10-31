@@ -30,6 +30,18 @@ const { defaultCardsNotShown } = vi.hoisted(() => ({
   defaultCardsNotShown: vi.fn(),
 }));
 vi.mock("./default-cards-shown", () => ({ defaultCardsNotShown }));
+
+// Which of the reader's cards that hide while empty answered empty, and which
+// widgets leave by their own answer: the case states them, since those
+// answers have their own tests.
+const { cardsAnsweredEmpty, hiddenWhenAnswerEmpty } = vi.hoisted(() => ({
+  cardsAnsweredEmpty: vi.fn(),
+  hiddenWhenAnswerEmpty: vi.fn(),
+}));
+vi.mock("./cards-answered-empty", () => ({
+  cardsAnsweredEmpty,
+  hiddenWhenAnswerEmpty,
+}));
 vi.mock("../di", () => ({ container: { get: containerGet } }));
 
 // `callerHoldsPermission` is the seam a caller is put on either side of.
@@ -104,6 +116,7 @@ let saved:
       placements: WidgetPlacement[];
       expected: number;
       arranged?: boolean;
+      sized?: readonly string[];
     }
   | undefined;
 let saveThrows: Error | undefined;
@@ -136,13 +149,14 @@ const fakeService = {
     _scope: string,
     placements: WidgetPlacement[],
     expected: number,
-    arranged?: boolean
+    arranged?: boolean,
+    sized?: readonly string[]
   ) => {
     if (saveThrows) throw saveThrows;
     // Whether the write ARRANGES is recorded because nothing in the response
     // says it, so the only place a wrong answer is visible is what reaches the
-    // service.
-    saved = { placements, expected, arranged };
+    // service. The sizes the reader chose likewise.
+    saved = { placements, expected, arranged, sized };
     return expected + 1;
   },
 };
@@ -169,8 +183,9 @@ function withoutUndefined<T extends object>(value: T): Partial<T> {
   ) as Partial<T>;
 }
 
-function getReq(): Request {
-  return new Request("http://localhost/api/dashboard/layout");
+/** A layout read, with the query string `search` when it is given one. */
+function getReq(search = ""): Request {
+  return new Request(`http://localhost/api/dashboard/layout${search}`);
 }
 
 /**
@@ -200,9 +215,13 @@ function putReq(body: unknown): Request {
 
 interface LayoutPayload {
   placements?: WidgetPlacement[];
+  hiddenWhileEmpty?: string[];
+  hiddenWhenAnswerEmpty?: string[];
+  readAheadToken?: string;
   available?: string[];
   version?: number;
   source?: string;
+  arranged?: boolean;
   scope?: string;
   defaultPlacements?: WidgetPlacement[];
   widgets?: Record<
@@ -255,6 +274,8 @@ beforeEach(() => {
     suggested: [],
   });
   defaultCardsNotShown.mockResolvedValue(new Set());
+  cardsAnsweredEmpty.mockResolvedValue([]);
+  hiddenWhenAnswerEmpty.mockReturnValue([]);
   reqAuth.mockResolvedValue({
     userId: "user-1",
     permissions: [],
@@ -332,6 +353,25 @@ describe("GET /api/dashboard/layout", () => {
     // Sorted by the reader's own order, not the registry's -- and the hidden
     // one still comes back, or nothing could ever put it back.
     expect(body.placements?.map(p => p.id)).toEqual(["p2", "p1"]);
+  });
+
+  it("says whether the reader arranged the dashboard: an arranged row, a row of dismissals alone, no row", async () => {
+    registerWidget(widget({ id: "core/a" }));
+    const placements: WidgetPlacement[] = [
+      { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: true },
+    ];
+
+    stored = { version: 4, layout: serializeLayout(placements) };
+    expect((await bodyOf(await getWidgetLayout(getReq()))).arranged).toBe(true);
+    // A card dismissed at rest leaves a row that still follows the default.
+    stored = { version: 5, layout: serializeLayout(placements, false) };
+    const dismissed = await bodyOf(await getWidgetLayout(getReq()));
+    expect(dismissed.source).toBe("own");
+    expect(dismissed.arranged).toBe(false);
+    stored = undefined;
+    expect((await bodyOf(await getWidgetLayout(getReq()))).arranged).toBe(
+      false
+    );
   });
 
   it("serves a row whose ids collide, without leaking the repair onto the wire", async () => {
@@ -438,7 +478,7 @@ describe("where the add panel lists each widget", () => {
     // Registered in an order the panel must not follow.
     registerWidget(widget({ id: "site/zeta" }));
     registerWidget(widget({ id: "core/team" }));
-    registerWidget(widget({ id: "core/recently-edited" }));
+    registerWidget(widget({ id: "core/continue" }));
     registerWidget(widget({ id: "site/alpha" }));
     setContributedWidgets([{ id: "forms/latest", plugin: "@acme/forms" }]);
     // Something stored, so every widget is offered rather than placed.
@@ -447,7 +487,7 @@ describe("where the add panel lists each widget", () => {
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
     expect(body.available).toEqual([
-      "core/recently-edited",
+      "core/continue",
       "site/zeta",
       "site/alpha",
       "core/team",
@@ -460,7 +500,7 @@ describe("where the add panel lists each widget", () => {
     // it, as on the dashboard, and needs its place. Without a rank it could only guess one.
     registerWidget(widget({ id: "site/zeta" }));
     registerWidget(widget({ id: "core/team" }));
-    registerWidget(widget({ id: "core/recently-edited" }));
+    registerWidget(widget({ id: "core/continue" }));
     stored = {
       version: 1,
       layout: serializeLayout([
@@ -475,7 +515,7 @@ describe("where the add panel lists each widget", () => {
       .filter(([, facts]) => typeof facts.rank === "number")
       .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0))
       .map(([id]) => id);
-    expect(ranked).toEqual(["core/recently-edited", "site/zeta", "core/team"]);
+    expect(ranked).toEqual(["core/continue", "site/zeta", "core/team"]);
   });
 });
 
@@ -640,10 +680,14 @@ describe("a widget registered after the reader last saved", () => {
 });
 
 /** A row a dismissal wrote: never arranged, so it still follows the defaults. */
-function unarrangedRow(placements: WidgetPlacement[], version = 1) {
+function unarrangedRow(
+  placements: WidgetPlacement[],
+  version = 1,
+  sized: readonly string[] = []
+) {
   return {
     version,
-    layout: serializeLayout(placements, false),
+    layout: serializeLayout(placements, false, sized),
   };
 }
 
@@ -689,6 +733,156 @@ describe("a row nobody arranged still follows the defaults", () => {
     expect(body.placements?.find(p => p.widgetId === "core/new")?.removed).toBe(
       false
     );
+  });
+
+  describe("the size a reader chose at rest", () => {
+    const RESIZABLE = {
+      default: { w: 6, h: 3 },
+      min: { w: 4, h: 3 },
+      max: { w: 8, h: 3 },
+    };
+
+    it("persists across a read, and a card the default gains still arrives", async () => {
+      registerWidget(
+        widget({ id: "core/a", size: RESIZABLE, defaultOrder: 0 })
+      );
+      registerWidget(
+        widget({ id: "core/b", size: RESIZABLE, defaultOrder: 10 })
+      );
+      // Resized at rest from the default: a write that does not arrange.
+      await putWidgetLayout(
+        putReq({
+          placements: [
+            { id: "core/a", widgetId: "core/a", w: 8, h: 3, removed: false },
+            { id: "core/b", widgetId: "core/b", w: 6, h: 3, removed: false },
+          ],
+          version: 0,
+          scope: scopeFor(),
+          arranged: false,
+        })
+      );
+      // Only the card the reader resized is kept as theirs.
+      expect(saved?.sized).toEqual(["core/a"]);
+      stored = unarrangedRow(saved?.placements ?? [], 1, saved?.sized);
+      registerWidget(widget({ id: "core/new", defaultOrder: 20 }));
+
+      const body = await bodyOf(await getWidgetLayout(getReq()));
+
+      expect(body.arranged).toBe(false);
+      expect(body.placements?.map(p => [p.widgetId, p.w])).toEqual([
+        ["core/a", 8],
+        ["core/b", 6],
+        ["core/new", 12],
+      ]);
+    });
+
+    it("leaves a card the reader did not resize following a change to the default's size", async () => {
+      // The default's size for core/b, changed since the row was written at 6.
+      registerWidget(
+        widget({ id: "core/a", size: RESIZABLE, defaultOrder: 0 })
+      );
+      registerWidget(
+        widget({
+          id: "core/b",
+          size: { ...RESIZABLE, default: { w: 4, h: 3 } },
+          defaultOrder: 10,
+        })
+      );
+      stored = unarrangedRow(
+        [
+          { id: "core/a", widgetId: "core/a", w: 8, h: 3, removed: false },
+          { id: "core/b", widgetId: "core/b", w: 6, h: 3, removed: false },
+        ],
+        1,
+        ["core/a"]
+      );
+
+      const body = await bodyOf(await getWidgetLayout(getReq()));
+
+      expect(body.placements?.map(p => [p.widgetId, p.w])).toEqual([
+        ["core/a", 8],
+        ["core/b", 4],
+      ]);
+    });
+
+    it("is held to the widget's bounds as it is read", async () => {
+      registerWidget(
+        widget({ id: "core/a", size: RESIZABLE, defaultOrder: 0 })
+      );
+      registerWidget(
+        widget({ id: "core/b", size: RESIZABLE, defaultOrder: 10 })
+      );
+      stored = unarrangedRow(
+        [
+          // Wider than the widget allows now: drawn at its widest.
+          { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
+          // Narrower than it allows: drawn at its narrowest.
+          { id: "core/b", widgetId: "core/b", w: 2, h: 3, removed: false },
+        ],
+        1,
+        ["core/a", "core/b"]
+      );
+
+      const body = await bodyOf(await getWidgetLayout(getReq()));
+
+      expect(body.placements?.map(p => [p.widgetId, p.w, p.h])).toEqual([
+        ["core/a", 8, 3],
+        ["core/b", 4, 3],
+      ]);
+    });
+
+    it("is refused when it lies outside the widget's bounds", async () => {
+      registerWidget(
+        widget({ id: "core/a", size: RESIZABLE, defaultOrder: 0 })
+      );
+
+      const res = await putWidgetLayout(
+        putReq({
+          placements: [
+            { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
+          ],
+          version: 0,
+          scope: scopeFor(),
+          arranged: false,
+        })
+      );
+      expect(res.status).toBe(400);
+      expect(saved).toBeUndefined();
+    });
+
+    it("is cleared by a reset, which leaves the reader on the default's size", async () => {
+      registerWidget(
+        widget({ id: "core/a", size: RESIZABLE, defaultOrder: 0 })
+      );
+      stored = unarrangedRow(
+        [{ id: "core/a", widgetId: "core/a", w: 8, h: 3, removed: false }],
+        4,
+        ["core/a"]
+      );
+      expect(
+        (await bodyOf(await getWidgetLayout(getReq()))).placements?.[0]?.w
+      ).toBe(8);
+
+      await deleteWidgetLayout(deleteReq({ version: "4", scope: scopeFor() }));
+
+      expect(
+        (await bodyOf(await getWidgetLayout(getReq()))).placements?.[0]?.w
+      ).toBe(6);
+    });
+
+    it("is not read from a row written before sizes were kept: it reads as it always did", async () => {
+      // A row from before `sized`: its card's size is the one the default gave it then.
+      registerWidget(
+        widget({ id: "core/a", size: RESIZABLE, defaultOrder: 0 })
+      );
+      stored = unarrangedRow([
+        { id: "core/a", widgetId: "core/a", w: 8, h: 3, removed: true },
+      ]);
+
+      const body = await bodyOf(await getWidgetLayout(getReq()));
+
+      expect(body.placements?.[0]).toMatchObject({ w: 6, removed: true });
+    });
   });
 
   it("follows a change to the declared order", async () => {
@@ -996,7 +1190,7 @@ describe("PUT /api/dashboard/layout", () => {
     );
     const single = await refused("single/about-card");
     expect(single).toContain(
-      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`
     );
     expect(single).not.toContain("Collection to");
     expect(saved).toBeUndefined();
@@ -2852,6 +3046,112 @@ describe("the one default", () => {
       "site/a",
       "acme/suggested",
     ]);
+  });
+
+  it("names the cards that hide while empty and answered empty, asked of what the reader was handed at the width the admin sent, outside the scope token", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    const placed = await bodyOf(await getWidgetLayout(getReq("?width=1200")));
+    expect(placed.hiddenWhileEmpty).toEqual([]);
+
+    cardsAnsweredEmpty.mockResolvedValue(["acme/quiet"]);
+    const body = await bodyOf(await getWidgetLayout(getReq("?width=1199.5")));
+
+    expect(body.hiddenWhileEmpty).toEqual(["acme/quiet"]);
+    // Still placed: the admin draws the page without it, and customise mode
+    // shows it marked, so it can be moved or removed.
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+    expect(cardsAnsweredEmpty).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      [
+        expect.objectContaining({ widgetId: "acme/quiet" }),
+        expect.objectContaining({ widgetId: "site/a" }),
+      ],
+      {
+        // The reader's widgets, which say which of the cards hide while empty.
+        widgets: [
+          expect.objectContaining({ id: "site/a" }),
+          expect.objectContaining({ id: "acme/quiet" }),
+        ],
+        // The width as the admin measured it, unrounded: each card's tier is
+        // read from it as the admin reads the tier of the card's first query.
+        dashboardWidth: 1199.5,
+        signal: expect.any(AbortSignal),
+        readAheadToken: body.readAheadToken,
+      }
+    );
+    // A card that empties is no change to the arrangement: a save staged
+    // before it did is not a conflict.
+    expect(body.scope).toBe(placed.scope);
+  });
+
+  it("judges no card ahead, and gives no verdict, for a read sent no dashboard width or one that is not a width", async () => {
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }] });
+    cardsAnsweredEmpty.mockResolvedValue(["acme/quiet"]);
+    for (const search of [
+      "",
+      "?width=",
+      "?width=wide",
+      "?width=0",
+      "?width=-1200",
+      "?width=Infinity",
+      "?width=99999",
+    ]) {
+      const body = await bodyOf(await getWidgetLayout(getReq(search)));
+      // No tier to judge a card at, so none is judged: absent rather than
+      // empty, which the admin reads as no verdict, hiding nothing and
+      // revealing nothing it already hid.
+      expect(Object.hasOwn(body, "hiddenWhileEmpty"), search).toBe(false);
+      expect(
+        body.placements?.map(p => p.widgetId),
+        search
+      ).toEqual(["acme/quiet"]);
+    }
+    expect(cardsAnsweredEmpty).not.toHaveBeenCalled();
+  });
+
+  it("names the widgets whose cards leave the dashboard by their own answer, with a width or without", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "legacy/quiet", hidesWhenEmpty: true }));
+    plan({ cards: [{ widget: "legacy/quiet" }, { widget: "site/a" }] });
+    hiddenWhenAnswerEmpty.mockReturnValue(["legacy/quiet"]);
+    for (const search of ["", "?width=1200"]) {
+      const body = await bodyOf(await getWidgetLayout(getReq(search)));
+      expect(body.hiddenWhenAnswerEmpty, search).toEqual(["legacy/quiet"]);
+    }
+    // Asked of the reader's widgets, whichever channel declared them.
+    expect(hiddenWhenAnswerEmpty).toHaveBeenLastCalledWith([
+      expect.objectContaining({ id: "site/a" }),
+      expect.objectContaining({ id: "legacy/quiet", hidesWhenEmpty: true }),
+    ]);
+  });
+
+  it("names each read's own load, the token its cards were read ahead under, outside the scope token", async () => {
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }] });
+
+    const first = await bodyOf(await getWidgetLayout(getReq("?width=1200")));
+    const firstAsked = cardsAnsweredEmpty.mock.lastCall;
+    const second = await bodyOf(await getWidgetLayout(getReq("?width=1200")));
+    const secondAsked = cardsAnsweredEmpty.mock.lastCall;
+
+    expect(first.readAheadToken).toEqual(expect.any(String));
+    expect(second.readAheadToken).toEqual(expect.any(String));
+    // The token each answer carries is the one its own cards were read ahead
+    // under, so the batch that sends it back takes that read's answer.
+    expect(firstAsked?.[3].readAheadToken).toBe(first.readAheadToken);
+    expect(secondAsked?.[3].readAheadToken).toBe(second.readAheadToken);
+    // A load of its own on every read: two tabs of one reader never name the
+    // same load. Nothing else about the dashboard changed, so the scope token
+    // does not move with it.
+    expect(second.readAheadToken).not.toBe(first.readAheadToken);
+    expect(second.scope).toBe(first.scope);
   });
 
   it("leaves out a card its declared widget would not show this reader, and carries it into the first save", async () => {

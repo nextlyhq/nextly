@@ -18,14 +18,15 @@
  */
 
 import { BreakdownCard } from "@admin/components/features/dashboard/BreakdownCard";
-import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
+import { ContentTable } from "@admin/components/features/dashboard/ContentTable";
+import { ContinueCard } from "@admin/components/features/dashboard/ContinueCard";
 import { CountCard } from "@admin/components/features/dashboard/CountCard";
 import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedCard";
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
 import { NoteCard } from "@admin/components/features/dashboard/NoteCard";
 import { OverTimeCard } from "@admin/components/features/dashboard/OverTimeCard";
 import { RecentEntriesCard } from "@admin/components/features/dashboard/RecentEntriesCard";
-import { RecentlyEdited } from "@admin/components/features/dashboard/RecentlyEdited";
+import { SystemHealthCard } from "@admin/components/features/dashboard/SystemHealthCard";
 import { TeamActivityCard } from "@admin/components/features/dashboard/TeamActivity";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
@@ -41,15 +42,16 @@ import { registerCoreComponent } from "@admin/lib/plugins/component-registry-int
  */
 export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#GetStartedCard", GetStartedCard);
-  registerCoreComponent("core#CollectionQuickLinks", CollectionQuickLinks);
+  registerCoreComponent("core#ContentTable", ContentTable);
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#NeedsAttention", NeedsAttention);
   registerCoreComponent("core#TeamActivity", TeamActivityCard);
-  registerCoreComponent("core#RecentlyEdited", RecentlyEdited);
+  registerCoreComponent("core#ContinueCard", ContinueCard);
   registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
   registerCoreComponent("core#Count", CountCard);
   registerCoreComponent("core#Breakdown", BreakdownCard);
   registerCoreComponent("core#Note", NoteCard);
   registerCoreComponent("core#RecentEntries", RecentEntriesCard);
   registerCoreComponent("core#OverTime", OverTimeCard);
+  registerCoreComponent("core#SystemHealth", SystemHealthCard);
 }

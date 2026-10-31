@@ -24,10 +24,10 @@ describe("the group each widget is listed in", () => {
     );
     expect(groups).toEqual({
       "core/get-started": "overview",
-      "core/content": "overview",
+      "core/content-table": "overview",
       "core/team": "team",
       "core/needs-attention": "overview",
-      "core/recently-edited": "overview",
+      "core/continue": "overview",
       "core/upcoming-releases": "overview",
       "core/team-activity": "team",
       // Offered per collection, inside each collection's part of Content.
@@ -38,6 +38,8 @@ describe("the group each widget is listed in", () => {
       // Offered per collection, as Count is.
       "core/recent-entries": "content",
       "core/over-time": "content",
+      // Super-admins only, and one row of Overview for them.
+      "core/system-health": "overview",
     });
   });
 
@@ -72,7 +74,7 @@ describe("the group each widget is listed in", () => {
   it("carries the description and the sketch kind", () => {
     expect(
       addPanelFacts({
-        id: "core/recently-edited",
+        id: "core/continue",
         description: "The documents most recently left with unpublished edits.",
         archetype: "list",
       })
@@ -102,16 +104,16 @@ describe("the order the panel lists widgets in", () => {
       core("site/zeta"),
       core("core/team"),
       core("site/alpha"),
-      core("core/recently-edited"),
-      core("core/content"),
+      core("core/continue"),
+      core("core/content-table"),
       { id: "seo/issues", plugin: "@acme/seo" },
       { id: "forms/totals", plugin: "@acme/forms" },
     ]).map(widget => widget.id);
 
     expect(listed).toEqual([
       // Overview: built-ins in core's own order, whatever order they came in.
-      "core/content",
-      "core/recently-edited",
+      "core/content-table",
+      "core/continue",
       // Then the site's own, in the order they were declared.
       "site/zeta",
       "site/alpha",

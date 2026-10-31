@@ -31,7 +31,11 @@ import { ok } from "./support/releases-api";
 // one alongside would change the card under this one.
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.releases] });
 
-const CARDS = ["core/team", "core/content", "core/upcoming-releases"] as const;
+const CARDS = [
+  "core/team",
+  "core/content-table",
+  "core/upcoming-releases",
+] as const;
 
 interface Layout {
   version: number;
@@ -106,8 +110,8 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       /\/admin\/users$/
     );
 
-    const content = cell(page, "core/content");
-    // At least one collection tile, each a link to its list.
+    const content = cell(page, "core/content-table");
+    // At least one row of the Content table, its label a link to its list.
     await expect(content.getByRole("link").first()).toBeVisible();
 
     // Upcoming releases hides while nothing is scheduled, stopped or overdue, which is all this

@@ -10,10 +10,10 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
+import { registerContinueWidgetSource } from "../../../services/dashboard/continue-widget-source";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
-import { CORE_WIDGETS } from "../core-widgets";
+import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
   chromeFieldProblem,
@@ -22,7 +22,7 @@ import {
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
 import { DENSITY_OPTIONS } from "../declaration/setting-builders";
-import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
+import { LIST_DENSITIES, MAX_WIDGET_ROWS } from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { clearSystemResolvers } from "../system-sources";
@@ -37,12 +37,18 @@ function card(id: string) {
   return found;
 }
 
+/** A core widget's declared size, whether it is a definition or a declaration. */
+function sizeOf(id: string) {
+  const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
+  return declared === undefined ? card(id).size : declared.size;
+}
+
 // As boot orders it: a card's settings are admitted against the filters its
 // source declares, so the sources a card names are registered first.
 beforeAll(() => {
   clearSources();
   clearSystemResolvers();
-  registerRecentEditsWidgetSource();
+  registerContinueWidgetSource();
 });
 
 describe("core widget definitions", () => {
@@ -158,21 +164,32 @@ describe("core widget definitions", () => {
   it("offers the Content card only while there is a collection or a Single to list", () => {
     // One card for both: a reader with Singles and no collections still has
     // something it lists, which `collections:present` alone would hide.
-    const content = CORE_WIDGETS.find(w => w.id === "core/content");
+    const content = CORE_WIDGETS.find(w => w.id === "core/content-table");
     expect(content?.lifecycle).toBe("conditional");
     expect(content?.visibleWhen).toBe("content:present");
   });
 
-  it("offers Needs attention and Upcoming releases each on what it needs", () => {
+  it("offers Upcoming releases on what it needs", () => {
     const shownWhen = (id: string) => {
       const declared = card(id);
       expect(declared.lifecycle, id).toBe("conditional");
       return declared.visibleWhen;
     };
-    expect(shownWhen("core/needs-attention")).toBe("attention:readable");
     expect(shownWhen("core/upcoming-releases")).toBe("releases:present");
     // Its gate stays: the condition is about existence, the gate about access.
     expect(card("core/upcoming-releases").requiredPermission).toBeDefined();
+  });
+
+  it("no longer declares the Content tile card, which the Content table replaced", () => {
+    // Removed outright, not kept as an alias of the table: no core id, no
+    // definition and no place in core's default names it.
+    expect(CORE_WIDGETS.map(w => w.id)).not.toContain("core/content");
+    expect(CORE_WIDGET_IDS).not.toContain("core/content");
+    expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
+      "core/content"
+    );
+    // The control: the table is declared, so the absence above is the old id's.
+    expect(CORE_WIDGET_IDS).toContain("core/content-table");
   });
 
   it("no longer declares the Collections and Singles cards Content replaced", () => {
@@ -193,8 +210,7 @@ describe("core widget definitions", () => {
       w => w.lifecycle === "conditional"
     ).map(w => w.id);
     expect(conditional).toEqual([
-      "core/content",
-      "core/needs-attention",
+      "core/content-table",
       "core/upcoming-releases",
     ]);
   });
@@ -228,37 +244,73 @@ describe("core widget definitions", () => {
 describe("the list cards' Density", () => {
   // Recent entries' Density, declared, is held to the same choice in
   // `core-declarations.test.ts`.
-  it.each([
-    "core/recently-edited",
-    "core/team-activity",
-    "core/upcoming-releases",
-  ])("%s offers the shared choice, one option for every density", id => {
-    // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
-    const widget = CORE_WIDGETS.find(w => w.id === id);
-    const density = widget?.settings?.find(
-      setting => setting.name === "density"
-    );
-    expect(density).toMatchObject({
-      type: "select",
-      defaultValue: "default",
-      options: [...DENSITY_OPTIONS],
-    });
-    expect(
-      (density as { options?: { value: string }[] } | undefined)?.options?.map(
-        option => option.value
-      )
-    ).toEqual([...LIST_DENSITIES]);
-  });
+  it.each(["core/continue", "core/team-activity", "core/upcoming-releases"])(
+    "%s offers the shared choice, one option for every density",
+    id => {
+      // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
+      const widget = CORE_WIDGETS.find(w => w.id === id);
+      const density = widget?.settings?.find(
+        setting => setting.name === "density"
+      );
+      expect(density).toMatchObject({
+        type: "select",
+        defaultValue: "default",
+        options: [...DENSITY_OPTIONS],
+      });
+      expect(
+        (
+          density as { options?: { value: string }[] } | undefined
+        )?.options?.map(option => option.value)
+      ).toEqual([...LIST_DENSITIES]);
+    }
+  );
 });
 
 describe("the content card", () => {
-  it("asks for every collection, not the default five", () => {
-    // An omitted limit is materialized as the default 5, which would cut a
-    // site's sixth collection from the card.
-    expect(card("core/content").query).toEqual({
-      source: CONTENT_SOURCE_ID,
-      op: "list",
-      limit: MAX_WIDGET_LIMIT,
+  it("is the table, asked for the rows its size draws, never every collection", () => {
+    // 🔴 Asked at the most a query may return, the card's source counted fifty
+    // collections on every load. Sized, it is asked the rows the card draws and
+    // one more, and its source counts only those.
+    expect(card("core/content-table")).toMatchObject({
+      component: "core#ContentTable",
+      sizedQuery: true,
+      query: {
+        source: CONTENT_SOURCE_ID,
+        op: "list",
+        limit: MAX_WIDGET_ROWS,
+      },
+    });
+  });
+});
+
+describe("Continue where you left off", () => {
+  it("takes Recently edited's place: no core id, card or default names the old one", () => {
+    const ids = CORE_WIDGETS.map(widget => widget.id);
+    const defaults = CORE_DEFAULT_LAYOUT.map(entry => entry.widget);
+    // The control: the card that replaced it is there, so an absence below is
+    // the old id being gone rather than a list that is empty.
+    expect(ids).toContain("core/continue");
+    expect(defaults).toContain("core/continue");
+    expect(ids).not.toContain("core/recently-edited");
+    expect(defaults).not.toContain("core/recently-edited");
+  });
+
+  it("puts its tab on its header and offers the rows a list draws", () => {
+    const settings = card("core/continue").settings ?? [];
+    const quick = settings.filter(setting => setting.quick === true);
+    expect(quick.map(setting => setting.name)).toEqual(["tab"]);
+    expect(quick[0]).toMatchObject({
+      type: "select",
+      defaultValue: "mine",
+      options: [
+        { label: "Mine", value: "mine" },
+        { label: "Team", value: "team" },
+      ],
+    });
+    expect(settings.find(setting => setting.name === "limit")).toMatchObject({
+      type: "number",
+      min: 1,
+      max: MAX_WIDGET_ROWS,
     });
   });
 });
@@ -311,13 +363,13 @@ describe("the default dashboard", () => {
   // The agreed cards, in order, each at its agreed size and within its agreed
   // bounds, in grid units: [id, default, min, max].
   const AGREED = [
-    // Needs attention four rows tall at the least, so each of its three kinds has a row.
-    ["core/needs-attention", [8, 4], [4, 4], [12, 6]],
+    // Needs attention three rows tall, which holds two items and folds the rest.
+    ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
     // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
     // default.
-    ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
+    ["core/continue", [6, 5], [4, 4], [12, 8]],
     ["core/team-activity", [6, 5], [4, 4], [12, 8]],
-    ["core/content", [12, 4], [6, 3], [12, 6]],
+    ["core/content-table", [12, 4], [6, 3], [12, 6]],
     // Alone on its row: Team, for the people who manage the team, is not on the default.
     // Up to the full row, so the dashboard may widen it to 12 when it shows alone in its row.
     ["core/upcoming-releases", [4, 4], [4, 4], [12, 8]],
@@ -347,7 +399,7 @@ describe("the default dashboard", () => {
     // Read through `sizeBounds`, as every reader of a size reads it, so an end
     // left to its default is checked as the grid will draw it.
     for (const [id, dflt, min, max] of AGREED) {
-      expect([id, sizeBounds(card(id).size)]).toEqual([
+      expect([id, sizeBounds(sizeOf(id))]).toEqual([
         id,
         { default: unit(dflt), min: unit(min), max: unit(max) },
       ]);
@@ -361,7 +413,7 @@ describe("the default dashboard", () => {
     const rows: number[][] = [[]];
     let used = 0;
     for (const [id] of AGREED) {
-      const { w, h } = card(id).size.default;
+      const { w, h } = sizeOf(id).default;
       if (used + w > 12) {
         rows.push([]);
         used = 0;

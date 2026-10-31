@@ -28,7 +28,6 @@ import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
 import type { PrincipalKindContribution } from "./principals/types";
 import type { PluginRoute } from "./routes/route-types";
-import type { PluginWidgetSource } from "./widgets/collect-widget-sources";
 
 /**
  * @public A plugin-declared custom permission. CRUD permissions are
@@ -765,38 +764,9 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    */
   routes?: PluginRoute[];
   /**
-   * @experimental Dashboard-widget DATA SOURCES: a queryable source this plugin
-   * publishes, paired with the server-side function that answers it.
-   *
-   * Server-side, and therefore not under `admin`: a source is answered in the
-   * Nextly process against the caller's identity, while `admin.widgets` is
-   * about what the dashboard DRAWS. A plugin can contribute either without the
-   * other — a card over `collection:orders` needs no source, and a source is
-   * useful to any card that names it.
-   *
-   * Each entry declares the source's queryable fields and supported ops up
-   * front, so a query is validated against them before the resolver is ever
-   * called. The resolver receives `(query, caller, ctx)` -- its own plugin's
-   * context, which is how it reads data at all.
-   *
-   * 🔴 That validation checks field names, operators and operand SHAPES. It
-   * does not constrain operand VALUES: `where: { total: { equals: "http://..." } }`
-   * is a legal query, and a caller who may place a widget chooses those bytes.
-   * A resolver must never use a value out of `query` as an outbound URL, a
-   * path, or a table or column name without validating it against a closed set
-   * of its own.
-   *
-   * The host cannot prove a resolver consults `caller` — it hands the caller
-   * over and the plugin decides. That is the trust boundary this plugin's
-   * `init()`, hooks and services already cross, not a new one.
-   */
-  widgetSources?: PluginWidgetSource[];
-  /**
-   * @public Admin UI contributions: menu, pages + settings, per-collection view
-   * overrides and dashboard widgets. `widgets` is drawn by `WidgetGrid` and
-   * permission-gated; it stays `@experimental` and graduates per D55, which is
-   * a statement about the CONTRACT settling rather than about the card being
-   * drawn. `PluginAdminContributions` documents each.
+   * @public Admin UI contributions: menu, pages + settings and per-collection
+   * view overrides. Dashboard widgets are declared under `dashboard`, not
+   * here. `PluginAdminContributions` documents each.
    */
   admin?: PluginAdminContributions;
   /**
@@ -804,8 +774,9 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * `defineWidget()`, which core checks at startup with every other
    * declaration, keeps on the server with their data code, and publishes to
    * the admin as data. `suggest` and `alternatives` ask for places on the
-   * default dashboard; core and the site config decide. Beside today's
-   * `admin.widgets` and `widgetSources`, which keep working.
+   * default dashboard; core and the site config decide. The one way a plugin
+   * adds a widget: startup refuses a plugin that still carries
+   * `admin.widgets` or `widgetSources`, the older keys, naming this one.
    */
   dashboard?: DashboardContribution<W>;
   /**

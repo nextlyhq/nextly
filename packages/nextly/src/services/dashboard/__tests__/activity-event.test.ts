@@ -1,7 +1,7 @@
 /**
  * The event a trail row records, as Team activity names it: read from the
- * row's action and the marks a publish writes, the same marks Recently edited
- * reads to tell a publish from a save. None for a row whose record leaves the
+ * row's action and the marks a publish writes, the same marks Continue where
+ * you left off reads to tell a publish from a save. None for a row whose record leaves the
  * operation open, by the rule the feed's runs read it by, and none for an
  * install-level settings change, which is no entry's or Single's event.
  */

@@ -56,6 +56,8 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `widget-preview`: the widget preview page exists only while the server
  *   runs in development; a production build answers its address as not found
  *   (`tests/production/widget-preview.spec.ts`).
+ * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
+ *   Builder's, which a production build turns off.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -65,6 +67,7 @@ const DEV_SPECS = [
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
+  "**/removed-from-code-singles-list.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
@@ -231,6 +234,15 @@ export default defineConfig({
       // double does not appear in a contributor's plugins list or inject a
       // showcase section into the Posts collection.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
+      // Leaves the query devtools out of the dev server's admin: their floating icon sits over
+      // the bottom-right corner, where a toast's Undo is drawn, and takes the click a phone-width
+      // spec makes there. A production build never draws them.
+      NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS: "off",
+      // The first-party plugins the playground registers only when named
+      // (`apps/playground/nextly.config.ts`): the SEO plugin, as it ships, for
+      // dashboard-seo-issues.spec.ts. It extends a collection of its own there,
+      // so no other spec meets its fields.
+      NEXTLY_PLAYGROUND_PLUGINS: "seo",
       // Registers the slow-card fixture, which dashboard-slow-card.spec.ts
       // delays. Its card answers at once until that spec asks otherwise, so the
       // other dashboard specs see an ordinary card.

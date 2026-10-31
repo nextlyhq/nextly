@@ -948,6 +948,13 @@ exports[`each code, as a command ends with it > NEXTLY_PERMISSION_COLLISION 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-permission-collision  (NEXTLY_PERMISSION_COLLISION)"
 `;
 
+exports[`each code, as a command ends with it > NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL 1`] = `
+"✗ Plugin "reviews" declares \`contributes.widgetSources\`, which Nextly no longer reads.
+  Why:  A plugin adds dashboard widgets one way: each declared with \`defineWidget()\` under \`contributes.dashboard.widgets\`, whose \`load\` reads its data as the person asking.
+  Next: Declare each widget with \`defineWidget()\` under \`contributes.dashboard.widgets\`, read its data in that widget's \`load\`, and remove the key. If the plugin is not yours, update it to a release that declares its widgets that way.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-plugin-removed-widget-channel  (NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL)"
+`;
+
 exports[`each code, as a command ends with it > NEXTLY_ROUTE_COLLISION 1`] = `
 "✗ Duplicate route GET /feeds/rss contributed by feeds and syndication.
   Why:  Both patterns match the same requests with as many fixed segments each, so nothing decides which of them answers.

@@ -6,6 +6,7 @@ import { useEffect, useState, type JSX } from "react";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useDashboardSummary } from "@admin/hooks/queries/useDashboardSummary";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
+import type { DashboardSummary } from "@admin/types/dashboard/summary";
 
 import { useDashboardChrome } from "./header/dashboard-chrome";
 import { EnvironmentBadge } from "./header/EnvironmentBadge";
@@ -33,6 +34,17 @@ export function greetingFor(
   const hour = now.getHours();
   const part = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
   return `Good ${part}, ${first}`;
+}
+
+/**
+ * The summary as the line may word it: none while its latest read failed. A
+ * read that fails after one that answered keeps the earlier answer, and its
+ * counts, or its "all caught up", are no longer known to be true.
+ */
+function currentSummary(
+  read: ReturnType<typeof useDashboardSummary>
+): DashboardSummary | undefined {
+  return read.isError ? undefined : read.data;
 }
 
 /** The time the header words itself against, moved on each minute. */
@@ -63,7 +75,7 @@ function useMinuteClock(): Date {
 export function WelcomeHeader(): JSX.Element {
   const { user, isLoading: userLoading } = useDashboardUser();
   const appName = useAppName();
-  const { data: summary } = useDashboardSummary();
+  const summary = useDashboardSummary();
   const chrome = useDashboardChrome();
   const now = useMinuteClock();
 
@@ -101,11 +113,15 @@ export function WelcomeHeader(): JSX.Element {
             {appName}
           </h1>
           {/* Beside the heading, not in it: the heading's name is the project's. */}
-          {summary?.environment ? (
-            <EnvironmentBadge environment={summary.environment} />
+          {summary.data?.environment ? (
+            <EnvironmentBadge environment={summary.data.environment} />
           ) : null}
         </div>
-        <SummaryLine summary={summary} cards={chrome?.cards ?? {}} now={now} />
+        <SummaryLine
+          summary={currentSummary(summary)}
+          cards={chrome?.cards ?? {}}
+          now={now}
+        />
         <Freshness
           oldestAnswerAt={chrome?.oldestAnswerAt ?? null}
           now={now}

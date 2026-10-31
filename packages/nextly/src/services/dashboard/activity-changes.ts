@@ -95,8 +95,8 @@ export function isStatusOnlyChange(metadata: unknown): boolean {
 
 /**
  * Whether the row is a save of the document's content by whoever wrote it, the
- * row Recently edited names as the document's latest save, rather than only a
- * change to whether it is live.
+ * row Continue where you left off names as the document's latest save, rather
+ * than only a change to whether it is live.
  *
  * - A create is a save.
  * - A publish or an unpublish on its own is not, so it never takes the row of
@@ -176,7 +176,7 @@ export type { ActivityEvent };
 /**
  * The event a trail row records, read from its action and the same marks the
  * questions above read, so a row the feed calls a publish is the row
- * Recently edited declines to call a save.
+ * Continue where you left off declines to call a save.
  *
  * - A settings change names none: an event is what happened to an entry or a
  *   Single, and an install-level change is neither.

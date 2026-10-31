@@ -25,6 +25,12 @@ export interface SummaryLinePart {
   text: string;
   /** The widget whose card the part names, followed to when it is on the dashboard. */
   widget: string;
+  /**
+   * The very card the part names, where the server named one: the card of a
+   * widget placed more than once that is shown to the reader, which need not
+   * be its first.
+   */
+  card?: string;
   /** Where the part goes when that card is not on the dashboard. */
   href?: string;
 }
@@ -103,6 +109,7 @@ function linePart(part: DashboardSummaryPart, now: Date): SummaryLinePart {
         key: `widget:${part.widget}`,
         text: `${part.count} ${part.label}`,
         widget: part.widget,
+        card: part.card,
       };
   }
 }

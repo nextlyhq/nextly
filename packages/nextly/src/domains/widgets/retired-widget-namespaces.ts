@@ -72,8 +72,8 @@ function collectionMinted(
  *
  * 🔴 Each says only what is true of its own namespace. A per-collection card's
  * place is a core widget set to that collection; a Single has no such widget,
- * since those widgets offer collections only, and its edits show in Recently
- * edited, so a per-Single card is never told to pick a collection. The widgets
+ * since those widgets offer collections only, and its edits show in Continue
+ * where you left off, so a per-Single card is never told to pick a collection. The widgets
  * are named by their titles here, as a person finds them in the add panel; this
  * module cannot load them (see above), so the titles are spelled out.
  */
@@ -84,7 +84,7 @@ const RETIRED_CARD: Record<
   collection: collection =>
     `is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to ${collection ?? "the collection this card showed"}.`,
   single: () =>
-    `is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (${CORE_WIDGET_ID.recentlyEdited}).`,
+    `is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (${CORE_WIDGET_ID.continue}).`,
 };
 
 /**

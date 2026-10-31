@@ -379,6 +379,79 @@ function collectionsKeptOffClause(
   };
 }
 
+/**
+ * The conditions narrowing the saves to one subject's, by its slug AND its
+ * kind, since a collection and a Single may share a slug: a collection's
+ * entries, by a row stating that kind or none (a row written before the kind
+ * was recorded is a collection's), and a Single's document, by a row stating
+ * it is a Single's. None when neither is asked for.
+ */
+function oneSubjectConditions(
+  options: Pick<RecentEditsOptions, "collection" | "single">
+): NonNullable<WhereClause["and"]> {
+  const conditions: NonNullable<WhereClause["and"]> = [];
+  if (options.collection !== undefined) {
+    conditions.push(
+      { column: "collection", op: "=", value: options.collection },
+      {
+        or: [
+          { column: "subjectKind", op: "IS NULL" },
+          { column: "subjectKind", op: "=", value: "collection" },
+        ],
+      }
+    );
+  }
+  if (options.single !== undefined) {
+    conditions.push(
+      { column: "collection", op: "=", value: options.single },
+      { column: "subjectKind", op: "=", value: "single" }
+    );
+  }
+  return conditions;
+}
+
+/**
+ * The conditions that keep the saves of one person (`savedBy`) or every save
+ * but theirs (`notSavedBy`), from one statement of what "a person's save" is,
+ * so the two are exact complements: a row written before the kind was
+ * recorded is a person's; an API key's save is never one, whatever its id.
+ */
+function saverConditions(
+  options: Pick<RecentEditsOptions, "savedBy" | "notSavedBy">
+): WhereClause[] {
+  const conditions: WhereClause[] = [];
+  const byPerson = (id: string): WhereClause => ({
+    and: [
+      { column: "userId", op: "=", value: id },
+      {
+        or: [
+          { column: "actorType", op: "IS NULL" },
+          { column: "actorType", op: "=", value: "user" },
+        ],
+      },
+    ],
+  });
+  if (options.savedBy !== undefined) {
+    conditions.push(byPerson(options.savedBy));
+  }
+  if (options.notSavedBy !== undefined) {
+    // NOT of the person's condition, spelled out: a NULL `userId` is nobody's.
+    conditions.push({
+      or: [
+        { column: "userId", op: "IS NULL" },
+        { column: "userId", op: "!=", value: options.notSavedBy },
+        {
+          and: [
+            { column: "actorType", op: "IS NOT NULL" },
+            { column: "actorType", op: "!=", value: "user" },
+          ],
+        },
+      ],
+    });
+  }
+  return conditions;
+}
+
 /** Options for the documents most recently saved; see `getRecentEdits`. */
 export interface RecentEditsOptions {
   /** How many documents the card shows; clamped as every widget query is. */
@@ -392,10 +465,29 @@ export interface RecentEditsOptions {
   /** Only this collection's entries: never a Single, which may share its slug. */
   collection?: string;
   /**
+   * Only this Single's document: never a collection's entries, which may share
+   * its slug. Given with `collection`, both narrow, and no save is of both.
+   */
+  single?: string;
+  /**
    * Only saves this person made. A PERSON's id: a row whose actor is an API
    * key never matches it, though a key's id and a person's could be equal.
    */
   savedBy?: string;
+  /**
+   * Only saves this person did NOT make: every other person's, and every API
+   * key's, whatever its id. The exact complement of `savedBy` for the same id.
+   */
+  notSavedBy?: string;
+  /**
+   * Whether a publish or an unpublish on its own counts as its document's
+   * latest change. Off by default, as the cards that list what someone edited
+   * read the trail: there a publish never takes the row of the person who made
+   * the edits. On, each document's latest create or update is its row,
+   * whatever it changed, for a reader asking who last changed a document and
+   * when, which a status change does.
+   */
+  statusChanges?: boolean;
 }
 
 /**
@@ -948,16 +1040,19 @@ function feedWhere(
  * Each document's newest save among `rows`, newest first: rows that are not a
  * save are passed over, and a document is the kind, the slug and the id
  * together, since a Single and a collection may share a slug. A row whose id
- * was redacted names no document, and is passed over too.
+ * was redacted names no document, and is passed over too. With
+ * `statusChanges`, a publish or an unpublish on its own is a save as well (see
+ * `RecentEditsOptions.statusChanges`).
  */
 function latestSaves(
-  rows: readonly Record<string, unknown>[]
+  rows: readonly Record<string, unknown>[],
+  statusChanges = false
 ): Record<string, unknown>[] {
   const seen = new Set<string>();
   const latest: Record<string, unknown>[] = [];
   for (const row of rows) {
     if (typeof row.entryId !== "string" || row.entryId.length === 0) continue;
-    if (!isContentSave(row.action, row.metadata)) continue;
+    if (!statusChanges && !isContentSave(row.action, row.metadata)) continue;
     const document = JSON.stringify([
       row.subjectKind ?? "collection",
       row.collection,
@@ -1336,8 +1431,9 @@ export class ActivityLogService extends BaseService {
    * row, which keeps a readable save behind a newer one the caller may not
    * read (another language's, say).
    *
-   * A save is what `isContentSave` says it is. A publish or an unpublish on its
-   * own never takes the row of the person who made the edits, and a deletion
+   * A save is what `isContentSave` says it is, unless `statusChanges` asks for
+   * every change. A publish or an unpublish on its own otherwise never takes
+   * the row of the person who made the edits, and a deletion
    * and the redacted history of a removed document name no document to list.
    * Settings changes name none either, and are left out by kind.
    */
@@ -1366,37 +1462,8 @@ export class ActivityLogService extends BaseService {
             },
           ],
         },
-        ...(options.collection === undefined
-          ? []
-          : [
-              {
-                column: "collection",
-                op: "=" as const,
-                value: options.collection,
-              },
-              {
-                or: [
-                  { column: "subjectKind", op: "IS NULL" as const },
-                  {
-                    column: "subjectKind",
-                    op: "=" as const,
-                    value: "collection",
-                  },
-                ],
-              },
-            ]),
-        ...(options.savedBy === undefined
-          ? []
-          : [
-              { column: "userId", op: "=" as const, value: options.savedBy },
-              // A row written before the kind was recorded is a person's.
-              {
-                or: [
-                  { column: "actorType", op: "IS NULL" as const },
-                  { column: "actorType", op: "=" as const, value: "user" },
-                ],
-              },
-            ]),
+        ...oneSubjectConditions(options),
+        ...saverConditions(options),
       ],
     };
     try {
@@ -1406,9 +1473,9 @@ export class ActivityLogService extends BaseService {
         where,
         0,
         options.caller,
-        rows => latestSaves(rows).length > limit
+        rows => latestSaves(rows, options.statusChanges).length > limit
       );
-      const saves = latestSaves(visible.rows);
+      const saves = latestSaves(visible.rows, options.statusChanges);
       return {
         edits: saves.slice(0, limit).map(row => ({
           ...this.mapRow(row, options.singles?.labels),

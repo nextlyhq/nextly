@@ -60,6 +60,7 @@ import {
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 import { useRecordNewType } from "./useDashboardNewTypes";
 
 /**
@@ -233,6 +234,10 @@ export function useCreateEntry<
     },
 
     onError: (error: Error) => {
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
+
       // Try to map server errors to form fields
       let handledByForm = false;
 

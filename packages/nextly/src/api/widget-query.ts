@@ -14,6 +14,8 @@
  * @module api/widget-query
  */
 
+import { z } from "zod";
+
 import {
   authorizationScheduler,
   canReadEntity,
@@ -24,6 +26,7 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
 import { createBatchScope } from "../domains/widgets/batch-scope";
 import { refreshContentSources } from "../domains/widgets/content-sources";
+import type { ReadAheadSide } from "../domains/widgets/declaration/read-services";
 import {
   entityRead,
   resolveExecutableSource,
@@ -131,6 +134,51 @@ function parseQueriesBody(body: unknown): unknown[] {
     });
   }
   return queries;
+}
+
+/**
+ * The longest read-ahead token a batch may carry. The layout read mints a
+ * UUID, of 36 characters; the bound keeps a client from having an arbitrary
+ * string of its choosing looked up.
+ */
+const MAX_READ_AHEAD_TOKEN_LENGTH = 64;
+
+/** A batch's `readAheadToken`, when it carries one. */
+const READ_AHEAD_TOKEN = z
+  .string()
+  .min(1)
+  .max(MAX_READ_AHEAD_TOKEN_LENGTH)
+  .optional();
+
+/**
+ * The dashboard load this batch answers, as the layout read named it (its
+ * answer's `readAheadToken`), sent back so a card may be handed what was read
+ * ahead for that load and for no other. Absent, the batch is no load's, and
+ * every card reads anew.
+ *
+ * Trusted to choose among this caller's own loads and nothing more: what was
+ * read ahead is found under the caller the batch resolved as well, so a token
+ * names nobody else's. Refused as the body's other malformed fields are, with
+ * the field's path.
+ */
+function parseReadAhead(body: unknown): ReadAheadSide | undefined {
+  const parsed = READ_AHEAD_TOKEN.safeParse(
+    (body as { readAheadToken?: unknown } | null)?.readAheadToken
+  );
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "readAheadToken",
+          code: "INVALID_VALUE",
+          message: `"readAheadToken" must be a string of 1 to ${MAX_READ_AHEAD_TOKEN_LENGTH} characters, as the layout read answered it.`,
+        },
+      ],
+    });
+  }
+  return parsed.data === undefined
+    ? undefined
+    : { side: "batch", token: parsed.data };
 }
 
 /**
@@ -508,6 +556,7 @@ async function prepareBatch(req: Request): Promise<PreparedBatch> {
   // one here.
   const body = await readJsonBody(req);
   const queries = parseQueriesBody(body);
+  const readAhead = parseReadAhead(body);
 
   await getCachedNextly();
 
@@ -528,10 +577,12 @@ async function prepareBatch(req: Request): Promise<PreparedBatch> {
   // A declared widget's cards, asked by card rather than by query: looked up
   // in what this caller was handed, before the first byte, like every other
   // whole-batch step. Each one's own reads are checked by the same door.
-  const cards = await prepareCards(
-    queries,
-    cardBatchFor(auth, caller, mayRead)
-  );
+  // With the dashboard load the batch names, so a card read ahead for that
+  // load may be handed what was read for it.
+  const cards = await prepareCards(queries, {
+    ...cardBatchFor(auth, caller, mayRead),
+    ...(readAhead === undefined ? {} : { readAhead }),
+  });
 
   // Read and resolve every query entry FIRST, so the batch's distinct entities
   // are known before a single read decision is taken -- then take them through

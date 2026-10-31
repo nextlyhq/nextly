@@ -11,6 +11,7 @@ import {
   DASHBOARD_FULL_MESSAGE,
   MAX_PLACEMENTS,
   MAX_STORED_PLACEMENTS,
+  chosenSizeIds,
   dismissalsApplied,
   layoutSizeProblem,
   mergePreservingHidden,
@@ -481,6 +482,41 @@ describe("a row of an earlier format is no saved arrangement", () => {
       [true, { range: "7d" }],
       [false, { range: "30d" }],
     ]);
+  });
+
+  it("carries a stored size only for a card the reader resized, held to its widget's bounds", () => {
+    const defaults = [card("core/a", "core/a", { w: 6, h: 3 })];
+    const bounds = {
+      default: { w: 6, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 8, h: 3 },
+    };
+    const stored = [card("core/a", "core/a", { w: 12, h: 3 })];
+    const resized = readStoredLayout(
+      serializeLayout(stored, false, ["core/a"])
+    );
+    // Not resized: the size the row stored is the default's from then, and the default's now stands.
+    const notResized = readStoredLayout(serializeLayout(stored, false));
+    expect(
+      dismissalsApplied(defaults, notResized, () => bounds)[0]
+    ).toMatchObject({ w: 6 });
+    expect(dismissalsApplied(defaults, resized, () => bounds)[0]).toMatchObject(
+      { w: 8 }
+    );
+    // With nothing to judge a chosen size by, the default's stands.
+    expect(dismissalsApplied(defaults, resized)[0]).toMatchObject({ w: 6 });
+  });
+
+  it("names a card of an unarranged write as resized only where its size differs from the default's", () => {
+    const defaults = [card("core/a", "core/a", { w: 6, h: 3 }), card("core/b")];
+    expect(
+      chosenSizeIds(defaults, [
+        card("core/a", "core/a", { w: 8, h: 3 }),
+        card("core/b"),
+        // A card the default does not hold is not a size chosen against it.
+        card("extra", "core/extra", { w: 4 }),
+      ])
+    ).toEqual(["core/a"]);
   });
 
   it("starts a card afresh when its id was stored for another widget", () => {
