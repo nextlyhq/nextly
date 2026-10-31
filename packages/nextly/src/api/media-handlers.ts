@@ -76,6 +76,7 @@ import type { PendingMediaDeletes } from "../domains/media/pending-delete";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
+import { getNextlyLogger } from "../observability/logger";
 import type {
   MediaService,
   ListMediaOptions,
@@ -849,7 +850,7 @@ async function pendingDeletes(): Promise<PendingMediaDeletes> {
     db: getService("adapter"),
     deleteItem: (mediaId, actor) =>
       mediaService.delete(mediaId, createRequestContext(), actor),
-    logger: getService("logger"),
+    logger: getNextlyLogger(),
   });
 }
 
@@ -862,7 +863,7 @@ async function sweepPendingDeletes(): Promise<void> {
     const pending = await pendingDeletes();
     await pending.finalizeDue();
   } catch (error) {
-    getService("logger").warn(
+    getNextlyLogger().warn(
       "Deleted media items could not be finished; the next read tries again.",
       { error: error instanceof Error ? error.message : String(error) }
     );
