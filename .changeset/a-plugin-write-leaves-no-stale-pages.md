@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A plugin that writes to columns it added to a collection, a Single or a component through `ctx.db.contributed` now expires the cached pages showing that entry or Single, as any other content write does. Inside `ctx.db.transaction` the pages expire once the transaction commits, and a rolled-back write expires nothing. A cached page also keeps its own collection's or Single's tag when a read names more tags than Next.js keeps.
+A plugin that writes to columns it added to a collection, a Single or a component through `ctx.db.contributed` now expires the cached pages showing that entry or Single, as any other content write does. Inside `ctx.db.transaction` the pages expire once the transaction commits, and a rolled-back write expires nothing. A cached page also keeps its own collection's or Single's tag when a read names more tags than Next.js keeps. A collection or Single deleted inside `ctx.db.transaction` expires its cached pages once that transaction commits, and not at all when it rolls back.
