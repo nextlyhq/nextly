@@ -16,8 +16,8 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { gotoAdmin, type Theme } from "./support/admin";
-import { scanAxe } from "./support/axe-scan.mjs";
+import { contrastRatio, gotoAdmin, type Theme } from "./support/admin";
+import { scanAxe, settleTransitions } from "./support/axe-scan.mjs";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -266,6 +266,67 @@ for (const theme of ["light", "dark"] as Theme[]) {
   });
 }
 
+/**
+ * The badge's edge as the built stylesheet draws it, at least 3:1 against what is behind it
+ * (dashboard-experience R-23; axe does not judge an edge). Read from the computed style, so a
+ * border utility missing from the compiled CSS, or a rule that removes the border, fails here
+ * whatever the class list says. Each colour is resolved by painting it, alpha included, and the
+ * backdrop is the nearest ancestors' backgrounds composited until one is opaque.
+ */
+async function expectEdgeContrast(badge: Locator, label: string) {
+  await settleTransitions(badge.page());
+  const edge = await badge.evaluate(node => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("no 2d context");
+    const rgba = (color: string): [number, number, number, number] => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255];
+    };
+    const over = (
+      top: [number, number, number, number],
+      under: [number, number, number]
+    ): [number, number, number] =>
+      [0, 1, 2].map(i => top[i] * top[3] + under[i] * (1 - top[3])) as [
+        number,
+        number,
+        number,
+      ];
+    const layers: Array<[number, number, number, number]> = [];
+    for (let at = node.parentElement; at !== null; at = at.parentElement) {
+      const layer = rgba(getComputedStyle(at).backgroundColor);
+      if (layer[3] === 0) continue;
+      layers.push(layer);
+      if (layer[3] === 1) break;
+    }
+    // Nothing opaque above it: the canvas of a page is white.
+    let backdrop: [number, number, number] = [255, 255, 255];
+    for (const layer of layers.reverse()) backdrop = over(layer, backdrop);
+    const style = getComputedStyle(node);
+    return {
+      style: style.borderTopStyle,
+      width: Number.parseFloat(style.borderTopWidth),
+      border: over(rgba(style.borderTopColor), backdrop),
+      backdrop,
+    };
+  });
+  expect(edge.style, `${label}: the badge draws no border`).not.toBe("none");
+  expect(
+    edge.width,
+    `${label}: the badge's border has no width`
+  ).toBeGreaterThan(0);
+  const ratio = contrastRatio(edge.border, edge.backdrop);
+  expect(
+    ratio,
+    `${label}: edge rgb(${edge.border.map(Math.round).join(",")}) on rgb(${edge.backdrop.map(Math.round).join(",")}) is ${ratio.toFixed(2)}:1`
+  ).toBeGreaterThanOrEqual(3);
+}
+
 for (const theme of ["light", "dark"] as Theme[]) {
   test(`the environment badge passes axe in each tone (${theme})`, async ({
     page,
@@ -292,6 +353,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
       const badge = page.getByTestId("dashboard-environment");
       await expect(badge).toHaveAttribute("data-tone", each);
       await scan(page, `environment badge, ${each}`);
+      await expectEdgeContrast(badge, `${each}, ${theme}`);
     }
   });
 }
