@@ -16,8 +16,8 @@ import { WIDGET_TABS, type WidgetTab } from "../sources";
 /**
  * A list card's "Number of items", from 1 to the most rows a card draws
  * (`MAX_WIDGET_ROWS`), so the editor never offers rows the card would not draw.
- * Keyed `limit` by every card that declares it, the name the knob that sets a
- * query's rows reads.
+ * Keyed `limit` by every card that declares it; each card's `load` reads it to
+ * size the rows it asks for.
  */
 export const LIST_ITEMS = setting.number({
   label: "Number of items",

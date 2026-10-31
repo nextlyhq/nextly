@@ -30,7 +30,6 @@ import type {
 import {
   drivesQuery,
   fieldsSettingQueryProblem,
-  isLimitSetting,
   settingsSourceOf,
   validateWidgetSettings,
   type AnyWidgetSetting,
@@ -1320,43 +1319,6 @@ function customAsksTwiceProblem(widget: {
     : undefined;
 }
 
-/**
- * Why a widget's `limit` setting cannot reach its query, or `undefined`. A
- * number setting named `limit` sets how many rows the card asks for, and a
- * query over a `range` refuses a limit, since its range sets how many points
- * are drawn: offered beside one, the setting would fail every request it
- * changed. Shared by the registry and the contributed-widget check.
- */
-export function rangedLimitSettingProblem(widget: {
-  query?: unknown;
-  cells?: unknown;
-  settings?: unknown;
-}): string | undefined {
-  // The setting the limit knob drives, by the knob's own test.
-  const limited =
-    Array.isArray(widget.settings) && widget.settings.some(isLimitSetting);
-  if (!limited) return undefined;
-  const queries = [
-    widget.query,
-    ...(Array.isArray(widget.cells)
-      ? widget.cells.map(cell =>
-          typeof cell === "object" && cell !== null
-            ? (cell as { query?: unknown }).query
-            : undefined
-        )
-      : []),
-  ];
-  const ranged = queries.some(
-    query =>
-      typeof query === "object" &&
-      query !== null &&
-      (query as { range?: unknown }).range !== undefined
-  );
-  return ranged
-    ? 'declares a "limit" setting, and a query with a range draws the points its range sets'
-    : undefined;
-}
-
 function validateCells(d: Partial<WidgetDefinition>): void {
   if (d.archetype === "custom" && d.cells !== undefined) {
     const twice = customAsksTwiceProblem(d);
@@ -1658,8 +1620,6 @@ export function validateWidgetDefinition(
   validateOfferTerms(d);
   validateEmpty(d);
   validateCells(d);
-  const rangedLimit = rangedLimitSettingProblem(d);
-  if (rangedLimit !== undefined) fail(`${d.id}: ${rangedLimit}`);
   const fieldsQuery = fieldsSettingQueryProblem(d);
   if (fieldsQuery !== undefined) fail(`${d.id}: ${fieldsQuery}`);
   validateOffered(d);

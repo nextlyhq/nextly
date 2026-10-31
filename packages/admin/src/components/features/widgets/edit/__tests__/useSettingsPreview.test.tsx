@@ -39,7 +39,16 @@ const WIDGET: DashboardWidget = {
   archetype: "list",
   size: gridBounds(4),
   query: { source: "collection:posts", op: "list", limit: 5 },
-  settings: [{ name: "limit", type: "number", label: "Rows", defaultValue: 5 }],
+  // The card's Collection, a knob by its type: what it is set to is the
+  // question the card asks.
+  settings: [
+    {
+      name: "collection",
+      type: "collection",
+      label: "Collection",
+      defaultValue: "posts",
+    },
+  ],
 };
 
 const SHOWN: WidgetSlot = {
@@ -52,19 +61,24 @@ const sent = () =>
   vi
     .mocked(protectedApi.post)
     .mock.calls.map(
-      ([, body]) => (body as { queries: Array<{ limit?: number }> }).queries
+      ([, body]) =>
+        (body as { queries: Array<{ source?: string; limit?: number }> })
+          .queries
     );
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
     Promise.resolve({
-      results: (body as { queries: Array<{ limit?: number }> }).queries.map(
-        query => ({
-          ok: true,
-          result: { op: "list", items: [{ title: `limit ${query.limit}` }] },
-        })
-      ),
+      results: (
+        body as { queries: Array<{ source?: string; limit?: number }> }
+      ).queries.map(query => ({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ title: `${query.source} ${query.limit}` }],
+        },
+      })),
     })
   );
 });
@@ -111,8 +125,8 @@ describe("the settings sheet's preview", () => {
   it("asks a changed question once the values stop changing, as its own card", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { result, rerender } = preview({});
-    rerender({ draft: { limit: 1 } });
-    rerender({ draft: { limit: 12 } });
+    rerender({ draft: { collection: "pages" } });
+    rerender({ draft: { collection: "tags" } });
     // Waiting for the values to settle: the card's answer was asked another way, so it is not
     // drawn, and nothing has been asked yet.
     expect(result.current.slot).toBeUndefined();
@@ -122,16 +136,19 @@ describe("the settings sheet's preview", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
-    await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 11"));
+    await waitFor(() =>
+      expect(titleOf(result.current.slot)).toBe("collection:tags 6")
+    );
     // One request, for the settled question only, with the settings it would keep. Sized as a
-    // card the dashboard draws: one row more than the ten it draws of the twelve chosen (ten
-    // being the most any card draws), which is how a list learns that more exist, at the widest
-    // tier, which serves whatever width the sheet gives it.
+    // card the dashboard draws: one row more than the five it declares, which is how a list
+    // learns that more exist, at the widest tier, which serves whatever width the sheet gives it.
     expect(sent()).toEqual([
-      [{ source: "collection:posts", op: "list", limit: 11 }],
+      [{ source: "collection:tags", op: "list", limit: 6 }],
     ]);
     expect(result.current.answerSize).toEqual({ tier: "large" });
-    expect(result.current.placement.settings).toMatchObject({ limit: 12 });
+    expect(result.current.placement.settings).toMatchObject({
+      collection: "tags",
+    });
   });
 
   it("draws the card's own answer with the tier it was fetched at", () => {
@@ -151,13 +168,15 @@ describe("the settings sheet's preview", () => {
       {},
       { widget: { ...WIDGET, archetype: "custom" } }
     );
-    rerender({ draft: { limit: 12 } });
+    rerender({ draft: { collection: "tags" } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
-    await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 12"));
+    await waitFor(() =>
+      expect(titleOf(result.current.slot)).toBe("collection:tags 5")
+    );
     expect(sent()).toEqual([
-      [{ source: "collection:posts", op: "list", limit: 12 }],
+      [{ source: "collection:tags", op: "list", limit: 5 }],
     ]);
     expect(result.current.answerSize).toBeUndefined();
   });
