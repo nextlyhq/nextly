@@ -43,8 +43,10 @@ import {
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+// The attribute the drag measures cells by, from the module the header reads it from too.
+import { CELL_PLACEMENT_ATTRIBUTE } from "../cell-placement-attribute";
+
 import { handleLabel } from "./drag/drag-messages";
-import { CELL_PLACEMENT_ATTRIBUTE } from "./drag/useCardDrag";
 
 /** What the cell's handle does, while dragging is on. */
 export interface CellDrag {

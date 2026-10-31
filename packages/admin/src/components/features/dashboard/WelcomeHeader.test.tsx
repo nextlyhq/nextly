@@ -54,7 +54,8 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useAppName: () => appName,
 }));
 
-import { CELL_PLACEMENT_ATTRIBUTE } from "../widgets/edit/drag/useCardDrag";
+// The attribute the summary looks a card up by, from the module it reads it from.
+import { CELL_PLACEMENT_ATTRIBUTE } from "../widgets/cell-placement-attribute";
 
 import {
   DashboardChromeProvider,

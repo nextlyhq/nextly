@@ -10,10 +10,12 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { gridBounds } from "../../../__tests__/grid-bounds";
+// Where the hook reads the attribute from, so the cells built here carry the one it looks for.
+import { CELL_PLACEMENT_ATTRIBUTE } from "../../../cell-placement-attribute";
 import { drawnSpan } from "../../../sizes";
 import type { ArrangedWidget } from "../../useDashboardArrangement";
 import { finalPositionAt, type DrawnCard } from "../drop-geometry";
-import { CELL_PLACEMENT_ATTRIBUTE, useCardDrag } from "../useCardDrag";
+import { useCardDrag } from "../useCardDrag";
 
 const WIDTH = 1200;
 const HEIGHT = 100;
