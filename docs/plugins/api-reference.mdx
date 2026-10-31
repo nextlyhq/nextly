@@ -62,6 +62,7 @@ interface PluginContributions {
   settingsPermission?: PermissionSlug; // one of your own permissions; replaces update-settings for writes and the settings page
   audit?: PluginAuditDeclaration; // gives ctx.audit
   hookPoints?: PluginHookPointDeclaration[]; // your slug and a dot, never core's prefixes, or boot fails
+  dashboard?: DashboardContribution; // @experimental: { widgets?, suggest?, alternatives?, attention? } — see Dashboard widgets below
   admin?: {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
@@ -73,6 +74,40 @@ interface PluginContributions {
 ```
 
 Component references are string paths: `"<package>/<path>#<Export>"`, e.g. `"@acme/x/admin#ReportsPage"`.
+
+### Dashboard widgets
+
+A plugin adds dashboard widgets one way: `defineWidget` declarations under
+`contributes.dashboard.widgets`. Startup refuses the older `admin.widgets` and `widgetSources`
+keys, naming this one.
+
+```ts
+import { definePlugin, defineWidget } from "@nextlyhq/plugin-sdk";
+
+const ordersThisMonth = defineWidget({
+  id: "acme/orders-this-month",
+  title: "Orders this month",
+  description: "How many orders came in over the last 30 days.",
+  size: { default: { w: 3, h: 2 } },
+  view: "figure",
+  load: async ({ services }) => ({
+    total: await services.count("orders", { window: { range: "30d" } }),
+  }),
+});
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-orders",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  contributes: {
+    dashboard: { widgets: [ordersThisMonth] },
+  },
+});
+```
+
+`suggest` asks for a place on the default dashboard, `alternatives` offers a widget in place of a
+built-in one, and `attention` adds lines to Needs your attention. [Dashboard widgets](/docs/widgets)
+covers the views, what each `load` returns, and drawing your own component.
 
 ## `PluginContext` (`ctx`)
 

@@ -45,10 +45,11 @@ and run its test with `npx vitest run`.
 
 ## Declaring a widget
 
-A plugin declares its widgets under `contributes.dashboard.widgets`, and a site under its
-config's `admin.dashboard.widgets`, each with `defineWidget` from `@nextlyhq/plugin-sdk` (or
-`nextly`). Startup checks every declaration with the rest of the config, and names every fault
-it finds in one message.
+A plugin declares its widgets under `contributes.dashboard.widgets`, with `defineWidget` from
+`@nextlyhq/plugin-sdk`, the only surface a plugin imports from. A site declares its own under its
+config's `admin.dashboard.widgets`, and there `defineWidget` may also come from `nextly`. Startup
+checks every declaration with the rest of the config, and names every fault it finds in one
+message.
 
 ```ts
 contributes: {

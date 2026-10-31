@@ -61,9 +61,6 @@ assertType<
 expectTypeOf<CoreView>().toEqualTypeOf<
   "figure" | "list" | "table" | "bars" | "series"
 >();
-// One assertion per type, written out (see below): a run of them reads as a clone of
-// every other type test's run, and has no shared helper to become.
-// fallow-ignore-next-line code-duplication
 expectTypeOf<WidgetView>().toEqualTypeOf<CoreView | { component: string }>();
 
 // The three claims a closed string union makes, stated together per type: the
@@ -80,7 +77,6 @@ expectTypeOf<WidgetView>().toEqualTypeOf<CoreView | { component: string }>();
 // deferred, and the wrapper evaluated to `false` for a HEALTHY union -- a helper
 // that fails on correct code and would have been "fixed" by deleting the
 // assertions it broke. Instantiated directly, they resolve.
-// fallow-ignore-next-line code-duplication
 assertType<
   Exact<
     [
