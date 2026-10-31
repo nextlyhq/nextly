@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withSideEffectWarnings } from "../../../hooks/side-effect-warnings";
 import {
   setExpiryHandoff,
+  takeHeldForNextRequest,
   takePendingExpiries,
 } from "../../../revalidation/expiry-handoff";
 import type { RevalidationIntent } from "../../../revalidation/types";
@@ -21,12 +22,16 @@ import {
   tagsToExpire,
   type NextCacheModule,
 } from "../next-cache-revalidator";
+import { LedgerExpiryHandoff } from "../ledger-wiring";
+import { publishTagExpiryLedger } from "../tag-expiry-view";
 
 // What one case hands off is held in this process for the next flush; each case
 // starts with nothing held and the default hand-off installed.
 afterEach(() => {
   takePendingExpiries();
+  takeHeldForNextRequest();
   setExpiryHandoff(null);
+  publishTagExpiryLedger(null);
 });
 
 function fakeNextCache() {
@@ -627,5 +632,98 @@ describe("a write outside any request", () => {
     }
     expect(expired).toHaveLength(waiting.length + 1);
     warn.mockRestore();
+  });
+});
+
+/**
+ * With the ledger's hand-off installed, as registration installs it: a tag it
+ * takes is recorded for nextly's cache handlers, and Next.js's own cache, which
+ * never reads that record, still expires it at the next request.
+ */
+describe("a hand-off to the ledger", () => {
+  const NO_REQUEST =
+    "Invariant: static generation store missing in revalidateTag";
+
+  function installLedger() {
+    const recorded: string[][] = [];
+    publishTagExpiryLedger({
+      record: async tags => {
+        recorded.push([...tags]);
+        return new Map(tags.map(tag => [tag, Date.now()] as const));
+      },
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    setExpiryHandoff(new LedgerExpiryHandoff());
+    return recorded;
+  }
+
+  it("still expires a write made outside a request in Next.js's own cache at the next request", async () => {
+    const recorded = installLedger();
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error(NO_REQUEST);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const revalidator = new NextCacheRevalidator(() => next);
+    await revalidator.flush([{ tags: ["nextly:posts:id:job"] }]);
+    expect(recorded.flat()).toContain("nextly:posts:id:job");
+
+    // Now inside a request.
+    next.revalidateTag.mockReset();
+    await revalidator.flush([{ tags: ["nextly:posts:id:fresh"] }]);
+
+    const expired = next.revalidateTag.mock.calls.map(([tag]) => tag);
+    expect(expired).toContain("nextly:posts:id:job");
+    expect(expired).toContain("nextly:posts:id:fresh");
+    warn.mockRestore();
+  });
+
+  it("records each tag of a run of writes outside a request once, and expires each once at the next request", async () => {
+    const recorded = installLedger();
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error(NO_REQUEST);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const revalidator = new NextCacheRevalidator(() => next);
+    const waiting = Array.from(
+      { length: 20 },
+      (_, i) => `nextly:posts:id:${i}`
+    );
+    for (const tag of waiting) await revalidator.flush([{ tags: [tag] }]);
+
+    // Kept for Next.js's own cache, not handed to the ledger again by each
+    // later write: that would record a run of N writes O(N²) times.
+    expect(recorded.flat().sort()).toEqual([...waiting].sort());
+
+    next.revalidateTag.mockReset();
+    await revalidator.flush([{ tags: ["nextly:posts:id:fresh"] }]);
+    const expired = next.revalidateTag.mock.calls.map(([tag]) => tag);
+    for (const tag of waiting) {
+      expect(
+        expired.filter(t => t === tag),
+        tag
+      ).toHaveLength(1);
+    }
+    warn.mockRestore();
+  });
+
+  it("tries a tag that failed twice inside a request again at the next request", async () => {
+    installLedger();
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const revalidator = new NextCacheRevalidator(() => next);
+    await revalidator.flush([{ tags: ["nextly:posts:id:old"] }]);
+
+    next.revalidateTag.mockReset();
+    await revalidator.flush([{ tags: ["nextly:pages"] }]);
+    expect(next.revalidateTag.mock.calls.map(([tag]) => tag)).toContain(
+      "nextly:posts:id:old"
+    );
+    error.mockRestore();
   });
 });
