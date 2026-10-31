@@ -53,32 +53,44 @@ const listCard = (id: string, source: string, w: number) => ({
   hidesWhenEmpty: true,
 });
 
+/** A site's own card, eight columns wide. */
+const ORDERS = "site/orders";
+
 const branding = {
   widgets: [
     listCard(ATTENTION, "collection:attention", 8),
     listCard(RELEASES, "collection:releases", 4),
+    listCard(ORDERS, "collection:orders", 8),
   ],
 } as unknown as AdminBranding;
 
-/** The pair as a layout read answers it, from `source`. */
+/** The pair, each at its default width, as core's default places them. */
+const PAIR: DashboardLayoutResponse["placements"] = [
+  { id: ATTENTION, widgetId: ATTENTION, w: 8, h: 4, removed: false },
+  { id: RELEASES, widgetId: RELEASES, w: 4, h: 4, removed: false },
+];
+
+/**
+ * A layout read from `source`, of `placements`: arranged when it is the reader's own, and with
+ * the default as configured giving the pair a row of their own unless `pairedRow` says not.
+ */
 function layoutRead(
-  source: DashboardLayoutResponse["source"]
+  source: DashboardLayoutResponse["source"],
+  { placements = PAIR, pairedRow = true } = {}
 ): DashboardLayoutResponse {
   return {
-    placements: [
-      { id: ATTENTION, widgetId: ATTENTION, w: 8, h: 4, removed: false },
-      { id: RELEASES, widgetId: RELEASES, w: 4, h: 4, removed: false },
-    ],
-    widgets: {
-      [ATTENTION]: { allowsSeveral: false },
-      [RELEASES]: { allowsSeveral: false },
-    },
+    placements,
+    widgets: Object.fromEntries(
+      placements.map(p => [p.widgetId, { allowsSeveral: false }])
+    ),
     available: [],
     defaultPlacements: [],
     // Widgets the layout read cannot answer ahead: each card leaves while its own answer is empty.
     hiddenWhenAnswerEmpty: [ATTENTION, RELEASES],
     version: source === "own" ? 2 : 0,
     source,
+    arranged: source === "own",
+    pairedRow,
     scope: "tok",
     audience: "aud",
   };
@@ -157,6 +169,44 @@ describe("the pair on the default dashboard", () => {
     expect(await screen.findByText("Spring launch")).toBeInTheDocument();
     expect(cell(ATTENTION)).toHaveClass("@min-[1024px]/dashboard:col-span-8");
     expect(cell(RELEASES)).toHaveClass("@min-[1024px]/dashboard:col-span-4");
+  });
+});
+
+describe("the pair for a reader who may not see one of the two", () => {
+  it("draws Needs attention across the row when Upcoming releases is not theirs to see", async () => {
+    // Not handed to this reader at all, while the default as configured pairs the two.
+    api.get.mockResolvedValue(layoutRead("default", { placements: [PAIR[0]] }));
+    answerWith([]);
+    renderGrid();
+    expect(
+      await screen.findByText("Three unpublished changes")
+    ).toBeInTheDocument();
+    expect(cell(ATTENTION)).not.toHaveClass(
+      "@min-[1024px]/dashboard:col-span-8"
+    );
+    expect(cell(ATTENTION)).toHaveClass("col-span-12");
+  });
+});
+
+describe("a site's default that places Needs attention beside a card of its own", () => {
+  it("is drawn as it is written: Needs attention four wide beside the eight-wide card", async () => {
+    // No Upcoming releases anywhere, and the default as configured gives the pair no row.
+    api.get.mockResolvedValue(
+      layoutRead("default", {
+        placements: [
+          { id: ATTENTION, widgetId: ATTENTION, w: 4, h: 4, removed: false },
+          { id: ORDERS, widgetId: ORDERS, w: 8, h: 4, removed: false },
+        ],
+        pairedRow: false,
+      })
+    );
+    answerWith([]);
+    renderGrid();
+    expect(
+      await screen.findAllByText("Three unpublished changes")
+    ).not.toHaveLength(0);
+    expect(cell(ATTENTION)).toHaveClass("@min-[1024px]/dashboard:col-span-4");
+    expect(cell(ORDERS)).toHaveClass("@min-[1024px]/dashboard:col-span-8");
   });
 });
 

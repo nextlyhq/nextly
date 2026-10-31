@@ -11,6 +11,7 @@ import type { CanonicalWidget } from "../canonical";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
   defaultLayoutPlacements,
+  pairHasItsOwnRow,
   type DefaultLayoutPlan,
 } from "../default-layout";
 import { partitionPlacements } from "../layout";
@@ -212,5 +213,54 @@ describe("one default for everyone", () => {
     expect(
       defaultLayoutPlacements(widgets, withoutFirst).map(each => each.id)
     ).toEqual(["site/one", "pages-count", "posts-count"]);
+  });
+});
+
+describe("whether the default gives Needs attention and Upcoming releases a row of their own", () => {
+  const NA = "core/needs-attention";
+  const UR = "core/upcoming-releases";
+  const card = (widgetId: string, w: number) => ({ widgetId, w });
+
+  it("is yes for core's own default, the two side by side after the setup row", () => {
+    const placements = defaultLayoutPlacements(
+      [...core, widget(FORM_SUBMISSIONS)],
+      plan({ cards: CORE_DEFAULT_LAYOUT })
+    );
+    expect(pairHasItsOwnRow(placements)).toBe(true);
+    // In either order, wherever the row falls.
+    expect(
+      pairHasItsOwnRow([
+        card("site/a", 6),
+        card("site/b", 6),
+        card(UR, 4),
+        card(NA, 8),
+      ])
+    ).toBe(true);
+  });
+
+  it("is no for a site's default that puts Needs attention beside a card of its own", () => {
+    // Needs attention four wide beside an eight-wide card, and no Upcoming releases at all.
+    expect(pairHasItsOwnRow([card(NA, 4), card("site/orders", 8)])).toBe(false);
+  });
+
+  it("is no where the two share a row with another card, or do not fill it", () => {
+    expect(
+      pairHasItsOwnRow([card("site/a", 4), card(NA, 4), card(UR, 4)])
+    ).toBe(false);
+    expect(pairHasItsOwnRow([card(NA, 4), card(UR, 4)])).toBe(false);
+  });
+
+  it("is no where the two are not next to each other", () => {
+    expect(
+      pairHasItsOwnRow([card(NA, 8), card("site/a", 4), card(UR, 4)])
+    ).toBe(false);
+  });
+
+  it("is no where the first of them does not start a row", () => {
+    // Laid out as the grid lays them: the four-wide card leaves eight on its row, where the
+    // eight-wide Needs attention fits, so Upcoming releases wraps to the next row alone.
+    expect(
+      pairHasItsOwnRow([card("site/a", 4), card(NA, 8), card(UR, 4)])
+    ).toBe(false);
   });
 });

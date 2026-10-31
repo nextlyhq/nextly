@@ -18,9 +18,9 @@
  */
 
 import { sizeFacts, type CanonicalWidget } from "./canonical";
-import { CORE_DEFAULT_LAYOUT } from "./core-widgets/ids";
+import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_ID } from "./core-widgets/ids";
 import type { DefaultLayoutCard } from "./declaration/dashboard";
-import { clampSize } from "./grid-size";
+import { clampSize, GRID_COLUMNS } from "./grid-size";
 import type { WidgetPlacement } from "./layout";
 
 /** What startup read from the site config, for the default. */
@@ -104,4 +104,46 @@ function placementOf(
     removed: false,
     ...(card.settings === undefined ? {} : { config: { ...card.settings } }),
   };
+}
+
+/**
+ * The two cards core's default puts side by side as one row, the near future in one band:
+ * Needs attention and Upcoming releases.
+ */
+const SHARED_ROW_PAIR: ReadonlySet<string> = new Set([
+  CORE_WIDGET_ID.needsAttention,
+  CORE_WIDGET_ID.upcomingReleases,
+]);
+
+/**
+ * Whether `placements`, a default as configured, gives the pair a row of their own: the two
+ * next to each other, in either order, the first starting a row as the grid lays cards out (in
+ * order, twelve columns to a row, a card that does not fit starting the next one), and the two
+ * filling it.
+ *
+ * Asked of the default BEFORE any reader's cards are left out, so a reader who may not see one
+ * of the two is told the same as one who may: the admin draws the other across the row only
+ * where the configured row is the pair's alone, and a site's default that places them
+ * otherwise is drawn as it is written.
+ */
+export function pairHasItsOwnRow(
+  placements: readonly Pick<WidgetPlacement, "widgetId" | "w">[]
+): boolean {
+  let used = 0;
+  for (const [index, card] of placements.entries()) {
+    if (used + card.w > GRID_COLUMNS) used = 0;
+    const next = placements[index + 1];
+    if (
+      used === 0 &&
+      next !== undefined &&
+      next.widgetId !== card.widgetId &&
+      SHARED_ROW_PAIR.has(card.widgetId) &&
+      SHARED_ROW_PAIR.has(next.widgetId) &&
+      card.w + next.w === GRID_COLUMNS
+    ) {
+      return true;
+    }
+    used += card.w;
+  }
+  return false;
 }

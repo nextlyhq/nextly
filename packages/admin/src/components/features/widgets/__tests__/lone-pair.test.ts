@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { widenLoneOfPair } from "../lone-pair";
+import { widenLoneOfPair, widensLonePair } from "../lone-pair";
 
 const ATTENTION = "core/needs-attention";
 const RELEASES = "core/upcoming-releases";
@@ -85,5 +85,21 @@ describe("the pair that shares a row", () => {
     ]);
     // The stored rows are left as they were: the width is drawn, never written back.
     expect(given[1].size).toEqual({ w: 4, h: 5 });
+  });
+});
+
+describe("whether a dashboard widens the lone card of the pair", () => {
+  it("does where the reader follows a default that gives the pair a row of their own", () => {
+    expect(widensLonePair({ arranged: false, pairedRow: true })).toBe(true);
+  });
+
+  it("does not where the default places the two otherwise, or a server says nothing", () => {
+    expect(widensLonePair({ arranged: false, pairedRow: false })).toBe(false);
+    expect(widensLonePair({ arranged: false })).toBe(false);
+  });
+
+  it("does not on a dashboard the reader arranged, nor before the layout is read", () => {
+    expect(widensLonePair({ arranged: true, pairedRow: true })).toBe(false);
+    expect(widensLonePair(undefined)).toBe(false);
   });
 });

@@ -60,14 +60,16 @@ function refusal(run: () => void): string {
 }
 
 const warn = vi.fn();
+const error = vi.fn();
 
 beforeEach(() => {
   resetLegacyIdWarnings();
   warn.mockReset();
+  error.mockReset();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn,
     info: vi.fn(),
-    error: vi.fn(),
+    error,
     debug: vi.fn(),
   } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
 });
@@ -682,6 +684,32 @@ describe("the default the site config asks for", () => {
     expect(defaultLayoutPlan().cards).toEqual([
       { widget: "acme/orders-by-state", optional: true },
       { widget: "core/team" },
+    ]);
+  });
+
+  it("starts on core's own default without the form-builder plugin, leaving its optional card out and logging nothing", () => {
+    // Core's default names New form submissions, a widget only that plugin declares.
+    expect(() => resetWidgetRegistries([], {})).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    // The plan still names it, as optional: the entry is skipped where the default is built.
+    expect(defaultLayoutPlan().cards).toContainEqual({
+      widget: "form-builder/new-submissions",
+      w: 6,
+      h: 4,
+      optional: true,
+    });
+    const widgets = allWidgets();
+    expect(widgets.map(widget => widget.id)).not.toContain(
+      "form-builder/new-submissions"
+    );
+    const placed = defaultLayoutPlacements(widgets).map(p => p.widgetId);
+    expect(placed).not.toContain("form-builder/new-submissions");
+    // The control: the rest of the default resolved, in order around the missing card.
+    expect(placed.slice(-3)).toEqual([
+      "core/continue",
+      "core/content-table",
+      "core/team-activity",
     ]);
   });
 

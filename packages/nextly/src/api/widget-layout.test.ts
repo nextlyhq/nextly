@@ -213,6 +213,7 @@ interface LayoutPayload {
   version?: number;
   source?: string;
   arranged?: boolean;
+  pairedRow?: boolean;
   scope?: string;
   defaultPlacements?: WidgetPlacement[];
   widgets?: Record<
@@ -2976,6 +2977,61 @@ describe("the one default", () => {
       cards: [],
       ...patch,
     });
+
+  /** A widget that may be drawn from four to twelve columns wide. */
+  const resizable = (id: string, patch: Partial<WidgetDefinition> = {}) =>
+    widget({
+      id,
+      size: {
+        default: { w: 4, h: 4 },
+        min: { w: 4, h: 2 },
+        max: { w: 12, h: 8 },
+      },
+      ...patch,
+    });
+
+  it("says the pair has a row of its own where the default gives it one, to a reader who may not see one of the two too", async () => {
+    registerWidget(resizable("core/needs-attention"));
+    registerWidget(
+      resizable("core/upcoming-releases", {
+        requiredPermission: "read-releases",
+      })
+    );
+    plan({
+      cards: [
+        { widget: "core/needs-attention", w: 8, h: 4 },
+        { widget: "core/upcoming-releases", w: 4, h: 4 },
+      ],
+    });
+    callerHoldsPermission.mockResolvedValue(false);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The control: this reader is not handed Upcoming releases at all.
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "core/needs-attention",
+    ]);
+    expect(body.pairedRow).toBe(true);
+  });
+
+  it("says the pair has no row of its own where the site's default places Needs attention beside a card of its own", async () => {
+    registerWidget(resizable("core/needs-attention"));
+    registerWidget(resizable("site/orders"));
+    plan({
+      cards: [
+        { widget: "core/needs-attention", w: 4, h: 4 },
+        { widget: "site/orders", w: 8, h: 4 },
+      ],
+    });
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.defaultPlacements?.map(p => [p.widgetId, p.w])).toEqual([
+      ["core/needs-attention", 4],
+      ["site/orders", 8],
+    ]);
+    expect(body.pairedRow).toBe(false);
+  });
 
   it("is the site's defaultLayout, in its order, at its sizes and with its settings", async () => {
     registerWidget(widget({ id: "site/a" }));

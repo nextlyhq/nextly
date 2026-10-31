@@ -16,6 +16,8 @@
 import { GRID_COLUMNS, type GridSize } from "nextly/config";
 import { createContext } from "react";
 
+import type { DashboardLayoutResponse } from "../../../types/dashboard/widgets";
+
 /**
  * The pair, by widget id: core's Needs attention and Upcoming releases, as core declares them
  * (`core-widgets/ids.ts` in nextly, which the admin does not import at run time).
@@ -32,11 +34,23 @@ interface PairRow {
 }
 
 /**
- * Whether the grid draws the lone card of the pair across its row: on the default dashboard
- * only, provided where the grid's cards are (`CardContexts`); a dashboard the reader arranged
- * keeps its sizes.
+ * Whether the grid draws the lone card of the pair across its row ({@link widensLonePair}),
+ * provided where the grid's cards are (`CardContexts`).
  */
 export const WidenLonePairContext = createContext(false);
+
+/**
+ * Whether this reader's dashboard widens the lone card of the pair: they follow the default
+ * (they have not arranged their own, whose sizes are theirs), and the default as configured
+ * gives the pair a row of their own (`pairedRow`, judged by the server before this reader's
+ * cards are left out). A site's default that places the two otherwise, or one of them beside
+ * another card, is drawn as it is written. Nothing before the layout read has answered.
+ */
+export function widensLonePair(
+  read: Pick<DashboardLayoutResponse, "arranged" | "pairedRow"> | undefined
+): boolean {
+  return read !== undefined && !read.arranged && read.pairedRow === true;
+}
 
 /**
  * `rows`, with the one card of the pair that is on show drawn twelve columns wide when the other
