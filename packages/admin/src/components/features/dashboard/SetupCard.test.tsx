@@ -493,15 +493,53 @@ describe("the setup card", () => {
       { kind: "sample", status: "open" },
       { kind: "invite", status: "skipped" },
     ];
-    draw(dataOf({ setup: { known: true, steps, done: 1, total: 2 } }));
-    expect(screen.getByTestId("setup-all-set")).toHaveTextContent(
-      "You're all set."
+    let land: (answer: unknown) => void = () => undefined;
+    put.mockReturnValueOnce(
+      new Promise(resolve => {
+        land = resolve;
+      })
     );
+    draw(dataOf({ setup: { known: true, steps, done: 1, total: 2 } }));
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith("/dashboard/setup", {
         retire: { sampleRefused: true },
       })
     );
+    // Not before the host has recorded it: until then the one tile is drawn, done.
+    expect(screen.queryByTestId("setup-all-set")).toBeNull();
+    expect(headerCount()).toHaveTextContent("1 of 1 done");
+    act(() => land({}));
+    expect(await screen.findByTestId("setup-all-set")).toHaveTextContent(
+      "You're all set."
+    );
+    expect(put).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the steps again, and never says it will not show again, when the host refuses the retirement", async () => {
+    // The host finds a step open as it sees the site now (409): nothing recorded.
+    put.mockRejectedValueOnce(
+      Object.assign(new Error("Setup is not all set: a step is still open."), {
+        status: 409,
+        code: "CONFLICT",
+      })
+    );
+    seed.status = { kind: "hidden" };
+    const steps: SetupStep[] = [
+      { kind: "sample", status: "open" },
+      { kind: "invite", status: "skipped" },
+    ];
+    const data = dataOf({ setup: { known: true, steps, done: 1, total: 2 } });
+    const { rerender } = draw(data);
+    // The card's data is read again, once, to draw the steps as the host has them.
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("setup-all-set")).toBeNull();
+    expect(screen.queryByText(/won't show again/)).toBeNull();
+    expect(
+      screen.getByRole("list", { name: "Setup steps" })
+    ).toBeInTheDocument();
+    // A refusal is not asked again, whatever is read next.
+    rerender(tree({ ...data }));
+    await new Promise(resolve => setTimeout(resolve, 20));
     expect(put).toHaveBeenCalledTimes(1);
   });
 

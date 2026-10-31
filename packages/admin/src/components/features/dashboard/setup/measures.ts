@@ -27,7 +27,7 @@ export const SETUP_TILE = { className: "h-9", px: 36 } as const;
 /** The two lines inside a tile, as their classes draw them. */
 export const SETUP_TILE_LINES = {
   label: "text-xs leading-4",
-  hint: "text-[11px] leading-[14px]",
+  hint: "text-xs leading-[14px]",
 } as const;
 
 /** The expanded body's height, in pixels, when its tiles are in one row. */

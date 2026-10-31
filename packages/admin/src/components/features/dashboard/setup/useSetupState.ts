@@ -33,7 +33,13 @@ type SetupChange =
   | { retire: SampleRoute };
 
 /** Runs when the write it was handed to fails, so the card can undo what it drew ahead of it. */
-type OnFailed = () => void;
+type OnFailed = (error: Error) => void;
+
+/** What to do once a write lands, or once it fails. */
+interface WriteOutcome {
+  onDone?: () => void;
+  onFailed?: OnFailed;
+}
 
 export interface SetupStateWrite {
   /** Collapses or expands the card; `onFailed` runs when the write fails. */
@@ -44,9 +50,10 @@ export interface SetupStateWrite {
    * Asks the host to record "You're all set" over the steps this card draws,
    * with what the project's sample-content route said: only the admin can ask
    * it. The host judges the steps again and records only what it finds done.
-   * `onFailed` runs when the write fails, so the card can ask again later.
+   * `onDone` runs once it is recorded; `onFailed` when it is not, with why:
+   * a 409 when the host finds a step open and records nothing.
    */
-  retire: (route: SampleRoute, onFailed?: OnFailed) => void;
+  retire: (route: SampleRoute, outcome?: WriteOutcome) => void;
   isWriting: boolean;
   /** The last write that failed, said in words; cleared by the next write. */
   failed: string | undefined;
@@ -72,14 +79,18 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     },
   });
   const { mutate } = mutation;
-  // One change, with what to undo should it fail.
+  // One change, with what to do once it lands or fails.
   const send = useCallback(
-    (change: SetupChange, onFailed?: OnFailed) =>
-      mutate(change, onFailed === undefined ? {} : { onError: onFailed }),
+    (change: SetupChange, { onDone, onFailed }: WriteOutcome = {}) =>
+      mutate(change, {
+        ...(onDone === undefined ? {} : { onSuccess: () => onDone() }),
+        ...(onFailed === undefined ? {} : { onError: onFailed }),
+      }),
     [mutate]
   );
   const setCollapsed = useCallback(
-    (collapsed: boolean, onFailed?: OnFailed) => send({ collapsed }, onFailed),
+    (collapsed: boolean, onFailed?: OnFailed) =>
+      send({ collapsed }, onFailed === undefined ? {} : { onFailed }),
     [send]
   );
   const dismiss = useCallback(() => mutate({ dismissed: true }), [mutate]);
@@ -89,8 +100,8 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     [mutate]
   );
   const retire = useCallback(
-    (route: SampleRoute, onFailed?: OnFailed) =>
-      send({ retire: route }, onFailed),
+    (route: SampleRoute, outcome?: WriteOutcome) =>
+      send({ retire: route }, outcome),
     [send]
   );
   return {

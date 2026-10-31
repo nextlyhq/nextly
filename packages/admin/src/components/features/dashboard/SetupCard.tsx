@@ -61,6 +61,7 @@ import {
   type SeedStatus,
 } from "@admin/hooks/queries/useSeedStatus";
 import { useSingles } from "@admin/hooks/queries/useSingles";
+import { isApiError } from "@admin/lib/api/parseApiError";
 import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
@@ -125,29 +126,53 @@ function drawnSteps(
   });
 }
 
+/** Where the card's request to record "You're all set" stands. */
+type Retirement = "unasked" | "asked" | "recorded" | "refused";
+
 /**
  * Asks the host to record "You're all set" when the card finds every step it draws done but the
  * host, which cannot ask the project's sample-content route, did not: the host judges the steps
- * again with what the route said, through the same `drawnSetup`.
+ * again with what the route said, through the same `drawnSetup`. The card says it is all set only
+ * once the host has recorded it.
  *
  * Asked once per answer the card is drawn from (`answer`): a write that failed is asked again
  * when the card's data is next read, on the next load or refocus, never in a loop on its own
- * failure. One that landed is not asked again.
+ * failure. One the host refused, as it finds a step open (409), is not asked again: the card's
+ * data is read once more (`refresh`) to draw the steps as the host now has them.
  */
-function useRetireOnce(
+function useRetirement(
   due: boolean,
   sampleRefused: boolean,
   retire: SetupStateWrite["retire"],
-  answer: SetupCardData
-): void {
+  answer: SetupCardData,
+  refresh: () => void
+): Retirement {
+  const [retirement, setRetirement] = useState<Retirement>("unasked");
   const asked = useRef(false);
+  // The latest refresh, read when an answer lands, so a new one each draw never asks again.
+  const latestRefresh = useRef(refresh);
+  latestRefresh.current = refresh;
   useEffect(() => {
     if (!due || asked.current) return;
     asked.current = true;
-    retire({ sampleRefused }, () => {
-      asked.current = false;
-    });
+    setRetirement("asked");
+    retire(
+      { sampleRefused },
+      {
+        onDone: () => setRetirement("recorded"),
+        onFailed: error => {
+          if (isApiError(error) && error.status === 409) {
+            setRetirement("refused");
+            latestRefresh.current();
+            return;
+          }
+          asked.current = false;
+          setRetirement("unasked");
+        },
+      }
+    );
   }, [due, sampleRefused, retire, answer]);
+  return retirement;
 }
 
 /** "N of M done", from a counted answer. */
@@ -433,9 +458,11 @@ function HintText({
   if (step.kind === "sample" && step.status === "open") {
     return <span className="flex shrink-0 items-center">{sample}</span>;
   }
+  const text = step.status === "skipped" ? "Skipped" : detail;
   return (
-    <span className="min-w-0 truncate">
-      {step.status === "skipped" ? "Skipped" : detail}
+    // Its whole text on hover, as a narrow tile may cut it short.
+    <span className="min-w-0 truncate" title={text}>
+      {text}
     </span>
   );
 }
@@ -479,6 +506,8 @@ function StepTile({
             SETUP_TILE_LINES.label,
             "truncate font-semibold text-foreground"
           )}
+          // Its whole name on hover, as a narrow tile may cut it short.
+          title={label}
         >
           {label}
           <span className="sr-only"> — {STATUS_TEXT[step.status]}</span>
@@ -513,7 +542,7 @@ function SingleRow({ single, label }: { single: SetupSingle; label: string }) {
   return (
     <li
       data-setup-single={single.slug}
-      className="flex items-center justify-between gap-2"
+      className="flex min-h-6 items-center justify-between gap-2"
     >
       <span className="flex items-center gap-2">
         {single.filledIn ? (
@@ -529,9 +558,10 @@ function SingleRow({ single, label }: { single: SetupSingle; label: string }) {
           {single.filledIn ? "Filled in" : "Not filled in yet"}
         </span>
       </span>
+      {/* A 24 px target, the least a pointer is given. */}
       <Link
         href={singleHref(single.slug)}
-        className="font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
+        className="inline-flex min-h-6 items-center font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
       >
         {single.filledIn ? "Edit" : "Fill in"}
         <span className="sr-only">: {label}</span>
@@ -554,7 +584,7 @@ function SinglesList({
     <ul
       id={id}
       aria-label={`Your Singles, ${done} of ${total} filled in`}
-      className="grid gap-1 rounded-md border border-border p-2.5 text-xs"
+      className="grid rounded-md border border-border px-2.5 py-1.5 text-xs"
     >
       {step.singles.map(single => (
         <SingleRow
@@ -639,24 +669,30 @@ type CountedSetup = Extract<SetupAnswer, { known: true }>;
 /**
  * Whether the card is all set, and the steps it draws as tiles while it is not. All set when the
  * host found it so, or when every step the card draws is done though the host could not tell
- * (`drawnSetup`), which the card asks the host once to record (`useRetireOnce`).
+ * (`drawnSetup`) and the host has since recorded it (`useRetirement`); until then the tiles are
+ * drawn, every one done.
  */
 function useDrawnSetup(
   card: SetupCardData,
   seed: SeedStatus,
   answeredHere: boolean,
-  retire: SetupStateWrite["retire"]
+  write: Pick<SetupStateWrite, "retire">,
+  refresh: () => void
 ): { allSet: boolean; counted: CountedSetup | undefined } {
   const drawn =
     card.setup.known && !card.allSet
       ? drawnSteps(card.setup.steps, seed, answeredHere)
       : undefined;
   const drawnAllSet = drawn !== undefined && setupAllSet(drawn);
-  useRetireOnce(drawnAllSet, seed.kind === "hidden", retire, card);
-  return {
-    allSet: card.allSet || drawnAllSet,
-    counted: drawn?.known && !drawnAllSet ? drawn : undefined,
-  };
+  const retirement = useRetirement(
+    drawnAllSet,
+    seed.kind === "hidden",
+    write.retire,
+    card,
+    refresh
+  );
+  const allSet = card.allSet || (drawnAllSet && retirement === "recorded");
+  return { allSet, counted: drawn?.known && !allSet ? drawn : undefined };
 }
 
 /** A change that could not be saved, said once to assistive technology: the header shows it. */
@@ -736,11 +772,18 @@ function ExpandedSetup({
     >
       <ProgressBar done={counted.done} total={counted.total} />
       {failure}
-      <div className={cn("flex items-start", SETUP_GAP.className)}>
+      {/* Below 640 px the controls sit over the tiles, so the tiles' two columns take the card's
+          whole width; from 640 px they end the tiles' one row. */}
+      <div
+        className={cn(
+          "flex flex-col-reverse items-end sm:flex-row sm:items-start",
+          SETUP_GAP.className
+        )}
+      >
         {/* One row of tiles: one column per step from 640 px, two below. */}
         <ol
           className={cn(
-            "grid min-w-0 flex-1 grid-cols-2 sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none",
+            "grid min-w-0 flex-1 grid-cols-2 self-stretch sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none sm:self-auto",
             SETUP_GAP.className
           )}
           aria-label="Setup steps"
@@ -759,7 +802,9 @@ function ExpandedSetup({
           ))}
         </ol>
         <span
-          className={cn(SETUP_TILE.className, "flex shrink-0 items-center")}
+          // A tile high from 640 px (`SETUP_TILE`, 36 px), written out whole so the stylesheet
+          // keeps the class; one compact button high below.
+          className="flex h-6 shrink-0 items-center sm:h-9"
         >
           {controls}
         </span>
@@ -863,7 +908,8 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
     card,
     seed,
     sample.answeredHere,
-    write.retire
+    write,
+    retry
   );
   const progress = useSetupInFrame(
     counted,
