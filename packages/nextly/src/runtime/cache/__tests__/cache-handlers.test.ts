@@ -326,6 +326,20 @@ describe("the incremental cache handler", () => {
     expect((await handler.get("k"))?.value).toEqual(page(2));
   });
 
+  it("remembers a bounded number of reads, however many distinct keys a burst reads", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    const handler = new IncrementalHandler();
+    // All inside the fill window: none is old enough to drop by age.
+    for (let i = 0; i < 10_500; i += 1) await handler.get(`miss-${i}`);
+    const remembered = (
+      globalThis as { __nextly_cache_reads?: Map<string, number> }
+    ).__nextly_cache_reads;
+    expect(remembered?.size).toBeLessThanOrEqual(10_000);
+    // The newest are the ones kept.
+    expect(remembered?.has("miss-10499")).toBe(true);
+    expect(remembered?.has("miss-0")).toBe(false);
+  });
+
   it("expires its own writes with no ledger published, as one instance needs", async () => {
     publishTagExpiryLedger(null);
     const handler = new IncrementalHandler();
@@ -420,6 +434,20 @@ describe("the use cache handler", () => {
     expect(await useCacheHandler.get("k", [])).toBeUndefined();
     // Reported on this process's clock, for Next.js to compare its own times with.
     expect(await useCacheHandler.getExpiration(["posts"])).toBeGreaterThan(T0);
+  });
+
+  it("does not store a dynamic result outside development, keeping the entry there", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    vi.stubEnv("NODE_ENV", "production");
+    await useCacheHandler.set("k", Promise.resolve(entry("kept", ["posts"])));
+    await useCacheHandler.set(
+      "k",
+      Promise.resolve({ ...entry("dynamic", ["posts"]), expire: 0 })
+    );
+    expect(await read((await useCacheHandler.get("k", []))?.value)).toBe(
+      "kept"
+    );
+    vi.unstubAllEnvs();
   });
 
   it("answers a get made while the same key is being written with the new value", async () => {
