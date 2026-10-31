@@ -362,7 +362,7 @@ curl -i -X POST http://localhost:3000/admin/api/auth/login \
   -d '{"email":"user@example.com","password":"secure-password"}'
 ```
 
-A successful login responds 200 with the action envelope `{ message, user, token, exp }` and sets the `nextly_session` and `nextly_refresh` cookies on the response. Browsers handle these automatically; for API clients you can ignore them and use the returned `token` as a Bearer token instead.
+A successful login responds 200 with the action envelope `{ message, user, accessToken, refreshToken, expiresAt }` and sets the `nextly_session` and `nextly_refresh` cookies on the response. The REST routes authenticate a session by those cookies: browsers send them automatically, and an API client keeps them, as `curl` does with a cookie jar (`-c` and `-b`). An `Authorization: Bearer` header carries an [API key](#api-key-server-to-server), not the login's `accessToken`.
 
 ```bash
 # Register

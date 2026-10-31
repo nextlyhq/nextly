@@ -15,8 +15,11 @@ driven by your content, not a timer.
 
 1. A read tags its cached data with the `nextly:*` tags for the collection (and,
    for a detail page, the entry id).
-2. A write computes the same tags and, after it commits, calls Next's
-   `revalidateTag` for each — so any page tagged with them is invalidated.
+2. A write computes the same tags and, after it commits and before it
+   responds, expires each one, so any page tagged with them is invalidated.
+   In a Server Action it calls Next's `updateTag`, so the person who made the
+   change sees it on their next read. Everywhere else (a Route Handler, the
+   admin API) it calls `revalidateTag(tag, { expire: 0 })`.
 
 The write side is automatic once the admin route is wired (see below). You only
 add the read-side tags.
@@ -69,14 +72,61 @@ error), so it is safe but stale.
 
 Automatic revalidation fires for a write that runs **inside a Next.js request or
 render** — a Route Handler, a Server Action, or the admin API. That is where
-`revalidateTag` is valid, and it covers how content is normally edited.
+Next.js can expire a tag, and it covers how content is normally edited.
 
 A write from **outside** a request — a cron job, a CLI, or a background worker
-with no request in flight — cannot call `revalidateTag` (there is no cache scope
-to invalidate), so the adapter safely skips it (the write still succeeds). Those
-callers should either run the write in a Route Handler / Server Action, or
-invalidate the cache themselves. This mirrors how on-demand ISR works in Next.js
-generally: revalidation is request-scoped.
+with no request in flight — cannot expire a tag: Next.js has no cache scope to
+invalidate there. The write still succeeds, and Nextly keeps its tags pending
+in that process and expires them with the next write that runs inside a
+request. It logs one line per process the first time that happens. To refresh
+pages straight away, run the write in a Route Handler or a Server Action
+instead. This mirrors how on-demand ISR works in Next.js generally:
+revalidation is request-scoped.
+
+### When the new version shows
+
+- **Server Action:** the expiry completes before the action returns, and
+  `updateTag` lets the person who made the change read it straight away.
+- **Route Handler and the admin API:** the expiry starts before the response is
+  sent and completes in the same invocation. A request made after the response
+  arrives reads the new version. A request already in flight while the write
+  ran may still read the previous one.
+
+### If an expiry fails
+
+A tag that fails to expire is retried once. If it fails again, the write still
+succeeds: Nextly logs the tags and expires them with the next write in a
+request, and the REST and admin response says so with a notice:
+
+```json
+{
+  "warnings": [
+    {
+      "severity": "notice",
+      "phase": "cache-expiry",
+      "collection": "posts",
+      "code": "CACHE_EXPIRY_DEFERRED",
+      "message": "The change is saved. Its public pages may show the previous version for a while."
+    }
+  ]
+}
+```
+
+The Direct API's mutations return the same notice in the result's `warnings`, so a caller can tell the expiry was deferred.
+
+### Which writes expire a page
+
+Every write that changes what a read returns:
+
+- creating, updating, publishing, unpublishing and deleting an entry, and a
+  slug change;
+- saving a Single;
+- a release that publishes or unpublishes its documents;
+- deleting a collection or a Single;
+- a plugin writing to columns it added to a collection, a Single or a component
+  with `ctx.db.contributed(...).set`. A component's row expires the entry or
+  Single it sits in. Inside `ctx.db.transaction` the expiry waits for the
+  commit, and a rolled-back write expires nothing.
 
 ## Tag a read
 
@@ -165,7 +215,14 @@ cross-tenant data leak, not a stale-cache annoyance. For genuinely public conten
 (the same for every reader, like a published blog post) a stable key is correct
 and gives the full caching benefit.
 
-## Opt a write out of revalidation
+## Opt out of revalidation
+
+A collection or Single whose pages manage their own freshness can opt out with
+`revalidate: { disable: true }` in its config. None of the writes above then
+expire its tags, a delete or a plugin's write included. One exception: when a
+write cannot read the setting, because the record is already gone or the
+registry cannot be reached, it expires the derived `nextly:*` tags anyway. An
+extra cache miss is the cheaper mistake; a page left stale is the worse one.
 
 A bulk import, seed, or CLI write that owns its own cache strategy can skip the
 per-row revalidation with `disableRevalidate`:
@@ -186,3 +243,11 @@ unaffected); it just does not bust any cache tags.
   the same code works in tests and non-Next callers.
 - Add `revalidate: <seconds>` to `cachedFind` for a time-based safety net on top
   of tag-based busting.
+- Next.js keeps at most 128 tags on one cached read and drops any tag longer
+  than 256 characters. `cachedFind` leaves out the over-long tags, keeps each
+  tag once in the order you give, and leaves off any past 128 with a warning
+  logged once. The routes Nextly provides put their own collection's or
+  Single's tag first, so a read that lists many related collections still
+  expires whenever its own content changes. A read that
+  lists many related collections still expires whenever its own content
+  changes.
