@@ -11,13 +11,8 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
+import { CACHE_COMPONENTS } from "./support/cache-components";
 import { includingHidden, test } from "./support/test";
-
-/**
- * Whether the playground under test was built with Cache Components, which its
- * `next.config` turns on from this same variable.
- */
-const CACHE_COMPONENTS = process.env.NEXTLY_PLAYGROUND_CACHE_COMPONENTS === "1";
 
 /** The computed properties compared: what a global rule would change. */
 const PROPERTIES = [

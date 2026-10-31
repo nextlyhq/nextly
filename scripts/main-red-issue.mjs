@@ -36,6 +36,7 @@ export const ADVISORY = {
   "e2e-production": "Production browser tests",
   "dev-reload": "Dev reload applies a saved schema edit",
   "cache-components": "Playground builds and serves under Cache Components",
+  "e2e-cache-components-off": "Browser tests (Cache Components off)",
   "scaffold-smoke": "Scaffold smoke",
   "dev-script-smoke": "Dev script starts every watcher",
 };
@@ -58,7 +59,11 @@ export function verdict(results) {
   const ids = Object.keys(ADVISORY);
   return {
     failed: ids.filter(id => results[id]?.result === "failure"),
-    passed: ids.filter(id => results[id]?.result === "success" && results[id]?.outputs?.tested !== "false"),
+    passed: ids.filter(
+      id =>
+        results[id]?.result === "success" &&
+        results[id]?.outputs?.tested !== "false"
+    ),
   };
 }
 
@@ -80,8 +85,12 @@ function recorded(issue) {
  */
 async function olderThan(sha, runId, state, { repository, context }) {
   if (!state?.sha) return false;
-  if (state.sha === sha) return Number.isInteger(state.run) && Number(runId) < state.run;
-  const { status } = await githubJson(`repos/${repository}/compare/${state.sha}...${sha}`, context);
+  if (state.sha === sha)
+    return Number.isInteger(state.run) && Number(runId) < state.run;
+  const { status } = await githubJson(
+    `repos/${repository}/compare/${state.sha}...${sha}`,
+    context
+  );
   return status === "behind";
 }
 
@@ -94,18 +103,28 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   try {
     const { failed, passed } = verdict(JSON.parse(env.RESULTS ?? "{}"));
     if (failed.length === 0 && passed.length === 0) {
-      console.log("main-red-issue: no advisory job failed or ran its test; nothing to report");
+      console.log(
+        "main-red-issue: no advisory job failed or ran its test; nothing to report"
+      );
       return 0;
     }
     // The newest labelled issue, open or closed, records the newest commit
     // any run wrote for; a closed one still orders a run that finishes late.
     // A second is opened only while none is open, so an open one is the newest.
     const [newest] = (
-      await githubJson(`repos/${repository}/issues?labels=${LABEL}&state=all&sort=created&direction=desc&per_page=10`, context)
+      await githubJson(
+        `repos/${repository}/issues?labels=${LABEL}&state=all&sort=created&direction=desc&per_page=10`,
+        context
+      )
     ).filter(issue => !issue.pull_request);
     const state = newest ? recorded(newest) : null;
-    if (newest && (await olderThan(sha, env.GITHUB_RUN_ID, state, { repository, context }))) {
-      console.log(`main-red-issue: ${sha.slice(0, 9)} is older than #${newest.number}'s ${state.sha.slice(0, 9)}; leaving it`);
+    if (
+      newest &&
+      (await olderThan(sha, env.GITHUB_RUN_ID, state, { repository, context }))
+    ) {
+      console.log(
+        `main-red-issue: ${sha.slice(0, 9)} is older than #${newest.number}'s ${state.sha.slice(0, 9)}; leaving it`
+      );
       return 0;
     }
     const current = newest?.state === "open" ? newest : null;
@@ -117,7 +136,9 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
     }
     return 0;
   } catch (error) {
-    console.log(`::error title=Main red issue::${commandText(`could not report main's advisory jobs (${error.message})`)}`);
+    console.log(
+      `::error title=Main red issue::${commandText(`could not report main's advisory jobs (${error.message})`)}`
+    );
     return 1;
   }
 }
@@ -128,7 +149,12 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
  * not yet tested, so runs that each prove a different job close it between
  * them. Either way the issue records this commit, to order later runs.
  */
-async function closeIfProven(current, state, passed, { sha, runUrl, runId, repository, context }) {
+async function closeIfProven(
+  current,
+  state,
+  passed,
+  { sha, runUrl, runId, repository, context }
+) {
   const named = state?.jobs ?? Object.keys(ADVISORY);
   const unproven = named.filter(id => !passed.includes(id));
   const path = `repos/${repository}/issues/${current.number}`;
@@ -136,10 +162,16 @@ async function closeIfProven(current, state, passed, { sha, runUrl, runId, repos
     if (unproven.length < named.length) {
       await write(path, context, "PATCH", {
         title: retitled(current.title, unproven),
-        body: withMarker(current.body, { sha, jobs: unproven, run: Number(runId) }),
+        body: withMarker(current.body, {
+          sha,
+          jobs: unproven,
+          run: Number(runId),
+        }),
       });
     }
-    console.log(`main-red-issue: #${current.number} stays open; not yet passed: ${unproven.map(id => ADVISORY[id] ?? id).join(", ")}`);
+    console.log(
+      `main-red-issue: #${current.number} stays open; not yet passed: ${unproven.map(id => ADVISORY[id] ?? id).join(", ")}`
+    );
     return;
   }
   await write(`${path}/comments`, context, "POST", {
@@ -150,14 +182,18 @@ async function closeIfProven(current, state, passed, { sha, runUrl, runId, repos
     state_reason: "completed",
     body: withMarker(current.body, { sha, jobs: [], run: Number(runId) }),
   });
-  console.log(`main-red-issue: green on ${sha.slice(0, 9)}; closed #${current.number}`);
+  console.log(
+    `main-red-issue: green on ${sha.slice(0, 9)}; closed #${current.number}`
+  );
 }
 
 /** The issue's text with its marker recording `state` instead. */
 function withMarker(body, state) {
   const marker = `<!-- main-red ${JSON.stringify(state)} -->`;
   const text = body ?? "";
-  return /<!-- main-red \{.*?\} -->/.test(text) ? text.replace(/<!-- main-red \{.*?\} -->/, marker) : `${marker}\n${text}`;
+  return /<!-- main-red \{.*?\} -->/.test(text)
+    ? text.replace(/<!-- main-red \{.*?\} -->/, marker)
+    : `${marker}\n${text}`;
 }
 
 /** The issue's title naming only the jobs still red, keeping the commit it was opened for. */
@@ -167,31 +203,61 @@ function retitled(title, jobs) {
 }
 
 /** Opens the issue for this run's failures, or updates the open one. */
-async function report(current, state, { failed, passed }, { sha, runUrl, runId, repository, context }) {
+async function report(
+  current,
+  state,
+  { failed, passed },
+  { sha, runUrl, runId, repository, context }
+) {
   // A job the issue names stays named until a run has tested it and it
   // passed, whatever else this run failed: a run that did not test it says
   // nothing about it.
-  const carried = (state?.jobs ?? []).filter(id => id in ADVISORY && !failed.includes(id) && !passed.includes(id));
-  const jobs = Object.keys(ADVISORY).filter(id => failed.includes(id) || carried.includes(id));
+  const carried = (state?.jobs ?? []).filter(
+    id => id in ADVISORY && !failed.includes(id) && !passed.includes(id)
+  );
+  const jobs = Object.keys(ADVISORY).filter(
+    id => failed.includes(id) || carried.includes(id)
+  );
   const names = failed.map(id => ADVISORY[id]);
   const tests = await failingTests(runId, names, { repository, context });
   const title = `main is red: ${jobs.map(id => ADVISORY[id]).join(", ")} on ${sha.slice(0, 9)}`;
-  const body = issueBody({ sha, jobs, run: Number(runId) }, names, carried.map(id => ADVISORY[id]), runUrl, tests);
+  const body = issueBody(
+    { sha, jobs, run: Number(runId) },
+    names,
+    carried.map(id => ADVISORY[id]),
+    runUrl,
+    tests
+  );
   if (current) {
-    await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { title, body });
+    await write(
+      `repos/${repository}/issues/${current.number}`,
+      context,
+      "PATCH",
+      { title, body }
+    );
     console.log(`main-red-issue: updated #${current.number}: ${title}`);
     return;
   }
   await ensureLabel({ repository, context });
-  await write(`repos/${repository}/issues`, context, "POST", { title, body, labels: [LABEL] });
+  await write(`repos/${repository}/issues`, context, "POST", {
+    title,
+    body,
+    labels: [LABEL],
+  });
   console.log(`main-red-issue: opened: ${title}`);
 }
 
 /** Creates the label on its first use, so the issue it marks can be found again. */
 async function ensureLabel({ repository, context }) {
-  const response = await githubRequest(`repos/${repository}/labels/${LABEL}`, context);
+  const response = await githubRequest(
+    `repos/${repository}/labels/${LABEL}`,
+    context
+  );
   if (response.ok) return;
-  if (response.status !== 404) throw new Error(`GET repos/${repository}/labels/${LABEL}: HTTP ${response.status}`);
+  if (response.status !== 404)
+    throw new Error(
+      `GET repos/${repository}/labels/${LABEL}: HTTP ${response.status}`
+    );
   await write(`repos/${repository}/labels`, context, "POST", {
     name: LABEL,
     color: "b60205",
@@ -202,7 +268,8 @@ async function ensureLabel({ repository, context }) {
 /** A write whose failure throws. */
 async function write(path, context, method, body) {
   const response = await githubRequest(path, context, method, body);
-  if (!response.ok) throw new Error(`${method} ${path}: HTTP ${response.status}`);
+  if (!response.ok)
+    throw new Error(`${method} ${path}: HTTP ${response.status}`);
 }
 
 /**
@@ -213,18 +280,30 @@ async function write(path, context, method, body) {
  */
 async function failingTests(runId, failedNames, { repository, context }) {
   try {
-    const { jobs } = await githubJson(`repos/${repository}/actions/runs/${runId}/jobs?per_page=100`, context);
-    const failedJobs = jobs.filter(job => job.conclusion === "failure" && failedNames.some(name => job.name.startsWith(name)));
+    const { jobs } = await githubJson(
+      `repos/${repository}/actions/runs/${runId}/jobs?per_page=100`,
+      context
+    );
+    const failedJobs = jobs.filter(
+      job =>
+        job.conclusion === "failure" &&
+        failedNames.some(name => job.name.startsWith(name))
+    );
     const tests = new Set();
     let read = false;
     for (const job of failedJobs) {
-      const response = await githubRequest(`repos/${repository}/actions/jobs/${job.id}/logs`, context);
+      const response = await githubRequest(
+        `repos/${repository}/actions/jobs/${job.id}/logs`,
+        context
+      );
       if (!response.ok) continue;
       read = true;
       for (const line of (await response.text()).split("\n")) {
         const match =
           /##\[error\]\s+\d+\) (\[[^\]]+\] › .+?)\s*$/.exec(line) ??
-          /✘\s+\d+\s+(\[[^\]]+\]\s+›\s+.*?)(?:\s+\(retry #\d+\))?\s+\([\d.]+m?s\)\s*$/.exec(line);
+          /✘\s+\d+\s+(\[[^\]]+\]\s+›\s+.*?)(?:\s+\(retry #\d+\))?\s+\([\d.]+m?s\)\s*$/.exec(
+            line
+          );
         if (match) tests.add(match[1]);
       }
     }
@@ -250,17 +329,32 @@ function issueBody(state, failed, carried, runUrl, tests) {
     "",
   ];
   if (carried.length > 0) {
-    lines.push("Still red from an earlier run, and not tested again since:", "", ...carried.map(name => `- **${name}**`), "");
+    lines.push(
+      "Still red from an earlier run, and not tested again since:",
+      "",
+      ...carried.map(name => `- **${name}**`),
+      ""
+    );
   }
   lines.push(`Commit: ${sha}`, `Run: ${runUrl}`, "");
-  if (tests === null) lines.push("The failed jobs' logs could not be read; the run above has the failures.");
-  else if (tests.length === 0) lines.push("The logs name no failing test; the run above has the failures.");
+  if (tests === null)
+    lines.push(
+      "The failed jobs' logs could not be read; the run above has the failures."
+    );
+  else if (tests.length === 0)
+    lines.push(
+      "The logs name no failing test; the run above has the failures."
+    );
   else {
     lines.push("Failing tests:", "");
     lines.push(...tests.slice(0, MAX_TESTS).map(test => `- \`${test}\``));
-    if (tests.length > MAX_TESTS) lines.push(`- and ${tests.length - MAX_TESTS} more`);
+    if (tests.length > MAX_TESTS)
+      lines.push(`- and ${tests.length - MAX_TESTS} more`);
   }
-  lines.push("", "This issue is updated while `main` stays red, and closed once each of these jobs has passed again.");
+  lines.push(
+    "",
+    "This issue is updated while `main` stays red, and closed once each of these jobs has passed again."
+  );
   return lines.join("\n");
 }
 
