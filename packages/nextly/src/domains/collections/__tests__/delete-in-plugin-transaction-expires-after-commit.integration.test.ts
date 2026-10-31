@@ -87,7 +87,7 @@ describe("a collection deleted inside a plugin's transaction (sqlite)", () => {
   it("expires nothing when the transaction rolls back", async () => {
     await expect(
       ctx!.db.transaction(async () => {
-        await ctx!.services.collections.deleteCollection("notes");
+        await ctx!.services.collections.deleteCollection("notes", {});
         throw new Error("rolled back on purpose");
       })
     ).rejects.toThrow("rolled back on purpose");
@@ -98,7 +98,7 @@ describe("a collection deleted inside a plugin's transaction (sqlite)", () => {
   it("expires once the transaction commits, not before", async () => {
     let duringTransaction: string[] = [];
     await ctx!.db.transaction(async () => {
-      await ctx!.services.collections.deleteCollection("notes");
+      await ctx!.services.collections.deleteCollection("notes", {});
       duringTransaction = [...spy.tags];
     });
 
