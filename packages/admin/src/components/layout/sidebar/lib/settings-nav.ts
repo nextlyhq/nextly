@@ -11,7 +11,6 @@
  */
 import {
   Activity,
-  Image,
   Key,
   List,
   Settings,
@@ -125,13 +124,6 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         // one here would change what preset roles grant as a side effect of
         // adding a screen.
         gate: { kind: "permission", permission: "manage-background-jobs" },
-      },
-      {
-        id: "image-sizes",
-        label: "Image Sizes",
-        icon: Image,
-        href: ROUTES.SETTINGS_IMAGE_SIZES,
-        gate: { kind: "permission", permission: READ_SETTINGS },
       },
     ],
   },

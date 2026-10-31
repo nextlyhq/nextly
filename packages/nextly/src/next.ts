@@ -20,8 +20,6 @@
  * ```
  */
 
-import { warnIfCacheComponentsOn } from "./cache-components";
-
 /**
  * Packages that must be loaded from node_modules at runtime
  * instead of being bundled by Next.js.
@@ -107,10 +105,6 @@ const NEXTLY_FILE_TRACING_INCLUDES = [
 export function withNextly<T extends Record<string, unknown>>(
   nextConfig: T
 ): T {
-  // Read while Next.js loads the config, before anything builds or serves:
-  // the earliest place an app with Cache Components on can be told why.
-  warnIfCacheComponentsOn(nextConfig.cacheComponents, "this next.config");
-
   const existing =
     (nextConfig.serverExternalPackages as string[] | undefined) ?? [];
 

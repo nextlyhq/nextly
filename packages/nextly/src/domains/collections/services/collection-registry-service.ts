@@ -633,7 +633,12 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Every cached read of it now describes rows that are gone: expired
       // here, the method every deletion path reaches, with the setting the
       // deleted row held. A delete that removed no row has thrown above.
-      await flushContentChange(expire, this.logger, "a collection was deleted");
+      // Once the delete is durable: inside an enclosing transaction (a
+      // plugin's `ctx.db.transaction` on SQLite) only when that commits, and
+      // never for one that rolls back.
+      await this.afterCommit(() =>
+        flushContentChange(expire, this.logger, "a collection was deleted")
+      );
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;

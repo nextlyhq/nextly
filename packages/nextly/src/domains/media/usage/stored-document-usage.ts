@@ -15,8 +15,10 @@
  *   - its main row holds the values every language shares, recorded under "";
  *   - its translations table, where there is one, holds each language's own
  *     translatable values, recorded under that language;
- *   - its field groups' tables hold their instances per language, recorded
- *     under the language when the field group is translatable, else under "".
+ *   - its field groups' tables hold their instances per language: a
+ *     translated field group's translatable fields recorded under the
+ *     language, and every other value in it, which each language reads the
+ *     same, under "".
  *
  * @module domains/media/usage/stored-document-usage
  */
@@ -27,12 +29,12 @@ import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 import type { ComponentSchemas } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 
 import {
+  collectFieldGroupReferences,
   collectMediaReferences,
   type FieldGroupSchemas,
 } from "./media-references";
@@ -69,8 +71,14 @@ export interface StoredDocumentSource {
 export interface StoredUsageDeps {
   /** Absent when no field-group service is registered. */
   fieldGroupDataService: FieldGroupDataService | undefined;
-  /** The site's language codes; empty when it has no localization. */
+  /**
+   * Every language whose content the site keeps: the active ones and any
+   * removed in Settings and kept inactive (`storedLanguageCodes`). Empty when
+   * it has no localization.
+   */
   locales: readonly string[];
+  /** The adapter's `maxParamsPerQuery`, which no statement passes. */
+  maxParams: number;
 }
 
 /** A field's name, or "" for a field that has none. */
@@ -82,16 +90,6 @@ function nameOf(field: FieldConfig): string {
 /** A stored value, under its field's name or its column's. */
 function storedValue(row: Record<string, unknown>, name: string): unknown {
   return row[name] !== undefined ? row[name] : row[toSnakeCase(name)];
-}
-
-/** Whether any field group a field may hold is translatable. */
-function translatableFieldGroup(
-  field: FieldConfig,
-  schemas: ComponentSchemas
-): boolean {
-  const { single, many } = extractFieldGroupReferences(field);
-  const slugs = [...(single ? [single] : []), ...(many ?? [])];
-  return slugs.some(slug => schemas.get(slug)?.localized === true);
 }
 
 /** The references the main row's shared values make. */
@@ -174,16 +172,25 @@ async function fieldGroupReferences(
       parentTable: source.tableName,
       fieldConfigs: [...source.fields],
       locale: language,
+      // A removed language's instances are kept, and read as stored: what
+      // they use stays recorded until adding the language again shows them.
+      exactLanguage: true,
       reason: "media-usage-field-group-read",
       logContext: { kind: subject.kind, slug: subject.slug },
     });
+    // A shared value is read the same in every language and recorded once,
+    // under "": the rows are keyed by field, language and item.
     for (const field of groupFields) {
-      const locale =
-        language !== undefined && translatableFieldGroup(field, schemas)
-          ? language
-          : "";
-      for (const ref of collectMediaReferences([field], subtrees, schemas)) {
-        refs.push({ ...ref, locale });
+      const found = collectFieldGroupReferences(
+        field,
+        subtrees[nameOf(field)],
+        schemas
+      );
+      for (const { translated, ...ref } of found) {
+        refs.push({
+          ...ref,
+          locale: translated && language !== undefined ? language : "",
+        });
       }
     }
   }
@@ -236,5 +243,5 @@ export async function recordStoredDocumentUsage(
     await removeDocumentUsage(tx, subject);
     return;
   }
-  await replaceDocumentUsage(tx, subject, refs);
+  await replaceDocumentUsage(tx, subject, refs, deps.maxParams);
 }

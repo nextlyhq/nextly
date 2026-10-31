@@ -1320,10 +1320,11 @@ export class EmailTemplateService extends BaseService {
    * back together. Before `nextly migrate` has created the record's table the
    * write runs alone, as it always did.
    *
-   * The email services are never handed a caller's transaction. Inside a
-   * flow that has one open, opening another would take a second connection
-   * that the first may be waiting on, so the write and the record each run
-   * on the pool there, as the write always has.
+   * The email services are never handed a caller's transaction, so inside a
+   * flow that has one open the pair still runs on a transaction of its own:
+   * on SQLite that nests in the caller's as a savepoint, and on PostgreSQL
+   * and MySQL it holds the one other connection the write alone took before,
+   * which never leaves the template written and its record not.
    */
   private async writeTemplateRow<T>(
     templateId: string,
@@ -1334,14 +1335,13 @@ export class EmailTemplateService extends BaseService {
     const { recordEmailTemplateUsage } = await import(
       "../../media/usage/email-template-usage"
     );
-    if (transactionOpenInFlow(this.adapter)) {
-      const result = await write(this.db);
-      await recordEmailTemplateUsage(this.adapter, templateId);
-      return result;
-    }
     return this.adapter.transaction(async tx => {
       const result = await write(tx.getDrizzle<EmailTemplateService["db"]>());
-      await recordEmailTemplateUsage(tx, templateId);
+      await recordEmailTemplateUsage(
+        tx,
+        templateId,
+        this.adapter.getCapabilities().maxParamsPerQuery
+      );
       return result;
     });
   }

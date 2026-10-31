@@ -23,6 +23,11 @@ import {
 
 import type { MediaView } from "../../types/media";
 
+import {
+  DOCUMENT_MIME_TYPES,
+  MEDIA_TYPE_PREFIXES,
+  type MediaCategory,
+} from "./media-categories";
 import { PENDING_DELETE_KEY_PREFIX } from "./pending-delete";
 
 /** The `media` columns the narrowing reads. */
@@ -34,18 +39,48 @@ export interface MediaQueryColumns {
   originalFilename: AnyColumn;
   altText: AnyColumn;
   caption: AnyColumn;
+  /** The item's address, as the library gives it out. */
+  url: AnyColumn;
 }
 
 /** The usage table, as the `unused` view reads it. */
 export type MediaUsageQueryTable = Table & { mediaId: AnyColumn };
+
+/**
+ * A record outside content that keeps a media item chosen from the library by
+ * its address: a user's avatar, the email brand's logo, the site's logos. The
+ * usage record covers content alone, so the `unused` view asks each of these
+ * as well, or it would offer a logo in use for deletion.
+ */
+export interface MediaAddressHolder {
+  table: Table;
+  /** Its columns that may hold an item's address. */
+  columns: readonly AnyColumn[];
+  /**
+   * `exact` for a column holding the address as the library gave it out (an
+   * avatar). `suffix` for one that may hold it made absolute against the
+   * site (the email logo stores `https://site/uploads/a.png` for
+   * `/uploads/a.png`), so a value ending in the address names the item: a
+   * match too many keeps an item out of the view, never one in use in it.
+   */
+  match: "exact" | "suffix";
+}
+
+/** What decides which items are unused. */
+export interface UnusedSources {
+  usage: MediaUsageQueryTable;
+  holders: readonly MediaAddressHolder[];
+  /** How a value ending in another is asked, which differs by dialect. */
+  dialect: "postgresql" | "mysql" | "sqlite";
+}
 
 /** What narrows a page of items. */
 export interface MediaQueryFilter {
   /** A folder's id; `null` or "root" for the items in no folder. */
   folderId?: string | null;
   search?: string;
-  /** A kind of file: the first part of its type, such as "image". */
-  type?: string;
+  /** A kind of file, as the library names it (`media-categories`). */
+  type?: MediaCategory;
   view?: MediaView;
 }
 
@@ -54,12 +89,81 @@ export function missingAltText(media: MediaQueryColumns): SQL {
   return sql`(${media.mimeType} LIKE ${"image/%"} AND (${media.altText} IS NULL OR TRIM(${media.altText}) = ${""}))`;
 }
 
-/** An item no document uses, by the usage record's index on the item. */
+/** A MIME type that starts with `prefix`, which holds no LIKE wildcard. */
+function mimeStartsWith(media: MediaQueryColumns, prefix: string): SQL {
+  return sql`${media.mimeType} LIKE ${`${prefix}%`}`;
+}
+
+/** The items of one kind of file, as `mediaCategoryOf` names each item. */
+function mediaCategoryCondition(
+  media: MediaQueryColumns,
+  category: MediaCategory
+): SQL {
+  const named = Object.entries(MEDIA_TYPE_PREFIXES) as Array<
+    [MediaCategory, string]
+  >;
+  const document = or(
+    ...DOCUMENT_MIME_TYPES.exact.map(type => sql`${media.mimeType} = ${type}`),
+    ...DOCUMENT_MIME_TYPES.prefixes.map(prefix => mimeStartsWith(media, prefix))
+  ) as SQL;
+  if (category === "document") {
+    // An image's type is never a document's, so the order of the checks
+    // `mediaCategoryOf` makes does not change which items this is.
+    return document;
+  }
+  const prefix = named.find(([name]) => name === category)?.[1];
+  if (prefix !== undefined) return mimeStartsWith(media, prefix);
+  // What no kind names, a missing type included.
+  return or(
+    sql`${media.mimeType} IS NULL`,
+    sql`NOT (${or(...named.map(([, p]) => mimeStartsWith(media, p)), document)})`
+  ) as SQL;
+}
+
+/** Whether `value` ends in `suffix`, each a column, on `dialect`. */
+function endsWith(
+  value: AnyColumn,
+  suffix: AnyColumn,
+  dialect: UnusedSources["dialect"]
+): SQL {
+  if (dialect === "postgresql") {
+    return sql`RIGHT(${value}, LENGTH(${suffix})) = ${suffix}`;
+  }
+  if (dialect === "mysql") {
+    // MySQL's LENGTH counts bytes; RIGHT counts characters.
+    return sql`RIGHT(${value}, CHAR_LENGTH(${suffix})) = ${suffix}`;
+  }
+  return sql`SUBSTR(${value}, -LENGTH(${suffix})) = ${suffix}`;
+}
+
+/** Whether one holder keeps the item. */
+function heldBy(
+  media: MediaQueryColumns,
+  holder: MediaAddressHolder,
+  dialect: UnusedSources["dialect"]
+): SQL {
+  const names = holder.columns.map(column =>
+    holder.match === "exact"
+      ? sql`${column} = ${media.url}`
+      : endsWith(column, media.url, dialect)
+  );
+  return sql`EXISTS (SELECT 1 FROM ${holder.table} WHERE ${or(...names)})`;
+}
+
+/**
+ * An item no document uses, by the usage record's index on the item, and no
+ * record outside content keeps by its address.
+ */
 export function unusedItem(
   media: MediaQueryColumns,
-  usage: MediaUsageQueryTable
+  sources: UnusedSources
 ): SQL {
-  return sql`NOT EXISTS (SELECT 1 FROM ${usage} WHERE ${usage.mediaId} = ${media.id})`;
+  const { usage } = sources;
+  const notRecorded = sql`NOT EXISTS (SELECT 1 FROM ${usage} WHERE ${usage.mediaId} = ${media.id})`;
+  const held = sources.holders.map(
+    holder => sql`NOT ${heldBy(media, holder, sources.dialect)}`
+  );
+  return and(notRecorded, ...held) as SQL;
 }
 
 /**
@@ -83,12 +187,13 @@ export function notPendingDelete(media: Pick<MediaQueryColumns, "id">): SQL {
 /**
  * The condition `filter` puts on the items: never one deleted inside the
  * Undo window ({@link notPendingDelete}).
- * `usage` is the usage table, or `null` before `nextly migrate` has created
- * it, when the `unused` view can say nothing and matches no item.
+ * `unused` is what the `unused` view reads, or `null` before `nextly migrate`
+ * has created the usage table, when the view can say nothing and matches no
+ * item.
  */
 export function mediaQueryCondition(
   media: MediaQueryColumns,
-  usage: MediaUsageQueryTable | null,
+  unused: UnusedSources | null,
   filter: MediaQueryFilter
 ): SQL | undefined {
   const conditions: SQL[] = [notPendingDelete(media)];
@@ -112,11 +217,11 @@ export function mediaQueryCondition(
     if (search) conditions.push(search);
   }
   if (filter.type) {
-    conditions.push(sql`${media.mimeType} LIKE ${`${filter.type}/%`}`);
+    conditions.push(mediaCategoryCondition(media, filter.type));
   }
   if (filter.view === "missing-alt") conditions.push(missingAltText(media));
   if (filter.view === "unused") {
-    conditions.push(usage ? unusedItem(media, usage) : sql`1 = 0`);
+    conditions.push(unused ? unusedItem(media, unused) : sql`1 = 0`);
   }
   return and(...conditions);
 }
@@ -127,7 +232,10 @@ export interface MediaLibraryCounts {
   all: number;
   /** Images with no alt text. */
   missingAltText: number;
-  /** Items no document uses; `null` before the usage table exists. */
+  /**
+   * Items no document uses and no avatar or logo keeps; `null` before the
+   * usage table exists.
+   */
   unused: number | null;
   /**
    * Whether the usage record has been built for content written before it

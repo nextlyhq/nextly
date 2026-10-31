@@ -416,8 +416,7 @@ than failing the call, and a value a field `afterChange` hook or a Single's
 `afterUpdate` hook returns does not reshape the service's response. A media
 delete (`ctx.services.media.delete` or `bulkDelete`) called inside it is refused
 with `409 CONFLICT`, so stored files are never removed for a delete that rolls
-back: delete media after the transaction. A focal-point change made inside it
-keeps the superseded image variants rather than deleting them.
+back: delete media after the transaction.
 
 Statements from other requests wait for the transaction or run inside it. Core's
 security writes — sign-out, the refresh-token theft response, failed-attempt and

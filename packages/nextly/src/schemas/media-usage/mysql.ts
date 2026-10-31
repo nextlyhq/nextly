@@ -20,7 +20,7 @@ import { mysqlTable, varchar } from "drizzle-orm/mysql-core";
 import { MEDIA_USAGE_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
 import { media } from "../media/mysql";
 
-import { MEDIA_USAGE_TABLE } from "./table-name";
+import { MEDIA_USAGE_FIELD_PATH_LENGTH, MEDIA_USAGE_TABLE } from "./table-name";
 
 export const nextlyMediaUsageMysql = mysqlTable(
   MEDIA_USAGE_TABLE,
@@ -38,8 +38,11 @@ export const nextlyMediaUsageMysql = mysqlTable(
     // The entry's or template's id; "" for a Single.
     documentId: varchar("document_id", { length: 191 }).notNull(),
     // The field's name, with the names of the groups, repeaters and field
-    // groups it sits in before it, joined by dots.
-    fieldPath: varchar("field_path", { length: 255 }).notNull(),
+    // groups it sits in before it, joined by dots; a longer path is stored
+    // bounded to the column, ending in a hash of the whole path.
+    fieldPath: varchar("field_path", {
+      length: MEDIA_USAGE_FIELD_PATH_LENGTH,
+    }).notNull(),
     // The language whose value uses the item; "" for a value every language
     // shares. The unique index over the six columns stays inside MySQL's
     // 3072-byte key limit: (16 + 191 + 191 + 255 + 35 + 36) characters at

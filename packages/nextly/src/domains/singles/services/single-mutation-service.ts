@@ -1376,15 +1376,21 @@ export class SingleMutationService extends BaseService {
     }
     // Loaded when a Single's usage is recorded, not with the service.
     const { recordSingleMediaUsage } = await import("./single-media-usage");
-    await this.adapter.transaction(tx =>
-      recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
+    const { lockDocument } = await import(
+      "../../media/usage/media-usage-store"
+    );
+    await this.adapter.transaction(async tx => {
+      // Locked before anything is read, so a save in flight is read as it
+      // leaves the Single (`lockDocument`).
+      await lockDocument(tx, singleMeta.tableName, String(row.id));
+      await recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
         slug,
         rowId: row.id,
         tableName: singleMeta.tableName,
         fields: singleMeta.fields ?? [],
         companion,
-      })
-    );
+      });
+    });
     return true;
   }
 
@@ -1394,7 +1400,7 @@ export class SingleMutationService extends BaseService {
       adapter: this.adapter,
       logger: this.logger,
       fieldGroupDataService: this.fieldGroupDataService,
-      localization: this.localization,
+      localization: this.localizationSource,
     };
   }
 

@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { chainTo, loads, SRC } from "../../../../__tests__/static-import-walk";
+import { chainTo, loads, SRC } from "../../../../__tests__/source-import-walk";
 
 /** What the registry, the CLI and the route handler load with them. */
 const ENTRIES = ["di/register.ts", "cli/program.ts", "routeHandler.ts"];

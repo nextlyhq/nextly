@@ -796,6 +796,13 @@ exports[`each code, as a command ends with it > MEDIA_CONFIG_OUTSIDE_PROJECT 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/media-config-outside-project  (MEDIA_CONFIG_OUTSIDE_PROJECT)"
 `;
 
+exports[`each code, as a command ends with it > MEDIA_REINDEX_OUTSIDE_PROJECT 1`] = `
+"✗ Nothing was rebuilt: the command was run from outside /home/you/app.
+  Why:  The database settings were read before --cwd named /home/you/app, so they may be another project's.
+  Next: Run the command from /home/you/app to rebuild its record.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-reindex-outside-project  (MEDIA_REINDEX_OUTSIDE_PROJECT)"
+`;
+
 exports[`each code, as a command ends with it > MEDIA_STORAGE_UNLISTABLE 1`] = `
 "✗ The media storage (uploadthing) cannot list its files, so it cannot be searched for left-behind thumbnails.
   Why:  The uploadthing storage adapter offers no listing of the files it holds. Nothing was changed.
@@ -1635,6 +1642,13 @@ exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] =
   Why:  \`nextly upgrade\` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
   Next: Rename it, or re-run with \`--target-table-name <name>\`.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > WIDGET_GENERATE_CANCELLED 1`] = `
+"✗ \`nextly generate:widget\` was cancelled, and wrote no widget.
+  Why:  A prompt was closed before it was answered.
+  Next: Run \`nextly generate:widget\` again and answer its prompts, or give the answers as flags, as in \`nextly generate:widget open-orders --view figure --no-collection\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/widget-generate-cancelled  (WIDGET_GENERATE_CANCELLED)"
 `;
 
 exports[`each code, as a command ends with it > WORKFLOW_CANNOT_ATTACH 1`] = `

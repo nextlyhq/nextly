@@ -1,3 +1,4 @@
+import { CACHE_TAG_EXPIRIES_TABLE } from "../schemas/cache-tag-expiries/table-name";
 import { DASHBOARD_PINS_TABLE } from "../schemas/dashboard-pins/table-name";
 import { DASHBOARD_PREFERENCES_TABLE } from "../schemas/dashboard-preferences/table-name";
 import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
@@ -703,6 +704,15 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${LIMIT_STORE_TABLE}" ("expires_at")`,
     `CREATE INDEX IF NOT EXISTS "nls_generation_idx"
       ON "${LIMIT_STORE_TABLE}" ("generation")`,
+    // When each cache tag last expired, read by every instance's cache
+    // handlers. An integer of milliseconds, as the Drizzle bundle declares.
+    `CREATE TABLE IF NOT EXISTS "${CACHE_TAG_EXPIRIES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "tag" TEXT NOT NULL,
+      "expired_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "ncte_expired_at_idx"
+      ON "${CACHE_TAG_EXPIRIES_TABLE}" ("expired_at")`,
     // The two-factor challenges already answered, so an answer is accepted
     // once on every instance. An integer of milliseconds for the expiry, as
     // the Drizzle bundle declares.

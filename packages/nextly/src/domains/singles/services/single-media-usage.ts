@@ -13,7 +13,10 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { markWriteIntegrityFailure } from "../../../shared/write-integrity";
 import { transactionTableProbe } from "../../dashboard/table-presence";
-import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  storedLanguageCodes,
+  type LocalizationSource,
+} from "../../i18n/localization-source";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { mediaUsagePresent } from "../../media/usage/media-usage-store";
@@ -23,8 +26,11 @@ export interface SingleMediaUsageDeps {
   adapter: DrizzleAdapter;
   logger?: { warn(message: string, context?: Record<string, unknown>): void };
   fieldGroupDataService: FieldGroupDataService | undefined;
-  /** The site's languages; absent when it has no localization. */
-  localization: SanitizedLocalizationConfig | undefined;
+  /**
+   * Where the site's languages come from: the active ones, and in Settings
+   * the removed ones it keeps. Absent when it has no localization.
+   */
+  localization: LocalizationSource;
 }
 
 /**
@@ -77,7 +83,8 @@ export async function recordSingleMediaUsage(
       tx,
       {
         fieldGroupDataService: deps.fieldGroupDataService,
-        locales: deps.localization?.locales.map(l => l.code) ?? [],
+        locales: storedLanguageCodes(deps.localization),
+        maxParams: deps.adapter.getCapabilities().maxParamsPerQuery,
       },
       // A Single is one document, so it has no entry id of its own.
       { kind: "single", slug: single.slug, documentId: "" },

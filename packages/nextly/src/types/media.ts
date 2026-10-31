@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 
+import { mediaCategoryOf } from "../domains/media/media-categories";
 import type { ServiceErrorCode } from "../errors/error-codes";
 
 // ========================================
@@ -21,34 +22,6 @@ export const MediaTypeSchema = z.enum([
 ]);
 
 export type MediaType = z.infer<typeof MediaTypeSchema>;
-
-// ========================================
-// IMAGE SIZE VARIANT
-// ========================================
-
-/**
- * Metadata for a single generated image size variant.
- * Stored in the media.sizes JSONB field, keyed by size name.
- */
-export interface ImageSizeVariant {
-  url: string;
-  path: string;
-  width: number;
-  height: number;
-  filesize: number;
-  mimeType: string;
-  filename: string;
-}
-
-export const ImageSizeVariantSchema = z.object({
-  url: z.string(),
-  path: z.string(),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  filesize: z.number().int().positive(),
-  mimeType: z.string(),
-  filename: z.string(),
-});
 
 // ========================================
 // MEDIA RECORD SCHEMA
@@ -67,7 +40,6 @@ export const MediaSchema = z.object({
   thumbnailUrl: z.string().url().nullable(),
   focalX: z.number().int().min(0).max(100).nullable().optional(),
   focalY: z.number().int().min(0).max(100).nullable().optional(),
-  sizes: z.record(z.string(), ImageSizeVariantSchema).nullable().optional(),
   altText: z.string().nullable(),
   caption: z.string().nullable(),
   tags: z.array(z.string()).nullable(),
@@ -145,7 +117,8 @@ export type MediaParams = z.infer<typeof MediaParamsSchema>;
 
 /**
  * The views beside the folders. `missing-alt` is the images with no alt text;
- * `unused` is the items the usage record finds no document using.
+ * `unused` is the items the usage record finds no document using and no
+ * avatar or logo keeps.
  */
 const MEDIA_VIEWS = ["missing-alt", "unused"] as const;
 export type MediaView = (typeof MEDIA_VIEWS)[number];
@@ -205,23 +178,11 @@ export interface DeleteMediaResponse {
 // ========================================
 
 /**
- * Get media type from MIME type
+ * Get media type from MIME type: the kind the media library shows the file
+ * as, and narrows to (`mediaCategoryOf`).
  */
 export function getMediaTypeFromMime(mimeType: string): MediaType {
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("video/")) return "video";
-  if (mimeType.startsWith("audio/")) return "audio";
-  if (
-    mimeType.includes("pdf") ||
-    mimeType.includes("document") ||
-    mimeType.includes("text") ||
-    mimeType.includes("word") ||
-    mimeType.includes("sheet") ||
-    mimeType.includes("presentation")
-  ) {
-    return "document";
-  }
-  return "other";
+  return mediaCategoryOf(mimeType);
 }
 
 /**

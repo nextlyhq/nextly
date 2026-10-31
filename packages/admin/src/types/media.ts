@@ -46,19 +46,6 @@ export type MediaTypeFilter = "all" | MediaType;
  * };
  * ```
  */
-/**
- * Metadata for a single generated image size variant.
- */
-export interface ImageSizeVariant {
-  url: string;
-  path: string;
-  width: number;
-  height: number;
-  filesize: number;
-  mimeType: string;
-  filename: string;
-}
-
 export interface Media {
   id: string;
   filename: string;
@@ -72,7 +59,6 @@ export interface Media {
   thumbnailUrl?: string | null;
   focalX?: number | null; // Crop point X (0-100, percentage from left)
   focalY?: number | null; // Crop point Y (0-100, percentage from top)
-  sizes?: Record<string, ImageSizeVariant> | null; // Generated image size variants
   altText?: string | null;
   caption?: string | null;
   tags?: string[] | null;

@@ -13,7 +13,8 @@ import { gridBounds } from "../../../__tests__/grid-bounds";
 import { drawnSpan } from "../../../sizes";
 import type { ArrangedWidget } from "../../useDashboardArrangement";
 import { finalPositionAt, type DrawnCard } from "../drop-geometry";
-import { CELL_PLACEMENT_ATTRIBUTE, useCardDrag } from "../useCardDrag";
+import { CELL_PLACEMENT_ATTRIBUTE } from "../cell-placement";
+import { useCardDrag } from "../useCardDrag";
 
 const WIDTH = 1200;
 const HEIGHT = 100;

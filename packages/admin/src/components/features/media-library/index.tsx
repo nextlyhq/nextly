@@ -87,7 +87,7 @@ import { useMediaFileDrop } from "./MediaUploadDropzone/useMediaFileDrop";
 import { useMediaUsageState } from "./MediaUsedIn";
 import { MediaViewer } from "./MediaViewer";
 import { MoveToFolderDialog } from "./MoveToFolderDialog";
-import { UploadTray } from "./UploadTray";
+import { LazyUploadTray } from "./UploadTray/LazyUploadTray";
 import { useUploadQueue } from "./UploadTray/useUploadQueue";
 
 /**
@@ -1080,7 +1080,7 @@ export function MediaLibrary({
 
       {canEdit && mediaReplace.element}
 
-      <UploadTray
+      <LazyUploadTray
         queue={uploadQueue}
         placement="floating"
         returnFocusRef={headingRef}

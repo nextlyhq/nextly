@@ -96,7 +96,10 @@ function Probe(over: Partial<AddToReleaseProps>) {
       {/* The action as the editor would draw it, so a test opens the picker the
           way an author does rather than by reaching into state. */}
       {release.contributed === null ? null : (
-        <button type="button" onClick={release.contributed.binding.onSelect}>
+        <button
+          type="button"
+          onClick={() => release.contributed?.binding.onSelect({ values: {} })}
+        >
           {release.contributed.action.label}
         </button>
       )}
@@ -122,18 +125,19 @@ describe("the action is offered", () => {
   it("to a caller who can assemble and publish this document", () => {
     show();
     expect(text("present")).toBe("present");
-    expect(text("label")).toBe("Add to release");
+    expect(text("label")).toBe("Add to release…");
   });
 
-  it("as a menu action, not a toolbar button", () => {
+  it("on the Publish split's arrow, not as a toolbar button", () => {
     /*
      * The placement is the point of contributing a description rather than a
-     * control. Scheduling a release is a document-management act like Duplicate,
-     * and as a toolbar button it also widened the action cluster — which is what
-     * pushed Save under the version-history panel.
+     * control. Adding to a release decides when this goes live, so it sits
+     * beside Schedule publish… on the primary action's arrow; as a toolbar
+     * button it widened the action cluster, which is what pushed Save under
+     * the version-history panel.
      */
     show();
-    expect(text("placement")).toBe("menu/document");
+    expect(text("placement")).toBe("publish-menu/-");
   });
 
   it("carrying no reason when it can actually be used", () => {
@@ -215,6 +219,20 @@ describe("the picker's open state", () => {
     expect(picker()).not.toBeNull();
 
     rerender(<Probe entryId="e2" />);
+    expect(picker()).toBeNull();
+  });
+
+  it("stays closed on coming back to the document it was open for", async () => {
+    // Leaving closes it: a picker the author left behind by navigating away
+    // does not reappear, unasked, when they return.
+    const { rerender } = render(<Probe entryId="e1" />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /add to release/i })
+    );
+    expect(picker()).not.toBeNull();
+
+    rerender(<Probe entryId="e2" />);
+    rerender(<Probe entryId="e1" />);
     expect(picker()).toBeNull();
   });
 
