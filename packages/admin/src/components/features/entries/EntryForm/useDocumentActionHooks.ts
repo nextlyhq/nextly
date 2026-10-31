@@ -78,12 +78,14 @@ export function useDocumentActions(): DocumentActions | null {
 /**
  * An action in its published shape. The editor's arrow beside the primary
  * action (`publish-menu`) is not a placement the published contract names, so
- * a plugin's view is handed such an action as a `menu` one: where the editor
- * itself draws it when there is no arrow to draw it on.
+ * a plugin's view is handed such an action as a `menu` one in the `document`
+ * group: where the editor itself draws it when there is no arrow to draw it
+ * on, and where Add to release sat before the arrow, so a view drawing the
+ * menu by group still finds it.
  */
 function publishedAction(action: EditorDocumentAction): DocumentAction {
   return action.placement === "publish-menu"
-    ? { ...action, placement: "menu" }
+    ? { ...action, placement: "menu", group: "document" }
     : { ...action, placement: action.placement };
 }
 

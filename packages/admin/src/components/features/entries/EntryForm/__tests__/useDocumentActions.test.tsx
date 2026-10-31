@@ -100,6 +100,73 @@ describe("useDocumentActions", () => {
     ).toBe(true);
   });
 
+  it("hands a way to publish to a view in the document group, where Add to release always was", () => {
+    // A view that draws the published `document` and `danger` groups must
+    // still find these: before the arrow, Add to release was a document row.
+    const { result } = renderHook(() => useDocumentActions(), {
+      wrapper: hostedBy({
+        onSaveDraft: () => Promise.resolve(saved),
+        onPublish: () => Promise.resolve(saved),
+        contributedActions: [
+          {
+            action: {
+              id: "add-to-release",
+              label: "Add to release…",
+              placement: "publish-menu",
+            },
+            binding: { onSelect: () => undefined },
+          },
+        ],
+      }),
+    });
+    const add = result.current?.actions.find(
+      action => action.id === "add-to-release"
+    );
+    expect(add?.placement).toBe("menu");
+    expect(add?.group).toBe("document");
+  });
+
+  it("holds a way to publish while a colleague holds the document, as Publish is held", () => {
+    // Scheduling or adding to a release publishes the document later, so it
+    // is a write the lock withholds. Pinning, a menu action that writes
+    // nothing of the document's, is the control: it stays usable.
+    const { result } = renderHook(() => useDocumentActions(), {
+      wrapper: hostedBy({
+        documentLocked: true,
+        onSaveDraft: () => Promise.resolve(saved),
+        onPublish: () => Promise.resolve(saved),
+        contributedActions: [
+          {
+            action: {
+              id: "schedule-publish",
+              label: "Schedule publish…",
+              placement: "publish-menu",
+            },
+            binding: { onSelect: () => undefined },
+          },
+          {
+            action: {
+              id: "pin",
+              label: "Pin to dashboard",
+              placement: "menu",
+              group: "document",
+            },
+            binding: { onSelect: () => undefined },
+          },
+        ],
+      }),
+    });
+    const find = (id: string) =>
+      result.current?.actions.find(action => action.id === id);
+    expect(find("publish")?.disabledReason).toBe(
+      "Someone else is editing this document"
+    );
+    expect(find("schedule-publish")?.disabledReason).toBe(
+      "Someone else is editing this document"
+    );
+    expect(find("pin")?.disabledReason).toBeUndefined();
+  });
+
   it("carries the reason the header would show for an action that cannot run now", () => {
     const { result } = renderHook(() => useDocumentActions(), {
       wrapper: hostedBy({

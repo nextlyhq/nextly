@@ -578,7 +578,9 @@ export function useDocumentActionBindings({
     actionBindings,
     // A contribution acts on the document too (adding it to a release), which
     // is not offered where every write to it is refused.
-    isReadingHistory || writesRefused ? [] : contributedActions,
+    isReadingHistory || writesRefused
+      ? []
+      : heldUnderLock(contributedActions, documentLocked),
     currentValues
   );
 
@@ -880,9 +882,7 @@ export function refusalReasons({
    * Reading verbs are deliberately left alone: discarding your own unsaved
    * changes, previewing and opening history are yours to do whoever holds the row.
    */
-  const lockedReason = documentLocked
-    ? "Someone else is editing this document"
-    : undefined;
+  const lockedReason = documentLocked ? LOCKED_REASON : undefined;
   const invalidReason = isInvalid
     ? "Fix the errors on this page first."
     : undefined;
@@ -910,6 +910,35 @@ export function refusalReasons({
           ? "invalid"
           : "refused",
   };
+}
+
+/** Why a write is refused while a colleague holds the document. */
+const LOCKED_REASON = "Someone else is editing this document";
+
+/**
+ * The page's contributions, with each way to publish held while a colleague
+ * holds the document, as Publish is: scheduling the document or adding it to
+ * a release publishes it later, which is a write the lock withholds. Other
+ * contributions (a reader's own pin) write nothing of the document's and stay
+ * usable. Held through the binding's transient reason, so a permission the
+ * page already refused with still speaks first.
+ */
+function heldUnderLock(
+  contributed: readonly ContributedAction[],
+  documentLocked: boolean
+): readonly ContributedAction[] {
+  if (!documentLocked) return contributed;
+  return contributed.map(entry =>
+    entry.action.placement === "publish-menu"
+      ? {
+          ...entry,
+          binding: {
+            ...entry.binding,
+            disabledReason: entry.binding.disabledReason ?? LOCKED_REASON,
+          },
+        }
+      : entry
+  );
 }
 
 /** The document's one save state, from the form and the storing gate. */
