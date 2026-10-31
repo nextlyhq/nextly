@@ -216,6 +216,22 @@ describe('"You\'re all set", once', () => {
     expect(stored.has("ana:setup-retired")).toBe(false);
   });
 
+  it("never retires over a sample step whose answer could not be read, though the route refuses this reader", async () => {
+    steps.mockResolvedValue({
+      known: true,
+      steps: [
+        { kind: "sample", status: "open", unreadable: true },
+        { kind: "invite", status: "done" },
+      ],
+      done: 1,
+      total: 2,
+    });
+    expect(
+      (await setupCardData(person, now, { sampleRefused: true })).allSet
+    ).toBe(false);
+    expect(stored.has("ana:setup-retired")).toBe(false);
+  });
+
   it("counts a skipped step as done, so a skip can finish setup", async () => {
     await changeSetupState("ana", { skip: { kind: "invite", skipped: true } });
     const card = await setupCardData(person, now);
