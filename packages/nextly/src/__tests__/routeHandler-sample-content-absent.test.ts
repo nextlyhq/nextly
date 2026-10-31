@@ -51,6 +51,8 @@ describe("the sample-content route, where the project ships none", () => {
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("");
+    // Never kept: a cached 404 would hide a route the project adds here later.
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("answers a GET or a POST 404 in the canonical error envelope", async () => {
@@ -62,6 +64,7 @@ describe("the sample-content route, where the project ships none", () => {
       ),
     ]) {
       expect(response.status).toBe(404);
+      expect(response.headers.get("cache-control")).toBe("no-store");
       expect(response.headers.get("content-type")).toBe(
         "application/problem+json"
       );

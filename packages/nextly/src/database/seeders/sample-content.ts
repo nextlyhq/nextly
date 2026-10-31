@@ -760,6 +760,10 @@ export function isSampleContentPath(params: readonly string[]): boolean {
  * invalid-route 400 before, which the card could read only as "not known":
  * the step stayed open as unreadable and the probe was asked again on every
  * read of the card. A HEAD, the card's probe, is answered with no body.
+ *
+ * Never stored: a 404 is cacheable by default, and a kept one would hide the
+ * route a project adds at this address later, from the browser and from any
+ * shared cache between it and the site.
  */
 export function sampleContentNotShipped(request: Request): Response {
   const answer = buildErrorResponse(
@@ -769,6 +773,7 @@ export function sampleContentNotShipped(request: Request): Response {
     }),
     { requestId: readOrGenerateRequestId(request) }
   );
+  answer.headers.set("Cache-Control", "no-store");
   // The envelope's status and headers, without its body.
   return request.method === "HEAD"
     ? new Response(null, { status: answer.status, headers: answer.headers })

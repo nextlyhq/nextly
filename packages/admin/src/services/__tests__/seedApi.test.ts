@@ -82,7 +82,13 @@ describe("seedApi", () => {
       [404, "no sample-content route in this project", {}],
       [400, "an admin API that refuses a path it does not serve", {}],
       [405, "a route that does not answer HEAD", {}],
+      [410, "a route that is gone", {}],
+      [501, "a server that does not implement HEAD", {}],
+      // A 4xx that may not hold on the next ask stays not known, so the
+      // probe is asked again rather than hiding the offer for good.
       [408, "a request that timed out", { unknown: true }],
+      [409, "a conflict that may clear", { unknown: true }],
+      [425, "too early", { unknown: true }],
       [429, "too many requests", { unknown: true }],
       [500, "the route failing", { unknown: true }],
       [503, "the server still starting", { unknown: true }],
@@ -107,7 +113,7 @@ describe("seedApi", () => {
     // no sample-content route of its own, on every dashboard load. Read as
     // "not known", the step stayed open as unreadable and was asked again on
     // every read of the card.
-    it("reads an unexpected 4xx as no offer, said once at debug level and never as a console error", async () => {
+    it("reads a 400, the old catch-all's answer, as no offer, said once at debug level and never as a console error", async () => {
       const consoleError = vi
         .spyOn(console, "error")
         .mockImplementation(() => {});
@@ -124,8 +130,18 @@ describe("seedApi", () => {
       expect(consoleError).not.toHaveBeenCalled();
     });
 
-    it("says nothing at debug level for an answer the route's contract gives", async () => {
-      for (const status of [403, 404, 503]) {
+    it("asks without the browser's cache, so a kept answer cannot hide a route added since", async () => {
+      const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      await seedApi.probe();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/admin/api/seed",
+        expect.objectContaining({ method: "HEAD", cache: "no-store" })
+      );
+    });
+
+    it("says nothing at debug level for an answer the route's contract gives, or one asked again", async () => {
+      for (const status of [403, 404, 409, 429, 503]) {
         global.fetch = vi.fn(
           async () => new Response(null, { status })
         ) as unknown as typeof fetch;
