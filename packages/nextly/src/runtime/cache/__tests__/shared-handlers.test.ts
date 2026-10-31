@@ -16,6 +16,7 @@ import { applyCache, type UnstableCache } from "../cached-find";
 import IncrementalHandler from "../incremental-cache-handler";
 import { registerCachedRead, setCachedRead } from "../registered-read";
 import {
+  noteCachedRead,
   publicReadLifetime,
   UNSHARED_READ_LIFETIME_SECONDS,
 } from "../shared-handlers";
@@ -62,7 +63,7 @@ describe("a cached public read without nextly's cache handlers, in production", 
   });
 
   it("is said once per process, with the settings that lift it", () => {
-    for (let i = 0; i < 50; i++) publicReadLifetime(false, i % 2 === 0);
+    for (let i = 0; i < 50; i++) noteCachedRead(i % 2 === 0);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toMatchObject({
       kind: "cache-handlers-not-shared",
@@ -101,11 +102,52 @@ describe("a cached public read without nextly's cache handlers, in production", 
   });
 });
 
+describe("a read outside any scope Next.js caches in", () => {
+  /** `unstable_cache` outside a request or build, as Next.js answers there. */
+  const noScope: UnstableCache = () => async () => {
+    throw new Error("Invariant: incrementalCache missing in unstable_cache");
+  };
+  const working: UnstableCache = fn => fn;
+  const read = (cache: UnstableCache | null) =>
+    applyCache(cache, async () => "row", {
+      keyParts: ["notes"],
+      tags: ["nextly:notes"],
+    });
+
+  it("runs uncached and says nothing, and a later read that is cached still says it once", async () => {
+    await expect(read(noScope)).resolves.toBe("row");
+    expect(warn).not.toHaveBeenCalled();
+
+    await read(working);
+    await read(working);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('through the app\'s "use cache" function, says nothing outside the App Router either', async () => {
+    let inScope = false;
+    registerCachedRead(async () => {
+      if (!inScope) {
+        throw new Error(
+          '"use cache" cannot be used outside of App Router. Expected a WorkStore.'
+        );
+      }
+      return "row";
+    }, "true");
+    await expect(read(null)).resolves.toBe("row");
+    expect(warn).not.toHaveBeenCalled();
+
+    inScope = true;
+    await read(null);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a cached public read nextly's cache handlers serve", () => {
   it("keeps its lifetime once Next.js constructs nextly's incremental handler", () => {
     new IncrementalHandler();
     expect(publicReadLifetime(false, false)).toBe(false);
     expect(publicReadLifetime(300, false)).toBe(300);
+    noteCachedRead(false);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -135,6 +177,7 @@ describe("a cached public read outside production", () => {
     vi.stubEnv("NODE_ENV", "development");
     expect(publicReadLifetime(false, false)).toBe(false);
     expect(publicReadLifetime(300, true)).toBe(300);
+    noteCachedRead(false);
     expect(warn).not.toHaveBeenCalled();
   });
 });
