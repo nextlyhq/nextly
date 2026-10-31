@@ -79,11 +79,14 @@ function preview(
     widget = WIDGET,
     shown = {},
     tier,
+    size,
   }: {
     widget?: DashboardWidget;
     shown?: { answerSize?: { tier: "small" | "medium" | "large" } };
     /** The tier the card's real width gives it. */
     tier?: "small" | "medium" | "large";
+    /** The size the card is drawn at on the dashboard. */
+    size?: { w: number; h: number };
   } = {}
 ) {
   return renderHook(
@@ -95,6 +98,7 @@ function preview(
         draft,
         shown: { slot: SHOWN, updatedAt: null, isFetching: false, ...shown },
         ...(tier === undefined ? {} : { tier }),
+        ...(size === undefined ? {} : { size }),
       }),
     { wrapper, initialProps: { draft: initialDraft } }
   );
@@ -160,6 +164,43 @@ describe("the settings sheet's preview", () => {
     await waitFor(() => expect(sent()).toHaveLength(1));
     expect(sent()[0]?.[0]?.limit).toBe(small);
     expect(result.current.answerSize).toMatchObject({ tier: "small" });
+  });
+
+  it("asks again when only the density changes, as many rows as the density chosen draws", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const query = {
+      source: "collection:posts",
+      op: "list" as const,
+      limit: 10,
+    };
+    // The control: at this height a compact list draws more rows than a default one, so the
+    // answer the card was fetched with is too short for the compact preview.
+    const compact = queryForTier(query, "large", "compact", 4).limit;
+    expect(compact).not.toBe(queryForTier(query, "large", "default", 4).limit);
+    const widget: DashboardWidget = {
+      ...WIDGET,
+      query,
+      settings: [
+        {
+          name: "density",
+          type: "select",
+          label: "Density",
+          defaultValue: "default",
+          options: [
+            { label: "Default", value: "default" },
+            { label: "Compact", value: "compact" },
+          ],
+        },
+      ],
+    };
+    const { result, rerender } = preview({}, { widget, size: { w: 4, h: 4 } });
+    rerender({ draft: { density: "compact" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    expect(sent()[0]?.[0]?.limit).toBe(compact);
+    expect(result.current.answerSize).toMatchObject({ density: "compact" });
   });
 
   it("draws the card's own answer with the tier it was fetched at", () => {

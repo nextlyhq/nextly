@@ -160,6 +160,20 @@ function usePreviewPlacement(args: {
   }, [previewId, widget, draft, sources, size, tier]);
 }
 
+/**
+ * What a card asks with `config`, and the density its answer is sized for: a density alone
+ * changes how many rows the answer holds, so the card's own answer, fetched at its stored
+ * density, does not serve a preview at another one.
+ */
+function askingAt(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined,
+  sources: ReturnType<typeof useBranding>["widgetSources"]
+): string {
+  const density = listDensityOf(settingsAsAsked(widget, config, sources));
+  return `${questionOf(widget, config, sources)}|${density}`;
+}
+
 export function useSettingsPreview(args: {
   /** The widget as declared, before any settings apply. */
   widget: DashboardWidget;
@@ -194,8 +208,8 @@ export function useSettingsPreview(args: {
   }, [widget, draft, sources, heading.title]);
   const subtitle =
     heading.subtitle === undefined ? {} : { subtitle: heading.subtitle };
-  const asking = questionOf(widget, draft, sources);
-  const sameQuestion = asking === questionOf(widget, stored, sources);
+  const asking = askingAt(widget, draft, sources);
+  const sameQuestion = asking === askingAt(widget, stored, sources);
   // The question settles before it is asked, so a run of changes asks once.
   const settled = useDebouncedValue(asking, PREVIEW_ASK_DELAY_MS);
 
