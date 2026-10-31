@@ -61,7 +61,6 @@
   "src/schemas/nextly-i18n-archive/ddl.ts": 1,
   "src/services/collection-file-manager.ts": 1,
   "src/services/general-settings/general-settings-service.ts": 1,
-  "src/services/image-size.ts": 3,
   "src/services/index.ts": 1,
   "src/services/lib/permissions.ts": 1,
   "src/services/system/system-table-service.ts": 1,
