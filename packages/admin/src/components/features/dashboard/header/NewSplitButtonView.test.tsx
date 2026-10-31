@@ -28,25 +28,21 @@ const pages = collection("pages", "Page");
 const authors = collection("authors", "Author");
 
 function draw(creatable: ApiCollection[], recentSlugs: string[] = []) {
-  const onCreate = vi.fn();
   const menu = newMenu({
     creatable,
     recentSlugs,
     sidebarCollections: creatable,
   });
-  const view = render(<NewSplitButtonView menu={menu} onCreate={onCreate} />);
-  return { onCreate, ...view };
+  return render(<NewSplitButtonView menu={menu} />);
 }
 
 describe("NewSplitButtonView", () => {
   beforeEach(() => vi.mocked(navigateTo).mockClear());
 
-  it("creates the recent type from its main part, as a link", async () => {
-    const { onCreate } = draw([posts, pages, authors], ["pages"]);
+  it("creates the recent type from its main part, as a link", () => {
+    draw([posts, pages, authors], ["pages"]);
     const main = screen.getByRole("link", { name: "New Page" });
     expect(main).toHaveAttribute("href", "/admin/collections/pages/create");
-    await userEvent.setup().click(main);
-    expect(onCreate).toHaveBeenCalledWith("pages");
   });
 
   it("creates the first type in sidebar order when none is recent", () => {
@@ -56,7 +52,7 @@ describe("NewSplitButtonView", () => {
 
   it("lists recent types, then every type, and creates one by keyboard", async () => {
     const user = userEvent.setup();
-    const { onCreate } = draw([posts, pages, authors], ["authors"]);
+    draw([posts, pages, authors], ["authors"]);
     screen.getByRole("button", { name: "Choose what to create" }).focus();
     await user.keyboard("{Enter}");
     // Three types offer no search box: the list itself takes the keys.
@@ -66,7 +62,6 @@ describe("NewSplitButtonView", () => {
     ).toEqual(["Author", "Post", "Page", "Author"]);
     // The first option starts selected; one step down is the first of every type.
     await user.keyboard("{ArrowDown}{Enter}");
-    expect(onCreate).toHaveBeenCalledWith("posts");
     expect(navigateTo).toHaveBeenCalledWith("/admin/collections/posts/create");
     expect(screen.queryByRole("option")).toBeNull();
   });
@@ -110,6 +105,54 @@ describe("NewSplitButtonView", () => {
       .click(screen.getByRole("button", { name: "Choose what to create" }));
     expect(screen.getAllByRole("option")).toHaveLength(10);
     expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("cuts a long type's label short on screen, never in its name", () => {
+    const singular =
+      "Quarterly regional partner enablement programme submission";
+    draw([collection("enablement", singular)]);
+    const main = screen.getByRole("link", { name: `New ${singular}` });
+    // The whole label is the title a pointer shows, and the text is cut by
+    // the label's own box, inside a main part held to a width.
+    expect(main).toHaveAttribute("title", `New ${singular}`);
+    expect(main).toHaveClass("min-w-0", "max-w-64");
+    expect(screen.getByTestId("dashboard-new-primary-label")).toHaveClass(
+      "truncate"
+    );
+  });
+
+  it("draws two sections of one heading as two, each with its own types", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const menu = newMenu({
+        creatable: [
+          { ...collection("deals", "Deal"), admin: { sidebarGroup: "shop" } },
+          {
+            ...collection("orders", "Order"),
+            admin: { isPlugin: true, group: "Commerce" },
+          },
+        ],
+        recentSlugs: [],
+        sidebarCollections: [],
+        customGroups: [{ slug: "shop", name: "Commerce" }],
+      });
+      render(<NewSplitButtonView menu={menu} />);
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Choose what to create" }));
+      expect(
+        screen
+          .getAllByRole("group", { name: "Commerce" })
+          .map(group => group.textContent)
+      ).toEqual(["Deal", "Order"]);
+      // React names a key two siblings share; none may be shared here.
+      const keyWarnings = errors.mock.calls.filter(call =>
+        String(call[0]).includes("same key")
+      );
+      expect(keyWarnings).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("draws nothing when nothing is creatable", () => {

@@ -10,10 +10,7 @@
 import type { JSX } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import {
-  useDashboardNewTypes,
-  useRecordNewType,
-} from "@admin/hooks/queries/useDashboardNewTypes";
+import { useDashboardNewTypes } from "@admin/hooks/queries/useDashboardNewTypes";
 import { useCreatableCollections } from "@admin/hooks/useCreatableCollections";
 import { useSidebarCollectionList } from "@admin/hooks/useSidebarContentLists";
 
@@ -25,7 +22,6 @@ export function NewSplitButton(): JSX.Element | null {
   // A failed or pending read of the recent types leaves the main part on the
   // first type in sidebar order: recent types are a convenience, never a gate.
   const { data: recentSlugs } = useDashboardNewTypes();
-  const recordNewType = useRecordNewType();
   const { items: sidebarCollections } = useSidebarCollectionList();
   const branding = useBranding();
   const menu = newMenu({
@@ -35,5 +31,5 @@ export function NewSplitButton(): JSX.Element | null {
     customGroups: branding?.customGroups,
     plugins: branding?.plugins,
   });
-  return <NewSplitButtonView menu={menu} onCreate={recordNewType} />;
+  return <NewSplitButtonView menu={menu} />;
 }

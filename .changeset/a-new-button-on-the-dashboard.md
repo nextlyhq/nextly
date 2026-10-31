@@ -34,5 +34,13 @@ creates the type a person created most recently (or the first they may
 create), and its menu lists the recent types, then every type they may create,
 grouped as the sidebar groups them, with a search past ten. It is hidden for
 someone who may create nothing. The command palette offers "Create <type>" for
-each type too. The Create card is retired: `core/quick-create` is no longer a
-core widget, and core's default dashboard gives Needs attention its row.
+each type too. A type is remembered as recent when an entry of it is created,
+from anywhere in the admin, not when its form is opened.
+
+The Create card is removed: `core/quick-create` is no longer a core widget, and
+core's default dashboard gives Needs attention its row. Its id is now a retired
+card, as the per-collection and per-Single cards are: a site whose
+`admin.dashboard.defaultLayout` (or `hide` or `overrides`) still names it is
+refused at startup with a message saying creating entries now lives in the
+dashboard header's New button, so remove it from the config. A saved layout
+holding it reads without it.

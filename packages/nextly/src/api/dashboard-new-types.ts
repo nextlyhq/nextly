@@ -7,15 +7,18 @@
  *
  * The person is always the signed-in user, never a parameter, and an API key
  * is refused: the list is a person's own. Whether they may create in a
- * collection is the dashboard's own question of a reader (`callerMayPerform`).
+ * collection is the admin's own question of them, `createInDefaultLanguage`:
+ * a create sent from New names no language, so it writes the default one, and
+ * a rule that answers by language is asked in that one.
  *
  * @module api/dashboard-new-types
  * @experimental Until the dashboard's New button is built on it.
  */
 import { z } from "zod";
 
-import { callerMayPerform } from "../auth/access/route-gate-adapters";
-import type { AuthContext } from "../auth/middleware";
+import { createsInDefaultLanguage } from "../auth/access/route-gate-adapters";
+import { getRBACService } from "../auth/code-access";
+import { capabilityLanguageOf, type AuthContext } from "../auth/middleware";
 import { NextlyError } from "../errors/nextly-error";
 import {
   type MayCreate,
@@ -34,10 +37,16 @@ const MAX_BODY_BYTES = 1024;
 
 const recordBody = z.object({ slug: z.string().min(1).max(191) }).strict();
 
-/** Whether the signed-in person may create entries of a collection. */
+/**
+ * Whether the signed-in person may create entries of a collection, as the
+ * create New opens is judged: the same cell the admin reads to offer it. The
+ * cell's request names no language, so the caller's own is not asked for.
+ */
 function mayCreateFor(auth: AuthContext): MayCreate {
-  return slug =>
-    callerMayPerform(undefined, "create", slug, { id: auth.userId });
+  const caller = { userId: auth.userId };
+  const rules = getRBACService();
+  const languageOf = capabilityLanguageOf("");
+  return slug => createsInDefaultLanguage(caller, slug, rules, languageOf);
 }
 
 export const getDashboardNewTypes = withErrorHandler(async (req: Request) => {

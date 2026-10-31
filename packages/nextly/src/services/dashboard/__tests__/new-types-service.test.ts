@@ -11,17 +11,34 @@ import {
   withNewType,
 } from "../new-types-service";
 
-/** A service over an in-memory preference and the collections named. */
-function serviceWith(stored: string | undefined, existing: string[]) {
+/**
+ * A service over an in-memory preference and the collections named.
+ * `meanwhile` runs inside each change, before its read: what another change
+ * committed between the record's first read and its own.
+ */
+function serviceWith(
+  stored: string | undefined,
+  existing: string[],
+  meanwhile: (values: Map<string, string>) => void = () => {}
+) {
   const values = new Map<string, string>();
   if (stored !== undefined) values.set("u1:new-type", stored);
   const preferences = {
     get: vi.fn(async (userId: string, key: string) =>
       values.get(`${userId}:${key}`)
     ),
-    set: vi.fn(async (userId: string, key: string, value: string) => {
-      values.set(`${userId}:${key}`, value);
-    }),
+    update: vi.fn(
+      async (
+        userId: string,
+        key: string,
+        change: (stored: string | undefined) => string
+      ) => {
+        meanwhile(values);
+        const value = change(values.get(`${userId}:${key}`));
+        values.set(`${userId}:${key}`, value);
+        return value;
+      }
+    ),
   };
   const service = new NewTypesService({
     preferences,
@@ -115,6 +132,20 @@ describe("recording a type", () => {
     expect(values.get("u1:new-type")).toBe('["posts","pages"]');
   });
 
+  it("keeps a type another record stored while this one was judging", async () => {
+    // Both records read ["faq"]; the other wrote ["pages","faq"] first. This
+    // one builds on what is stored when it writes, not on what it read.
+    const { service, values } = serviceWith(
+      '["faq"]',
+      ["posts", "pages", "faq"],
+      stored => stored.set("u1:new-type", '["pages","faq"]')
+    );
+    expect(
+      await service.record("u1", "posts", mayCreateIn("posts", "pages", "faq"))
+    ).toEqual(["posts", "pages", "faq"]);
+    expect(values.get("u1:new-type")).toBe('["posts","pages","faq"]');
+  });
+
   it("refuses a collection the reader may not create in, or one that does not exist, and writes nothing", async () => {
     const { service, preferences } = serviceWith('["pages"]', [
       "pages",
@@ -125,6 +156,6 @@ describe("recording a type", () => {
         service.record("u1", slug, mayCreateIn("pages", "gone"))
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     }
-    expect(preferences.set).not.toHaveBeenCalled();
+    expect(preferences.update).not.toHaveBeenCalled();
   });
 });

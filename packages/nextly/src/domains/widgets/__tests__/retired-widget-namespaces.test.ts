@@ -47,6 +47,12 @@ describe("what a retired card is told", () => {
     );
   });
 
+  it("tells the retired Create card where creating entries lives now", () => {
+    expect(retiredWidgetReplacement("core/quick-create")).toBe(
+      "is a retired card: creating entries now lives in the dashboard header's New button."
+    );
+  });
+
   it("answers nothing for an id in no retired namespace", () => {
     expect(retiredWidgetReplacement("acme/x-count")).toBeUndefined();
   });

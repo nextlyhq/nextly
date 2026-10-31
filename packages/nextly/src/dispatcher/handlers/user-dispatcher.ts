@@ -22,7 +22,6 @@ import { aboutSubject } from "../../auth/access/deviations";
 import { actorForScope } from "../../auth/access/resolve-actor";
 import {
   routeGateCapabilities,
-  sentParams,
   type GateCaller,
 } from "../../auth/access/route-gate-adapters";
 import {
@@ -34,7 +33,7 @@ import {
   authorizationGroups,
   readableEntities,
 } from "../../auth/entity-read-access";
-import { requestLanguage } from "../../auth/middleware";
+import { capabilityLanguageOf } from "../../auth/middleware";
 import { container } from "../../di/container";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import type { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
@@ -369,11 +368,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         // each one every collection and Single the install has.
         await readableEntityKinds(kinds),
         getRBACService(),
-        (operation, sent) =>
-          requestLanguage({
-            method: operation,
-            params: sentParams(sent, locale),
-          }),
+        capabilityLanguageOf(locale),
         hasLifecycle
       );
       return respondData(

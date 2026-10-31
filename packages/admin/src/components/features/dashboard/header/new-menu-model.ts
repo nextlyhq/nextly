@@ -22,14 +22,21 @@ import type { PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection } from "@admin/types/entities";
 
 /** At most this many recent types lead the menu. */
-export const NEW_MENU_RECENT_LIMIT = 3;
+const NEW_MENU_RECENT_LIMIT = 3;
 
 /** Past this many creatable types, the menu offers a search. */
-export const NEW_MENU_SEARCH_AFTER = 10;
+const NEW_MENU_SEARCH_AFTER = 10;
 
 const OTHER = "Other";
 
 export interface NewMenuSection {
+  /**
+   * What the section is, whatever it is called: `collections`, a custom
+   * group's slug, a plugin group's name, or `other`, each with its kind. Two
+   * sections may share a heading (a custom group and a plugin group both
+   * named "Commerce"), so the heading cannot name one.
+   */
+  id: string;
   label: string;
   collections: readonly ApiCollection[];
 }
@@ -61,28 +68,45 @@ function byOrderThenName(a: ApiCollection, b: ApiCollection): number {
     : collectionDisplayName(a).localeCompare(collectionDisplayName(b));
 }
 
-/** The heading a type outside the Collections section sits under. */
+/** Where a type outside the Collections section sits, and its heading. */
+interface SectionPlace {
+  id: string;
+  label: string;
+  kind: "custom" | "plugin";
+}
+
+/**
+ * "Other" collects both a plugin's group-less types and types placed nowhere
+ * else, so the menu draws one section for them, not two.
+ */
+const OTHER_PLACE: SectionPlace = { id: "other", label: OTHER, kind: "plugin" };
+
+/** The section a type outside the Collections section sits in. */
 function sectionOf(
   collection: ApiCollection,
   customGroups: readonly { slug: string; name: string }[],
   plugins: readonly PluginMetadata[] | undefined
-): { label: string; kind: "custom" | "plugin" | "other" } {
-  const groupNamed = (slug: string | undefined) =>
-    slug ? customGroups.find(group => group.slug === slug) : undefined;
-  if (collection.admin?.isPlugin) {
-    const custom = groupNamed(
-      resolveCollectionPlacement(collection.name, plugins)
-    );
-    if (custom) return { label: custom.name, kind: "custom" };
-    if (!isCollectionPlacedElsewhere(collection.name, plugins)) {
-      return { label: collection.admin.group || OTHER, kind: "plugin" };
-    }
-    return { label: OTHER, kind: "other" };
+): SectionPlace {
+  const customPlace = (slug: string | undefined): SectionPlace | undefined => {
+    const group = slug
+      ? customGroups.find(each => each.slug === slug)
+      : undefined;
+    return group
+      ? { id: `custom:${group.slug}`, label: group.name, kind: "custom" }
+      : undefined;
+  };
+  if (!collection.admin?.isPlugin) {
+    return customPlace(collection.admin?.sidebarGroup) ?? OTHER_PLACE;
   }
-  const custom = groupNamed(collection.admin?.sidebarGroup);
-  return custom
-    ? { label: custom.name, kind: "custom" }
-    : { label: OTHER, kind: "other" };
+  const custom = customPlace(
+    resolveCollectionPlacement(collection.name, plugins)
+  );
+  if (custom) return custom;
+  const group = collection.admin.group;
+  if (isCollectionPlacedElsewhere(collection.name, plugins) || !group) {
+    return OTHER_PLACE;
+  }
+  return { id: `plugin:${group}`, label: group, kind: "plugin" };
 }
 
 export function newMenu(input: NewMenuInput): NewMenu {
@@ -95,31 +119,44 @@ export function newMenu(input: NewMenuInput): NewMenu {
     c => creatable.get(c.name) ?? []
   );
   const placed = new Set(inCollections.map(c => c.name));
-  const custom = new Map<string, ApiCollection[]>();
-  const plugin = new Map<string, ApiCollection[]>();
+  // Keyed by each section's id, never its heading: two groups of one name
+  // are two sections.
+  const custom = new Map<string, NewMenuSection>();
+  const plugin = new Map<string, NewMenuSection>();
   for (const collection of input.creatable) {
     if (placed.has(collection.name)) continue;
-    const { label, kind } = sectionOf(
+    const { id, label, kind } = sectionOf(
       collection,
       input.customGroups ?? [],
       input.plugins
     );
-    // "Other" collects both a plugin's group-less types and types placed
-    // nowhere else, so the menu draws one heading for them, not two.
     const into = kind === "custom" ? custom : plugin;
-    into.set(label, [...(into.get(label) ?? []), collection]);
+    const section = into.get(id);
+    into.set(id, {
+      id,
+      label,
+      collections: [...(section?.collections ?? []), collection],
+    });
   }
-  const grouped = (groups: Map<string, ApiCollection[]>) =>
-    [...groups.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([label, collections]) => ({
-        label,
-        collections: [...collections].sort(byOrderThenName),
+  const grouped = (groups: Map<string, NewMenuSection>) =>
+    [...groups.values()]
+      .sort(
+        (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id)
+      )
+      .map(section => ({
+        ...section,
+        collections: [...section.collections].sort(byOrderThenName),
       }));
 
   const sections: NewMenuSection[] = [
     ...(inCollections.length > 0
-      ? [{ label: "Collections", collections: inCollections }]
+      ? [
+          {
+            id: "collections",
+            label: "Collections",
+            collections: inCollections,
+          },
+        ]
       : []),
     ...grouped(custom),
     ...grouped(plugin),

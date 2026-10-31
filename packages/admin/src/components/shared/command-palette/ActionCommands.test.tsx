@@ -1,13 +1,22 @@
 /**
  * The palette's "Create <type>" commands: one per collection the reader may
- * create in, matched on the type's names, each opening a new entry and
- * recording the type for the dashboard's New button.
+ * create in, matched on the type's names, each opening a new entry. The type
+ * becomes recent for the dashboard's New button only when an entry is created,
+ * which the palette never does.
  */
 import { Command, CommandList } from "@nextlyhq/ui";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const COLLECTIONS = [
+/** Every collection the navigation lists, in this test. */
+let offered: {
+  name: string;
+  label: string;
+  labels?: { singular: string; plural: string };
+  admin?: Record<string, unknown>;
+}[] = [];
+
+const EVERY_KIND = [
   {
     name: "posts",
     label: "Posts",
@@ -23,9 +32,8 @@ const COLLECTIONS = [
 let mayCreate: string[] = [];
 
 vi.mock("@admin/hooks/queries/useCollections", () => ({
-  NAV_COLLECTIONS_PARAMS: {},
-  useCollections: () => ({
-    data: { items: COLLECTIONS },
+  useEveryNavCollection: () => ({
+    data: offered,
     isLoading: false,
     error: null,
   }),
@@ -62,6 +70,7 @@ const createCommands = () =>
   screen.queryAllByTestId(/^command-create-/).map(item => item.textContent);
 
 beforeEach(() => {
+  offered = EVERY_KIND;
   recorded.length = 0;
   navigateTo.mockClear();
 });
@@ -80,11 +89,37 @@ describe("the palette's create commands", () => {
     expect(screen.queryByText("Create Content")).toBeNull();
   });
 
-  it("open a new entry of the type, and record it for New", () => {
+  it("open a new entry of the type, and record nothing until one is created", () => {
     mayCreate = ["posts"];
     renderCommands();
     fireEvent.click(screen.getByTestId("command-create-posts"));
     expect(navigateTo).toHaveBeenCalledWith("/admin/collections/posts/create");
-    expect(recorded).toEqual(["posts"]);
+    // Opening the form is not creating an entry: the form may be left.
+    expect(recorded).toEqual([]);
+  });
+
+  it("tell two types of one label apart, by their slugs", () => {
+    const article = { singular: "Article", plural: "Articles" };
+    offered = [
+      { name: "articles", label: "Articles", labels: article },
+      { name: "news", label: "News", labels: article },
+    ];
+    mayCreate = ["articles", "news"];
+    renderCommands();
+    const articles = screen.getByTestId("command-create-articles");
+    const news = screen.getByTestId("command-create-news");
+    expect([articles.textContent, news.textContent]).toEqual([
+      "Create Article",
+      "Create Article",
+    ]);
+    // The list selects by value: one shared value would select both at once.
+    expect(articles.getAttribute("data-value")).not.toBe(
+      news.getAttribute("data-value")
+    );
+    expect(
+      screen
+        .getAllByRole("option")
+        .filter(option => option.getAttribute("aria-selected") === "true")
+    ).toEqual([articles]);
   });
 });

@@ -17,18 +17,12 @@
 import { useMemo } from "react";
 
 import { keptOffDashboard } from "@admin/components/features/dashboard/kept-off-dashboard";
-import {
-  NAV_COLLECTIONS_PARAMS,
-  useCollections,
-} from "@admin/hooks/queries/useCollections";
+import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-
-type NavCollection = NonNullable<
-  ReturnType<typeof useCollections>["data"]
->["items"][number];
+import type { ApiCollection } from "@admin/types/entities";
 
 export interface CreatableCollections {
-  collections: readonly NavCollection[];
+  collections: readonly ApiCollection[];
   /**
    * Whether both answers have arrived. Until they have, `collections` is empty
    * and says nothing: the permission check answers no before the server's
@@ -40,17 +34,19 @@ export interface CreatableCollections {
 }
 
 export function useCreatableCollections(): CreatableCollections {
-  const { data, isLoading, error } = useCollections(NAV_COLLECTIONS_PARAMS);
+  // Every page of collections, not the first alone: a type past it would be
+  // missing from the menu and the palette, and its recent slug dropped.
+  const { data, isLoading, error } = useEveryNavCollection();
   const { canAccessCollection, content } = useCurrentUserPermissions();
   const collections = useMemo(
     () =>
-      (data?.items ?? []).filter(
+      (data ?? []).filter(
         collection =>
           !keptOffDashboard(collection) &&
           !collection.admin?.disableCreate &&
           canAccessCollection(collection.name, "create")
       ),
-    [data?.items, canAccessCollection]
+    [data, canAccessCollection]
   );
   const isReady = !isLoading && !content.isLoading && content.hasAnswer;
   return {

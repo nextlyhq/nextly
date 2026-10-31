@@ -16,7 +16,7 @@ import { useCallback } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
-export const DASHBOARD_NEW_TYPES_KEY = ["dashboard", "new-types"] as const;
+const DASHBOARD_NEW_TYPES_KEY = ["dashboard", "new-types"] as const;
 
 const PATH = "/dashboard/new-types";
 
@@ -34,8 +34,10 @@ export function useDashboardNewTypes(): UseQueryResult<string[], Error> {
 }
 
 /**
- * Records a type as the most recent, best effort: creating an entry never
- * waits for it, and a type that is not recorded only leaves New as it was.
+ * Records a type as the most recent once an entry of it has been created
+ * (`useCreateEntry`, wherever in the admin the entry was made), best effort:
+ * creating an entry never waits for it, and a type that is not recorded only
+ * leaves New as it was.
  */
 export function useRecordNewType(): (slug: string) => void {
   const client = useQueryClient();

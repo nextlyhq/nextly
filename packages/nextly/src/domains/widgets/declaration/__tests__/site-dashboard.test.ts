@@ -209,6 +209,25 @@ describe("a site config that names what exists", () => {
       })
     ).not.toThrow();
   });
+
+  it("refuses the retired Create card in defaultLayout, naming what replaced it", () => {
+    // Its id is retired with the card: a site default naming it, optional or
+    // not, is told that creating entries is the header's New button, not
+    // offered a nearest match.
+    for (const optional of [false, true]) {
+      const message = refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: [
+            { widget: "core/team" },
+            { widget: "core/quick-create", optional },
+          ],
+        })
+      );
+      expect(message).toContain(
+        `defaultLayout names "core/quick-create", which is a retired card: creating entries now lives in the dashboard header's New button.`
+      );
+    }
+  });
 });
 
 describe("a site config with faults", () => {

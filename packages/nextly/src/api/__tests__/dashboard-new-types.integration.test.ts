@@ -4,8 +4,9 @@
  * `GET` and `POST /api/dashboard/new-types`.
  *
  * `new-types-service.test.ts` decides what is kept and what is read back over
- * fakes. Here the reader's create rights come from roles, the list is stored
- * in `nextly_dashboard_preferences`, and each person reads only their own.
+ * fakes. Here the reader's create rights come from roles and rules, the list
+ * is stored in `nextly_dashboard_preferences`, and each person reads only
+ * their own.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -18,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, text } from "../../config";
+import type { AccessRuleContext } from "../../shared/types/access";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -35,10 +37,29 @@ const pages = defineCollection({
   slug: "pages",
   fields: [text({ name: "title" })],
 });
+/**
+ * Created in English, the default language, alone: a create judged in the
+ * language New's create writes is allowed, and one judged in every language
+ * is refused.
+ */
+const notes = defineCollection({
+  slug: "notes",
+  localized: true,
+  access: {
+    create: ({ locale }: AccessRuleContext) => locale === "en",
+    read: () => true,
+  },
+  fields: [text({ name: "body", localized: true })],
+});
+const COLLECTIONS = [posts, pages, notes];
+const LOCALIZATION = { locales: ["en", "fr"], defaultLocale: "en" };
 
 function handlers() {
   return createDynamicHandlers({
-    config: sanitizeConfig({ collections: [posts, pages] }),
+    config: sanitizeConfig({
+      collections: COLLECTIONS,
+      localization: LOCALIZATION,
+    }),
   });
 }
 
@@ -50,10 +71,19 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
   let writerId = "";
 
   beforeEach(async () => {
-    handle = await createTestNextly({ dialect, collections: [posts, pages] });
+    handle = await createTestNextly({
+      dialect,
+      collections: COLLECTIONS,
+      localization: LOCALIZATION,
+    });
     ownerId = await userNamed("owner");
     writerId = await userNamed("writer");
-    await grantRole(writerId, ["read-posts", "create-posts"]);
+    await grantRole(writerId, [
+      "read-posts",
+      "create-posts",
+      "read-notes",
+      "create-notes",
+    ]);
   });
 
   afterEach(async () => {
@@ -163,6 +193,26 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
     expect((await record(writer, "pages")).status).toBe(403);
     expect((await record(writer, "nowhere")).status).toBe(403);
     expect(await recent(writer)).toEqual(["posts"]);
+  });
+
+  it("judges a type in the language its create writes, as the admin offers it", async () => {
+    // The rule admits English alone. New's create names no language, so it
+    // writes English and the rule allows it; the admin offers the type, and
+    // the list keeps it.
+    const writer = await sessionOf(writerId);
+    expect((await record(writer, "notes")).status).toBe(200);
+    expect(await recent(writer)).toEqual(["notes"]);
+  });
+
+  it("keeps both of two types recorded at once", async () => {
+    const owner = await sessionOf(ownerId);
+    const [first, second] = await Promise.all([
+      record(owner, "posts"),
+      record(owner, "pages"),
+    ]);
+    expect([first.status, second.status]).toEqual([200, 200]);
+    // Either may land first; neither may be lost.
+    expect([...(await recent(owner))].sort()).toEqual(["pages", "posts"]);
   });
 
   it("refuses a request with no session", async () => {

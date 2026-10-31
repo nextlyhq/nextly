@@ -5,7 +5,6 @@ import type { JSX } from "react";
 
 import { Plus, Settings, ShieldPlus, UserPlus } from "@admin/components/icons";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useRecordNewType } from "@admin/hooks/queries/useDashboardNewTypes";
 import { useCreatableCollections } from "@admin/hooks/useCreatableCollections";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { navigateTo } from "@admin/lib/navigation";
@@ -125,12 +124,12 @@ export function ActionCommands({ onSelect }: ActionCommandsProps): JSX.Element {
 
 /**
  * "Create <type>" for each collection the reader may create in, matched on its
- * labels and its slug. Running one opens a new entry of that type and records
- * the type for the dashboard's New button.
+ * labels and its slug. Running one opens a new entry of that type; the type
+ * becomes recent for the dashboard's New button only once the entry is created
+ * (`useCreateEntry`).
  */
 function CreateEntryCommands({ onSelect }: ActionCommandsProps): JSX.Element {
   const { collections } = useCreatableCollections();
-  const recordNewType = useRecordNewType();
   return (
     <>
       {collections.map(collection => {
@@ -138,8 +137,12 @@ function CreateEntryCommands({ onSelect }: ActionCommandsProps): JSX.Element {
         return (
           <CommandItem
             key={collection.name}
-            value={label}
+            // The list's identity for the command: two types may share a
+            // label, so the slug, which is unique, ends it. The label leads,
+            // and is a keyword too, so a search still finds it by name.
+            value={`${label} ${collection.name}`}
             keywords={[
+              label,
               collection.name,
               collection.label ?? "",
               collection.labels?.plural ?? "",
@@ -149,7 +152,6 @@ function CreateEntryCommands({ onSelect }: ActionCommandsProps): JSX.Element {
             ].filter(Boolean)}
             onSelect={() =>
               onSelect(() => {
-                recordNewType(collection.name);
                 navigateTo(
                   buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, {
                     slug: collection.name,

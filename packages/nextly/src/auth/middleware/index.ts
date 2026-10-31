@@ -34,6 +34,8 @@ import {
   routeGateVerdict,
   routeGrantVerdict,
   routeVisitorVerdict,
+  sentParams,
+  type LanguageOf,
   type RouteRules,
 } from "../access/route-gate-adapters";
 import {
@@ -944,6 +946,17 @@ export function requestLanguage(
   const kind = OPERATION_LANGUAGES.get(operation.method);
   if (kind === undefined) return everyLanguage();
   return LANGUAGES_OF[kind](requestedLanguage(operation));
+}
+
+/**
+ * The languages each REST operation is told when its request sends what
+ * `sent` names, for a caller asking in `locale`: how a capability cell is
+ * framed by exactly what its request sends, by the function that frames the
+ * request itself.
+ */
+export function capabilityLanguageOf(locale: string): LanguageOf {
+  return (operation, sent) =>
+    requestLanguage({ method: operation, params: sentParams(sent, locale) });
 }
 
 /** A REST route's method name, and the parameters it is dispatched with. */

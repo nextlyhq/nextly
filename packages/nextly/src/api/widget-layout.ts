@@ -752,11 +752,11 @@ function refuseUnknownOrRepeated(
   visibleIds: ReadonlySet<string>,
   readable: ReadonlySet<string>
 ): void {
-  // A card in a namespace core once filled per collection or per Single
-  // (`collection/`, `single/`) is refused by its namespace before anything
-  // else, and told what replaced it. No widget answers to one (the registry
-  // refuses the namespaces), so the check below would refuse it too; this one
-  // says why. It discloses nothing: the namespaces are core's, the same for
+  // A retired card, in a namespace core once filled per collection or per
+  // Single (`collection/`, `single/`) or a core card retired by id, is refused
+  // before anything else, and told what replaced it. No widget answers to one
+  // (the registry refuses them), so the check below would refuse it too; this
+  // one says why. It discloses nothing: the retired cards are core's, the same for
   // every install and every reader, and the collection it may name is one
   // this reader may read.
   for (const { widgetId } of submitted) {

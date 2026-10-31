@@ -46,7 +46,11 @@ describe("newMenu", () => {
     });
     expect(menu.primary?.name).toBe("pages");
     expect(menu.sections).toEqual([
-      { label: "Collections", collections: [pages, authors, posts] },
+      {
+        id: "collections",
+        label: "Collections",
+        collections: [pages, authors, posts],
+      },
     ]);
   });
 
@@ -68,7 +72,7 @@ describe("newMenu", () => {
     });
     expect(menu.recent).toEqual([]);
     expect(menu.sections).toEqual([
-      { label: "Collections", collections: [posts] },
+      { id: "collections", label: "Collections", collections: [posts] },
     ]);
   });
 
@@ -91,6 +95,30 @@ describe("newMenu", () => {
       ["Help", ["guides", "faqs", "placed"]],
       ["Other", ["forms", "loose"]],
       ["Shop", ["orders"]],
+    ]);
+  });
+
+  it("names each section by what it is, so two of one heading stay two", () => {
+    const deals = collection("deals", { sidebarGroup: "commerce" });
+    const orders = collection("orders", { isPlugin: true, group: "Commerce" });
+    const notes = collection("notes", { sidebarGroup: "misc" });
+    const forms = collection("forms", { isPlugin: true });
+    const menu = newMenu({
+      creatable: [deals, orders, notes, forms],
+      recentSlugs: [],
+      sidebarCollections: [],
+      customGroups: [
+        { slug: "commerce", name: "Commerce" },
+        { slug: "misc", name: "Other" },
+      ],
+    });
+    expect(
+      menu.sections.map(s => [s.id, s.label, names(s.collections)])
+    ).toEqual([
+      ["custom:commerce", "Commerce", ["deals"]],
+      ["custom:misc", "Other", ["notes"]],
+      ["plugin:Commerce", "Commerce", ["orders"]],
+      ["other", "Other", ["forms"]],
     ]);
   });
 

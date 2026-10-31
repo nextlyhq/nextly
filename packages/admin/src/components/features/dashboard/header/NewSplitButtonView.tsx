@@ -57,13 +57,15 @@ function matchesSearch(
 
 export interface NewSplitButtonViewProps {
   menu: NewMenu;
-  /** Called with a type's slug as the reader creates one. */
-  onCreate: (slug: string) => void;
 }
 
+/**
+ * Each choice only opens a new entry of its type. The type becomes recent when
+ * the entry is created (`useCreateEntry`), so opening a form and leaving it
+ * changes nothing.
+ */
 export function NewSplitButtonView({
   menu,
-  onCreate,
 }: NewSplitButtonViewProps): JSX.Element | null {
   const [open, setOpen] = useState(false);
   const commandRef = useRef<HTMLDivElement>(null);
@@ -82,7 +84,6 @@ export function NewSplitButtonView({
       ]}
       onSelect={() => {
         setOpen(false);
-        onCreate(collection.name);
         navigateTo(createHref(collection));
       }}
       data-testid={`dashboard-new-${group}-${collection.name}`}
@@ -91,16 +92,23 @@ export function NewSplitButtonView({
     </CommandItem>
   );
 
+  const primaryLabel = `New ${collectionSingularLabel(primary)}`;
   return (
-    <div className="inline-flex" data-testid="dashboard-new">
-      <Button asChild size="sm" className="rounded-r-none">
+    // The main part is capped and its label cut short with an ellipsis, so a
+    // long type name never widens the header past a narrow screen. The whole
+    // label stays the link's text, so it is still the accessible name, and
+    // the title shows it to a pointer.
+    <div className="inline-flex min-w-0 max-w-full" data-testid="dashboard-new">
+      <Button asChild size="sm" className="min-w-0 max-w-64 rounded-r-none">
         <Link
           href={createHref(primary)}
-          onClick={() => onCreate(primary.name)}
+          title={primaryLabel}
           data-testid="dashboard-new-primary"
         >
-          <Plus aria-hidden className="mr-2 size-4" />
-          New {collectionSingularLabel(primary)}
+          <Plus aria-hidden className="mr-2 size-4 shrink-0" />
+          <span className="truncate" data-testid="dashboard-new-primary-label">
+            {primaryLabel}
+          </span>
         </Link>
       </Button>
       <Popover open={open} onOpenChange={setOpen}>
@@ -146,7 +154,13 @@ export function NewSplitButtonView({
                 </CommandGroup>
               ) : null}
               {menu.sections.map(section => (
-                <CommandGroup key={section.label} heading={section.label}>
+                <CommandGroup
+                  key={section.id}
+                  // The list's own name for the section as well, so a search
+                  // that reorders sections tells two of one heading apart.
+                  value={section.id}
+                  heading={section.label}
+                >
                   {section.collections.map(collection =>
                     item("type", collection)
                   )}

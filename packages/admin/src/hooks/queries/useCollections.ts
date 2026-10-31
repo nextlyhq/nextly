@@ -31,6 +31,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
   type UseMutationResult,
   type UseQueryResult,
@@ -199,6 +200,54 @@ export function useCollections(
       return await collectionApi.fetchCollections(effectiveParams);
     },
     ...options,
+  });
+}
+
+/**
+ * The most pages of collections read: past it, a server still saying there
+ * is more is answered with an error rather than read for ever.
+ */
+const MAX_NAV_COLLECTION_PAGES = 50;
+
+/**
+ * Every collection the navigation lists, in its order: each page of
+ * {@link NAV_COLLECTIONS_PARAMS} in turn until `meta.hasNext` is false. Each
+ * page is the cache entry `useCollections` keeps for it, so the first is the
+ * sidebar's own request, read from the cache while it is fresh.
+ */
+async function fetchEveryNavCollection(
+  queryClient: QueryClient
+): Promise<ApiCollection[]> {
+  const items: ApiCollection[] = [];
+  for (let page = 0; page < MAX_NAV_COLLECTION_PAGES; page++) {
+    const params: TableParams = {
+      ...NAV_COLLECTIONS_PARAMS,
+      pagination: { ...NAV_COLLECTIONS_PARAMS.pagination, page },
+    };
+    const response = await queryClient.fetchQuery({
+      queryKey: collectionKeys.list(params),
+      queryFn: () => collectionApi.fetchCollections(params),
+    });
+    items.push(...response.items);
+    if (response.meta?.hasNext !== true) return items;
+  }
+  throw new Error("Unable to load every collection");
+}
+
+/**
+ * Every collection the navigation lists, however many pages that takes: for
+ * a reader that offers each one, where a type left on an unread page would
+ * simply be missing. Kept under {@link collectionKeys.all}, so whatever
+ * refreshes the collections refreshes it.
+ */
+export function useEveryNavCollection(): UseQueryResult<
+  ApiCollection[],
+  Error
+> {
+  const queryClient = useQueryClient();
+  return useQuery<ApiCollection[], Error>({
+    queryKey: [...collectionKeys.all(), "every-nav"],
+    queryFn: () => fetchEveryNavCollection(queryClient),
   });
 }
 
