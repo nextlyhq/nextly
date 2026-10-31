@@ -17,6 +17,7 @@ import {
 } from "../../retention/passes";
 import {
   AUDIT_RETENTION_DRAIN_GATE_KEY,
+  CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
@@ -59,6 +60,10 @@ const DRAIN_PASS: Record<
   previewLinks: {
     input: { previewLinks: true },
     claims: PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
+  },
+  cacheTagExpiries: {
+    input: { cacheTagExpiries: true },
+    claims: CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
   },
 };
 
@@ -110,6 +115,85 @@ function drain(
     retention,
   });
 }
+
+/**
+ * An adapter whose cache tag expiry ledger holds two batches of rows past its
+ * age, as the ledger's prune finds and deletes them.
+ */
+function ledgerWithRowsToPrune() {
+  let batches = 2;
+  const deleted: number[] = [];
+  const db = {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          orderBy: () => ({
+            limit: async () => {
+              if (batches === 0) return [];
+              batches -= 1;
+              return Array.from({ length: 1000 }, (_, i) => ({
+                id: `${batches}-${i}`,
+              }));
+            },
+          }),
+        }),
+      }),
+    }),
+    delete: () => ({
+      where: async () => {
+        deleted.push(1000);
+        return { changes: 1000 };
+      },
+    }),
+  };
+  return {
+    deleted,
+    adapter: {
+      select: async () => [],
+      delete: async () => 0,
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      tableExists: async () => true,
+      getDrizzle: () => db,
+    },
+  };
+}
+
+describe("the scheduled drain and the cache tag expiry ledger", () => {
+  const claimAll = {
+    claim: async () => true,
+    release: async () => undefined,
+  };
+
+  it("prunes the ledger's rows on its turn, and reports how many", async () => {
+    const ledger = ledgerWithRowsToPrune();
+    const result = await drain({
+      cacheTagExpiries: true,
+      prune: { adapter: ledger.adapter } as never,
+      gate: claimAll,
+    });
+
+    expect(ledger.deleted).toHaveLength(2);
+    expect(result.pruned.cacheTagExpiries).toBe(2000);
+  });
+
+  it("stops pruning at the drain's budget", async () => {
+    const ledger = ledgerWithRowsToPrune();
+    // A clock already past the drain's budget once the turn has been claimed.
+    let calls = 0;
+    const result = await drain(
+      {
+        cacheTagExpiries: true,
+        prune: { adapter: ledger.adapter } as never,
+        gate: claimAll,
+      },
+      () => new Date(calls++ < 4 ? 0 : 60_000),
+      1000
+    );
+
+    expect(ledger.deleted.length).toBeLessThan(2);
+    expect(result.pruned.cacheTagExpiries).toBeLessThan(2000);
+  });
+});
 
 describe("the scheduled drain and plugins' one-purpose secrets", () => {
   it("sweeps them with no other retention configured", async () => {
