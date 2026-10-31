@@ -13,7 +13,7 @@
  *      the column back and refills it, from main for the default language and from the archive
  *      for the others.
  */
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -46,21 +46,25 @@ const SHARED: MinimalConfigEntity = {
  */
 async function secondRun(
   dialect: SupportedDialect,
-  next: MinimalConfigEntity,
+  next: MinimalConfigEntity | MinimalConfigEntity[],
   options: {
-    first?: MinimalConfigEntity;
+    first?: MinimalConfigEntity | MinimalConfigEntity[];
     onWarning?: (message: string) => void;
     beforeSecond?: (dir: string) => Promise<void>;
   } = {}
 ): Promise<{ name: string; sql: string }[]> {
   const dir = await mkdtemp(join(tmpdir(), "nextly-field-leaves-"));
-  const run = (entity: MinimalConfigEntity, name: string, at: string) =>
+  const run = (
+    entity: MinimalConfigEntity | MinimalConfigEntity[],
+    name: string,
+    at: string
+  ) =>
     generateMigration({
       name,
       dialect,
       migrationsDir: dir,
       defaultLocale: "en",
-      collections: [entity],
+      collections: [entity].flat(),
       singles: [],
       components: [],
       nonInteractive: true,
@@ -211,7 +215,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     ) {
       const files = await secondRun(dialect, next, first ? { first } : {});
       const main = sections(
-        files.find(f => /_two\.sql$/.test(f.name))?.sql ?? ""
+        files.find(f => f.name.endsWith("_two.sql"))?.sql ?? ""
       );
       const shared = sections(
         files.find(f => f.name.includes("_shared_localization_"))?.sql ?? ""
@@ -311,6 +315,769 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       );
       expect(main.up).not.toMatch(unique);
       expect(shared.up).toMatch(unique);
+    });
+  }
+);
+
+/**
+ * Takes the record of translated fields out of every snapshot in `dir`, as a snapshot written
+ * before snapshots kept it reads.
+ */
+async function forgetTranslatedFieldRecord(dir: string): Promise<void> {
+  const meta = resolve(dir, "meta");
+  for (const name of await readdir(meta)) {
+    const path = resolve(meta, name);
+    const file = JSON.parse(await readFile(path, "utf-8")) as {
+      translatedFieldsRecorded?: boolean;
+      snapshot: { tables: Record<string, unknown>[] };
+    };
+    delete file.translatedFieldsRecorded;
+    for (const table of file.snapshot.tables) {
+      delete table.localized;
+      delete table.localizedColumns;
+      delete table.uniqueLocalizedColumns;
+    }
+    await writeFile(path, JSON.stringify(file, null, 2), "utf-8");
+  }
+}
+
+/**
+ * Takes the intent line out of every companion file in `dir`, as a file written before companion
+ * files recorded what they are for reads.
+ */
+async function forgetCompanionIntents(
+  dir: string,
+  only: RegExp = /_localization_/
+): Promise<void> {
+  for (const name of await readdir(dir)) {
+    if (!only.test(name)) continue;
+    const path = resolve(dir, name);
+    const kept = (await readFile(path, "utf-8"))
+      .split("\n")
+      .filter(line => !line.startsWith("-- Localization:"));
+    await writeFile(path, kept.join("\n"), "utf-8");
+  }
+}
+
+/** A project both of whose records predate the translated-field record. */
+async function forgetEverything(dir: string): Promise<void> {
+  await forgetTranslatedFieldRecord(dir);
+  await forgetCompanionIntents(dir);
+}
+
+/**
+ * A project whose companions came from outside its migration files, as a development sync or
+ * `db:sync` makes them, and whose snapshot predates the record: no file and no snapshot says
+ * which fields are translated.
+ */
+async function forgetCompanionFiles(dir: string): Promise<void> {
+  await forgetTranslatedFieldRecord(dir);
+  for (const name of await readdir(dir)) {
+    if (name.includes("_localization_")) await rm(resolve(dir, name));
+  }
+}
+
+/** A collection that isn't translated, with one field more in `NOTES_GROWN`. */
+const NOTES: MinimalConfigEntity = {
+  slug: "notes",
+  tableName: "dc_notes",
+  fields: [{ name: "title", type: "text" }],
+};
+const NOTES_GROWN: MinimalConfigEntity = {
+  ...NOTES,
+  fields: [...NOTES.fields, { name: "summary", type: "text" }],
+};
+
+/**
+ * A database whose translations tables hold every column these tests translate, for a recording
+ * run whose point is elsewhere; the cases about what the database holds give their own.
+ */
+const HELD = () =>
+  Promise.resolve([
+    "_parent",
+    "_locale",
+    "body",
+    "code",
+    "headline",
+    "summary",
+    "tagline",
+    "title",
+  ]);
+
+/** `migrate:create` on `dir` for `collections`, as `name`, at the minute `at` past 10:00. */
+function generate(
+  dialect: SupportedDialect,
+  dir: string,
+  collections: MinimalConfigEntity[],
+  name: string,
+  at: number,
+  options: {
+    recordSnapshot?: boolean;
+    onWarning?: (m: string) => void;
+    liveCompanionColumns?: (tableName: string) => Promise<readonly string[]>;
+  } = {}
+) {
+  return generateMigration({
+    name,
+    dialect,
+    migrationsDir: dir,
+    defaultLocale: "en",
+    collections,
+    singles: [],
+    components: [],
+    nonInteractive: true,
+    now: new Date(Date.UTC(2026, 9, 16, 10, at)),
+    liveCompanionColumns: HELD,
+    ...options,
+  });
+}
+
+/** A migrations directory after one `migrate:create` per step, each step's `after` run on it. */
+async function projectAfter(
+  dialect: SupportedDialect,
+  steps: {
+    collections: MinimalConfigEntity[];
+    after?: (dir: string) => Promise<void>;
+  }[]
+): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "nextly-field-leaves-"));
+  for (const [i, step] of steps.entries()) {
+    await generate(dialect, dir, step.collections, `step${i + 1}`, i);
+    await step.after?.(dir);
+  }
+  return dir;
+}
+
+/** The names of the files one more `migrate:create` (`next`, at 11:00) writes to `dir`. */
+async function filesOfRun(
+  dialect: SupportedDialect,
+  dir: string,
+  collections: MinimalConfigEntity[]
+): Promise<string[]> {
+  const before = new Set(await readdir(dir));
+  await generate(dialect, dir, collections, "next", 60);
+  return (await readdir(dir))
+    .filter(f => f.endsWith(".sql") && !before.has(f))
+    .sort();
+}
+
+/** Every file under `dir` with its contents, to show a run wrote nothing. */
+async function contentsOf(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const sub of ["", "meta"]) {
+    for (const name of await readdir(resolve(dir, sub))) {
+      if (name === "meta") continue;
+      out[join(sub, name)] = await readFile(resolve(dir, sub, name), "utf-8");
+    }
+  }
+  return out;
+}
+
+/** A translated collection whose `body` is shared from the start. */
+const BODY_SHARED: MinimalConfigEntity = {
+  slug: "docs",
+  tableName: "dc_docs",
+  localized: true,
+  fields: [
+    { name: "headline", type: "text", localized: true },
+    { name: "body", type: "text", localized: false },
+  ],
+};
+
+/** `BODY_SHARED` with `body` translated too. */
+const BODY_JOINS: MinimalConfigEntity = {
+  ...BODY_SHARED,
+  fields: [
+    { name: "headline", type: "text", localized: true },
+    { name: "body", type: "text", localized: true },
+  ],
+};
+
+/** `docs` with `title` and `body`, the collection and each field translated or not. */
+const titled = (
+  localized: boolean,
+  title: boolean,
+  body: boolean
+): MinimalConfigEntity => ({
+  slug: "docs",
+  tableName: "dc_docs",
+  localized,
+  fields: [
+    { name: "title", type: "text", localized: title },
+    { name: "body", type: "text", localized: body },
+  ],
+});
+
+describe.each(["sqlite", "postgresql", "mysql"] as const)(
+  "migrate:create on a project whose snapshots record translated fields (%s)",
+  dialect => {
+    it("reads a collection removed and added again untranslated as never translated", async () => {
+      // Removing a collection writes no localization file, so the files still describe the
+      // companion the first step made. The snapshot says the collection is not translated.
+      const dir = await projectAfter(dialect, [
+        { collections: [titled(true, true, true)] },
+        { collections: [] },
+        { collections: [titled(false, false, false)] },
+      ]);
+
+      expect(
+        await filesOfRun(dialect, dir, [titled(true, true, false)])
+      ).toEqual([
+        expect.stringMatching(/_next\.sql$/),
+        expect.stringMatching(/_enable_localization_docs\.sql$/),
+      ]);
+    });
+
+    it.each([
+      { before: "not translated", localized: false },
+      { before: "translated with no translated field", localized: true },
+    ])(
+      "makes the companion of a collection $before that gains only new translated fields",
+      async ({ localized }) => {
+        // No translated column was ever on the main table, so its shape alone reads the same as a
+        // companion already made.
+        const dir = await projectAfter(dialect, [
+          {
+            collections: [
+              {
+                ...TRANSLATED,
+                localized,
+                fields: [{ name: "price", type: "number" }],
+              },
+            ],
+          },
+        ]);
+
+        expect(await filesOfRun(dialect, dir, [TRANSLATED])).toEqual([
+          expect.stringMatching(/_next\.sql$/),
+          expect.stringMatching(/_create_localization_docs\.sql$/),
+        ]);
+      }
+    );
+
+    it("does not take the companion of a slug's earlier table as its own when it returns at another", async () => {
+      // docs was translated at dc_docs, then removed; it returns at dc_documents, translated with
+      // no translated field. The companion its history made is dc_docs_locales, not this table's.
+      const returned = (
+        fields: MinimalConfigEntity["fields"]
+      ): MinimalConfigEntity => ({
+        ...TRANSLATED,
+        tableName: "dc_documents",
+        fields,
+      });
+      const dir = await projectAfter(dialect, [
+        { collections: [TRANSLATED, NOTES] },
+        { collections: [NOTES] },
+        { collections: [NOTES, returned([{ name: "price", type: "number" }])] },
+      ]);
+
+      expect(
+        await filesOfRun(dialect, dir, [NOTES, returned(TRANSLATED.fields)])
+      ).toEqual([
+        expect.stringMatching(/_next\.sql$/),
+        expect.stringMatching(/_create_localization_docs\.sql$/),
+      ]);
+    });
+
+    it("moves a field back into the companion its last translated field left, with no file that made it", async () => {
+      // As `migrate:baseline` leaves a project: no localization file made the companion. Then its
+      // last translated field becomes shared, which empties the companion and keeps it.
+      const dir = await projectAfter(dialect, [
+        {
+          collections: [BODY_JOINS],
+          after: async d => {
+            for (const name of await readdir(d)) {
+              if (name.includes("_localization_")) await rm(resolve(d, name));
+            }
+          },
+        },
+        {
+          collections: [
+            {
+              ...BODY_SHARED,
+              fields: [
+                { name: "headline", type: "text", localized: false },
+                { name: "body", type: "text", localized: false },
+              ],
+            },
+          ],
+        },
+      ]);
+
+      // Its column is added to the companion that is there, not a second companion made over it.
+      expect(await filesOfRun(dialect, dir, [BODY_SHARED])).toEqual([
+        expect.stringMatching(/_joins_localization_docs\.sql$/),
+        expect.stringMatching(/_next\.sql$/),
+      ]);
+    });
+  }
+);
+
+describe.each(["sqlite", "postgresql", "mysql"] as const)(
+  "migrate:create when the last snapshot predates its record of translated fields (%s)",
+  dialect => {
+    /** docs, translated or not, with its declaration recorded as the snapshot's settings. */
+    const declared = (localized: boolean): MinimalConfigEntity => ({
+      ...TRANSLATED,
+      localized,
+      settings: { source: "code", settings: { slug: "docs", localized } },
+    });
+
+    it.each([
+      {
+        sign: "a localization file",
+        first: [TRANSLATED],
+        forget: forgetTranslatedFieldRecord,
+        next: [NOTES],
+      },
+      {
+        sign: "a collection translated now",
+        first: [NOTES],
+        forget: forgetTranslatedFieldRecord,
+        next: [NOTES, TRANSLATED],
+      },
+      {
+        sign: "the snapshot's settings, for a collection turned off now",
+        first: [declared(true)],
+        forget: forgetCompanionFiles,
+        next: [declared(false)],
+      },
+    ])(
+      "refuses every change while $sign shows translations no record settles, writing nothing",
+      async ({ first, forget, next }) => {
+        let dir = "";
+        let before: Record<string, string> = {};
+        const run = secondRun(dialect, next, {
+          first,
+          beforeSecond: async d => {
+            await forget(d);
+            dir = d;
+            before = await contentsOf(d);
+          },
+        });
+
+        await expect(run).rejects.toThrow(/--record-snapshot/);
+        expect(await contentsOf(dir)).toEqual(before);
+      }
+    );
+
+    it("names the run to make again by the name its file takes, after putting the config back", async () => {
+      const dir = await projectAfter(dialect, [
+        { collections: [TRANSLATED], after: forgetEverything },
+      ]);
+      const run = generate(dialect, dir, [SHARED], "Make body shared", 60);
+
+      await expect(run).rejects.toThrow(/as it was at the last migration/);
+      await expect(run).rejects.toThrow(
+        /`nextly migrate:create --name make_body_shared`/
+      );
+    });
+
+    it("plans as usual once --record-snapshot has run", async () => {
+      const dir = await projectAfter(dialect, [
+        { collections: [TRANSLATED], after: forgetTranslatedFieldRecord },
+      ]);
+      await generate(dialect, dir, [TRANSLATED], "record", 30, {
+        recordSnapshot: true,
+      });
+
+      expect(await filesOfRun(dialect, dir, [TRANSLATED, NOTES])).toEqual([
+        expect.stringMatching(/_next\.sql$/),
+      ]);
+    });
+
+    it("lets a field be added in a project that was never translated", async () => {
+      const dir = await projectAfter(dialect, [
+        { collections: [NOTES], after: forgetTranslatedFieldRecord },
+      ]);
+
+      expect(await filesOfRun(dialect, dir, [NOTES_GROWN])).toEqual([
+        expect.stringMatching(/_next\.sql$/),
+      ]);
+    });
+
+    describe("--record-snapshot", () => {
+      const record = (dir: string, entity: MinimalConfigEntity, at: string) =>
+        generateMigration({
+          name: "record_translated_fields",
+          dialect,
+          migrationsDir: dir,
+          defaultLocale: "en",
+          collections: [entity],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          recordSnapshot: true,
+          liveCompanionColumns: HELD,
+          now: new Date(at),
+        });
+
+      it("refuses to record translated fields the database has no translations table for", async () => {
+        // Turned translated with only a new translated field, before the config is put back: read
+        // from the main table alone, it looks as if its translations table were there.
+        const notes: MinimalConfigEntity = {
+          slug: "notes",
+          tableName: "dc_notes",
+          fields: [{ name: "headline", type: "text", localized: false }],
+        };
+        const dir = await projectAfter(dialect, [
+          { collections: [notes], after: forgetTranslatedFieldRecord },
+        ]);
+        const before = await contentsOf(dir);
+
+        const recording = generate(
+          dialect,
+          dir,
+          [
+            {
+              ...notes,
+              localized: true,
+              fields: [
+                ...notes.fields,
+                { name: "summary", type: "text", localized: true },
+              ],
+            },
+          ],
+          "record",
+          30,
+          {
+            recordSnapshot: true,
+            liveCompanionColumns: () => Promise.resolve([]),
+          }
+        );
+        await expect(recording).rejects.toThrow(/collection "notes"/);
+        await expect(recording).rejects.toThrow(/dc_notes_locales/);
+        await expect(recording).rejects.toThrow(/applied every migration/);
+        expect(await contentsOf(dir)).toEqual(before);
+      });
+
+      it("records a translations table that is there with no translated column, and keeps knowing it", async () => {
+        // Translated with no translated field, its translations table emptied outside the files.
+        const none: MinimalConfigEntity = {
+          ...BODY_SHARED,
+          fields: [
+            { name: "headline", type: "text", localized: false },
+            { name: "body", type: "text", localized: false },
+          ],
+        };
+        const dir = await projectAfter(dialect, [
+          { collections: [BODY_JOINS] },
+          { collections: [none], after: forgetCompanionFiles },
+        ]);
+
+        expect(
+          await generate(dialect, dir, [none], "record", 30, {
+            recordSnapshot: true,
+            liveCompanionColumns: table =>
+              Promise.resolve(
+                table === "dc_docs" ? ["_parent", "_locale"] : []
+              ),
+          })
+        ).not.toBeNull();
+        // A run about something else carries it on.
+        await generate(dialect, dir, [none, NOTES], "notes", 40);
+
+        // A field joining translation is moved into the table that is there.
+        expect(
+          await filesOfRun(dialect, dir, [
+            {
+              ...none,
+              fields: [
+                { name: "headline", type: "text", localized: false },
+                { name: "body", type: "text", localized: true },
+              ],
+            },
+            NOTES,
+          ])
+        ).toEqual([
+          expect.stringMatching(/_joins_localization_docs\.sql$/),
+          expect.stringMatching(/_next\.sql$/),
+        ]);
+      });
+
+      it("records a translations table made outside the migration files that holds every column", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED], after: forgetCompanionFiles },
+        ]);
+
+        expect(
+          await generate(dialect, dir, [TRANSLATED], "record", 30, {
+            recordSnapshot: true,
+            liveCompanionColumns: table =>
+              Promise.resolve(
+                table === "dc_docs" ? ["_parent", "_locale", "body"] : []
+              ),
+          })
+        ).not.toBeNull();
+      });
+
+      it("refuses to record a translated field its translations table has no column for, naming it", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED], after: forgetCompanionFiles },
+        ]);
+        const before = await contentsOf(dir);
+
+        const recording = generate(dialect, dir, [TRANSLATED], "record", 30, {
+          recordSnapshot: true,
+          liveCompanionColumns: () => Promise.resolve(["_parent", "_locale"]),
+        });
+        await expect(recording).rejects.toThrow(/"body"/);
+        await expect(recording).rejects.toThrow(/collection "docs"/);
+        expect(await contentsOf(dir)).toEqual(before);
+      });
+
+      it("records the translated fields, once, and lets the change through after it", async () => {
+        let recorded: Awaited<ReturnType<typeof record>> = null;
+        let again: Awaited<ReturnType<typeof record>> = null;
+        let afterRecord: Record<string, string> = {};
+        let afterAgain: Record<string, string> = {};
+        const files = await secondRun(dialect, SHARED, {
+          beforeSecond: async d => {
+            await forgetEverything(d);
+            recorded = await record(d, TRANSLATED, "2026-10-16T10:30:00.000Z");
+            afterRecord = await contentsOf(d);
+            again = await record(d, TRANSLATED, "2026-10-16T10:40:00.000Z");
+            afterAgain = await contentsOf(d);
+          },
+        });
+
+        expect(recorded).not.toBeNull();
+        const sql = await readFile(recorded!.sqlPath, "utf-8");
+        // Nothing for `nextly migrate` to change either way: comments up, a read down.
+        expect(
+          sections(sql)
+            .up.replace(/^--.*$/gm, "")
+            .trim()
+        ).toBe("");
+        expect(
+          sections(sql)
+            .down.replace(/^--.*$/gm, "")
+            .trim()
+        ).toBe("SELECT 1;");
+        const snapshot = JSON.parse(
+          await readFile(recorded!.snapshotPath, "utf-8")
+        ) as {
+          snapshot: {
+            tables: {
+              name: string;
+              localized?: boolean;
+              localizedColumns?: string[];
+            }[];
+          };
+        };
+        expect(
+          snapshot.snapshot.tables.find(t => t.name === "dc_docs")
+        ).toMatchObject({ localized: true, localizedColumns: ["body"] });
+
+        // A second run with nothing new to record writes nothing.
+        expect(again).toBeNull();
+        expect(afterAgain).toEqual(afterRecord);
+
+        // And the change it was run for now moves the values.
+        expect(files.map(f => f.name)).toEqual([
+          expect.stringMatching(/_archive_localization_docs\.sql$/),
+          expect.stringMatching(/_two\.sql$/),
+          expect.stringMatching(/_shared_localization_docs\.sql$/),
+        ]);
+      });
+
+      it("records a project that was never translated, so translation can be turned on after it", async () => {
+        const translated: MinimalConfigEntity = {
+          ...NOTES_GROWN,
+          localized: true,
+          fields: [
+            { name: "title", type: "text" },
+            { name: "summary", type: "text", localized: true },
+          ],
+        };
+        const dir = await projectAfter(dialect, [
+          { collections: [NOTES_GROWN], after: forgetTranslatedFieldRecord },
+        ]);
+
+        // Turning translation on is a sign of translation, and the older snapshot doesn't say
+        // `summary` was shared.
+        await expect(
+          generate(dialect, dir, [translated], "two", 20)
+        ).rejects.toThrow(/--record-snapshot/);
+        expect(
+          await generate(dialect, dir, [NOTES_GROWN], "record", 30, {
+            recordSnapshot: true,
+          })
+        ).not.toBeNull();
+        expect(await filesOfRun(dialect, dir, [translated])).toEqual([
+          expect.stringMatching(/_next\.sql$/),
+          expect.stringMatching(/_enable_localization_notes\.sql$/),
+        ]);
+      });
+
+      it("records nothing when the snapshot records the translated fields and the companion files don't", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED], after: d => forgetCompanionIntents(d) },
+        ]);
+        const before = await contentsOf(dir);
+
+        expect(
+          await generate(dialect, dir, [TRANSLATED], "record", 30, {
+            recordSnapshot: true,
+          })
+        ).toBeNull();
+        expect(await contentsOf(dir)).toEqual(before);
+      });
+
+      it("records a translated unique field, whose per-language index a snapshot from before the record lacks", async () => {
+        const unique: MinimalConfigEntity = {
+          ...TRANSLATED,
+          fields: [
+            { name: "code", type: "text", localized: true, unique: true },
+            { name: "price", type: "number" },
+          ],
+        };
+        const dir = await projectAfter(dialect, [
+          { collections: [unique], after: forgetTranslatedFieldRecord },
+        ]);
+
+        // The index reads as new to that snapshot, and is the record's to write, not a change.
+        expect(
+          await generate(dialect, dir, [unique], "record", 30, {
+            recordSnapshot: true,
+          })
+        ).not.toBeNull();
+        expect(await filesOfRun(dialect, dir, [unique, NOTES])).toEqual([
+          expect.stringMatching(/_next\.sql$/),
+        ]);
+      });
+
+      it("records a project with an older localization file that names no collection", async () => {
+        const shared: MinimalConfigEntity = {
+          ...BODY_SHARED,
+          localized: false,
+        };
+        // Translated now, with a field that is new beside one the main table holds: the same shape
+        // as a field joining translation, with nothing to tell them apart.
+        const translated: MinimalConfigEntity = {
+          ...BODY_JOINS,
+          fields: [...BODY_JOINS.fields, { name: "tagline", type: "text" }],
+        };
+        const dir = await mkdtemp(join(tmpdir(), "nextly-record-"));
+        const run = (
+          entity: MinimalConfigEntity,
+          name: string,
+          at: string,
+          recordSnapshot = false
+        ) =>
+          generateMigration({
+            name,
+            dialect,
+            migrationsDir: dir,
+            defaultLocale: "en",
+            collections: [entity],
+            singles: [],
+            components: [],
+            nonInteractive: true,
+            recordSnapshot,
+            liveCompanionColumns: HELD,
+            now: new Date(at),
+          });
+        await run(shared, "one", "2026-10-16T10:00:00.000Z");
+        await forgetTranslatedFieldRecord(dir);
+        // A companion file from before files recorded their intent, naming no collection, so it
+        // may be docs'.
+        await writeFile(
+          resolve(dir, "20261016_100000_001_create_localization_pages.sql"),
+          "-- Migration: 20261016_100000_001_create_localization_pages\n" +
+            "-- Generated: localization companion (create-only) (i18n)\n\n" +
+            "-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n",
+          "utf-8"
+        );
+
+        await expect(
+          run(translated, "two", "2026-10-16T11:00:00.000Z")
+        ).rejects.toThrow(/--record-snapshot/);
+        expect(
+          await run(
+            shared,
+            "record_translated_fields",
+            "2026-10-16T11:10:00.000Z",
+            true
+          )
+        ).not.toBeNull();
+        expect(
+          await run(
+            shared,
+            "record_translated_fields",
+            "2026-10-16T11:20:00.000Z",
+            true
+          )
+        ).toBeNull();
+        const before = new Set(await readdir(dir));
+        await run(translated, "two", "2026-10-16T11:30:00.000Z");
+        // The collection becoming translated, as the record says it was not.
+        expect(
+          (await readdir(dir))
+            .filter(f => f.endsWith(".sql") && !before.has(f))
+            .sort()
+        ).toEqual([
+          expect.stringMatching(/_two\.sql$/),
+          expect.stringMatching(/_enable_localization_docs\.sql$/),
+        ]);
+      });
+
+      it("refuses while the config holds a change to migrate, writing nothing", async () => {
+        const dir = await mkdtemp(join(tmpdir(), "nextly-record-"));
+        await generateMigration({
+          name: "one",
+          dialect,
+          migrationsDir: dir,
+          defaultLocale: "en",
+          collections: [TRANSLATED],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: new Date("2026-10-16T10:00:00.000Z"),
+        });
+        await forgetTranslatedFieldRecord(dir);
+        const before = await contentsOf(dir);
+
+        const recording = record(dir, SHARED, "2026-10-16T11:00:00.000Z");
+        await expect(recording).rejects.toThrow(
+          /--record-snapshot.*nextly migrate:create --name/
+        );
+        await expect(recording).rejects.toThrow(/"dc_docs"/);
+        expect(await contentsOf(dir)).toEqual(before);
+      });
+
+      it("records nothing for a snapshot that records the fields, whatever the config holds", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED] },
+        ]);
+        const before = await contentsOf(dir);
+
+        expect(
+          await record(dir, SHARED, "2026-10-16T11:00:00.000Z")
+        ).toBeNull();
+        expect(await contentsOf(dir)).toEqual(before);
+      });
+
+      it("records nothing for a recording snapshot before a planner can refuse the config", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED] },
+        ]);
+
+        // A field that changes type as it leaves translation, which a plain run refuses.
+        expect(
+          await record(
+            dir,
+            {
+              ...TRANSLATED,
+              fields: [
+                { name: "body", type: "number" },
+                { name: "price", type: "number" },
+              ],
+            },
+            "2026-10-16T11:00:00.000Z"
+          )
+        ).toBeNull();
+      });
     });
   }
 );

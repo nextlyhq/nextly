@@ -6,6 +6,7 @@
 import {
   migrationCreateCancelled,
   migrationNameRequired,
+  recordSnapshotNeedsAppMigration,
 } from "../../errors/areas/migrate-create";
 
 import type { ErrorCases } from "./types";
@@ -16,6 +17,7 @@ import { createLogger } from "../../utils/logger";
 export const MIGRATE_CREATE_CASES = {
   MIGRATION_NAME_REQUIRED: () => migrationNameRequired(),
   MIGRATION_CREATE_CANCELLED: () => migrationCreateCancelled(),
+  RECORD_SNAPSHOT_NEEDS_APP_MIGRATION: () => recordSnapshotNeedsAppMigration(),
   // The command's own first check, run for real: it refuses before reading anything.
   NO_TRANSACTION_NEEDS_BLANK: () =>
     runMigrateCreate(
@@ -32,6 +34,31 @@ export const MIGRATE_CREATE_CASES = {
       },
       (error: unknown) => error
     ),
+  // Built as `generateMigration` throws it, in a project whose translations no record settles.
+  TRANSLATIONS_UNRECORDED: () =>
+    new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage:
+        "`nextly migrate:create` can't tell which fields are translated, so it wrote nothing. " +
+        "The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values. " +
+        "To record them, put the config back as it was at the last migration and run `nextly migrate:create --record-snapshot` against a database that has applied every migration, " +
+        "then make your changes again and run `nextly migrate:create --name add_excerpt`.",
+      logContext: { reason: "translations-unrecorded" },
+    }),
+  // Built as `generateMigration` throws it, from `--record-snapshot`'s check of the database.
+  RECORD_SNAPSHOT_STORAGE_MISSING: () =>
+    new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage:
+        '--record-snapshot records which fields are translated as the database holds them, and collection "posts" has no translations table (dc_posts_locales). ' +
+        "Nothing was written. Run it against a database that has applied every migration, with the config as it was at the last migration.",
+      logContext: {
+        reason: "record-snapshot-storage-missing",
+        missing: [
+          'collection "posts" has no translations table (dc_posts_locales)',
+        ],
+      },
+    }),
   // The refusals below are built as `cli/commands/migrate-create.ts` throws them.
   PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA: () =>
     NextlyError.invalidInput({

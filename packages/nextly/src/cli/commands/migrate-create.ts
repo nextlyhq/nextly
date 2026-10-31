@@ -114,10 +114,16 @@ import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-fi
 import {
   migrationCreateCancelled,
   migrationNameRequired,
+  recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
 import { exitWithError } from "../errors/index";
-import { createContext, type CommandContext } from "../program";
-import { getDialectDisplayName, type SupportedDialect } from "../utils/adapter";
+import { createContext, type CommandContext } from "../context";
+import {
+  type CLIDatabaseAdapter,
+  createCliAdapter,
+  getDialectDisplayName,
+  type SupportedDialect,
+} from "../utils/adapter";
 import {
   requireDatabaseEnv,
   loadConfigOrExit,
@@ -176,6 +182,15 @@ export interface MigrateCreateCommandOptions {
    * @default true
    */
   transaction?: boolean;
+
+  /**
+   * Write a migration that changes nothing, whose snapshot records which fields are
+   * translated, for a project whose latest snapshot was written before
+   * snapshots recorded them. Refused while the config has changes to migrate.
+   * The name defaults to `record_translated_fields`.
+   * @default false
+   */
+  recordSnapshot?: boolean;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
@@ -188,6 +203,48 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
 // ============================================================================
 // Command Implementation
 // ============================================================================
+
+/**
+ * `--record-snapshot` with nothing to record exits 2, as a plain run with
+ * nothing to write does, so a script can tell it from a record to commit.
+ */
+/**
+ * What `--record-snapshot` reads the translations tables through (`liveCompanionColumns`): the
+ * database `DATABASE_URL` names, opened on the first read and closed by `close`. Nothing for any
+ * other run, which stays offline.
+ */
+function recordModeReader(recording: boolean | undefined): {
+  read?: (tableName: string) => Promise<readonly string[]>;
+  close: () => Promise<void>;
+} {
+  if (recording !== true) return { close: () => Promise.resolve() };
+  let adapter: Promise<CLIDatabaseAdapter> | undefined;
+  return {
+    read: async tableName => {
+      adapter ??= createCliAdapter();
+      const { companionColumnNames } = await import(
+        "../../domains/i18n/runtime/companion-io"
+      );
+      return companionColumnNames(
+        (await adapter) as unknown as Parameters<
+          typeof companionColumnNames
+        >[0],
+        tableName
+      );
+    },
+    close: async () => {
+      if (adapter) await (await adapter).disconnect();
+    },
+  };
+}
+
+function nothingToRecord(logger: CommandContext["logger"]): never {
+  logger.newline();
+  logger.info(
+    "Nothing to record: no snapshot here predates the record of which fields are translated."
+  );
+  process.exit(2);
+}
 
 /**
  * Whether the app stream has nothing it could possibly emit.
@@ -216,6 +273,12 @@ export async function runMigrateCreate(
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+
+  // The app's snapshot is the one that records translated fields; a blank
+  // file and a plugin module have none.
+  if (options.recordSnapshot === true && (options.blank || options.plugin)) {
+    exitWithError(logger, recordSnapshotNeedsAppMigration());
+  }
 
   if (options.plugin) {
     await runMigrateCreatePlugin(nameArg ?? options.name, options, context);
@@ -246,7 +309,10 @@ export async function runMigrateCreate(
 
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
-  const name = options.name ?? nameArg;
+  const name =
+    options.name ??
+    nameArg ??
+    (options.recordSnapshot === true ? "record_translated_fields" : undefined);
   if (!options.blank && !name) {
     exitWithError(logger, migrationNameRequired());
   }
@@ -443,13 +509,15 @@ export async function runMigrateCreate(
     builderEntriesOf(latest?.data.entities),
     dialect
   );
-  if (
-    nothingToGenerate({
-      entityCount: collections.length + singles.length + components.length,
-      appStream,
-      recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
-    })
-  ) {
+  const nothing = nothingToGenerate({
+    entityCount: collections.length + singles.length + components.length,
+    appStream,
+    recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
+  });
+  // A project with no tables has no translated field to record, and says so as any recording run
+  // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
+  if (nothing && options.recordSnapshot === true) nothingToRecord(logger);
+  if (nothing) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
@@ -460,6 +528,9 @@ export async function runMigrateCreate(
   logger.newline();
   logger.info("Comparing config to latest snapshot...");
 
+  // `--record-snapshot` records which fields are translated as the database holds them, so it reads
+  // the translations tables, connecting only once it has one to check. Every other run stays offline.
+  const live = recordModeReader(options.recordSnapshot);
   let result;
   try {
     result = await generateMigration({
@@ -476,6 +547,8 @@ export async function runMigrateCreate(
       previousMetadataUpserts,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
+      recordSnapshot: options.recordSnapshot === true,
+      liveCompanionColumns: live.read,
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
@@ -487,6 +560,12 @@ export async function runMigrateCreate(
       exitWithError(logger, migrationCreateCancelled());
     }
     exitWithError(logger, error);
+  } finally {
+    await live.close();
+  }
+
+  if (result === null && options.recordSnapshot === true) {
+    nothingToRecord(logger);
   }
 
   if (result === null) {
@@ -500,6 +579,26 @@ export async function runMigrateCreate(
   }
 
   const duration = Date.now() - startTime;
+  // A settings change is written as the settings-only migration it is, below; its snapshot is
+  // the record.
+  if (options.recordSnapshot === true && result.settingsChanges.length > 0) {
+    logger.newline();
+    logger.info(
+      "The config's settings have changes to migrate, so they are written as a settings-only migration, whose snapshot records which fields are translated."
+    );
+  } else if (options.recordSnapshot === true) {
+    logger.newline();
+    logger.success(`Recorded translated fields → ${result.snapshotPath}`);
+    logger.success(`Migration (changes nothing) → ${result.sqlPath}`);
+    logger.newline();
+    logger.info("Next steps:");
+    logger.item("Commit both files", 1);
+    logger.item(
+      "Make your change to the config, then run `nextly migrate:create --name <name>`",
+      1
+    );
+    return;
+  }
   logger.newline();
   logger.success(`Created migration → ${result.sqlPath}`);
   logger.success(`Snapshot → ${result.snapshotPath}`);
@@ -1343,6 +1442,11 @@ export function registerMigrateCreateCommand(program: Command): void {
     .option(
       "--plugin <entry>",
       "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
+    )
+    .option(
+      "--record-snapshot",
+      "Write a migration that changes nothing, whose snapshot records which fields are translated, for a project whose latest snapshot predates that record. Run it with the config as last migrated",
+      false
     )
     .option(
       "--no-transaction",
