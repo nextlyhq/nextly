@@ -43,13 +43,7 @@ export {
   type WidgetOverride,
   type WidgetRef,
 } from "./dashboard";
-export type {
-  ComponentDisplay,
-  CoreDisplay,
-  CoreView,
-  WidgetDisplay,
-  WidgetView,
-} from "./displays";
+export type { CoreView, WidgetView } from "./displays";
 export {
   setting,
   type ChartStyle,

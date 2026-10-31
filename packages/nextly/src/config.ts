@@ -242,34 +242,19 @@ export type { JsonValue } from "./plugins/admin-contributions";
 // A pure interface of strings, so this costs the browser nothing.
 export type { HookWarning } from "./hooks/side-effect-warnings";
 
-// The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
-// `/admin-meta` types from the declaration the server serializes rather than
-// restating them. `buildPluginAdminMeta` copies a contributed widget verbatim
-// into that payload, so the two were one shape declared twice -- and they
-// drifted, twice: `component` was optional on one side and required on the
-// other, and the whole declarative half (`title`, `archetype`, `size`,
-// `query`, `link`, ...) was added here and never on the admin's copy, so admin
-// code reading a property that was present on the wire got a type error.
-//
-// This subpath rather than the root, and that is the load-bearing part. The
-// admin's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
-// importing from `"nextly"` shadows the package exports and pulls core's whole
-// source tree in behind internal `@nextly/*` aliases that project does not
-// declare. `nextly/config` is not covered by that mapping, so it resolves
-// through the export map to the built declaration bundle the way any consumer's
-// would -- which is what makes the derivation reachable at all.
+// The admin panel reads its widget types from this subpath rather than the
+// root, and that is the load-bearing part. The admin's tsconfig maps the bare
+// `nextly` specifier to `../nextly/src`, so importing from `"nextly"` shadows
+// the package exports and pulls core's whole source tree in behind internal
+// `@nextly/*` aliases that project does not declare. `nextly/config` is not
+// covered by that mapping, so it resolves through the export map to the built
+// declaration bundle the way any consumer's would.
 //
 // Types only: `export type` carries no runtime binding, so nothing here adds a
 // byte to the config entry point's bundle.
 export type {
   ComponentPath,
-  DeclarativeWidgetArchetype,
   HeaderButtonId,
-  PluginAdminCustomWidget,
-  PluginAdminDataWidget,
-  PluginAdminDeclarativeWidget,
-  PluginAdminQuerylessWidget,
-  PluginAdminWidget,
 } from "./plugins/admin-contributions";
 //
 // Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
@@ -277,15 +262,11 @@ export type {
 // is exactly the weight this entry point exists to keep out of a
 // `nextly.config.ts`.
 //
-// `WidgetDefinition` is here for the same derivation reason as the contribution
-// shapes above: `/api/admin-meta/workspace` serializes the registry verbatim, so
-// the admin reads exactly this shape off the wire and restating it there would
-// be one contract declared twice.
+// `WidgetDefinition` is here for the admin alone: `/api/admin-meta/workspace`
+// serializes the registry verbatim, so the admin reads exactly this shape off
+// the wire and restating it there would be one contract declared twice. A
+// widget is declared with `defineWidget`, never written as one.
 export type {
-  WidgetArchetype,
-  DataWidgetArchetype,
-  QuerylessWidgetArchetype,
-  CellWidgetArchetype,
   WidgetDefinition,
   WidgetSetting,
   WidgetAction,
@@ -302,7 +283,7 @@ export {
   startsAtDefault,
   unfitContentField,
 } from "./domains/widgets/published-content-source";
-// The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
+// The lifecycle pair `WidgetDefinition` names. A
 // leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
 // and without it the two fields have types no config author can write down.
 export {

@@ -455,7 +455,7 @@ export interface WidgetDefinition {
    * returns -- that is `execute`'s job, and it is not optional there.
    *
    * A `PermissionSlug` spelling (`read-posts`), the same vocabulary
-   * `WidgetSource.requiredPermission` and `PluginAdminWidget` carry.
+   * `WidgetSource.requiredPermission` carries.
    *
    * 🔴 An ARRAY means ANY-OF, and it exists because a single slug cannot
    * describe the rule the services behind these cards actually apply. Release
@@ -1046,12 +1046,8 @@ function validateAction(action: WidgetAction | undefined, at: string): void {
 /**
  * What is wrong with one shortcut, or `undefined` when nothing is.
  *
- * A PREDICATE beside the throwing check, because both channels into the grid
- * need this rule and only one of them throws. `assertAdminWidgets` refuses a
- * contributed widget with its own error shape and its own message, so it cannot
- * call `validateAction` -- and restating the rule there is how the two came to
- * disagree: the registry rejected a blank label while a contributed
- * `actions: [{}]` was published and drew a link with an undefined destination.
+ * A PREDICATE beside the throwing check, so a caller can ask the rule without
+ * catching a throw.
  */
 export function actionProblem(action: unknown): string | undefined {
   const candidate = action as Partial<WidgetAction> | null | undefined;
