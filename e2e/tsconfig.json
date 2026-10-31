@@ -32,5 +32,5 @@
   // because their package's tsconfig only included `src/**/*`, so an import of
   // a package nobody had installed typechecked clean for months.
   "include": ["**/*.ts", "**/*.mjs"],
-  "exclude": ["node_modules", ".playwright"]
+  "exclude": ["node_modules", ".playwright", "multi-instance/.run"]
 }
