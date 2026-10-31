@@ -35,4 +35,4 @@ The admin renders inside your app's document, so your global CSS is in the casca
 
 `@nextlyhq/admin-css` adds the rule in `isolateAdminStylesheet` and exports `hasHostElementShield(css)`, which the admin's build uses to check the stylesheet it ships still carries it after minification.
 
-The base and blog templates write their `*:focus-visible` ring as `:where(*:focus-visible)`. Their pages draw it as before, and it no longer redraws the admin's focused controls with the site's ring and corner.
+The base and blog templates write their `*:focus-visible` ring as `html body :where(:focus-visible)`, which weighs two element names. Their pages draw it as before, it still beats a reset such as `button { outline: none }` added later, and it no longer redraws the admin's focused controls with the site's ring and corner.
