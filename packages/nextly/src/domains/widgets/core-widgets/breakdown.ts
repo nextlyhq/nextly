@@ -32,6 +32,25 @@ const BREAKDOWN_SETTINGS = {
   groupBy: COLLECTION_GROUP_BY,
 };
 
+/** Made-up entries by status, for the add gallery's tile and the preview page. */
+const SAMPLE_BREAKDOWN: BreakdownWidgetData = {
+  buckets: [
+    { value: "published", count: 86 },
+    { value: "draft", count: 24 },
+    { value: "archived", count: 6 },
+  ],
+  field: {
+    name: "status",
+    type: "string",
+    label: "Status",
+    choices: [
+      { value: "published", label: "Published" },
+      { value: "draft", label: "Draft" },
+      { value: "archived", label: "Archived" },
+    ],
+  },
+};
+
 export const breakdownWidget = defineWidget({
   id: CORE_WIDGET_ID.breakdown,
   title: "Breakdown",
@@ -95,4 +114,5 @@ export const breakdownWidget = defineWidget({
   // The component draws its own empty state, worded for groups and for a read
   // that stopped at its bound, which the frame's one line could not say.
   isEmpty: () => false,
+  preview: [{ name: "By status", data: SAMPLE_BREAKDOWN }],
 });

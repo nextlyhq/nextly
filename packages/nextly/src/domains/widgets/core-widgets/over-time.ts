@@ -16,7 +16,7 @@
 import { defineWidget } from "../declaration/define-widget";
 
 import { askedQuery } from "./asked";
-import type { OverTimeWidgetData } from "./data";
+import type { CoreSeriesPoint, OverTimeWidgetData } from "./data";
 import { CORE_WIDGET_ID } from "./ids";
 import {
   CARD_COLLECTION,
@@ -31,6 +31,22 @@ const OVER_TIME_SETTINGS = {
   filter: CARD_FILTER,
   dateRange: OVER_TIME_DATE_RANGE,
   chartStyle: OVER_TIME_CHART_STYLE,
+};
+
+/** A made-up month of entries a day, rising, for the add gallery's tile and the preview page. */
+const SAMPLE_DAILY = [
+  2, 3, 2, 4, 3, 5, 4, 4, 6, 5, 7, 6, 5, 8, 7, 9, 8, 7, 10, 9, 11, 10, 12, 11,
+  10, 13, 12, 14, 13, 15,
+];
+
+const SAMPLE_OVER_TIME: OverTimeWidgetData = {
+  points: SAMPLE_DAILY.map(
+    (count, day): CoreSeriesPoint => ({
+      start: new Date(Date.UTC(2026, 0, 1 + day)).toISOString(),
+      count,
+    })
+  ),
+  interval: "day",
 };
 
 export const overTimeWidget = defineWidget({
@@ -74,4 +90,5 @@ export const overTimeWidget = defineWidget({
   // its answer always has points to draw; the component says so for one that
   // has none.
   isEmpty: () => false,
+  preview: [{ name: "A rising month", data: SAMPLE_OVER_TIME }],
 });

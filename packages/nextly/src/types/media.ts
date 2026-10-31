@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 
+import { mediaCategoryOf } from "../domains/media/media-categories";
 import type { ServiceErrorCode } from "../errors/error-codes";
 
 // ========================================
@@ -114,6 +115,31 @@ export const MediaParamsSchema = z.object({
 
 export type MediaParams = z.infer<typeof MediaParamsSchema>;
 
+/**
+ * The views beside the folders. `missing-alt` is the images with no alt text;
+ * `unused` is the items the usage record finds no document using and no
+ * avatar or logo keeps.
+ */
+const MEDIA_VIEWS = ["missing-alt", "unused"] as const;
+export type MediaView = (typeof MEDIA_VIEWS)[number];
+
+/** The views a request may name, parsed at the boundary. */
+export const mediaViewSchema = z.enum(MEDIA_VIEWS);
+
+/**
+ * A page of a folder's items as a request asks for it, parsed at the
+ * boundary. Bounds as the list's own: at most 100 items a page.
+ */
+export const mediaPageQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(24),
+  search: z.string().trim().min(1).optional(),
+  type: MediaTypeSchema.optional(),
+  sortBy: z.enum(["uploadedAt", "filename", "size"]).default("uploadedAt"),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+});
+export type MediaPageQuery = z.infer<typeof mediaPageQuerySchema>;
+
 // ========================================
 // SERVICE RESPONSE TYPES
 // ========================================
@@ -152,23 +178,11 @@ export interface DeleteMediaResponse {
 // ========================================
 
 /**
- * Get media type from MIME type
+ * Get media type from MIME type: the kind the media library shows the file
+ * as, and narrows to (`mediaCategoryOf`).
  */
 export function getMediaTypeFromMime(mimeType: string): MediaType {
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("video/")) return "video";
-  if (mimeType.startsWith("audio/")) return "audio";
-  if (
-    mimeType.includes("pdf") ||
-    mimeType.includes("document") ||
-    mimeType.includes("text") ||
-    mimeType.includes("word") ||
-    mimeType.includes("sheet") ||
-    mimeType.includes("presentation")
-  ) {
-    return "document";
-  }
-  return "other";
+  return mediaCategoryOf(mimeType);
 }
 
 /**

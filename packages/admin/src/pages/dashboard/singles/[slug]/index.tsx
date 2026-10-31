@@ -33,6 +33,7 @@ import {
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
+import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
 import {
   SingleForm,
   type SingleSchema,
@@ -258,6 +259,20 @@ export default function SingleEditPage({
     lifecycleEnabled: schema?.status,
     onDefaultLocale: !isNonDefaultLocale,
   });
+  // The Publish split's other way to publish: at a time, in a release of its
+  // own named after the Single.
+  const schedule = useSchedulePublishAction({
+    scopeKind: "single",
+    scopeSlug: slug,
+    entryId: document?.id,
+    lifecycleEnabled: schema?.status,
+    onDefaultLocale: !isNonDefaultLocale,
+    // A Single is named by its schema, not by a field the form holds.
+    documentTitle: () => schema?.label || slug,
+    // With no drafts, a save of a live Single is published at once.
+    savesGoLive:
+      schema?.draftsEnabled !== true && document?.status === "published",
+  });
 
   // Update mutation — routes the save to the active language's companion row.
   const { mutateAsync: updateDocument, isPending: isUpdating } =
@@ -429,6 +444,7 @@ export default function SingleEditPage({
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame>
           {release.dialog}
+          {schedule.dialog}
           <SingleForm
             /* Under the editor's header, for the reason the entry editor
              gives. */
@@ -471,6 +487,9 @@ export default function SingleEditPage({
               removedFromCode
                 ? []
                 : [
+                    ...(schedule.contributed === null
+                      ? []
+                      : [schedule.contributed]),
                     ...(release.contributed === null
                       ? []
                       : [release.contributed]),

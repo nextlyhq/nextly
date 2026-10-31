@@ -5,6 +5,8 @@
  * These types represent the public API surface for media operations.
  */
 
+import type { MediaView } from "../../types/media";
+
 /**
  * Media file returned from operations
  */
@@ -92,6 +94,8 @@ export interface ListMediaOptions {
   sortBy?: "uploadedAt" | "filename" | "size";
   /** Sort direction */
   sortOrder?: "asc" | "desc";
+  /** A view across every folder: images missing alt text, or unused items. */
+  view?: MediaView;
 }
 
 /**
@@ -137,8 +141,11 @@ export interface UpdateFolderInput {
 export interface FolderContents {
   folder: MediaFolder;
   subfolders: MediaFolder[];
+  /** One page of the folder's own items, as `meta` says. */
   files: MediaFile[];
   breadcrumbs: Array<{ id: string; name: string }>;
+  /** Which page `files` is, and how many items the folder holds in all. */
+  meta: { total: number; page: number; limit: number; totalPages: number };
 }
 
 /**

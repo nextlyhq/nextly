@@ -39,6 +39,7 @@ import {
 } from "@tanstack/react-query";
 
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
+import { formatScheduledAt } from "@admin/components/features/releases/release-schedule";
 import { toast } from "@admin/components/ui";
 import { collectionApi } from "@admin/services/collectionApi";
 import { entryApi } from "@admin/services/entryApi";
@@ -58,9 +59,11 @@ import {
   fetchReleases,
   publishReleaseNow,
   removeReleaseMember,
+  scheduleDocument,
   scheduleRelease,
   updateRelease,
   type ReleaseReadinessListResponse,
+  type ScheduleDocumentResponse,
   type ReleaseMutationResponse,
   type ReleaseListResponse,
   type MemberMutationResponse,
@@ -83,6 +86,7 @@ import {
   type ReleaseMember,
   type ReleaseMemberAction,
   type ReleaseScopeNames,
+  type ScheduleDocumentPayload,
   type ScheduleReleasePayload,
   type UpdateReleasePayload,
   type Release,
@@ -489,6 +493,33 @@ export function useScheduleRelease(id: string): UseMutationResult<
     onSuccess: () => {
       refresh(id);
       toast.success("Release scheduled.");
+    },
+  });
+}
+
+/**
+ * Schedule one document to go live on its own: a release holding only it, at
+ * the chosen time, made in one request that lands whole or not at all.
+ *
+ * Every release read is refreshed when the request SETTLES, not only when it
+ * succeeds. A request whose answer was lost may still have scheduled the
+ * document, and the document's banner and Publishing section are where the
+ * editor looks to find out, so they must not keep the answer from before.
+ */
+export function useScheduleDocument(): UseMutationResult<
+  ScheduleDocumentResponse,
+  Error,
+  ScheduleDocumentPayload,
+  unknown
+> {
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: (payload: ScheduleDocumentPayload) => scheduleDocument(payload),
+    onSettled: result => refresh(result?.item.release.id),
+    onSuccess: result => {
+      const at = formatScheduledAt(result.item.release);
+      toast.success(at ? `Scheduled to go live ${at}.` : "Scheduled.");
     },
   });
 }

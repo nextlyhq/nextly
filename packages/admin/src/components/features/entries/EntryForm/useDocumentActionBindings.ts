@@ -21,7 +21,7 @@ import { useDocumentHistory } from "@admin/components/features/versions/document
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
-import { documentActions, type DocumentAction } from "./document-actions";
+import { documentActions, type EditorDocumentAction } from "./document-actions";
 import {
   acceptContributions,
   reasonFor,
@@ -137,6 +137,11 @@ export interface DocumentActionBindingsInput {
    * distinguish from a feature that does not exist.
    */
   contributedActions?: readonly ContributedAction[];
+  /**
+   * The form's current values, unsaved edits included, which a contributed
+   * action is told when it is chosen.
+   */
+  currentValues?: () => Record<string, unknown>;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -205,9 +210,9 @@ export interface ActionConfirmation {
 
 export interface DocumentActionBindings {
   /** Every action, in the order and placement the model gives it. */
-  actions: DocumentAction[];
+  actions: EditorDocumentAction[];
   /** The action that leads, when one does. */
-  primary: DocumentAction | undefined;
+  primary: EditorDocumentAction | undefined;
   /** What each action's control runs, and why it cannot at this instant. */
   bindings: Record<string, ActionBinding | undefined>;
   /**
@@ -414,6 +419,7 @@ export function useDocumentActionBindings({
   canEdit = true,
   writesRefused = false,
   contributedActions = [],
+  currentValues,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -572,7 +578,10 @@ export function useDocumentActionBindings({
     actionBindings,
     // A contribution acts on the document too (adding it to a release), which
     // is not offered where every write to it is refused.
-    isReadingHistory || writesRefused ? [] : contributedActions
+    isReadingHistory || writesRefused
+      ? []
+      : heldUnderLock(contributedActions, documentLocked),
+    currentValues
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>
@@ -653,7 +662,7 @@ function runAction(
     refusalFor,
   }: {
     offered: {
-      actions: readonly DocumentAction[];
+      actions: readonly EditorDocumentAction[];
       bindings: Record<string, ActionBinding | undefined>;
     };
     builtIn: {
@@ -873,9 +882,7 @@ export function refusalReasons({
    * Reading verbs are deliberately left alone: discarding your own unsaved
    * changes, previewing and opening history are yours to do whoever holds the row.
    */
-  const lockedReason = documentLocked
-    ? "Someone else is editing this document"
-    : undefined;
+  const lockedReason = documentLocked ? LOCKED_REASON : undefined;
   const invalidReason = isInvalid
     ? "Fix the errors on this page first."
     : undefined;
@@ -903,6 +910,35 @@ export function refusalReasons({
           ? "invalid"
           : "refused",
   };
+}
+
+/** Why a write is refused while a colleague holds the document. */
+const LOCKED_REASON = "Someone else is editing this document";
+
+/**
+ * The page's contributions, with each way to publish held while a colleague
+ * holds the document, as Publish is: scheduling the document or adding it to
+ * a release publishes it later, which is a write the lock withholds. Other
+ * contributions (a reader's own pin) write nothing of the document's and stay
+ * usable. Held through the binding's transient reason, so a permission the
+ * page already refused with still speaks first.
+ */
+function heldUnderLock(
+  contributed: readonly ContributedAction[],
+  documentLocked: boolean
+): readonly ContributedAction[] {
+  if (!documentLocked) return contributed;
+  return contributed.map(entry =>
+    entry.action.placement === "publish-menu"
+      ? {
+          ...entry,
+          binding: {
+            ...entry.binding,
+            disabledReason: entry.binding.disabledReason ?? LOCKED_REASON,
+          },
+        }
+      : entry
+  );
 }
 
 /** The document's one save state, from the form and the storing gate. */

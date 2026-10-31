@@ -10,7 +10,9 @@
  * visit loaded the editor for a sheet most visits never open. Its code is
  * asked for on the first sign a reader is heading for it (`preloadWidgetSettingsSheet`:
  * a pointer over, or focus on, a control that opens it), so it has usually
- * arrived by the time it opens.
+ * arrived by the time it opens. The fetch and those handlers live in
+ * `settings-sheet-code`, so a card that only starts the fetch does not carry
+ * this panel.
  *
  * @module components/features/widgets/edit/LazyWidgetSettingsSheet
  */
@@ -26,35 +28,9 @@ import {
 import type { JSX } from "react";
 
 import { useRetryableModule } from "@admin/hooks/useRetryableModule";
-import { retryableModule } from "@admin/lib/retryable-module";
 
+import { settingsSheetModule } from "./settings-sheet-code";
 import type { WidgetSettingsSheetProps } from "./WidgetSettingsSheet";
-
-/**
- * The sheet's code: one fetch shared by a preload and an opening, and, unlike
- * `React.lazy`, a failed fetch is not kept, so opening again fetches afresh
- * rather than throwing the dashboard into its error boundary.
- */
-const sheetModule = retryableModule(() =>
-  import("./WidgetSettingsSheet").then(m => m.WidgetSettingsSheet)
-);
-
-/**
- * Start fetching the sheet's code ahead of its opening. A failed fetch says
- * nothing here: opening the sheet asks again.
- */
-export function preloadWidgetSettingsSheet(): void {
-  sheetModule.preload();
-}
-
-/**
- * The handlers that preload the sheet from a control that opens it, or opens the menu or
- * popover it is opened from: a pointer over it, or focus on it.
- */
-export const settingsIntent = {
-  onPointerEnter: preloadWidgetSettingsSheet,
-  onFocus: preloadWidgetSettingsSheet,
-} as const;
 
 /**
  * The sheet as it stands while its code is still arriving: the same panel and
@@ -141,7 +117,7 @@ export function LazyWidgetSettingsSheet(
   props: WidgetSettingsSheetProps
 ): JSX.Element {
   const { state, attempt, retry } = useRetryableModule(
-    sheetModule,
+    settingsSheetModule,
     "The card settings sheet's code"
   );
   if (state.status === "ok") {

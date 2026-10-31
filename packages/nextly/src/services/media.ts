@@ -28,7 +28,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, count, desc, asc, or, sql } from "drizzle-orm";
+import { count, desc, asc, eq, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -40,6 +40,10 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import type {
+  MediaLibraryCounts,
+  UnusedSources,
+} from "../domains/media/media-library-query";
 import {
   errorForLog,
   filesKeptByOthers,
@@ -68,6 +72,7 @@ import type {
   DeleteMediaResponse,
   UploadMediaInput,
   UpdateMediaInput,
+  MediaView,
 } from "../types/media";
 
 import { BaseService } from "./base-service";
@@ -209,9 +214,76 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * What decides which items are unused: the usage table and the records
+   * outside content that keep an item by its address. `null` before
+   * `nextly migrate` has created the usage table. Asked on the pool: nothing
+   * here runs inside a caller's transaction.
+   */
+  private async unusedSources(): Promise<UnusedSources | null> {
+    // Loaded when the library is read, not with the service.
+    const [{ mediaUsagePresent }, { mediaAddressHolders }] = await Promise.all([
+      import("../domains/media/usage/media-usage-store"),
+      import("../domains/media/media-address-holders"),
+    ]);
+    if (!(await mediaUsagePresent(this.adapter, this.logger))) return null;
+    return {
+      usage: this.tables.nextlyMediaUsage,
+      holders: await mediaAddressHolders(this.adapter, this.tables),
+      dialect: this.adapter.getCapabilities().dialect,
+    };
+  }
+
+  /**
+   * The sidebar's counts, in one query: every folder's items (and the items
+   * in no folder), and each view's. Grouped by folder, with each view's
+   * condition summed inside the group, so the whole library is read once
+   * and nothing is counted in the application.
+   *
+   * `unused` is `null` before `nextly migrate` has created the usage table.
+   * `usageRecorded` says whether the record has been built for content
+   * written before it existed (`nextly media reindex-usage`): until then an
+   * item that content uses can read as unused.
+   */
+  async countLibrary(): Promise<MediaLibraryCounts> {
+    const { media, nextlyMeta } = this.tables;
+    const unused = await this.unusedSources();
+    // Loaded when the library is read, not with the service.
+    const [
+      { mediaLibraryCountsOf, missingAltText, unusedItem },
+      { MEDIA_USAGE_RECORDED_KEY },
+    ] = await Promise.all([
+      import("../domains/media/media-library-query"),
+      import("../domains/media/usage/media-usage-store"),
+    ]);
+    const groups = await this.db
+      .select({
+        folderId: media.folderId,
+        items: count(),
+        missingAlt: sql<
+          number | string | null
+        >`SUM(CASE WHEN ${missingAltText(media)} THEN 1 ELSE 0 END)`,
+        unused: unused
+          ? sql<
+              number | string | null
+            >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
+          : sql<number>`0`,
+        // At most one marker row joins each item, so it multiplies nothing.
+        recorded: sql<
+          number | string | null
+        >`MAX(CASE WHEN ${nextlyMeta.key} IS NULL THEN 0 ELSE 1 END)`,
+      })
+      .from(media)
+      .leftJoin(nextlyMeta, eq(nextlyMeta.key, MEDIA_USAGE_RECORDED_KEY))
+      .groupBy(media.folderId);
+    return mediaLibraryCountsOf(groups, unused !== null);
+  }
+
+  /**
    * List media with pagination, search, filtering, and sorting
    */
-  async listMedia(params?: MediaParams): Promise<MediaListResponse> {
+  async listMedia(
+    params?: MediaParams & { view?: MediaView }
+  ): Promise<MediaListResponse> {
     try {
       const {
         page = 1,
@@ -219,41 +291,23 @@ export class MediaService extends BaseService {
         search,
         type,
         folderId,
+        view,
         sortBy = "uploadedAt",
         sortOrder = "desc",
       } = params || {};
 
       const { media } = this.tables;
 
-      const conditions = [];
-
-      if (folderId !== undefined) {
-        if (folderId === null || folderId === "root") {
-          conditions.push(sql`${media.folderId} IS NULL`);
-        } else {
-          conditions.push(sql`${media.folderId} = ${folderId}`);
-        }
-      }
-
-      // Using LOWER() for case-insensitive search across all databases
-      if (search) {
-        const searchLower = search.toLowerCase();
-        conditions.push(
-          or(
-            sql`LOWER(${media.filename}) LIKE ${`%${searchLower}%`}`,
-            sql`LOWER(${media.originalFilename}) LIKE ${`%${searchLower}%`}`,
-            sql`LOWER(${media.altText}) LIKE ${`%${searchLower}%`}`,
-            sql`LOWER(${media.caption}) LIKE ${`%${searchLower}%`}`
-          )
-        );
-      }
-
-      if (type) {
-        conditions.push(sql`${media.mimeType} LIKE ${`${type}/%`}`);
-      }
-
-      const whereClause =
-        conditions.length > 0 ? and(...conditions) : undefined;
+      // The same narrowing a folder's contents and the sidebar's counts use,
+      // loaded when the library is read, not with the service.
+      const { mediaQueryCondition } = await import(
+        "../domains/media/media-library-query"
+      );
+      const whereClause = mediaQueryCondition(
+        media,
+        view === "unused" ? await this.unusedSources() : null,
+        { folderId, search, type, view }
+      );
 
       const orderFn = sortOrder === "asc" ? asc : desc;
       const orderByClause = orderFn(media[sortBy]);

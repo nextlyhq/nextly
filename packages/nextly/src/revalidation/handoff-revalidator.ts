@@ -10,25 +10,30 @@
  *
  * @module revalidation/handoff-revalidator
  */
-import { tagsToExpire } from "../runtime/cache/next-cache-revalidator";
-import { consoleLogger } from "../shared/types";
+import {
+  handOffWithin,
+  tagsToExpire,
+} from "../runtime/cache/next-cache-revalidator";
 
-import { expiryHandoff, isPendingExpiryHandoff } from "./expiry-handoff";
+import {
+  expiryHandoff,
+  isPendingExpiryHandoff,
+  takePendingExpiries,
+} from "./expiry-handoff";
 import type { CacheRevalidator, RevalidationIntent } from "./types";
 
 export class HandOffRevalidator implements CacheRevalidator {
   async flush(intents: RevalidationIntent[]): Promise<void> {
     const handoff = expiryHandoff();
     if (isPendingExpiryHandoff(handoff)) return;
-    const tags = tagsToExpire(intents);
+    // Tags an earlier flush could not hand off are retried with this one's:
+    // outside Next.js no request flush drains them.
+    const tags = [
+      ...new Set([...takePendingExpiries(), ...tagsToExpire(intents)]),
+    ];
     if (tags.length === 0) return;
-    try {
-      await handoff.handOff(tags, "a write made outside Next.js");
-    } catch (error) {
-      // Best-effort, as every revalidator is: the write is committed already.
-      consoleLogger.error("[nextly] cache expiry could not be handed off", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // Bounded, as in a request: a ledger that never answers must not hold a
+    // write that has already committed. What it does not take is kept.
+    await handOffWithin(handoff, tags, "a write made outside Next.js");
   }
 }
