@@ -49,6 +49,7 @@
  * - GET    /api/media/folders/:id/contents   - Get folder contents
  * - GET    /api/media/folders/root/contents  - Get root folder contents
  * - GET    /api/media/counts                 - Every folder's and view's item count
+ * - GET    /api/media/:id/usage              - The documents using a media item
  *
  * @module api/media-handlers
  */
@@ -61,6 +62,7 @@ import {
   isErrorResponse,
   isVisitorRefusal,
   requirePermission,
+  type AuthContext,
 } from "../auth/middleware";
 import { actorFromAuthContext, type RequestActor } from "../auth/request-actor";
 import { visitorReadsSystemResource } from "../auth/resource-readable";
@@ -151,6 +153,7 @@ const MEDIA_ACTION_BY_ROUTE: Partial<
   "get-folder-contents": "read",
   "get-root-contents": "read",
   "media-counts": "read",
+  "media-usage": "read",
   "upload-media": "create",
   "create-folder": "create",
   "update-media": "update",
@@ -197,7 +200,9 @@ async function gateMediaRoute(
   path: string[] | undefined,
   method: string,
   requireAuth: boolean
-): Promise<{ authUserId?: string; actor?: RequestActor } | Response> {
+): Promise<
+  { authUserId?: string; actor?: RequestActor; auth?: AuthContext } | Response
+> {
   if (!requireAuth) {
     if (!READ_ROUTE_TYPES.has(route.type)) {
       throwUnmatchedRoute(path, method);
@@ -234,7 +239,13 @@ async function gateMediaRoute(
   // Surface both the acting user id (for uploader attribution on the DB row)
   // and the full actor (session vs API key) so media writes record the true
   // caller on their outbox events.
-  return { authUserId: auth.userId, actor: actorFromAuthContext(auth) };
+  // The whole auth context too, for a read that answers by what the caller
+  // may read (where an item is used).
+  return {
+    authUserId: auth.userId,
+    actor: actorFromAuthContext(auth),
+    auth,
+  };
 }
 
 // ============================================================
@@ -295,6 +306,7 @@ interface ParsedMediaRoute {
     | "get-folder-contents"
     | "get-root-contents"
     | "media-counts"
+    | "media-usage"
     | "not-found";
   mediaId?: string;
   folderId?: string;
@@ -358,6 +370,11 @@ function parseMediaRoute(
   if (segments.length === 2 && segments[1] === "raw") {
     if (method === "GET")
       return { type: "serve-media-bytes", mediaId: segments[0] };
+    return { type: "not-found" };
+  }
+
+  if (segments.length === 2 && segments[1] === "usage") {
+    if (method === "GET") return { type: "media-usage", mediaId: segments[0] };
     return { type: "not-found" };
   }
 
@@ -749,6 +766,47 @@ async function handleMediaCounts(): Promise<Response> {
   return respondData(counts as unknown as Record<string, unknown>);
 }
 
+/**
+ * The documents using one item that the caller may read, and the rest
+ * counted by collection, read from the usage record. Served only on the
+ * gated mount, since it names documents: the public mount answers it as an
+ * unknown path. Per caller, so it is never cached for another.
+ */
+async function handleMediaUsage(
+  mediaId: string,
+  auth: AuthContext | undefined
+): Promise<Response> {
+  // Only a gated mount reaches here, and it always carries the caller.
+  if (!auth) throw NextlyError.authRequired();
+  const mediaService = await getMediaService();
+  // An item that does not exist is not found, rather than used by nothing.
+  await mediaService.findById(mediaId, createRequestContext());
+  // Loaded when it is asked, not with the handlers.
+  const [{ readCaller, PRIVATE_NO_STORE_HEADERS }, { mediaUsesOf }, source] =
+    await Promise.all([
+      import("./authenticated-read"),
+      import("../domains/media/usage/media-uses"),
+      import("../domains/media/usage/media-uses-source"),
+    ]);
+  const uses = await mediaUsesOf(
+    mediaId,
+    source.bootedMediaUsesSource(getService("adapter"), await readCaller(auth))
+  );
+  return respondList(
+    uses.items,
+    {
+      total: uses.items.length,
+      page: 1,
+      limit: uses.items.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+      ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
+    },
+    { headers: PRIVATE_NO_STORE_HEADERS }
+  );
+}
+
 // ============================================================
 // Public API
 // ============================================================
@@ -818,6 +876,9 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "media-counts":
             response = await handleMediaCounts();
+            break;
+          case "media-usage":
+            response = await handleMediaUsage(route.mediaId!, gate.auth);
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "GET");
