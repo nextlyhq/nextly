@@ -57,10 +57,9 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
 import {
   SETUP_BAR,
   SETUP_GAP,
+  SETUP_ROW,
   SETUP_ROW_BODY_PX,
   SETUP_TILE,
-  setupOneRowPx,
-  setupRowClass,
 } from "./setup/measures";
 import { SetupCard } from "./SetupCard";
 
@@ -194,13 +193,8 @@ describe("the setup card", () => {
       screen.getByRole("region", { name: /Set up your project/ })
     ).toHaveAccessibleName("Set up your project, 1 of 5 done");
     const row = screen.getByRole("list", { name: "Setup steps" });
-    // One column per step, flowing in one row, where the body gives five tiles room to read in
-    // full; two columns where it does not. Judged by the body's width, not the viewport's.
-    expect(screen.getByTestId("setup-card")).toHaveClass("@container");
-    expect(row).toHaveClass("grid-cols-2");
-    expect(row).toHaveClass(`@min-[${setupOneRowPx(5)}px]:grid-flow-col`);
-    expect(row).toHaveClass(`@min-[${setupOneRowPx(5)}px]:auto-cols-fr`);
-    expect(row).toHaveClass(`@min-[${setupOneRowPx(5)}px]:grid-cols-none`);
+    // One column per step, flowing in one row, scrolling sideways where the body is narrower.
+    expect(row).toHaveClass(...SETUP_ROW.className.split(" "));
     expect(tiles().map(tile => tile.dataset.setupStep)).toEqual([
       "sample",
       "collection",
@@ -210,24 +204,35 @@ describe("the setup card", () => {
     ]);
   });
 
-  it("keeps the tiles in one row only where each gets the width to read in full", () => {
-    // Written out per count, so each threshold is held to the one rule it is written from.
-    for (const count of [1, 2, 3, 4, 5, 6]) {
-      const px = setupOneRowPx(count);
-      expect(setupRowClass(count).split(" ").sort()).toEqual(
-        [
-          "grid-cols-2",
-          `@min-[${px}px]:grid-flow-col`,
-          `@min-[${px}px]:auto-cols-fr`,
-          `@min-[${px}px]:grid-cols-none`,
-        ].sort()
+  it("keeps every count of steps in one row at every width, never wrapping into rows", () => {
+    // The grid's contract: a card is as tall as its stored rows in every band, so the tiles may not
+    // wrap into a second row of tiles at any width; a narrow body scrolls the row instead.
+    for (const count of [1, 2, 3, 4, 5, 6, 7]) {
+      const steps: SetupStep[] = Array.from({ length: count }, (_, index) => ({
+        kind: `step-${index}` as SetupStep["kind"],
+        status: "open",
+      })) as SetupStep[];
+      const { unmount } = draw(
+        dataOf({ setup: { known: true, steps, done: 0, total: count } })
       );
+      const row = screen.getByRole("list", { name: "Setup steps" });
+      const classes = [...row.classList];
+      // A grid (without it the flow and columns below do nothing, and the tiles stack in a
+      // column), flowing along the row, a column per tile, scrolling sideways where they do not
+      // fit. Spelled out here rather than read from `SETUP_ROW`, so the constant is what is tested.
+      expect(classes).toEqual(
+        expect.arrayContaining(["grid", "grid-flow-col", "overflow-x-auto"])
+      );
+      expect(classes).toContain("auto-cols-[minmax(max-content,1fr)]");
+      // Positioned, so a scrolled-away tile's screen-reader text stays inside the row's clip.
+      expect(classes).toContain("relative");
+      // No rule that sets columns, at any width, so nothing can wrap the tiles onto a second row.
+      expect(classes.filter(name => /(^|:)grid-cols-/.test(name))).toEqual([]);
+      expect(classes.filter(name => name.startsWith("@"))).toEqual([]);
+      expect(tiles()).toHaveLength(count);
+      for (const tile of tiles()) expect(tile).toHaveClass(SETUP_ROW.tile);
+      unmount();
     }
-    // Four tiles in a 1024 px window's card (598 px) wrap; in a 1440 px one's (1012 px) they do not.
-    expect(setupOneRowPx(4)).toBeGreaterThan(598);
-    expect(setupOneRowPx(5)).toBeLessThan(1012);
-    // More steps than the table holds: two columns, never a row too narrow to read.
-    expect(setupRowClass(7)).toBe("grid-cols-2");
   });
 
   it("draws no heading of its own: the frame's title is the card's one", () => {
@@ -343,6 +348,29 @@ describe("the setup card", () => {
       screen.getByRole("button", { name: "Hide: Fill in your Singles" })
     );
     expect(grow).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("asks no growth at rest even where its body measures taller than its rows, so it never grows a frame after its first paint", () => {
+    // What a body taller than 12 × 2 holds measures, as two rows of wrapped tiles did (124 px): a
+    // card that asked for it at rest was painted at its two rows and grew a frame later, moving
+    // every card under it on a phone.
+    const offsetHeight = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.dataset.testid === "setup-card" ? 124 : 0;
+      });
+    try {
+      const grow = vi.fn();
+      draw(dataOf(), grow);
+      expect(grow).not.toHaveBeenCalledWith(expect.any(Number));
+      // The positive control: the reader's own action is measured and asked for.
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open: Fill in your Singles" })
+      );
+      expect(grow).toHaveBeenLastCalledWith(124);
+    } finally {
+      offsetHeight.mockRestore();
+    }
   });
 
   it("links Add your first entry to a new entry of the first creatable collection, not the collections index", () => {

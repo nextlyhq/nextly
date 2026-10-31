@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+import { playgroundCacheComponents } from "./cache-components";
+
 // Payload-style env-conditional source-mode (see packages/next/src/withPayload/withPayload.js
 // in the payloadcms/payload repo for the canonical reference).
 //
@@ -47,19 +49,11 @@ const NEXTLY_DYNAMIC_PACKAGES = [
 ];
 
 /**
- * Cache Components with Partial Prefetching, behind a switch.
- *
- * The "Playground builds and serves under Cache Components" CI job turns it on,
- * so this app's build is where nextly's route helpers prove they prerender a
- * static shell. Everything else builds with it off, the browser suite among
- * them: the admin's own behaviour under Cache Components is not ready yet, and
- * a suite run with it on fails there for reasons that have nothing to do with
- * the change under test. Partial Prefetching is set only with it, since Next.js
- * accepts it only with Cache Components on. Nextly supports only the on
- * state, so a playground started with it off says so once at start; the
- * default turns on together with the browser suite's expectations for it.
+ * Cache Components with Partial Prefetching, on unless turned off (see
+ * `cache-components.ts`). Partial Prefetching is set only with it, since
+ * Next.js accepts it only with Cache Components on.
  */
-const CACHE_COMPONENTS = process.env.NEXTLY_PLAYGROUND_CACHE_COMPONENTS === "1";
+const CACHE_COMPONENTS = playgroundCacheComponents();
 
 const nextConfig: NextConfig = {
   ...(CACHE_COMPONENTS

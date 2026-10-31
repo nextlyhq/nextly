@@ -43,12 +43,13 @@ export type RunnerOutcome = "overdue" | "stopped";
 
 /**
  * Leave each release as the runner would, then confirm through the API that
- * the server reads it that way.
+ * the server reads it that way. Answers the instant every one of them was due,
+ * so a spec can find the day the calendar places them on.
  */
 export async function leaveReleasesAsTheRunnerWould(
   page: Requester,
   releases: ReadonlyArray<{ id: string; outcome: RunnerOutcome }>
-): Promise<void> {
+): Promise<Date> {
   const dueAt = Math.floor((Date.now() - OVERDUE_BY_MS) / 1000);
   // The dev server holds the same file, and it, or a spec on another worker,
   // may be writing when this opens: wait for its lock, as the server's own adapter
@@ -86,4 +87,5 @@ export async function leaveReleasesAsTheRunnerWould(
       dueAt * 1000
     );
   }
+  return new Date(dueAt * 1000);
 }
