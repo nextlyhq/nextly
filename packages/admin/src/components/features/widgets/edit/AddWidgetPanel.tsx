@@ -371,6 +371,7 @@ function RadioChips({
   value,
   onChange,
   testId,
+  glyphs = false,
 }: {
   legend: string;
   name: string;
@@ -378,6 +379,8 @@ function RadioChips({
   value: string;
   onChange: (value: string) => void;
   testId: string;
+  /** Labels that are glyphs (⅓, ½): drawn larger, in the text face, so a fraction reads. */
+  glyphs?: boolean;
 }): JSX.Element {
   return (
     <fieldset className="space-y-1.5" data-testid={testId}>
@@ -398,7 +401,10 @@ function RadioChips({
             />
             <span
               aria-hidden="true"
-              className="inline-flex min-h-8 cursor-pointer items-center rounded-md border border-border px-2.5 font-mono text-xs text-muted-foreground peer-checked:border-foreground peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring"
+              className={cn(
+                "inline-flex min-h-8 cursor-pointer items-center justify-center rounded-md border border-border px-2.5 text-muted-foreground peer-checked:border-foreground peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring",
+                glyphs ? "min-w-10 text-sm" : "font-mono text-xs"
+              )}
             >
               {option.label}
             </span>
@@ -488,9 +494,11 @@ function AddStepView({
         <p id={hintId} className="text-xs text-muted-foreground">
           {collections.length === 0
             ? "There is no collection you can read yet."
-            : step.collection !== "" && step.collection === mostEdited
-              ? "The collection you edit most."
-              : "Defaults to the collection you edit most."}
+            : mostEdited === undefined
+              ? "Starts on the first collection you can read."
+              : step.collection === mostEdited
+                ? "The collection you edit most."
+                : "Defaults to the collection you edit most."}
         </p>
       </div>
       {period !== undefined && step.period !== undefined ? (
@@ -515,6 +523,7 @@ function AddStepView({
           value={String(step.width)}
           onChange={value => onChange({ ...step, width: Number(value) })}
           testId="add-panel-width"
+          glyphs
         />
       ) : null}
       {widget !== undefined && chosen ? (

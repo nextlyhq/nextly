@@ -493,6 +493,26 @@ describe("the add step", () => {
     expect(step).toHaveTextContent("There is no collection you can read yet.");
   });
 
+  it("starts on the first readable collection, and says so, when the reader edited none", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      gallery: {
+        read: { ...READ, mostEdited: undefined },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Add Over time" }));
+    const collection = within(screen.getByTestId("add-panel-step")).getByRole(
+      "combobox",
+      { name: "Collection" }
+    );
+    expect(collection).toHaveValue("posts");
+    expect(collection).toHaveAccessibleDescription(
+      "Starts on the first collection you can read."
+    );
+  });
+
   it("Back returns to the gallery with focus on the tile it came from", async () => {
     const user = userEvent.setup();
     renderPanel();
