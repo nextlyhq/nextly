@@ -14,7 +14,7 @@
     "check-types": "node ../scripts/tsc.mjs --noEmit"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.13.0",
+    "@axe-core/playwright": "^4.14.0",
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/admin": "workspace:*",
