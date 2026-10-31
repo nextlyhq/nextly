@@ -50,6 +50,8 @@
  * - GET    /api/media/folders/root/contents  - Get root folder contents
  * - GET    /api/media/counts                 - Every folder's and view's item count
  * - GET    /api/media/:id/usage              - The documents using a media item
+ * - POST   /api/media/deletions              - Delete items, undoable for 10 s
+ * - POST   /api/media/deletions/undo         - Bring back items inside the window
  *
  * @module api/media-handlers
  */
@@ -69,6 +71,7 @@ import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
+import type { PendingMediaDeletes } from "../domains/media/pending-delete";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -162,6 +165,10 @@ const MEDIA_ACTION_BY_ROUTE: Partial<
   "delete-media": "delete",
   "delete-folder": "delete",
   "bulk-delete-media": "delete",
+  // Both halves of a delete that can be undone ask the delete permission,
+  // checked by the gate before either writes or removes a mark.
+  "delete-media-later": "delete",
+  "undo-delete-media": "delete",
 };
 
 /** Route types that only read — the sole surface the public mount serves. */
@@ -307,6 +314,8 @@ interface ParsedMediaRoute {
     | "get-root-contents"
     | "media-counts"
     | "media-usage"
+    | "delete-media-later"
+    | "undo-delete-media"
     | "not-found";
   mediaId?: string;
   folderId?: string;
@@ -328,6 +337,18 @@ function parseMediaRoute(
   // segments.length === 1 block so neither is mistaken for a media ID.
   if (segments[0] === "counts" && segments.length === 1) {
     if (method === "GET") return { type: "media-counts" };
+    return { type: "not-found" };
+  }
+
+  // "deletions" is matched before the generic one- and two-segment blocks
+  // so it is never read as a media id.
+  if (segments[0] === "deletions") {
+    if (segments.length === 1 && method === "POST") {
+      return { type: "delete-media-later" };
+    }
+    if (segments.length === 2 && segments[1] === "undo" && method === "POST") {
+      return { type: "undo-delete-media" };
+    }
     return { type: "not-found" };
   }
 
@@ -766,6 +787,96 @@ async function handleMediaCounts(): Promise<Response> {
   return respondData(counts as unknown as Record<string, unknown>);
 }
 
+/** The ids a delete or its Undo names: one to a hundred items. */
+const deletionBodySchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(100),
+});
+
+/** The library reads that finish deletes whose window has ended. */
+const LIBRARY_READS = new Set<ParsedMediaRoute["type"]>([
+  "list-media",
+  "get-folder-contents",
+  "get-root-contents",
+  "media-counts",
+]);
+
+/** The marks, over the booted adapter and the ordinary media delete. */
+async function pendingDeletes(): Promise<PendingMediaDeletes> {
+  const mediaService = await getMediaService();
+  // Loaded when a delete or a read needs it, not with the handlers.
+  const { PendingMediaDeletes } = await import(
+    "../domains/media/pending-delete"
+  );
+  return new PendingMediaDeletes({
+    db: getService("adapter"),
+    deleteItem: (mediaId, actor) =>
+      mediaService.delete(mediaId, createRequestContext(), actor),
+    logger: getService("logger"),
+  });
+}
+
+/**
+ * Finish the deletes whose window has ended. A read never fails for it: what
+ * is left is tried again by the next.
+ */
+async function sweepPendingDeletes(): Promise<void> {
+  try {
+    const pending = await pendingDeletes();
+    await pending.finalizeDue();
+  } catch (error) {
+    getService("logger").warn(
+      "Deleted media items could not be finished; the next read tries again.",
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+  }
+}
+
+/**
+ * Delete items so that the delete can be undone: each is marked, leaves the
+ * library at once, and is deleted with its files once the window ends, by a
+ * timer here or by the next library read.
+ */
+async function handleDeleteMediaLater(
+  request: Request,
+  actor?: RequestActor
+): Promise<Response> {
+  const { ids } = parseAtBoundary(
+    deletionBodySchema,
+    await readJsonBody(request)
+  );
+  const pending = await pendingDeletes();
+  const marked = await pending.mark(ids, actor);
+  const { PENDING_DELETE_WINDOW_MS } = await import(
+    "../domains/media/pending-delete"
+  );
+  // A moment after the window, so the marks are due when it runs. Unref'd:
+  // a waiting delete never keeps a process alive, and the sweep covers one
+  // that exits first.
+  setTimeout(() => {
+    void sweepPendingDeletes();
+  }, PENDING_DELETE_WINDOW_MS + 500).unref?.();
+  return respondAction("Media deleted.", {
+    ids: marked.ids,
+    deleteAfter: marked.deleteAfter,
+  });
+}
+
+/** Bring back items deleted inside the window; say which had already gone. */
+async function handleUndoDeleteMedia(request: Request): Promise<Response> {
+  const { ids } = parseAtBoundary(
+    deletionBodySchema,
+    await readJsonBody(request)
+  );
+  const pending = await pendingDeletes();
+  const undone = await pending.undo(ids);
+  return respondAction(
+    undone.gone.length === 0
+      ? "Delete undone."
+      : "Some items were already deleted.",
+    { restored: undone.restored, gone: undone.gone }
+  );
+}
+
 /**
  * The documents using one item that the caller may read, and the rest
  * counted by collection, read from the usage record. Served only on the
@@ -854,6 +965,10 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
         );
         if (gate instanceof Response) return gate;
 
+        // The library's reads finish any delete whose window ended while no
+        // timer was left to finish it.
+        if (LIBRARY_READS.has(route.type)) await sweepPendingDeletes();
+
         let response: Response;
         switch (route.type) {
           case "list-media":
@@ -912,6 +1027,12 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "create-folder":
             response = await handleCreateFolder(request, gate.authUserId!);
+            break;
+          case "delete-media-later":
+            response = await handleDeleteMediaLater(request, gate.actor);
+            break;
+          case "undo-delete-media":
+            response = await handleUndoDeleteMedia(request);
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "POST");

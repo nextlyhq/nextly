@@ -23,6 +23,8 @@ import {
 
 import type { MediaView } from "../../types/media";
 
+import { PENDING_DELETE_KEY_PREFIX } from "./pending-delete";
+
 /** The `media` columns the narrowing reads. */
 export interface MediaQueryColumns {
   id: AnyColumn;
@@ -61,7 +63,26 @@ export function unusedItem(
 }
 
 /**
- * The condition `filter` puts on the items, or `undefined` for every item.
+ * An item no one has deleted inside the Undo window: one with no
+ * `media.deleting:<id>` mark in `nextly_meta`. Every library read applies it,
+ * so a deleted item leaves the list, a folder, the views and the counts at
+ * once while its row and files wait for the window to end. The mark's key is
+ * matched from its own side (`SUBSTR`, which every dialect has) rather than
+ * built from the item's id, since the dialects join strings differently.
+ */
+export function notPendingDelete(media: Pick<MediaQueryColumns, "id">): SQL {
+  // Under an alias of its own, since the counting query also joins
+  // `nextly_meta` for another row.
+  const meta = sql.identifier("nextly_meta");
+  const mark = sql.identifier("pending_mark");
+  const key = sql.identifier("key");
+  const idStart = sql.raw(String(PENDING_DELETE_KEY_PREFIX.length + 1));
+  return sql`NOT EXISTS (SELECT 1 FROM ${meta} ${mark} WHERE ${mark}.${key} LIKE ${`${PENDING_DELETE_KEY_PREFIX}%`} AND SUBSTR(${mark}.${key}, ${idStart}) = ${media.id})`;
+}
+
+/**
+ * The condition `filter` puts on the items: never one deleted inside the
+ * Undo window ({@link notPendingDelete}).
  * `usage` is the usage table, or `null` before `nextly migrate` has created
  * it, when the `unused` view can say nothing and matches no item.
  */
@@ -70,7 +91,7 @@ export function mediaQueryCondition(
   usage: MediaUsageQueryTable | null,
   filter: MediaQueryFilter
 ): SQL | undefined {
-  const conditions: SQL[] = [];
+  const conditions: SQL[] = [notPendingDelete(media)];
   if (filter.folderId !== undefined) {
     conditions.push(
       filter.folderId === null || filter.folderId === "root"
@@ -97,7 +118,7 @@ export function mediaQueryCondition(
   if (filter.view === "unused") {
     conditions.push(usage ? unusedItem(media, usage) : sql`1 = 0`);
   }
-  return conditions.length > 0 ? and(...conditions) : undefined;
+  return and(...conditions);
 }
 
 /** The sidebar's counts. */

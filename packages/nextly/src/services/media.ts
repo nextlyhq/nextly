@@ -321,7 +321,7 @@ export class MediaService extends BaseService {
     const usage = await this.usageTable();
     // Loaded when the library is read, not with the service.
     const [
-      { mediaLibraryCountsOf, missingAltText, unusedItem },
+      { mediaLibraryCountsOf, missingAltText, notPendingDelete, unusedItem },
       { MEDIA_USAGE_RECORDED_KEY },
     ] = await Promise.all([
       import("../domains/media/media-library-query"),
@@ -346,6 +346,8 @@ export class MediaService extends BaseService {
       })
       .from(media)
       .leftJoin(nextlyMeta, eq(nextlyMeta.key, MEDIA_USAGE_RECORDED_KEY))
+      // Never an item deleted inside the Undo window, as every library read.
+      .where(notPendingDelete(media))
       .groupBy(media.folderId);
     return mediaLibraryCountsOf(groups, usage !== null);
   }
