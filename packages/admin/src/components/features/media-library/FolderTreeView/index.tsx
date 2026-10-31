@@ -254,8 +254,10 @@ function LibraryRow({
         "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition-colors cursor-pointer",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         current
-          ? "bg-primary/5 font-bold text-primary"
-          : "font-medium text-muted-foreground hover:bg-primary/5 hover:text-foreground"
+          ? // The sidebar's own pair for the row on screen, which holds its
+            // contrast whatever colour a site brands the admin with.
+            "bg-sidebar-accent font-semibold text-sidebar-accent-foreground"
+          : "font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
       )}
     >
       {icon}
@@ -350,8 +352,9 @@ function FolderTreeItem({
         className={cn(
           "group flex w-full items-center transition-all duration-200 cursor-pointer relative rounded-md mx-0.5",
           isActive
-            ? "bg-primary/5 text-primary font-bold"
-            : "text-muted-foreground hover:bg-primary/5 font-medium"
+            ? // As the rows above: the sidebar's pair, whatever the brand.
+              "bg-sidebar-accent text-sidebar-accent-foreground font-semibold"
+            : "text-muted-foreground hover:bg-sidebar-accent font-medium"
         )}
         style={{ paddingLeft: `${4 + level * 10}px` }}
         onClick={() => {
@@ -374,7 +377,7 @@ function FolderTreeItem({
                 "flex h-8 w-6 items-center justify-center transition-colors rounded-md cursor-pointer",
                 // Full-strength primary so the active expander icon meets contrast.
                 isActive
-                  ? "text-primary group-hover:text-primary"
+                  ? "text-sidebar-accent-foreground"
                   : "text-muted-foreground group-hover:text-foreground"
               )}
             >
@@ -405,7 +408,7 @@ function FolderTreeItem({
             className={cn(
               "h-4 w-4 shrink-0 transition-colors",
               isActive
-                ? "text-primary"
+                ? "text-sidebar-accent-foreground"
                 : "text-muted-foreground group-hover:text-foreground"
             )}
             aria-hidden="true"
