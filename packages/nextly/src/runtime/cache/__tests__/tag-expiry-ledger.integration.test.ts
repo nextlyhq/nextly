@@ -114,7 +114,54 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
     expect((await ledger.expiriesOf(["posts"]))?.expired.get("posts")).toBe(
       later
     );
-    expect(stored ? stored.get("posts") : -1).toBe(later);
+    // What the record resolves is the time it wrote, not the later row's, so
+    // its writer does not take that row as its own.
+    expect(stored ? stored.get("posts") : Infinity).toBeLessThan(later);
+  });
+
+  it("resolves the time it wrote, not a racing writer's later one", async () => {
+    // Another writer records the same tag straight after this record's write,
+    // before it resolves.
+    const adapter = current.adapter;
+    const racing = createTagExpiryLedger({
+      getCapabilities: () => adapter.getCapabilities(),
+      tableExists: name => adapter.tableExists(name),
+      getDrizzle: (() => {
+        const real = adapter.getDrizzle<Record<string, unknown>>();
+        type Upsert = (args: unknown) => Promise<unknown>;
+        return new Proxy(real, {
+          get(target, key, receiver) {
+            if (key !== "insert") return Reflect.get(target, key, receiver);
+            return (into: unknown) => ({
+              values: (rows: unknown[]) => {
+                const values = (
+                  target.insert as (t: unknown) => {
+                    values(r: unknown[]): Record<string, Upsert>;
+                  }
+                )(into).values(rows);
+                const thenRace =
+                  (method: string): Upsert =>
+                  async args => {
+                    const result = await values[method](args);
+                    await pause(5);
+                    await ledger.record(["posts"]);
+                    return result;
+                  };
+                return {
+                  onConflictDoUpdate: thenRace("onConflictDoUpdate"),
+                  onDuplicateKeyUpdate: thenRace("onDuplicateKeyUpdate"),
+                };
+              },
+            });
+          },
+        });
+      }) as never,
+    });
+
+    const mine = (await racing.record(["posts"])) || new Map();
+    const row = (await ledger.expiriesOf(["posts"]))?.expired.get("posts");
+
+    expect(row).toBeGreaterThan(mine.get("posts") ?? Infinity);
   });
 
   it("answers a lookup of more tags than one statement asks for", async () => {

@@ -15,9 +15,9 @@
  * Times are the database's clock (`databaseNowMs`), never an instance's: two
  * instances whose clocks differ still agree on whether an entry predates an
  * expiry, because every lookup hands back the database's time with its rows.
- * A tag's time is taken when its row is written, after the content write it
- * follows has committed, so an entry made from that content is never older
- * than the expiry that judges it.
+ * A tag's time is read from the database just before its row is written,
+ * after the content write it follows has committed, so an entry made from that
+ * content is never older than the expiry that judges it.
  *
  * A database that has not run `nextly migrate` since the table was added has
  * no table yet. The ledger then reports itself unavailable, warning once,
@@ -28,11 +28,12 @@
 import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, asc, inArray, lt, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, inArray, lt, sql, type SQL } from "drizzle-orm";
 
 import { tablePresence } from "../../domains/dashboard/table-presence";
 import { COLLECTION_ROW_LIFETIME_MS } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { databaseNowMs } from "../../domains/limits/store-clock";
+import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 import {
   CACHE_TAG_EXPIRIES_TABLE,
@@ -81,8 +82,9 @@ export interface TagExpiries {
 export interface TagExpiryLedger {
   /**
    * Record that `tags` expired now, graced by {@link TAG_EXPIRY_GRACE_MS}: a
-   * row never moves back, whatever recorded it. Resolves each tag's stored
-   * time, so the writer can tell its own rows from another instance's; or
+   * row never moves back, whatever recorded it. Resolves the time this record
+   * wrote for each tag, so the writer can tell its own rows from another
+   * instance's: a row holding any other time is not its own; or
    * `false`, writing nothing, while the table does not exist. Throws when the
    * database refuses the write, so a caller that must not lose the tags can
    * keep them.
@@ -189,7 +191,27 @@ export function createTagExpiryLedger(
       const unique = [...new Set(tags)];
       if (unique.length === 0) return new Map();
       if (!(await present())) return false;
-      const at = sql<number>`(${now} + ${TAG_EXPIRY_GRACE_MS})`;
+      // The database's time is read first and the record's time written as a
+      // value, so the writer knows exactly what it attempted: a time read back
+      // after the write may be a racing writer's, and taking that one as its
+      // own would hide that writer's expiry from this process. An aggregate
+      // answers one row even where no tag matches, and these keys are the ones
+      // about to be written, so the read is a primary-key lookup.
+      const [clock] = await db()
+        .select<{ now: number; rows: number }>({ now, rows: count() })
+        .from(table)
+        .where(
+          inArray(table.id, unique.slice(0, LOOKUP_BATCH).map(tagExpiryId))
+        );
+      const at = Number(clock?.now) + TAG_EXPIRY_GRACE_MS;
+      if (!Number.isFinite(at)) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "the database's clock could not be read",
+            table: CACHE_TAG_EXPIRIES_TABLE,
+          },
+        });
+      }
       const insert = db()
         .insert(table)
         .values(
@@ -215,26 +237,10 @@ export function createTagExpiryLedger(
           },
         });
       }
-      // Read back by key: the times stored, which the writer recognises as its
-      // own. A row a racing writer moved further on is not, and judges here as
-      // another instance's.
-      const stored = new Map<string, number>();
-      for (let i = 0; i < unique.length; i += LOOKUP_BATCH) {
-        const rows = await db()
-          .select<{ tag: string; expiredAt: number }>({
-            tag: table.tag,
-            expiredAt: table.expiredAt,
-          })
-          .from(table)
-          .where(
-            inArray(
-              table.id,
-              unique.slice(i, i + LOOKUP_BATCH).map(tagExpiryId)
-            )
-          );
-        for (const row of rows) stored.set(row.tag, Number(row.expiredAt));
-      }
-      return stored;
+      // The time this record wrote, for every tag. A row already later, or
+      // moved on by a racing writer, holds another time, and judges here as
+      // another instance's expiry.
+      return new Map(unique.map(tag => [tag, at] as const));
     },
 
     async expiriesOf(tags) {

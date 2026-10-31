@@ -434,6 +434,27 @@ describe("the writer's own expiry", () => {
     expect(isEntryExpired(["t"], begunAt)).toBe(false);
   });
 
+  it("records into the state an older copy of the view made, which has no record of its own times", async () => {
+    // As a bundled or hot-reloaded copy finds it: every field but `mine`.
+    (
+      globalThis as { __nextly_tag_expiry_view?: unknown }
+    ).__nextly_tag_expiry_view = {
+      lookups: new Map(),
+      asking: new Map(),
+      own: new Map(),
+      offsetMs: 0,
+      sweptAt: 0,
+      lastLocal: 0,
+      warned: false,
+    };
+    const { ledger } = memoryLedger();
+    publishTagExpiryLedger(ledger);
+
+    await expect(expireTags(["t"])).resolves.toBe("recorded");
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await expect(refreshTagExpiries(["t"])).resolves.toBeUndefined();
+  });
+
   it("still judges another instance's later expiry of the same tag", async () => {
     const { ledger, recordElsewhere } = memoryLedger();
     publishTagExpiryLedger(ledger);

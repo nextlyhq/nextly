@@ -59,7 +59,10 @@ interface ViewState {
 }
 
 const globalForView = globalThis as unknown as {
-  __nextly_tag_expiry_view?: ViewState;
+  // A copy of this module from before `mine` was kept may have made it.
+  __nextly_tag_expiry_view?: Omit<ViewState, "mine"> & {
+    mine?: ViewState["mine"];
+  };
 };
 
 function state(): ViewState {
@@ -73,7 +76,10 @@ function state(): ViewState {
     lastLocal: 0,
     warned: false,
   };
-  return globalForView.__nextly_tag_expiry_view;
+  const view = globalForView.__nextly_tag_expiry_view;
+  // A bundled or hot-reloaded copy keeps the state an older copy made, which
+  // has no `mine`: given one here, the first record would otherwise throw.
+  return Object.assign(view, { mine: view.mine ?? new Map() });
 }
 
 /** Publishes the ledger the handlers read and record into; `null` withdraws it. */
