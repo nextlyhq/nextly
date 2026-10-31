@@ -5,19 +5,21 @@
  * Offered to a reader of both the forms and the submissions, and shown while
  * at least one form is theirs to read; its card lists the new submissions of
  * those forms, newest first, and stays on the dashboard with "No new
- * submissions" while there are none. Its summary puts the same count in the
- * dashboard's header. Core's default dashboard names it by its id
+ * submissions" while there are none. Its summary puts the card's own count in
+ * the dashboard's header. Core's default dashboard names it by its id
  * (`NEW_SUBMISSIONS_WIDGET_ID`), so a site without this plugin has no such
  * card and no such part.
  *
  * @module dashboard/widget
  */
 
-import { defineWidget, rowsThatFit } from "@nextlyhq/plugin-sdk";
-import type { AnyWidget } from "nextly";
+import {
+  defineWidget,
+  rowsThatFit,
+  type AnyWidget,
+} from "@nextlyhq/plugin-sdk";
 
 import {
-  countNewSubmissions,
   NEW_SUBMISSIONS_WIDGET_ID,
   readNewSubmissions,
   type NewSubmissionsData,
@@ -48,6 +50,7 @@ const PREVIEW: NewSubmissionsData = {
   ],
   total: 2,
   allHref: "/admin/collections/form-submissions",
+  collection: "form-submissions",
 };
 
 /**
@@ -56,7 +59,9 @@ const PREVIEW: NewSubmissionsData = {
  *
  * `submissionsPath` is read when a card loads rather than when the widget is
  * declared: the plugin learns the slug a site renamed its collection to only
- * at `init`, after this declaration was made.
+ * at `init`, after this declaration was made. Every link the card draws, its
+ * empty state's among them, is made from it, so none names a slug the site
+ * renamed away.
  */
 export function newSubmissionsWidget(
   declared: SubmissionsCollections,
@@ -83,23 +88,23 @@ export function newSubmissionsWidget(
         submissionsPath: submissionsPath(),
       }),
     view: { component: CARD_COMPONENT },
-    // Judged by the count, not the rows drawn: a card too short for a row
-    // still has submissions waiting.
-    isEmpty: data => data.total === 0,
-    empty: {
-      message: "No new submissions",
-      action: {
-        label: "All submissions",
-        link: `collections/${declared.submissions}`,
-        permission: `read-${declared.submissions}`,
-      },
-    },
+    // The card draws its own empty state: its link is to the submissions as
+    // the site installed them, which a declaration made before `init` cannot
+    // name, and which the card's data carries.
+    isEmpty: () => false,
     preview: [{ name: "Two new", data: PREVIEW }],
-    // The card's own question, so the header and the card never disagree.
+    // The card's own read, asked for no rows, so the header counts exactly
+    // what the card lists.
     summary: {
       label: "new submissions",
-      count: ({ services, signal }) =>
-        countNewSubmissions(services, declared, signal),
+      count: async ({ services, signal }) =>
+        (
+          await readNewSubmissions(services, declared, {
+            limit: 0,
+            signal,
+            submissionsPath: submissionsPath(),
+          })
+        ).total,
     },
   });
 }

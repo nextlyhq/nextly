@@ -7,6 +7,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
 import { describeActivityActor, formatRelativeTime } from "./dashboard";
+import {
+  getGlobalDateTimeConfig,
+  setGlobalDateTimeConfig,
+} from "./dates/format";
 
 describe("formatRelativeTime", () => {
   afterEach(() => {
@@ -44,6 +48,25 @@ describe("formatRelativeTime", () => {
     // shared formatter fills in `year: "numeric"` whenever the caller does not
     // name one, so anything past the relative window reads as "Mar 1, 2026".
     expect(formatRelativeTime("2026-03-01T12:00:00Z")).toBe("Mar 1, 2026");
+  });
+
+  it("dates an older time in the admin's timezone, not the browser's", () => {
+    const before = getGlobalDateTimeConfig();
+    try {
+      // 12:30 on 28 February in UTC is already 1 March at UTC+14: the day
+      // shown is the one the admin is set to, whatever zone the browser is in.
+      setGlobalDateTimeConfig({ timezone: "Pacific/Kiritimati" });
+      const now = Date.parse("2026-03-20T12:00:00Z");
+      expect(formatRelativeTime("2026-02-28T12:30:00Z", now)).toBe(
+        "Mar 1, 2026"
+      );
+      setGlobalDateTimeConfig({ timezone: "Pacific/Pago_Pago" });
+      expect(formatRelativeTime("2026-02-28T12:30:00Z", now)).toBe(
+        "Feb 28, 2026"
+      );
+    } finally {
+      setGlobalDateTimeConfig(before);
+    }
   });
 });
 

@@ -5,8 +5,8 @@
  *
  * Every read goes through the services a widget's `load`, `shows` and
  * `summary.count` are handed, which core binds to the reader, so nothing here
- * reads as the system. The card's total and the header's count come from one
- * filter (`newSubmissionsWhere`), so the two cannot disagree.
+ * reads as the system. The header's count is the card's own read asked for no
+ * rows (`readNewSubmissions` with a `limit` of 0), so the two cannot disagree.
  *
  * Reads the collections by their declared slugs: core renames a plugin's own
  * collections on the way in, for a site that renamed them.
@@ -14,7 +14,7 @@
  * @module dashboard/new-submissions
  */
 
-import type { WidgetReadServices } from "nextly";
+import type { WidgetReadServices } from "@nextlyhq/plugin-sdk";
 
 /** The widget's id, the one core's default names. */
 export const NEW_SUBMISSIONS_WIDGET_ID = "form-builder/new-submissions";
@@ -51,6 +51,11 @@ export interface NewSubmissionsData {
   atLeast?: true;
   /** Every submission, in the admin. */
   allHref: string;
+  /**
+   * The submissions collection's slug as the site installed it, the one a
+   * row is marked read in when it is opened.
+   */
+  collection: string;
 }
 
 /** What a read is asked with beyond its collections. */
@@ -63,7 +68,7 @@ export interface NewSubmissionsRead {
 }
 
 /** The status a submission arrives with, and keeps until someone opens it. */
-const NEW_STATUS = "new";
+export const NEW_STATUS = "new";
 
 /** The admin's root, which a row's link and the list's link start from. */
 const ADMIN_ROOT = "/admin";
@@ -90,12 +95,26 @@ const SUBMISSION_FIELDS = [
 /** The form fields a row is made from. */
 const FORM_FIELDS = ["id", "name", "fields"] as const;
 
-/** Field names and labels that mark a form's name field, compared as letters only. */
+/**
+ * Field names and labels that mark a form's name field, compared as letters
+ * only (`lettersOf`), so case, spaces, underscores, hyphens and camelCase do
+ * not matter: `firstName`, `first_name` and "First name" are all "firstname".
+ */
 const NAME_KEYS: ReadonlySet<string> = new Set([
   "name",
   "fullname",
+  "firstname",
   "yourname",
+  "yourfullname",
+  "yourfirstname",
 ]);
+
+/**
+ * The most characters of an answer or a name a row carries. A form may leave
+ * a field's length open, so a visitor's answer can be any length; the card
+ * draws one line, and the rest would only weigh down its data and the page.
+ */
+const MAX_ROW_TEXT = 140;
 
 /** The answer types whose first line a row may show under its title. */
 const TEXT_TYPES: ReadonlySet<string> = new Set(["text", "textarea"]);
@@ -143,29 +162,18 @@ export async function readableFormIds(
 }
 
 /** The new submissions of the forms named: what the card lists and the header counts. */
-export function newSubmissionsWhere(formIds: readonly string[]): {
+function newSubmissionsWhere(formIds: readonly string[]): {
   status: { equals: string };
   form: { in: string[] };
 } {
   return { status: { equals: NEW_STATUS }, form: { in: [...formIds] } };
 }
 
-/** How many new submissions the reader may read: the header's count. */
-export async function countNewSubmissions(
-  services: Pick<WidgetReadServices, "find" | "count">,
-  collections: SubmissionsCollections,
-  signal?: AbortSignal
-): Promise<number> {
-  const formIds = await readableFormIds(services, collections.forms, signal);
-  if (formIds.length === 0) return 0;
-  return services.count(collections.submissions, {
-    where: newSubmissionsWhere(formIds),
-    status: "all",
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
-
-/** The card's data: the newest new submissions the card holds, and how many there are. */
+/**
+ * The card's data: the newest new submissions the card holds, and how many
+ * there are. Asked with a `limit` of 0 it reads no rows and still counts
+ * them, which is the header's count.
+ */
 export async function readNewSubmissions(
   services: Pick<WidgetReadServices, "find">,
   collections: SubmissionsCollections,
@@ -173,12 +181,15 @@ export async function readNewSubmissions(
 ): Promise<NewSubmissionsData> {
   const signal = read.signal === undefined ? {} : { signal: read.signal };
   const allHref = `${ADMIN_ROOT}/collections/${read.submissionsPath}`;
+  const collection = read.submissionsPath;
   const formIds = await readableFormIds(
     services,
     collections.forms,
     read.signal
   );
-  if (formIds.length === 0) return { items: [], total: 0, allHref };
+  if (formIds.length === 0) {
+    return { items: [], total: 0, allHref, collection };
+  }
   const found = await services.find(collections.submissions, {
     where: newSubmissionsWhere(formIds),
     sort: "-submittedAt",
@@ -196,6 +207,7 @@ export async function readNewSubmissions(
     total: found.total ?? found.items.length,
     ...(found.atLeast === true ? { atLeast: true as const } : {}),
     allHref,
+    collection,
   };
 }
 
@@ -276,13 +288,27 @@ function lettersOf(text: string): string {
   return text.toLowerCase().replace(/[^a-z]/g, "");
 }
 
-/** The first line of a text answer, trimmed, or `undefined` for none. */
+/**
+ * The first line of a text answer, trimmed and held to `MAX_ROW_TEXT`
+ * characters, or `undefined` for none.
+ */
 export function firstLine(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  return value
+  const line = value
     .split(/\r?\n/)
     .map(part => part.trim())
     .find(part => part !== "");
+  return line === undefined ? undefined : clipped(line);
+}
+
+/**
+ * `text` cut to its first `MAX_ROW_TEXT` characters with an ellipsis, where it
+ * is longer. Counted in whole characters, so an emoji is never split in two.
+ */
+function clipped(text: string): string {
+  const characters = Array.from(text);
+  if (characters.length <= MAX_ROW_TEXT) return text;
+  return `${characters.slice(0, MAX_ROW_TEXT).join("").trimEnd()}…`;
 }
 
 /** A relationship's id, whether the read answered the id or the related row. */

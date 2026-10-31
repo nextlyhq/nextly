@@ -6,11 +6,19 @@
  * component registered at the path the widget declares.
  *
  * What a load answers for a reader is the integration suite's question; this
- * one is what the card shows for an answer, in light and dark, and that its
- * empty state stays on the dashboard with a way to every submission.
+ * one is what the card shows for an answer, in light and dark, that its
+ * empty state stays on the dashboard with a way to every submission, that its
+ * times move on while it is open, and that opening a row marks it read.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { NewSubmissionsCard } from "./NewSubmissionsCard";
 import {
@@ -18,7 +26,11 @@ import {
   type NewSubmissionsData,
 } from "./new-submissions";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 // The card's frame measures itself with a ResizeObserver, which jsdom does not
 // implement. One that never reports leaves the card at the size and tier it
@@ -118,6 +130,7 @@ const TWO_NEW: NewSubmissionsData = {
   ],
   total: 2,
   allHref: ALL,
+  collection: "form-submissions",
 };
 
 /**
@@ -176,26 +189,136 @@ describe("New form submissions", () => {
     ).toHaveAttribute("href", ALL);
   });
 
-  it('stays on the dashboard while nothing is new, saying "No new submissions" with a link to all of them', () => {
-    drawCard("empty", { items: [], total: 0, allHref: ALL });
+  it('stays on the dashboard while nothing is new, saying "No new submissions" with a link to all of them, as the site installed them', () => {
+    // A site that renamed the collection: the link is the card's data's, the
+    // installed slug, never the slug the plugin declared.
+    drawCard("ready", {
+      items: [],
+      total: 0,
+      allHref: "/admin/collections/leads",
+      collection: "leads",
+    });
     const card = screen.getByRole("region", { name: "New form submissions" });
     expect(card).toHaveAttribute("data-state", "empty");
     expect(card).toHaveTextContent("No new submissions");
     const all = within(card).getByRole("link", { name: "All submissions" });
-    expect(all.getAttribute("href")).toMatch(
-      /\/admin\/collections\/form-submissions$/
-    );
+    expect(all).toHaveAttribute("href", "/admin/collections/leads");
   });
 
   it("does not hide while empty: its declaration never asks to", () => {
     expect(contributed()).not.toHaveProperty("hidesWhenEmpty");
   });
 
-  it("is empty by its count, not by the rows a short card draws", () => {
-    const { isEmpty } = contributed() as {
-      isEmpty?: (data: NewSubmissionsData) => boolean;
-    };
-    expect(isEmpty?.({ items: [], total: 0, allHref: ALL })).toBe(true);
-    expect(isEmpty?.({ items: [], total: 3, allHref: ALL })).toBe(false);
+  it("moves its times on while it stays open, and stops its clock when it is gone", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(new Date("2026-01-05T09:30:20.000Z"));
+    const { unmount } = drawCard("ready", TWO_NEW);
+    const card = screen.getByRole("region", { name: "New form submissions" });
+    const ana = () => within(card).getByRole("link", { name: /Ana Ruiz/ });
+    expect(ana().querySelector("time")).toHaveTextContent("just now");
+    act(() => {
+      vi.advanceTimersByTime(3 * 60_000);
+    });
+    expect(ana().querySelector("time")).toHaveTextContent("3m ago");
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("dates a submission a week old or more as core's cards do, with its year", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(new Date("2026-01-10T12:00:00.000Z"));
+    drawCard("ready", {
+      ...TWO_NEW,
+      items: [
+        {
+          id: "s1",
+          title: "Ana Ruiz",
+          at: "2025-12-01T12:00:00.000Z",
+          href: `${ALL}/s1`,
+        },
+      ],
+      total: 1,
+    });
+    const card = screen.getByRole("region", { name: "New form submissions" });
+    expect(
+      within(card)
+        .getByRole("link", { name: /Ana Ruiz/ })
+        .querySelector("time")
+    ).toHaveTextContent("Dec 1, 2025");
+  });
+
+  describe("opening a submission", () => {
+    /** Clicks, with the page's own navigation held, and the requests sent. */
+    function sent() {
+      const fetched = vi.fn((_url: string, _init: RequestInit) =>
+        Promise.resolve(undefined)
+      );
+      vi.stubGlobal("fetch", fetched);
+      const hold = (event: Event) => event.preventDefault();
+      document.addEventListener("click", hold, true);
+      document.addEventListener("auxclick", hold, true);
+      return {
+        fetched,
+        release: () => {
+          document.removeEventListener("click", hold, true);
+          document.removeEventListener("auxclick", hold, true);
+        },
+      };
+    }
+
+    it("marks it read, in the collection the site installed, while it is still new", () => {
+      const { fetched, release } = sent();
+      try {
+        drawCard("ready", { ...TWO_NEW, collection: "leads" });
+        const card = screen.getByRole("region", {
+          name: "New form submissions",
+        });
+        fireEvent.click(within(card).getByRole("link", { name: /Ana Ruiz/ }));
+        expect(fetched).toHaveBeenCalledTimes(1);
+        const [url, init] = fetched.mock.calls[0] ?? [];
+        expect(url).toBe("/admin/api/collections/leads/entries");
+        expect(init?.method).toBe("PATCH");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          where: { id: { equals: "s1" }, status: { equals: "new" } },
+          data: { status: "read" },
+        });
+
+        // A middle click opens it in a new tab, and marks it read too.
+        fireEvent(
+          within(card).getByRole("link", { name: /^Submission/ }),
+          new MouseEvent("auxclick", { bubbles: true, button: 1 })
+        );
+        expect(fetched).toHaveBeenCalledTimes(2);
+        expect(
+          JSON.parse(String(fetched.mock.calls[1]?.[1].body))
+        ).toMatchObject({ where: { id: { equals: "s2" } } });
+      } finally {
+        release();
+      }
+    });
+
+    it("marks nothing for the footer's link or a click beside the rows", () => {
+      const { fetched, release } = sent();
+      try {
+        drawCard("ready", TWO_NEW);
+        const card = screen.getByRole("region", {
+          name: "New form submissions",
+        });
+        const ana = within(card).getByRole("link", { name: /Ana Ruiz/ });
+        fireEvent.click(within(card).getByRole("link", { name: /View all/ }));
+        // Inside the list, beside a row's link rather than on it.
+        const beside = ana.parentElement;
+        expect(beside).not.toBeNull();
+        expect(beside?.closest("a[href]")).toBeNull();
+        if (beside !== null) fireEvent.click(beside);
+        expect(fetched).not.toHaveBeenCalled();
+        // The control: the same card does send one for a row.
+        fireEvent.click(ana);
+        expect(fetched).toHaveBeenCalledTimes(1);
+      } finally {
+        release();
+      }
+    });
   });
 });

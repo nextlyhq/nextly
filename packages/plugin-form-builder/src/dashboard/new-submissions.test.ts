@@ -10,15 +10,16 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { formBuilder } from "../plugin";
+
 import {
-  countNewSubmissions,
   firstLine,
-  newSubmissionsWhere,
+  NEW_SUBMISSIONS_WIDGET_ID,
   readNewSubmissions,
   readableFormIds,
   submissionRow,
+  type NewSubmissionsData,
 } from "./new-submissions";
-import { relativeTime } from "./relative-time";
 
 type Row = Record<string, unknown>;
 
@@ -31,6 +32,27 @@ interface FindOptions {
 }
 
 const COLLECTIONS = { forms: "forms", submissions: "form-submissions" };
+
+/** The widget as the plugin contributes it, with the two functions run here. */
+function contributedWidget(): {
+  load: (input: {
+    services: ReturnType<typeof services>;
+    size: { w: number; h: number; tier: "medium" };
+    signal: AbortSignal;
+  }) => Promise<NewSubmissionsData>;
+  summary: {
+    count: (input: {
+      services: ReturnType<typeof services>;
+      signal: AbortSignal;
+    }) => Promise<number>;
+  };
+} {
+  const widget = formBuilder().plugin.contributes?.dashboard?.widgets?.find(
+    candidate => candidate.id === NEW_SUBMISSIONS_WIDGET_ID
+  );
+  if (widget === undefined) throw new Error("the plugin contributes no card");
+  return widget as unknown as ReturnType<typeof contributedWidget>;
+}
 
 /** A read that answers by the meaning of the filters the widget sends. */
 function matches(row: Row, where: FindOptions["where"]): boolean {
@@ -222,6 +244,59 @@ describe("a submission's row", () => {
     expect(firstLine("   ")).toBeUndefined();
     expect(firstLine(42)).toBeUndefined();
   });
+
+  it("carries at most 140 characters of an answer, cut with an ellipsis", () => {
+    const long = `${"a".repeat(300)}xyz`;
+    const row = submissionRow(
+      submission(
+        "s6",
+        SURVEY.id,
+        { comment: long },
+        "2026-01-05T05:00:00.000Z"
+      ),
+      SURVEY,
+      all
+    );
+    expect(row.excerpt).toBe(`${"a".repeat(140)}…`);
+    // A line that fits is carried whole, with no ellipsis.
+    expect(firstLine("a".repeat(140))).toBe("a".repeat(140));
+    // Counted in characters: the emoji at the cut is kept whole, not halved.
+    expect(firstLine(`${"a".repeat(139)}😀😀`)).toBe(`${"a".repeat(139)}😀…`);
+  });
+
+  it.each([
+    ["firstName", "First"],
+    ["first_name", "First"],
+    ["q1", "Full name"],
+    ["q2", "Your name"],
+    ["q3", "Your full name"],
+    ["YOUR-NAME", "Name please"],
+  ])("is titled by a name field named %s, labelled %s", (fieldName, label) => {
+    const form = {
+      id: "f-named",
+      name: "Named",
+      fields: [
+        { type: "email", name: "email", label: "Email" },
+        { type: "text", name: fieldName, label },
+        { type: "textarea", name: "message", label: "Message" },
+      ],
+    };
+    const row = submissionRow(
+      submission(
+        "s7",
+        form.id,
+        {
+          email: "kim@example.com",
+          [fieldName]: "Kim Lee",
+          message: "Hello",
+        },
+        "2026-01-05T04:00:00.000Z"
+      ),
+      form,
+      all
+    );
+    expect(row).toMatchObject({ title: "Kim Lee", excerpt: "Hello" });
+  });
 });
 
 describe("the card's read", () => {
@@ -269,6 +344,7 @@ describe("the card's read", () => {
     expect(data.items.map(row => row.id)).toEqual(["newest", "middle"]);
     expect(data.total).toBe(3);
     expect(data.allHref).toBe("/admin/collections/leads");
+    expect(data.collection).toBe("leads");
     expect(data.items[0]?.href).toBe("/admin/collections/leads/newest");
     // Only the fields a row is made from are asked for.
     const read = reads.calls.find(
@@ -278,24 +354,30 @@ describe("the card's read", () => {
     expect(read?.options.sort).toBe("-submittedAt");
   });
 
-  it("counts what it lists, for the header, by the same filter", async () => {
+  it("counts for the header by the card's own read, asked for no rows", async () => {
+    const widget = contributedWidget();
+    const signal = new AbortController().signal;
     const reads = services({ forms, submissions });
-    const count = await countNewSubmissions(reads, COLLECTIONS);
-    const data = await readNewSubmissions(reads, COLLECTIONS, {
-      limit: 10,
-      submissionsPath: "form-submissions",
+    const data = await widget.load({
+      services: reads,
+      size: { w: 6, h: 8, tier: "medium" },
+      signal,
     });
-    expect(count).toBe(3);
-    expect(data.total).toBe(count);
-    const [counted, listed] = [
-      reads.calls.find(call => call.op === "count"),
-      reads.calls.find(
-        call => call.op === "find" && call.collection === "form-submissions"
-      ),
-    ];
-    expect(counted?.options.where).toEqual(listed?.options.where);
-    expect(counted?.options.where).toEqual(
-      newSubmissionsWhere(forms.map(form => form.id))
+    const listed = reads.calls.filter(
+      call => call.collection === COLLECTIONS.submissions
+    );
+    reads.calls.length = 0;
+    const count = await widget.summary.count({ services: reads, signal });
+    const counted = reads.calls.filter(
+      call => call.collection === COLLECTIONS.submissions
+    );
+    expect(data.total).toBe(3);
+    expect(count).toBe(data.total);
+    // The very read the card made, filter, status and all, with no rows: a
+    // count asked any other way could come to disagree with the card.
+    expect(listed).toHaveLength(1);
+    expect(counted).toEqual(
+      listed.map(call => ({ ...call, options: { ...call.options, limit: 0 } }))
     );
   });
 
@@ -319,8 +401,8 @@ describe("the card's read", () => {
       items: [],
       total: 0,
       allHref: "/admin/collections/form-submissions",
+      collection: "form-submissions",
     });
-    expect(await countNewSubmissions(reads, COLLECTIONS)).toBe(0);
     expect(
       reads.calls.filter(call => call.collection === "form-submissions")
     ).toEqual([]);
@@ -336,17 +418,5 @@ describe("the card's read", () => {
     const ids = await readableFormIds(reads, COLLECTIONS.forms);
     expect(ids).toEqual(many.map(form => form.id));
     expect(reads.calls).toHaveLength(3);
-  });
-});
-
-describe("a row's time", () => {
-  const now = Date.parse("2026-01-10T12:00:00.000Z");
-
-  it("is worded as core's list cards word it", () => {
-    expect(relativeTime("2026-01-10T11:59:30.000Z", now)).toBe("just now");
-    expect(relativeTime("2026-01-10T11:55:00.000Z", now)).toBe("5m ago");
-    expect(relativeTime("2026-01-10T09:00:00.000Z", now)).toBe("3h ago");
-    expect(relativeTime("2026-01-08T12:00:00.000Z", now)).toBe("2d ago");
-    expect(relativeTime("2025-12-01T12:00:00.000Z", now)).not.toMatch(/ago/);
   });
 });

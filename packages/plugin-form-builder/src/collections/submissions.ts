@@ -104,6 +104,10 @@ export function submissionsCollection(
         // positive stays reviewable and recoverable ("Not spam" = back to new).
         { label: "Spam", value: "spam" },
       ],
+      // Indexed with `submittedAt`: the dashboard's New form submissions card
+      // and its header count filter every submission by status and list them
+      // newest first, on every dashboard load.
+      index: true,
       admin: {
         description: "Track whether this submission has been reviewed",
       },
@@ -155,6 +159,8 @@ export function submissionsCollection(
       name: "submittedAt",
       label: "Submitted At",
       required: true,
+      // The order the dashboard lists new submissions in (see `status`).
+      index: true,
       admin: {
         readOnly: true,
         description: "When the form was submitted",

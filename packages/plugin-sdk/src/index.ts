@@ -62,6 +62,15 @@ export type {
   WidgetSummary,
   WidgetView,
 } from "nextly";
+/**
+ * The types a plugin's widget code is written in, intended to stay as they
+ * are: `AnyWidget`, any widget `defineWidget` made, for a function that
+ * returns one or a list that holds several; `WidgetReadServices`, the reads a
+ * widget's `load`, `shows` and `summary.count` are handed, already bound to
+ * the person asking, for a helper those functions share. Types only, core's
+ * own, so a plugin names them from here rather than from `nextly`.
+ */
+export type { AnyWidget, WidgetReadServices } from "nextly";
 
 /**
  * @experimental The number and change formatters a dashboard card's figures are
