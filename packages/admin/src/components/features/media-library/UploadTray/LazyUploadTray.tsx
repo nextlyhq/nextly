@@ -17,6 +17,7 @@
 import { lazy, Suspense, type JSX } from "react";
 
 import { UploadLiveRegion } from "./UploadLiveRegion";
+
 import type { UploadTrayProps } from ".";
 
 const UploadTray = lazy(() =>
