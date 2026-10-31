@@ -63,10 +63,7 @@ import {
 // detects code-first config edits and flips a reload flag; the next
 // getNextly() call drains the flag, calls reloadNextlyConfig, and then
 // returns the cached instance with refreshed schema state.
-import {
-  type CachedRead,
-  setCachedRead,
-} from "./runtime/cache/registered-read";
+import { recordCacheComponents } from "./runtime/cache/registered-read";
 import {
   ensureHmrListener,
   consumeHmrReloadFlag,
@@ -583,20 +580,12 @@ export async function getCachedNextly(): Promise<Nextly> {
  */
 export function createRegister(
   config: SanitizedNextlyConfig,
-  host: {
-    cacheComponents?: string | boolean;
-    /**
-     * The app's `"use cache"` function nextly reads through under Cache
-     * Components (see `runtime/cache/registered-read`). Used only when
-     * `cacheComponents` says Cache Components is on.
-     */
-    cachedRead?: CachedRead;
-  } = {}
+  host: { cacheComponents?: string | boolean } = {}
 ): () => Promise<void> {
   return async function register() {
-    setCachedRead(
-      cacheComponentsEnabled(host.cacheComponents) ? host.cachedRead : undefined
-    );
+    // Kept for the cached reads: under Cache Components they go through the
+    // app's `"use cache"` function, and one that was never registered is said.
+    recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
     // Before anything starts. Nextly cannot read this itself: Next.js inlines
     // the setting only into code it bundles, and Nextly is a server-external
     // package. `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;

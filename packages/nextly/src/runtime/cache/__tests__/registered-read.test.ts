@@ -12,12 +12,15 @@ import { applyCache, type UnstableCache } from "../cached-find";
 import {
   type CachedRead,
   readThroughRegistered,
+  recordCacheComponents,
+  registerCachedRead,
   runRegisteredRead,
   setCachedRead,
 } from "../registered-read";
 
 afterEach(() => {
   setCachedRead(undefined);
+  recordCacheComponents(false);
   vi.restoreAllMocks();
 });
 
@@ -154,5 +157,58 @@ describe("applyCache under Cache Components", () => {
       keyParts: ["posts", "y"],
     });
     expect(used).toEqual([["posts", "y"]]);
+  });
+});
+
+describe("Cache Components with no cached-read function registered", () => {
+  const passthrough: UnstableCache = cb => cb;
+  const read = () =>
+    applyCache(passthrough, async () => ({ id: "x" }), {
+      tags: ["nextly:posts"],
+      keyParts: ["posts", "x"],
+    });
+  function spyWarn() {
+    const warn = vi.fn();
+    vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
+      error: vi.fn(),
+      warn,
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as never);
+    return warn;
+  }
+
+  it("says so once, naming the file and the docs, and still reads", async () => {
+    const warn = spyWarn();
+    recordCacheComponents(true);
+    await expect(read()).resolves.toEqual({ id: "x" });
+    await read();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [entry] = warn.mock.calls[0] as [{ kind: string; message: string }];
+    expect(entry.kind).toBe("cached-read-missing");
+    expect(entry.message).toContain("src/nextly/cached-read.ts");
+    expect(entry.message).toContain("isr-caching#cache-components");
+  });
+
+  it("says nothing once a cached-read function is registered", async () => {
+    const warn = spyWarn();
+    recordCacheComponents(true);
+    registerCachedRead(async key => runRegisteredRead(key), "true");
+    await read();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("says nothing with Cache Components off", async () => {
+    const warn = spyWarn();
+    recordCacheComponents(false);
+    await read();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("uses a registered function only when the value says Cache Components is on", async () => {
+    registerCachedRead(async () => {
+      throw new Error("must not be used with Cache Components off");
+    }, undefined);
+    await expect(read()).resolves.toEqual({ id: "x" });
   });
 });

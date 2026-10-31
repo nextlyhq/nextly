@@ -14,7 +14,11 @@ import type { LanguageRegistry } from "../../domains/i18n/language-registry";
 import { loadNextModule, requireNextApi } from "../next-api";
 
 import { readTags } from "./nextly-tags";
-import { readThroughRegistered, registeredCachedRead } from "./registered-read";
+import {
+  readThroughRegistered,
+  registeredCachedRead,
+  reportUnregisteredUnderCacheComponents,
+} from "./registered-read";
 
 /** The subset of `unstable_cache` this helper uses. */
 export type UnstableCache = <T>(
@@ -154,6 +158,7 @@ export function applyCache<T>(
       options.revalidate ?? false
     );
   }
+  reportUnregisteredUnderCacheComponents();
   if (!unstableCache) return reader();
   const cached = unstableCache(afterLanguagesRead(reader), options.keyParts, {
     // Each once, none longer than Next.js accepts, and no more than it keeps,

@@ -38,6 +38,10 @@ interface Registered {
 interface RegistryState {
   cachedRead: CachedRead | undefined;
   readers: Map<string, Registered>;
+  /** Whether the app's build has Cache Components on, as `createRegister` was told. */
+  cacheComponents: boolean;
+  /** Whether a read under Cache Components without a registered function has been said. */
+  unregisteredReported: boolean;
 }
 
 const STATE = Symbol.for("nextly/registered-read");
@@ -45,7 +49,12 @@ const STATE = Symbol.for("nextly/registered-read");
 /** One state per process, however many copies of this module load. */
 function state(): RegistryState {
   const holder = globalThis as unknown as Record<symbol, RegistryState>;
-  holder[STATE] ??= { cachedRead: undefined, readers: new Map() };
+  holder[STATE] ??= {
+    cachedRead: undefined,
+    readers: new Map(),
+    cacheComponents: false,
+    unregisteredReported: false,
+  };
   return holder[STATE];
 }
 
@@ -69,6 +78,37 @@ export function registerCachedRead(
   setCachedRead(
     cacheComponentsEnabled(cacheComponents) ? cachedRead : undefined
   );
+}
+
+/** Where the cached-read file and how to turn Cache Components on are described. */
+const CACHED_READ_DOCS_URL =
+  "https://nextlyhq.com/docs/guides/isr-caching#cache-components";
+
+/**
+ * Records whether the app's build has Cache Components on, from
+ * `createRegister`. Each boot starts the once-only warning afresh.
+ */
+export function recordCacheComponents(on: boolean): void {
+  const current = state();
+  current.cacheComponents = on;
+  current.unregisteredReported = false;
+}
+
+/**
+ * Says, once per process, that a cached read ran under Cache Components with
+ * no `"use cache"` function registered: the read falls back to
+ * `unstable_cache`, and a page read right after a write can show the previous
+ * version. Usually the app turned Cache Components on and kept the stub
+ * `src/nextly/cached-read.ts`.
+ */
+export function reportUnregisteredUnderCacheComponents(): void {
+  const current = state();
+  if (!current.cacheComponents || current.unregisteredReported) return;
+  current.unregisteredReported = true;
+  getNextlyLogger().warn({
+    kind: "cached-read-missing",
+    message: `Cache Components is on, but no "use cache" read function is registered, so cached reads use unstable_cache and a page read right after a write can show the previous version. Replace src/nextly/cached-read.ts with its Cache Components version: ${CACHED_READ_DOCS_URL}`,
+  });
 }
 
 /** The app's cached-read function, if it registered one. */

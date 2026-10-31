@@ -763,9 +763,14 @@ jobs:
           node -e '
             const fs = require("fs");
             const config = fs.readFileSync("next.config.ts", "utf8");
+            // With the Nextly cache handlers: under Cache Components the default
+            // Next.js incremental cache serves the previous page shell once after a write.
             const on = config.replace(
               "cacheComponents: false,",
-              "cacheComponents: true,\n  partialPrefetching: true,"
+              "cacheComponents: true,\n  partialPrefetching: true,\n" +
+                "  cacheHandler: require.resolve(\"nextly/cache-handler\"),\n" +
+                "  cacheMaxMemorySize: 0,\n" +
+                "  cacheHandlers: { default: require.resolve(\"nextly/cache-handlers\") },"
             );
             if (on === config) {
               console.error("next.config.ts does not set cacheComponents: false");
@@ -774,6 +779,11 @@ jobs:
             fs.writeFileSync("next.config.ts", on);
           '
           cat next.config.ts
+          # Nextly's cached reads through the app's "use cache" function, as the stub
+          # file says to do under Cache Components.
+          if [ -f src/nextly/cached-read.cache-components.txt ]; then
+            cp src/nextly/cached-read.cache-components.txt src/nextly/cached-read.ts
+          fi
 
       # Only the nightly newest-minor run sets the input (see `on.workflow_call`).
       # The specs are passed through the environment, and the caller checks
@@ -943,11 +953,9 @@ jobs:
               exit 1
             fi
           done
-          # Cache Components is not supported yet, and under it the first read after a
-          # write can still be the previous version, so this check runs on the legs
-          # that build without it: the configuration the freshness promise is made for.
-          # Not indented under the `if`, so the heredoc's closing line stays in column 0.
-          if [ "${{ matrix.cacheComponents }}" != on ]; then
+          # The freshness check, on every blog leg: under Cache Components the app's
+          # "use cache" read function and Nextly's cache handlers make the first read
+          # after a write the new version, as without it.
           # A write through the REST API, a Route Handler, expires the post's cached page
           # before it responds: the next request, made after the response, reads the new
           # title. It writes as an administrator made for it through the Direct API, as
@@ -1017,7 +1025,6 @@ jobs:
             exit 1
           fi
           echo "$page shows \"$new\" on the first read after the write"
-          fi
 
       # Under Cache Components every route streams a static shell, so the first request for
       # an unknown slug is answered with the not-found page and `noindex` before its status

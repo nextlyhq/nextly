@@ -234,6 +234,64 @@ await nx.create({ collection: "posts", data, disableRevalidate: true });
 The write still records its outbox event (webhooks and retention are
 unaffected); it just does not bust any cache tags.
 
+## Cache Components
+
+Nextly builds apps with Cache Components off by default. To turn it on, make
+three changes; with only some of them, a page read right after a write can
+still show the previous version.
+
+1. **Read through the app's own `"use cache"` function.** Once Cache Components
+   is on, Next.js caches non-fetch reads with `"use cache"` and `cacheTag`, and
+   the directive works only in code Next.js compiles. A scaffolded blog keeps
+   that function in `src/nextly/cached-read.ts`: with Cache Components off it is
+   a stub that registers nothing. Replace it with the contents of
+   `src/nextly/cached-read.cache-components.txt` beside it:
+
+   ```ts
+   // src/nextly/cached-read.ts
+   import { cacheLife, cacheTag } from "next/cache";
+   import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
+
+   export async function cachedRead(
+     key: string,
+     tags: string[],
+     revalidate: number | false
+   ): Promise<unknown> {
+     "use cache";
+     cacheTag(...tags);
+     if (revalidate === false) cacheLife("max");
+     else cacheLife({ revalidate, expire: Math.max(revalidate * 2, 60) });
+     return runRegisteredRead(key);
+   }
+
+   registerCachedRead(cachedRead, process.env.__NEXT_CACHE_COMPONENTS);
+   ```
+
+   Import it from every module that reads content through `cachedFind`; the
+   blog's query modules (`src/lib/queries`) already do. Nextly passes the
+   function only the read's key, tags and lifetime, which `"use cache"` can
+   cache, and runs the reader itself. Register it from a module Next.js
+   compiles as a server component: a copy imported from `instrumentation.ts`
+   is not a cached function.
+2. **Install Nextly's cache handlers** in `next.config.ts`. Next.js's default
+   incremental cache serves a page's previous shell once after its tags are
+   expired, so the first read after a write would still be the old version:
+
+   ```ts
+   cacheComponents: true,
+   partialPrefetching: true,
+   cacheHandler: require.resolve("nextly/cache-handler"),
+   cacheMaxMemorySize: 0,
+   cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
+   ```
+3. **Keep `createRegister`'s `cacheComponents` value** in `instrumentation.ts`
+   (`process.env.__NEXT_CACHE_COMPONENTS`). With Cache Components on and no read
+   function registered, Nextly warns at the first cached read and keeps using
+   `unstable_cache`.
+
+With Cache Components off, nothing here applies: the stub registers nothing
+and reads are cached with `unstable_cache` as before.
+
 ## Notes
 
 - Works across the supported Next.js range (see
