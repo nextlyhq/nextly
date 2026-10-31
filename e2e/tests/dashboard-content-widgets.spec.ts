@@ -166,21 +166,25 @@ for (const viewport of WIDTHS) {
     await gotoAdmin(page, "/");
 
     const card = page.getByTestId("widget-cell-core/over-time");
-    const range = card.getByRole("combobox", {
-      name: /^Date range for Over time/,
-    });
+    // Set to posts, the card is titled by its subject, "Posts", and its control is named for
+    // that title; the widget's name and the range it is set to are its subtitle.
+    const range = card.getByRole("combobox", { name: "Date range for Posts" });
     await expect(range).toBeVisible();
     await expect(range).toHaveText(/Last 30 days/);
+    await expect(card.getByText("Over time · last 30 days")).toBeVisible();
 
     await range.click();
     await page.getByRole("option", { name: "Last 12 months" }).click();
-    // Kept for this reader, and the chart redrawn over months.
-    await expect(page.getByTestId("widget-grid-live")).toHaveText(
-      /Date range set to Last 12 months/
-    );
+    // Said once the card shows the new range, by the toast that offers its Undo, and the card
+    // redrawn under it: its subtitle names the range chosen.
+    await expect(
+      page.getByText("Posts: Date range set to Last 12 months.")
+    ).toBeVisible();
+    await expect(card.getByText("Over time · last 12 months")).toBeVisible();
+    // Kept for this reader: it is there after a reload.
     await page.reload();
     await expect(
-      card.getByRole("combobox", { name: /^Date range for Over time/ })
+      card.getByRole("combobox", { name: "Date range for Posts" })
     ).toHaveText(/Last 12 months/);
   });
 }
