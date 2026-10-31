@@ -107,19 +107,11 @@ for (const leg of LEGS) {
       const { a, b } = running();
       // From when the write began, not when the writing process exited.
       const since = running().writeOutsideRequest("outside");
-      const tookA = await servedWithin(
-        request,
-        a,
-        "outside",
-        since,
-        FRESH_WITHIN_MS
-      );
-      const tookB = await servedWithin(
-        request,
-        b,
-        "outside",
-        since,
-        FRESH_WITHIN_MS
+      // Both read at once, each held to the whole bound from the write.
+      const [tookA, tookB] = await Promise.all(
+        [a, b].map(instance =>
+          servedWithin(request, instance, "outside", since, FRESH_WITHIN_MS)
+        )
       );
       testInfo.annotations.push({
         type: "fresh after the write",
