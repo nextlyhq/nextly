@@ -65,6 +65,8 @@ beforeEach(() => {
   // A fresh view per case: its state is shared by every module copy on purpose.
   delete (globalThis as { __nextly_tag_expiry_view?: unknown })
     .__nextly_tag_expiry_view;
+  delete (globalThis as { __nextly_cache_entries?: unknown })
+    .__nextly_cache_entries;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -182,6 +184,50 @@ describe("the incremental cache handler", () => {
     expect(await handler.get("/blog")).toBeNull();
   });
 
+  it("keeps an entry across the handlers Next.js makes, one per request", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    await new IncrementalHandler().set("k", page(1), { tags: ["posts"] });
+    expect(await new IncrementalHandler().get("k")).not.toBeNull();
+  });
+
+  it("counts a prerender's segment buffers toward the bound, and evicts past it", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    // A page's segments are a Map of Buffers, which JSON writes as `{}`.
+    const prerender = () => ({
+      kind: "APP_PAGE",
+      segmentData: new Map([["/page", Buffer.alloc(10 * 1024 * 1024)]]),
+    });
+    for (let i = 0; i < 6; i += 1) {
+      await new IncrementalHandler().set(`p${i}`, prerender());
+    }
+    expect(await new IncrementalHandler().get("p0")).toBeNull();
+    expect(await new IncrementalHandler().get("p5")).not.toBeNull();
+  });
+
+  it("expires an entry for its own write when the database's offset is learned after it", async () => {
+    // The database's clock runs a minute ahead; the ledger cannot take the
+    // write, so only this process's own record of it expires the entry.
+    const ahead = 60_000;
+    publishTagExpiryLedger({
+      record: async () => {
+        throw new Error("read-only replica");
+      },
+      expiriesOf: async tags => ({
+        now: Date.now() + ahead,
+        expired: new Map(
+          tags.includes("other") ? [["other", T0 + ahead - 100_000]] : []
+        ),
+      }),
+      prune: async () => 0,
+    });
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts", "other"] });
+    vi.advanceTimersByTime(1000);
+    // Before any read: the offset is not known yet.
+    await handler.revalidateTag("posts");
+    expect(await handler.get("k")).toBeNull();
+  });
+
   it("expires its own writes with no ledger published, as one instance needs", async () => {
     publishTagExpiryLedger(null);
     const handler = new IncrementalHandler();
@@ -276,6 +322,19 @@ describe("the use cache handler", () => {
     expect(await useCacheHandler.get("k", [])).toBeUndefined();
     // Reported on this process's clock, for Next.js to compare its own times with.
     expect(await useCacheHandler.getExpiration(["posts"])).toBeGreaterThan(T0);
+  });
+
+  it("answers a get made while the same key is being written with the new value", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    let finish!: (value: ReturnType<typeof entry>) => void;
+    const pending = new Promise<ReturnType<typeof entry>>(resolve => {
+      finish = resolve;
+    });
+    const writing = useCacheHandler.set("k", pending);
+    const reading = useCacheHandler.get("k", []);
+    finish(entry("fresh", ["posts"]));
+    await writing;
+    expect(await read((await reading)?.value)).toBe("fresh");
   });
 });
 

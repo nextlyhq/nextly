@@ -37,7 +37,10 @@ interface ViewState {
   lookups: Map<string, TagLookup>;
   /** Tags being asked about now, with the read that will answer them. */
   asking: Map<string, Promise<void>>;
-  /** Tags this process expired itself, on the database's clock as last known. */
+  /**
+   * Tags this process expired itself, on this process's clock: converted only
+   * when compared, so an offset learned later cannot misplace them.
+   */
   own: Map<string, number>;
   /** The database's clock less this process's, as of the last read that told it. */
   offsetMs: number;
@@ -94,7 +97,7 @@ function sweep(view: ViewState, now: number): void {
   for (const [tag, lookup] of view.lookups) {
     if (now - lookup.askedAt >= TAG_LOOKUP_TTL_MS) view.lookups.delete(tag);
   }
-  const horizon = now + view.offsetMs - LEDGER_RETENTION_MS;
+  const horizon = now - LEDGER_RETENTION_MS;
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
@@ -163,9 +166,10 @@ export async function refreshTagExpiries(
 
 /** When `tag` last expired as far as this process knows, on the database's clock. */
 function expiryOf(view: ViewState, tag: string): number {
+  const own = view.own.get(tag);
   return Math.max(
     view.lookups.get(tag)?.expiredAt ?? 0,
-    view.own.get(tag) ?? 0
+    own === undefined ? 0 : own + view.offsetMs
   );
 }
 
@@ -209,7 +213,7 @@ export function latestExpiry(tags: Iterable<string>): number {
  */
 export async function expireTags(tags: readonly string[]): Promise<void> {
   const view = state();
-  const now = Date.now() + view.offsetMs;
+  const now = Date.now();
   for (const tag of tags) view.own.set(tag, now);
   try {
     await view.ledger?.record(tags);

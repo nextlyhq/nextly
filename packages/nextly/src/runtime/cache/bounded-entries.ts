@@ -51,3 +51,24 @@ export class BoundedEntries<V> {
     return this.total;
   }
 }
+
+const globalForEntries = globalThis as unknown as {
+  __nextly_cache_entries?: Map<string, BoundedEntries<unknown>>;
+};
+
+/**
+ * The one store named `name` in this process, made on first use. Next.js
+ * builds a new incremental cache, and a new handler with it, for each
+ * request, so a store kept on the handler would hold nothing past the request
+ * that filled it; it lives here instead, beside every module copy.
+ */
+export function sharedEntries<V>(name: string): BoundedEntries<V> {
+  globalForEntries.__nextly_cache_entries ??= new Map();
+  const stores = globalForEntries.__nextly_cache_entries;
+  let store = stores.get(name);
+  if (store === undefined) {
+    store = new BoundedEntries<unknown>();
+    stores.set(name, store);
+  }
+  return store as BoundedEntries<V>;
+}

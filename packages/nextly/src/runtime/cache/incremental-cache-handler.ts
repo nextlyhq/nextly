@@ -9,7 +9,7 @@
  *
  * @module runtime/cache/incremental-cache-handler
  */
-import { BoundedEntries } from "./bounded-entries";
+import { sharedEntries } from "./bounded-entries";
 import {
   expireTags,
   isEntryExpired,
@@ -35,40 +35,47 @@ function headerTags(value: unknown): string[] {
 }
 
 /**
- * A rough size for the bound: the entry as JSON, with each buffer counted by
- * its length rather than serialised. A Buffer reaches the replacer already
- * turned into `{ type: "Buffer", data }` by its own `toJSON`.
+ * A rough size for the bound, walking the value rather than serialising it:
+ * a page's `segmentData` is a Map of Buffers, which JSON writes as `{}`, so a
+ * serialised length would let a large prerender pass as a few bytes. Bytes are
+ * counted for buffers, characters for strings and keys, and a few bytes for
+ * anything else; a value seen twice is counted once.
  */
-function sizeOf(value: unknown): number {
-  let buffers = 0;
-  try {
-    const json = JSON.stringify(value, (_key, part: unknown) => {
-      if (part instanceof Uint8Array) {
-        buffers += part.byteLength;
-        return null;
-      }
-      const serialised = part as { type?: unknown; data?: unknown } | null;
-      if (serialised?.type === "Buffer" && Array.isArray(serialised.data)) {
-        buffers += serialised.data.length;
-        return null;
-      }
-      return part;
-    });
-    return (json?.length ?? 0) + buffers;
-  } catch {
-    // An entry that cannot be measured is kept, counted at a nominal size.
-    return 1024;
+function sizeOf(value: unknown, seen = new WeakSet<object>()): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "string") return value.length;
+  if (typeof value !== "object") return 8;
+  if (seen.has(value)) return 0;
+  seen.add(value);
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  let bytes = 0;
+  if (value instanceof Map) {
+    for (const [key, part] of value) {
+      bytes += sizeOf(key, seen) + sizeOf(part, seen);
+    }
+    return bytes;
   }
+  if (value instanceof Set || Array.isArray(value)) {
+    for (const part of value) bytes += sizeOf(part, seen);
+    return bytes;
+  }
+  for (const [key, part] of Object.entries(value)) {
+    bytes += key.length + sizeOf(part, seen);
+  }
+  return bytes;
 }
 
-export default class NextlyIncrementalCacheHandler {
-  private readonly entries = new BoundedEntries<StoredEntry>();
+/** Stored pages, routes and fetches, shared by every handler Next.js makes. */
+// Looked up on each use, so the store a test resets is the one read.
+const entries = () => sharedEntries<StoredEntry>("incremental");
 
+export default class NextlyIncrementalCacheHandler {
   async get(
     key: string,
     ctx?: CacheContext
   ): Promise<{ lastModified: number; value: unknown } | null> {
-    const stored = this.entries.get(key);
+    const stored = entries().get(key);
     if (stored === undefined) return null;
     const tags = [
       ...stored.tags,
@@ -80,7 +87,7 @@ export default class NextlyIncrementalCacheHandler {
     // most one ledger read, and none while their answers are fresh.
     await refreshTagExpiries(tags);
     if (isEntryExpired(tags, stored.lastModified)) {
-      this.entries.delete(key);
+      entries().delete(key);
       return null;
     }
     return { lastModified: stored.lastModified, value: stored.value };
@@ -89,9 +96,9 @@ export default class NextlyIncrementalCacheHandler {
   // Synchronous work behind the promise Next.js expects from a handler.
   set(key: string, data: unknown, ctx?: CacheContext): Promise<void> {
     if (data === null || data === undefined) {
-      this.entries.delete(key);
+      entries().delete(key);
     } else {
-      this.entries.set(
+      entries().set(
         key,
         { value: data, lastModified: Date.now(), tags: ctx?.tags ?? [] },
         sizeOf(data)
