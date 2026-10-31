@@ -72,7 +72,7 @@ describe("the revalidator outside Next.js", () => {
 
   it("returns within the hand-off's bound when the ledger never answers, keeping the tags", async () => {
     vi.useFakeTimers();
-    ledgerThat(() => new Promise<boolean>(() => undefined));
+    ledgerThat(() => new Promise<never>(() => undefined));
     setExpiryHandoff(new LedgerExpiryHandoff());
 
     const flushing = new HandOffRevalidator().flush(write("posts"));

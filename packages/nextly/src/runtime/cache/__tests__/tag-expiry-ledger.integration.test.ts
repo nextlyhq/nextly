@@ -33,6 +33,9 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
         from(table: unknown): PromiseLike<Array<{ rows: number }>>;
       };
       delete(table: unknown): PromiseLike<unknown>;
+      update(table: unknown): {
+        set(values: Record<string, unknown>): PromiseLike<unknown>;
+      };
     }>();
   const rowCount = async () =>
     Number((await db().select({ rows: count() }).from(table()))[0]?.rows);
@@ -86,6 +89,34 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
     expect(await rowCount()).toBe(1);
   });
 
+  it("records an expiry past the database's time, by the grace", async () => {
+    await ledger.record(["posts"]);
+    const read = await ledger.expiriesOf(["posts"]);
+    const stored = read?.expired.get("posts") ?? 0;
+    const now = read?.now ?? Infinity;
+
+    // Read straight after the record, within the grace: an ungraced row would
+    // already be at or before the database's time.
+    expect(stored).toBeGreaterThan(now);
+    expect(stored).toBeLessThanOrEqual(now + TAG_EXPIRY_GRACE_MS);
+  });
+
+  it("never moves a row back, whatever time a record would store", async () => {
+    await ledger.record(["posts"]);
+    // A row already later than any record now would store: a racing writer's,
+    // or one written while the database's clock ran ahead.
+    const later =
+      ((await ledger.expiriesOf(["posts"]))?.now ?? 0) + 60 * 60 * 1000;
+    await db().update(table()).set({ expiredAt: later });
+
+    const stored = await ledger.record(["posts"]);
+
+    expect((await ledger.expiriesOf(["posts"]))?.expired.get("posts")).toBe(
+      later
+    );
+    expect(stored ? stored.get("posts") : -1).toBe(later);
+  });
+
   it("answers a lookup of more tags than one statement asks for", async () => {
     const tags = Array.from({ length: 1200 }, (_, i) => `tag-${i}`);
     await ledger.record(tags);
@@ -95,7 +126,8 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
 
   it("keeps a row whose tag expired again after the prune found it", async () => {
     await ledger.record(["old-a", "old-b"]);
-    await pause(1500);
+    // A recorded row stands TAG_EXPIRY_GRACE_MS ahead, so this makes it 1.5 s old.
+    await pause(TAG_EXPIRY_GRACE_MS + 1500);
     // Each delete is preceded by "old-a" expiring again, as a write landing
     // between the prune's select and its delete would make it.
     const adapter = current.adapter;
@@ -138,10 +170,11 @@ describeEachDialect("the cache tag expiry ledger", dialect => {
 
   it("prunes only the rows older than its age, on the database's clock", async () => {
     await ledger.record(["old-a", "old-b"]);
-    await pause(1500);
+    // A recorded row stands TAG_EXPIRY_GRACE_MS ahead, so this makes it 1.5 s old.
+    await pause(TAG_EXPIRY_GRACE_MS + 1500);
     await ledger.record(["new"]);
 
-    // The old rows are 1.5 s old, the new one a few milliseconds.
+    // The old rows are 1.5 s old; the new one is not yet past the database's time.
     expect(await ledger.prune(750)).toBe(2);
     expect([
       ...((

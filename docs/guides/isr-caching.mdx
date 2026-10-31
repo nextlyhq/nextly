@@ -91,6 +91,15 @@ revalidation is request-scoped.
   sent and completes in the same invocation. A request made after the response
   arrives reads the new version. A request already in flight while the write
   ran may still read the previous one.
+- **Other instances:** with Nextly's cache handlers installed (see Cache
+  Components below), every other instance stops serving the previous version
+  within about five seconds. They treat the expiry as standing for one second
+  past the write, the time an instance may keep a collection's settings
+  cached, so a page one of them rebuilt from settings it read just before a
+  schema change is not served either. That second is the whole cost: a tag
+  written more than about once a second keeps the other instances rebuilding
+  the reads that carry it until the writes pause, while the instance making
+  the writes is not affected.
 
 ### If an expiry fails
 
