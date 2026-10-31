@@ -417,6 +417,56 @@ describe("searching", () => {
   });
 });
 
+describe("what the gallery says for a chip", () => {
+  it("says the count for a chip the reader chooses, and nothing for the All it opens on", () => {
+    vi.useFakeTimers();
+    renderPanel();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live().textContent).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Trends" }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(live()).toHaveTextContent("1 widget.");
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(live()).toHaveTextContent("4 widgets.");
+  });
+
+  it("says the chip's count after Clear, not every widget's", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole("button", { name: "Trends" }));
+    await user.type(search(), "zzz");
+    expect(screen.getByTestId("add-panel-none")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(tileNames()).toEqual(["add-panel-tile-core/over-time"]);
+    expect(live()).toHaveTextContent("1 widget.");
+    expect(screen.getByTestId("add-panel-count")).toHaveTextContent("1 widget");
+  });
+
+  it("lets a card put back under a chip be said, never spoken over by the count it moved", () => {
+    vi.useFakeTimers();
+    const removed: WidgetPlacement = {
+      id: "p1",
+      widgetId: "core/team-activity",
+      w: 6,
+      h: 5,
+      removed: true,
+    };
+    const all = renderPanel({ placements: [removed] });
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    act(() => vi.advanceTimersByTime(500));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add back Team activity" })
+    );
+    // The draft as it is once the card is back: off the Removed list, so the count moves.
+    all.rerender(
+      <AddWidgetPanel {...all} placements={[{ ...removed, removed: false }]} />
+    );
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live()).toHaveTextContent("Added back Team activity.");
+  });
+});
+
 describe("the add step", () => {
   it("opens for a widget that reads a collection, on the collection the reader edits most", async () => {
     const user = userEvent.setup();

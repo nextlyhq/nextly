@@ -36,6 +36,7 @@ import { MAX_PLACEMENTS } from "nextly/config";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useId,
   useMemo,
   useRef,
@@ -134,8 +135,20 @@ interface AddStep {
  * The count, and the one sentence the panel is saying now, for its live region. Each visit starts
  * silent: the panel stays mounted while closed, so a sentence from the last visit, or a count
  * still waiting when it closed, would otherwise be said again on opening.
+ *
+ * The count is said when the reader narrows the gallery, by a search or by a chip they chose
+ * (`chosenChip`, `null` until they choose one this visit), and when the read lands under a
+ * search typed before it. Not when the count moves under the reader for another reason, as when
+ * a card put back leaves the Removed list: that add's own sentence is what the reader should
+ * hear, not a count spoken over it a moment later.
  */
-function usePanelVoice(found: number, query: string, open: boolean) {
+function usePanelVoice(
+  found: number,
+  query: string,
+  open: boolean,
+  chosenChip: GalleryChip | null,
+  ready: boolean
+) {
   const [spoken, setSpoken] = useState("");
   // Cleared as the panel opens or closes, during render (React's pattern for state that follows
   // a prop), so no frame of a new visit draws the old sentence.
@@ -146,16 +159,17 @@ function usePanelVoice(found: number, query: string, open: boolean) {
   }
   const count = galleryCount(found, query);
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Read when the announcement is scheduled, so a later count is said without the count itself
+  // being what schedules one.
+  const sayCount = useEffectEvent(() => setSpoken(`${count}.`));
   // Announced once typing pauses, so each keystroke does not interrupt the last. Never while
   // closed: closing clears a count still waiting, and none starts until the panel opens again.
   useEffect(() => {
-    if (!open || query.trim() === "") return undefined;
-    pending.current = setTimeout(
-      () => setSpoken(`${count}.`),
-      COUNT_ANNOUNCE_DELAY_MS
-    );
+    if (!open || !ready) return undefined;
+    if (query.trim() === "" && chosenChip === null) return undefined;
+    pending.current = setTimeout(sayCount, COUNT_ANNOUNCE_DELAY_MS);
     return () => clearTimeout(pending.current);
-  }, [count, query, open]);
+  }, [query, chosenChip, open, ready]);
   // A sentence said on purpose (an add, a cleared search) cancels a count still waiting, which
   // would otherwise land on top of it.
   const say = useCallback((sentence: string) => {
@@ -1194,12 +1208,25 @@ function useAddGallery({
 >) {
   const [query, setQuery] = useState("");
   const [chip, setChip] = useState<GalleryChip>("all");
+  // Whether the reader chose a chip this visit, so the count is said for it: the All the visit
+  // opens on was not chosen, and says nothing.
+  const [chipChosen, setChipChosen] = useState(false);
   const [step, setStep] = useState<AddStep | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const read = gallery.read;
   const model = useGalleryModel(read, placements, byId, chip, query);
-  const voice = usePanelVoice(foundCount(model.found), query, open);
+  const voice = usePanelVoice(
+    foundCount(model.found),
+    query,
+    open,
+    chipChosen ? chip : null,
+    read !== undefined
+  );
+  const chooseChip = (next: GalleryChip) => {
+    setChip(next);
+    setChipChosen(true);
+  };
   // A fresh gallery each time it opens: an old search, chip or step would hide what the reader
   // came to find. Reset during the render that opens it (React's pattern for state that follows
   // a prop), so the sheet's first frame already draws the search its focus goes to.
@@ -1209,6 +1236,7 @@ function useAddGallery({
     if (open) {
       setQuery("");
       setChip("all");
+      setChipChosen(false);
       setStep(null);
     }
   }
@@ -1224,18 +1252,18 @@ function useAddGallery({
     focusTile,
     keepFocusInPanel,
   });
+  // The count said is what the gallery lists once the search is gone: under the chip still on,
+  // which a cleared search leaves as it was.
   const clear = () => {
     setQuery("");
-    voice.say(
-      `${galleryCount(model.removed.length + model.tiles.length, "")}.`
-    );
+    voice.say(`${galleryCount(model.unsearched, "")}.`);
     searchRef.current?.focus();
   };
   return {
     query,
     setQuery,
     chip,
-    setChip,
+    chooseChip,
     step,
     setStep,
     searchRef,
@@ -1280,13 +1308,16 @@ function useGalleryModel(
     [placements, byId]
   );
   const collections = useMemo(() => read?.collections ?? [], [read]);
-  const found = useMemo(
-    () =>
-      searchGallery(
-        { removed, tiles: tilesInChip(tiles, chip), collections, canAsk },
-        query
-      ),
-    [removed, tiles, chip, collections, canAsk, query]
+  const inChip = useMemo(
+    () => ({ removed, tiles: tilesInChip(tiles, chip), collections, canAsk }),
+    [removed, tiles, chip, collections, canAsk]
+  );
+  const found = useMemo(() => searchGallery(inChip, query), [inChip, query]);
+  // What the chip keeps with no search, by the same search an empty query runs: what Clear
+  // brings back, and says.
+  const unsearched = useMemo(
+    () => foundCount(searchGallery(inChip, "")),
+    [inChip]
   );
   const suggestions = useMemo(
     () =>
@@ -1306,6 +1337,7 @@ function useGalleryModel(
     removed,
     collections,
     found,
+    unsearched,
     shownSuggestions: narrowed ? [] : suggestions,
     collectionsOf,
     startFor,
@@ -1359,7 +1391,7 @@ export function AddWidgetPanel({
     query,
     setQuery,
     chip,
-    setChip,
+    chooseChip,
     step,
     setStep,
     searchRef,
@@ -1389,7 +1421,7 @@ export function AddWidgetPanel({
                 query={query}
                 onQuery={setQuery}
                 chip={chip}
-                onChip={setChip}
+                onChip={chooseChip}
                 count={voice.count}
                 ready={read !== undefined}
               />
@@ -1407,7 +1439,7 @@ export function AddWidgetPanel({
           query={query}
           chip={chip}
           onClear={clear}
-          onShowAll={() => setChip("all")}
+          onShowAll={() => chooseChip("all")}
           suggestions={shownSuggestions}
           atCapacity={atCapacity}
           byId={byId}
