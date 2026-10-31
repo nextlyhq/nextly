@@ -94,17 +94,17 @@ export function newSubmissionsWidget(
     isEmpty: () => false,
     preview: [{ name: "Two new", data: PREVIEW }],
     // The card's own read, asked for no rows, so the header counts exactly
-    // what the card lists.
+    // what the card lists, a floor ("1,000+") where the card's is one.
     summary: {
       label: "new submissions",
-      count: async ({ services, signal }) =>
-        (
-          await readNewSubmissions(services, declared, {
-            limit: 0,
-            signal,
-            submissionsPath: submissionsPath(),
-          })
-        ).total,
+      count: async ({ services, signal }) => {
+        const { total, atLeast } = await readNewSubmissions(
+          services,
+          declared,
+          { limit: 0, signal, submissionsPath: submissionsPath() }
+        );
+        return { count: total, atLeast: atLeast === true };
+      },
     },
   });
 }

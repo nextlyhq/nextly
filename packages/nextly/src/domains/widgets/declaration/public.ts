@@ -30,6 +30,7 @@ export {
   type WidgetRenderSize,
   type WidgetSkeleton,
   type WidgetSummary,
+  type WidgetSummaryCount,
 } from "./define-widget";
 export {
   defineAttentionItem,

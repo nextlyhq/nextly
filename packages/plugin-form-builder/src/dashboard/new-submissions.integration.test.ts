@@ -100,7 +100,11 @@ describe.each(getConfiguredTestDialects())(
     let submissions = DECLARED_SUBMISSIONS;
 
     /** Boots with the plugin, its submissions renamed to `renamedTo` when one is named. */
-    async function boot(withPlugin: boolean, renamedTo?: string) {
+    async function boot(
+      withPlugin: boolean,
+      renamedTo?: string,
+      seedPublic = false
+    ) {
       const fb = installed();
       const rename = fb.plugin.rename;
       if (renamedTo !== undefined && rename === undefined) {
@@ -114,6 +118,9 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         plugins: withPlugin ? [plugin] : [],
+        // The Public role a real boot grants the submission create, for a
+        // case sending one as a visitor.
+        ...(seedPublic ? { seedPublic: true } : {}),
       });
       const t = current;
       const owner = await person(t, "owner");
@@ -282,6 +289,31 @@ describe.each(getConfiguredTestDialects())(
         cookie,
         JSON.parse(String(init.body)) as unknown
       );
+    }
+
+    /** A submission created as a visitor, through core's entry route, with no session. */
+    async function visitorCreate(body: unknown): Promise<Response> {
+      const path = ["collections", submissions, "entries"];
+      const request = new Request(`http://localhost/api/${path.join("/")}`, {
+        method: "POST",
+        headers: {
+          origin: "http://localhost",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      return createDynamicHandlers().POST(request, {
+        params: Promise.resolve({ params: path }),
+      });
+    }
+
+    /** A submission's stored `submittedAt`, read as the system, in epoch milliseconds. */
+    async function submittedAtOf(t: TestNextly, id: string): Promise<number> {
+      const found = (await t.nextly.findByID({
+        collection: submissions,
+        id,
+      })) as { submittedAt?: unknown } | null;
+      return new Date(String(found?.submittedAt)).getTime();
     }
 
     /** A submission's status, read as the system. */
@@ -505,6 +537,41 @@ describe.each(getConfiguredTestDialects())(
       const refused = await open(await sessionOf(t, reader), ids.contact);
       expect(refused.status).toBeGreaterThanOrEqual(400);
       expect(await statusOf(t, ids.contact)).toBe("new");
+    });
+
+    it("stores a visitor's submission at the server's time, whatever date it names", async () => {
+      const { t } = await boot(true, undefined, true);
+      const contact = await form(t, "contact", "Contact", [
+        { type: "text", name: "comment", label: "Comment" },
+      ]);
+      const before = Date.now();
+      const created = await visitorCreate({
+        form: contact,
+        data: { comment: "Hello" },
+        submittedAt: "2099-01-01T00:00:00.000Z",
+      });
+      expect(created.status, await created.clone().text()).toBeLessThan(300);
+      const { item } = (await created.json()) as { item: { id: string } };
+      const at = await submittedAtOf(t, item.id);
+      // The server's clock, not the year 2099 it asked for.
+      expect(at).toBeGreaterThanOrEqual(before - 1000);
+      expect(at).toBeLessThanOrEqual(Date.now() + 1000);
+    });
+
+    it("keeps the date a server-side create names, as an import restoring old submissions does", async () => {
+      const { t } = await boot(true);
+      const contact = await form(t, "contact", "Contact", [
+        { type: "text", name: "comment", label: "Comment" },
+      ]);
+      const id = await submit(
+        t,
+        contact,
+        { comment: "From the old site" },
+        "2024-03-01T09:00:00.000Z"
+      );
+      expect(await submittedAtOf(t, id)).toBe(
+        Date.parse("2024-03-01T09:00:00.000Z")
+      );
     });
 
     it("indexes the submissions by status and by when they were submitted", async () => {

@@ -43,10 +43,18 @@ export function markReadRequest(
 }
 
 /**
- * Marks submission `id` read, without waiting for the answer. A refusal or a
- * failed request leaves it new, which the card and the list then still say.
+ * Marks submission `id` read, answering whether the update was taken. A
+ * refusal or a failed request answers `false` and leaves it new, which the
+ * card and the list then still say; it never rejects.
  */
-export function markRead(collection: string, id: string): void {
+export async function markRead(
+  collection: string,
+  id: string
+): Promise<boolean> {
   const { url, init } = markReadRequest(collection, id);
-  void fetch(url, init).catch(() => undefined);
+  try {
+    return (await fetch(url, init)).ok;
+  } catch {
+    return false;
+  }
 }

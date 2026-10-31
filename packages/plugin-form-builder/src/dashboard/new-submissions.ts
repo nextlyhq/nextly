@@ -79,7 +79,8 @@ const FORM_PAGE = 50;
 /**
  * The most pages of forms read for the filter: 1,000 forms. Past that, the
  * later forms' submissions are left out of the card and the count, never
- * shown: what is missed is a reader's own, not someone else's.
+ * shown: what is missed is a reader's own, not someone else's. The count then
+ * says it is a floor (`atLeast`), so nobody reads it as every one.
  */
 const MAX_FORM_PAGES = 20;
 
@@ -129,36 +130,57 @@ interface FormFieldShape {
   label?: string;
 }
 
+/** The forms the reader may read, by id, and whether that is every one of them. */
+export interface ReadableForms {
+  ids: string[];
+  /** `false` when the scan stopped at its budget with forms still unread. */
+  complete: boolean;
+}
+
+/** Up to `limit` ids of forms the reader may read, by id, after `after`. */
+async function formIdPage(
+  services: Pick<WidgetReadServices, "find">,
+  forms: string,
+  page: { after: string | undefined; limit: number; signal?: AbortSignal }
+): Promise<string[]> {
+  const { items } = await services.find(forms, {
+    ...(page.after === undefined
+      ? {}
+      : { where: { id: { greater_than: page.after } } }),
+    sort: "id",
+    limit: page.limit,
+    select: ["id"],
+    status: "all",
+    ...(page.signal === undefined ? {} : { signal: page.signal }),
+  });
+  return items.flatMap(item => (typeof item.id === "string" ? [item.id] : []));
+}
+
 /**
- * The ids of every form the reader may read, in pages of `FORM_PAGE`, by id.
- * A form a read rule keeps from them is never among them.
+ * The ids of the forms the reader may read, in pages of `FORM_PAGE`, by id,
+ * at most `MAX_FORM_PAGES` of them. A form a read rule keeps from them is
+ * never among them. Where the budget is spent, one more id says whether any
+ * form was left out.
  */
 export async function readableFormIds(
   services: Pick<WidgetReadServices, "find">,
   forms: string,
   signal?: AbortSignal
-): Promise<string[]> {
+): Promise<ReadableForms> {
   const ids: string[] = [];
   let after: string | undefined;
   for (let page = 0; page < MAX_FORM_PAGES; page += 1) {
-    const { items } = await services.find(forms, {
-      ...(after === undefined
-        ? {}
-        : { where: { id: { greater_than: after } } }),
-      sort: "id",
+    const pageIds = await formIdPage(services, forms, {
+      after,
       limit: FORM_PAGE,
-      select: ["id"],
-      status: "all",
-      ...(signal === undefined ? {} : { signal }),
+      signal,
     });
-    const pageIds = items.flatMap(item =>
-      typeof item.id === "string" ? [item.id] : []
-    );
     ids.push(...pageIds);
     after = pageIds.at(-1);
-    if (items.length < FORM_PAGE || after === undefined) break;
+    if (pageIds.length < FORM_PAGE) return { ids, complete: true };
   }
-  return ids;
+  const beyond = await formIdPage(services, forms, { after, limit: 1, signal });
+  return { ids, complete: beyond.length === 0 };
 }
 
 /** The new submissions of the forms named: what the card lists and the header counts. */
@@ -182,21 +204,24 @@ export async function readNewSubmissions(
   const signal = read.signal === undefined ? {} : { signal: read.signal };
   const allHref = `${ADMIN_ROOT}/collections/${read.submissionsPath}`;
   const collection = read.submissionsPath;
-  const formIds = await readableFormIds(
+  const readable = await readableFormIds(
     services,
     collections.forms,
     read.signal
   );
-  if (formIds.length === 0) {
+  if (readable.ids.length === 0) {
     return { items: [], total: 0, allHref, collection };
   }
   const found = await services.find(collections.submissions, {
-    where: newSubmissionsWhere(formIds),
+    where: newSubmissionsWhere(readable.ids),
     sort: "-submittedAt",
     limit: read.limit,
     select: SUBMISSION_FIELDS,
     status: "all",
     total: true,
+    // Each row's form as the id it stores: the forms drawn are read once,
+    // below, so expanding them here would read them twice.
+    depth: 0,
     ...signal,
   });
   const forms = await formsOf(services, collections.forms, found.items, signal);
@@ -205,7 +230,11 @@ export async function readNewSubmissions(
       submissionRow(item, forms.get(formIdOf(item.form) ?? ""), allHref)
     ),
     total: found.total ?? found.items.length,
-    ...(found.atLeast === true ? { atLeast: true as const } : {}),
+    // A floor where the read counted only so far, or where forms past the
+    // scan's budget were left out of it.
+    ...(found.atLeast === true || !readable.complete
+      ? { atLeast: true as const }
+      : {}),
     allHref,
     collection,
   };

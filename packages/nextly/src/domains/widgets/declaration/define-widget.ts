@@ -401,6 +401,17 @@ export type WidgetAccess =
   | ((input: { user: UserContext }) => unknown);
 
 /**
+ * A summary's count as a widget answers it: a number, or the number with
+ * `atLeast` where the widget counted only so far and there may be more, which
+ * the header then shows as a floor ("1,000+").
+ *
+ * @experimental
+ */
+export type WidgetSummaryCount =
+  | number
+  | { readonly count: number; readonly atLeast?: boolean };
+
+/**
  * What a widget's summary counts for the dashboard's header: a label, and a
  * count run as the person asking.
  *
@@ -410,7 +421,7 @@ export interface WidgetSummary {
   label: string;
   count: (
     input: Pick<WidgetDataInput<unknown>, "user" | "signal" | "services">
-  ) => Promise<number>;
+  ) => Promise<WidgetSummaryCount>;
 }
 
 /**

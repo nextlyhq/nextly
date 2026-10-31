@@ -8,14 +8,17 @@
  * What a load answers for a reader is the integration suite's question; this
  * one is what the card shows for an answer, in light and dark, that its
  * empty state stays on the dashboard with a way to every submission, that its
- * times move on while it is open, and that opening a row marks it read.
+ * times move on while it is open, that opening a row marks it read, and that
+ * its title carries how many are new.
  */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -74,7 +77,13 @@ if (!("matchMedia" in globalThis)) {
  * card's own among them, are imported above with the DOM in place, so only
  * the server modules are evaluated without it, and the DOM is back before
  * anything is drawn.
+ *
+ * Loading them is evaluating core's whole server graph once, cold, which took
+ * past the 10s hook default on a loaded CI runner; `SERVER_LOAD_MS` gives it
+ * the budget the plugin's integration hooks have, for the same kind of work.
  */
+const SERVER_LOAD_MS = 30_000;
+
 let server: {
   renderWidgetCard: typeof import("@nextlyhq/plugin-sdk/testing/admin").renderWidgetCard;
   formBuilder: typeof import("../plugin").formBuilder;
@@ -95,7 +104,7 @@ beforeAll(async () => {
   } finally {
     if (dom !== undefined) Object.defineProperty(globalThis, "window", dom);
   }
-});
+}, SERVER_LOAD_MS);
 
 /** The widget exactly as the plugin contributes it. */
 function contributed() {
@@ -109,6 +118,9 @@ function contributed() {
 }
 
 const ALL = "/admin/collections/form-submissions";
+
+/** The card's region, by its title: read with its count, when it has one. */
+const CARD = /^New form submissions(, \d+( or more)? items?)?$/;
 
 const TWO_NEW: NewSubmissionsData = {
   items: [
@@ -141,15 +153,20 @@ const TWO_NEW: NewSubmissionsData = {
 function drawCard(
   state: "ready" | "empty",
   data: NewSubmissionsData,
-  theme: "light" | "dark" = "light"
+  theme: "light" | "dark" = "light",
+  client: QueryClient = new QueryClient()
 ) {
+  // Inside the admin's query client, as on the dashboard: the card asks the
+  // dashboard's reads again after its own write.
   return render(
-    server.renderWidgetCard(contributed(), {
-      state,
-      data: data as never,
-      theme,
-      component: NewSubmissionsCard,
-    })
+    <QueryClientProvider client={client}>
+      {server.renderWidgetCard(contributed(), {
+        state,
+        data: data as never,
+        theme,
+        component: NewSubmissionsCard,
+      })}
+    </QueryClientProvider>
   );
 }
 
@@ -157,7 +174,7 @@ describe("New form submissions", () => {
   for (const theme of ["light", "dark"] as const) {
     it(`lists each new submission as a row opening it, with who, which form, its first line and when (${theme})`, () => {
       drawCard("ready", TWO_NEW, theme);
-      const card = screen.getByRole("region", { name: "New form submissions" });
+      const card = screen.getByRole("region", { name: CARD });
       expect(card).toHaveAttribute("data-state", "ready");
 
       const ana = within(card).getByRole("link", { name: /Ana Ruiz/ });
@@ -183,7 +200,7 @@ describe("New form submissions", () => {
 
   it("leads from its footer to every submission", () => {
     drawCard("ready", TWO_NEW);
-    const card = screen.getByRole("region", { name: "New form submissions" });
+    const card = screen.getByRole("region", { name: CARD });
     expect(
       within(card).getByRole("link", { name: /View all/ })
     ).toHaveAttribute("href", ALL);
@@ -198,11 +215,26 @@ describe("New form submissions", () => {
       allHref: "/admin/collections/leads",
       collection: "leads",
     });
-    const card = screen.getByRole("region", { name: "New form submissions" });
+    const card = screen.getByRole("region", { name: CARD });
     expect(card).toHaveAttribute("data-state", "empty");
     expect(card).toHaveTextContent("No new submissions");
     const all = within(card).getByRole("link", { name: "All submissions" });
     expect(all).toHaveAttribute("href", "/admin/collections/leads");
+    // Nothing new, and no "0" beside the title: the empty state says it.
+    expect(screen.queryByTestId("widget-card-title-count")).toBeNull();
+    expect(card).toHaveAccessibleName("New form submissions");
+  });
+
+  it("carries how many are new beside its title, read with it: the total, not the rows drawn", () => {
+    // Seven new, two drawn: the count is the read's total, the one the
+    // dashboard header's part counts, however few rows the card holds.
+    drawCard("ready", { ...TWO_NEW, total: 7 });
+    expect(screen.getByTestId("widget-card-title-count")).toHaveTextContent(
+      "7"
+    );
+    expect(
+      screen.getByRole("region", { name: "New form submissions, 7 items" })
+    ).toBeInTheDocument();
   });
 
   it("does not hide while empty: its declaration never asks to", () => {
@@ -213,7 +245,7 @@ describe("New form submissions", () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     vi.setSystemTime(new Date("2026-01-05T09:30:20.000Z"));
     const { unmount } = drawCard("ready", TWO_NEW);
-    const card = screen.getByRole("region", { name: "New form submissions" });
+    const card = screen.getByRole("region", { name: CARD });
     const ana = () => within(card).getByRole("link", { name: /Ana Ruiz/ });
     expect(ana().querySelector("time")).toHaveTextContent("just now");
     act(() => {
@@ -240,7 +272,7 @@ describe("New form submissions", () => {
       ],
       total: 1,
     });
-    const card = screen.getByRole("region", { name: "New form submissions" });
+    const card = screen.getByRole("region", { name: CARD });
     expect(
       within(card)
         .getByRole("link", { name: /Ana Ruiz/ })
@@ -249,10 +281,13 @@ describe("New form submissions", () => {
   });
 
   describe("opening a submission", () => {
-    /** Clicks, with the page's own navigation held, and the requests sent. */
-    function sent() {
+    /**
+     * Clicks, with the page's own navigation held, and the requests sent, each
+     * answered with `answer`'s status.
+     */
+    function sent(answer = 200) {
       const fetched = vi.fn((_url: string, _init: RequestInit) =>
-        Promise.resolve(undefined)
+        Promise.resolve(new Response(null, { status: answer }))
       );
       vi.stubGlobal("fetch", fetched);
       const hold = (event: Event) => event.preventDefault();
@@ -272,7 +307,7 @@ describe("New form submissions", () => {
       try {
         drawCard("ready", { ...TWO_NEW, collection: "leads" });
         const card = screen.getByRole("region", {
-          name: "New form submissions",
+          name: CARD,
         });
         fireEvent.click(within(card).getByRole("link", { name: /Ana Ruiz/ }));
         expect(fetched).toHaveBeenCalledTimes(1);
@@ -303,7 +338,7 @@ describe("New form submissions", () => {
       try {
         drawCard("ready", TWO_NEW);
         const card = screen.getByRole("region", {
-          name: "New form submissions",
+          name: CARD,
         });
         const ana = within(card).getByRole("link", { name: /Ana Ruiz/ });
         fireEvent.click(within(card).getByRole("link", { name: /View all/ }));
@@ -320,5 +355,61 @@ describe("New form submissions", () => {
         release();
       }
     });
+
+    /** The dashboard's cards and header summary, answered, in `client`. */
+    function answered(client: QueryClient) {
+      const batch = ["dashboard", "widget-queries", "batch-1"];
+      const summary = ["dashboard", "summary"];
+      client.setQueryData(batch, { answered: true });
+      client.setQueryData(summary, { answered: true });
+      return () =>
+        [batch, summary].map(key => client.getQueryState(key)?.isInvalidated);
+    }
+
+    it("asks the dashboard's cards and header count again once the submission is marked read", async () => {
+      const { release } = sent(200);
+      try {
+        const client = new QueryClient();
+        const stale = answered(client);
+        drawCard("ready", TWO_NEW, "light", client);
+        const card = screen.getByRole("region", { name: CARD });
+        expect(stale()).toEqual([false, false]);
+        fireEvent.click(within(card).getByRole("link", { name: /Ana Ruiz/ }));
+        await waitFor(() => expect(stale()).toEqual([true, true]));
+      } finally {
+        release();
+      }
+    });
+
+    it("asks nothing again when the update is refused, since nothing changed", async () => {
+      const { fetched, release } = sent(403);
+      try {
+        const client = new QueryClient();
+        const stale = answered(client);
+        drawCard("ready", TWO_NEW, "light", client);
+        const card = screen.getByRole("region", { name: CARD });
+        fireEvent.click(within(card).getByRole("link", { name: /Ana Ruiz/ }));
+        await waitFor(() => expect(fetched).toHaveBeenCalledTimes(1));
+        // Past the answer's own turn: a refresh would have run by now.
+        await act(async () => {
+          await fetched.mock.results[0]?.value;
+        });
+        expect(stale()).toEqual([false, false]);
+      } finally {
+        release();
+      }
+    });
+  });
+
+  it("carries a floor as N+ beside its title, read as N or more", () => {
+    drawCard("ready", { ...TWO_NEW, total: 1000, atLeast: true });
+    expect(screen.getByTestId("widget-card-title-count")).toHaveTextContent(
+      "1000+"
+    );
+    expect(
+      screen.getByRole("region", {
+        name: "New form submissions, 1000 or more items",
+      })
+    ).toBeInTheDocument();
   });
 });

@@ -3,8 +3,9 @@
 /**
  * The New form submissions card's body: the newest new submissions as core's
  * list rows, each opening its submission and marking it read, with the
- * card's footer leading to every submission. While nothing is new it says so,
- * with a link to every submission.
+ * card's footer leading to every submission, and how many are new beside its
+ * title. While nothing is new it says so, with a link to every submission,
+ * and its title carries no count.
  *
  * Drawn only with data: the frame draws loading and every failure itself.
  * The empty state is drawn here rather than by the frame, because its link
@@ -18,6 +19,7 @@
 import {
   formatWidgetTime,
   FrameState,
+  useRefreshDashboard,
   useWidgetClock,
   Widget,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -76,12 +78,25 @@ export function NewSubmissionsCard({
   // One instant for every row, moved on each minute while the card is
   // mounted, so "just now" becomes "1m ago" without the card being reloaded.
   const now = useWidgetClock();
+  const refresh = useRefreshDashboard();
+  // The title carries how many are new, the total the header's part counts
+  // from the same read ("1000+" where that is a floor); nothing while none
+  // are, as the empty state says so.
+  Widget.useTitleCount(
+    data.total > 0 ? data.total : undefined,
+    data.atLeast === true
+  );
   if (data.total === 0) return <NothingNew allHref={data.allHref} />;
   // Opening a row, by a click or a middle click into a new tab, marks its
-  // submission read; a click anywhere else in the card does nothing.
+  // submission read; a click anywhere else in the card does nothing. Once it
+  // is taken, the cards and the header's count are asked again: a dashboard
+  // left open behind a new tab would otherwise go on listing it.
   const opened = (event: MouseEvent) => {
     const row = openedRow(event, data.items);
-    if (row !== undefined) markRead(data.collection, row.id);
+    if (row === undefined) return;
+    void markRead(data.collection, row.id).then(taken => {
+      if (taken) refresh();
+    });
   };
   return (
     // Laid out as if absent (`contents`), so the list sits in the card's body

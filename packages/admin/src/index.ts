@@ -767,6 +767,9 @@ export type { WidgetRenderSize } from "nextly/widget-result";
 // so a widget's own list words and moves its times as theirs do.
 export { formatRelativeTime as formatWidgetTime } from "./lib/dashboard";
 export { useNowTick as useWidgetClock } from "./hooks/useNowTick";
+// Asks the dashboard's cards and header summary again, for a widget whose own
+// write changes what they answer.
+export { useRefreshDashboard } from "./hooks/queries/useRefreshDashboard";
 
 // Constants
 export {

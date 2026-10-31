@@ -28,6 +28,8 @@ export { definePlugin } from "nextly";
  * an author annotating one imports it from where `defineWidget` came from.
  * `WidgetLoadSize` is the `size` a `load` is handed: the card's `{ w, h }` and
  * its tier, the shape `WidgetRenderSize` hands its component.
+ * `WidgetSummaryCount` is what a `summary.count` answers: a number, or
+ * `{ count, atLeast }` for a floor the header shows as "N+".
  */
 export { defineWidget } from "nextly";
 /**
@@ -60,6 +62,7 @@ export type {
   WidgetRenderSize,
   WidgetSizeDeclaration,
   WidgetSummary,
+  WidgetSummaryCount,
   WidgetView,
 } from "nextly";
 /**

@@ -29,6 +29,7 @@ interface FindOptions {
   limit?: number;
   select?: readonly string[];
   total?: true;
+  depth?: 0;
 }
 
 const COLLECTIONS = { forms: "forms", submissions: "form-submissions" };
@@ -44,7 +45,7 @@ function contributedWidget(): {
     count: (input: {
       services: ReturnType<typeof services>;
       signal: AbortSignal;
-    }) => Promise<number>;
+    }) => Promise<number | { count: number; atLeast?: boolean }>;
   };
 } {
   const widget = formBuilder().plugin.contributes?.dashboard?.widgets?.find(
@@ -352,6 +353,8 @@ describe("the card's read", () => {
     );
     expect(read?.options.select).not.toContain("ipAddress");
     expect(read?.options.sort).toBe("-submittedAt");
+    // Each row's form as its stored id: the forms drawn are read once, after.
+    expect(read?.options.depth).toBe(0);
   });
 
   it("counts for the header by the card's own read, asked for no rows", async () => {
@@ -372,7 +375,7 @@ describe("the card's read", () => {
       call => call.collection === COLLECTIONS.submissions
     );
     expect(data.total).toBe(3);
-    expect(count).toBe(data.total);
+    expect(count).toEqual({ count: data.total, atLeast: false });
     // The very read the card made, filter, status and all, with no rows: a
     // count asked any other way could come to disagree with the card.
     expect(listed).toHaveLength(1);
@@ -415,8 +418,58 @@ describe("the card's read", () => {
       fields: [],
     }));
     const reads = services({ forms: many, submissions: [] });
-    const ids = await readableFormIds(reads, COLLECTIONS.forms);
-    expect(ids).toEqual(many.map(form => form.id));
+    const readable = await readableFormIds(reads, COLLECTIONS.forms);
+    expect(readable).toEqual({
+      ids: many.map(form => form.id),
+      complete: true,
+    });
     expect(reads.calls).toHaveLength(3);
+  });
+
+  describe("past the scan's budget of 1,000 forms", () => {
+    /** `count` readable forms, each with one new submission. */
+    function forms(count: number) {
+      const all = Array.from({ length: count }, (_, index) => ({
+        id: `f-${String(index).padStart(4, "0")}`,
+        name: `Form ${index}`,
+        fields: [],
+      }));
+      return services({
+        forms: all,
+        submissions: all.map(form =>
+          submission(`s-${form.id}`, form.id, {}, "2026-01-01T00:00:00.000Z")
+        ),
+      });
+    }
+
+    it("says the forms read are not all of them, and the count is a floor, in the card and the header", async () => {
+      const reads = forms(1001);
+      const readable = await readableFormIds(reads, COLLECTIONS.forms);
+      expect(readable.ids).toHaveLength(1000);
+      expect(readable.complete).toBe(false);
+
+      const data = await readNewSubmissions(reads, COLLECTIONS, {
+        limit: 0,
+        submissionsPath: "form-submissions",
+      });
+      expect(data).toMatchObject({ total: 1000, atLeast: true });
+      const signal = new AbortController().signal;
+      expect(
+        await contributedWidget().summary.count({ services: reads, signal })
+      ).toEqual({ count: 1000, atLeast: true });
+    });
+
+    it("is whole at exactly 1,000 forms: the one id more finds none", async () => {
+      const reads = forms(1000);
+      expect((await readableFormIds(reads, COLLECTIONS.forms)).complete).toBe(
+        true
+      );
+      const data = await readNewSubmissions(reads, COLLECTIONS, {
+        limit: 0,
+        submissionsPath: "form-submissions",
+      });
+      expect(data.total).toBe(1000);
+      expect(data).not.toHaveProperty("atLeast");
+    });
   });
 });

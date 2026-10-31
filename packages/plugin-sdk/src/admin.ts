@@ -375,8 +375,11 @@ export type {
  *   (rows with one action each), `Widget.Table` (rows across named columns, a
  *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
  *   that take plain data, drawn in the shared chart colours, with an optional
- *   `unit` for their tooltips), and `Widget.FooterLink` (one link drawn in the
- *   card's own footer, where core's cards draw "View all").
+ *   `unit` for their tooltips), `Widget.FooterLink` (one link drawn in the
+ *   card's own footer, where core's cards draw "View all") and
+ *   `Widget.useTitleCount` (a hook: the count it is given is drawn beside the
+ *   card's title and read with it, as the Needs your attention card shows its
+ *   items; `undefined` shows none).
  *
  * The number and change formatters and the chart colour accessor are exported
  * from this package's root, not here: every module of the admin is a client
@@ -401,6 +404,14 @@ export { FrameState, Widget } from "@nextlyhq/admin";
  * Core's own, so a plugin's times read and move as the cards beside it do.
  */
 export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin";
+/**
+ * @experimental `useRefreshDashboard()`: a function that asks every card on
+ * the dashboard, and the header's summary, again, for a widget whose own
+ * write changes what they answer (a card marking a row done, say). Each card
+ * keeps what it shows until its answer arrives. Core's own reads, so a plugin
+ * names no query of the admin's.
+ */
+export { useRefreshDashboard } from "@nextlyhq/admin";
 export type {
   CardEmptyContent,
   CardState,

@@ -190,6 +190,18 @@ expectTypeOf(Widget.List<{ id: string }>)
 expectTypeOf(Widget.Table<{ id: string }>)
   .parameter(0)
   .toEqualTypeOf<WidgetTableProps<{ id: string }>>();
+// The dashboard refresh is a hook answering a function of nothing.
+expectTypeOf(adminEntry.useRefreshDashboard).returns.toEqualTypeOf<
+  () => void
+>();
+// The title count is a hook of a count or none, and answers nothing.
+expectTypeOf(Widget.useTitleCount)
+  .parameter(0)
+  .toEqualTypeOf<number | undefined>();
+expectTypeOf(Widget.useTitleCount)
+  .parameter(1)
+  .toEqualTypeOf<boolean | undefined>();
+expectTypeOf(Widget.useTitleCount).returns.toBeVoid();
 // A chart's unit is part of both charts' props, as core's cards pass it.
 expectTypeOf<WidgetBarChartProps>().toHaveProperty("unit");
 expectTypeOf<WidgetSeriesChartProps>().toHaveProperty("unit");

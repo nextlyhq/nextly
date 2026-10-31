@@ -27,6 +27,20 @@ interface ExtendedCollectionConfig extends Omit<CollectionConfig, "admin"> {
 }
 
 /**
+ * Whether a create keeps the `submittedAt` it names: only one made on the
+ * server with no request behind it (`req.http` absent), such as an import
+ * restoring old submissions with their dates, and only where it names one.
+ *
+ * A create a request produced, a visitor's through the public grant above
+ * all, is given the server's time whatever it says: the dashboard lists new
+ * submissions newest first by this field, and a date a visitor chose (one far
+ * in the future) would keep theirs ahead of every real submission.
+ */
+function trustedSubmittedAt(context: HookContext): boolean {
+  return context.req?.http === undefined && Boolean(context.data?.submittedAt);
+}
+
+/**
  * Generate the Form Submissions collection configuration.
  *
  * Creates a collection for storing form submissions with:
@@ -253,13 +267,13 @@ export function submissionsCollection(
     access: accessWithDefaults(accessOverrides, { create: true }),
 
     hooks: {
-      // Auto-set submittedAt timestamp on creation. (The edit stamp for
-      // updates is registered in plugin.ts init — direct registry hooks are
-      // the path that runs for every API surface.)
+      // The submission time on creation. (The edit stamp for updates is
+      // registered in plugin.ts init — direct registry hooks are the path
+      // that runs for every API surface.)
       beforeValidate: [
         (context: HookContext) => {
           const { data, operation } = context;
-          if (operation === "create" && data && !data.submittedAt) {
+          if (operation === "create" && data && !trustedSubmittedAt(context)) {
             data.submittedAt = new Date();
           }
           return data;

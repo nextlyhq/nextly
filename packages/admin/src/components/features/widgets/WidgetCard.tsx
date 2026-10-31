@@ -108,7 +108,12 @@ import {
   useMeasuredTier,
   type RowsLayout,
 } from "./frame/tier";
-import { CardTitleCountContext, titleCountSpoken } from "./frame/title-count";
+import {
+  CardTitleCountContext,
+  titleCountSpoken,
+  titleCountText,
+  type CardTitleCount,
+} from "./frame/title-count";
 import {
   CardHiddenReportContext,
   useReportCardHidden,
@@ -337,7 +342,9 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const report = useCallback((next: CardState | null) => setReported(next), []);
   // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
   // stops being drawn unmounts, and its unmount withdraws the count.
-  const [titleCount, setTitleCount] = useState<number | undefined>(undefined);
+  const [titleCount, setTitleCount] = useState<CardTitleCount | undefined>(
+    undefined
+  );
   // A line the body shows beneath the title (`useCardSubtitle`), withdrawn the same way.
   const [bodySubtitle, setBodySubtitle] = useState<string | undefined>(
     undefined
@@ -629,7 +636,7 @@ function WidgetCardHeader({
   subtitleId: string;
   title: string;
   /** A count the body shows beside the title, muted; read after it as ", N items". */
-  titleCount?: number | undefined;
+  titleCount?: CardTitleCount | undefined;
   subtitle?: string | undefined;
   /** What the body reports beneath the title; drawn only where the card is given no subtitle. */
   bodySubtitle?: string | undefined;
@@ -669,7 +676,7 @@ function WidgetCardHeader({
                 className="shrink-0 text-xs font-normal text-muted-foreground"
                 data-testid="widget-card-title-count"
               >
-                {titleCount}
+                {titleCountText(titleCount)}
               </span>
               <span className="sr-only">{titleCountSpoken(titleCount)}</span>
             </>

@@ -8,6 +8,8 @@
  *   tokens, so a plugin's card matches core's beside it in light and dark. The frame and every
  *   state around the body are the host's.
  * - `Widget.FooterLink`: a link drawn in the card's own footer, where core's cards draw theirs.
+ * - `Widget.useTitleCount`: a count shown beside the card's title, as the Needs your attention card
+ *   shows its items, reported by the body that knows what it counts.
  *
  * The number and change formatters and the chart colour accessor are not here: they are
  * published from `@nextlyhq/plugin-sdk`'s server-safe root, since every module of the admin is
@@ -33,6 +35,7 @@ import {
   type OverTimeSeries,
 } from "../charts/over-time-chart";
 import { CardFigure } from "../frame/figure";
+import { useCardTitleCount } from "../frame/title-count";
 
 import { WidgetFooterLink } from "./footer-link";
 import { WidgetList, WidgetTable } from "./list";
@@ -71,6 +74,11 @@ export interface WidgetKit {
   readonly SeriesChart: typeof OverTimeChart;
   /** @experimental A link in the card's own footer: `<Widget.FooterLink href label />`. */
   readonly FooterLink: typeof WidgetFooterLink;
+  /**
+   * @experimental A count beside the card's title while the body is drawn, `undefined` for none:
+   * `Widget.useTitleCount(total)`.
+   */
+  readonly useTitleCount: typeof useCardTitleCount;
 }
 
 /**
@@ -84,6 +92,9 @@ export interface WidgetKit {
  * - `SeriesChart`: one line per series over time, with an optional `unit`.
  * - `FooterLink`: one link in the card's own footer, as a list's "View all" is drawn, taking the
  *   place of the widget's own link while it is there, so the footer holds one link.
+ * - `useTitleCount`: a hook, the frame's own: the count it is given is drawn beside the card's
+ *   title, muted, and read with it ("New form submissions, 3 items"), from the first paint and
+ *   until the body unmounts; `undefined` shows none.
  */
 export const Widget: WidgetKit = Object.freeze({
   Figure: CardFigure,
@@ -92,4 +103,5 @@ export const Widget: WidgetKit = Object.freeze({
   BarChart: GroupsChart,
   SeriesChart: OverTimeChart,
   FooterLink: WidgetFooterLink,
+  useTitleCount: useCardTitleCount,
 });
