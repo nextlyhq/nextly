@@ -94,6 +94,23 @@ its tags in the database, in a table `nextly migrate` creates:
   lifetimes, install the handlers, or run the write in a Route Handler or a
   Server Action.
 
+### Several instances, and upgrading an app
+
+Nextly's cache handlers need nothing beyond the database the app already
+uses. Each instance keeps its cached entries in its own memory, and every
+instance shares when each tag last expired through one table in that database.
+No Redis or other cache service is involved. An app created with
+`create-nextly-app` has them installed. To add them to an existing app:
+
+1. Run `nextly migrate`, which creates the `nextly_cache_tag_expiries` table.
+   Until it exists, Nextly warns once and each instance sees only the writes it
+   makes itself.
+2. Add the handler settings to `next.config.ts`, as in step 2 of
+   [Cache Components](#cache-components) below: `cacheHandler`,
+   `cacheMaxMemorySize: 0` and `cacheHandlers`.
+3. Deploy, and check the server log: with the handlers serving the app, it has
+   no `cache-handlers-not-shared` line.
+
 ### When the new version shows
 
 - **Server Action:** the expiry completes before the action returns, and
