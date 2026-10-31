@@ -109,6 +109,9 @@ describe("pinRefusal", () => {
   });
 });
 
+/** Twenty KB over whatever the total's budget is, so a raised budget keeps it a breach. */
+const OVER_KB = BUDGETS.totalMinifiedKB + 20;
+
 describe("budgetBreaches", () => {
   it("fails two routes that share a stable name: one pin cannot hold both", () => {
     const r = report([
@@ -181,10 +184,10 @@ describe("budgetBreaches", () => {
   });
 
   it("fails a shipped total over its budget", () => {
-    const r = report([], { totalKB: 3600 });
+    const r = report([], { totalKB: OVER_KB });
     const [breach] = budgetBreaches(r, pins([]));
     expect(breach.kind).toBe("total");
-    expect(breach.measured).toContain("3600.00 KB");
+    expect(breach.measured).toContain(`${OVER_KB}.00 KB`);
     expect(breach.budget).toContain(`${BUDGETS.totalMinifiedKB}`);
   });
 
@@ -208,10 +211,10 @@ describe("budgetBreaches", () => {
 
 describe("describeBreaches", () => {
   it("renders measured size and budget together on one line", () => {
-    const r = report([], { totalKB: 3600 });
+    const r = report([], { totalKB: OVER_KB });
     expect(describeBreaches(budgetBreaches(r, pins([])))).toEqual([
       expect.stringMatching(
-        new RegExp(`total.*3600\\.00 KB minified.*${BUDGETS.totalMinifiedKB} KB minified`)
+        new RegExp(`total.*${OVER_KB}\\.00 KB minified.*${BUDGETS.totalMinifiedKB} KB minified`)
       ),
     ]);
   });

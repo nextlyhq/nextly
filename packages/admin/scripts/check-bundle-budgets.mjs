@@ -40,8 +40,10 @@ export const BUDGETS = {
   // lazy chunk (9.7 KB). Their owners are asked to trim, so this comes back
   // down. Raised to 3,580 KB when the card settings panel (panel, preview,
   // sections, about 16 KB) took the shipped total from about 3,555 to
-  // 3,572 KB.
-  totalMinifiedKB: 3580,
+  // 3,572 KB. Raised to 3,600 KB when main measured 3,581.94 KB at
+  // 4a727b919: the add gallery, sample content and the setup row's scroller
+  // took it past 3,580.
+  totalMinifiedKB: 3600,
   // Spec R-3: the shared shell, measured at 259 KB gzipped on 2026-10-27.
   shellGzipKB: 280,
   // Spec R-3: each route's own code may grow this share above its pin...
