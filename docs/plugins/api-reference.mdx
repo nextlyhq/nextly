@@ -7,15 +7,15 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 
 ## Entry points
 
-| Import                         | Surface                                                                                                                        | React?              |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
-| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                          | no                  |
-| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                             | no                  |
-| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                              | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult`               | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                            | no                  |
-| `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them                                                   | no                  |
-| `@nextlyhq/plugin-sdk/widgets` | `WidgetComponentProps`, `WidgetSlot`, `WidgetResult`, `WidgetResultField`, `WidgetQueryBatchResponse` — types only, no runtime | no                  |
+| Import                         | Surface                                                                                                          | React?              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`            | no                  |
+| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                               | no                  |
+| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult` | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                              | no                  |
+| `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them                                     | no                  |
+| `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime    | no                  |
 
 ## `definePlugin(def): PluginDefinition`
 
@@ -68,7 +68,6 @@ interface PluginContributions {
     settings?: { component: ComponentPath };
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, by collection slug
     documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a top-level field of one of this plugin's field types
-    widgets?: PluginAdminWidget[]; // rendered on the dashboard; @experimental
   };
 }
 ```
