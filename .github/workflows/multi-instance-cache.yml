@@ -7,7 +7,9 @@ name: Multi-instance cache
 #
 # It runs when a change can reach what it tests: the cache, the revalidation
 # path, nextly's package manifest and build config (where the handler subpaths
-# are declared), the fixture's dependencies, and the suite itself. A pull
+# are declared), the fixture's dependencies and the lockfile that pins the
+# Next.js it runs on, the e2e support module the driver starts servers with,
+# and the suite itself. A pull
 # request is filtered by `paths`. A push to main and a merge-queue entry run the
 # `changes` job first, which reads the files the commit changed and skips the
 # suite when none of them is one of those (`merge_group` takes no `paths`), so
@@ -28,6 +30,8 @@ on:
       - "e2e/multi-instance/**"
       - "e2e/playwright.multi-instance.config.ts"
       - "e2e/package.json"
+      - "e2e/support/playground-dev-server.ts"
+      - "pnpm-lock.yaml"
       - ".github/workflows/multi-instance-cache.yml"
   merge_group:
     types: [checks_requested]
@@ -86,7 +90,7 @@ jobs:
           LAST_TESTED_SHA: ${{ steps.newer.outputs.last-tested-sha }}
           SCOPE_TITLE: Multi-instance cache scope
           INERT_PATHS: "."
-          ALWAYS_RUN_PATHS: '^(packages/nextly/src/runtime/cache/|packages/nextly/src/revalidation/|packages/nextly/package\.json$|packages/nextly/tsdown\.config\.ts$|e2e/multi-instance/|e2e/playwright\.multi-instance\.config\.ts$|e2e/package\.json$|\.github/workflows/multi-instance-cache\.yml$)'
+          ALWAYS_RUN_PATHS: '^(packages/nextly/src/runtime/cache/|packages/nextly/src/revalidation/|packages/nextly/package\.json$|packages/nextly/tsdown\.config\.ts$|e2e/multi-instance/|e2e/playwright\.multi-instance\.config\.ts$|e2e/package\.json$|e2e/support/playground-dev-server\.ts$|pnpm-lock\.yaml$|\.github/workflows/multi-instance-cache\.yml$)'
         run: node scripts/change-scope.mjs
 
   two-instances:

@@ -53,21 +53,38 @@ async function noteOn(
   return ((await res.json()) as { value: string | null }).value;
 }
 
-/** Waits for `instance` to serve `value`, and returns how long that took. */
+/**
+ * Waits for `instance` to serve `value` no later than `FRESH_WITHIN_MS` after
+ * `since`, the write, and returns how long that took. The bound runs from the
+ * write, not from this call: a check made after another, or after other work,
+ * gets only what is left of it.
+ */
 async function servedWithin(
   request: APIRequestContext,
   instance: Instance,
   value: string,
   since: number
 ): Promise<number> {
+  const left = since + FRESH_WITHIN_MS - Date.now();
+  expect(
+    left,
+    `time left of the ${String(FRESH_WITHIN_MS)} ms bound for instance ${instance.name}`
+  ).toBeGreaterThan(0);
   await expect
     .poll(() => noteOn(request, instance), {
       message: `instance ${instance.name} serves ${value}`,
-      timeout: FRESH_WITHIN_MS,
+      timeout: left,
       intervals: [250],
     })
     .toBe(value);
-  return Date.now() - since;
+  const took = Date.now() - since;
+  // The poll's last answer can arrive after its timeout, so the bound is
+  // asserted on the time itself.
+  expect(
+    took,
+    `instance ${instance.name} served ${value} within ${String(FRESH_WITHIN_MS)} ms of the write`
+  ).toBeLessThanOrEqual(FRESH_WITHIN_MS);
+  return took;
 }
 
 for (const leg of LEGS) {
