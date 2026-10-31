@@ -3,7 +3,7 @@
  * site config's `admin.dashboard`.
  *
  * Both take the same `defineWidget()` declarations. What differs is what each
- * may ask for: a plugin may only ask (a suggested default place, an
+ * may ask for: a plugin may only offer (its widgets in the add panel, an
  * alternative to a built-in card), and the site decides (what is hidden, what
  * the default dashboard is, which alternative replaces which built-in).
  *
@@ -86,10 +86,15 @@ export interface DashboardContribution<W extends AnyWidget = AnyWidget> {
   /** Its widgets; absent for a plugin that adds only Needs attention items. */
   widgets?: readonly W[];
   /**
-   * Widgets of this plugin to place on the default dashboard. Core places
-   * them after the default's own cards, in the order the site lists its
-   * plugins, while there is room; a site may turn suggestions off. Never
-   * added to a dashboard someone has saved: the add panel offers them there.
+   * Widgets of this plugin it would like on the default dashboard. Still
+   * checked at startup (each must be one of the plugin's own widgets), and
+   * places NOTHING: no plugin widget is placed on a dashboard on its own. The
+   * add panel offers every widget a plugin declares; a site that wants one on
+   * its default names it in `admin.dashboard.defaultLayout`, marked
+   * `optional` where the plugin may be absent.
+   *
+   * @deprecated Places nothing. Leave the widget to the add panel, or ask the
+   * site to name it in its `defaultLayout`.
    */
   suggest?: readonly W["id"][];
   /**
@@ -185,7 +190,14 @@ export interface AdminDashboardConfig<W extends AnyWidget = AnyWidget> {
    * saved a dashboard, never placed on it.
    */
   defaultLayout?: readonly (WidgetRef | DefaultLayoutCard)[];
-  /** `false` ignores every plugin's suggestion. */
+  /**
+   * Still checked at startup (it must be `true` or `false`), and changes
+   * nothing: no widget is placed after the default's own cards, so there is
+   * nothing for it to turn off. A widget the site wants on its default is named
+   * in `defaultLayout`.
+   *
+   * @deprecated Changes nothing; remove it from the site config.
+   */
   suggestions?: boolean;
   /**
    * A plugin's offered alternative, in the place of the built-in it names, at

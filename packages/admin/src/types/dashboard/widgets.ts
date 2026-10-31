@@ -295,6 +295,13 @@ export interface DashboardLayoutResponse {
    */
   arranged: boolean;
   /**
+   * Whether the default as configured gives Needs attention and Upcoming releases a row of their
+   * own, side by side: judged by the server before this reader's cards are left out, so it is
+   * the same for a reader who may not see one of the two. Absent from a server that predates
+   * it, which reads as no.
+   */
+  pairedRow?: boolean;
+  /**
    * An opaque token for the set of widgets this reader could see when the
    * arrangement was read. Echoed back on write; a mismatch is a 409.
    */

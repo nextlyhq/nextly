@@ -9,12 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
 import * as loggerModule from "../../../observability/logger";
-import { allWidgets, placedByDefault, sizeFacts } from "../canonical";
+import { allWidgets, sizeFacts } from "../canonical";
 import {
   CORE_DECLARATIONS,
   CORE_WIDGET_IDS,
   CORE_WIDGETS,
 } from "../core-widgets";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import { noteWidget } from "../core-widgets/note";
 import { declaredWidget } from "../declaration/declared-widgets";
 import { widgetDeclarationFaults } from "../declaration/validate";
@@ -117,7 +118,9 @@ describe("core's Note, declared", () => {
     const canonical = allWidgets().find(widget => widget.id === "core/note");
     expect(canonical).toBeDefined();
     if (canonical === undefined) return;
-    expect(placedByDefault(canonical)).toBe(false);
+    expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
+      "core/note"
+    );
     expect(sizeFacts(canonical).allowsSeveral).toBe(true);
   });
 });

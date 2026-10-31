@@ -258,23 +258,6 @@ export function pluginSuggestionFaults(
 }
 
 /**
- * The widgets the plugins suggest for the default dashboard, in the order the
- * site lists its plugins, from the copies startup checked: each is one of its
- * plugin's own widgets, or startup refused it.
- */
-export function pluginSuggestions(
-  dashboards: readonly PluginDashboardSnapshot[]
-): string[] {
-  return dashboards.flatMap(({ suggest }) =>
-    Array.isArray(suggest)
-      ? (suggest as readonly unknown[]).filter(
-          (id): id is string => typeof id === "string"
-        )
-      : []
-  );
-}
-
-/**
  * Each alternative the plugins offer, by its widget id, with the built-in it
  * may replace: what the site config's `replace` may choose from.
  */

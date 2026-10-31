@@ -148,8 +148,13 @@ describe("core widget definitions", () => {
       min: { w: 12, h: 2 },
       max: { w: 12, h: 4 },
     });
-    // First on core's default: it addresses a reader who has just arrived.
-    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/setup" });
+    // First on core's default, across the row at its one row of steps: it addresses a reader
+    // who has just arrived.
+    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({
+      widget: "core/setup",
+      w: 12,
+      h: 2,
+    });
   });
 
   it("no longer declares the old Get started card, or the cards it replaced", () => {
@@ -194,6 +199,18 @@ describe("core widget definitions", () => {
     expect(CORE_WIDGET_IDS).toContain("core/content-table");
   });
 
+  it("offers Continue and Team activity only while there is a collection or a Single to read", () => {
+    // With none, nobody's saves or events could reach a row: the reader of no content is not
+    // shown two cards that could only say there is nothing.
+    for (const id of ["core/continue", "core/team-activity"]) {
+      expect([id, card(id).lifecycle, card(id).visibleWhen]).toEqual([
+        id,
+        "conditional",
+        "content:present",
+      ]);
+    }
+  });
+
   it("no longer declares the Collections and Singles cards Content replaced", () => {
     const ids = CORE_WIDGETS.map(w => w.id);
     expect(ids).not.toContain("core/collections");
@@ -214,7 +231,9 @@ describe("core widget definitions", () => {
     expect(conditional).toEqual([
       "core/content-table",
       "core/quick-create",
+      "core/continue",
       "core/upcoming-releases",
+      "core/team-activity",
     ]);
   });
 
@@ -415,11 +434,24 @@ describe("the team card's description", () => {
 });
 
 describe("the default dashboard", () => {
-  // The agreed cards, in order, each at its agreed size and within its agreed
-  // bounds, in grid units: [id, default, min, max].
-  const AGREED = [
-    // Needs attention three rows tall, which holds two items and folds the rest; Create as
-    // tall, beside it.
+  // The cards on it, in grid order, each at its size in grid units: [id, w, h]. Twelve columns to
+  // a row: the onboarding card; Needs attention beside Upcoming releases; Continue beside
+  // Content; New form submissions, the form-builder plugin's, beside Team activity.
+  const DEFAULT = [
+    ["core/setup", 12, 2],
+    ["core/needs-attention", 8, 4],
+    ["core/upcoming-releases", 4, 4],
+    ["core/continue", 6, 4],
+    ["core/content-table", 6, 4],
+    ["form-builder/new-submissions", 6, 4],
+    ["core/team-activity", 6, 4],
+  ] as const;
+  const FORM_SUBMISSIONS = "form-builder/new-submissions";
+
+  // Each card's own bounds, in grid units: [id, default, min, max]. What the add panel places a
+  // new card at, and what a default entry's size must lie within.
+  const BOUNDS = [
+    // Needs attention three rows tall, which holds two items and folds the rest.
     ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
     ["core/quick-create", [4, 3], [4, 2], [12, 4]],
     // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
@@ -427,19 +459,71 @@ describe("the default dashboard", () => {
     ["core/continue", [6, 5], [4, 4], [12, 8]],
     ["core/team-activity", [6, 5], [4, 4], [12, 8]],
     ["core/content-table", [12, 4], [6, 3], [12, 6]],
-    // Alone on its row: Team, for the people who manage the team, is not on the default.
     // Up to the full row, so the dashboard may widen it to 12 when it shows alone in its row.
     ["core/upcoming-releases", [4, 4], [4, 4], [12, 8]],
   ] as const;
 
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });
 
-  it("is core's own defaultLayout: the setup card, then the agreed cards as agreed", () => {
-    // Each at its widget's starting size: no entry states a size or settings of its own.
+  it("is core's own defaultLayout: the agreed cards, in the agreed order, at the agreed sizes", () => {
+    // Written out in full rather than read from any list of what is registered, so a card
+    // added to or dropped from core's widgets cannot move the default with it.
     expect(CORE_DEFAULT_LAYOUT).toEqual([
-      { widget: "core/setup" },
-      ...AGREED.map(([id]) => ({ widget: id })),
+      { widget: "core/setup", w: 12, h: 2 },
+      { widget: "core/needs-attention", w: 8, h: 4 },
+      { widget: "core/upcoming-releases", w: 4, h: 4 },
+      { widget: "core/continue", w: 6, h: 4 },
+      { widget: "core/content-table", w: 6, h: 4 },
+      { widget: "form-builder/new-submissions", w: 6, h: 4, optional: true },
+      { widget: "core/team-activity", w: 6, h: 4 },
     ]);
+    // The table the other cases read agrees with it.
+    expect(
+      CORE_DEFAULT_LAYOUT.map(({ widget, w, h }) => [widget, w, h])
+    ).toEqual(DEFAULT.map(([widget, w, h]) => [widget, w, h]));
+  });
+
+  it("names one widget that is not core's, the form submissions card, as optional", () => {
+    // A site without the form-builder plugin leaves it out, with no startup fault; every other
+    // entry is a core widget, so no other plugin's widget is placed by core's default.
+    const core: ReadonlySet<string> = new Set(CORE_WIDGET_IDS);
+    const notCore = CORE_DEFAULT_LAYOUT.filter(
+      entry => !core.has(entry.widget)
+    );
+    expect(notCore).toEqual([
+      { widget: FORM_SUBMISSIONS, w: 6, h: 4, optional: true },
+    ]);
+    // The control: every core entry must be installed, so none is optional.
+    const coreEntries = CORE_DEFAULT_LAYOUT.filter(entry =>
+      core.has(entry.widget)
+    );
+    expect(coreEntries).toHaveLength(DEFAULT.length - 1);
+    expect(coreEntries.filter(entry => entry.optional !== undefined)).toEqual(
+      []
+    );
+  });
+
+  it("places each core card within its widget's bounds, so none is clamped where it is placed", () => {
+    const core: ReadonlySet<string> = new Set(CORE_WIDGET_IDS);
+    for (const entry of CORE_DEFAULT_LAYOUT.filter(e => core.has(e.widget))) {
+      const { min, max } = sizeBounds(sizeOf(entry.widget));
+      const size = { w: entry.w ?? 0, h: entry.h ?? 0 };
+      expect([entry.widget, size.w >= min.w && size.w <= max.w]).toEqual([
+        entry.widget,
+        true,
+      ]);
+      expect([entry.widget, size.h >= min.h && size.h <= max.h]).toEqual([
+        entry.widget,
+        true,
+      ]);
+    }
+  });
+
+  it("lets Needs attention and Upcoming releases be drawn across the whole row", () => {
+    // The admin draws the one of the pair on show across the row while the other is not.
+    for (const id of ["core/needs-attention", "core/upcoming-releases"]) {
+      expect([id, sizeBounds(sizeOf(id)).max.w]).toEqual([id, 12]);
+    }
   });
 
   it("states no defaultOrder on any of core's widgets: the order is the defaultLayout's", () => {
@@ -448,10 +532,10 @@ describe("the default dashboard", () => {
     }
   });
 
-  it("gives each its agreed size, within its agreed bounds", () => {
+  it("gives each card its agreed starting size, within its agreed bounds", () => {
     // Read through `sizeBounds`, as every reader of a size reads it, so an end
     // left to its default is checked as the grid will draw it.
-    for (const [id, dflt, min, max] of AGREED) {
+    for (const [id, dflt, min, max] of BOUNDS) {
       expect([id, sizeBounds(sizeOf(id))]).toEqual([
         id,
         { default: unit(dflt), min: unit(min), max: unit(max) },
@@ -459,14 +543,11 @@ describe("the default dashboard", () => {
     }
   });
 
-  it("tiles: the cards that share a row of the default dashboard share a height", () => {
-    // 🔴 Laid out as the grid lays them, in order and twelve columns to a row,
-    // a card beside a taller one leaves a gap below it. The agreed sizes are
-    // chosen so no row of the default dashboard has one.
+  /** The heights of each row, laid out as the grid lays the cards: in order, twelve to a row. */
+  const rowHeights = (cards: ReadonlyArray<{ w?: number; h?: number }>) => {
     const rows: number[][] = [[]];
     let used = 0;
-    for (const [id] of AGREED) {
-      const { w, h } = sizeOf(id).default;
+    for (const { w = 0, h = 0 } of cards) {
       if (used + w > 12) {
         rows.push([]);
         used = 0;
@@ -474,8 +555,51 @@ describe("the default dashboard", () => {
       rows[rows.length - 1].push(h);
       used += w;
     }
-    for (const heights of rows) {
+    return rows;
+  };
+
+  it("tiles: the cards that share a row share a height, with the form submissions card or without it", () => {
+    // 🔴 A card beside a taller one leaves a gap below it; no later card is moved up to fill it.
+    const withForms = rowHeights(CORE_DEFAULT_LAYOUT);
+    // The control: the rows are the agreed four, so a single-row answer cannot pass.
+    expect(withForms).toEqual([[2], [4, 4], [4, 4], [4, 4]]);
+    const withoutForms = rowHeights(
+      CORE_DEFAULT_LAYOUT.filter(entry => entry.widget !== FORM_SUBMISSIONS)
+    );
+    for (const heights of [...withForms, ...withoutForms]) {
       expect(new Set(heights).size).toBe(1);
     }
+  });
+
+  it("is all core registers: the default's cards, the add-only cards, and Create", () => {
+    // Nothing else is core's, so no news feed, upsell, quick draft, clock, profile or banner
+    // card exists to be offered. Create is the one card past those two sets.
+    const expected = [
+      // On the default.
+      "core/setup",
+      "core/needs-attention",
+      "core/upcoming-releases",
+      "core/continue",
+      "core/content-table",
+      "core/team-activity",
+      // Offered from the add panel only; System health to super-admins alone.
+      "core/count",
+      "core/recent-entries",
+      "core/over-time",
+      "core/breakdown",
+      "core/note",
+      "core/team",
+      "core/system-health",
+      // Create.
+      "core/quick-create",
+    ].sort();
+    expect([...CORE_WIDGET_IDS].sort()).toEqual(expected);
+    // The ids the registry is handed: the definitions and the declarations together.
+    expect(
+      [
+        ...CORE_WIDGETS.map(widget => widget.id),
+        ...CORE_DECLARATIONS.map(widget => widget.id),
+      ].sort()
+    ).toEqual(expected);
   });
 });

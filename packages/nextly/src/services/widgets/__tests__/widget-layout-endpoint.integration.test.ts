@@ -27,6 +27,12 @@ import {
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
+import { CORE_DEFAULT_LAYOUT } from "../../../domains/widgets/core-widgets/ids";
+import {
+  defaultLayoutPlan,
+  setDefaultLayoutPlan,
+  type DefaultLayoutPlan,
+} from "../../../domains/widgets/default-layout";
 import {
   deregisterWidget,
   listWidgets,
@@ -77,9 +83,12 @@ interface LayoutRead {
 const ours = (placements: readonly Placement[]) =>
   placements.filter(p => p.widgetId.startsWith("test/"));
 
+/** This suite's widgets, each with the place it takes on the default, in registration order. */
+const testOrder = new Map<string, number>();
+
 function testWidget(
   id: string,
-  defaultOrder: number,
+  order: number,
   extra: Record<string, unknown> = {}
 ) {
   registerWidget(
@@ -88,13 +97,30 @@ function testWidget(
       title: id,
       archetype: "text",
       size: { default: { w: 4, h: 3 } },
-      defaultOrder,
       content: id,
       ...extra,
     },
     { source: "@test/layout" }
   );
+  testOrder.set(`test/${id}`, order);
 }
+
+/**
+ * The default these cases follow: core's own cards, then this suite's widgets still registered,
+ * by the place each was given. A stand-in for a site's `defaultLayout` naming them, read when
+ * the default is built, so a widget registered during a case joins it, as a site's changed
+ * default would: nothing is placed that the default does not name.
+ */
+const SUITE_DEFAULT: DefaultLayoutPlan = {
+  get cards() {
+    const registered = new Set(listWidgets().map(widget => widget.id));
+    const ours = [...testOrder]
+      .filter(([id]) => registered.has(id))
+      .sort(([, a], [, b]) => a - b)
+      .map(([widget]) => ({ widget }));
+    return [...CORE_DEFAULT_LAYOUT, ...ours];
+  },
+};
 
 describe.each(getConfiguredTestDialects())(
   "the layout endpoint (%s)",
@@ -233,9 +259,12 @@ describe.each(getConfiguredTestDialects())(
     // test's widgets registered anew, beside the widgets the boot registered.
     let accounts = 0;
     let bootWidgets: string[] = [];
+    /** The default the boot set, put back after each case. */
+    let bootPlan: DefaultLayoutPlan = defaultLayoutPlan();
     beforeAll(async () => {
       handle = await createTestNextly({ dialect });
       bootWidgets = listWidgets().map(w => w.id);
+      bootPlan = defaultLayoutPlan();
       // The first account of an instance is its super admin.
       admin = await account("admin@example.com");
     }, 120_000);
@@ -254,6 +283,7 @@ describe.each(getConfiguredTestDialects())(
       if (stored.version > 0) {
         await service().deleteLayout("user", admin, stored.version);
       }
+      setDefaultLayoutPlan(SUITE_DEFAULT);
       testWidget("first", 1000);
       testWidget("gated", 1010, { requiredPermission: "manage-the-vault" });
       testWidget("last", 1020, { size: { default: { w: 3, h: 2 } } });
@@ -265,6 +295,8 @@ describe.each(getConfiguredTestDialects())(
       for (const { id } of listWidgets()) {
         if (id.startsWith("test/")) deregisterWidget(id);
       }
+      testOrder.clear();
+      setDefaultLayoutPlan(bootPlan);
     });
 
     it("gives two people with no arrangement the same default, less what one may not see", async () => {
