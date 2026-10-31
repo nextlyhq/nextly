@@ -10,7 +10,7 @@
  * @module cli/commands/generate-widget/run
  */
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep, type win32 } from "node:path";
 
 import { getCoreVersion } from "../../../plugins/core-version";
 
@@ -196,12 +196,30 @@ interface ProjectState {
   added: readonly string[];
 }
 
+/**
+ * A generated file as the next steps print it: relative to where the command
+ * ran, separated by `/` on every platform.
+ *
+ * The test's path is part of a command to paste, and Windows' own `\` does
+ * not survive every shell there: Git Bash reads it as an escape and runs
+ * `npx vitest run srcdashboard...`, which finds no test. The forward slash is
+ * read alike by cmd, PowerShell, Git Bash, editors and Vitest. `paths` is the
+ * platform's path functions, or Windows' where a test asks for them.
+ */
+export function shownPath(
+  root: string,
+  path: string,
+  paths: Pick<typeof win32, "relative" | "sep"> = { relative, sep }
+): string {
+  return paths.relative(root, path).split(paths.sep).join("/");
+}
+
 /** What to do next, in the order an author does it. */
 function nextSteps(
   paths: ReturnType<typeof planPaths>,
   project: ProjectState
 ): string[] {
-  const rel = (path: string) => relative(project.root, path);
+  const rel = (path: string) => shownPath(project.root, path);
   return [
     ...(project.added.length > 0
       ? [

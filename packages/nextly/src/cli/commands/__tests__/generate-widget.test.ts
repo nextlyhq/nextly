@@ -17,7 +17,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 import { parse } from "@babel/parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +25,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registrationEdit } from "../generate-widget/config-edit";
 import { testSource } from "../generate-widget/files";
 import { widgetId, type WidgetTarget } from "../generate-widget/id";
-import { runGenerateWidget, type WidgetPrompter } from "../generate-widget/run";
+import {
+  runGenerateWidget,
+  shownPath,
+  type WidgetPrompter,
+} from "../generate-widget/run";
 
 /** The version of the nextly these tests run, which the SDK it adds must match. */
 const NEXTLY_VERSION = (
@@ -589,6 +593,18 @@ describe("running the command", () => {
     expect(result.nextSteps.join("\n")).toMatch(
       /src\/dashboard\/open-orders\.widget\.ts[\s\S]*\/admin\/dev\/widget-previews[\s\S]*vitest run src\/dashboard\/open-orders\.widget\.test\.ts/
     );
+  });
+
+  it("prints a Windows path with forward slashes, which every shell there takes", () => {
+    // Git Bash reads `src\dashboard\…` as escapes and runs a path with no
+    // folders in it, while cmd, PowerShell and Vitest all read `/`.
+    expect(
+      shownPath(
+        "C:\\Users\\you\\shop",
+        "C:\\Users\\you\\shop\\src\\dashboard\\open-orders.widget.test.ts",
+        win32
+      )
+    ).toBe("src/dashboard/open-orders.widget.test.ts");
   });
 
   // A plugin as its scaffold writes one: the SDK among its devDependencies.
