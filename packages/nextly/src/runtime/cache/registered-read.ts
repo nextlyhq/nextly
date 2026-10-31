@@ -221,17 +221,21 @@ function release(key: string): void {
  * that finds no reader (which should not happen, since registration precedes
  * the call) falls back to the reader here rather than failing the read, and so
  * does a call outside an App Router scope, which Next.js refuses to cache.
+ * `onCached` runs only once the read was cached.
  */
 export async function readThroughRegistered<T>(
   cachedRead: CachedRead,
   key: string,
   reader: () => Promise<T>,
   tags: string[],
-  revalidate: number | false
+  revalidate: number | false,
+  onCached?: () => void
 ): Promise<T> {
   hold(key, reader);
   try {
-    return (await cachedRead(key, tags, revalidate)) as T;
+    const value = (await cachedRead(key, tags, revalidate)) as T;
+    onCached?.();
+    return value;
   } catch (error) {
     // Read directly and without a warning, as the unstable_cache path reads
     // outside a Next.js scope.

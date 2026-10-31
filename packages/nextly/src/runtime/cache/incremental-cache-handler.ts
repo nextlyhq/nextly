@@ -12,6 +12,7 @@
 import { holdForNextFlush } from "../../revalidation/expiry-handoff";
 
 import { sharedEntries } from "./bounded-entries";
+import { markIncrementalHandlerInUse } from "./shared-handlers";
 import {
   expireTags,
   isEntryExpired,
@@ -145,6 +146,12 @@ function fillBegan(key: string): number {
 }
 
 export default class NextlyIncrementalCacheHandler {
+  // Next.js constructs the configured handler for each request and build
+  // before it renders, so reads this process caches keep their lifetimes.
+  constructor() {
+    markIncrementalHandlerInUse();
+  }
+
   async get(
     key: string,
     ctx?: CacheContext
