@@ -537,6 +537,25 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await recordedFor(t, "collection", "usageposts", id)).toEqual([]);
     });
+
+    // Last in this suite: it deletes a collection the cases above write to.
+    it("forgets every use by a deleted collection's entries, and keeps every other", async () => {
+      await handler().createEntry(
+        { collectionName: "usagenotes", overrideAccess: true },
+        { title: "Gone with its collection", image: F.id }
+      );
+      const before = await recorded(t);
+      const ofNotes = (l: string) => l.startsWith("collection usagenotes ");
+      expect(before.filter(ofNotes).length).toBeGreaterThan(0);
+      const others = before.filter(l => !ofNotes(l));
+      expect(others.length).toBeGreaterThan(0);
+
+      await t
+        .getService("collectionRegistryService")
+        .deleteCollection("usagenotes", { force: true });
+
+      expect(await recorded(t)).toEqual(others);
+    });
   }
 );
 
