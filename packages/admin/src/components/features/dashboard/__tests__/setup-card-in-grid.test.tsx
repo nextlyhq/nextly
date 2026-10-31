@@ -32,13 +32,10 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
     await import("@admin/hooks/queries/__tests__/batch-over-post")
   ).streamOverPost()
 );
-// No sample-content route for this reader: the sample step is drawn done, as the host may not.
-vi.mock("@admin/hooks/queries/useSeedStatus", () => ({
-  useSeedStatus: () => ({
-    status: { kind: "hidden" },
-    startSeed: vi.fn(),
-    skip: vi.fn(),
-  }),
+// No sample-content route for this reader (the probe answers a definitive no): the sample step
+// is left out, as the host may not.
+vi.mock("@admin/services/seedApi", () => ({
+  seedApi: { probe: async () => ({ available: false }), start: vi.fn() },
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
   useSingles: () => ({ data: { items: [] } }),

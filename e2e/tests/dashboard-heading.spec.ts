@@ -106,26 +106,7 @@ async function answerProbe(
       body: "",
     });
   });
-  await page.route("**/admin/api/meta/seed-status", (route: Route) =>
-    route.request().method() === "GET"
-      ? route.fulfill({ json: { completedAt: null, skippedAt: null } })
-      : route.fallback()
-  );
   return probes;
-}
-
-/**
- * The reads of the site's answer to the offer. The admin asks for it only once
- * the probe has said yes, so it is the observable trace of a yes.
- */
-function trackStatusReads(page: Page): string[] {
-  const reads: string[] = [];
-  page.on("request", request => {
-    if (request.url().endsWith("/admin/api/meta/seed-status")) {
-      reads.push(request.method());
-    }
-  });
-  return reads;
 }
 
 /** The dashboard's batch, whatever its query string. */
@@ -270,18 +251,15 @@ test.describe("the sample-content offer", () => {
     page,
   }) => {
     await answerProbe(page, 200);
-    const statusReads = trackStatusReads(page);
     await placeSetupCard(page);
     await gotoAdmin(page, "/");
+    // The site's answer comes with the card's own data, so a yes from the
+    // probe is all that stands between the card and the offer.
     await expect(page.getByRole("button", OFFER_ACTION)).toBeVisible();
-    // The trace the refusal test looks for in vain is there for a yes, so
-    // its absence there is a measurement and not a listener that never fires.
-    expect(statusReads).toContain("GET");
   });
 
   test("is not made to a person the route refuses", async ({ page }) => {
     const probes = await answerProbe(page, 403);
-    const statusReads = trackStatusReads(page);
     await placeSetupCard(page);
     await gotoAdmin(page, "/");
     // The probe was asked and answered before the verdict, so "no offer" is
@@ -293,17 +271,12 @@ test.describe("the sample-content offer", () => {
     // same before the probe's answer is read as after, and nothing else on
     // the page is ordered after it (the cards come from their own reads, in
     // no fixed order with this one). A probe that took the refusal for a yes
-    // goes on to read the site's answer and draws the card within
-    // milliseconds, so give it a second to, then check it did neither. The
-    // wait cannot fail a correct build, which never reads the site's answer;
-    // a slow machine can only let a broken one through, and the probe's unit
-    // tests are the proof of each answer. (Not `networkidle`: the dev server
-    // holds a long poll open, so the page never goes idle.)
+    // draws the offer within milliseconds of its answer, so give it a second
+    // to, then check it did not. The wait cannot fail a correct build; a slow
+    // machine can only let a broken one through, and the probe's unit and
+    // component tests are the proof of each answer. (Not `networkidle`: the
+    // dev server holds a long poll open, so the page never goes idle.)
     await page.waitForTimeout(1_000);
-    expect(
-      statusReads,
-      "the site's answer was read, so the probe said yes"
-    ).toEqual([]);
     await expectOneMainHeading(page);
     await expect(page.getByRole("button", OFFER_ACTION)).toHaveCount(0);
     await expect(
