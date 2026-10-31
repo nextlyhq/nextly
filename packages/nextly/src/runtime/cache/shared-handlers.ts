@@ -74,6 +74,16 @@ function sharedHandlersServe(throughUseCache: boolean): boolean {
 const INSTALL_LINES =
   'cacheHandler: require.resolve("nextly/cache-handler"), cacheMaxMemorySize: 0, cacheHandlers: { default: require.resolve("nextly/cache-handlers") }';
 
+/**
+ * Called once a read was cached, inside a scope Next.js caches in: says, once
+ * per process, that such reads are bounded. Only then, since a read outside
+ * any such scope (the CLI, a job, instrumentation) runs uncached, and the
+ * handlers it would be told to install may still be loaded later.
+ */
+export function noteCachedRead(throughUseCache: boolean): void {
+  if (bounded(throughUseCache)) warnUnshared();
+}
+
 /** Says once per process that cached public reads are bounded, and how to lift it. */
 function warnUnshared(): void {
   if (globalForShared.__nextly_unshared_reads_warned) return;
@@ -85,6 +95,18 @@ function warnUnshared(): void {
 }
 
 /**
+ * Whether a read cached this way is bounded: in production, while nextly's
+ * handlers do not serve it. Development runs one process, which every write it
+ * makes reaches.
+ */
+function bounded(throughUseCache: boolean): boolean {
+  return (
+    process.env.NODE_ENV === "production" &&
+    !sharedHandlersServe(throughUseCache)
+  );
+}
+
+/**
  * The lifetime a cached public read is given: `configured`, or, in production
  * without nextly's handlers, at most {@link UNSHARED_READ_LIFETIME_SECONDS}. A
  * read cached until a write expires it (`false`) is refreshed then too.
@@ -93,10 +115,7 @@ export function publicReadLifetime(
   configured: number | false,
   throughUseCache: boolean
 ): number | false {
-  // Development runs one process, which every write it makes reaches.
-  if (process.env.NODE_ENV !== "production") return configured;
-  if (sharedHandlersServe(throughUseCache)) return configured;
-  warnUnshared();
+  if (!bounded(throughUseCache)) return configured;
   return configured === false
     ? UNSHARED_READ_LIFETIME_SECONDS
     : Math.min(configured, UNSHARED_READ_LIFETIME_SECONDS);
