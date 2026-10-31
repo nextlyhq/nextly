@@ -45,9 +45,12 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push supersedes its last run. Every other run (a push
+# to main through ci.yml, the nightly newest-minor) keeps a group of its own
+# event and commit, so one commit's run on main is never cancelled by the next.
 concurrency:
-  group: scaffold-build-${{ github.ref }}
-  cancel-in-progress: true
+  group: scaffold-build-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   scaffold-build:
