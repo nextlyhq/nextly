@@ -94,8 +94,8 @@ for (const leg of LEGS) {
       request,
     }, testInfo) => {
       const { a, b } = running();
-      running().writeOutsideRequest("outside");
-      const since = Date.now();
+      // From when the write began, not when the writing process exited.
+      const since = running().writeOutsideRequest("outside");
       const tookA = await servedWithin(
         request,
         a,
