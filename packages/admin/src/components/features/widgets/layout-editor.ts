@@ -287,20 +287,28 @@ export function restorePlacement(
  * a missing config and an empty one identically, so keeping `{}` would be a
  * difference the layout carries and nothing can observe — and it would make
  * `hasChanges` report a card as edited for having been opened.
+ *
+ * `ownTitle` is the title the reader gave the card, when the change sets it:
+ * trimmed, as the layout write stores it, and dropped when nothing is left, so
+ * the card is titled automatically again. Left out, the card keeps the title it
+ * has: a quick setting changes settings alone.
  */
 export function setPlacementConfig(
   placements: readonly WidgetPlacement[],
   placementId: string,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  ownTitle?: string
 ): WidgetPlacement[] {
   const empty = Object.keys(config).length === 0;
   return placements.map(placement => {
     if (placement.id !== placementId) return placement;
-    if (empty) {
-      const { config: _dropped, ...rest } = placement;
-      return rest;
-    }
-    return { ...placement, config };
+    const { config: _config, title: _title, ...rest } = placement;
+    const title = ownTitle === undefined ? placement.title : ownTitle.trim();
+    return {
+      ...rest,
+      ...(empty ? {} : { config }),
+      ...(title === undefined || title === "" ? {} : { title }),
+    };
   });
 }
 
@@ -445,6 +453,7 @@ function comparable(
     h: placement.h,
     removed: placement.removed,
     config: placement.config ?? {},
+    title: placement.title ?? "",
   };
 }
 

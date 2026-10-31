@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { WidgetSettingsSheet } from "../WidgetSettingsSheet";
+import { SettingsPanel } from "../SettingsPanel";
 
 const mockBranding = vi.hoisted(() => ({
   value: {} as { widgetSources?: PublishedContentSource[] },
@@ -71,13 +71,14 @@ function open(
 ) {
   const onSave = vi.fn();
   render(
-    <WidgetSettingsSheet
+    <SettingsPanel
+      placementId="p1"
       open
       onOpenChange={() => {}}
       title="Recent posts"
       settings={declared}
       config={config}
-      onDone={onSave}
+      onDone={(kept, settled) => onSave(kept.config, settled)}
     />
   );
   return onSave;
@@ -185,7 +186,8 @@ describe("the settings sheet with content settings", () => {
       { name: "shown", type: "fields", of: "collection", label: "Fields" },
     ];
     const { unmount } = render(
-      <WidgetSettingsSheet
+      <SettingsPanel
+        placementId="p1"
         open
         onOpenChange={() => {}}
         title="Recent posts"
@@ -204,7 +206,8 @@ describe("the settings sheet with content settings", () => {
     unmount();
     // At the most a row shows, nothing more is offered.
     render(
-      <WidgetSettingsSheet
+      <SettingsPanel
+        placementId="p1"
         open
         onOpenChange={() => {}}
         title="Recent posts"
@@ -240,7 +243,8 @@ describe("the settings sheet with content settings", () => {
       },
     ];
     render(
-      <WidgetSettingsSheet
+      <SettingsPanel
+        placementId="p1"
         open
         onOpenChange={() => {}}
         title="Breakdown"
@@ -293,6 +297,7 @@ describe("the settings sheet with content settings", () => {
 
   it("keeps a chosen field while its value is entered, and saves the condition once complete", async () => {
     const onSave = open({ collection: "posts" }, withFilter);
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
     await userEvent.click(
       screen.getByRole("combobox", { name: "Condition field" })
     );
@@ -337,13 +342,14 @@ describe("the settings sheet with content settings", () => {
     mockBranding.value = {};
     const onSave = vi.fn();
     const sheet = (isOpen: boolean) => (
-      <WidgetSettingsSheet
+      <SettingsPanel
+        placementId="p1"
         open={isOpen}
         onOpenChange={() => {}}
         title="Recent posts"
         settings={settings}
         config={{ collection: "posts", by: "secret" }}
-        onDone={onSave}
+        onDone={(kept, settled) => onSave(kept.config, settled)}
       />
     );
     const { rerender } = render(sheet(false));
@@ -362,9 +368,12 @@ describe("the settings sheet with content settings", () => {
     const onSave = open({ collection: "posts", items: 9 });
     await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
     await userEvent.click(screen.getByRole("option", { name: "Pages" }));
-    await userEvent.click(
-      screen.getByRole("button", { name: "Reset to defaults" })
-    );
+    // Every section's own Reset, Data's holding the Collection.
+    for (const section of ["Data", "Display"]) {
+      await userEvent.click(
+        screen.getByRole("button", { name: `Reset ${section} to defaults` })
+      );
+    }
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
@@ -388,6 +397,7 @@ describe("the settings sheet with content settings", () => {
 
   it("offers a choice field's values without a blank one, and draws them", async () => {
     open({ collection: "posts" }, withFilter);
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
     await userEvent.click(
       screen.getByRole("combobox", { name: "Condition field" })
     );
@@ -435,6 +445,7 @@ describe("the settings sheet with content settings", () => {
 
   it("starts the filter row afresh when the collection changes, even half-built", async () => {
     const onSave = open({ collection: "posts" }, withFilter);
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
     await userEvent.click(
       screen.getByRole("combobox", { name: "Condition field" })
     );
@@ -453,12 +464,25 @@ describe("the settings sheet with content settings", () => {
 
   it("resets every setting to its default but keeps the card's collection", async () => {
     const onSave = open({ collection: "posts", by: "title", items: 9 });
-    await userEvent.click(
-      screen.getByRole("button", { name: "Reset to defaults" })
-    );
+    for (const section of ["Data", "Display"]) {
+      await userEvent.click(
+        screen.getByRole("button", { name: `Reset ${section} to defaults` })
+      );
+    }
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).toEqual({ collection: "posts" });
+  });
+
+  it("resets one section alone: Data's Reset leaves what Display holds", async () => {
+    const onSave = open({ collection: "posts", by: "title", items: 9 });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reset Data to defaults" })
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    // Group by, in Data, went back to its default; Number of items, in Display, stayed.
+    expect(saved(onSave)).toEqual({ collection: "posts", items: 9 });
   });
 });
 
