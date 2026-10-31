@@ -141,13 +141,19 @@ interface AddStep {
  * search typed before it. Not when the count moves under the reader for another reason, as when
  * a card put back leaves the Removed list: that add's own sentence is what the reader should
  * hear, not a count spoken over it a moment later.
+ *
+ * Each narrowing is said at most once. Opening an add step (`inStep`) cancels a count still
+ * waiting and settles that narrowing as said: the gallery it counted is gone and focus is on the
+ * step, so "N widgets" there would describe nothing in front of the reader, and coming back from
+ * the step, by Back or by an add, does not say it again over what the reader is hearing then.
  */
 function usePanelVoice(
   found: number,
   query: string,
   open: boolean,
   chosenChip: GalleryChip | null,
-  ready: boolean
+  ready: boolean,
+  inStep: boolean
 ) {
   const [spoken, setSpoken] = useState("");
   // Cleared as the panel opens or closes, during render (React's pattern for state that follows
@@ -159,17 +165,35 @@ function usePanelVoice(
   }
   const count = galleryCount(found, query);
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Read when the announcement is scheduled, so a later count is said without the count itself
-  // being what schedules one.
+  // What the reader narrowed the gallery to, or `null` before they narrowed it this visit.
+  const narrowing =
+    query.trim() === "" && chosenChip === null
+      ? null
+      : `${chosenChip ?? ""}\u0000${query}`;
+  // The narrowing last said, or settled by opening a step: never said twice.
+  const said = useRef<string | null>(null);
+  // Read when the announcement fires, so a later count is said without the count itself being
+  // what schedules one.
   const sayCount = useEffectEvent(() => setSpoken(`${count}.`));
   // Announced once typing pauses, so each keystroke does not interrupt the last. Never while
   // closed: closing clears a count still waiting, and none starts until the panel opens again.
   useEffect(() => {
-    if (!open || !ready) return undefined;
-    if (query.trim() === "" && chosenChip === null) return undefined;
-    pending.current = setTimeout(sayCount, COUNT_ANNOUNCE_DELAY_MS);
+    if (!open) {
+      said.current = null;
+      return undefined;
+    }
+    if (!ready || narrowing === null) return undefined;
+    if (inStep) {
+      said.current = narrowing;
+      return undefined;
+    }
+    if (said.current === narrowing) return undefined;
+    pending.current = setTimeout(() => {
+      said.current = narrowing;
+      sayCount();
+    }, COUNT_ANNOUNCE_DELAY_MS);
     return () => clearTimeout(pending.current);
-  }, [query, chosenChip, open, ready]);
+  }, [narrowing, open, ready, inStep]);
   // A sentence said on purpose (an add, a cleared search) cancels a count still waiting, which
   // would otherwise land on top of it.
   const say = useCallback((sentence: string) => {
@@ -1221,7 +1245,8 @@ function useAddGallery({
     query,
     open,
     chipChosen ? chip : null,
-    read !== undefined
+    read !== undefined,
+    step !== null
   );
   const chooseChip = (next: GalleryChip) => {
     setChip(next);

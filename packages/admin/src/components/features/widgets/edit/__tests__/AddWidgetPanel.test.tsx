@@ -443,6 +443,51 @@ describe("what the gallery says for a chip", () => {
     expect(screen.getByTestId("add-panel-count")).toHaveTextContent("1 widget");
   });
 
+  it("never says a chip's count once the add step has opened, nor again on coming back", () => {
+    vi.useFakeTimers();
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Trends" }));
+    // Into the step before the pause ends: the count waiting is for a gallery no longer shown.
+    act(() => vi.advanceTimersByTime(200));
+    fireEvent.click(screen.getByRole("button", { name: "Add Over time" }));
+    expect(screen.getByTestId("add-panel-step")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live().textContent).toBe("");
+    // Back in the gallery, the same chip still on: nothing said over the reader's return.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live().textContent).toBe("");
+    // A new narrowing is said as ever.
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(live()).toHaveTextContent("4 widgets.");
+  });
+
+  it("lets an add from the step be heard, not the chip's count after it", () => {
+    vi.useFakeTimers();
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Trends" }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(live()).toHaveTextContent("1 widget.");
+    fireEvent.click(screen.getByRole("button", { name: "Add Over time" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to dashboard" }));
+    expect(live()).toHaveTextContent("Added Over time.");
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live()).toHaveTextContent("Added Over time.");
+  });
+
+  it("never says a chip's count after the panel closes on it", () => {
+    vi.useFakeTimers();
+    const all = renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Trends" }));
+    act(() => vi.advanceTimersByTime(200));
+    all.rerender(<AddWidgetPanel {...all} open={false} />);
+    act(() => vi.advanceTimersByTime(1000));
+    all.rerender(<AddWidgetPanel {...all} open />);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live().textContent).toBe("");
+  });
+
   it("lets a card put back under a chip be said, never spoken over by the count it moved", () => {
     vi.useFakeTimers();
     const removed: WidgetPlacement = {
