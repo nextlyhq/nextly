@@ -12,8 +12,11 @@
 /** How urgent an item is: critical items rank before every warning. */
 export type AttentionSeverity = "critical" | "warning";
 
-/** What an item counts: a core release kind, or a plugin's item. */
-export type AttentionDigestKind = "stopped" | "overdue" | "plugin";
+/**
+ * What an item counts: a core release kind, a system problem System health
+ * reports, or a plugin's item.
+ */
+export type AttentionDigestKind = "stopped" | "overdue" | "system" | "plugin";
 
 /** One item of the digest, as the card, the header and any inbox read it. */
 export interface AttentionDigestItem {
@@ -26,8 +29,12 @@ export interface AttentionDigestItem {
   /** The count is a floor: counting stopped at a bound. */
   atLeast?: true;
   severity: AttentionSeverity;
-  /** Where the reader goes about it: a path relative to the admin, which the admin resolves. */
-  link: string;
+  /**
+   * Where the reader goes about it: a path relative to the admin, which the
+   * admin resolves. Absent when no admin page is the place to act, and the
+   * item's reason then names what to do.
+   */
+  link?: string;
   /** One line saying why it is waiting; absent when its owner gave none. */
   reason?: string;
   /** The count could not be read: it failed, timed out or was not a count. */

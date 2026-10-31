@@ -19,6 +19,7 @@
 import {
   authorizationGroups,
   callerHoldsPermission,
+  callerIsSuperAdmin,
   readableEntities,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
@@ -26,6 +27,7 @@ import {
 import { allWidgets, type CanonicalWidget } from "./canonical";
 import { collectionSettingsToken } from "./collection-cards";
 import { refreshContentSources } from "./content-sources";
+import { SUPER_ADMIN_WIDGET_IDS } from "./core-widgets/ids";
 import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 import { visibilityToken } from "./layout";
 import { keptOffBySite } from "./site-rules";
@@ -133,10 +135,16 @@ async function decide(caller: ReadAccessCaller): Promise<{
   // the site keeps off the dashboard is kept off it for everyone, before any
   // reader's verdict: hidden, a built-in an alternative replaces, or an
   // alternative not put anywhere.
+  // A widget only a super-admin is told exists, judged by the one
+  // super-admin decision, and asked only when such a widget is registered.
+  const superAdmin = all.some(widget => SUPER_ADMIN_WIDGET_IDS.has(widget.id))
+    ? await callerIsSuperAdmin(caller)
+    : false;
   const visible = all.filter(
     widget =>
       !keptOffBySite(widget.id) &&
-      holdsWidgetPermission(widget.requiredPermission, verdicts)
+      holdsWidgetPermission(widget.requiredPermission, verdicts) &&
+      (superAdmin || !SUPER_ADMIN_WIDGET_IDS.has(widget.id))
   );
   return {
     visible,

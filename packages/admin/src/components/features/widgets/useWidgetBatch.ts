@@ -108,6 +108,8 @@ export interface WidgetBatch {
   retry: (placementId: string) => void;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
+  answeredAtFor: (placementId: string) => Date | null;
   /** Ask every card again, as the batch does on window focus. */
   refresh: () => void;
   /**
@@ -505,6 +507,7 @@ export function useWidgetBatch(
     settling: outcomes.some(outcome => outcome.state === "loading"),
     retry,
     updatedAtFor,
+    answeredAtFor: retries.answeredAtFor,
     refresh: () => void batch.refetch(),
     fetchedSizeFor,
   };

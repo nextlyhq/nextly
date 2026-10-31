@@ -21,6 +21,10 @@ import {
   renameEntity,
 } from "../../entity-rename/rename-entity";
 import {
+  deletedEntityIntent,
+  flushContentChange,
+} from "../../flush-content-change";
+import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
@@ -642,11 +646,26 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
+    // The setting and the delete in one transaction, the row locked between
+    // them: the expiry below uses the setting the deleted row held, and a
+    // second delete racing this one waits, then finds nothing to remove.
+    const where = {
+      and: [{ column: "slug", op: "=" as const, value: slug }],
+    };
+    let removed = 0;
+    let stored: unknown;
     // Cleared once the delete has run, as after an insert.
     try {
-      await this.db
-        .delete(this.dynamicCollections)
-        .where(eq(this.dynamicCollections.slug, slug));
+      ({ removed, stored } = await this.adapter.transaction(async tx => {
+        const [row] = await tx.select<{ revalidate: unknown }>(
+          "dynamic_collections",
+          { columns: ["revalidate"], where, forUpdate: true }
+        );
+        return {
+          removed: await tx.delete("dynamic_collections", where),
+          stored: row?.revalidate,
+        };
+      }));
     } finally {
       clearRegistryRowCache();
     }
@@ -656,5 +675,16 @@ export class DynamicCollectionRegistryService extends BaseService {
     // must start from the recording default rather than inherit a suppression
     // whose row no longer exists.
     clearWebhookRecording("collection", slug);
+
+    // Every cached read of it now describes rows that are gone. Only when this
+    // call removed the row, with the setting it held: a repeated delete finds
+    // nothing and expires nothing.
+    if (removed > 0) {
+      await flushContentChange(
+        deletedEntityIntent("collection", slug, stored),
+        this.logger,
+        "a collection was deleted"
+      );
+    }
   }
 }

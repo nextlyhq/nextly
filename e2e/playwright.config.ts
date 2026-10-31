@@ -51,8 +51,10 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `setup-*`: first-run setup's origin rules for loopback names hold in
  *   development only, and `next dev` is what serves those names a page.
  * - `component-map-dev`: a development server refusing a stale component map.
- * - The Schema Builder specs: a production build turns the builder off unless
- *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
+ * - The Schema Builder specs (`schema-builder*`, so a new one joins them): a
+ *   production build turns the builder off unless the app opts in, and
+ *   refuses its writes with `BUILDER_DISABLED`. The production refusal itself
+ *   is `tests/production/builder-guard.spec.ts`, which runs there.
  * - `widget-preview`: the widget preview page exists only while the server
  *   runs in development; a production build answers its address as not found
  *   (`tests/production/widget-preview.spec.ts`).
@@ -63,7 +65,7 @@ const DEV_SPECS = [
   "**/setup-*.spec.ts",
   "**/component-map-dev.spec.ts",
   "**/widget-preview.spec.ts",
-  "**/schema-builder.spec.ts",
+  "**/schema-builder*.spec.ts",
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
@@ -234,6 +236,10 @@ export default defineConfig({
       // double does not appear in a contributor's plugins list or inject a
       // showcase section into the Posts collection.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
+      // Leaves the query devtools out of the dev server's admin: their floating icon sits over
+      // the bottom-right corner, where a toast's Undo is drawn, and takes the click a phone-width
+      // spec makes there. A production build never draws them.
+      NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS: "off",
       // The first-party plugins the playground registers only when named
       // (`apps/playground/nextly.config.ts`): the SEO plugin, as it ships, for
       // dashboard-seo-issues.spec.ts. It extends a collection of its own there,

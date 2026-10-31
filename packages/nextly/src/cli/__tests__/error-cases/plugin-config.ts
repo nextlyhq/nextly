@@ -35,6 +35,7 @@ import {
   slugCollisionError,
 } from "../../../plugins/schema-error";
 import { topoSortPlugins } from "../../../plugins/topo-sort";
+import { assertAdminWidgets } from "../../../plugins/validate-admin-widgets";
 import { assertDocumentViews } from "../../../plugins/validate-document-views";
 import { validatePluginMenus } from "../../../plugins/validate-menus";
 import { validatePluginSlugs } from "../../../plugins/validate-slugs";
@@ -171,6 +172,16 @@ export const PLUGIN_CONFIG_CASES = {
       "reports",
       ["app", "reports"],
       "duplicate-permission"
+    ),
+  // `plugins/removed-widget-keys.ts`, through the startup check, for a plugin that still
+  // declares a widget data source under `contributes.widgetSources`.
+  NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL: () =>
+    thrown(() =>
+      assertAdminWidgets([
+        plugin("reviews", {
+          contributes: { widgetSources: [] },
+        } as unknown as Partial<PluginDefinition>),
+      ])
     ),
   // `plugins/validate-admin-widgets.ts`, for a widget whose query holds a bigint.
   PLUGIN_ADMIN_WIDGET_NOT_JSON: () =>

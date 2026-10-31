@@ -81,16 +81,6 @@ export async function fetchDashboardLayout(): Promise<DashboardLayoutRead> {
   return { ...answer, askedAtWidth: width };
 }
 
-/**
- * The layout read with the Get started steps answered even for a removed card, which the card
- * needs once it is restored in customise mode and drawn before the save that restores it.
- */
-export function fetchGetStartedOnRestore(): Promise<DashboardLayoutResponse> {
-  return protectedApi.get<DashboardLayoutResponse>(
-    `${LAYOUT_PATH}?getStarted=1`
-  );
-}
-
 export interface SaveLayoutInput {
   /** The WHOLE ordered list, removed cards included: the order is the array's. */
   placements: WidgetPlacement[];
@@ -201,6 +191,12 @@ export interface UseDashboardLayoutResult {
    * until then.
    */
   isUnreadable: boolean;
+  /**
+   * Whether the reader has arranged their dashboard, as the read says (`arranged`): a card they
+   * remove at rest is then taken out of their arrangement, where a reader following the default
+   * has it hidden.
+   */
+  isArranged: boolean;
   /**
    * Whether ANY write against this layout is in flight.
    *
@@ -434,6 +430,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     ...writeState(save, reset, [dismiss, cardSettings]),
     hasStoredRow: (query.data?.version ?? 0) > 0,
     isUnreadable: query.data?.source === "unreadable",
+    isArranged: query.data?.arranged === true,
     cached,
     reload: invalidate,
   };
