@@ -461,6 +461,8 @@ Back up the database and the media storage first, then run again with --apply.
 
 The command removes files only from the media storage configured now. An item whose sizes were uploaded to another storage, bucket or host, before you moved media, is listed as `leave its stored sizes as they are`, with where its files are. A size recorded under a URL relative to your site was written by local disk, so with S3, Vercel Blob or UploadThing configured it is listed the same way. Run the command for those items with the storage they were uploaded to configured; until then they keep their `sizes`, and the drop waits for them.
 
+A size recorded by its path alone, with no URL, shows no storage at all: a Replace may since have stored the item's original elsewhere. The command never deletes such a file. It lists the item as `leave its stored sizes as they are`, naming the path, and exits non-zero. Clean these up by hand: delete the file at that path from the storage it was uploaded to, then clear that item's sizes (`UPDATE media SET sizes = NULL WHERE id = '<the item's id>'`). The drop waits until you have.
+
 ### 3. Back up the database and the media storage
 
 Take both backups at the same time, so they match each other. For the database:

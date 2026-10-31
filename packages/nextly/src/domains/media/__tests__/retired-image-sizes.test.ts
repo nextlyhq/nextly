@@ -503,6 +503,63 @@ describe("a size entry that is not a size record it can read", () => {
   );
 });
 
+describe("a size recorded by its path alone", () => {
+  // Nothing in such a record says which storage the file is on, and the item
+  // cannot say either: a Replace stores the new original on the storage
+  // configured then and keeps the item's sizes. A path taken for this
+  // storage's would delete this storage's own file of that name, and the
+  // record cleared would leave the real one stored with nothing naming it.
+  it("is left, named, and nothing deleted, once the item's original was replaced onto another storage", async () => {
+    const adapter = new Bucket("s3");
+    // The original as a Replace left it, on this bucket. The size was stored
+    // beside the earlier original, elsewhere, and this bucket holds a file of
+    // its own at the very key the size names.
+    const original = await put(adapter, "photo.png");
+    const key = "2026/10/photo-small.webp";
+    adapter.files.set(key, Buffer.from("this bucket's own file"));
+    const store = new MemoryStore([
+      {
+        id: "replaced",
+        filename: original.path,
+        url: original.url,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({ small: { path: key } }),
+      },
+    ]);
+    const before = [...adapter.files.keys()].sort();
+    const listed: string[] = [];
+    const applied: string[] = [];
+
+    const dry = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: false,
+      referencedNow: usedIn(store),
+      say: line => listed.push(line),
+    });
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: line => applied.push(line),
+    });
+
+    expect(dry.code).toBe(0);
+    expect(listed.join("\n")).toContain(
+      `leave  its stored sizes as they are: the file of "small" is recorded by its path alone (${key})`
+    );
+    expect(code).toBe(1);
+    expect([...adapter.files.keys()].sort()).toEqual(before);
+    expect(store.cleared).toEqual([]);
+    expect(holdsStoredSizes(store.table[0].sizes)).toBe(true);
+    expect(report.itemsLeft.map(item => item.id)).toEqual(["replaced"]);
+    expect(applied.join("\n")).toContain("media replaced");
+  });
+});
+
 describe("two sizes whose keys differ only in spelling", () => {
   // An object storage keeps keys as written: `media//x.webp` and
   // `media/x.webp` are two objects. Taken for one, only the first would be
@@ -519,8 +576,14 @@ describe("two sizes whose keys differ only in spelling", () => {
         url: original.url,
         thumbnailUrl: null,
         sizes: JSON.stringify({
-          small: { path: "media//x.webp" },
-          medium: { path: "media/x.webp" },
+          small: {
+            path: "media//x.webp",
+            url: adapter.getPublicUrl("media//x.webp"),
+          },
+          medium: {
+            path: "media/x.webp",
+            url: adapter.getPublicUrl("media/x.webp"),
+          },
         }),
       },
     ]);

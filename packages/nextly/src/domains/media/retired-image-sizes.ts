@@ -15,10 +15,11 @@
  * size files are gone, so a run that stops part-way, or a file the storage
  * refuses, leaves that item as it was for the next run.
  *
- * Three things leave an item as it is, named, for the run to exit non-zero:
+ * Four things leave an item as it is, named, for the run to exit non-zero:
  * a size whose file is on another storage than the one configured now (its
- * path means nothing to this one), a delete that fails for any reason but the
- * file being definitely gone, and a check of what items use, asked again just
+ * path means nothing to this one), a size recorded by its path alone (which
+ * shows no storage at all), a delete that fails for any reason but the file
+ * being definitely gone, and a check of what items use, asked again just
  * before the removal, that cannot be answered.
  *
  * @module domains/media/retired-image-sizes
@@ -178,6 +179,14 @@ interface ItemPlan {
    * this storage's file of the same name, and the record would be cleared.
    */
   elsewhere: Array<{ name: string; url: string }>;
+  /**
+   * Sizes recorded by their path alone, with no URL. Nothing shows which
+   * storage such a file is on: not the record, and not the item, whose
+   * original a Replace may have stored since on another storage while it
+   * kept the sizes. Leaves the item's `sizes` as it is, for the file to be
+   * removed by hand where it is.
+   */
+  pathOnly: Array<{ name: string; path: string }>;
 }
 
 /** The files media items use as originals or thumbnails, across the table. */
@@ -282,21 +291,6 @@ function servedHere(
   return oneRelative && storage.getType() === "local";
 }
 
-/**
- * Whether a size's file is on the storage configured now: by the size's own
- * URL, or, for a size recorded by path alone, by the item's original, which
- * was stored with it.
- */
-function onThisStorage(
-  size: StoredSize,
-  path: string,
-  row: MediaSizesRow,
-  storage: SizeFileStorage
-): boolean {
-  if (size.url) return servedHere(size.url, path, storage);
-  return servedHere(row.url, row.filename, storage);
-}
-
 /** One item's plan, judged against everything every item uses. */
 function planItem(
   row: MediaSizesRow,
@@ -310,6 +304,7 @@ function planItem(
     keep: [],
     unlocated: [],
     elsewhere: [],
+    pathOnly: [],
   };
   const read = readStoredSizes(row.sizes);
   if (!read.readable) {
@@ -335,6 +330,14 @@ interface SizeContext {
 /** Puts one size into its item's plan: removed, kept, or holding the item. */
 function planSize(plan: ItemPlan, size: StoredSize, at: SizeContext): void {
   const { row } = at;
+  // Only a size's own URL shows which storage its file is on (`servedHere`).
+  // One recorded by path alone holds the item before anything else is
+  // judged of it: kept or removed on a guess, its record would be cleared.
+  if (size.url === undefined) {
+    if (size.path) plan.pathOnly.push({ name: size.name, path: size.path });
+    else plan.unlocated.push(size.name);
+    return;
+  }
   const path = pathOfSize(size, row);
   if (path === undefined) {
     // Every size record names its file (`sizeEntry`); one named by a URL
@@ -346,8 +349,8 @@ function planSize(plan: ItemPlan, size: StoredSize, at: SizeContext): void {
     plan.keep.push({ name: size.name, path, reason: "thumbnail" });
   } else if (isInUse(at.inUse, size, path)) {
     plan.keep.push({ name: size.name, path, reason: "in-use" });
-  } else if (!onThisStorage(size, path, row, at.storage)) {
-    plan.elsewhere.push({ name: size.name, url: size.url ?? row.url });
+  } else if (!servedHere(size.url, path, at.storage)) {
+    plan.elsewhere.push({ name: size.name, url: size.url });
   } else if (!at.planned.has(path)) {
     // By the key exactly as stored: an object storage keeps `media//x.webp`
     // and `media/x.webp` as two objects, and one taken for the other would
@@ -446,7 +449,8 @@ export interface SizeRemovalReport {
 
 /**
  * What leaves an item's stored sizes as they are before anything of it is
- * removed: a size whose file cannot be located, or one on another storage.
+ * removed: a size whose file cannot be located, one on another storage, or
+ * one recorded by its path alone.
  */
 function blockers(plan: ItemPlan, storageType: string): string[] {
   const reasons: string[] = [];
@@ -461,6 +465,11 @@ function blockers(plan: ItemPlan, storageType: string): string[] {
     ];
     reasons.push(
       `the file of ${plan.elsewhere.map(size => `"${size.name}"`).join(", ")} is not on the media storage configured now (${storageType}), but at ${where.join(", ")}; run this with the storage it was uploaded to configured`
+    );
+  }
+  for (const size of plan.pathOnly) {
+    reasons.push(
+      `the file of "${size.name}" is recorded by its path alone (${storedPathForLog(size.path)}), which does not show which storage it is on; remove it by hand from the storage it was uploaded to, then clear this item's sizes`
     );
   }
   return reasons;
@@ -563,8 +572,9 @@ async function applyItem(
   report: SizeRemovalReport
 ): Promise<void> {
   say(itemHeading(plan));
-  // Nothing of an item is removed when one of its sizes cannot be located or
-  // is elsewhere: its `sizes` stays, and with it the record of every file.
+  // Nothing of an item is removed when one of its sizes cannot be located,
+  // is elsewhere or is recorded by path alone: its `sizes` stays, and with it
+  // the record of every file.
   const reasons = blockers(plan, storage.getType());
   if (reasons.length === 0) {
     for (const file of plan.remove) {

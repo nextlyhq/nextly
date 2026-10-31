@@ -7,6 +7,7 @@
  * removed still has, which no definition names: it is added here as such a
  * database has it, and read through the reader every delete uses.
  */
+import type { SQL } from "drizzle-orm";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -20,8 +21,9 @@ import {
   setRetiredSizes,
 } from "../../../__tests__/helpers/retired-image-sizes";
 import { consoleLogger } from "../../../shared/types";
-import { filesKeptByOthers } from "../remove-stored-files";
+import { filesKeptByOthers, removeStoredFiles } from "../remove-stored-files";
 import { StoredFileSearchReader } from "../stored-file-search";
+import { storedFilesOf } from "../stored-files";
 
 const SHARED = "2026/10/3b1c-photo-small.webp";
 // A key may hold what JSON escapes and `like` reads as its own escape.
@@ -92,5 +94,60 @@ describeEachDialect("files another item refers to", dialect => {
     // Not null: the statement ran on this dialect.
     expect(kept).not.toBeNull();
     expect([...(kept ?? [])]).toEqual([SHARED]);
+  });
+
+  // Last in the file: it drops the retired column the others read.
+  it("still answers, and the cleanup removes the files, when the sizes column is dropped between the check and the read", async () => {
+    const probe = new StoredFileSearchReader(current.adapter, consoleLogger)
+      .search;
+    const q = dialect === "mysql" ? "`" : '"';
+    let asked: SQL | undefined;
+    // As `nextly media remove-sizes --apply --drop` can: the column is
+    // there when asked, and gone by the time the read names it.
+    const racing = {
+      ...probe,
+      sizesColumn: async () => {
+        asked = await probe.sizesColumn?.();
+        await current.adapter.executeQuery(
+          `ALTER TABLE ${q}media${q} DROP COLUMN ${q}sizes${q}`
+        );
+        return asked;
+      },
+    };
+    // An item whose row is already deleted, as a delete's cleanup finds it.
+    const deleted = {
+      filename: "2026/10/1d1d-gone.png",
+      url: "/uploads/2026/10/1d1d-gone.png",
+      thumbnailUrl: "/uploads/2026/10/1d1d-gone-thumb.webp",
+    };
+    const files = storedFilesOf(deleted).paths;
+    // The other item's own original, so the read again is shown to find rows.
+    const otherOriginal = "2026/10/9a9a-other.png";
+    const removed: string[] = [];
+
+    const kept = await filesKeptByOthers(
+      racing,
+      [...files, otherOriginal],
+      ["deleted-2"]
+    );
+    // As every delete does: the files go only once the search has answered.
+    if (kept) {
+      await removeStoredFiles(
+        {
+          delete: async path => {
+            removed.push(path);
+          },
+        },
+        deleted,
+        "deleted-2",
+        kept
+      );
+    }
+
+    expect(asked).toBeDefined();
+    expect(kept).not.toBeNull();
+    expect([...(kept ?? [])]).toEqual([otherOriginal]);
+    expect(removed.sort()).toEqual([...files].sort());
+    expect(files).toHaveLength(2);
   });
 });

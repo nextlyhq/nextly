@@ -1,10 +1,12 @@
 import { like, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 
+import { isMissingNamedColumnError } from "../../database/missing-column";
 import { redactCredentialsInText } from "../../observability/mask-emails";
 import { consoleLogger } from "../../shared/types";
 import { isTransientError, withRetry } from "../../storage/retry";
 
 import { canonicalStoredPath } from "./orphan-thumbnails";
+import { RETIRED_SIZES_COLUMN } from "./retired-image-sizes-constants";
 import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
 
 /**
@@ -216,9 +218,7 @@ export async function filesKeptByOthers(
   mediaIds: readonly string[]
 ): Promise<Set<string> | null> {
   const names = [...new Set(paths.map(lastSegment).filter(Boolean))];
-  try {
-    // Asked once per search, so every chunk reads the same columns.
-    const sizes = await search.sizesColumn?.();
+  const readAll = async (sizes: SQL | undefined) => {
     const rows: MediaFilesRecord[] = [];
     for (let i = 0; i < names.length; i += NAMES_PER_QUERY) {
       rows.push(
@@ -227,6 +227,30 @@ export async function filesKeptByOthers(
           sizes
         ))
       );
+    }
+    return rows;
+  };
+  try {
+    // Asked once per search, so every chunk reads the same columns.
+    const sizes = await search.sizesColumn?.();
+    let rows: MediaFilesRecord[];
+    try {
+      rows = await readAll(sizes);
+    } catch (error) {
+      // The retired column dropped between the ask and the read, as
+      // `nextly media remove-sizes --apply --drop` can while a delete runs.
+      // It is dropped only once no item names a size file in it, so the
+      // search read again without it misses nothing; answering null instead
+      // would leave every file of an item whose row is already gone. Told by
+      // the driver's code for a missing column, and by its name, so no other
+      // failure is read again.
+      if (
+        sizes === undefined ||
+        !isMissingNamedColumnError(error, RETIRED_SIZES_COLUMN)
+      ) {
+        throw error;
+      }
+      rows = await readAll(undefined);
     }
     return pathsReferencedAmong(paths, rows);
   } catch (error) {
