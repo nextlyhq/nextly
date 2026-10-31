@@ -31,7 +31,7 @@ import { SCHEDULE_PUBLISH_ACTION_ID } from "@admin/components/features/releases/
 import { Button, Skeleton } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import { useReleasesContaining } from "@admin/hooks/queries/useReleases";
+import { useReleasesContaining } from "@admin/hooks/queries/useReleasesContaining";
 import { useCan } from "@admin/hooks/useCan";
 import type { Release, ReleaseDocumentRef } from "@admin/types/releases";
 

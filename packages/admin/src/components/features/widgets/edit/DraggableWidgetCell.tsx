@@ -43,8 +43,8 @@ import {
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { CELL_PLACEMENT_ATTRIBUTE } from "./drag/cell-placement";
 import { handleLabel } from "./drag/drag-messages";
-import { CELL_PLACEMENT_ATTRIBUTE } from "./drag/useCardDrag";
 
 /** What the cell's handle does, while dragging is on. */
 export interface CellDrag {

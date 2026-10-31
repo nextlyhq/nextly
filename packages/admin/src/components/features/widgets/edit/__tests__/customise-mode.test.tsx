@@ -7,7 +7,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -21,6 +29,7 @@ import type {
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
+import { preloadWidgetSettingsSheet } from "../LazyWidgetSettingsSheet";
 import {
   stubDashboardWidth,
   unstubDashboardWidth,
@@ -211,6 +220,14 @@ function renderDashboard() {
   );
 }
 
+// The settings sheet's code loads apart from the dashboard's, ahead of its opening, as a pointer
+// over the card's menu fetches it. Fetched once here, so a test opening the sheet waits on the
+// sheet rather than on the first transform of the editor's field renderer behind it.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../WidgetSettingsSheet");
+});
+
 beforeEach(() => {
   // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
   stubDashboardWidth();
@@ -359,7 +376,10 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       await user.click(
         within(popover).getByRole("button", { name: "More settings" })
       );
-      const sheet = await screen.findByRole("dialog");
+      // The sheet's panel opens at once and says it is loading until its code
+      // arrives, so wait for the form's field before reading the sheet.
+      await screen.findByLabelText(/Heading/);
+      const sheet = screen.getByRole("dialog", { name: "Notes settings" });
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
       await user.click(within(sheet).getByRole("button", { name: "Done" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
