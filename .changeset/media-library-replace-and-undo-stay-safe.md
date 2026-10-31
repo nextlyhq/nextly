@@ -54,4 +54,7 @@ Media Replace, delete and Undo are safer.
 
 The media usage table gains an `address` column. It is new in this release,
 so `nextly migrate` creates it with the column; a database that created the
-table from an unreleased build adds it the same way.
+table from an unreleased build adds it the same way. A usage record built
+before the column existed reads as still being built, which keeps old files
+on Replace and the Unused view closed, until `nextly media reindex-usage` is
+run once more.
