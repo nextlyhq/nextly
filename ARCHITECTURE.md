@@ -170,7 +170,7 @@ HTTP request to /admin/api/[[...params]] (the dynamic catch-all)
 ```
 
 Some resources (media, uploads, health, api-keys, dashboard, schema journal,
-general-settings, image-sizes) are served by standalone modules under
+general-settings) are served by standalone modules under
 `src/api/*` rather than the dispatcher switch. Plugin routes are served by
 the same catch-all under `plugins/<name>` (so `/admin/api/plugins/<name>`
 with the standard mount).

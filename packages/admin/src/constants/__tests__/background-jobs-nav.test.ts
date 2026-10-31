@@ -132,8 +132,9 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
         `${item.id} (${permission})`
       ).toBe(true);
     }
-    // The premise: this walked real destinations, not an empty list.
-    expect(gated.length).toBeGreaterThan(2);
+    // The premise: this walked real destinations, not an empty list. Two are
+    // gated by a permission (General and Background Jobs).
+    expect(gated.length).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps revealing it for the grants it always revealed for", () => {

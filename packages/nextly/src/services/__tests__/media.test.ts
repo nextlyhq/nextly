@@ -34,6 +34,29 @@ const mockOptimizeImage = vi.fn().mockResolvedValue({
   metadata: { width: 1920, height: 1080, format: "webp" },
 });
 
+// A size cutter and a readable adapter, so a service that still cut sizes at
+// upload, or again when the focus point moves, would reach them and show it.
+// Hoisted, because the module factory below reads it as the module loads.
+const mockGenerateImageSizes = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _buffer: Buffer,
+      filename: string,
+      _sizes: unknown,
+      upload: (b: Buffer, o: { filename: string; mimeType: string }) => unknown
+    ) => {
+      await upload(Buffer.from("card"), {
+        filename: `card_${filename}`,
+        mimeType: "image/webp",
+      });
+      return {
+        card: { url: "https://test.com/card.webp", path: "card.webp" },
+      };
+    }
+  )
+);
+const mockAdapterRead = vi.fn().mockResolvedValue(Buffer.from("original"));
+
 vi.mock("@nextly/storage", () => ({
   getMediaStorage: vi.fn(() => ({
     upload: mockStorageUpload,
@@ -41,7 +64,9 @@ vi.mock("@nextly/storage", () => ({
     exists: mockStorageExists,
     getPublicUrl: mockStorageGetPublicUrl,
     getStorageType: mockStorageGetType,
+    getAdapterForCollection: () => ({ read: mockAdapterRead }),
   })),
+  generateImageSizes: mockGenerateImageSizes,
   getImageProcessor: vi.fn(() => ({
     isValidImage: mockIsValidImage,
     getDimensions: mockGetDimensions,
@@ -521,6 +546,98 @@ describe("MediaService", () => {
       expect(result.statusCode).toBe(404);
       expect(result.message).toBe("Media not found");
       expect(result.data).toBeNull();
+    });
+  });
+
+  // Image sizes are no longer made or read. A size defined before then is
+  // still a row in `image_sizes`, and an item stored before then still holds
+  // its `sizes`: neither is used, and neither is touched.
+  describe("image sizes", () => {
+    const STORED_SIZES = {
+      card: { url: "https://test.com/old-card.webp", path: "old-card.webp" },
+    };
+
+    beforeEach(async () => {
+      mockGenerateImageSizes.mockClear();
+      mockAdapterRead.mockClear();
+      await testDb.db.insert(testDb.schema.imageSizes).values({
+        name: "card",
+        width: 400,
+        height: 300,
+        isDefault: true,
+      });
+      await testDb.db.insert(testDb.schema.media).values({
+        id: "media-with-sizes",
+        filename: "old.jpg",
+        originalFilename: "old.jpg",
+        mimeType: "image/jpeg",
+        size: 1024,
+        width: 800,
+        height: 600,
+        url: "https://test.com/old.jpg",
+        thumbnailUrl: "https://test.com/thumb_old.jpg",
+        sizes: JSON.stringify(STORED_SIZES),
+        uploadedBy: testUserId,
+        uploadedAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+
+    async function storedRow(id: string) {
+      const rows = await testDb.db.select().from(testDb.schema.media);
+      return rows.find(row => row.id === id);
+    }
+
+    it("stores an uploaded image's original and one thumbnail, and no sizes", async () => {
+      const result = await mediaService.uploadMedia({
+        file: Buffer.from("fake-image-data"),
+        filename: "photo.jpg",
+        mimeType: "image/jpeg",
+        size: 1024,
+        uploadedBy: testUserId,
+      });
+
+      expect(result.success).toBe(true);
+      const stored = mockStorageUpload.mock.calls.map(
+        call => (call[1] as { filename: string }).filename
+      );
+      expect(stored.sort()).toEqual(["photo.jpg", "thumb_photo.jpg"]);
+      expect(mockGenerateImageSizes).not.toHaveBeenCalled();
+      expect("sizes" in (result.data as object)).toBe(false);
+      expect((await storedRow(result.data!.id))?.sizes ?? null).toBeNull();
+    });
+
+    it("saves a moved focus point and stores no file", async () => {
+      const result = await mediaService.updateMedia("media-with-sizes", {
+        focalX: 20,
+        focalY: 30,
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockStorageUpload).not.toHaveBeenCalled();
+      expect(mockStorageDelete).not.toHaveBeenCalled();
+      expect(mockAdapterRead).not.toHaveBeenCalled();
+      expect("sizes" in (result.data as object)).toBe(false);
+      const row = await storedRow("media-with-sizes");
+      expect([row?.focalX, row?.focalY]).toEqual([20, 30]);
+      // The stored sizes are left exactly as they were, for the command that
+      // removes their files to find.
+      expect(JSON.parse(String(row?.sizes))).toEqual(STORED_SIZES);
+    });
+
+    it("leaves stored sizes out of what it reads", async () => {
+      const one = await mediaService.getMediaById("media-with-sizes");
+      const list = await mediaService.listMedia();
+
+      expect(one.data?.id).toBe("media-with-sizes");
+      expect("sizes" in (one.data as object)).toBe(false);
+      const listed = list.data?.find(item => item.id === "media-with-sizes");
+      expect(listed).toBeDefined();
+      expect("sizes" in (listed as object)).toBe(false);
+      // Still stored: reading leaves the column alone.
+      expect((await storedRow("media-with-sizes"))?.sizes).toBe(
+        JSON.stringify(STORED_SIZES)
+      );
     });
   });
 

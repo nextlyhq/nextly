@@ -1033,6 +1033,15 @@ export class CollectionService extends BaseService {
   async warmLocalizedReadiness(collectionName: string): Promise<void> {
     await this.entryService.warmLocalizedReadiness(collectionName);
   }
+  /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * for `nextly media reindex-usage`. Returns how many entries it read.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    return this.entryService.rebuildMediaUsage(collectionName);
+  }
 
   /**
    * Create an entry within an existing transaction

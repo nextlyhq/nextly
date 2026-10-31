@@ -81,9 +81,12 @@ import {
   isImageMimeType,
   UpdateMediaInputSchema,
   validateFileSize,
+  type MediaPageQuery,
   type MediaParams,
+  type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import type { MediaLibraryCounts } from "../media-library-query";
 import { withMediaRevalidationBatch } from "../revalidate-media";
 import type {
   MediaFile,
@@ -549,12 +552,13 @@ export class MediaService {
     const page = options.page ?? 1;
     const limit = options.limit ?? 24;
 
-    const queryParams: MediaParams = {
+    const queryParams: MediaParams & { view?: MediaView } = {
       page,
       limit,
       search: options.search,
       type: options.type,
       folderId: options.folderId,
+      view: options.view,
       sortBy: options.sortBy ?? "uploadedAt",
       sortOrder: options.sortOrder ?? "desc",
     };
@@ -578,6 +582,14 @@ export class MediaService {
         hasMore: offset + files.length < total,
       },
     };
+  }
+
+  /**
+   * The media library sidebar's counts: every folder's items and each view's,
+   * read from the database in one query.
+   */
+  async countLibrary(_context: RequestContext): Promise<MediaLibraryCounts> {
+    return this.legacyMediaService.countLibrary();
   }
 
   /**
@@ -1134,11 +1146,16 @@ export class MediaService {
    */
   async getFolderContents(
     folderId: string | null,
-    _context: RequestContext
+    _context: RequestContext,
+    /** Which page of its items, and how they are narrowed and sorted. */
+    query: Partial<MediaPageQuery> = {}
   ): Promise<FolderContents> {
     this.logger.debug("Getting folder contents", { folderId });
 
-    const result = await this.legacyFolderService.getFolderContents(folderId);
+    const result = await this.legacyFolderService.getFolderContents(
+      folderId,
+      query
+    );
 
     if (!result.success || !result.data) {
       // One throw. The converter answers a code-less 404 with the same generic
@@ -1157,6 +1174,7 @@ export class MediaService {
         this.mapToMediaFile(m)
       ),
       breadcrumbs: result.data.breadcrumbs,
+      meta: result.data.meta,
     };
   }
 
@@ -1308,25 +1326,20 @@ export class MediaService {
   /**
    * Map legacy media data to MediaFile type
    *
-   * `sizes`, `focalX` and `focalY` are carried through rather than dropped. The
-   * row holds all three in every dialect, and dropping them meant the same
-   * media file described itself differently depending on how it was read: with
-   * variants when populated as a relationship on another collection, without
-   * them from `media.findByID()` and `GET /api/media/:id`.
+   * `focalX` and `focalY` are carried through rather than dropped, so the same
+   * media file describes itself alike whether populated as a relationship on
+   * another collection or read from `media.findByID()` and `GET /api/media/:id`.
    *
    * The URLs go through `normalizeMediaUrls`, which the relationship and
    * Single paths use too, so the three cannot disagree about what a media URL
    * is: as the storage wrote it, the local adapter's own base followed by the
    * file's path, which the app's pages resolve on whatever host serves them.
-   * It carries the part that is easy to get wrong by hand: SQLite stores
-   * `sizes` as TEXT and returns a JSON string, which it parses, so the shape a
-   * caller receives is the same on all three dialects.
+   * A row's stored `sizes` is not carried: image sizes are no longer offered.
    */
   private mapToMediaFile(data: MediaRow): MediaFile {
-    const { url, thumbnailUrl, sizes } = normalizeMediaUrls({
+    const { url, thumbnailUrl } = normalizeMediaUrls({
       url: data.url,
       thumbnailUrl: data.thumbnailUrl,
-      sizes: data.sizes,
     });
     return {
       id: String(data.id),
@@ -1339,7 +1352,6 @@ export class MediaService {
       duration: data.duration,
       url,
       thumbnailUrl,
-      sizes,
       focalX: data.focalX,
       focalY: data.focalY,
       altText: data.altText,

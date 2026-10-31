@@ -22,6 +22,18 @@ vi.mock("../../dashboard/dashboard-preferences", () => ({
     get(userId: string, key: string): Promise<string | undefined> {
       return Promise.resolve(stored.get(`${userId}:${key}`));
     }
+    // Every key the reader asks for, in one read, as the repository answers.
+    getMany(
+      userId: string,
+      keys: readonly string[]
+    ): Promise<Map<string, string>> {
+      const values = new Map<string, string>();
+      for (const key of keys) {
+        const value = stored.get(`${userId}:${key}`);
+        if (value !== undefined) values.set(key, value);
+      }
+      return Promise.resolve(values);
+    }
     set(userId: string, key: string, value: string): Promise<void> {
       stored.set(`${userId}:${key}`, value);
       return Promise.resolve();
@@ -168,6 +180,54 @@ describe('"You\'re all set", once', () => {
     });
     expect(
       (await setupCardData(person, now, { sampleRefused: false })).allSet
+    ).toBe(false);
+    expect(stored.has("ana:setup-retired")).toBe(false);
+  });
+
+  it("never retires over a load nobody has seen through, though the route refuses this reader", async () => {
+    // The route's refusal (a 503 or an outage as much as a 403) withholds the offer only: an
+    // unfinished, failed or unrecorded load stays on the card and holds setup open.
+    for (const run of [
+      { state: "unfinished", startedAt: "2026-10-31T09:30:00.000Z" },
+      {
+        state: "failed",
+        startedAt: "2026-10-31T09:30:00.000Z",
+        failure: "boom",
+      },
+      {
+        state: "unrecorded",
+        startedAt: "2026-10-31T09:30:00.000Z",
+        run: "r1",
+      },
+    ] as const) {
+      steps.mockResolvedValue({
+        known: true,
+        steps: [
+          { kind: "sample", status: "open", run },
+          { kind: "invite", status: "done" },
+        ],
+        done: 1,
+        total: 2,
+      });
+      expect(
+        (await setupCardData(person, now, { sampleRefused: true })).allSet
+      ).toBe(false);
+    }
+    expect(stored.has("ana:setup-retired")).toBe(false);
+  });
+
+  it("never retires over a sample step whose answer could not be read, though the route refuses this reader", async () => {
+    steps.mockResolvedValue({
+      known: true,
+      steps: [
+        { kind: "sample", status: "open", unreadable: true },
+        { kind: "invite", status: "done" },
+      ],
+      done: 1,
+      total: 2,
+    });
+    expect(
+      (await setupCardData(person, now, { sampleRefused: true })).allSet
     ).toBe(false);
     expect(stored.has("ana:setup-retired")).toBe(false);
   });

@@ -60,7 +60,10 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
+import {
+  deleteEntityRegistryRow,
+  mediaUsageTablePresent,
+} from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -854,6 +857,7 @@ export class SingleRegistryService extends BaseRegistryService<
       // Asked before the transaction opens: see `DashboardTables`.
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+        mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
       };
       const { deleted: count, expire } = await this.adapter.transaction(
         async tx => deleteEntityRegistryRow(tx, "single", slug, tables)
@@ -880,8 +884,12 @@ export class SingleRegistryService extends BaseRegistryService<
       // Every cached read of it now describes content that is gone: expired
       // here, the method every deletion path reaches, with the setting the
       // deleted row held. A delete that found the row already gone has thrown
-      // above, so a retry never flushes a Single that opted out.
-      await flushContentChange(expire, this.logger, "a Single was deleted");
+      // above, so a retry never flushes a Single that opted out. Once the
+      // delete is durable, as for collections: after an enclosing
+      // transaction commits, and never for one that rolls back.
+      await this.afterCommit(() =>
+        flushContentChange(expire, this.logger, "a Single was deleted")
+      );
 
       // Loaded when a delete runs, not with the registry.
       const { deleteResourcePermissions } = await import(

@@ -31,6 +31,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
 export { nextlyPluginSettings } from "../plugin-settings/mysql";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/mysql";
 export { nextlyLimitStore } from "../limit-store/mysql";
+export { nextlyCacheTagExpiries } from "../cache-tag-expiries/mysql";
 export { nextlySpentChallenges } from "../spent-challenges/mysql";
 export { nextlySchemaOwners } from "../schema-owners/mysql";
 export { nextlyWidgetLayout } from "../widget-layout/mysql";
@@ -115,6 +116,9 @@ export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
 // creates.
 export { nextlyDashboardPinsMysql as nextlyDashboardPins } from "../dashboard-pins/mysql";
 export { nextlyDashboardPreferencesMysql as nextlyDashboardPreferences } from "../dashboard-preferences/mysql";
+// Which media items each document uses; in the bundle for the reason the
+// releases note above gives — this map is what the push creates.
+export { nextlyMediaUsageMysql as nextlyMediaUsage } from "../media-usage/mysql";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

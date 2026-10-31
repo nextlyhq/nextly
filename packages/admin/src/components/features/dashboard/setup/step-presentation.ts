@@ -15,15 +15,21 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 
 export interface StepPresentation {
   label: string;
-  /** One short line under the label: what is done, or what the step asks. */
-  detail: string;
+  /**
+   * The words under the label, before the step's actions: what is done, or what the step asks.
+   * Short, so a tile reads in full at narrow widths; absent where the actions say it all
+   * ("Invite · Skip").
+   */
+  detail?: string;
+  /** The detail as read aloud, where the drawn one is shortened ("2 of 5 filled in"). */
+  spoken?: string;
   /** Where the step is done, when it is a link; the Singles open a list instead. */
   href?: string;
   /** The link's own words, for an open step. */
   action?: string;
 }
 
-/** "N of M filled in", for the Singles step. */
+/** How many of the Singles are filled in, of how many, for the Singles step. */
 export function filledIn(step: Extract<SetupStep, { kind: "singles" }>): {
   done: number;
   total: number;
@@ -71,12 +77,15 @@ const BY_KIND: {
     const { done, total } = filledIn(step);
     return {
       label: "Fill in your Singles",
-      detail: `${done} of ${total} filled in`,
+      // "2 of 5 · Open · Skip" on the tile, and the whole of it to assistive technology.
+      detail: `${done} of ${total}`,
+      spoken: `${done} of ${total} filled in`,
     };
   },
+  // Open, its actions say it all: Skip already says it is optional.
   invite: step => ({
     label: "Invite a teammate",
-    detail: step.status === "done" ? "Done" : "Optional",
+    ...(step.status === "done" ? { detail: "Done" } : {}),
     href: ROUTES.USERS_CREATE,
     action: "Invite",
   }),

@@ -24,6 +24,7 @@ import {
   storedFilesOf,
   type MediaFilesRecord,
 } from "../../domains/media/stored-files";
+import type { ReindexUsageResult } from "../../domains/media/usage/reindex-usage";
 import {
   initializeMediaStorage,
   type MediaStorage,
@@ -34,6 +35,7 @@ import { exitWithError, printCliError, type CliError } from "../errors";
 import {
   mediaApplyOutsideProject,
   mediaConfigOutsideProject,
+  mediaReindexOutsideProject,
   mediaStorageUnlistable,
   mediaThumbnailsNotRemoved,
 } from "../errors/areas/commands";
@@ -292,6 +294,29 @@ function sayRemoval(
 }
 
 /**
+ * How a command that changes the project's database refuses to run where it
+ * cannot tell that the database and the config are the project's: from
+ * another directory, and with a config from outside the project.
+ */
+interface ProjectGuard {
+  outsideProject(cwd: string): CliError;
+  configOutsideProject(configPath: string, cwd: string): CliError;
+}
+
+/** `nextly media orphans --apply`, which removes files. */
+const ORPHANS_APPLY: ProjectGuard = {
+  outsideProject: mediaApplyOutsideProject,
+  configOutsideProject: mediaConfigOutsideProject,
+};
+
+/** `nextly media reindex-usage`, which rebuilds the database's usage record. */
+const REINDEX_USAGE: ProjectGuard = {
+  outsideProject: cwd => mediaReindexOutsideProject(cwd),
+  configOutsideProject: (configPath, cwd) =>
+    mediaReindexOutsideProject(cwd, configPath),
+};
+
+/**
  * Makes the project --cwd names the process's directory, and throws the
  * command's error when it may not go on. From inside the project: a storage factory in the
  * config, such as a local-disk plugin given a relative path, resolves that
@@ -299,18 +324,22 @@ function sayRemoval(
  *
  * The database settings were read before --cwd: from `.env` where the CLI
  * was run, from the shell or from a parent process, and may be another
- * project's, against which a file in use in this project's storage would
- * read as left behind. So from another directory --apply is refused, and a
- * listing warns when that directory has its own `.env`; the project's own
- * `.env` sets what nothing has set yet.
+ * project's. So from another directory a command with a `guard`, one that
+ * changes the database or what it describes, is refused, and a listing warns
+ * when that directory has its own `.env`; the project's own `.env` sets what
+ * nothing has set yet.
  */
-function enterProject(cwd: string, apply: boolean, logger: Logger): void {
+function enterProject(
+  cwd: string,
+  guard: ProjectGuard | null,
+  logger: Logger
+): void {
   const ranIn = process.cwd();
   if (cwd !== ranIn) {
     // The database settings may come from another project's `.env`, from
     // the shell or from a parent process, none of which a `.env` loaded now
-    // replaces: nothing ties them to this project, so nothing is removed.
-    if (apply) throw mediaApplyOutsideProject(cwd);
+    // replaces: nothing ties them to this project, so nothing is changed.
+    if (guard) throw guard.outsideProject(cwd);
     const loaded = path.join(ranIn, ".env");
     if (existsSync(loaded)) {
       logger.warn(
@@ -324,34 +353,38 @@ function enterProject(cwd: string, apply: boolean, logger: Logger): void {
 }
 
 /**
- * The project's config, loaded from inside it (`enterProject`). Throws the
- * command's error when --apply cannot go on: with a config, given or
- * discovered, that is not the project's own (`assertConfigInside`), or from
- * another directory.
+ * The project's config, loaded from inside it (`enterProject`). With a
+ * `guard`, throws the command's error when it cannot go on: with a config,
+ * given or discovered, that is not the project's own (`assertConfigInside`),
+ * or from another directory.
  */
 async function projectConfig(
   cwd: string,
   configPath: string | undefined,
-  apply: boolean,
+  guard: ProjectGuard | null,
   logger: Logger
-): Promise<Awaited<ReturnType<typeof loadConfig>>["config"]> {
-  if (apply) assertConfigInside(cwd, configPath);
-  enterProject(cwd, apply, logger);
+): Promise<Awaited<ReturnType<typeof loadConfig>>> {
+  if (guard) assertConfigInside(cwd, configPath, guard);
+  enterProject(cwd, guard, logger);
   // The loader discovers the config from the project; a path is passed
   // only when one was given.
-  const { config, configPath: loaded } = await loadConfig({ configPath, cwd });
+  const loaded = await loadConfig({ configPath, cwd });
   // The file the loader read, as discovery found it too: a project's own
   // config can be a link to another project's.
-  if (apply) assertConfigInside(cwd, loaded);
-  return config;
+  if (guard) assertConfigInside(cwd, loaded.configPath, guard);
+  return loaded;
 }
 
 /**
- * Throws unless the config --apply would read is the project's own: a
- * `--config` outside `cwd` is another project's storage, which this
- * project's database settings would be compared against.
+ * Throws unless the config a guarded command would read is the project's
+ * own: a config outside `cwd` is another project's, which this project's
+ * database settings would be read against.
  */
-function assertConfigInside(cwd: string, configPath: string | undefined): void {
+function assertConfigInside(
+  cwd: string,
+  configPath: string | undefined,
+  guard: ProjectGuard
+): void {
   if (configPath === undefined) return;
   // Compared as the loader reads them, through any link: a link inside the
   // project to another project's config is that config.
@@ -360,7 +393,7 @@ function assertConfigInside(cwd: string, configPath: string | undefined): void {
     realPathOf(path.resolve(cwd, configPath))
   );
   if (!relative.startsWith("..") && !path.isAbsolute(relative)) return;
-  throw mediaConfigOutsideProject(configPath, cwd);
+  throw guard.configOutsideProject(configPath, cwd);
 }
 
 /** `target` with its links followed, or as given when it does not exist. */
@@ -403,6 +436,10 @@ function otherUploaders(
  * `nextly media orphans [--apply]`: finds, and with --apply removes, the
  * upload-time thumbnails deletes before this release left in the media
  * storage, still publicly served. A dry run by default.
+ *
+ * `nextly media reindex-usage`: rebuilds the record of where each media item
+ * is used from the stored content, for an install whose content predates the
+ * record and after a restore.
  */
 export function createMediaCommand(): Command {
   const media = new Command("media").description(
@@ -421,10 +458,10 @@ export function createMediaCommand(): Command {
         // Resolved once, from where the command was run: a relative --cwd
         // read again after the change would name a folder inside itself.
         const cwd = path.resolve(context.cwd);
-        const config = await projectConfig(
+        const { config } = await projectConfig(
           cwd,
           context.configPath,
-          cmdOptions.apply === true,
+          cmdOptions.apply === true ? ORPHANS_APPLY : null,
           context.logger
         );
         const db = databaseEnvOrThrow();
@@ -471,5 +508,115 @@ export function createMediaCommand(): Command {
         exitWithError(context.logger, error);
       }
     });
+  media
+    .command("reindex-usage")
+    .description(
+      "Rebuild the record of where each media item is used, from the stored content"
+    )
+    .action(async (_cmdOptions: unknown, cmd: Command) => {
+      const context = createContext(cmd.optsWithGlobals());
+      let adapter: CLIDatabaseAdapter | null = null;
+      try {
+        const cwd = path.resolve(context.cwd);
+        // It empties and rewrites the database's record from the config's
+        // collections, so both must be the project's, as for `--apply`.
+        const loaded = await projectConfig(
+          cwd,
+          context.configPath,
+          REINDEX_USAGE,
+          context.logger
+        );
+        const db = databaseEnvOrThrow();
+        adapter = await createCliAdapter({
+          dialect: db.dialect,
+          databaseUrl: db.databaseUrl,
+          logger: context.options.verbose ? context.logger : undefined,
+        });
+        const drizzle = adapter as unknown as DrizzleAdapter;
+        installRegistryResolver(drizzle);
+        const result = await reindexUsageWithServices(
+          loaded,
+          drizzle,
+          context.logger
+        );
+        console.log(
+          `Read ${result.documents} document(s); the record holds ${result.rows} use(s) of media items.`
+        );
+        await adapter.disconnect();
+        process.exit(0);
+      } catch (error) {
+        if (adapter) await adapter.disconnect();
+        exitWithError(context.logger, error);
+      }
+    });
   return media;
+}
+
+/**
+ * Boot the services on this command's connection and rebuild the media usage
+ * record through them: every collection's entries, every Single and every
+ * email template, read the way a write reads them.
+ *
+ * Booted as the plugin lifecycle command boots, with the config as the app
+ * wrote it and boot migrations off, and torn down in a `finally`, so a
+ * rebuild that fails leaves no running plugins behind. The connection stays
+ * open for the caller to close.
+ */
+async function reindexUsageWithServices(
+  loaded: Awaited<ReturnType<typeof loadConfig>>,
+  adapter: DrizzleAdapter,
+  logger: Logger
+): Promise<ReindexUsageResult> {
+  const { registerServices, clearServices, destroyRegisteredPlugins } =
+    await import("../../di/register");
+  const { getService } = await import("../../di");
+  const { buildServiceConfig } = await import(
+    "../../init/build-service-config"
+  );
+  const { getImageProcessor } = await import("../../storage/image-processor");
+  const { getHookRegistry } = await import("../../hooks/hook-registry");
+  const { reindexMediaUsage } = await import(
+    "../../domains/media/usage/reindex-usage"
+  );
+  const { appConfig, pluginConsent, projectRoot } = loaded;
+  try {
+    await registerServices({
+      ...buildServiceConfig({
+        config: {
+          ...appConfig,
+          db: { ...appConfig.db, runMigrationsOnBoot: false },
+        },
+        pluginConsent,
+        adapter,
+        imageProcessor: getImageProcessor(),
+        hookRegistry: getHookRegistry(),
+        logger,
+      }),
+      appRoot: projectRoot,
+    });
+    return await reindexMediaUsage({
+      adapter,
+      collections: {
+        slugs: async () =>
+          (
+            await getService("collectionRegistryService").getAllCollections()
+          ).map(collection => collection.slug),
+        rebuild: slug =>
+          getService("collectionService").rebuildMediaUsage(slug),
+      },
+      singles: {
+        slugs: async () =>
+          (await getService("singleRegistryService").getAllSingles()).map(
+            single => single.slug
+          ),
+        rebuild: slug =>
+          getService("singleEntryService").rebuildMediaUsage(slug),
+      },
+      meta: getService("metaService"),
+      say: line => console.log(line),
+    });
+  } finally {
+    await destroyRegisteredPlugins();
+    clearServices();
+  }
 }

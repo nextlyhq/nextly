@@ -128,15 +128,6 @@ const ApiKeysPage = lazyRoute(
 const BackgroundJobsPage = lazyRoute(
   () => import("./dashboard/settings/background-jobs/index")
 );
-const CreateImageSizePage = lazyRoute(
-  () => import("./dashboard/settings/image-sizes/create")
-);
-const EditImageSizePage = lazyRoute(
-  () => import("./dashboard/settings/image-sizes/edit/[id]")
-);
-const ImageSizesSettingsPage = lazyRoute(
-  () => import("./dashboard/settings/image-sizes/index")
-);
 const SettingsPage = lazyRoute(() => import("./dashboard/settings/index"));
 const SettingsPermissionsPage = lazyRoute(
   () => import("./dashboard/settings/permissions/index")
@@ -796,31 +787,6 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: settingsScreen(ROUTES.SETTINGS_WEBHOOKS),
     type: "private",
     requiredPermission: ["read-webhooks", "update-webhooks"],
-    section: overridableBy("settings"),
-  },
-
-  // Image sizes settings
-  [ROUTES.SETTINGS_IMAGE_SIZES]: {
-    component: ImageSizesSettingsPage,
-    screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
-    type: "private",
-    requiredPermission: READ_SETTINGS,
-    section: overridableBy("settings"),
-  },
-  [ROUTES.SETTINGS_IMAGE_SIZES_CREATE]: {
-    component: CreateImageSizePage,
-    screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
-    type: "private",
-    requiredPermission: CREATE_SETTINGS,
-    section: overridableBy("settings"),
-  },
-  // Opened on read, since the page first loads what it shows and that read
-  // asks `read-settings`; the form is read-only without `update-settings`.
-  [ROUTES.SETTINGS_IMAGE_SIZES_EDIT]: {
-    component: EditImageSizePage,
-    screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
-    type: "private",
-    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
 

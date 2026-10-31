@@ -69,7 +69,7 @@ import { MediaListView } from "./MediaListView";
 import { useMediaFileDrop } from "./MediaUploadDropzone/useMediaFileDrop";
 import { MediaViewer } from "./MediaViewer";
 import { MoveToFolderDialog } from "./MoveToFolderDialog";
-import { UploadTray } from "./UploadTray";
+import { LazyUploadTray } from "./UploadTray/LazyUploadTray";
 import { useUploadQueue } from "./UploadTray/useUploadQueue";
 
 /**
@@ -961,7 +961,7 @@ export function MediaLibrary({
         />
       )}
 
-      <UploadTray
+      <LazyUploadTray
         queue={uploadQueue}
         placement="floating"
         returnFocusRef={headingRef}

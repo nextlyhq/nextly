@@ -27,6 +27,29 @@ vi.mock("../domains/widgets/setup-card", () => ({
 vi.mock("../domains/widgets/setup-reader", () => ({
   readSetupState: seams.readSetupState,
 }));
+// The site-wide store the sample answer is written to: any write to it fails the test.
+const meta = vi.hoisted(() => {
+  const rows = new Map<string, unknown>();
+  return {
+    rows,
+    getEntry: vi.fn(async (key: string) =>
+      rows.has(key)
+        ? { present: true, value: rows.get(key) }
+        : { present: false }
+    ),
+    insertIfAbsent: vi.fn(async (key: string, value: unknown) => {
+      if (!rows.has(key)) rows.set(key, value);
+    }),
+    compareAndSet: vi.fn(async () => false),
+    set: vi.fn(async (key: string, value: unknown) => {
+      rows.set(key, value);
+    }),
+    delete: vi.fn(async (key: string) => {
+      rows.delete(key);
+    }),
+  };
+});
+vi.mock("../di", () => ({ getService: () => meta }));
 
 import { putDashboardSetup } from "./dashboard-setup";
 
@@ -48,6 +71,7 @@ const retire = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  meta.rows.clear();
   seams.changeSetupState.mockResolvedValue(untouched);
 });
 
@@ -77,5 +101,44 @@ describe("asking the host to record You're all set", () => {
     };
     expect(body.error.code).toBe("CONFLICT");
     expect(body.error.message).toContain("not all set");
+  });
+});
+
+describe("a sample answer", () => {
+  const put = (body: unknown) =>
+    putDashboardSetup(
+      new Request("http://localhost/api/dashboard/setup", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+    );
+
+  it("is refused with any other change, before anything is written", async () => {
+    for (const other of [
+      { retire: { sampleRefused: true } },
+      { collapsed: true },
+      { skip: { kind: "invite", skipped: true } },
+    ]) {
+      const res = await put({ sample: "decline", ...other });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { message: string } };
+      expect(body.error.message).toContain("on its own");
+    }
+    // Nothing was declined, and no reader's change was written either.
+    expect(meta.insertIfAbsent).not.toHaveBeenCalled();
+    expect(meta.compareAndSet).not.toHaveBeenCalled();
+    expect(meta.set).not.toHaveBeenCalled();
+    expect(seams.changeSetupState).not.toHaveBeenCalled();
+    expect(seams.setupCardData).not.toHaveBeenCalled();
+  });
+
+  it("declines on its own", async () => {
+    const res = await put({ sample: "decline" });
+    expect(res.status).toBe(200);
+    expect(meta.insertIfAbsent).toHaveBeenCalledWith(
+      "seed.current",
+      expect.objectContaining({ kind: "decline" })
+    );
   });
 });

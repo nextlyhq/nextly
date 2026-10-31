@@ -48,6 +48,10 @@ const serverEntries = [
   // Templates' catch-all admin route imports from
   // `nextly/runtime`. The root `.` entry must NOT pull this.
   "src/runtime.ts",
+  // The cache handlers `next.config` names by path; Next.js loads each outside
+  // the app's bundle.
+  "src/cache-handler.ts",
+  "src/cache-handlers.ts",
   "src/scripts/load-env.ts",
   "src/api/auth-state.ts",
   "src/api/health.ts",
@@ -191,6 +195,10 @@ const clientEntries = [
   // the server, so neither keeps a copy; it imports nothing. Internal: not a
   // public API.
   "src/collections/fields/field-label.ts",
+  // Which kind of file a MIME type is, as its own entry: the admin badges an
+  // item by it and the library query narrows to a kind by it, so neither
+  // keeps a copy; it imports nothing. Internal: not a public API.
+  "src/domains/media/media-categories.ts",
   // The data each of core's declared cards answers, as their own entry: the
   // card's server `load` is typed to answer it and its admin component to draw
   // it, and the module holds types alone, so the admin takes nothing more.

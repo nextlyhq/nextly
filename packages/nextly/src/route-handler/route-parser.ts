@@ -2778,6 +2778,7 @@ const DASHBOARD_ROUTES: Readonly<
     },
     activity: { operation: "list", method: "getDashboardActivity" },
     layout: { operation: "list", method: "getWidgetLayout" },
+    gallery: { operation: "list", method: "getDashboardGallery" },
     pins: { operation: "list", method: "getDashboardPins" },
     summary: { operation: "list", method: "getDashboardSummary" },
     setup: { operation: "list", method: "getDashboardSetup" },
@@ -2803,6 +2804,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   GET  /api/dashboard/gallery        → getDashboardGallery
  *   GET  /api/dashboard/summary        → getDashboardSummary
  *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   DELETE /api/dashboard/layout       → deleteWidgetLayout
@@ -3295,33 +3297,7 @@ export function parseRestRoute(
     return { service: "generalSettings", operation, method, routeParams };
   }
 
-  // Handle Image Sizes endpoints
-  if (resource === "image-sizes") {
-    // Sub-routes for regeneration
-    if (id === "regeneration-status") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerationStatus",
-        routeParams,
-      };
-    }
-    if (id === "regenerate") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerate",
-        routeParams,
-      };
-    }
-    if (id) routeParams.imageId = id;
-    return {
-      service: "imageSizes",
-      operation: "list",
-      method: "imageSizes",
-      routeParams,
-    };
-  }
-
+  // Nothing matched: answered as an unknown route. `image-sizes` is among
+  // these, since image sizes are no longer made or offered.
   return {};
 }

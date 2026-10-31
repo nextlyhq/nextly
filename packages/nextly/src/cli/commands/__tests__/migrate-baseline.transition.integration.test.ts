@@ -46,11 +46,8 @@ import { createLogger } from "../../utils/logger";
 import { baselineCore } from "../migrate-baseline";
 import { ensureLocalizedCompanions, syncCollections } from "../dev-build";
 import { ensureCoreTables } from "../dev-server";
-import {
-  parseSqlSections,
-  runFileMigrations,
-  splitSqlStatements,
-} from "../migrate";
+import { runFileMigrations, splitSqlStatements } from "../migrate";
+import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";

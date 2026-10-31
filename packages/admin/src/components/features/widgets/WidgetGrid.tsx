@@ -695,9 +695,7 @@ export function WidgetGrid(): JSX.Element {
             open={addPanel.open}
             onOpenChange={addPanel.setOpen}
             editor={editor}
-            layout={layout}
             byId={byId}
-            isDrawn={arrangement.isDrawn}
             restore={removal.restore}
             highlight={ring.highlight}
             focus={focus}
