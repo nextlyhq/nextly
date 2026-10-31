@@ -374,29 +374,60 @@ async function countItemsWithSizes(
   }
 }
 
+/** Reads the stored `sizes` of the given items, by id. */
+export type RetiredSizesReader = (
+  ids: readonly string[]
+) => Promise<Map<string, unknown>>;
+
+/**
+ * A reader of items' stored `sizes` for one scan of the media table, page by
+ * page or batch by batch. Whether the column is the one image sizes were
+ * stored in (`hasRetiredSizesColumn`) is two metadata reads, asked once, on
+ * the first read, and reused for every later one: a scan of a large library
+ * would otherwise repeat them per page. A failed ask is not kept, so the next
+ * read asks again rather than repeating the failure.
+ *
+ * Nothing makes the column while a scan runs, and a drop meanwhile makes the
+ * next read fail rather than answer as if no item had sizes.
+ */
+export function retiredSizesReader(
+  db: unknown,
+  dialect: SupportedDialect
+): RetiredSizesReader {
+  let column: Promise<boolean> | undefined;
+  return async ids => {
+    const found = new Map<string, unknown>();
+    if (ids.length === 0) return found;
+    column ??= hasRetiredSizesColumn(db, dialect).catch((error: unknown) => {
+      column = undefined;
+      throw error;
+    });
+    if (!(await column)) return found;
+    const rows = await rowsOf<{ id: string; sizes: unknown }>(
+      db,
+      dialect,
+      sql`SELECT ${id}, ${sizes} FROM ${media} WHERE ${id} IN (${sql.join(
+        ids.map(value => sql`${value}`),
+        sql`, `
+      )}) AND ${sizes} IS NOT NULL`
+    );
+    for (const row of rows) found.set(row.id, row.sizes);
+    return found;
+  };
+}
+
 /**
  * The stored `sizes` of the given items, while the column exists: what a
  * delete of those items reads to remove their size files too. Empty when the
- * column is gone.
+ * column is gone. For one read; a scan in pages reads through one
+ * `retiredSizesReader`.
  */
-export async function storedSizesOf(
+export function storedSizesOf(
   db: unknown,
   dialect: SupportedDialect,
   ids: readonly string[]
 ): Promise<Map<string, unknown>> {
-  const found = new Map<string, unknown>();
-  if (ids.length === 0) return found;
-  if (!(await hasRetiredSizesColumn(db, dialect))) return found;
-  const rows = await rowsOf<{ id: string; sizes: unknown }>(
-    db,
-    dialect,
-    sql`SELECT ${id}, ${sizes} FROM ${media} WHERE ${id} IN (${sql.join(
-      ids.map(value => sql`${value}`),
-      sql`, `
-    )}) AND ${sizes} IS NOT NULL`
-  );
-  for (const row of rows) found.set(row.id, row.sizes);
-  return found;
+  return retiredSizesReader(db, dialect)(ids);
 }
 
 /** Runs one generated DDL statement. */

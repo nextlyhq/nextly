@@ -21,7 +21,10 @@ import {
   errorForLog,
   storedPathForLog,
 } from "../../domains/media/remove-stored-files";
-import { storedSizesOf } from "../../domains/media/retired-image-sizes-store";
+import {
+  retiredSizesReader,
+  type RetiredSizesReader,
+} from "../../domains/media/retired-image-sizes-store";
 import {
   storedFilesOf,
   type MediaFilesRecord,
@@ -58,6 +61,24 @@ interface ReferenceOptions {
    * thumbnail, and leaves the column out.
    */
   withRetiredSizes?: boolean;
+  /**
+   * The reader of the retired sizes, shared by scans that run together (a
+   * listing and the rechecks after it), so the column's provenance is asked
+   * once for all of them. One of its own per scan when absent.
+   */
+  retiredSizes?: RetiredSizesReader;
+}
+
+/** The reader a scan reads the retired sizes through, or none when they do not count. */
+function sizesReaderFor(
+  adapter: Pick<DrizzleAdapter, "getDrizzle" | "dialect">,
+  options: ReferenceOptions
+): RetiredSizesReader | undefined {
+  if (options.withRetiredSizes === false) return undefined;
+  return (
+    options.retiredSizes ??
+    retiredSizesReader(adapter.getDrizzle(), adapter.dialect)
+  );
 }
 
 /**
@@ -76,6 +97,9 @@ export async function referencedStoredPaths(
   const referenced = new Set<string>();
   const unlocated: string[] = [];
   const limit = 500;
+  // One reader for every page: whether the column is the retired one is
+  // asked once per scan, not once per page.
+  const readSizes = sizesReaderFor(adapter, options);
   let after: string | undefined;
   for (;;) {
     const rows = await adapter.select<MediaFilesRecord & { id: string }>(
@@ -92,13 +116,9 @@ export async function referencedStoredPaths(
     // reads through: an item's size files count as referenced while it has
     // them, read from the column for as long as the database has it.
     const sizes =
-      options.withRetiredSizes === false
+      readSizes === undefined
         ? new Map<string, unknown>()
-        : await storedSizesOf(
-            adapter.getDrizzle(),
-            adapter.dialect,
-            rows.map(row => row.id)
-          );
+        : await readSizes(rows.map(row => row.id));
     for (const row of rows) {
       const files = storedFilesOf({ ...row, sizes: sizes.get(row.id) });
       for (const path of files.paths) referenced.add(path);
@@ -121,10 +141,16 @@ export function referencedNowIn(
   adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">,
   options: ReferenceOptions = {}
 ): ReferencedNow {
+  // One reader for every recheck, so the column's provenance is asked once
+  // across them all rather than once per batch.
+  const shared: ReferenceOptions = {
+    ...options,
+    retiredSizes: sizesReaderFor(adapter, options),
+  };
   return async paths => {
     let now: MediaReferences;
     try {
-      now = await referencedStoredPaths(adapter, options);
+      now = await referencedStoredPaths(adapter, shared);
     } catch (error) {
       console.warn(
         "[media orphans] Could not read what media items refer to:",
@@ -496,6 +522,12 @@ export function createMediaCommand(): Command {
           const storage = mediaStorage.getAdapterForCollection("media");
           const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
           const others = otherUploaders(mediaStorage);
+          // One reader for the listing and every recheck after it, so the
+          // retired column's provenance is asked once for the whole run.
+          const readSizes = retiredSizesReader(
+            drizzle.getDrizzle(),
+            drizzle.dialect
+          );
           return mediaOrphans({
             storage,
             prefix,
@@ -504,8 +536,11 @@ export function createMediaCommand(): Command {
               others.map(other => other.prefix)
             ),
             sharedWith: collectionsSharingMediaPlace(prefix, others),
-            referenced: () => referencedStoredPaths(drizzle),
-            referencedNow: referencedNowIn(drizzle),
+            referenced: () =>
+              referencedStoredPaths(drizzle, { retiredSizes: readSizes }),
+            referencedNow: referencedNowIn(drizzle, {
+              retiredSizes: readSizes,
+            }),
             apply,
             say: line => console.log(line),
             // The run's failing code is its exit status, so the reason is printed in the error

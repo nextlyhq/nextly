@@ -453,6 +453,95 @@ async function oneItem(storage: IStorageAdapter) {
   return { original, small, large, store };
 }
 
+describe("a size entry that is not a size record it can read", () => {
+  // Each of these may name a file, as the first does, or say nothing of one,
+  // and nothing tells which: clearing the item's sizes over it could leave a
+  // file stored with nothing pointing at it.
+  it.each([
+    ["a bare path", "/uploads/2026/10/photo-small.webp"],
+    ["a number", 42],
+    ["null", null],
+    ["a list", ["2026/10/photo-small.webp"]],
+    ["an object naming no file", { width: 8, height: 8 }],
+    ["a path that is not text", { path: 42 }],
+    ["an empty path", { path: "" }],
+  ])(
+    "leaves the item as it is, named, and exits non-zero, for %s",
+    async (_case, entry) => {
+      const storage = bucket("s3");
+      const original = await put(storage.adapter, "photo.png");
+      const large = await storedSize(storage.adapter, "photo-large.webp");
+      const store = new MemoryStore([
+        {
+          id: "odd",
+          filename: original.path,
+          url: original.url,
+          thumbnailUrl: null,
+          sizes: JSON.stringify({ small: entry, large }),
+        },
+      ]);
+      const before = await storage.files();
+      const lines: string[] = [];
+
+      const { code, report } = await removeStoredImageSizes({
+        store,
+        storage: storage.adapter,
+        objects,
+        apply: true,
+        referencedNow: usedIn(store),
+        say: line => lines.push(line),
+      });
+
+      expect(code).toBe(1);
+      expect(store.cleared).toEqual([]);
+      expect(holdsStoredSizes(store.table[0].sizes)).toBe(true);
+      // Nothing of the item is removed, the readable size included.
+      expect(await storage.files()).toEqual(before);
+      expect(report.itemsLeft.map(item => item.id)).toEqual(["odd"]);
+      expect(lines.join("\n")).toContain("odd");
+    }
+  );
+});
+
+describe("two sizes whose keys differ only in spelling", () => {
+  // An object storage keeps keys as written: `media//x.webp` and
+  // `media/x.webp` are two objects. Taken for one, only the first would be
+  // removed, and clearing the item would leave the second with no record.
+  it("removes each by its own key, and clears the item only then", async () => {
+    const adapter = new Bucket("s3");
+    const original = await put(adapter, "photo.png");
+    adapter.files.set("media//x.webp", Buffer.from("one"));
+    adapter.files.set("media/x.webp", Buffer.from("two"));
+    const store = new MemoryStore([
+      {
+        id: "twins",
+        filename: original.path,
+        url: original.url,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({
+          small: { path: "media//x.webp" },
+          medium: { path: "media/x.webp" },
+        }),
+      },
+    ]);
+
+    const { code } = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect([...adapter.files.keys()]).not.toContain("media//x.webp");
+    expect([...adapter.files.keys()]).not.toContain("media/x.webp");
+    expect([...adapter.files.keys()]).toContain(original.path);
+    expect(store.cleared).toEqual(["twins"]);
+  });
+});
+
 describe("a delete that fails while the file may still be there", () => {
   /**
    * A storage whose delete of one path fails with `error`, and whose `exists`

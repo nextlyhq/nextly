@@ -53,14 +53,29 @@ type StoredSizes =
 
 const NONE: StoredSizes = { readable: true, sizes: [] };
 
-/** A size entry, read as an object with optional string `path` and `url`. */
-function sizeEntry(name: string, value: unknown): StoredSize {
-  if (!value || typeof value !== "object") return { name };
+/** Whether a field of a size record is absent or a name of its file. */
+function absentOrText(value: unknown): value is string | undefined {
+  return value === undefined || (typeof value === "string" && value !== "");
+}
+
+/**
+ * A size entry as a size record: an object naming its file by a non-empty
+ * text `path`, `url` or both, and nothing of another kind under either. Any
+ * other entry, a bare path, a number, null, a list or an object naming no
+ * file, is not one, and undefined: it may name a file or say nothing of one,
+ * and nothing tells which.
+ */
+function sizeEntry(name: string, value: unknown): StoredSize | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
   const { path, url } = value as { path?: unknown; url?: unknown };
+  if (!absentOrText(path) || !absentOrText(url)) return undefined;
+  if (path === undefined && url === undefined) return undefined;
   return {
     name,
-    ...(typeof path === "string" && path !== "" ? { path } : {}),
-    ...(typeof url === "string" && url !== "" ? { url } : {}),
+    ...(path === undefined ? {} : { path }),
+    ...(url === undefined ? {} : { url }),
   };
 }
 
@@ -68,9 +83,11 @@ function sizeEntry(name: string, value: unknown): StoredSize {
  * The sizes a `sizes` value holds, from the column as each dialect returns it:
  * an object on PostgreSQL and MySQL, a JSON string on SQLite.
  *
- * Unreadable when it is text that is not JSON, or JSON that is not an object
- * of sizes. Such a value may still name files, so it is never read as empty:
- * nothing can show that clearing it loses nothing.
+ * Unreadable when it is text that is not JSON, JSON that is not an object of
+ * sizes, or an object with any entry that is not a size record
+ * (`sizeEntry`). Such a value may still name files, so it is never read as
+ * empty, nor read for its other entries alone: nothing can show that clearing
+ * it loses nothing.
  */
 function readStoredSizes(value: unknown): StoredSizes {
   let parsed = value;
@@ -86,12 +103,13 @@ function readStoredSizes(value: unknown): StoredSizes {
     return parsed.length === 0 ? NONE : { readable: false };
   }
   if (typeof parsed !== "object") return { readable: false };
-  return {
-    readable: true,
-    sizes: Object.entries(parsed).map(([name, entry]) =>
-      sizeEntry(name, entry)
-    ),
-  };
+  const sizes: StoredSize[] = [];
+  for (const [name, entry] of Object.entries(parsed)) {
+    const size = sizeEntry(name, entry);
+    if (size === undefined) return { readable: false };
+    sizes.push(size);
+  }
+  return { readable: true, sizes };
 }
 
 /**
@@ -310,7 +328,7 @@ interface SizeContext {
   row: MediaSizesRow;
   inUse: InUse;
   storage: SizeFileStorage;
-  /** The stored paths already planned for removal, canonically. */
+  /** The stored keys already planned for removal, exactly as stored. */
   planned: Set<string>;
 }
 
@@ -319,8 +337,9 @@ function planSize(plan: ItemPlan, size: StoredSize, at: SizeContext): void {
   const { row } = at;
   const path = pathOfSize(size, row);
   if (path === undefined) {
-    // A size with no file named and no URL had nothing stored for it.
-    if (size.url) plan.unlocated.push(size.name);
+    // Every size record names its file (`sizeEntry`); one named by a URL
+    // whose stored path cannot be worked out holds the item.
+    plan.unlocated.push(size.name);
     return;
   }
   if (isOwnThumbnail(size, path, row)) {
@@ -329,8 +348,12 @@ function planSize(plan: ItemPlan, size: StoredSize, at: SizeContext): void {
     plan.keep.push({ name: size.name, path, reason: "in-use" });
   } else if (!onThisStorage(size, path, row, at.storage)) {
     plan.elsewhere.push({ name: size.name, url: size.url ?? row.url });
-  } else if (!at.planned.has(canonicalStoredPath(path))) {
-    at.planned.add(canonicalStoredPath(path));
+  } else if (!at.planned.has(path)) {
+    // By the key exactly as stored: an object storage keeps `media//x.webp`
+    // and `media/x.webp` as two objects, and one taken for the other would
+    // stay with nothing recording it once the item is cleared. The checks
+    // above compare canonically, which can only keep more.
+    at.planned.add(path);
     plan.remove.push({ name: size.name, path });
   }
 }
