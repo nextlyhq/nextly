@@ -2778,6 +2778,7 @@ const DASHBOARD_ROUTES: Readonly<
     },
     activity: { operation: "list", method: "getDashboardActivity" },
     layout: { operation: "list", method: "getWidgetLayout" },
+    gallery: { operation: "list", method: "getDashboardGallery" },
     pins: { operation: "list", method: "getDashboardPins" },
     summary: { operation: "list", method: "getDashboardSummary" },
     setup: { operation: "list", method: "getDashboardSetup" },
@@ -2803,6 +2804,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   GET  /api/dashboard/gallery        → getDashboardGallery
  *   GET  /api/dashboard/summary        → getDashboardSummary
  *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   DELETE /api/dashboard/layout       → deleteWidgetLayout

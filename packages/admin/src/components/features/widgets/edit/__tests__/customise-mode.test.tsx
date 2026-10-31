@@ -35,6 +35,8 @@ import {
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
 
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
+
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 
@@ -234,7 +236,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
-  api.get.mockImplementation(() => Promise.resolve(layoutResponse));
+  api.get.mockImplementation((path: string) =>
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    Promise.resolve(
+      isGalleryPath(path) && layoutResponse !== undefined
+        ? galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+        : layoutResponse
+    )
+  );
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
   // A history the reader can go Back through: they came to the dashboard
@@ -393,12 +402,16 @@ describe("customise mode writes nothing before Save", () => {
     async (_kind, change) => {
       renderDashboard();
       const user = await beginEditing();
-      const reads = api.get.mock.calls.length;
+      // The layout's reads: opening the add panel reads the gallery, which is no re-read.
+      const layoutReads = () =>
+        api.get.mock.calls.filter(([path]) => !isGalleryPath(String(path)))
+          .length;
+      const reads = layoutReads();
 
       await change(user);
 
       expect(writes()).toBe(0);
-      expect(api.get.mock.calls.length).toBe(reads);
+      expect(layoutReads()).toBe(reads);
       await user.click(saveButton());
       await waitFor(() => expect(writes()).toBe(1));
     }
