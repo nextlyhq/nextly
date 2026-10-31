@@ -40,7 +40,7 @@ export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
  * without a group here does not compile.
  */
 const CORE_GROUPS = {
-  [CORE_WIDGET_ID.getStarted]: "overview",
+  [CORE_WIDGET_ID.setup]: "overview",
   [CORE_WIDGET_ID.contentTable]: "overview",
   [CORE_WIDGET_ID.quickCreate]: "overview",
   [CORE_WIDGET_ID.team]: "team",

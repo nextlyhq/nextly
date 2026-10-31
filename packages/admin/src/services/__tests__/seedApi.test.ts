@@ -190,5 +190,27 @@ describe("seedApi", () => {
       expect(typeof body.skippedAt).toBe("string");
       expect(body.skippedAt.length).toBeGreaterThan(0);
     });
+
+    it("throws when the route does not confirm the decline", async () => {
+      global.fetch = vi.fn(
+        async () => new Response(null, { status: 403 })
+      ) as unknown as typeof fetch;
+      await expect(seedApi.setSkipped()).rejects.toThrow(
+        "Decline failed (403)"
+      );
+    });
+
+    it("throws with the route's own message when it gives one", async () => {
+      global.fetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ errors: [{ message: "Nextly is not ready." }] }),
+            { status: 503 }
+          )
+      ) as unknown as typeof fetch;
+      await expect(seedApi.setSkipped()).rejects.toThrow(
+        "Nextly is not ready."
+      );
+    });
   });
 });

@@ -48,8 +48,8 @@ describe("the base of the default", () => {
       CORE_DEFAULT_LAYOUT.map(card => card.widget)
     );
     expect(placements[0]).toEqual({
-      id: "core/get-started",
-      widgetId: "core/get-started",
+      id: "core/setup",
+      widgetId: "core/setup",
       w: 6,
       h: 3,
       removed: false,
