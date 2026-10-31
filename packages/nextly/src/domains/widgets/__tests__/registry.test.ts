@@ -64,7 +64,7 @@ describe("widget registry", () => {
       'Widget "collection/x-count" cannot be registered: "collection/x-count" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.'
     );
     expect(() => registerWidget(def("single/about-card"))).toThrow(
-      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`
     );
     expect(listWidgets()).toEqual([]);
     // The control: the same definition outside those namespaces registers.

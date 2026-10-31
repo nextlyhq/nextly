@@ -15,34 +15,19 @@
 import { postWidgetQuery } from "../api/widget-query";
 import { buildClaims } from "../auth/jwt/claims";
 import { signAccessToken } from "../auth/jwt/sign";
-import { cardAnswerResult } from "../domains/widgets/declaration/card-answer";
-import { toDefinition } from "../domains/widgets/declaration/declared-widgets";
 import type {
   AnyWidget,
   WidgetData,
   WidgetSettingValues,
 } from "../domains/widgets/declaration/define-widget";
-import { displayOfView } from "../domains/widgets/declaration/displays";
-import type { WidgetDefinition } from "../domains/widgets/definition";
 import type { WidgetSlot } from "../domains/widgets/result";
-import { UNAVAILABLE_SOURCE_MESSAGE } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { env } from "../lib/env";
 
 import type { TestNextly } from "./test-nextly";
-
-/**
- * What one card answers, in the card's own states: its data, ready or empty;
- * the setting it waits for; not available to this person; not shown to them
- * by its `shows`; or the error its card would show.
- */
-export type WidgetLoadResult<W> =
-  | { state: "ready"; data: WidgetData<W> }
-  | { state: "empty"; data: WidgetData<W> }
-  | { state: "needs-setting"; setting: string }
-  | { state: "unavailable" }
-  | { state: "not-shown" }
-  | { state: "error"; error: string };
+// The card's states are declared beside the card helpers, which draw them in
+// a browser test, so this module's server graph stays out of that one.
+import type { WidgetLoadResult } from "./test-widget-card";
 
 export interface RunWidgetLoadOptions<W> {
   /** The person the card is answered for, by user id; `null` for nobody signed in. */
@@ -154,64 +139,4 @@ export async function runWidgetLoad<W extends AnyWidget>(
   // The route answers one slot per entry asked for, in order, and one was.
   const { results } = (await response.json()) as { results: [WidgetSlot] };
   return resultOf<W>(results[0]);
-}
-
-/**
- * A widget as the registry publishes it to the admin: what a test draws its
- * card from, so the card is described exactly as the dashboard describes it.
- *
- * @internal For the SDK's test helpers; not a runtime API.
- */
-export function publishedWidgetDefinition(
-  widget: AnyWidget,
-  owner = 'plugin "test"'
-): WidgetDefinition {
-  return toDefinition(
-    widget as unknown as Parameters<typeof toDefinition>[0],
-    owner
-  );
-}
-
-/**
- * The answer a card is drawn with for a load result, as the dashboard's route
- * carries it: the data through the server's own `cardAnswerResult`, the other
- * states in the slot each would come back as. `undefined` while it loads.
- *
- * @internal For the SDK's test helpers; not a runtime API.
- */
-export function widgetCardSlot<W extends AnyWidget>(
-  widget: W,
-  result: WidgetLoadResult<W> | { state: "loading" }
-): WidgetSlot | undefined {
-  switch (result.state) {
-    case "loading":
-      return undefined;
-    case "ready":
-    case "empty": {
-      const answer = cardAnswerResult(displayOfView(widget.view), result.data, {
-        widget: widget.id,
-        owner: "test",
-      });
-      return result.state === "empty"
-        ? { ok: true, result: answer, empty: true }
-        : { ok: true, result: answer };
-    }
-    case "needs-setting":
-      return {
-        ok: false,
-        error: `No ${result.setting} chosen yet`,
-        code: "needs-setting",
-        setting: result.setting,
-      };
-    case "unavailable":
-      return {
-        ok: false,
-        error: UNAVAILABLE_SOURCE_MESSAGE,
-        code: "unavailable",
-      };
-    case "not-shown":
-      return { ok: false, error: "Not shown for you", code: "not-shown" };
-    case "error":
-      return { ok: false, error: result.error };
-  }
 }

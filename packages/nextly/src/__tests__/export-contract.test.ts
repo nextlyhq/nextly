@@ -72,6 +72,28 @@ const RETIRED_ACCOUNT_TYPES = [
   "UnlinkAccountResponse",
 ];
 
+// The ways to add, change or remove a widget or a widget source other than the
+// one door: a plugin's `contributes.dashboard`, a site's `admin.dashboard`, and
+// core's own list, all through one internal call. Each stays internal to the
+// widgets domain, so none may be published from any entry point, and a name
+// that comes back fails here rather than shipping.
+const REMOVED_WIDGET_DOORS = [
+  "registerWidget",
+  "overrideWidget",
+  "extendWidget",
+  "deregisterWidget",
+  "registerSource",
+];
+
+// The contract the removed `contributes.widgetSources` key was written
+// against. Types, so read from the compiler's own list of each entry point's
+// exports, as the retired account types are.
+const REMOVED_WIDGET_SOURCE_TYPES = [
+  "PluginWidgetSource",
+  "PluginSourceResolver",
+  "PluginManySourceResolver",
+];
+
 /**
  * What a published function looks like from an import site.
  *
@@ -233,6 +255,9 @@ function exportedAmong(names: readonly string[]): Map<string, Set<string>> {
 const ASKED = [
   ...RETIRED_ACCOUNT_TYPES,
   ...RETIRED_ACCOUNT_NAMES,
+  ...REMOVED_WIDGET_DOORS,
+  ...REMOVED_WIDGET_SOURCE_TYPES,
+  "WidgetSourceResolver",
   "WidgetSizeDeclaration",
   "UserListResponse",
   "UserListResponseSchema",
@@ -504,6 +529,24 @@ describe("published export surface", () => {
   );
 
   it(
+    "exports neither core's handle on a card's caller nor the digest read it is for",
+    () => {
+      // Internal to core: a plugin holding either could read as a card's caller
+      // outside the services bound to that caller, or ask the digest as anyone.
+      const compiled = exported();
+      const leaked = [...compiled].flatMap(([entry, names]) =>
+        ["boundCaller", "readAttentionDigest"]
+          .filter(name => names.has(name))
+          .map(name => `${entry}: ${name}`)
+      );
+      expect(leaked).toEqual([]);
+      // The control: every entry point was read, so an empty list is an answer.
+      expect(compiled.size).toBe(ENTRY_POINTS.length);
+    },
+    COMPILE_TIMEOUT_MS
+  );
+
+  it(
     "exports the grid size type a definition names from the root and the config entry",
     () => {
       // A type is erased at runtime, so only the compiler can say it is
@@ -550,6 +593,48 @@ describe("published export surface", () => {
     expect(schemas.UserListResponseSchema).toBeDefined();
     expect(schemas.DeleteUserResponseSchema).toBeDefined();
   });
+
+  it.each(ENTRY_POINTS)(
+    "%s exposes no way to add, change or remove a widget",
+    async (_name, source) => {
+      const mod = (await import(pathToFileURL(source).href)) as Record<
+        string,
+        unknown
+      >;
+      const leaked = REMOVED_WIDGET_DOORS.filter(name => name in mod);
+      expect(leaked).toEqual([]);
+    }
+  );
+
+  it("still publishes the one door and the registry's reads from the root", async () => {
+    // The control: the absence above is also satisfied by an entry point that
+    // published nothing. The root is where the registry's writers were, and
+    // what stayed beside them is asserted there, so the scan is seen reading
+    // the module they lived in.
+    const root = (await import("../index")) as Record<string, unknown>;
+    for (const name of ["defineWidget", "getWidget", "listWidgets"]) {
+      expect([name, typeof root[name]]).toEqual([name, "function"]);
+    }
+  });
+
+  it(
+    "exports no type of the removed widget source contract from any entry point",
+    () => {
+      const compiled = exported();
+      const leaked = [...compiled].flatMap(([entry, names]) =>
+        [...REMOVED_WIDGET_SOURCE_TYPES, ...REMOVED_WIDGET_DOORS]
+          .filter(name => names.has(name))
+          .map(name => `${entry}: ${name}`)
+      );
+      expect(leaked).toEqual([]);
+
+      // The controls: every entry point was asked, and core's own resolver
+      // type, published beside the removed ones, is read through the root.
+      expect(compiled.size).toBe(ENTRY_POINTS.length);
+      expect(compiled.get("nextly")?.has("WidgetSourceResolver")).toBe(true);
+    },
+    COMPILE_TIMEOUT_MS
+  );
 
   it.each(ENTRY_POINTS)(
     "%s exposes no legacy component names",
@@ -633,8 +718,8 @@ describe("published export surface", () => {
     // entry point is the only place a plugin author can reach these -- and a
     // publicly visible property whose type has no public name cannot be
     // annotated, only inferred. Same argument for the source contract:
-    // `registerSource` and `WidgetSource` are published, so the field and op
-    // vocabularies they are built out of have to be nameable too.
+    // `WidgetSource` is published, so the field and op vocabularies it is
+    // built out of have to be nameable too.
     const root = (await import("../index")) as Record<string, unknown>;
     expect(root.GRID_COLUMNS).toBe(12);
     expect(root.WIDGET_ARCHETYPES).toContain("metric");

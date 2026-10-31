@@ -12,6 +12,7 @@
 import { z } from "zod";
 
 import type { AuthContext } from "../auth/middleware";
+import { cardTierAt } from "../domains/widgets/card-geometry";
 import { cardAnswerResult } from "../domains/widgets/declaration/card-answer";
 import {
   hasFieldSettingValue,
@@ -25,7 +26,10 @@ import {
   type DeclaredWidget,
 } from "../domains/widgets/declaration/declared-widgets";
 import type { WidgetLoadSize } from "../domains/widgets/declaration/define-widget";
-import { bindReadServices } from "../domains/widgets/declaration/read-services";
+import {
+  bindReadServices,
+  type ReadAheadSide,
+} from "../domains/widgets/declaration/read-services";
 import { WIDGET_CELL_TIERS } from "../domains/widgets/definition";
 import {
   clampSize,
@@ -41,7 +45,11 @@ import { publishableContentSources } from "../domains/widgets/publish";
 import type { WidgetQuery } from "../domains/widgets/query";
 import { readableOfKind } from "../domains/widgets/reader-content";
 import { getWidget } from "../domains/widgets/registry";
-import { noSettingChosen, type WidgetSlot } from "../domains/widgets/result";
+import {
+  cardAnswerIsEmpty,
+  noSettingChosen,
+  type WidgetSlot,
+} from "../domains/widgets/result";
 import { withSiteOverride } from "../domains/widgets/site-rules";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
@@ -178,6 +186,15 @@ export interface CardBatch {
    */
   check: (raw: unknown) => Promise<WidgetQuery>;
   /**
+   * The dashboard load this batch answers, and on which side of its
+   * read-ahead: the layout read's, ahead of the dashboard's own batch, or
+   * that batch, carrying the token the layout read handed the dashboard. The
+   * read services each card is bound to carry it, with the credential the
+   * batch was asked on (`readAheadFor`).
+   */
+  readAhead?: Omit<ReadAheadSide, "credential">;
+
+  /**
    * The collections the caller may read, and whether the registry could be
    * read at all: what a card's Field settings are judged against. One answer
    * for the whole batch ({@link readableCollectionsOnce}), however many of its
@@ -198,6 +215,31 @@ export function readableCollectionsOnce(
 ): CardBatch["readableCollections"] {
   let read: ReturnType<CardBatch["readableCollections"]> | undefined;
   return () => (read ??= readableOfKind(caller, "collection"));
+}
+
+/**
+ * The side of a dashboard load's read-ahead a card's services are bound on:
+ * the batch's, with the credential its request was authenticated by, so an
+ * answer read ahead is reused only on the credential it was read for
+ * (`ReadAheadSide.credential`). An API key is named by its id, and a key
+ * whose id authentication did not carry by none, so nothing read ahead is
+ * reused for it. A session carries no id or token times past verification;
+ * it is told apart by its verified claims and roles, which the caller holds.
+ */
+function readAheadFor(batch: CardBatch): ReadAheadSide | undefined {
+  const { readAhead, auth } = batch;
+  if (readAhead === undefined) return undefined;
+  const credential =
+    auth.authMethod === "api-key"
+      ? auth.apiKeyId === undefined
+        ? undefined
+        : `api-key:${auth.apiKeyId}`
+      : "session";
+  return {
+    side: readAhead.side,
+    token: readAhead.token,
+    ...(credential === undefined ? {} : { credential }),
+  };
 }
 
 /**
@@ -450,7 +492,7 @@ type LoadInput = Parameters<DeclaredWidget["declaration"]["load"]>[0];
  * card's size (`cardSize`). `shows` is handed the same input, so the two read one shape.
  *
  * 🔴 The one judgement: a card answered (`answerCard`) and a card asked whether it is shown at all
- * (`cardIsShownTo`) both read it, so the two cannot come to answer one card differently.
+ * (`cardShownTo`) both read it, so the two cannot come to answer one card differently.
  */
 type CardVerdict =
   | { kind: "refused" }
@@ -461,9 +503,10 @@ type CardVerdict =
 /**
  * Which of a card's rules is being judged, kept up to date by `judgeCard` for whoever bounds it:
  * a timeout names the stage that was running, the widget's access (its predicate, or core's own
- * check of the collections it reads) or its `shows`.
+ * check of the collections it reads) or its `shows`; or, for a card answered whole to learn
+ * whether it is empty (`cardAnswersEmpty`), its `load`.
  */
-type JudgingStage = { at: "access" | "shows" };
+type JudgingStage = { at: "access" | "shows" | "load" };
 
 async function judgeCard(
   declared: DeclaredWidget,
@@ -505,6 +548,7 @@ async function judgeCard(
     return { kind: "needs-setting", label: missing.label };
   }
   const { signal, scope, now } = asked;
+  const readAhead = readAheadFor(batch);
   const input = {
     settings,
     user: batch.caller.user,
@@ -520,6 +564,7 @@ async function judgeCard(
       signal,
       now,
       ...(collections === undefined ? {} : { collections }),
+      ...(readAhead === undefined ? {} : { readAhead }),
     }),
   };
   const { shows } = declaration;
@@ -580,32 +625,41 @@ async function answerCard(
 }
 
 /**
- * Whether this person is shown this card at all, by the card's own rules (`judgeCard`), without
- * running its `load`: for a dashboard built for them, such as the default they follow, which
- * leaves out the cards they would not be shown.
+ * Whether this person is shown this card, as its batch would draw it:
  *
- * - Refused by its `access`: no.
- * - A setting it needs has no value: YES. The card asks for that setting itself ("No ...
+ * - `"shown"`: the card is drawn for them;
+ * - `"hidden"`: its own rules leave it out for them, by its `access` or its `shows`;
+ * - `"failed"`: it could not be judged, its `shows` having thrown or not settled in time, so the
+ *   batch draws it as a failed card, neither shown nor deliberately left out.
+ */
+export type CardShown = "shown" | "hidden" | "failed";
+
+/**
+ * Whether this person is shown this card at all, by the card's own rules (`judgeCard`), without
+ * running its `load`, and whether that could be judged (`CardShown`):
+ *
+ * - Refused by its `access`: hidden. A predicate that throws refuses, as it does in the batch.
+ * - A setting it needs has no value: SHOWN. The card asks for that setting itself ("No ...
  *   chosen yet", with a button to choose it), and leaving it out would hide the one step that
  *   fixes it.
- * - Its `shows`, as the person: only `true` is yes.
- * - No `shows`: yes.
+ * - Its `shows`, as the person: only `true` is shown, anything else hidden.
+ * - No `shows`: shown.
  *
  * Judged within the card's own budget, under `signal` as the batch's: a `shows` that throws, or
- * that does not settle in time, is no, and is logged as the widget's failure. A permission name as
- * `access` is the caller's to have judged already, as the layout's audience does for every card it
- * hands over (`askableCards`).
+ * a judgement that does not settle in time, has failed, and is logged as the widget's failure.
+ * A permission name as `access` is the caller's to have judged already, as the layout's audience
+ * does for every card it hands over (`askableCards`).
  *
  * @param asked the signal the work is given up on, the instant reads measure from, and the
  * owner's share scope, as a card answered in the batch is handed them. No browser asks, so a
  * `shows` reading its size is handed the placement's own, at the unstated tier (`cardSize`).
  */
-export async function cardIsShownTo(
+export async function cardShownTo(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
   asked: CardInput
-): Promise<boolean> {
+): Promise<CardShown> {
   const stage: JudgingStage = { at: "access" };
   const size = cardSize(declared, { placement, preview: false });
   try {
@@ -622,12 +676,72 @@ export async function cardIsShownTo(
       () => judgingTimedOut(declared, stage),
       asked.signal
     );
-    return verdict.kind === "shown" || verdict.kind === "needs-setting";
+    return verdict.kind === "shown" || verdict.kind === "needs-setting"
+      ? "shown"
+      : "hidden";
+  } catch (error) {
+    // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
+    if (!asked.signal.aborted) logNotJudged(declared, error);
+    return "failed";
+  }
+}
+
+/**
+ * Whether this person's card answers empty by its own `isEmpty`, for a widget that hides while
+ * empty: asked by the layout read, so the dashboard is drawn without the card from its first
+ * paint, rather than drawn with it and then taken out, which moves every card after it.
+ *
+ * The card's own answer (`answerCard`, its rules, then its `load`, then its `isEmpty`), within the
+ * card's budget, under `signal` as the batch's. Empty when its `isEmpty` holds, or when the core
+ * display that draws it would find nothing in it (`cardAnswerIsEmpty`, the rule the admin also
+ * reveals a hidden card by); anything else is not empty: refused, a setting missing, not shown, a `load` that throws or does not settle in time.
+ * The card is then placed, and says for itself what it has.
+ *
+ * @param asked as `cardIsShownTo` is handed it: no browser asks, so the card is answered at the
+ * placement's own size (`cardSize`).
+ * @param dashboardWidth the dashboard's width as the admin measured it when it asked for the
+ * layout. The card is answered at the tier it is drawn at on a dashboard that wide
+ * (`cardTierAt`), the rule the admin sizes the card's first query by, so a `load` that reads
+ * its tier is judged on the answer that query gets.
+ */
+export async function cardAnswersEmpty(
+  declared: DeclaredWidget,
+  placement: WidgetPlacement,
+  batch: CardBatch,
+  asked: CardInput,
+  dashboardWidth: number
+): Promise<boolean> {
+  const grid = cardSize(declared, { placement, preview: false });
+  const size = { ...grid, tier: cardTierAt(grid.w, dashboardWidth) };
+  try {
+    const answer = await withinSlotBudget(
+      signal =>
+        answerCard(declared, placement, batch, { ...asked, signal }, size),
+      () => judgingTimedOut(declared, { at: "load" }),
+      asked.signal
+    );
+    // Empty by the widget's own `isEmpty`, or, drawn by a core display, by the
+    // display's own rule, as the card itself would draw it.
+    return "empty" in answer && cardAnswerIsEmpty(answer);
   } catch (error) {
     // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
     if (!asked.signal.aborted) logNotJudged(declared, error);
     return false;
   }
+}
+
+/**
+ * Whether this person is shown this card at all: only a card judged shown (`cardShownTo`) is.
+ * One that could not be judged is not, for a dashboard built for them, such as the default they
+ * follow, which leaves out the cards they would not be shown.
+ */
+export async function cardIsShownTo(
+  declared: DeclaredWidget,
+  placement: WidgetPlacement,
+  batch: CardBatch,
+  asked: CardInput
+): Promise<boolean> {
+  return (await cardShownTo(declared, placement, batch, asked)) === "shown";
 }
 
 /**

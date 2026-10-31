@@ -1292,53 +1292,46 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
   });
 });
 
-describe("the quick setting: at most one sits on the card", () => {
-  const range: AnyWidgetSetting = {
-    name: "range",
+describe("quick settings: at most three sit in the card's quick popover", () => {
+  const choice = (name: string): AnyWidgetSetting => ({
+    name,
     type: "select",
     options: [
-      { label: "Last 7 days", value: "7d" },
-      { label: "Last 30 days", value: "30d" },
+      { label: "One", value: "one" },
+      { label: "Two", value: "two" },
     ],
-    defaultValue: "30d",
-  };
-  const style: AnyWidgetSetting = {
-    name: "style",
-    type: "select",
-    options: [
-      { label: "Line", value: "line" },
-      { label: "Bars", value: "bars" },
-    ],
-    defaultValue: "line",
-  };
-
-  it("accepts one quick setting, or none", () => {
-    expect(widgetSettingsProblems([{ ...range, quick: true }, style])).toEqual(
-      []
-    );
-    expect(widgetSettingsProblems([range, style])).toEqual([]);
-    expect(widgetSettingsProblem([{ ...range, quick: true }])).toBeUndefined();
+    defaultValue: "one",
   });
+  const range = choice("range");
+  const style = choice("style");
+  const accent = choice("accent");
+  const density = choice("density");
 
-  it("refuses a widget that marks two settings quick, naming both", () => {
+  it("accepts three quick settings, or fewer", () => {
     expect(
       widgetSettingsProblems([
         { ...range, quick: true },
         { ...style, quick: true },
+        { ...accent, quick: true },
+        density,
       ])
-    ).toEqual([
-      'settings "range", "style" are all marked quick; a widget may mark at most one',
+    ).toEqual([]);
+    expect(widgetSettingsProblems([range, style])).toEqual([]);
+    expect(widgetSettingsProblem([{ ...range, quick: true }])).toBeUndefined();
+  });
+
+  it("refuses a widget that marks four settings quick, naming each", () => {
+    const four = [range, style, accent, density].map(setting => ({
+      ...setting,
+      quick: true,
+    }));
+    expect(widgetSettingsProblems(four)).toEqual([
+      'settings "range", "style", "accent", "density" are all marked quick; a widget may mark at most three',
     ]);
     // Registration reads the same rule.
-    expect(() =>
-      validateWidgetSettings(
-        [
-          { ...range, quick: true },
-          { ...style, quick: true },
-        ],
-        "core/x"
-      )
-    ).toThrow(/at most one/);
+    expect(() => validateWidgetSettings(four, "core/x")).toThrow(
+      /at most three/
+    );
   });
 
   it("refuses a quick mark that is not true or false", () => {

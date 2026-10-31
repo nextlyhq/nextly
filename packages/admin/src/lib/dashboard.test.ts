@@ -68,6 +68,19 @@ describe("formatRelativeTime", () => {
       setGlobalDateTimeConfig(before);
     }
   });
+
+  it("drops the words in its short style, at the same thresholds", () => {
+    const at = Date.parse("2026-03-08T12:00:00Z");
+    const short = (iso: string) => formatRelativeTime(iso, at, "short");
+    expect(short("2026-03-08T11:59:45Z")).toBe("now");
+    expect(short("2026-03-08T11:55:00Z")).toBe("5m");
+    expect(short("2026-03-08T09:00:00Z")).toBe("3h");
+    expect(short("2026-03-06T12:00:00Z")).toBe("2d");
+    // Past the relative window, the date, as the long style draws it.
+    expect(short("2026-03-01T12:00:00Z")).toBe(
+      formatRelativeTime("2026-03-01T12:00:00Z", at)
+    );
+  });
 });
 
 describe("describeActivityActor", () => {

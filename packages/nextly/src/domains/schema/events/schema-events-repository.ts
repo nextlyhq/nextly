@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { schemaEventsTables } from "../../../schemas/schema-events";
@@ -146,7 +146,8 @@ export class SchemaEventsRepository {
 
   /**
    * The start time for an event being recorded NOW, strictly after every event
-   * already recorded for the same file.
+   * already recorded for the same file, and for the same scope (a collection's,
+   * a Single's or a component's schema change).
    *
    * "Is this file applied?" is answered by the file's newest event, so two
    * events for one file must never share a `startedAt`: the ledger is read
@@ -155,19 +156,46 @@ export class SchemaEventsRepository {
    * answer. Guaranteeing the order where events are WRITTEN makes every
    * reader agree without each inventing a tie-break. The columns hold
    * milliseconds on all three dialects, so one millisecond is enough.
+   *
+   * A scope's schema changes are read the same way: whether a collection's
+   * last change failed is answered by its newest, so a failed save and the
+   * retry that fixed it, recorded in the same millisecond, must not tie
+   * either. Ids are random UUIDs, so the table keeps no insertion order of
+   * its own to break the tie with on read.
    */
   private async startAfterNewest(
-    filename: string | null | undefined
+    filename: string | null | undefined,
+    scope?: {
+      kind: SchemaEventScopeKind | null | undefined;
+      slug: string | null | undefined;
+    }
   ): Promise<Date> {
     const now = new Date();
-    if (filename === undefined || filename === null) return now;
-    const rows = (await this.db
-      .select()
-      .from(this.table)
-      .where(eq(this.table.filename, filename))) as { startedAt: Date }[];
     let newest = Number.NEGATIVE_INFINITY;
-    for (const row of rows) {
-      newest = Math.max(newest, new Date(row.startedAt).getTime());
+    if (filename !== undefined && filename !== null) {
+      const rows = (await this.db
+        .select()
+        .from(this.table)
+        .where(eq(this.table.filename, filename))) as { startedAt: Date }[];
+      for (const row of rows) {
+        newest = Math.max(newest, new Date(row.startedAt).getTime());
+      }
+    }
+    if (typeof scope?.kind === "string" && typeof scope.slug === "string") {
+      const [row] = (await this.db
+        .select()
+        .from(this.table)
+        .where(
+          and(
+            eq(this.table.scopeKind, scope.kind),
+            eq(this.table.scopeSlug, scope.slug)
+          )
+        )
+        .orderBy(desc(this.table.startedAt))
+        .limit(1)) as { startedAt: Date }[];
+      if (row !== undefined) {
+        newest = Math.max(newest, new Date(row.startedAt).getTime());
+      }
     }
     return newest >= now.getTime() ? new Date(newest + 1) : now;
   }
@@ -180,7 +208,10 @@ export class SchemaEventsRepository {
       eventType: input.eventType,
       status: "in_progress",
       source: input.source,
-      startedAt: await this.startAfterNewest(input.filename),
+      startedAt: await this.startAfterNewest(input.filename, {
+        kind: input.scopeKind,
+        slug: input.scopeSlug,
+      }),
     };
     if (input.filename !== undefined) values.filename = input.filename;
     if (input.sha256 !== undefined) values.sha256 = input.sha256;
@@ -195,7 +226,7 @@ export class SchemaEventsRepository {
    * Insert an already-terminal event in one shot.
    *
    * Without a `startedAt` the event is being recorded now, and is stamped
-   * after the file's newest event as `recordStart` is. An explicit one is
+   * after its file's or its scope's newest event as `recordStart` is. An explicit one is
    * kept as given: the upgrade backfill imports history whose times are facts,
    * not "now".
    */
@@ -204,7 +235,14 @@ export class SchemaEventsRepository {
     const startedAt =
       values.startedAt ??
       (await this.startAfterNewest(
-        typeof values.filename === "string" ? values.filename : undefined
+        typeof values.filename === "string" ? values.filename : undefined,
+        {
+          kind:
+            typeof values.scopeKind === "string"
+              ? (values.scopeKind as SchemaEventScopeKind)
+              : null,
+          slug: typeof values.scopeSlug === "string" ? values.scopeSlug : null,
+        }
       ));
     await this.db.insert(this.table).values({ id, ...values, startedAt });
     return id;

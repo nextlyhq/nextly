@@ -3,7 +3,8 @@
 /**
  * The header's live summary: what needs the reader, one link per part, joined
  * by " · ". A part follows to its card when the card is on the dashboard,
- * scrolled to and focused; otherwise it opens the list the card would.
+ * scrolled to and focused; otherwise it opens the list the card would. A
+ * modified or non-primary click on a link is the browser's, as on any link.
  *
  * Nothing is drawn while the summary loads or when it could not be read, and
  * "You're all caught up" only when every part was read and none has anything.
@@ -13,7 +14,7 @@
 
 import { Fragment, type JSX, type MouseEvent } from "react";
 
-import { Link } from "@admin/components/ui/link";
+import { Link, prefersNativeNavigation } from "@admin/components/ui/link";
 import type { DashboardSummary } from "@admin/types/dashboard/summary";
 
 import { CELL_PLACEMENT_ATTRIBUTE } from "../../widgets/edit/drag/useCardDrag";
@@ -39,6 +40,19 @@ function focusCard(placementId: string | undefined): boolean {
   return true;
 }
 
+/**
+ * The card a part follows to, when it is on the dashboard: the very card the
+ * part names, else its widget's first.
+ */
+function cardOf(
+  part: SummaryLinePart,
+  cards: Readonly<Record<string, readonly string[]>>
+): string | undefined {
+  const placed = cards[part.widget] ?? [];
+  if (part.card === undefined) return placed[0];
+  return placed.includes(part.card) ? part.card : undefined;
+}
+
 function PartLink({
   part,
   card,
@@ -49,6 +63,11 @@ function PartLink({
 }): JSX.Element {
   const toCard = (event: MouseEvent) => {
     if (focusCard(card)) event.preventDefault();
+  };
+  // Opening the list in a new tab or window is the reader's to ask for: only
+  // a plain primary click follows to the card instead.
+  const linkToCard = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!prefersNativeNavigation(event, undefined)) toCard(event);
   };
   // With no list to open and no card to follow to, there is nowhere to go:
   // the part is words, not a control that does nothing.
@@ -75,7 +94,7 @@ function PartLink({
     <Link
       href={part.href}
       className={LINK_CLASS}
-      onClick={toCard}
+      onClick={linkToCard}
       data-testid={`dashboard-summary-${part.key}`}
     >
       {part.text}
@@ -89,8 +108,8 @@ export function SummaryLine({
   now,
 }: {
   summary: DashboardSummary | undefined;
-  /** Each widget's card on the dashboard, by widget id. */
-  cards: Readonly<Record<string, string>>;
+  /** Each widget's cards on the dashboard, in its order, by widget id. */
+  cards: Readonly<Record<string, readonly string[]>>;
   now: Date;
 }): JSX.Element | null {
   if (summary === undefined) return null;
@@ -106,7 +125,7 @@ export function SummaryLine({
         : line.parts.map((part, index) => (
             <Fragment key={part.key}>
               {index > 0 ? " · " : null}
-              <PartLink part={part} card={cards[part.widget]} />
+              <PartLink part={part} card={cardOf(part, cards)} />
             </Fragment>
           ))}
     </p>

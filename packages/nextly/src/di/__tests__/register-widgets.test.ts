@@ -33,6 +33,7 @@ import {
   listWidgets,
   registerWidget,
 } from "../../domains/widgets/registry";
+import { drivesQuery } from "../../domains/widgets/settings";
 import {
   clearSources,
   getSource,
@@ -49,7 +50,7 @@ import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
-  RECENT_EDITS_SOURCE_ID,
+  CONTINUE_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
@@ -102,7 +103,7 @@ describe("resetWidgetRegistries", () => {
         ACTIVITY_SOURCE_ID,
         ATTENTION_SOURCE_ID,
         CONTENT_SOURCE_ID,
-        RECENT_EDITS_SOURCE_ID,
+        CONTINUE_SOURCE_ID,
         RELEASES_SOURCE_ID,
         TEAM_SOURCE_ID,
         VERSIONS_SOURCE_ID,
@@ -262,17 +263,17 @@ describe("resetWidgetRegistries", () => {
   });
 
   it("registers core's sources before core's cards, so a card's filter settings are admitted", () => {
-    // 🔴 Recently edited's Collection and Only mine settings are admitted only
-    // because its source declares those filters, which admission reads from the
-    // source registry. With the sources registered after the cards, as they
-    // once were, the source is not there yet and this boot refuses the card.
+    // 🔴 Continue where you left off's Tab setting drives its query only
+    // because its source declares the `tab` filter, which the knobs read from
+    // the source registry: with no such filter the setting would be drawn and
+    // saved and change nothing the card asks.
     expect(() => resetWidgetRegistries()).not.toThrow();
-    const settings = listWidgets()
-      .find(widget => widget.id === "core/recently-edited")
-      ?.settings?.map(setting => setting.name);
-    expect(settings).toEqual(
-      expect.arrayContaining(["collection", "onlyMine", "limit"])
-    );
+    const card = listWidgets().find(widget => widget.id === "core/continue");
+    const settings = card?.settings?.map(setting => setting.name);
+    expect(settings).toEqual(expect.arrayContaining(["tab", "limit"]));
+    const tab = card?.settings?.find(setting => setting.name === "tab");
+    expect(tab).toBeDefined();
+    expect(tab && drivesQuery(tab, card?.query)).toBe(true);
   });
 
   it("still refuses a genuine duplicate WITHIN one boot", () => {

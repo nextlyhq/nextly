@@ -87,8 +87,9 @@ import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
-import { registerRecentEditsWidgetSource } from "../../services/dashboard/recent-edits-widget-source";
+import { registerContinueWidgetSource } from "../../services/dashboard/continue-widget-source";
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
+import { registerSystemHealthSource } from "../../services/dashboard/system-health-source";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = [],
@@ -152,8 +153,10 @@ export function resetWidgetRegistries(
   // Needs attention's source, which combines the releases' and versions' reads
   // with the entry list's counts and so belongs to no one domain.
   registerAttentionWidgetSource();
+  // System health's read, which the card and the attention digest share.
+  registerSystemHealthSource();
   registerSummaryWidgetSources();
-  registerRecentEditsWidgetSource();
+  registerContinueWidgetSource();
 
   // Every widget, through the one call: core's own list, the plugins' widgets
   // declared with `defineWidget()`, and the site's. Each is checked together

@@ -60,10 +60,13 @@ import { createHash } from "node:crypto";
 import { NextlyError } from "../../errors/nextly-error";
 
 import {
+  clampSize,
   GRID_COLUMNS,
   isGridSize,
   MAX_GRID_ROWS,
   MIN_GRID_ROWS,
+  type GridSize,
+  type WidgetSizeBounds,
 } from "./grid-size";
 import { isUsableText, MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
@@ -141,6 +144,15 @@ export interface StoredLayout {
    * Read it through {@link layoutIsArranged}, never directly.
    */
   unarranged?: true;
+  /**
+   * The cards of an unarranged row whose size the reader chose, by placement
+   * id: a card resized outside customise mode. Every other card of such a row
+   * is drawn at the size the default gives it, so a later change to that size
+   * still reaches the reader. Absent on a row that predates it, which reads as
+   * a reader who resized nothing, and on an arranged row, whose sizes are all
+   * the reader's.
+   */
+  sized?: readonly string[];
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -407,8 +419,22 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
     // `=== true` rather than truthiness: anything else this core did not
     // write is the ordinary, arranged row.
     ...(decoded.unarranged === true ? { unarranged: true as const } : {}),
+    ...sizedOf(decoded),
     ...(rekeyed.length === 0 ? {} : { duplicatePlacementIds: rekeyed }),
   };
+}
+
+/**
+ * A stored row's chosen sizes (`StoredLayout.sized`): read only from an unarranged row, and only
+ * as a list of ids. Anything else this core did not write is a reader who chose no size.
+ */
+function sizedOf(
+  decoded: Record<string, unknown>
+): Pick<StoredLayout, "sized"> {
+  const { sized } = decoded;
+  if (decoded.unarranged !== true || !Array.isArray(sized)) return {};
+  const ids = sized.filter((id): id is string => typeof id === "string");
+  return ids.length === 0 ? {} : { sized: ids };
 }
 
 /**
@@ -421,9 +447,9 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
  *
  * 🔴 The invariant that keeps this safe: ANY write that can drop a placement
  * from the array must be an arranged one. An unarranged row is then only ever
- * the default plus the reader's choices about its cards (removed flags and
- * per-card settings), so following the default cannot bring back a card the
- * reader deliberately took away.
+ * the default plus the reader's choices about its cards (removed flags,
+ * per-card settings and the sizes they chose), so following the default cannot
+ * bring back a card the reader deliberately took away.
  */
 export function layoutIsArranged(stored: StoredLayout): boolean {
   return stored.unarranged !== true;
@@ -432,12 +458,19 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
 /**
  * The default arrangement with a reader's choices about its cards applied.
  *
- * For a row that still follows the default: positions, sizes and the set of
- * cards all come from `defaults`, and the stored row contributes only what its
- * reader chose about each card -- that they removed it, and the settings they
- * gave it. A setting changed outside customise mode is written to such a row,
- * and reading only the removals back dropped it on every read. A setting the
- * default's own entry starts a card with gives way to one stored for it.
+ * For a row that still follows the default: the order and the set of cards
+ * come from `defaults`, so a card the default gains later still reaches the
+ * reader, and the stored row contributes only what its reader chose about each
+ * card -- that they removed it, the settings they gave it, and the size they
+ * gave it, where they gave it one (`StoredLayout.sized`). A setting or a size
+ * changed outside customise mode is written to such a row, and reading only the
+ * removals back dropped it on every read. A setting the default's own entry
+ * starts a card with gives way to one stored for it. A card the reader did not
+ * resize keeps the default's size, whatever the row stored for it.
+ *
+ * A chosen size is held to the widget's bounds as `boundsOf` gives them, as
+ * every stored size is drawn; with no bounds to judge it by, the default's
+ * size stands.
  *
  * Keyed by CARD, across the whole stored row and whatever its visibility, so
  * a removal or a setting on a card the reader has since lost access to is
@@ -452,29 +485,80 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
  */
 export function dismissalsApplied(
   defaults: readonly WidgetPlacement[],
-  stored: StoredLayout | undefined
+  stored: StoredLayout | undefined,
+  boundsOf: (widgetId: string) => WidgetSizeBounds | undefined = () => undefined
 ): WidgetPlacement[] {
-  const placements = stored?.placements ?? [];
+  const sized = new Set(stored?.sized ?? []);
+  return defaultCardsWithChoices(defaults, stored?.placements ?? []).map(
+    ([placement, choice]) => {
+      if (choice === undefined) return placement;
+      return {
+        ...placement,
+        ...(sized.has(choice.id)
+          ? chosenSize(choice, boundsOf(placement.widgetId))
+          : {}),
+        removed: choice.removed,
+        ...(choice.config === undefined ? {} : { config: choice.config }),
+      };
+    }
+  );
+}
+
+/**
+ * Each card of the default, with the card of `placements` that holds a reader's choices about
+ * it, or `undefined` when none does. The one matching both the read
+ * ({@link dismissalsApplied}) and a write's chosen sizes ({@link chosenSizeIds}) go by.
+ *
+ * The card stored under the default card's id, only while it is still a card of the same widget:
+ * an id a config gives another widget is a new card, whose settings would read another widget's
+ * vocabulary. Else, for a widget the default and `placements` each hold one card of, that card.
+ */
+function defaultCardsWithChoices(
+  defaults: readonly WidgetPlacement[],
+  placements: readonly WidgetPlacement[]
+): Array<[WidgetPlacement, WidgetPlacement | undefined]> {
   const byId = new Map(placements.map(placement => [placement.id, placement]));
   const soleCardOf = soleCardsByWidget(placements);
   const soleInDefault = soleCardsByWidget(defaults);
   return defaults.map(placement => {
-    // The card stored under this id, only while it is still a card of the same
-    // widget: an id a config gives another widget is a new card, whose
-    // settings would read another widget's vocabulary.
     const sameCard = byId.get(placement.id);
     const choice =
       (sameCard?.widgetId === placement.widgetId ? sameCard : undefined) ??
       (soleInDefault.has(placement.widgetId)
         ? soleCardOf.get(placement.widgetId)
         : undefined);
-    if (choice === undefined) return placement;
-    return {
-      ...placement,
-      removed: choice.removed,
-      ...(choice.config === undefined ? {} : { config: choice.config }),
-    };
+    return [placement, choice];
   });
+}
+
+/**
+ * The cards of an unarranged write whose size the reader chose: those whose size differs from the
+ * size the default gives the card they stand for. A card at the default's size is not one, so it
+ * goes on following that size; a card the default does not hold is not one either, as it is
+ * drawn from the default or not at all.
+ */
+export function chosenSizeIds(
+  defaults: readonly WidgetPlacement[],
+  placements: readonly WidgetPlacement[]
+): string[] {
+  return defaultCardsWithChoices(defaults, placements).flatMap(
+    ([placement, choice]) =>
+      choice !== undefined &&
+      (choice.w !== placement.w || choice.h !== placement.h)
+        ? [choice.id]
+        : []
+  );
+}
+
+/** The size a reader gave a card, held to its widget's bounds, or nothing to judge it by. */
+function chosenSize(
+  choice: WidgetPlacement,
+  bounds: WidgetSizeBounds | undefined
+): GridSize | Record<string, never> {
+  const size = { w: choice.w, h: choice.h };
+  return bounds !== undefined && isGridSize(size)
+    ? clampSize(size, bounds)
+    : {};
 }
 
 /** Each widget that `placements` holds exactly one card of, with that card. */

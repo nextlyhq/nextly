@@ -60,6 +60,8 @@ import { EntryLocaleProvider } from "../EntryLocaleContext";
 import { DocumentLanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
+import { isRemovedFromCode } from "../removed-from-code-notice";
+import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
@@ -631,13 +633,22 @@ export function EntryForm({
   // A user who may read this entry but not change it gets the same page,
   // read-only, with no claim made on the document.
   const updateAnswer = useUpdateAnswer(collectionSlug);
-  const readOnlyForReader = updateAnswer === "refused" && mode === "edit";
+  // A collection removed from code refuses every write to its entries, for
+  // everyone: the page opens as it does for a reader, through the same gates.
+  const removedFromCode = isRemovedFromCode(collection);
+  const readOnlyForReader =
+    (updateAnswer === "refused" || removedFromCode) && mode === "edit";
+  // What the user's access allows, apart from the removal: previewing and
+  // sharing a preview follow it alone, since the server keeps preview links
+  // working for a removed collection and opening one writes no entry.
+  const accessAllowsEdits = mode === "create" || editsOffered(updateAnswer);
   // While a language switch's answer is on its way, nothing that saves is
   // offered and a submit is held, though the page is not read-only.
-  const mayEdit = mode === "create" || editsOffered(updateAnswer);
-  // What changing the entry needs is held with it: previewing and sharing a
-  // preview (minting a link needs it on the server) and a version's restore,
-  // for a reader and while a language switch's answer is on its way.
+  const mayEdit = accessAllowsEdits && !removedFromCode;
+  const previewHeld = !accessAllowsEdits;
+  // What changing the entry needs is held with it: a recovery point and a
+  // version's restore, for a reader, for a removed collection and while a
+  // language switch's answer is on its way.
   const updatesHeld = !mayEdit;
   // While a refused publish's recovery runs, every field it reaches is
   // read-only, as it is while someone else holds the entry.
@@ -647,6 +658,7 @@ export function EntryForm({
     entryId: entry?.id,
     enabled: mode === "edit",
     readOnlyForReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
   });
   const lock = heldWhileRecovering(lockSurface, recovering);
 
@@ -688,12 +700,16 @@ export function EntryForm({
   // Changing the content is held for a reader as well. Deleting is not: it
   // follows its own permission, and is offered only with it.
   const editsHeld = writesHeld || !mayEdit;
+  // A status write alone is held where the document's writes are, and for a
+  // collection removed from code, whose publish the server refuses as it
+  // refuses a save.
+  const statusWriteHold = writesHeld || removedFromCode;
   // Publishing every language changes only each language's status, so a
   // reader whose document nothing else holds is still offered it.
   const publishAllHeld = statusWritesHeld({
     editsHeld,
     refused: readOnlyForReader,
-    writesHeld,
+    writesHeld: statusWriteHold,
   });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
@@ -716,7 +732,8 @@ export function EntryForm({
     collectionSlug,
     "updateInDefaultLanguage"
   );
-  const canSave = mode === "create" ? canCreate : canUpdateUnnamed;
+  const canSave =
+    !removedFromCode && (mode === "create" ? canCreate : canUpdateUnnamed);
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
@@ -745,7 +762,7 @@ export function EntryForm({
     // their own permissions judge; everything else stays held.
     const status = readerStatusWrite(intent, {
       refused: readOnlyForReader,
-      writesHeld,
+      writesHeld: statusWriteHold,
     });
     return status === undefined
       ? Promise.resolve(submitHeld)
@@ -816,7 +833,7 @@ export function EntryForm({
   // Withheld from a reader too, so the share popover cannot stay mounted
   // once the user may no longer change the entry.
   const shareDocument: PreviewLinkDocument | undefined =
-    updatesHeld || savedEntryId === "" || linkLocale.kind === "unresolved"
+    previewHeld || savedEntryId === "" || linkLocale.kind === "unresolved"
       ? undefined
       : {
           collection: collection.name,
@@ -873,7 +890,7 @@ export function EntryForm({
   // Previewing, and sharing a preview, are offered only to a user who may
   // change the entry: minting a link needs that on the server.
   const canPreview =
-    !updatesHeld &&
+    !previewHeld &&
     entryPreview.isPreviewAvailable &&
     savedEntryId !== "" &&
     linkLocale.kind !== "unresolved";
@@ -896,13 +913,14 @@ export function EntryForm({
   /*
    * Whether the preview pane is actually on screen: withheld while
    * translation mode is on, beside a document view, and for a reader, as the
-   * pane itself reads below.
+   * pane itself reads below. A removed collection keeps it: the preview
+   * follows access alone, as previewing writes nothing.
    */
   const previewOnScreen =
     previewOpen &&
     translationMode.source === undefined &&
     !documentView &&
-    !updatesHeld;
+    !previewHeld;
 
   // The document panel: on screen or not, and how it sits at the editor's
   // width. The preview folds it and showing it closes the preview; history
@@ -938,6 +956,7 @@ export function EntryForm({
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
     canEdit: mayEdit,
+    writesRefused: removedFromCode,
     contributedActions: documentActions,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
@@ -985,6 +1004,21 @@ export function EntryForm({
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
             />
+            {/* No page around a modal to carry the removed-from-code notice in
+                a document banner, so the modal says it itself. */}
+            {removedFromCode && (
+              <RemovedFromCodeNotice
+                entity={{
+                  kind: "collection",
+                  label:
+                    collection.labels?.plural ||
+                    collection.label ||
+                    collection.name,
+                  slug: collection.name,
+                }}
+                state={collection.removedFromCodeState}
+              />
+            )}
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
             {/* This branch renders every collection field, the editable slug among them, but not
@@ -1163,6 +1197,7 @@ export function EntryForm({
                                   mode={mode}
                                   panelMode={panel.mode}
                                   documentLocked={lock.readOnly}
+                                  writesRefused={removedFromCode}
                                   isSubmitting={isSubmitting}
                                   // The whole unsaved-work state, so the restore
                                   // confirmation covers builder-held work too.
@@ -1216,7 +1251,7 @@ export function EntryForm({
                                   // locale is either refused by the mint route or, if the claim
                                   // were dropped to avoid that, a grant over every translation.
                                   isLinkAvailable={
-                                    !updatesHeld &&
+                                    !previewHeld &&
                                     savedEntryId !== "" &&
                                     linkLocale.kind !== "unresolved"
                                   }

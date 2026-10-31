@@ -197,11 +197,28 @@ export interface WidgetSource {
 
 /**
  * A card setting a source may narrow its answer by: the Collection a row
- * belongs to, or Only mine, the reader's own.
+ * belongs to, Only mine, the reader's own, or Tab, whose work a card shows:
+ * the reader's own (`"mine"`) or other people's (`"team"`).
  *
  * @experimental
  */
-export type WidgetSourceFilter = "collection" | "onlyMine";
+export type WidgetSourceFilter = "collection" | "onlyMine" | "tab";
+
+/**
+ * The values the Tab filter takes, in the order a card offers them: the
+ * reader's own work first, which is a tab's default.
+ *
+ * @experimental
+ */
+export const WIDGET_TABS = ["mine", "team"] as const;
+
+/** One of {@link WIDGET_TABS}. @experimental */
+export type WidgetTab = (typeof WIDGET_TABS)[number];
+
+/** Whether `value` is one of the Tab filter's values. */
+export function isWidgetTab(value: unknown): value is WidgetTab {
+  return WIDGET_TABS.some(tab => tab === value);
+}
 
 // A malformed widget source is a plugin/core author's mistake, not end-user
 // input, so this uses `invalidInput` (developer-facing, safe to surface
@@ -252,6 +269,7 @@ function validateSourceTitleField(s: Partial<WidgetSource>): void {
 const SOURCE_FILTERS: ReadonlySet<string> = new Set<WidgetSourceFilter>([
   "collection",
   "onlyMine",
+  "tab",
 ]);
 
 /**

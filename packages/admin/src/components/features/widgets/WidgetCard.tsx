@@ -78,6 +78,7 @@ import {
   type CardFooterClaims,
   type FooterClaimRank,
 } from "./frame/footer-slot";
+import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
 import type { RowsSize } from "./frame/list-rows";
@@ -107,6 +108,11 @@ import {
   useMeasuredTier,
   type RowsLayout,
 } from "./frame/tier";
+import { CardTitleCountContext, titleCountSpoken } from "./frame/title-count";
+import {
+  CardHiddenReportContext,
+  useReportCardHidden,
+} from "./hidden-while-empty";
 
 export interface WidgetCardProps {
   /** The card's subject, always rendered, in every state, once. */
@@ -125,6 +131,14 @@ export interface WidgetCardProps {
   headerAction?: ReactNode;
   /** The card's one quick control, just before `headerAction`. */
   quick?: ReactNode;
+  /**
+   * Draws the title as a control, handed the title: the dashboard's cards make it open their
+   * quick popover. The heading around it, and the name it gives the card's region, stay as
+   * they are. Absent, the title is text.
+   *
+   * @internal Set by the dashboard grid only, never part of the widget kit.
+   */
+  titleTrigger?: ((title: string) => ReactNode) | undefined;
   /**
    * Customise mode: the body, footer and quick control become inert and dim, so their links and
    * controls are out of reach, while the title stays where it is.
@@ -153,10 +167,20 @@ export interface WidgetCardProps {
   /** A stats card's cell labels, which its loading skeleton draws under each held value. */
   skeletonCells?: readonly string[];
   /**
-   * The widget takes its card off the dashboard while its answer is empty, rather than saying
-   * so; customise mode still shows it, marked, so it can be moved or removed.
+   * The widget hides while empty and the layout read found this card empty, so the card is off
+   * the dashboard for this visit; customise mode still shows it, marked, so it can be moved or
+   * removed. Decided before the first paint and held (`hidden-while-empty`), never from an answer
+   * that arrives after it: a card that left, or joined, the page then would move every card after
+   * it. A card of such a widget not taken off draws its own state, its empty one included.
    */
-  hidesWhenEmpty?: boolean;
+  hiddenWhileEmpty?: boolean;
+  /**
+   * The widget hides while empty and the layout read cannot answer it ahead (a widget of the
+   * `registerWidget` or `contributes.admin.widgets` channel, named by the layout's
+   * `hiddenWhenAnswerEmpty`), so the card is taken off the dashboard while its own answer is
+   * empty, as it is drawn; customise mode still shows it, marked.
+   */
+  hidesWhenAnswerEmpty?: boolean;
   /**
    * The widget's own `shows` said no for this person: the card is taken off the dashboard as one
    * hidden while empty is, and customise mode shows it marked, so it can be removed.
@@ -234,18 +258,27 @@ function bodyClassName(
 
 /**
  * Whether the card is off the dashboard and why: its widget's own `shows` said no for this person,
- * or it hides when empty and is. Taken out at rest, and shown marked with that reason while
- * customising, so it can still be moved or removed.
+ * or it hides while empty and was found so when the layout was read (`hiddenWhileEmpty`), or by
+ * its own answer, for a widget the layout read cannot answer (`hidesWhenAnswerEmpty`). Taken out
+ * at rest, and shown marked with that reason while customising, so it can still be moved or
+ * removed.
  */
 function hiddenFlags(
-  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown">,
+  props: Pick<
+    WidgetCardProps,
+    "hiddenWhileEmpty" | "hidesWhenAnswerEmpty" | "notShown"
+  >,
   state: CardState,
   customizing: boolean
 ) {
   const notShown = props.notShown === true;
+  const emptyByOwnAnswer =
+    props.hidesWhenAnswerEmpty === true && state.kind === "empty";
   const hidden =
-    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+    notShown || props.hiddenWhileEmpty === true || emptyByOwnAnswer;
   return {
+    // Off the dashboard in either mode: what the card reports to its cell (`useReportCardHidden`).
+    hidden,
     hiddenEmpty: hidden && !customizing,
     markedHidden: hidden && customizing,
     hiddenBecause: notShown
@@ -260,7 +293,10 @@ function hiddenFlags(
  * its quick control is out of reach, how its body is marked, and whether its footer link shows.
  */
 function frameFlags(
-  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown" | "link">,
+  props: Pick<
+    WidgetCardProps,
+    "hiddenWhileEmpty" | "hidesWhenAnswerEmpty" | "notShown" | "link"
+  >,
   state: CardState,
   modes: {
     customizing: boolean;
@@ -299,6 +335,13 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
   const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
+  // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
+  // stops being drawn unmounts, and its unmount withdraws the count.
+  const [titleCount, setTitleCount] = useState<number | undefined>(undefined);
+  // A line the body shows beneath the title (`useCardSubtitle`), withdrawn the same way.
+  const [bodySubtitle, setBodySubtitle] = useState<string | undefined>(
+    undefined
+  );
   const given = props.state ?? READY;
   const state = shownState(given, reported);
   const drawsBody = showsBody(given);
@@ -310,6 +353,8 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   // The width the card is drawn at decides how its figures are written; see `frame/tier`.
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = useMeasuredTier(rootRef, props.tier);
+  // The grid counts the cards on show from this report, so it reads the decision drawn here.
+  useReportCardHidden(flags.hidden);
 
   return (
     <CardTierContext.Provider value={tier}>
@@ -338,11 +383,14 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 titleId={titleId}
                 subtitleId={subtitleId}
                 title={title}
+                titleCount={titleCount}
                 subtitle={props.subtitle}
+                bodySubtitle={bodySubtitle}
                 leading={props.leading}
                 quick={props.quick}
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
+                titleTrigger={props.titleTrigger}
               />
 
               <CardContent
@@ -356,24 +404,28 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                   showsBody(state)
                 )}
               >
-                {flags.markedHidden ? (
-                  <p
-                    className="mb-2 text-xs font-medium text-muted-foreground"
-                    data-testid="hidden-while-empty"
-                  >
-                    {flags.hiddenBecause}
-                  </p>
-                ) : null}
+                <HiddenWhileEmptyNote
+                  marked={flags.markedHidden}
+                  because={flags.hiddenBecause}
+                />
                 <StateBody state={state} title={title} props={props} />
                 {/* The body stays mounted while it reports a state, so the data it reads keeps
                   arriving; what it renders then is its report, which draws nothing. */}
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
-                    <CardFooterSlotProvider value={footerSlot}>
-                      <CardFooterClaimProvider value={footer.claims}>
-                        {props.children}
-                      </CardFooterClaimProvider>
-                    </CardFooterSlotProvider>
+                    <CardTitleCountContext.Provider value={setTitleCount}>
+                      <CardSubtitleContext.Provider value={setBodySubtitle}>
+                        <CardFooterSlotProvider value={footerSlot}>
+                          <CardFooterClaimProvider value={footer.claims}>
+                            {/* A card drawn inside this one is not the cell's card: it reports
+                              nothing in its place. */}
+                            <CardHiddenReportContext.Provider value={undefined}>
+                              {props.children}
+                            </CardHiddenReportContext.Provider>
+                          </CardFooterClaimProvider>
+                        </CardFooterSlotProvider>
+                      </CardSubtitleContext.Provider>
+                    </CardTitleCountContext.Provider>
                   </CardStateReportProvider>
                 ) : null}
               </CardContent>
@@ -388,6 +440,28 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
         </AnswerSizeContext.Provider>
       </ListDensityContext.Provider>
     </CardTierContext.Provider>
+  );
+}
+
+/**
+ * The line above the body that says why a card is hidden from the dashboard while it is empty,
+ * drawn while it is (`frameFlags`); nothing otherwise.
+ */
+function HiddenWhileEmptyNote({
+  marked,
+  because,
+}: {
+  marked: boolean;
+  because: string | undefined;
+}) {
+  if (!marked) return null;
+  return (
+    <p
+      className="mb-2 text-xs font-medium text-muted-foreground"
+      data-testid="hidden-while-empty"
+    >
+      {because}
+    </p>
   );
 }
 
@@ -519,33 +593,53 @@ function heldLayout(
   return fields === undefined ? undefined : rowsLayout(tier, fields);
 }
 
+/** The card's title inside its heading: as text, or as the control `trigger` draws it as. */
+function CardTitle({
+  title,
+  trigger,
+}: {
+  title: string;
+  trigger: WidgetCardProps["titleTrigger"];
+}): ReactNode {
+  return trigger ? trigger(title) : title;
+}
+
 /**
  * The card's header, one fixed height in every state, tier and mode.
  *
  * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
  * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
- * widget's own name. The quick control and the menu sit at the right end, always in that order,
+ * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`). The quick control and the menu sit at the right end, always in that order,
  * so the menu is in the same place on every card.
  */
 function WidgetCardHeader({
   titleId,
   subtitleId,
   title,
-  subtitle,
+  titleCount,
+  subtitle: givenSubtitle,
+  bodySubtitle,
   leading,
   quick,
   quickInert,
   headerAction,
+  titleTrigger,
 }: {
   titleId: string;
   subtitleId: string;
   title: string;
+  /** A count the body shows beside the title, muted; read after it as ", N items". */
+  titleCount?: number | undefined;
   subtitle?: string | undefined;
+  /** What the body reports beneath the title; drawn only where the card is given no subtitle. */
+  bodySubtitle?: string | undefined;
   leading?: ReactNode;
   quick?: ReactNode;
   quickInert: boolean;
   headerAction?: ReactNode;
+  titleTrigger?: WidgetCardProps["titleTrigger"];
 }) {
+  const subtitle = givenSubtitle || bodySubtitle;
   return (
     <CardHeader
       // No rule under the header: a divider is the difference between a card and a panel.
@@ -563,9 +657,23 @@ function WidgetCardHeader({
         <h2
           id={titleId}
           title={title}
-          className="truncate text-sm font-semibold leading-5 tracking-tight text-foreground"
+          className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
-          {title}
+          <span className="truncate">
+            <CardTitle title={title} trigger={titleTrigger} />
+          </span>
+          {titleCount !== undefined && (
+            <>
+              <span
+                aria-hidden
+                className="shrink-0 text-xs font-normal text-muted-foreground"
+                data-testid="widget-card-title-count"
+              >
+                {titleCount}
+              </span>
+              <span className="sr-only">{titleCountSpoken(titleCount)}</span>
+            </>
+          )}
         </h2>
         {subtitle && (
           <p
