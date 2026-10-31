@@ -261,10 +261,10 @@ interface PluginAdminWidgetBase {
   /**
    * Whether a reader may send this card away themselves.
    *
-   * Independent of the lifecycle beside it: a conditional card goes when the
-   * install says its condition has lapsed, and a dismissible one goes when the
-   * READER says so, while the condition still holds. `WidgetDefinition` carries
-   * the reasoning and the fact that dismissal is recorded as hiding.
+   * @deprecated Has no effect: every card's "…" menu offers Remove, whatever
+   * its widget declares, so a reader may send any card away. Still accepted, so
+   * a contribution that sets it starts as before, and removed with the legacy
+   * definition fields.
    */
   dismissible?: boolean;
   /**

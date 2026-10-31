@@ -13,9 +13,12 @@
 import type { GridSize } from "nextly/config";
 import {
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentProps,
+  type ReactElement,
   type ReactNode,
   type JSX,
 } from "react";
@@ -28,6 +31,11 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import {
+  CardCollapseContext,
+  collapsedRows,
+  type CardCollapse,
+} from "../frame/collapse";
 import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
@@ -43,16 +51,17 @@ import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardSizeLabel } from "./CardActionsMenu";
 import { CardMenu } from "./CardMenu";
+import { CardQuickPopover, CardTitleButton } from "./CardQuickSetting";
 import {
   CardControlsOverlay,
   CardControlsSpace,
   CustomizingFence,
 } from "./CustomizingFence";
-import { DismissWidgetButton } from "./DismissWidgetButton";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
 import { SettingsPreview } from "./SettingsPreview";
 import {
   useCardQuickSetting,
+  useQuickPopoverOpening,
   type CellSettingsWrite,
 } from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
@@ -94,7 +103,7 @@ export interface ArrangedCellProps {
     slot: WidgetSlot | undefined;
     /** How a `stats` card reaches each cell's answer; absent otherwise. */
     slotFor?: CellSlotLookup;
-    /** `null` when this card took no part in the batch. */
+    /** When this card's own answer arrived; `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
     /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
@@ -128,7 +137,8 @@ export interface ArrangedCellProps {
     setSize: (size: GridSize) => void;
     remove: () => void;
     /**
-     * Send this card away from the card itself, outside customise mode.
+     * Send this card away from the card itself, outside customise mode: the menu's Remove, the
+     * reader's own dismissal of it, whatever its widget declares.
      *
      * 🔴 ABSENT rather than present-and-inert before an arrangement has been
      * read: the rows drawn then carry no stored placement to remove, so a
@@ -140,48 +150,6 @@ export interface ArrangedCellProps {
   };
 }
 
-/**
- * This card's header controls at rest: its dismiss control, where its author offered one, and
- * its menu, in that order at the header's right end. Nothing while customising, where Remove in
- * the customise menu does the same thing and the controls are drawn over the header.
- *
- * 🔴 `=== true`, not truthiness. A registration arrives over the wire from a
- * server that may be a different version and the admin copies the field
- * verbatim, so a malformed `dismissible: "false"` would otherwise DRAW the
- * control, which is the one reading the declaration cannot have meant.
- */
-function dismissAffordance(
-  widget: DashboardWidget,
-  props: Pick<
-    ArrangedCellProps,
-    "isEditing" | "isWriting" | "singleCardWriteBlocked" | "refs"
-  >,
-  dismiss: (() => void) | undefined,
-  /** The card's menu at rest, drawn beside the dismiss control when both are offered. */
-  menu?: ReactNode
-): ReactNode | undefined {
-  const dismissible =
-    dismiss !== undefined && !props.isEditing && widget.dismissible === true;
-  if (!dismissible && !menu) return undefined;
-  const button = dismissible ? (
-    <DismissWidgetButton
-      title={widget.title}
-      isDismissing={props.isWriting}
-      unavailableReason={props.singleCardWriteBlocked}
-      buttonRef={props.refs.dismiss}
-      onDismiss={dismiss}
-    />
-  ) : null;
-  return menu ? (
-    <span className="flex items-center gap-1">
-      {button}
-      {menu}
-    </span>
-  ) : (
-    button
-  );
-}
-
 /** A card's size and its one menu, side by side, while customising. */
 function CardEditActions(props: {
   row: ArrangedCellProps["row"];
@@ -189,13 +157,14 @@ function CardEditActions(props: {
   size: GridSize;
   can: ArrangedCellProps["can"];
   isWriting: boolean;
-  refs: ArrangedCellProps["refs"];
+  /** Registers the menu button, so focus can be sent back to it. */
+  menuRef: (element: HTMLElement | null) => void;
   on: ArrangedCellProps["on"];
-  /** Present only when the widget offers settings. */
-  openSettings?: () => void;
+  /** Present only when the card offers settings: its quick popover, or its sheet. */
+  openSettings?: (() => void) | undefined;
   sizesInPlace: boolean;
 }) {
-  const { row, size, can, isWriting, refs, on, openSettings } = props;
+  const { row, size, can, isWriting, menuRef, on, openSettings } = props;
   return (
     <span className="flex items-center gap-1" data-testid="card-edit-actions">
       <CardSizeLabel size={size} />
@@ -205,7 +174,7 @@ function CardEditActions(props: {
         bounds={row.widget.size}
         can={can}
         disabled={isWriting}
-        triggerRef={refs.menu}
+        triggerRef={menuRef}
         sizesInPlace={props.sizesInPlace}
         on={{
           move: on.move,
@@ -227,6 +196,8 @@ function CardBody(props: {
   headerAction: ReactNode;
   /** The card's quick setting, at rest; the frame decides when to draw it. */
   quick: ReactNode;
+  /** The card's title as the control that opens its quick popover, at rest. */
+  titleTrigger: ((title: string) => ReactNode) | undefined;
   data: ArrangedCellProps["data"];
   isEditing: boolean;
   /** Opens this card's settings from its empty state, where the reader can change them. */
@@ -257,6 +228,7 @@ function CardBody(props: {
       placement={placement}
       headerAction={headerAction}
       quick={quick}
+      titleTrigger={props.titleTrigger}
       subtitle={subtitle}
       {...(props.onOpenSettings
         ? { onOpenSettings: props.onOpenSettings }
@@ -267,32 +239,99 @@ function CardBody(props: {
 }
 
 /**
- * What a card offers at rest: its quick setting, its dismiss control and menu in its header, and
- * where its sheet's Done goes.
+ * A card's controls: its quick setting and quick popover, its menu's Settings, its menu in its
+ * header at rest, and where its sheet's Done goes.
  */
-function useRestingControls(
+function useCardControls(
   props: ArrangedCellProps,
   widget: DashboardWidget,
+  size: GridSize,
   hasSettings: boolean,
   setSettingsOpen: (open: boolean) => void
 ) {
   // From the DECLARED widget, so the change is judged against the reader's stored settings.
   const quick = useCardQuickSetting({
+    placementId: props.row.placementId,
     widget: props.row.widget,
+    title: widget.title,
     config: props.row.config,
+    size,
     isEditing: props.isEditing,
     isFetching: props.data.isFetching,
     updatedAt: props.data.updatedAt,
     settingsWrite: props.settingsWrite,
+    // While customising, the same changes the customise menu and the sheet stage.
+    staged: {
+      config: props.on.saveSettings,
+      size: props.on.setSize,
+      isWriting: props.isWriting,
+    },
   });
-  const menu = restingMenuFor(props, widget, hasSettings, quick, () =>
-    setSettingsOpen(true)
+  const popover = useQuickPopoverOpening();
+  const menus = useMenuButtons(props);
+  // A popover belongs to the mode it opened in: its anchor is the title at rest and the
+  // customise controls while customising, and the other is not drawn.
+  const { onOpenChange } = popover;
+  useEffect(() => onOpenChange(false), [props.isEditing, onOpenChange]);
+  const openSettings = settingsOpener(
+    quick.popover?.settings.length ?? 0,
+    hasSettings,
+    quick.popover ? () => popover.openFrom(menus.button.current) : undefined,
+    () => setSettingsOpen(true)
   );
   return {
     quick,
-    header: dismissAffordance(widget, props, props.on.dismiss, menu),
+    popover,
+    openSettings,
+    customiseMenuRef: menus.customise,
+    // The menu is the one control a card's header holds at rest: its Remove is the dismissal.
+    header: restingMenuFor(props, widget, {
+      quick,
+      openSettings,
+      menuRef: menus.rest,
+    }),
     done: doneFor(props),
   };
+}
+
+/**
+ * The card's menu buttons, registered for focus: the customise menu's as the card's menu, and
+ * the one at rest as its dismiss control, which focus returns to after Undo of a removal made
+ * from it: its Remove is the card's dismissal.
+ */
+function useMenuButtons(props: ArrangedCellProps) {
+  const button = useRef<HTMLElement | null>(null);
+  const { menu, dismiss } = props.refs;
+  const rest = useCallback(
+    (element: HTMLElement | null) => {
+      button.current = element;
+      dismiss(element);
+    },
+    [dismiss]
+  );
+  const customise = useCallback(
+    (element: HTMLElement | null) => {
+      button.current = element;
+      menu(element);
+    },
+    [menu]
+  );
+  return { button, rest, customise };
+}
+
+/**
+ * What the menus' Settings does: opens the quick popover where the card has one, else the
+ * settings sheet. Offered where the card has a setting to change, so a card whose popover holds
+ * only its Size, which the menu lists itself, offers none.
+ */
+function settingsOpener(
+  popoverSettings: number,
+  hasSettings: boolean,
+  openPopover: (() => void) | undefined,
+  openSheet: () => void
+): (() => void) | undefined {
+  if (popoverSettings === 0 && !hasSettings) return undefined;
+  return openPopover ?? openSheet;
 }
 
 /** Whether a card's settings cannot be saved at rest right now: a write is in flight, or none is possible. */
@@ -303,42 +342,49 @@ function settingsBlocked(write: CellSettingsWrite | undefined): boolean {
 }
 
 /**
- * What the card's menu at rest offers: its quick setting where the header has no room for it,
- * Settings where its settings can be saved there, and Refresh where it asks for data. Nothing
- * while customising, where the customise menu stands in its place, nor for a card that would
- * offer nothing in it.
+ * The card's menu at rest, in the same place on every card: Settings, Size, Refresh and Remove,
+ * each where the card has it (`CardMenu`). Nothing while customising, where the customise menu
+ * stands in its place, nor for a card that would offer nothing in it. Settings and Size are
+ * offered once an arrangement has been read, as Remove is: before it there is no stored card to
+ * save them into.
  */
-function restingMenuItems(
-  props: ArrangedCellProps,
-  hasSettings: boolean,
-  quick: ReturnType<typeof useCardQuickSetting>,
-  openSettings: () => void
-) {
-  if (props.isEditing) return undefined;
-  const items = {
-    quick: quick.menu,
-    onOpenSettings:
-      props.settingsWrite !== undefined && hasSettings
-        ? openSettings
-        : undefined,
-    onRefresh: props.data.onRetry,
-  };
-  const offersSomething = Object.values(items).some(item => item !== undefined);
-  return offersSomething
-    ? { ...items, settingsDisabled: settingsBlocked(props.settingsWrite) }
-    : undefined;
-}
-
-/** The card's menu at rest, in the same place on every card, or none (`restingMenuItems`). */
 function restingMenuFor(
   props: ArrangedCellProps,
   widget: DashboardWidget,
-  hasSettings: boolean,
-  quick: ReturnType<typeof useCardQuickSetting>,
-  openSettings: () => void
+  controls: {
+    quick: ReturnType<typeof useCardQuickSetting>;
+    openSettings: (() => void) | undefined;
+    menuRef: (element: HTMLElement | null) => void;
+  }
 ): ReactNode | undefined {
-  const items = restingMenuItems(props, hasSettings, quick, openSettings);
-  return items ? <CardMenu title={widget.title} {...items} /> : undefined;
+  if (props.isEditing) return undefined;
+  const write = props.settingsWrite;
+  const popover = controls.quick.popover;
+  const items = {
+    onOpenSettings: write ? controls.openSettings : undefined,
+    size: popover?.size
+      ? {
+          ...popover.size,
+          inPlace: props.sizesInPlace === true,
+          onSetSize: popover.changeSize,
+        }
+      : undefined,
+    onRefresh: props.data.onRetry,
+    onRemove: props.on.dismiss,
+  };
+  if (Object.values(items).every(item => item === undefined)) return undefined;
+  return (
+    <CardMenu
+      title={widget.title}
+      triggerRef={controls.menuRef}
+      settingsDisabled={settingsBlocked(write)}
+      removeDisabled={props.isWriting}
+      {...(props.singleCardWriteBlocked === undefined
+        ? {}
+        : { removeUnavailable: props.singleCardWriteBlocked })}
+      {...items}
+    />
+  );
 }
 
 /**
@@ -400,17 +446,95 @@ function cellClassName(size: GridSize, isEditing: boolean): string {
 function editActionsOf(
   props: ArrangedCellProps,
   size: GridSize,
-  openSettings: (() => void) | undefined
-): ReactNode {
+  openSettings: (() => void) | undefined,
+  menuRef: (element: HTMLElement | null) => void
+): ReactElement | null {
   if (!props.isEditing) return null;
-  const { row, can, isWriting, refs, on } = props;
+  const { row, can, isWriting, on } = props;
   return (
     <CardEditActions
-      {...{ row, size, can, isWriting, refs, on }}
+      {...{ row, size, can, isWriting, on, menuRef, openSettings }}
       sizesInPlace={props.sizesInPlace === true}
-      {...(openSettings ? { openSettings } : {})}
     />
   );
+}
+
+/**
+ * The card's quick popover around `anchor`: the card's title at rest, which opens it, or its
+ * customise controls, whose menu does. `anchor` alone where the card has nothing for it.
+ */
+function withQuickPopover(
+  controls: ReturnType<typeof useCardControls>,
+  cardTitle: string,
+  openSheet: (() => void) | undefined,
+  opensFrom: "trigger" | "anchor",
+  anchor: ReactElement
+): ReactElement {
+  const model = controls.quick.popover;
+  if (!model) return anchor;
+  return (
+    <CardQuickPopover
+      model={model}
+      cardTitle={cardTitle}
+      open={controls.popover.open}
+      onOpenChange={controls.popover.onOpenChange}
+      opensFrom={opensFrom}
+      onMoreSettings={openSheet}
+      returnFocusTo={controls.popover.returnFocusTo}
+    >
+      {anchor}
+    </CardQuickPopover>
+  );
+}
+
+/**
+ * Where the card's quick popover is drawn from. At rest, its title, which opens it. While
+ * customising, the card's size and its one menu, side by side, over its own header's right end,
+ * outside the fence that puts the card's own content out of reach; the menu opens it there.
+ */
+function popoverPlaces(
+  props: ArrangedCellProps,
+  controls: ReturnType<typeof useCardControls>,
+  size: GridSize,
+  cardTitle: string,
+  openSheet: (() => void) | undefined
+): {
+  titleTrigger: ((title: string) => ReactNode) | undefined;
+  editActions: ReactElement | null;
+} {
+  if (!props.isEditing) {
+    return {
+      titleTrigger: controls.quick.popover
+        ? title =>
+            withQuickPopover(
+              controls,
+              cardTitle,
+              openSheet,
+              "trigger",
+              <CardTitleButton ref={controls.popover.titleRef} label={title} />
+            )
+        : undefined,
+      editActions: null,
+    };
+  }
+  const actions = editActionsOf(
+    props,
+    size,
+    controls.openSettings,
+    controls.customiseMenuRef
+  );
+  return {
+    titleTrigger: undefined,
+    editActions: actions
+      ? withQuickPopover(
+          controls,
+          cardTitle,
+          openSheet,
+          "anchor",
+          <span className="inline-flex">{actions}</span>
+        )
+      : null,
+  };
 }
 
 /** The card's size and menu while customising, drawn over its header's right end. */
@@ -504,6 +628,33 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
   };
 }
 
+/**
+ * The rows a card is drawn at, from what its body asks of the frame: the body height its content
+ * has asked for while its reader shows more of it (`frame/grow`), and whether the body has
+ * collapsed it to one line (`frame/collapse`), which is one row. Its stored rows in customise
+ * mode, where the arrangement is what is being edited, and never collapsed there.
+ */
+function useBodyRows(
+  storedRows: number,
+  isEditing: boolean
+): {
+  rows: number;
+  collapse: CardCollapse;
+  setContentHeight: (height: number | undefined) => void;
+} {
+  const [contentHeight, setContentHeight] = useState<number | undefined>();
+  const [bodyCollapsed, setBodyCollapsed] = useState(false);
+  const collapsed = bodyCollapsed && !isEditing;
+  const collapse = useMemo<CardCollapse>(
+    () => ({ collapsed, setCollapsed: setBodyCollapsed }),
+    [collapsed]
+  );
+  const rows = isEditing
+    ? storedRows
+    : collapsedRows(grownRows(storedRows, contentHeight), collapsed);
+  return { rows, collapse, setContentHeight };
+}
+
 export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const { row, isEditing, data } = props;
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
@@ -528,11 +679,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => drawnSize(row.size, row.widget.size),
     [row.size, row.widget.size]
   );
-  // The body height the card's content has asked for while its reader shows more of it
-  // (`frame/grow`), and the rows that holds. Its stored rows in customise mode, where the
-  // arrangement is what is being edited.
-  const [contentHeight, setContentHeight] = useState<number | undefined>();
-  const rows = isEditing ? size.h : grownRows(size.h, contentHeight);
+  const { rows, collapse, setContentHeight } = useBodyRows(size.h, isEditing);
   // The card's report, bound to this placement. Only the card drawn in the cell is told it: the
   // settings sheet's preview of the same placement is drawn outside it and reports nothing.
   const { reportHidden } = props;
@@ -554,22 +701,24 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     }),
     [row.placementId, row.widget, row.config, size, sources]
   );
-  const {
-    quick,
-    header: restingControls,
-    done,
-  } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
-
-  // While customising, the card's size and its one menu, side by side, over
-  // its own header's right end, outside the fence that puts the card's own
-  // content out of reach.
-  const editActions = editActionsOf(
+  const controls = useCardControls(
     props,
+    widget,
     size,
+    hasSettings,
+    setSettingsOpen
+  );
+  const { quick, header: restingControls, done } = controls;
+  const { titleTrigger, editActions } = popoverPlaces(
+    props,
+    controls,
+    size,
+    widget.title,
+    // More settings, in the popover: the sheet, where the widget declares settings.
     hasSettings ? () => setSettingsOpen(true) : undefined
   );
   // While customising, the card's header keeps the room its controls are drawn
-  // over; at rest it holds the dismiss control and the menu.
+  // over; at rest it holds the menu.
   const headerAction = isEditing ? <CardControlsSpace /> : restingControls;
 
   return (
@@ -596,16 +745,19 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           focusFirstField={sheet.focusFirstField}
         />
       ) : null}
-      <CardGrowContext.Provider value={setContentHeight}>
-        <CardHiddenReportContext.Provider value={reportCardHidden}>
-          <CardBody
-            {...{ widget, placement, headerAction, data, isEditing }}
-            subtitle={heading.subtitle}
-            quick={quick.inline}
-            onOpenSettings={sheet.openFromEmpty}
-          />
-        </CardHiddenReportContext.Provider>
-      </CardGrowContext.Provider>
+      <CardCollapseContext.Provider value={collapse}>
+        <CardGrowContext.Provider value={setContentHeight}>
+          <CardHiddenReportContext.Provider value={reportCardHidden}>
+            <CardBody
+              {...{ widget, placement, headerAction, data, isEditing }}
+              subtitle={heading.subtitle}
+              quick={quick.inline}
+              titleTrigger={titleTrigger}
+              onOpenSettings={sheet.openFromEmpty}
+            />
+          </CardHiddenReportContext.Provider>
+        </CardGrowContext.Provider>
+      </CardCollapseContext.Provider>
     </DraggableWidgetCell>
   );
 }

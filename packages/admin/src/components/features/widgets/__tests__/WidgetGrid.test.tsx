@@ -3,8 +3,14 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import { useEffect, type JSX, type ReactNode } from "react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
@@ -15,6 +21,7 @@ import {
 } from "@admin/lib/plugins/component-registry";
 import type { AdminBranding } from "@admin/types/branding";
 
+import { useCardCollapsed } from "../frame/collapse";
 import { coreDraws } from "../outcome";
 import { GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
@@ -1068,6 +1075,43 @@ describe("WidgetGrid — sizing", () => {
         .getByLabelText("Dashboard widgets")
         .closest(".\\@container\\/dashboard")
     ).toBe(screen.getByTestId("dashboard-container"));
+  });
+
+  it("draws a card its body collapsed one row tall, with its title kept for assistive technology only, and its own rows again once opened", () => {
+    // A body that collapses itself to one line, as the setup card does, with a control to open it.
+    function Collapsible() {
+      const [collapsed, setCollapsed] = useState(true);
+      useCardCollapsed(collapsed);
+      return (
+        <button type="button" onClick={() => setCollapsed(open => !open)}>
+          {collapsed ? "Expand" : "Collapse"}
+        </button>
+      );
+    }
+    registerComponents({ "@acme/admin#A": Collapsible });
+    mockBranding = brandingWith([{ ...sized("bar", 12, 3), title: "Bar" }]);
+    renderGrid();
+    const cell = screen.getByTestId("widget-cell-bar");
+    const card = within(cell).getByRole("region");
+    expect(cell.style.gridRow).toBe("span 1 / span 1");
+    expect(card).toHaveAttribute("data-collapsed");
+    // Its border, padding and one header-high line make exactly one row.
+    expect(card).toHaveClass("py-[15px]");
+    // The title still names the card, out of sight; no footer takes room under the line.
+    expect(within(cell).getByTestId("widget-card-header")).toHaveClass(
+      "sr-only"
+    );
+    expect(card).toHaveAccessibleName(/Bar/);
+    expect(within(cell).queryByTestId("widget-card-footer")).toBeNull();
+
+    // The must-differ half: opened, the card spans its stored rows and draws its frame.
+    fireEvent.click(within(cell).getByRole("button", { name: "Expand" }));
+    expect(cell.style.gridRow).toBe("span 3 / span 3");
+    expect(card).not.toHaveAttribute("data-collapsed");
+    expect(within(cell).getByTestId("widget-card-header")).not.toHaveClass(
+      "sr-only"
+    );
+    expect(within(cell).getByTestId("widget-card-footer")).toBeInTheDocument();
   });
 
   it("lays its cards on twelve columns in rows of 72 px, in order, with the gaps a card's predicted width counts", () => {
