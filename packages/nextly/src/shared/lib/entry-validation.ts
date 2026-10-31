@@ -33,6 +33,7 @@ import {
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
+import { numberFieldStoresFractions } from "../../domains/schema/services/field-column-descriptor";
 import type { ValidationPublicData } from "../../errors/public-data";
 import type {
   PluginFieldType,
@@ -123,6 +124,21 @@ export interface ValidateEntryOptions {
    */
   emptyIsAValue?: boolean;
   /**
+   * Whether the document was assembled from storage rather than carried by
+   * the caller — a publish merging the stored row with the caller's patch, a
+   * promoted working draft, a go-live document judged per language.
+   *
+   * Every rule still judges this document whole: that is what stops an
+   * untouched stored value from reading as missing. The whole-number rule is
+   * the one exception, because it alone binds values a CALLER writes — each
+   * value the caller carried was already judged, and refused, at its own
+   * patch gate on the way in. A stored fraction (SQLite holds 2.5 where a
+   * pre-fix write put it, MySQL's column already rounded it) rides through
+   * these views unchanged, and the column decides at the write, as it
+   * always has.
+   */
+  assembledFromStorage?: boolean;
+  /**
    * The entry write being validated, for the field types that judge a value
    * against stored rows. Absent where no entry write is behind the validation,
    * and then no type is handed one.
@@ -190,6 +206,133 @@ function numberRule(field: ValidatableField, key: string): number | undefined {
 }
 
 /**
+ * Whether the field's number values may carry a fraction. The opt-in answer
+ * is the descriptor's own — `numberFieldStoresFractions` there owns the
+ * question, so validation and the column cannot drift. This wrapper adds
+ * what the descriptor's column question does not cover: a hasMany number
+ * stores a JSON list, but the rule follows the field's whole-number
+ * semantics, not the physical column; and a plugin-contributed type
+ * rerouted here by its storage primitive is not a `number` field at all —
+ * its primitive stores numbers as integers unconditionally, so it is never
+ * exempt.
+ */
+function fieldJudgesFractions(field: ValidatableField): boolean {
+  if (field.type !== "number") return false;
+  return numberFieldStoresFractions(field);
+}
+
+/**
+ * The whole-number floor, judged over everything a beforeChange hook left
+ * changed — top-level values and numbers inside group and repeater rows.
+ *
+ * The hooks run after the validation gate and may transform or set any
+ * value, so what they leave behind is a write this gate never saw: a hook
+ * that produces a fraction would reach an integer column and let the
+ * database decide — the dialect divergence the whole-number rule exists to
+ * remove.
+ *
+ * Top-level scalars are compared by reference against the snapshot taken
+ * before the hooks ran — a number, string or boolean a hook leaves is
+ * always a replacement. Containers are compared by CONTENTS (`group` and
+ * `repeater` rows), because the hook runner recurses into those rows and
+ * its handlers mutate them in place: the parent's reference does not move
+ * even when a nested number did. Rows past the snapshot's own rows are
+ * hook-written whole, and every number in them is judged.
+ *
+ * Only number fields are judged — every other rule keeps its pre-hook
+ * verdict — and hasMany elements are judged as values, indexed in the path.
+ */
+/**
+ * The pre-hook copy the hook judgment compares against. Deep on purpose: the
+ * hook runner recurses into group and repeater rows and its handlers mutate
+ * those rows IN PLACE, so a shallow spread shares the nested object and a
+ * content comparison would see the hook's own result as unchanged. A payload
+ * is JSON-shaped, so `structuredClone` answers; the shallow fallback covers
+ * whatever exotic value it refuses, at the cost of nested-in-place visibility
+ * on that corner.
+ */
+export function snapshotForHookJudgment(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  try {
+    return structuredClone(data);
+  } catch {
+    return { ...data };
+  }
+}
+
+export function hookChangedWholeNumberIssues(
+  snapshot: Record<string, unknown> | undefined,
+  data: Record<string, unknown>,
+  fields: ValidatableField[],
+  path = ""
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const byName = new Map(
+    fields
+      .filter(field => typeof field.name === "string")
+      .map(field => [field.name as string, field])
+  );
+  for (const key of Object.keys(data)) {
+    const field = byName.get(key);
+    if (!field) continue;
+    const childPath = path ? `${path}.${key}` : key;
+
+    // A container's children are judged by CONTENTS, not by reference: the
+    // hook runner recurses into group and repeater rows and its handlers
+    // mutate those rows in place, so the parent's reference does not move
+    // even when a nested number did.
+    if (
+      (field.type === "group" || field.type === "repeater") &&
+      Array.isArray(field.fields)
+    ) {
+      const before = snapshot?.[key];
+      const after = data[key];
+      if (JSON.stringify(before ?? null) === JSON.stringify(after ?? null)) {
+        continue;
+      }
+      const rowsBefore = containerRows(before);
+      containerRows(after).forEach((row, index) => {
+        const rowPath =
+          field.type === "repeater" ? `${childPath}[${index}]` : childPath;
+        issues.push(
+          ...hookChangedWholeNumberIssues(
+            rowsBefore[index],
+            row,
+            field.fields as ValidatableField[],
+            rowPath
+          )
+        );
+      });
+      continue;
+    }
+
+    if (snapshot && data[key] === snapshot[key]) continue;
+    // A fraction-capable field (decimal, float) keeps fractions; a
+    // whole-number field is the one the floor judges.
+    if (fieldJudgesFractions(field)) continue;
+    const label = typeof field.label === "string" ? field.label : field.name;
+    const value = data[key];
+    const elements = field.hasMany && Array.isArray(value) ? value : [value];
+    elements.forEach((element, index) => {
+      if (
+        typeof element !== "number" ||
+        Number.isNaN(element) ||
+        Number.isInteger(element)
+      ) {
+        return;
+      }
+      issues.push({
+        path: field.hasMany ? `${childPath}[${index}]` : childPath,
+        code: "INVALID_TYPE",
+        message: `${label} must be a whole number.`,
+      });
+    });
+  }
+  return issues;
+}
+
+/**
  * Whether a write is judged against this field at all.
  *
  * A virtual field stores nothing: a value sent for it is dropped before the
@@ -199,6 +342,24 @@ function numberRule(field: ValidatableField, key: string): number | undefined {
  * not one to refuse. Exported because anything deciding whether a document
  * would pass this validator has to leave the same fields out.
  */
+/**
+ * The row objects a container value holds: a repeater's array filtered to
+ * its object rows, a group's single object, anything else empty. Mirrors
+ * the row walk the hook runner recurses with.
+ */
+function containerRows(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        row !== null && typeof row === "object"
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return [value as Record<string, unknown>];
+  }
+  return [];
+}
+
 export function isJudgedOnWrite(field: ValidatableField): boolean {
   return !isVirtualField(field);
 }
@@ -503,6 +664,24 @@ async function validateFieldValue(
             message: `${label} must be a number.`,
           });
           continue;
+        }
+        // A whole-number field says what it stores: a fraction is refused
+        // with the field named, before any write, on every dialect — not
+        // left to the column, where MySQL rounds it away silently,
+        // PostgreSQL answers a 500, and SQLite stores a value the schema
+        // never declared. On an assembled-from-storage document the caller's
+        // own values were already judged at their patch gate, and the stored
+        // ones were carried by nobody, so they ride unchanged.
+        if (
+          !fieldJudgesFractions(field) &&
+          !options.assembledFromStorage &&
+          !Number.isInteger(v)
+        ) {
+          issues.push({
+            path: p,
+            code: "INVALID_TYPE",
+            message: `${label} must be a whole number.`,
+          });
         }
         const min = numberRule(field, "min");
         const max = numberRule(field, "max");
