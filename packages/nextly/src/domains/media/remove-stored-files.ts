@@ -59,8 +59,11 @@ export function errorForLog(error: unknown): string {
   );
 }
 
-/** A stored file that could not be removed, by its path, so it can be found. */
-function warnNotRemoved(
+/**
+ * A stored file that could not be removed, by its path, so it can be found.
+ * Exported for the media file replace, which removes the old files too.
+ */
+export function warnNotRemoved(
   filePath: string,
   mediaId: string,
   error: unknown
