@@ -30,6 +30,7 @@ import {
   setRetiredSizes,
 } from "../../../__tests__/helpers/retired-image-sizes";
 import { runRemoveSizes } from "../../../cli/commands/media";
+import { previewRetiredImageSizes } from "../../../cli/commands/migrate";
 import { ensureFirstRunSetup } from "../../../init/first-run";
 import { reconcileCore } from "../../schema/migrate/core-reconcile";
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
@@ -112,6 +113,15 @@ async function migrate(
   return warn.mock.calls.map(([message]) => String(message));
 }
 
+/** What `nextly migrate --dry-run` says of the retired column and table. */
+async function migrateDryRun(fresh: FreshDatabase): Promise<string[]> {
+  const lines: string[] = [];
+  await previewRetiredImageSizes(fresh.db, fresh.dialect, {
+    info: line => lines.push(line),
+  });
+  return lines;
+}
+
 /** Whether the retired column and table are there. */
 async function retired(fresh: FreshDatabase) {
   return {
@@ -191,7 +201,11 @@ describe.each(availableDialects())(
           expect(notice).toContain("nextly media remove-sizes");
           expect(notice).toContain("`nextly migrate`");
 
-          // `nextly migrate` keeps both while items name size files.
+          // `nextly migrate` keeps both while items name size files, and its
+          // dry run says so.
+          expect(await migrateDryRun(fresh)).toEqual([
+            "  • would keep the retired column media.sizes and table image_sizes: 2 items still name their image size files. Run `nextly media remove-sizes` first.",
+          ]);
           const refused = await migrate(fresh, true);
           expect(refused.join("\n")).toContain(
             "2 items still name their image size files"
@@ -252,7 +266,13 @@ describe.each(availableDialects())(
           await migrate(fresh, false);
           expect(await retired(fresh)).toEqual({ column: true, table: true });
 
-          // `nextly migrate` now drops both, keeping every media row.
+          // `nextly migrate` now drops both, keeping every media row; its dry
+          // run names each, first, and drops nothing.
+          expect(await migrateDryRun(fresh)).toEqual([
+            "  • would drop the retired column media.sizes (no item names a size file)",
+            "  • would drop the retired table image_sizes (1 row of size definitions)",
+          ]);
+          expect(await retired(fresh)).toEqual({ column: true, table: true });
           await migrate(fresh, true);
           expect(await retired(fresh)).toEqual({ column: false, table: false });
           const rows = (await (
@@ -284,6 +304,7 @@ describe.each(availableDialects())(
             })
           ).toBe(0);
           expect(again[0]).toContain("no sizes column");
+          expect(await migrateDryRun(fresh)).toEqual([]);
           await migrate(fresh, true);
           expect(await retired(fresh)).toEqual({ column: false, table: false });
         });

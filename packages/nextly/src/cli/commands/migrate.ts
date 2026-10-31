@@ -904,18 +904,13 @@ export async function previewMigrate(args: {
  * drop them, naming each, or keep them while items still name size files.
  * Read with the same helpers the run decides with.
  */
-async function previewRetiredImageSizes(
+export async function previewRetiredImageSizes(
   db: unknown,
   dialect: SupportedDialect,
-  logger: CommandContext["logger"]
+  logger: Pick<CommandContext["logger"], "info">
 ): Promise<void> {
-  const [
-    { readRetiredObjects },
-    { formatRetiredImageSizesKept },
-    { liveColumnsOf },
-  ] = await Promise.all([
+  const [{ readRetiredObjects }, { liveColumnsOf }] = await Promise.all([
     import("../../domains/media/retired-image-sizes-store"),
-    import("../../domains/media/retired-image-sizes"),
     import("../../init/retired-auth-tables"),
   ]);
   const objects = await readRetiredObjects(
@@ -925,7 +920,9 @@ async function previewRetiredImageSizes(
   );
   if (!objects.column && objects.tableRows === null) return;
   if (objects.itemsWithSizes > 0) {
-    logger.info(`  • ${formatRetiredImageSizesKept(objects.itemsWithSizes)}`);
+    logger.info(
+      `  • would keep the retired column media.sizes and table image_sizes: ${objects.itemsWithSizes} ${objects.itemsWithSizes === 1 ? "item still names its" : "items still name their"} image size files. Run \`nextly media remove-sizes\` first.`
+    );
     return;
   }
   if (objects.column) {

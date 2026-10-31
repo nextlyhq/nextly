@@ -424,6 +424,83 @@ initialised process and throws `Nextly services not initialized` when it is the 
 Nextly code a worker runs, which a blank scaffold makes likely because it ships no
 `instrumentation.ts`.
 
+## Upgrading from a release with image sizes
+
+Earlier releases cut a set of image sizes from every upload and stored each as a file of its own, recorded in the media table's `sizes` column, with the size definitions in an `image_sizes` table. This release no longer makes or reads them, but it leaves what is stored until you remove it, and your site keeps working meanwhile. Startup says so while the column or the table is still there.
+
+Removing them takes two commands: `nextly media remove-sizes` deletes the size files while the `sizes` column still says where they are, then `nextly migrate` drops the column and the table. Dropping the column first would leave every size file in storage, still publicly served, with nothing pointing at it, so `nextly migrate` keeps both while any item still names a size file.
+
+What is deleted, and nothing else:
+
+- **Files:** each file an item's `sizes` names. Never an original, never a thumbnail: where an item's thumbnail is one of its sizes, that file stays, and so does any size file another item uses as its original or thumbnail.
+- **Database:** each item's `sizes` value, then the `media.sizes` column and the `image_sizes` table with its rows (the size definitions you set at Settings › Image sizes).
+
+### 1. Back up the database and the media storage
+
+Take both backups at the same time, before you run anything, so they match each other. For the database:
+
+```bash
+pg_dump "$DATABASE_URL" > nextly-before-sizes.sql      # PostgreSQL
+mysqldump --single-transaction nextly > nextly-before-sizes.sql   # MySQL
+cp nextly.db nextly-before-sizes.db                   # SQLite: copy your database file, with the app stopped
+```
+
+For the media storage, copy the folder or bucket the media collection uploads to:
+
+```bash
+cp -R public/uploads uploads-before-sizes                  # local disk
+aws s3 sync s3://your-bucket ./bucket-before-sizes        # S3 and S3-compatible services
+```
+
+On Vercel Blob or UploadThing, download the files from the provider's dashboard or API. Only the size files are deleted, so a copy of those is enough; the dry run below lists them.
+
+### 2. List what would be deleted
+
+```bash
+npx nextly media remove-sizes
+```
+
+This is a dry run: it changes nothing. It names every item that holds sizes, each size file it would remove, each it would keep and why, and what `nextly migrate` will drop afterwards:
+
+```text
+Dry run: nothing is changed.
+media 4f2a9c1e-7b3d-4c55-9a1e-0d6f2b8c3a10 (2025/03/1a2b-photo.png)
+  remove 2025/03/1a2b-photo-medium.webp (size "medium")
+  remove 2025/03/1a2b-photo-large.webp (size "large")
+  keep   2025/03/1a2b-photo-thumbnail.webp (size "thumbnail": the item's thumbnail)
+  clear  its stored sizes
+Would remove 2 files from storage, keep 1, and clear the stored sizes of 1 of 1 item.
+Once no item holds sizes, `nextly migrate` drops the `sizes` column of the `media` table and the `image_sizes` table (3 rows, the size definitions).
+Back up the database and the media storage first, then run again with --apply.
+```
+
+### 3. Remove the size files
+
+```bash
+npx nextly media remove-sizes --apply
+```
+
+It works item by item: it removes the item's size files, then clears its `sizes`. If the storage refuses a file, that item keeps its `sizes`, the file and the item are named, the run goes on with the next item, and the command exits non-zero. Fix the cause and run it again: a file already gone counts as removed, so a second run picks up where the first stopped. Like `nextly media orphans`, it removes files only when run from the project's own directory.
+
+### 4. Drop the column and the table
+
+```bash
+npx nextly migrate --dry-run   # names the column and the table it would drop
+npx nextly migrate
+```
+
+`nextly migrate` drops `media.sizes` and `image_sizes` only when no item names a size file; otherwise it keeps both, says how many items still do, and goes on with the rest of the migration. A migration run at startup never drops them.
+
+### 5. Check
+
+- `npx nextly media remove-sizes` says there is no `sizes` column left.
+- Startup no longer names image sizes.
+- Pages and the media library still show every image, and each item's thumbnail.
+
+### Restoring
+
+To undo the removal, restore both backups from step 1 together: the database dump (`psql "$DATABASE_URL" < nextly-before-sizes.sql`, `mysql nextly < nextly-before-sizes.sql`, or the copied SQLite file, with the app stopped), and the storage copy (`cp -R uploads-before-sizes/. public/uploads/`, or `aws s3 sync ./bucket-before-sizes s3://your-bucket`, or upload the files again to Vercel Blob or UploadThing under the same paths). Restoring one without the other leaves records and files that disagree.
+
 ## Focus point
 
 Each media record can carry a focus point: the part of the image to keep in frame when a layout crops it. Set it from the admin media library: open an item, choose **Set focus point**, click or drag on the image (or use the arrow keys), then **Done**. The values are stored as `focalX` (0-100, left to right) and `focalY` (0-100, top to bottom). Saving a point changes no stored file: your site, or an image loader, reads it.
