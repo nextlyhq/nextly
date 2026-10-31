@@ -8,6 +8,8 @@
  *
  * @module runtime/cache/use-cache-handler
  */
+import { holdForNextFlush } from "../../revalidation/expiry-handoff";
+
 import { sharedEntries } from "./bounded-entries";
 import {
   expireTags,
@@ -71,6 +73,13 @@ const useCacheHandler = {
   set(cacheKey: string, pendingEntry: Promise<CacheEntry>): Promise<void> {
     const write = (async () => {
       const { value, ...entry } = await pendingEntry;
+      // Outside development an `expire: 0` entry is dynamic: Next.js
+      // regenerates it on every read and never serves the stored copy, so it
+      // is not stored, and an entry already there is left as it was. In
+      // development (`next dev`) it is kept, as Next.js's own handler does.
+      if (process.env.NODE_ENV !== "development" && entry.expire === 0) {
+        return;
+      }
       const chunks: Uint8Array[] = [];
       let bytes = 0;
       const reader = value.getReader();
@@ -107,7 +116,9 @@ const useCacheHandler = {
   // Every expiry is immediate here, `max` profiles included: a write recorded
   // for another instance cannot carry a stale-while-revalidate window there.
   async updateTags(tags: string[]): Promise<void> {
-    await expireTags(tags);
+    // A refused record is retried by the next flush; no table is not, as in
+    // the incremental handler.
+    if ((await expireTags(tags)) === "failed") holdForNextFlush(tags);
   },
 };
 

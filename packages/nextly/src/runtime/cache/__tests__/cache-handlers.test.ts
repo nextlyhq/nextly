@@ -326,6 +326,36 @@ describe("the incremental cache handler", () => {
     expect((await handler.get("k"))?.value).toEqual(page(2));
   });
 
+  it("remembers a bounded number of reads, however many distinct keys a burst reads", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    const handler = new IncrementalHandler();
+    // All inside the fill window: none is old enough to drop by age.
+    for (let i = 0; i < 10_500; i += 1) await handler.get(`miss-${i}`);
+    const remembered = (
+      globalThis as { __nextly_cache_reads?: Map<string, number> }
+    ).__nextly_cache_reads;
+    expect(remembered?.size).toBeLessThanOrEqual(10_000);
+    // None inside the window is dropped: the reads that overflowed are the
+    // ones not remembered, and their fills are judged from the window's start.
+    expect(remembered?.has("miss-0")).toBe(true);
+    expect(remembered?.has("miss-10499")).toBe(false);
+  });
+
+  it("refuses a fill whose read went unremembered while the reads were full, when an expiry crossed it", async () => {
+    const { ledger, recordElsewhere } = memoryLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    // Fills the remembered reads with ones still inside the window.
+    for (let i = 0; i < 10_000; i += 1) await handler.get(`busy-${i}`);
+    // This miss finds no room, so when its fill began is not kept.
+    expect(await handler.get("k")).toBeNull();
+    vi.advanceTimersByTime(10);
+    recordElsewhere("posts");
+    vi.advanceTimersByTime(10);
+    await handler.set("k", page(1), { tags: ["posts"] });
+    expect(await handler.get("k")).toBeNull();
+  });
+
   it("expires its own writes with no ledger published, as one instance needs", async () => {
     publishTagExpiryLedger(null);
     const handler = new IncrementalHandler();
@@ -420,6 +450,20 @@ describe("the use cache handler", () => {
     expect(await useCacheHandler.get("k", [])).toBeUndefined();
     // Reported on this process's clock, for Next.js to compare its own times with.
     expect(await useCacheHandler.getExpiration(["posts"])).toBeGreaterThan(T0);
+  });
+
+  it("does not store a dynamic result outside development, keeping the entry there", async () => {
+    publishTagExpiryLedger(memoryLedger().ledger);
+    vi.stubEnv("NODE_ENV", "production");
+    await useCacheHandler.set("k", Promise.resolve(entry("kept", ["posts"])));
+    await useCacheHandler.set(
+      "k",
+      Promise.resolve({ ...entry("dynamic", ["posts"]), expire: 0 })
+    );
+    expect(await read((await useCacheHandler.get("k", []))?.value)).toBe(
+      "kept"
+    );
+    vi.unstubAllEnvs();
   });
 
   it("answers a get made while the same key is being written with the new value", async () => {
