@@ -1,12 +1,13 @@
 "use client";
 
 /**
- * A card its body has collapsed to one line: drawn one grid row tall, with the frame's header,
- * gap and footer given up so the body's line is the whole card.
+ * A card its body has collapsed to one line: drawn one grid row tall, with the frame's gap and
+ * footer given up so its header is the whole card.
  *
  * A body that offers collapsing (the setup card) reports it with `useCardCollapsed`. The cell
- * then spans one row in place of its stored rows, and the frame keeps its title for assistive
- * technology only, since the body's one line names the card on screen. Nothing is written to the
+ * then spans one row in place of its stored rows, and the frame draws its header alone: the
+ * title, its count, the body's own controls (`header-slot`) and the card's menu, each visible and
+ * in reach, so no control is focusable while it cannot be seen. Nothing is written to the
  * layout: the body keeps whether it is collapsed wherever it keeps it, and the card is drawn at
  * its stored rows again once the body reports it open. Never in customise mode, where the card's
  * stored size is what is being edited and its controls stand over the frame's header.

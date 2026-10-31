@@ -71,7 +71,10 @@ export interface RetentionPassInput {
     NoticesPruneDb &
     ContentEventsPruneDb &
     PreviewLinksPruneAdapter &
-    TagExpiryLedgerAdapter;
+    TagExpiryLedgerAdapter & {
+      /** Whether the calling flow holds an open transaction on this adapter. */
+      transactionOpenInFlow?(): boolean;
+    };
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
@@ -366,5 +369,8 @@ export function buildRetentionRunner(
     gate: input.gate,
     now: input.now,
     logger: input.logger,
+    // A write offering passes from inside its transaction is offered none:
+    // they would run on the pool, outside it.
+    transactionOpen: () => input.adapter.transactionOpenInFlow?.() ?? false,
   });
 }

@@ -193,6 +193,42 @@ describe("the scheduled drain and the cache tag expiry ledger", () => {
     expect(ledger.deleted.length).toBeLessThan(2);
     expect(result.pruned.cacheTagExpiries).toBeLessThan(2000);
   });
+
+  it("is left its share behind secrets and preview-link backlogs that never end", async () => {
+    // Every sweep batch takes time and there is always another, so a sweep
+    // handed the whole remainder would spend it all and the ledger's turn,
+    // last, would never run.
+    let clock = 0;
+    const remove = async () => {
+      clock += 50;
+      return 500;
+    };
+    const ledger = ledgerWithRowsToPrune();
+    const adapter = {
+      ...ledger.adapter,
+      select: async () =>
+        Array.from({ length: 500 }, (_, i) => ({ id: `row-${i}` })),
+      delete: remove,
+      transaction: async (
+        fn: (tx: { delete: typeof remove }) => Promise<unknown>
+      ) => fn({ delete: remove }),
+    };
+
+    const result = await drain(
+      {
+        oneTimeSecrets: true,
+        previewLinks: true,
+        cacheTagExpiries: true,
+        prune: { adapter } as never,
+        gate: claimAll,
+      },
+      () => new Date(clock),
+      1_000
+    );
+
+    expect(ledger.deleted.length).toBeGreaterThan(0);
+    expect(result.pruned.cacheTagExpiries).toBeGreaterThan(0);
+  });
 });
 
 describe("the scheduled drain and plugins' one-purpose secrets", () => {

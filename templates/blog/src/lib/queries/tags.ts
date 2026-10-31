@@ -10,6 +10,8 @@
 
 // Pass nextlyConfig (loaded via the -config path alias) so
 // getNextly() bootstraps with this project's collections list.
+// Registers Nextly's cached reads under Cache Components (see the file).
+import "@/nextly/cached-read";
 import { getNextly } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";

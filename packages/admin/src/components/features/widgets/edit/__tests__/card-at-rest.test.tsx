@@ -10,7 +10,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
@@ -27,6 +35,7 @@ import {
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -248,6 +257,14 @@ function pressUndo() {
   if (options?.action?.label !== "Undo") throw new Error("no Undo offered");
   options.action.onClick();
 }
+
+// The settings panel's code loads apart from the dashboard's, ahead of its opening, as a pointer
+// over the card's menu fetches it. Fetched once here, so a test opening the panel meets the panel
+// rather than its loading screen.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../CellSettings");
+});
 
 beforeEach(() => {
   stubDashboardWidth();

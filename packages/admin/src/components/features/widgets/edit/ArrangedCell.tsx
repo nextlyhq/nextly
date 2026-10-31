@@ -12,8 +12,6 @@
 
 import type { GridSize } from "nextly/config";
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -60,6 +58,7 @@ import {
   CustomizingFence,
 } from "./CustomizingFence";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import { LazyWidgetSettingsSheet } from "./LazyWidgetSettingsSheet";
 import { requestSettingsPanel } from "./settings-panel-registry";
 import type { SettingsPanelProps } from "./SettingsPanel";
 import {
@@ -68,9 +67,6 @@ import {
   type CellSettingsWrite,
 } from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
-
-/** A card's settings panel, fetched when a reader first opens one (`CellSettings`). */
-const CellSettings = lazy(() => import("./CellSettings"));
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
@@ -724,19 +720,17 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     >
       <CellEditActions actions={editActions} />
       {/* On every card, since every card has its own title to set, once its reader first opens
-          it: the panel's module is fetched then, not with the dashboard. Kept mounted after, not
+          it: the panel's module is fetched then, or as a pointer or focus heads for a control that opens it (`settings-sheet-code`), not with the dashboard. Kept mounted after, not
           only while customising, which is what lets the panel outlive customise mode rather
           than being torn out from under a reader still filling it in. */}
       {sheet.everOpened ? (
-        <Suspense fallback={null}>
-          <CellSettings
-            {...{ row, widget, data, done, size, isEditing }}
-            open={sheet.settingsOpen}
-            onOpenChange={sheet.changeSettingsOpen}
-            focusFirstField={sheet.focusFirstField}
-            returnFocusTo={controls.panelReturnFocusTo}
-          />
-        </Suspense>
+        <LazyWidgetSettingsSheet
+          {...{ row, widget, data, done, size, isEditing }}
+          open={sheet.settingsOpen}
+          onOpenChange={sheet.changeSettingsOpen}
+          focusFirstField={sheet.focusFirstField}
+          returnFocusTo={controls.panelReturnFocusTo}
+        />
       ) : null}
       <CardCollapseContext.Provider value={collapse}>
         <CardGrowContext.Provider value={setContentHeight}>

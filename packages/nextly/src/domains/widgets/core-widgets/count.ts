@@ -70,6 +70,15 @@ function whereFor(
   ).where;
 }
 
+/**
+ * A collection of sample size, for the add gallery's tile and the preview
+ * page: plainly made up, never read from anything.
+ */
+const SAMPLE_COUNT: CountWidgetData = {
+  total: 128,
+  split: { published: 104, draft: 24 },
+};
+
 export const countWidget = defineWidget({
   id: CORE_WIDGET_ID.count,
   title: "Count",
@@ -165,4 +174,5 @@ export const countWidget = defineWidget({
   skeleton: "figure",
   // A count of nothing is the number 0, drawn as every other number is.
   isEmpty: () => false,
+  preview: [{ name: "Sample collection", data: SAMPLE_COUNT }],
 });

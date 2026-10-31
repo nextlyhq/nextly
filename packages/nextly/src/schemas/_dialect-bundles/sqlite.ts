@@ -116,6 +116,9 @@ export { nextlyNoticesSqlite as nextlyNotices } from "../notices/sqlite";
 // creates.
 export { nextlyDashboardPinsSqlite as nextlyDashboardPins } from "../dashboard-pins/sqlite";
 export { nextlyDashboardPreferencesSqlite as nextlyDashboardPreferences } from "../dashboard-preferences/sqlite";
+// Which media items each document uses; in the bundle for the reason the
+// releases note above gives — this map is what the push creates.
+export { nextlyMediaUsageSqlite as nextlyMediaUsage } from "../media-usage/sqlite";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

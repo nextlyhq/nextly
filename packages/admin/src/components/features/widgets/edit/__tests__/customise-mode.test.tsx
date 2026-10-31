@@ -7,7 +7,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -21,10 +29,13 @@ import type {
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
+
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -211,13 +222,28 @@ function renderDashboard() {
   );
 }
 
+// The settings sheet's code loads apart from the dashboard's, ahead of its opening, as a pointer
+// over the card's menu fetches it. Fetched once here, so a test opening the sheet waits on the
+// sheet rather than on the first transform of the editor's field renderer behind it.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../CellSettings");
+});
+
 beforeEach(() => {
   // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
   stubDashboardWidth();
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
-  api.get.mockImplementation(() => Promise.resolve(layoutResponse));
+  api.get.mockImplementation((path: string) =>
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    Promise.resolve(
+      isGalleryPath(path) && layoutResponse !== undefined
+        ? galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+        : layoutResponse
+    )
+  );
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
   // A history the reader can go Back through: they came to the dashboard
@@ -359,7 +385,10 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       await user.click(
         within(popover).getByRole("button", { name: "More settings" })
       );
-      const sheet = await screen.findByRole("dialog");
+      // The sheet's panel opens at once and says it is loading until its code
+      // arrives, so wait for the form's field before reading the sheet.
+      await screen.findByLabelText(/Heading/);
+      const sheet = screen.getByRole("dialog", { name: "Notes settings" });
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
       await user.click(within(sheet).getByRole("button", { name: "Done" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -373,12 +402,16 @@ describe("customise mode writes nothing before Save", () => {
     async (_kind, change) => {
       renderDashboard();
       const user = await beginEditing();
-      const reads = api.get.mock.calls.length;
+      // The layout's reads: opening the add panel reads the gallery, which is no re-read.
+      const layoutReads = () =>
+        api.get.mock.calls.filter(([path]) => !isGalleryPath(String(path)))
+          .length;
+      const reads = layoutReads();
 
       await change(user);
 
       expect(writes()).toBe(0);
-      expect(api.get.mock.calls.length).toBe(reads);
+      expect(layoutReads()).toBe(reads);
       await user.click(saveButton());
       await waitFor(() => expect(writes()).toBe(1));
     }

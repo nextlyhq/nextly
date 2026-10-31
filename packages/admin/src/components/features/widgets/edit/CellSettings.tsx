@@ -19,6 +19,21 @@ import type { ArrangedCellProps } from "./ArrangedCell";
 import { SettingsPanel, type SettingsPanelProps } from "./SettingsPanel";
 import { SettingsPreview } from "./SettingsPreview";
 
+/** What a card's cell hands its settings panel. */
+export interface CellSettingsProps {
+  row: ArrangedCellProps["row"];
+  widget: DashboardWidget;
+  data: ArrangedCellProps["data"];
+  /** Where the panel's Done goes, and why it cannot keep a change now, when it cannot. */
+  done: { done: SettingsPanelProps["onDone"]; blocked: string | undefined };
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  focusFirstField: boolean;
+  size: GridSize;
+  returnFocusTo: () => HTMLElement | null;
+  isEditing: boolean;
+}
+
 /**
  * The card's settings panel, with the card at its top as the panel's values would draw it: the
  * declared widget, the reader's stored settings it was asked with, the answer it shows now, and
@@ -35,19 +50,7 @@ export default function CellSettings({
   size,
   returnFocusTo,
   isEditing,
-}: {
-  row: ArrangedCellProps["row"];
-  widget: DashboardWidget;
-  data: ArrangedCellProps["data"];
-  /** Where the panel's Done goes, and why it cannot keep a change now, when it cannot. */
-  done: { done: SettingsPanelProps["onDone"]; blocked: string | undefined };
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  focusFirstField: boolean;
-  size: GridSize;
-  returnFocusTo: () => HTMLElement | null;
-  isEditing: boolean;
-}): JSX.Element {
+}: CellSettingsProps): JSX.Element {
   // The card's width on the dashboard, from the dashboard's own and the card's span, the rule
   // its first query is sized by: the width it has once the panel closes.
   const dashboardWidth = useDashboardWidthAround();

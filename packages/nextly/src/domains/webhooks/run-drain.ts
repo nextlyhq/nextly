@@ -632,12 +632,12 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           now(),
           {
             // Its share, not the whole remainder, while the preview-links
-            // sweep still follows: a backlog here would otherwise take every
-            // drain's last moments and leave that sweep none.
+            // sweep or the ledger prune still follows: a backlog here would
+            // otherwise take every drain's last moments and leave them none.
             deadline: shareOfRemaining(
               deadline,
               now,
-              previewLinksTurn ? 2 : 1
+              1 + (previewLinksTurn ? 1 : 0) + (cacheTagsTurn ? 1 : 0)
             )?.getTime(),
             clock: () => now().getTime(),
           }
@@ -661,11 +661,16 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       // sweep stops between batches at the deadline, and the turn is kept only
       // if a batch was attempted.
       if (previewLinksTurn && !deadlineSpent()) {
-        // Mirrors the secrets sweep above deliberately: the same deadline,
-        // the same quiet failure and the same rule for keeping the turn.
+        // Mirrors the secrets sweep above deliberately: a share of the
+        // deadline that leaves the ledger prune its own, the same quiet
+        // failure and the same rule for keeping the turn.
         // fallow-ignore-next-line code-duplication
         const swept = await prunePreviewLinks(retention.prune.adapter, now(), {
-          deadline: deadline?.getTime(),
+          deadline: shareOfRemaining(
+            deadline,
+            now,
+            cacheTagsTurn ? 2 : 1
+          )?.getTime(),
           clock: () => now().getTime(),
         }).catch((error: unknown) => {
           // Quietly, as the secrets sweep: a database not yet updated has no

@@ -33,6 +33,8 @@ import {
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
 
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
+
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 
@@ -181,7 +183,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
-  api.get.mockImplementation(() => Promise.resolve(layoutResponse));
+  api.get.mockImplementation((path: string) =>
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    Promise.resolve(
+      isGalleryPath(path) && layoutResponse !== undefined
+        ? galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+        : layoutResponse
+    )
+  );
   /*
    * 🔴 The stand-in APPLIES the write, so the next read answers with it. A
    * `put` that merely resolves leaves every later GET returning the original

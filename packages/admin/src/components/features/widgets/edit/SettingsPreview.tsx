@@ -145,20 +145,27 @@ function PreviewCard({
 }
 
 /** What the preview says in the card's place while the panel's filters match nothing. */
-function NoMatchNotice({ onClearFilters }: { onClearFilters: () => void }) {
+function NoMatchNotice({
+  onClearFilters,
+}: {
+  onClearFilters: (() => void) | undefined;
+}) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card p-4 text-center">
       <p role="status" className="text-sm text-foreground">
         {NO_FILTER_MATCH}
       </p>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={onClearFilters}
-      >
-        Clear filters
-      </Button>
+      {/* Offered where the preview sits beside the filters it would clear: the panel's. */}
+      {onClearFilters ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onClearFilters}
+        >
+          Clear filters
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -177,8 +184,8 @@ export function SettingsPreview(props: {
   size: GridSize;
   /** The width the card is drawn at on the dashboard, in pixels, when it is known. */
   cardWidth: number | undefined;
-  /** Empty every Filter setting in the panel. */
-  onClearFilters: () => void;
+  /** Empty every Filter setting in the panel; absent where nothing beside the preview holds one. */
+  onClearFilters?: () => void;
 }): JSX.Element {
   const { cardWidth, size } = props;
   const tier = cardWidth === undefined ? undefined : tierForWidth(cardWidth);
