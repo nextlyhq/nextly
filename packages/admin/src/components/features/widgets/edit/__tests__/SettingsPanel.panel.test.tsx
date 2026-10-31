@@ -392,6 +392,53 @@ describe("the panel's filter chips", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
+  it("adds one row at a time: + Add filter waits for the row being built, which takes focus", async () => {
+    const { onDone } = panel({ collection: "posts" });
+    const add = () => screen.getByRole("button", { name: "+ Add filter" });
+    await userEvent.click(add());
+    // Focus goes to the new row, where it is built, and a second row cannot be begun.
+    expect(
+      screen.getByRole("combobox", { name: "Condition field" })
+    ).toHaveFocus();
+    expect(add()).toBeDisabled();
+    // Opening a finished chip meanwhile leaves the unfinished row the one shown.
+    await addFilterAfter("Title", "Hello");
+    await userEvent.click(add());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Title is Hello" })
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Condition field" })
+    ).toHaveTextContent(/Choose a field/);
+    // Finished, the row is a chip, Add is back, and Done keeps both.
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Condition field" })
+    );
+    await userEvent.click(screen.getByRole("option", { name: "Title" }));
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Condition value" }),
+      "World"
+    );
+    expect(add()).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(kept(onDone)?.config.where).toEqual({
+      and: [{ title: { equals: "Hello" } }, { title: { equals: "World" } }],
+    });
+
+    /** Finishes the row already open: its field, then its value. */
+    async function addFilterAfter(field: string, value: string) {
+      await userEvent.click(
+        screen.getByRole("combobox", { name: "Condition field" })
+      );
+      await userEvent.click(screen.getByRole("option", { name: field }));
+      await userEvent.type(
+        screen.getByRole("textbox", { name: "Condition value" }),
+        value
+      );
+    }
+  });
+
   it("removes one chip alone with its ✕", async () => {
     const { onDone } = panel({
       collection: "posts",

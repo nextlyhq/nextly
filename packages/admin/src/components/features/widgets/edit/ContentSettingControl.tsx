@@ -339,6 +339,44 @@ function FilterControl({
 }
 
 /**
+ * The row the chips draw open: a row begun and not finished, while there is one, else the chip
+ * opened for editing. An unfinished row writes nothing, so drawn nowhere it could not be finished
+ * or removed, and Done refused by it with no way to reach it; so it stays open, and no second row
+ * is begun beside it. A row just added takes focus, where the reader builds it.
+ */
+function useOpenRow(
+  conditions: readonly (ConditionValue | undefined)[],
+  editing: number | undefined,
+  onEdit: (index: number | undefined) => void
+) {
+  const unfinishedAt = conditions.findIndex(
+    condition => !isComplete(condition)
+  );
+  const shown = unfinishedAt === -1 ? editing : unfinishedAt;
+  // The chip open follows the unfinished row, so once it is finished it stays the one open, as
+  // the reader is still typing its value, rather than giving way to a chip opened meanwhile.
+  useEffect(() => {
+    if (unfinishedAt !== -1 && editing !== unfinishedAt) onEdit(unfinishedAt);
+  }, [unfinishedAt, editing, onEdit]);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [added, setAdded] = useState(false);
+  useEffect(() => {
+    if (!added) return;
+    setAdded(false);
+    rowRef.current
+      ?.querySelector<HTMLElement>("button, input, select, textarea")
+      ?.focus();
+  }, [added]);
+  return {
+    shown,
+    open: shown === undefined ? undefined : conditions[shown],
+    building: unfinishedAt !== -1,
+    rowRef,
+    focusAdded: () => setAdded(true),
+  };
+}
+
+/**
  * The chips, the one open for editing as a condition row beneath them, and "+ Add filter". A
  * chip being built, which writes nothing yet, is drawn as its row alone.
  */
@@ -355,7 +393,11 @@ function FilterChips({
   onEdit: (index: number | undefined) => void;
   onChange: (next: (ConditionValue | undefined)[]) => void;
 }) {
-  const open = editing === undefined ? undefined : conditions[editing];
+  const { shown, open, building, rowRef, focusAdded } = useOpenRow(
+    conditions,
+    editing,
+    onEdit
+  );
   return (
     <>
       {conditions.some(isComplete) ? (
@@ -390,27 +432,29 @@ function FilterChips({
           )}
         </ul>
       ) : null}
-      {editing === undefined ? null : (
-        <ConditionRow
-          // One row per chip: another chip opened starts its own row.
-          key={editing}
-          // The panel is narrow at every screen width, so the row is laid out for the panel, not
-          // the screen: the field across the whole row, where "Choose a field…" fits on one
-          // line, and the operator and value side by side beneath it.
-          className="grid grid-cols-2 gap-2 [&>*:first-child]:col-span-2"
-          condition={open}
-          sources={conditionSources(fields)}
-          operatorsFor={filterOperatorsFor}
-          onChange={next =>
-            onChange(
-              conditions.map((condition, at) =>
-                at === editing ? next : condition
+      {shown === undefined ? null : (
+        <div ref={rowRef}>
+          <ConditionRow
+            // One row per chip: another chip opened starts its own row.
+            key={shown}
+            // The panel is narrow at every screen width, so the row is laid out for the panel, not
+            // the screen: the field across the whole row, where "Choose a field…" fits on one
+            // line, and the operator and value side by side beneath it.
+            className="grid grid-cols-2 gap-2 [&>*:first-child]:col-span-2"
+            condition={open}
+            sources={conditionSources(fields)}
+            operatorsFor={filterOperatorsFor}
+            onChange={next =>
+              onChange(
+                conditions.map((condition, at) =>
+                  at === shown ? next : condition
+                )
               )
-            )
-          }
-        />
+            }
+          />
+        </div>
       )}
-      {editing === undefined || isComplete(open) ? null : (
+      {shown === undefined || isComplete(open) ? null : (
         // A chip being built has no ✕ of its own yet, so it is removed here.
         <div>
           <Button
@@ -419,7 +463,7 @@ function FilterChips({
             size="sm"
             onClick={() => {
               onEdit(undefined);
-              onChange(conditions.filter((_, at) => at !== editing));
+              onChange(conditions.filter((_, at) => at !== shown));
             }}
           >
             Remove this filter
@@ -431,9 +475,12 @@ function FilterChips({
           type="button"
           variant="ghost"
           size="sm"
+          // One row at a time: the one being built is finished or removed first.
+          disabled={building}
           onClick={() => {
             onEdit(conditions.length);
             onChange([...conditions, undefined]);
+            focusAdded();
           }}
         >
           + Add filter
