@@ -562,6 +562,7 @@ function SearchAndChips({
   chip,
   onChip,
   count,
+  ready,
 }: {
   searchRef: RefObject<HTMLInputElement | null>;
   query: string;
@@ -569,6 +570,8 @@ function SearchAndChips({
   chip: GalleryChip;
   onChip: (chip: GalleryChip) => void;
   count: string;
+  /** Whether the read has answered; the count line says nothing before it. */
+  ready: boolean;
 }): JSX.Element {
   const countId = useId();
   return (
@@ -597,7 +600,7 @@ function SearchAndChips({
         className="text-xs text-muted-foreground"
         data-testid="add-panel-count"
       >
-        {count}
+        {ready ? count : ""}
       </p>
     </>
   );
@@ -989,6 +992,66 @@ function useGalleryActions({
   };
 }
 
+/** The panel's header: its title and Close, the search when it is shown, and the limit's note. */
+function PanelHeader({
+  onClose,
+  search,
+  atCapacity,
+}: {
+  onClose: () => void;
+  /** The search and chips, or nothing while the add step is open. */
+  search: ReactNode;
+  atCapacity: boolean;
+}): JSX.Element {
+  return (
+    <SheetHeader className="space-y-3 border-b border-border p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="space-y-1">
+          <SheetTitle>Add widget</SheetTitle>
+          <SheetDescription>
+            New cards go to the end of your dashboard. Move them from their
+            menu.
+          </SheetDescription>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close"
+          onClick={onClose}
+        >
+          <Icons.X aria-hidden className="size-4" />
+        </Button>
+      </div>
+      {search}
+      {atCapacity ? (
+        <p
+          className="text-sm text-muted-foreground"
+          data-testid="add-panel-at-capacity"
+        >
+          Your dashboard holds the most cards it can ({MAX_PLACEMENTS}, counting
+          removed ones), so no new card can be added. A removed card can still
+          be put back.
+        </p>
+      ) : null}
+    </SheetHeader>
+  );
+}
+
+/** The panel's body: the add step while one is open, else the gallery (`children`). */
+function PanelBody({
+  step,
+  stepView,
+  children,
+}: {
+  step: AddStep | null;
+  stepView: (step: AddStep) => JSX.Element;
+  children: ReactNode;
+}): JSX.Element {
+  if (step !== null) return stepView(step);
+  return <>{children}</>;
+}
+
 /** The sentence an add, or an add refused at the limit, is announced with. */
 function addedSentence(added: AddedCard | null, verb: string): string {
   return added === null
@@ -1030,7 +1093,16 @@ function useGalleryModel(
     [read, tiles, placements]
   );
   const starting = read === undefined ? undefined : startingCollection(read);
-  return { tiles, removed, collections, found, suggestions, starting };
+  // Suggested is for the whole gallery: none while a search or a chip narrows it.
+  const narrowed = query.trim() !== "" || chip !== "all";
+  return {
+    tiles,
+    removed,
+    collections,
+    found,
+    shownSuggestions: narrowed ? [] : suggestions,
+    starting,
+  };
 }
 
 /** The gallery's body: waiting for the read, nothing found, or what it lists (`children`). */
@@ -1083,10 +1155,9 @@ export function AddWidgetPanel({
   const contentRef = useRef<HTMLDivElement>(null);
 
   const read = gallery.read;
-  const { tiles, removed, collections, found, suggestions, starting } =
+  const { tiles, removed, collections, found, shownSuggestions, starting } =
     useGalleryModel(read, placements, byId, chip, query);
   const voice = usePanelVoice(foundCount(found), query, open);
-  const searching = query.trim() !== "";
 
   // A fresh gallery each time it opens: an old search, chip or step would hide what the reader
   // came to find.
@@ -1128,6 +1199,31 @@ export function AddWidgetPanel({
     />
   );
 
+  // Built here, drawn where the panel is in its gallery rather than its add step.
+  const search = (
+    <SearchAndChips
+      searchRef={searchRef}
+      query={query}
+      onQuery={setQuery}
+      chip={chip}
+      onChip={setChip}
+      count={voice.count}
+      ready={read !== undefined}
+    />
+  );
+  const stepView = (current: AddStep) => (
+    <AddStepView
+      step={current}
+      widget={byId.get(current.tile.id)}
+      collections={collections}
+      mostEdited={read?.mostEdited}
+      atCapacity={atCapacity}
+      onChange={setStep}
+      onBack={actions.back}
+      onAdd={actions.addFromStep}
+    />
+  );
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -1145,60 +1241,13 @@ export function AddWidgetPanel({
           onClosed();
         }}
       >
-        <SheetHeader className="space-y-3 border-b border-border p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="space-y-1">
-              <SheetTitle>Add widget</SheetTitle>
-              <SheetDescription>
-                New cards go to the end of your dashboard. Move them from their
-                menu.
-              </SheetDescription>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Close"
-              onClick={() => onOpenChange(false)}
-            >
-              <Icons.X aria-hidden className="size-4" />
-            </Button>
-          </div>
-          {step === null ? (
-            <SearchAndChips
-              searchRef={searchRef}
-              query={query}
-              onQuery={setQuery}
-              chip={chip}
-              onChip={setChip}
-              count={read === undefined ? "" : voice.count}
-            />
-          ) : null}
-          {atCapacity ? (
-            <p
-              className="text-sm text-muted-foreground"
-              data-testid="add-panel-at-capacity"
-            >
-              Your dashboard holds the most cards it can ({MAX_PLACEMENTS},
-              counting removed ones), so no new card can be added. A removed
-              card can still be put back.
-            </p>
-          ) : null}
-        </SheetHeader>
-
+        <PanelHeader
+          onClose={() => onOpenChange(false)}
+          search={step === null ? search : null}
+          atCapacity={atCapacity}
+        />
         <div className="flex-1 space-y-6 overflow-y-auto p-4">
-          {step !== null ? (
-            <AddStepView
-              step={step}
-              widget={byId.get(step.tile.id)}
-              collections={collections}
-              mostEdited={read?.mostEdited}
-              atCapacity={atCapacity}
-              onChange={setStep}
-              onBack={actions.back}
-              onAdd={actions.addFromStep}
-            />
-          ) : (
+          <PanelBody step={step} stepView={stepView}>
             <GalleryBody
               gallery={gallery}
               found={found}
@@ -1209,7 +1258,7 @@ export function AddWidgetPanel({
             >
               <GalleryLists
                 found={found}
-                suggestions={!searching && chip === "all" ? suggestions : []}
+                suggestions={shownSuggestions}
                 atCapacity={atCapacity}
                 tileFor={tileFor}
                 onAddBack={actions.addBack}
@@ -1217,9 +1266,8 @@ export function AddWidgetPanel({
                 onPair={actions.addPair}
               />
             </GalleryBody>
-          )}
+          </PanelBody>
         </div>
-
         <div
           role="status"
           aria-live="polite"
