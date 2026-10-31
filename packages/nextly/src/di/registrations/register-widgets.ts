@@ -77,7 +77,6 @@ import {
   pluginAlternatives,
   pluginDashboardSnapshots,
   pluginSuggestionFaults,
-  pluginSuggestions,
   pluginWidgetDeclarationGroups,
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -150,7 +149,7 @@ export function resetWidgetRegistries(
   // Every widget, through the one call: core's own list, the plugins' widgets
   // declared with `defineWidget()`, and the site's. Each is checked together
   // with everything that names one (the site config's dashboard, the plugins'
-  // suggestions and alternatives), and startup stops on any fault of any owner,
+  // `suggest` lists and alternatives), and startup stops on any fault of any owner,
   // all of them reported at once, before any widget is kept. Each
   // plugin's contribution and the site config are read once, here, and every
   // check reads the copy. The site's own widgets are checked with the plugins'
@@ -181,10 +180,9 @@ export function resetWidgetRegistries(
   // Only once the check above found no fault, so every item kept is whole.
   registerAttentionItems(dashboards);
   // The one default dashboard, from the copies just checked: the site's
-  // `defaultLayout` or core's, and the plugins' suggestions after it.
-  setDefaultLayoutPlan(
-    siteDefaultLayoutPlan(site, pluginSuggestions(dashboards))
-  );
+  // `defaultLayout` or core's. A plugin's `suggest` is checked above and places
+  // nothing; the add panel offers its widgets.
+  setDefaultLayoutPlan(siteDefaultLayoutPlan(site));
   // What the site keeps off the dashboard, replaces and overrides, from the
   // same checked copies: read wherever a widget is offered, drawn or described.
   setSiteDashboardRules(

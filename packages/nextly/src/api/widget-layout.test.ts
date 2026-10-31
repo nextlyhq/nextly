@@ -84,8 +84,11 @@ import {
   listWidgets,
   registerWidget,
 } from "../domains/widgets/registry";
-import { allWidgets } from "../domains/widgets/canonical";
-import { CORE_DEFAULT_LAYOUT } from "../domains/widgets/core-widgets/ids";
+import { allWidgets, type CanonicalWidget } from "../domains/widgets/canonical";
+import {
+  CORE_DEFAULT_LAYOUT,
+  CORE_WIDGET_IDS,
+} from "../domains/widgets/core-widgets/ids";
 import {
   setDefaultLayoutPlan,
   type DefaultLayoutPlan,
@@ -246,6 +249,7 @@ interface LayoutPayload {
   version?: number;
   source?: string;
   arranged?: boolean;
+  pairedRow?: boolean;
   scope?: string;
   defaultPlacements?: WidgetPlacement[];
   widgets?: Record<
@@ -283,6 +287,39 @@ async function itemOf(res: Response): Promise<LayoutPayload> {
   return body.item as LayoutPayload;
 }
 
+/** A widget's place among those the case registers: one that states no order after the rest. */
+function stated(widget: CanonicalWidget): number {
+  return widget.defaultOrder ?? Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The default most cases here follow: core's own, then every widget the case registers or
+ * contributes that is not core's and is not offered, ordered by its `defaultOrder` (stably, so
+ * equal orders keep the registration order). A stand-in for a site's `defaultLayout` naming
+ * them, so a case says what its default holds by the widgets it registers: core places nothing
+ * its default does not name. Read when the default is built, so a widget registered during a
+ * case joins it.
+ */
+const REGISTERED_DEFAULT: DefaultLayoutPlan = {
+  get cards() {
+    const core: ReadonlySet<string> = new Set(CORE_WIDGET_IDS);
+    const named = allWidgets()
+      .filter(
+        widget =>
+          !core.has(widget.id) &&
+          widget.serverData !== true &&
+          widget.offered === undefined
+      )
+      .sort((a, b) =>
+        stated(a) === stated(b) ? 0 : stated(a) < stated(b) ? -1 : 1
+      );
+    return [
+      ...CORE_DEFAULT_LAYOUT,
+      ...named.map(widget => ({ widget: widget.id })),
+    ];
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   stored = undefined;
@@ -292,11 +329,7 @@ beforeEach(() => {
   logged.length = 0;
   clearWidgets();
   clearDeclaredWidgets();
-  setDefaultLayoutPlan({
-    cards: CORE_DEFAULT_LAYOUT,
-    suggestions: true,
-    suggested: [],
-  });
+  setDefaultLayoutPlan(REGISTERED_DEFAULT);
   defaultCardsNotShown.mockResolvedValue(new Set());
   cardsAnsweredEmpty.mockResolvedValue([]);
   hiddenWhenAnswerEmpty.mockReturnValue([]);
@@ -932,14 +965,17 @@ describe("a row nobody arranged still follows the defaults", () => {
     });
   });
 
-  it("follows a change to the declared order", async () => {
-    // Positions come from the live registry, not from the order the row was
-    // written in. A snapshot taken from an earlier registry would otherwise
-    // keep a card where a plugin has since stopped putting it -- and merging a
-    // new widget into that snapshot could land it on a number an existing
-    // placement already holds.
-    registerWidget(widget({ id: "core/a", defaultOrder: 20 }));
-    registerWidget(widget({ id: "core/b", defaultOrder: 10 }));
+  it("follows a change to the default's order", async () => {
+    // Positions come from the default as it stands, not from the order the row
+    // was written in. A snapshot taken from an earlier default would otherwise
+    // keep a card where the default has since stopped putting it -- and
+    // merging a new widget into that snapshot could land it on a number an
+    // existing placement already holds.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/b" }));
+    setDefaultLayoutPlan({
+      cards: [{ widget: "core/b" }, { widget: "core/a" }],
+    });
     stored = unarrangedRow([
       { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
       { id: "core/b", widgetId: "core/b", w: 12, h: 3, removed: false },
@@ -2879,10 +2915,63 @@ describe("the one default", () => {
   const plan = (patch: Partial<DefaultLayoutPlan>) =>
     setDefaultLayoutPlan({
       cards: [],
-      suggestions: true,
-      suggested: [],
       ...patch,
     });
+
+  /** A widget that may be drawn from four to twelve columns wide. */
+  const resizable = (id: string, patch: Partial<WidgetDefinition> = {}) =>
+    widget({
+      id,
+      size: {
+        default: { w: 4, h: 4 },
+        min: { w: 4, h: 2 },
+        max: { w: 12, h: 8 },
+      },
+      ...patch,
+    });
+
+  it("says the pair has a row of its own where the default gives it one, to a reader who may not see one of the two too", async () => {
+    registerWidget(resizable("core/needs-attention"));
+    registerWidget(
+      resizable("core/upcoming-releases", {
+        requiredPermission: "read-releases",
+      })
+    );
+    plan({
+      cards: [
+        { widget: "core/needs-attention", w: 8, h: 4 },
+        { widget: "core/upcoming-releases", w: 4, h: 4 },
+      ],
+    });
+    callerHoldsPermission.mockResolvedValue(false);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The control: this reader is not handed Upcoming releases at all.
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "core/needs-attention",
+    ]);
+    expect(body.pairedRow).toBe(true);
+  });
+
+  it("says the pair has no row of its own where the site's default places Needs attention beside a card of its own", async () => {
+    registerWidget(resizable("core/needs-attention"));
+    registerWidget(resizable("site/orders"));
+    plan({
+      cards: [
+        { widget: "core/needs-attention", w: 4, h: 4 },
+        { widget: "site/orders", w: 8, h: 4 },
+      ],
+    });
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.defaultPlacements?.map(p => [p.widgetId, p.w])).toEqual([
+      ["core/needs-attention", 4],
+      ["site/orders", 8],
+    ]);
+    expect(body.pairedRow).toBe(false);
+  });
 
   it("is the site's defaultLayout, in its order, at its sizes and with its settings", async () => {
     registerWidget(widget({ id: "site/a" }));
@@ -2902,7 +2991,6 @@ describe("the one default", () => {
         { widget: "site/b", w: 6, h: 4, settings: { top: 5 } },
         { widget: "site/a" },
       ],
-      suggestions: false,
     });
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
@@ -2949,25 +3037,29 @@ describe("the one default", () => {
     );
   });
 
-  it("places a plugin's suggestion on the default, never on a saved dashboard, where it is offered", async () => {
+  it("places no widget the default does not name, on the default or a saved dashboard: it is offered", async () => {
     registerWidget(widget({ id: "site/a" }));
-    registerWidget(widget({ id: "acme/suggested" }));
-    plan({ cards: [{ widget: "site/a" }], suggested: ["acme/suggested"] });
+    // Installed, with an order of its own, and named by no default entry.
+    registerWidget(widget({ id: "acme/unnamed", defaultOrder: 0 }));
+    plan({ cards: [{ widget: "site/a" }] });
+
+    // Following the default: the default's own card alone, the other offered.
+    const following = await bodyOf(await getWidgetLayout(getReq()));
+    expect(following.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    expect(following.available).toContain("acme/unnamed");
+
     stored = {
       version: 2,
       layout: serializeLayout([
         { id: "p1", widgetId: "site/a", w: 12, h: 3, removed: false },
       ]),
     };
-
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
     expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
-    expect(body.available).toContain("acme/suggested");
-    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
-      "site/a",
-      "acme/suggested",
-    ]);
+    expect(body.available).toContain("acme/unnamed");
+    // What a reset would return to is the default alone, too.
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual(["site/a"]);
   });
 
   it("names the cards that hide while empty and answered empty, asked of what the reader was handed at the width the admin sent, outside the scope token", async () => {
@@ -3239,7 +3331,6 @@ describe("the one default", () => {
         { widget: "site/many", settings: { top: 5 } },
         { widget: "site/many", id: "many-2", settings: { top: 10 } },
       ],
-      suggestions: false,
     });
     defaultCardsNotShown.mockResolvedValue(new Set(["site/many"]));
     const withheld = await bodyOf(await getWidgetLayout(getReq()));
@@ -3310,7 +3401,6 @@ describe("the one default", () => {
         { widget: "site/many", settings: { top: 5 } },
         { widget: "site/many", id: "many-2", settings: { top: 10 } },
       ],
-      suggestions: false,
     });
 
     const handed = await bodyOf(await getWidgetLayout(getReq()));

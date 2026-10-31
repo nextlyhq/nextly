@@ -150,11 +150,13 @@ describeEachDialect("what the add panel is offered", dialect => {
     const layout = await read(reader);
     expect(named(layout).has(GATED)).toBe(false);
     expect(layout.widgets).not.toHaveProperty(GATED);
-    // The control: the same read names a built-in this reader may see. Recent
-    // activity, which has no gate and no condition. Not Team: it is offered
-    // only to someone who may read people and add or change them, which this
-    // reader, holding no grants, may not.
-    expect(named(layout).has("core/team-activity")).toBe(true);
+    // The control: the same read names a built-in this reader may see. Note,
+    // which has no gate and no condition. Not Team: it is offered only to
+    // someone who may read people and add or change them, which this reader,
+    // holding no grants, may not; nor Team activity, offered only to a reader
+    // of some content.
+    expect(named(layout).has("core/note")).toBe(true);
+    expect(named(layout).has("core/team-activity")).toBe(false);
   });
 
   it("names no widget per collection: a collection is reached through a Content widget", async () => {

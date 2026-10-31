@@ -13,6 +13,9 @@
  * onto the page during the visit: an answer that finds it with something, a
  * later layout read's or the card's own batch answer, judged by the rule the
  * layout read hid it by (`cardAnswerIsEmpty`). New work is worth the one move.
+ * And one thing ends the verdict itself: the dashboard resized to a width that
+ * draws its cards at other tiers than the width it was judged at, where what
+ * was judged of them no longer holds, so the cards it hid are shown.
  *
  * A widget the layout read cannot answer (one whose data a query asks rather
  * than a `load`) is named in its `hiddenWhenAnswerEmpty`
@@ -113,8 +116,20 @@ export function useReportCardHidden(hidden: boolean): void {
   }, [report, hidden]);
 }
 
-/** The cards held hidden and those revealed since, once the dashboard has a width to judge at. */
-type Held = Pick<HeldVerdict, "hidden" | "revealed">;
+/**
+ * The cards held hidden and those revealed since, once the dashboard has a width to judge at, and
+ * `judgedAt`, the dashboard width the held verdict was judged at (the `askedAtWidth` of the answer
+ * it was taken from); `undefined` when no verdict was taken, so nothing is held hidden.
+ */
+type Held = Pick<HeldVerdict, "hidden" | "revealed"> & {
+  judgedAt: number | undefined;
+};
+
+/** An answer's verdict at this width: the cards it found empty, and the width it judged them at. */
+interface Verdict {
+  hidden: ReadonlySet<string>;
+  judgedAt: number;
+}
 
 /**
  * The verdict of the layout answer the dashboard is first drawn from, held for as long as it is
@@ -134,7 +149,12 @@ type Held = Pick<HeldVerdict, "hidden" | "revealed">;
  * one way to learn of it while on the page. An answer still being asked is not judged, since it
  * may be the previous load's, carried while the new one runs. A card shown
  * at first that a later read finds empty stays, saying nothing is waiting, until the next visit,
- * so what the reader is looking at never jumps up. A dashboard drawn without any answer (the
+ * so what the reader is looking at never jumps up. A dashboard resized, after the verdict was
+ * taken, to a width that draws its cards at other tiers than the one judged at (`tierBandAt`
+ * differs; opening the sidebar, turning a tablet) shows every card held hidden: the verdict says
+ * nothing about a card at a tier it was not judged at, so each is drawn and shows its own empty
+ * state. Not marked revealed, since nothing new arrived, and never hidden again in the visit,
+ * which keeps every later move a showing one. A dashboard drawn without any answer (the
  * layout could not be read) hides nothing, and so does one drawn from an answer that judged no
  * card (no `hiddenWhileEmpty`: it was asked before the dashboard had a width, or at a width of
  * another tier); such an answer is no verdict, so arriving later it shows nothing it hid either.
@@ -159,7 +179,11 @@ export function useHiddenWhileEmptyAtFirstPaint(
   // Read from the held state: a render that changed it above is discarded and rendered again
   // with it before anything is painted.
   return useMemo(
-    () => ({ ...(held ?? NOTHING_HELD), hiddenWhenAnswerEmpty: ownAnswer }),
+    () => ({
+      hidden: held?.hidden ?? NONE,
+      revealed: held?.revealed ?? NONE,
+      hiddenWhenAnswerEmpty: ownAnswer,
+    }),
     [held, ownAnswer]
   );
 }
@@ -186,38 +210,66 @@ function answeredSomething(answers: CardAnswers, placementId: string): boolean {
   return slot?.ok === true && !cardAnswerIsEmpty(slot);
 }
 
-/** The verdict taken where the dashboard first has a width; nothing before it has one. */
+/**
+ * The verdict taken where the dashboard first has a width, with the width it was judged at;
+ * nothing before it has one.
+ */
 function firstHeld(
-  fresh: ReadonlySet<string> | undefined,
+  fresh: Verdict | undefined,
   dashboardWidth: number | undefined
 ): Held | undefined {
   return dashboardWidth === undefined
     ? undefined
-    : { hidden: fresh ?? NONE, revealed: NONE };
+    : {
+        hidden: fresh?.hidden ?? NONE,
+        revealed: NONE,
+        judgedAt: fresh?.judgedAt,
+      };
+}
+
+/**
+ * Whether the dashboard, now `dashboardWidth` wide, draws its cards at other tiers than the width
+ * `held` was judged at, while it still holds a card hidden. All spans are compared at once
+ * (`tierBandAt`), so every card held hidden is released together, not only those whose own tier
+ * moved. Guarded by the hidden cards so that, once released, it answers no and nothing changes.
+ */
+function crossedTierBand(
+  held: Held,
+  dashboardWidth: number | undefined
+): boolean {
+  return (
+    held.hidden.size > 0 &&
+    held.judgedAt !== undefined &&
+    dashboardWidth !== undefined &&
+    tierBandAt(held.judgedAt) !== tierBandAt(dashboardWidth)
+  );
 }
 
 /**
  * What the dashboard holds after `fresh`, the latest answer's verdict at this width: the first
- * verdict once there is a width, and from then each card a later verdict finds with something
- * waiting, or whose own batch answer holds something (`answeredSomething`), moved from hidden to
- * revealed. `held` itself when nothing changes.
+ * verdict once there is a width; then, on a resize to another tier band than the verdict was
+ * judged at (`crossedTierBand`), no card hidden and none newly revealed; and otherwise each card
+ * a later verdict finds with something waiting, or whose own batch answer holds something
+ * (`answeredSomething`), moved from hidden to revealed. `held` itself when nothing changes.
  */
 function nextHeld(
   held: Held | undefined,
-  fresh: ReadonlySet<string> | undefined,
+  fresh: Verdict | undefined,
   dashboardWidth: number | undefined,
   answers: CardAnswers
 ): Held | undefined {
   if (held === undefined) return firstHeld(fresh, dashboardWidth);
+  if (crossedTierBand(held, dashboardWidth)) return { ...held, hidden: NONE };
   const appearing = new Set(
     [...held.hidden].filter(
       id =>
-        (fresh !== undefined && !fresh.has(id)) ||
+        (fresh !== undefined && !fresh.hidden.has(id)) ||
         answeredSomething(answers, id)
     )
   );
   if (appearing.size === 0) return held;
   return {
+    ...held,
     hidden: new Set([...held.hidden].filter(id => !appearing.has(id))),
     revealed: new Set([...held.revealed, ...appearing]),
   };
@@ -225,13 +277,14 @@ function nextHeld(
 
 /**
  * The cards an answer found empty, judged at the tier each is drawn at on a dashboard
- * `dashboardWidth` wide; `undefined` for an answer that judged none, or one judged at a width
- * that draws some card at another tier, and before the dashboard has a width.
+ * `dashboardWidth` wide, with the width they were judged at; `undefined` for an answer that
+ * judged none, or one judged at a width that draws some card at another tier, and before the
+ * dashboard has a width.
  */
 function verdictAt(
   layout: DashboardLayoutRead | undefined,
   dashboardWidth: number | undefined
-): ReadonlySet<string> | undefined {
+): Verdict | undefined {
   const judgedAt = layout?.askedAtWidth;
   if (
     layout?.hiddenWhileEmpty === undefined ||
@@ -241,5 +294,5 @@ function verdictAt(
   ) {
     return undefined;
   }
-  return new Set(layout.hiddenWhileEmpty);
+  return { hidden: new Set(layout.hiddenWhileEmpty), judgedAt };
 }

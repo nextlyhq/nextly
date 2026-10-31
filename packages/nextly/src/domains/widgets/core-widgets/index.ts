@@ -49,10 +49,11 @@
  *   rather than an empty one -- see its own note.
  * - `core/team-activity` is not. Its feed takes the caller's readable
  *   collections as a scope and defaults that scope to NOTHING, so a reader
- *   entitled to none of it is shown an empty feed. That is a card correctly
- *   saying there is nothing to report, which needs no gate; a gate would
+ *   entitled to none of it would see an empty feed; a permission gate would
  *   instead hide the feed from anyone whose permissions happened to be narrow
- *   today.
+ *   today. It is CONDITIONAL instead, like Continue where you left off: offered
+ *   while the reader may read a collection or a Single (`content:present`),
+ *   which is exactly when the feed has something it may draw.
  *
  * @module domains/widgets/core-widgets
  */

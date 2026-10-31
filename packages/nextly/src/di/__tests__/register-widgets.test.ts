@@ -15,11 +15,12 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { allWidgets, placedByDefault } from "../../domains/widgets/canonical";
+import { allWidgets } from "../../domains/widgets/canonical";
 import {
   CORE_WIDGET_IDS,
   CORE_WIDGETS,
 } from "../../domains/widgets/core-widgets";
+import { defaultLayoutPlacements } from "../../domains/widgets/default-layout";
 import {
   deferredEntities,
   setDeferredEntities,
@@ -333,13 +334,15 @@ function asksOf(card: AskingCard): { source?: unknown }[] {
   ];
 }
 
-/** Whether core places each of its cards on a new dashboard, by the one rule. */
+/**
+ * Whether core places each of its cards on a new dashboard: read from the default the layout
+ * builds (`defaultLayoutPlacements`), the one rule, over core's cards.
+ */
 function placedById(): (id: string) => boolean {
-  const canonical = new Map(allWidgets().map(card => [card.id, card]));
-  return id => {
-    const card = canonical.get(id);
-    return card !== undefined && placedByDefault(card);
-  };
+  const placed = new Set(
+    defaultLayoutPlacements(allWidgets()).map(card => card.widgetId)
+  );
+  return id => placed.has(id);
 }
 
 /**

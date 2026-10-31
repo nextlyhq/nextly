@@ -4,12 +4,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  allWidgets,
-  placedByDefault,
-  sizeFacts,
-  type CanonicalWidget,
-} from "../canonical";
+import { allWidgets, sizeFacts, type CanonicalWidget } from "../canonical";
 import {
   collectionWidgets,
   unreadableCollectionCard,
@@ -298,11 +293,6 @@ describe("a widget offered per collection", () => {
     id: "core/count",
     offered: "per-collection" as const,
   };
-
-  it("stays off the default dashboard, where every other widget is placed", () => {
-    expect(placedByDefault(perCollection)).toBe(false);
-    expect(placedByDefault({ id: "core/team" })).toBe(true);
-  });
 
   it("allows several cards, one per collection, unless it says otherwise", () => {
     expect(sizeFacts(perCollection).allowsSeveral).toBe(true);
