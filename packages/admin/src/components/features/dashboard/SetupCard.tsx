@@ -79,7 +79,6 @@ import {
   SETUP_GAP,
   SETUP_ROW,
   SETUP_TILE,
-  SETUP_TILE_DETAIL,
   SETUP_TILE_LINES,
 } from "./setup/measures";
 import { useRetirementRefusals } from "./setup/retirement-refusals";
@@ -454,8 +453,8 @@ function hintWords(
 
 /**
  * What the hint line says before its actions: the sample offer while open, whole, as it is its
- * actions; else the step's words, the one part of the line cut short when the tile is narrow, and
- * read in full where they are drawn short ("2 of 5", read "2 of 5 filled in").
+ * actions; else the step's words, which a tile is always wide enough to show (`SETUP_ROW`), read
+ * in full where they are drawn short ("2 of 5", read "2 of 5 filled in").
  */
 function HintText({
   step,
@@ -471,12 +470,8 @@ function HintText({
   }
   if (words === undefined) return null;
   return (
-    // Its whole words on hover, as a narrow tile may cut them short: they give the tile none of
-    // its width, so a tile is as wide as its name and its actions (`SETUP_TILE_DETAIL`).
-    <span
-      className={cn("min-w-0 truncate", SETUP_TILE_DETAIL)}
-      title={words.spoken}
-    >
+    // Its whole words on hover, should a tile ever be drawn narrower than they are.
+    <span className="min-w-0 truncate" title={words.spoken}>
       {words.shown === words.spoken ? (
         words.shown
       ) : (
@@ -559,13 +554,13 @@ function StepTile({
             SETUP_TILE_LINES.label,
             "truncate font-semibold text-foreground"
           )}
-          // Its whole name on hover, as a narrow tile may cut it short.
+          // Its whole name on hover, should a tile ever be drawn narrower than it is.
           title={label}
         >
           {label}
           <span className="sr-only"> — {STATUS_TEXT[step.status]}</span>
         </span>
-        {/* One line: only the detail is cut short, so its actions are never clipped. */}
+        {/* One line, as wide as its words and actions: the row is never narrower (`SETUP_ROW`). */}
         <span
           className={cn(
             SETUP_TILE_LINES.hint,

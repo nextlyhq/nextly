@@ -60,7 +60,6 @@ import {
   SETUP_ROW,
   SETUP_ROW_BODY_PX,
   SETUP_TILE,
-  SETUP_TILE_DETAIL,
 } from "./setup/measures";
 import { SetupCard } from "./SetupCard";
 
@@ -232,23 +231,6 @@ describe("the setup card", () => {
       for (const tile of tiles()) expect(tile).toHaveClass(SETUP_ROW.tile);
       unmount();
     }
-  });
-
-  it("gives a tile no width for its detail words, so it is as wide as its name and actions", () => {
-    draw(dataOf());
-    // "Write something to publish": cut short in a narrow tile, its whole words on hover.
-    const detail = within(tileOf("entry")).getByText(
-      "Write something to publish"
-    );
-    expect(detail).toHaveClass(SETUP_TILE_DETAIL, "truncate");
-    expect(detail).toHaveAttribute("title", "Write something to publish");
-    // The actions are never cut: they size the tile.
-    expect(tileOf("entry").querySelector("[data-setup-actions]")).toHaveClass(
-      "shrink-0"
-    );
-    expect(
-      tileOf("entry").querySelector("[data-setup-actions]")
-    ).not.toHaveClass(SETUP_TILE_DETAIL);
   });
 
   it("draws no heading of its own: the frame's title is the card's one", () => {

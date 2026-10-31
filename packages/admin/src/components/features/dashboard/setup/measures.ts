@@ -40,11 +40,11 @@ export const SETUP_ROW_BODY_PX = SETUP_BAR.px + SETUP_GAP.px + SETUP_TILE.px;
  * `SETUP_ROW_BODY_PX` whatever the card's width or the number of steps:
  * - one column per tile, flowing along the row (`grid-flow-col`), never wrapping;
  * - each column shares the row equally where the body has room, and is never narrower than its
- *   own tile's name and actions (`minmax(max-content, 1fr)`): only a step's detail words, which
- *   take no width of their own (`SETUP_TILE_DETAIL`), are cut short;
- * - where the body is narrower than the tiles at that width, a phone's or a narrow card's, the row
- *   scrolls sideways inside the card, a tile at a time, the next one cut by the card's edge to
- *   show there is more. Its scrollbar is not drawn, since the row has no height to spare for one:
+ *   own tile's content, its name, its words and its actions (`minmax(max-content, 1fr)`), so
+ *   every tile reads in full;
+ * - where the body is narrower than the tiles, a phone's or a narrow card's, the row scrolls
+ *   sideways inside the card, a tile at a time, the next one cut by the card's edge to show there
+ *   is more. Its scrollbar is not drawn, since the row has no height to spare for one:
  *   a tile's links and buttons scroll it into view as they take focus, and a touch or a trackpad
  *   scrolls it directly;
  * - positioned (`relative`), so what a tile holds for assistive technology alone (`sr-only`, placed
@@ -56,10 +56,3 @@ export const SETUP_ROW = {
     "relative grid-flow-col auto-cols-[minmax(max-content,1fr)] overflow-x-auto overscroll-x-contain snap-x snap-proximity [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
   tile: "snap-start",
 } as const;
-
-/**
- * A step's detail words in its tile's hint line, which give the tile none of its width
- * (`contain: inline-size`): a tile is as wide as its name and its actions, and its detail fills
- * what is left, cut short with its whole words on hover.
- */
-export const SETUP_TILE_DETAIL = "[contain:inline-size]";
