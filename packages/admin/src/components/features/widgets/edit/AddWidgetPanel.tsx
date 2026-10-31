@@ -859,6 +859,64 @@ function AddStepView({
   );
 }
 
+/** The add step as it opens: the collection given, the period's and the width's starting values. */
+function startingStep(
+  tile: GalleryTile,
+  widget: DashboardWidget | undefined,
+  collection: string
+): AddStep {
+  const period = periodOf(widget);
+  return {
+    tile,
+    collection,
+    ...(period === undefined ? {} : { period: period.initial }),
+    width: tile.size.default.w,
+  };
+}
+
+/** The width the reader chose, or none when it is the widget's own starting width. */
+function chosenWidth(step: AddStep): number | undefined {
+  return step.width === step.tile.size.default.w ? undefined : step.width;
+}
+
+/**
+ * Where focus goes inside the panel after a step or an add, each a tick later so the render that
+ * moved things has landed:
+ *
+ * - `focusTile`: back on the tile a step was opened from, or on the search when that tile is
+ *   gone or disabled;
+ * - `keepFocusInPanel`: after an add, focus stays on the control that was pressed while it is
+ *   still drawn. When it changed under it (a one-card widget is now on the dashboard), it is
+ *   gone and focus goes back to the search, rather than falling out of the panel. The dialog's
+ *   focus trap catches a removed control's focus on the sheet itself, which is inside the panel
+ *   but no control, so that counts as lost too.
+ */
+function usePanelFocus(
+  contentRef: RefObject<HTMLDivElement | null>,
+  searchRef: RefObject<HTMLInputElement | null>
+) {
+  const focusTile = (tileId: string | null) =>
+    setTimeout(() => {
+      const tile =
+        tileId === null
+          ? null
+          : contentRef.current?.querySelector<HTMLElement>(
+              `[data-gallery-tile="${CSS.escape(tileId)}"]`
+            );
+      if (tile && !tile.hasAttribute("disabled")) tile.focus();
+      else searchRef.current?.focus();
+    }, 0);
+  const keepFocusInPanel = () =>
+    setTimeout(() => {
+      const content = contentRef.current;
+      const active = document.activeElement;
+      if (active === content || !content?.contains(active)) {
+        searchRef.current?.focus();
+      }
+    }, 0);
+  return { focusTile, keepFocusInPanel };
+}
+
 /** The sentence an add, or an add refused at the limit, is announced with. */
 function addedSentence(added: AddedCard | null, verb: string): string {
   return added === null
@@ -969,49 +1027,17 @@ export function AddWidgetPanel({
     setStep(null);
   }, [open]);
 
-  /** Focus back on a tile, or on the search when the tile is gone. */
-  const focusTile = (tileId: string | null) =>
-    setTimeout(() => {
-      const content = contentRef.current;
-      const tile =
-        tileId === null
-          ? null
-          : content?.querySelector<HTMLElement>(
-              `[data-gallery-tile="${CSS.escape(tileId)}"]`
-            );
-      if (tile && !tile.hasAttribute("disabled")) tile.focus();
-      else searchRef.current?.focus();
-    }, 0);
-
-  /*
-   * After an add, focus stays on the control that was pressed while it is still drawn. When it
-   * changed under it (a one-card widget is now on the dashboard), it is gone and focus goes back
-   * to the search, rather than falling out of the panel. The dialog's focus trap catches a
-   * removed control's focus on the sheet itself, which is inside the panel but no control, so
-   * that counts as lost too.
-   */
-  const keepFocusInPanel = () =>
-    setTimeout(() => {
-      const content = contentRef.current;
-      const active = document.activeElement;
-      if (active === content || !content?.contains(active)) {
-        searchRef.current?.focus();
-      }
-    }, 0);
+  const { focusTile, keepFocusInPanel } = usePanelFocus(contentRef, searchRef);
 
   const said = (added: AddedCard | null, verb: string) => {
     voice.say(addedSentence(added, verb));
   };
 
   const openStep = (tile: GalleryTile, collection?: string) => {
-    const period = periodOf(byId.get(tile.id));
     openedFrom.current = tile.id;
-    setStep({
-      tile,
-      collection: collection ?? starting ?? "",
-      ...(period === undefined ? {} : { period: period.initial }),
-      width: tile.size.default.w,
-    });
+    setStep(
+      startingStep(tile, byId.get(tile.id), collection ?? starting ?? "")
+    );
   };
 
   const choose = (view: GalleryTileView) => {
@@ -1034,7 +1060,7 @@ export function AddWidgetPanel({
     const added = onAdd(
       step.tile.id,
       stepSettings(step, byId.get(step.tile.id)),
-      step.width === step.tile.size.default.w ? undefined : step.width
+      chosenWidth(step)
     );
     said(added, "Added");
     // Back to the gallery, the panel open for the next card, focus on the tile it came from.
