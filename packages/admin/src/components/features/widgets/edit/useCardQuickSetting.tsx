@@ -241,6 +241,25 @@ function offeredCollections(
   );
 }
 
+/**
+ * What a pending announcement does now: wait for the card's answer, note that its re-ask is in
+ * flight, or be said.
+ */
+function announcementStep(
+  pending: PendingAnnouncement,
+  isFetching: boolean,
+  shownAt: number | null
+): "wait" | "seen" | "say" {
+  const awaitsReask = pending.asksAgain && !pending.seenFetching;
+  if (isFetching) return awaitsReask ? "seen" : "wait";
+  if (!awaitsReask) return "say";
+  // An answer newer than the one shown as the change was made means the re-ask has already
+  // finished: the write waits for the invalidation that starts it, so it can end before the
+  // change is pending here, and waiting to see it in flight would wait for good. No answer at
+  // all is not a newer one.
+  return shownAt === null || shownAt === pending.shownAt ? "wait" : "say";
+}
+
 /** The announcement once the card shows it, in its toast; see the module note. */
 function useAnnouncement(
   pending: PendingAnnouncement | null,
@@ -252,15 +271,9 @@ function useAnnouncement(
   const { placementId, title, isFetching } = card;
   useEffect(() => {
     if (!pending || !settingsWrite) return;
-    // An answer newer than the one shown as the change was made means the re-ask has already
-    // finished: the write waits for the invalidation that starts it, so it can end before the
-    // change is pending here, and waiting to see it in flight would wait for good.
-    const answered = shownAt !== pending.shownAt;
-    if (pending.asksAgain && !pending.seenFetching && !answered) {
-      if (isFetching) setPending({ ...pending, seenFetching: true });
-      return;
-    }
-    if (isFetching) return;
+    const step = announcementStep(pending, isFetching, shownAt);
+    if (step === "seen") setPending({ ...pending, seenFetching: true });
+    if (step !== "say") return;
     // A refused quiet re-ask keeps the answer the card had, and its time with it: the card does
     // not show the change, so it is said as saved but not shown. Only an answer that arrived
     // after the change shows it.
