@@ -713,8 +713,8 @@ export interface AdminConfig {
   /**
    * How this site shapes its dashboard: its own widgets, widgets hidden for
    * everyone, a widget's title, description, widths and starting settings,
-   * the default dashboard, plugin suggestions, and a plugin's alternative in a
-   * built-in's place. Checked at startup against every widget the install has.
+   * the default dashboard, and a plugin's alternative in a built-in's place.
+   * Checked at startup against every widget the install has.
    *
    * @experimental While the dashboard widget SDK is being built.
    */

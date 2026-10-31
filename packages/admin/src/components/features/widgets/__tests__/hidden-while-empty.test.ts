@@ -177,6 +177,39 @@ describe("the cards a dashboard is drawn without while empty", () => {
     expect(result.current.revealed.size).toBe(0);
   });
 
+  it("are shown, unmarked, once a resize draws the cards at other tiers than the verdict was judged at", () => {
+    const { result, rerender } = held(answer(["core/needs-attention"]));
+    expect([...result.current.hidden]).toEqual(["core/needs-attention"]);
+
+    // The sidebar opens: at 1030 the eight-column card is drawn medium where 1200 drew it large,
+    // so the verdict judged at 1200 says nothing of it. It is shown, with its own empty state,
+    // and not marked revealed, since nothing new arrived.
+    rerender({
+      dashboardWidth: 1030,
+      layout: answer(["core/needs-attention"]),
+    });
+    expect(result.current.hidden.size).toBe(0);
+    expect(result.current.revealed.size).toBe(0);
+
+    // Back at the width it was judged at: once shown, it stays shown for the visit.
+    rerender({
+      dashboardWidth: WIDE,
+      layout: answer(["core/needs-attention"]),
+    });
+    expect(result.current.hidden.size).toBe(0);
+  });
+
+  it("stay hidden through a resize that draws every card at the tier the verdict was judged at", () => {
+    const { result, rerender } = held(answer(["core/needs-attention"]));
+    // 1210 draws a card of every span at the tier 1200 does: the verdict still holds.
+    rerender({
+      dashboardWidth: 1210,
+      layout: answer(["core/needs-attention"]),
+    });
+    expect([...result.current.hidden]).toEqual(["core/needs-attention"]);
+    expect(result.current.revealed.size).toBe(0);
+  });
+
   it("name the widgets whose cards leave by their own answer, as the latest answer names them", () => {
     const { result, rerender } = held(answer([], ["acme/legacy-quiet"]));
     expect([...result.current.hiddenWhenAnswerEmpty]).toEqual([

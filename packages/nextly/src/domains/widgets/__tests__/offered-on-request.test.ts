@@ -1,15 +1,15 @@
 /**
- * A widget offered on request: never placed on the default dashboard, several
- * cards allowed, and offered in the add panel as one row, not once per
- * collection. Read through the same functions every widget is. (Core's Note,
- * once offered this way, is now declared with `defineWidget`, which keeps it
- * off the default dashboard by being answered on the server:
- * `note-declaration.test.ts`.)
+ * A widget offered on request: several cards allowed, and offered in the add
+ * panel as one row, not once per collection. Read through the same functions
+ * every widget is. (Core's Note, once offered this way, is now declared with
+ * `defineWidget`: `note-declaration.test.ts`.) No widget is placed on the
+ * default dashboard by being declared, whatever it offers: the default is
+ * only what its `defaultLayout` names (`default-layout.test.ts`).
  */
 import { describe, expect, it } from "vitest";
 
 import { addPanelFacts } from "../add-panel";
-import { type CanonicalWidget, placedByDefault, sizeFacts } from "../canonical";
+import { type CanonicalWidget, sizeFacts } from "../canonical";
 
 const widget = (patch: Partial<CanonicalWidget>): CanonicalWidget => ({
   id: "core/note",
@@ -19,13 +19,6 @@ const widget = (patch: Partial<CanonicalWidget>): CanonicalWidget => ({
 });
 
 describe("a widget offered on request", () => {
-  it("is never placed on the default dashboard, as one offered per collection is not", () => {
-    expect(placedByDefault(widget({ offered: "on-request" }))).toBe(false);
-    expect(placedByDefault(widget({ offered: "per-collection" }))).toBe(false);
-    // The must-differ case: a widget that says nothing is placed.
-    expect(placedByDefault(widget({}))).toBe(true);
-  });
-
   it("allows several cards unless it says otherwise", () => {
     expect(sizeFacts(widget({ offered: "on-request" })).allowsSeveral).toBe(
       true

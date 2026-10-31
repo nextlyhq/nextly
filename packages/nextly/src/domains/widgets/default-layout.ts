@@ -4,43 +4,33 @@
  *
  * The base is the site config's `admin.dashboard.defaultLayout`, or else core's
  * own (`CORE_DEFAULT_LAYOUT`), written the same way, so the two cannot be
- * built by different rules. After it come the plugins' suggestions, unless the
- * site sets `suggestions: false`: first the widgets plugins name in
- * `contributes.dashboard.suggest`, in the order the site lists its plugins,
- * then the widgets of the older contribution shape, which were placed on the
- * default before suggestions existed and so are suggested by being declared,
- * by their `defaultOrder`. A widget the base already places is not suggested
- * again.
+ * built by different rules. It is the whole default: nothing follows it. No
+ * widget is placed on its own, a plugin's included; the add panel offers it,
+ * and a site that wants it on its default names it in `defaultLayout`. A
+ * plugin's `contributes.dashboard.suggest`, and the site's `suggestions`, are
+ * still accepted and checked at startup, and place nothing.
  *
  * The same default for everyone: what varies per person is only which of its
  * cards they may see, decided where it is read (`api/widget-layout`). A saved
- * layout is never built from here, so nothing a plugin suggests reaches one.
+ * layout is never built from here.
  *
  * @module domains/widgets/default-layout
  */
 
-import { placedByDefault, sizeFacts, type CanonicalWidget } from "./canonical";
-import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "./core-widgets/ids";
+import { sizeFacts, type CanonicalWidget } from "./canonical";
+import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_ID } from "./core-widgets/ids";
 import type { DefaultLayoutCard } from "./declaration/dashboard";
-import { clampSize } from "./grid-size";
+import { clampSize, GRID_COLUMNS } from "./grid-size";
 import type { WidgetPlacement } from "./layout";
 
-/** What startup read from the site config and the plugins, for the default. */
+/** What startup read from the site config, for the default. */
 export interface DefaultLayoutPlan {
-  /** The base: the site's `defaultLayout`, or core's own when it gives none. */
+  /** The default: the site's `defaultLayout`, or core's own when it gives none. */
   readonly cards: readonly DefaultLayoutCard[];
-  /** Whether plugins' suggestions are placed after it (`suggestions: false` is not). */
-  readonly suggestions: boolean;
-  /** The widgets plugins suggest, in the order the site lists its plugins. */
-  readonly suggested: readonly string[];
 }
 
-/** Core's default and nothing suggested: what a boot that read no config builds. */
-const CORE_PLAN: DefaultLayoutPlan = {
-  cards: CORE_DEFAULT_LAYOUT,
-  suggestions: true,
-  suggested: [],
-};
+/** Core's default: what a boot that read no config builds. */
+const CORE_PLAN: DefaultLayoutPlan = { cards: CORE_DEFAULT_LAYOUT };
 
 /**
  * Pinned where every boot-time widget store is pinned, so a hot reload replaces
@@ -59,8 +49,6 @@ export function setDefaultLayoutPlan(plan: DefaultLayoutPlan): void {
 export function defaultLayoutPlan(): DefaultLayoutPlan {
   return globalForPlan.__nextly_defaultLayoutPlan ?? CORE_PLAN;
 }
-
-const CORE_IDS: ReadonlySet<string> = new Set(CORE_WIDGET_IDS);
 
 /**
  * The default's cards, in order, over `widgets`: the install's widgets as
@@ -85,61 +73,10 @@ export function defaultLayoutPlacements(
   plan: DefaultLayoutPlan = defaultLayoutPlan()
 ): WidgetPlacement[] {
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
-  const base = plan.cards.flatMap(card => {
+  return plan.cards.flatMap(card => {
     const widget = byId.get(card.widget);
     return widget === undefined ? [] : [placementOf(widget, card)];
   });
-  if (!plan.suggestions) return base;
-  const placed = new Set(base.map(placement => placement.widgetId));
-  const suggested = suggestedWidgets(widgets, plan.suggested).filter(
-    widget => !placed.has(widget.id)
-  );
-  return [...base, ...suggested.map(widget => placementOf(widget, {}))];
-}
-
-/**
- * The widgets suggested for the default, each once: those plugins name, in
- * order, then the older shape's, by `defaultOrder`.
- */
-function suggestedWidgets(
-  widgets: readonly CanonicalWidget[],
-  named: readonly string[]
-): CanonicalWidget[] {
-  const byId = new Map(widgets.map(widget => [widget.id, widget]));
-  const chosen = [...new Set(named)].flatMap(id => {
-    const widget = byId.get(id);
-    return widget === undefined ? [] : [widget];
-  });
-  const chosenIds = new Set(chosen.map(widget => widget.id));
-  const older = widgets
-    .filter(widget => !chosenIds.has(widget.id) && suggestedByItsShape(widget))
-    .sort(byDefaultOrder);
-  return [...chosen, ...older];
-}
-
-/**
- * Whether a widget of the older shape is suggested by being declared: one
- * placed on the default before suggestions existed. Never one of core's, whose
- * place is the base's to give, nor one offered (per collection, or on
- * request), which is offered and never placed.
- */
-function suggestedByItsShape(widget: CanonicalWidget): boolean {
-  return !CORE_IDS.has(widget.id) && placedByDefault(widget);
-}
-
-/**
- * The older shape's order: a widget with no `defaultOrder` after every widget
- * that states one.
- *
- * 🔴 Equal orders compare EQUAL, so the declaration order then stands (the
- * sort is stable). Any tie-break here would rearrange every default dashboard
- * holding widgets that state no order.
- */
-function byDefaultOrder(a: CanonicalWidget, b: CanonicalWidget): number {
-  const aOrder = a.defaultOrder ?? Number.POSITIVE_INFINITY;
-  const bOrder = b.defaultOrder ?? Number.POSITIVE_INFINITY;
-  if (aOrder === bOrder) return 0;
-  return aOrder < bOrder ? -1 : 1;
 }
 
 /**
@@ -167,4 +104,46 @@ function placementOf(
     removed: false,
     ...(card.settings === undefined ? {} : { config: { ...card.settings } }),
   };
+}
+
+/**
+ * The two cards core's default puts side by side as one row, the near future in one band:
+ * Needs attention and Upcoming releases.
+ */
+const SHARED_ROW_PAIR: ReadonlySet<string> = new Set([
+  CORE_WIDGET_ID.needsAttention,
+  CORE_WIDGET_ID.upcomingReleases,
+]);
+
+/**
+ * Whether `placements`, a default as configured, gives the pair a row of their own: the two
+ * next to each other, in either order, the first starting a row as the grid lays cards out (in
+ * order, twelve columns to a row, a card that does not fit starting the next one), and the two
+ * filling it.
+ *
+ * Asked of the default BEFORE any reader's cards are left out, so a reader who may not see one
+ * of the two is told the same as one who may: the admin draws the other across the row only
+ * where the configured row is the pair's alone, and a site's default that places them
+ * otherwise is drawn as it is written.
+ */
+export function pairHasItsOwnRow(
+  placements: readonly Pick<WidgetPlacement, "widgetId" | "w">[]
+): boolean {
+  let used = 0;
+  for (const [index, card] of placements.entries()) {
+    if (used + card.w > GRID_COLUMNS) used = 0;
+    const next = placements[index + 1];
+    if (
+      used === 0 &&
+      next !== undefined &&
+      next.widgetId !== card.widgetId &&
+      SHARED_ROW_PAIR.has(card.widgetId) &&
+      SHARED_ROW_PAIR.has(next.widgetId) &&
+      card.w + next.w === GRID_COLUMNS
+    ) {
+      return true;
+    }
+    used += card.w;
+  }
+  return false;
 }

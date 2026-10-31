@@ -53,7 +53,10 @@ import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import { CORE_WIDGET_ID } from "../domains/widgets/core-widgets/ids";
 import { staleFieldSettings } from "../domains/widgets/declaration/card-settings";
-import { defaultLayoutPlacements } from "../domains/widgets/default-layout";
+import {
+  defaultLayoutPlacements,
+  pairHasItsOwnRow,
+} from "../domains/widgets/default-layout";
 import { sizeWithinBounds } from "../domains/widgets/grid-size";
 import {
   LAYOUT_SCHEMA_VERSION,
@@ -142,7 +145,7 @@ type LayoutSource = "own" | "default" | "unreadable";
 /**
  * The whole arrangement a reader without an arranged row follows: the one
  * default (`defaultLayoutPlacements`, from the site's `defaultLayout` or
- * core's, and the plugins' suggestions), with their removals applied.
+ * core's), with their removals applied.
  *
  * ONE materialization over every widget the install has, split afterwards, so
  * the cards a caller may see and the ones they may not keep one order between
@@ -649,6 +652,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // reader following it is shown: a staged reset draws it, and the admin
       // never works the default out for itself.
       defaultPlacements: defaults,
+      // Whether the default as configured gives Needs attention and Upcoming releases a row of
+      // their own: judged before this reader's cards are left out, so the admin draws the one of
+      // the two on show across that row whether the other is hidden or not this reader's to see.
+      pairedRow: pairHasItsOwnRow(defaultLayoutPlacements(allWidgets())),
       widgets: widgetFactsOf(view.widgets),
       available,
       version: stored.version,
