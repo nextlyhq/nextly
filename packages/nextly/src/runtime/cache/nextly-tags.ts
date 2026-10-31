@@ -6,6 +6,7 @@
  *
  * @module runtime/cache/nextly-tags
  */
+import { getNextlyLogger } from "../../observability/logger";
 import {
   collectionTag,
   entryIdLocaleTag,
@@ -66,6 +67,38 @@ export function nextlyTags(
     }
   }
   return tags;
+}
+
+/**
+ * Next.js keeps at most 128 tags on one cached read and drops the rest, with a
+ * warning naming them. The limit is per read: a write may expire any number.
+ */
+export const MAX_TAGS_PER_READ = 128;
+
+/** Whether a read past the limit has been reported, so a busy page logs once. */
+let readTagsDropReported = false;
+
+/**
+ * The tags one cached read carries: its own (the collection's or Single's)
+ * first, then the caller's, each once, and no more than Next.js keeps. Its own
+ * come first so the tag every write to it expires is never the one dropped.
+ */
+export function readTags(
+  own: readonly string[],
+  extra: readonly string[] = []
+): string[] {
+  const tags = [...new Set([...own, ...extra])];
+  if (tags.length <= MAX_TAGS_PER_READ) return tags;
+  if (!readTagsDropReported) {
+    readTagsDropReported = true;
+    getNextlyLogger().warn({
+      kind: "read-tags-dropped",
+      message: `A cached read named ${tags.length} tags, more than the ${MAX_TAGS_PER_READ} Next.js keeps; the last ${tags.length - MAX_TAGS_PER_READ} were left off, so a write that expires only those leaves it cached until its own collection or Single changes.`,
+      kept: MAX_TAGS_PER_READ,
+      named: tags.length,
+    });
+  }
+  return tags.slice(0, MAX_TAGS_PER_READ);
 }
 
 /**

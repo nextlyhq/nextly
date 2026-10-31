@@ -39,6 +39,10 @@ import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
  */
 export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
 
+/** Cache tag expiries older than the ledger keeps them; its own key, as each pass has. */
+export const CACHE_TAG_EXPIRIES_RETENTION_GATE_KEY =
+  "cache-tags.retention.lastPassAt";
+
 /** Plugins' one-purpose secrets past their expiry; its own key, as each pass has. */
 export const ONE_TIME_SECRETS_RETENTION_GATE_KEY =
   "secrets.retention.lastPassAt";
@@ -269,3 +273,12 @@ export const ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY =
  */
 export const PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY =
   "preview-links.retention.lastDrainPassAt";
+
+/**
+ * The scheduled drain's own marker for the cache tag expiry ledger's prune,
+ * for the reason the secrets sweep has one: an install that goes quiet makes
+ * no write that offers the pass, and the drain is the trigger that keeps
+ * running.
+ */
+export const CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY =
+  "cache-tags.retention.lastDrainPassAt";
