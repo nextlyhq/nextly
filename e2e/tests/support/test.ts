@@ -289,3 +289,22 @@ export const test = base.extend<{ freshSession: string }>({
     { scope: "worker" },
   ],
 });
+
+/**
+ * Gives the tests of the group it is called in a further seat of their file's account
+ * (`fileAccount`): an account of their own, with a REST budget of its own.
+ *
+ * The REST limit gives each signed-in user 500 reads a minute. A file whose tests each load the
+ * dashboard and read its layout around it spends that budget faster than its tests take, so
+ * through one account the last of them met a 429, and an admin that could not reach the server.
+ * Each group reads through a seat of its own instead, as a seeder spreads its writes over
+ * further seats. A group that calls nothing keeps the file's own account, seat 0.
+ */
+export function ownSeat(seat: number): void {
+  test.use({
+    storageState: async ({ baseURL }, use, testInfo) => {
+      if (!baseURL) throw new Error("[e2e] No baseURL configured.");
+      await use(await fileAccount(baseURL, testInfo, seat));
+    },
+  });
+}

@@ -20,7 +20,7 @@ import {
 } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { fileAccount, test } from "./support/test";
+import { ownSeat, test } from "./support/test";
 import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
@@ -159,26 +159,9 @@ function queriesAfterWrite(sent: readonly Request[]): Request[] {
   return write === -1 ? [] : sent.slice(write + 1).filter(isQuery);
 }
 
-/**
- * Gives the tests of the group it is called in a further seat of this file's account
- * (`fileAccount`): an account of their own, with a REST budget of its own.
- *
- * The REST limit gives each signed-in user 500 reads a minute, and a test here spends about fifty:
- * two dashboard loads, and the layout reads around them. On a production server the file's
- * sixteen tests run in well under a minute, so through one account they spent past 500 by the
- * last group, and whichever test was running then met a 429 and an admin that could not reach
- * the server. Each group reads through a seat of its own instead, as a seeder spreads its writes
- * over further seats, so no account spends more than about 300 of its 500. The first group, the
- * quick setting at each width, keeps the file's own account, seat 0.
- */
-function ownSeat(seat: number): void {
-  test.use({
-    storageState: async ({ baseURL }, use, testInfo) => {
-      if (!baseURL) throw new Error("[e2e] No baseURL configured.");
-      await use(await fileAccount(baseURL, testInfo, seat));
-    },
-  });
-}
+// A test here spends about fifty REST reads (two dashboard loads, and the layout reads around
+// them), so the file's sixteen run through four seats (`ownSeat`), none spending more than about
+// 300 of its 500 a minute. The first group, the quick setting at each width, keeps seat 0.
 
 test.beforeEach(async ({ page }) => {
   await gotoAdmin(page, "/");
@@ -431,9 +414,22 @@ test.describe("the settings sheet", () => {
       "large"
     );
     expect(Number(await preview.getAttribute("data-scale"))).toBeLessThan(1);
-    // Not modal: the card behind it can still be reached, and reaching it keeps the panel open.
-    // Found by its test id, not its name, which follows the card's title.
-    await cell(page).getByTestId("card-menu").click();
+    // Not modal: a card beside it can still be reached, and reaching it keeps the panel open.
+    // This card is full width, so its own menu sits under the panel: the first card menu clear
+    // of the panel's box is used, found by its test id, not its name, which follows the title.
+    const menus = await page.getByTestId("card-menu").all();
+    let reachable: (typeof menus)[number] | undefined;
+    for (const menu of menus) {
+      const at = await menu.boundingBox();
+      if (at && box && at.width > 0 && at.x + at.width < box.x) {
+        reachable = menu;
+        break;
+      }
+    }
+    if (reachable === undefined)
+      throw new Error("no card menu clear of the panel");
+    await reachable.click();
+    await expect(page.getByRole("menu")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(sheet).toBeVisible();
   });
@@ -481,21 +477,22 @@ test.describe("the settings sheet", () => {
   }) => {
     // 🔴 The sheet's base is not a flex box, so the area below its header took its own height and
     // ran past the screen with nothing to scroll: on a phone the footer, Done included, was off
-    // the bottom and out of reach. The area now scrolls inside the sheet, so Done can be brought
-    // into view, and pressing it keeps the change.
+    // the bottom and out of reach. The area now scrolls inside the sheet, with Cancel and Done
+    // held at its foot, so Done is in reach however far the form runs, and pressing it keeps
+    // the change.
     await page.setViewportSize({ width: 390, height: 400 });
     await page.reload();
     await expect(rows(page)).toHaveCount(3);
     const sheet = await openSettings(page);
-    await chooseRows(sheet, 2);
+    // Guards the guard: the form must be taller than the room it is given, or Done is in reach
+    // whatever the sheet's layout does, and this test would pass on the old one.
+    const overflows = await sheet
+      .locator("form")
+      .evaluate(form => form.scrollHeight > form.clientHeight);
+    expect(overflows, "the form must be taller than its room").toBe(true);
     const done = sheet.getByRole("button", { name: "Done" });
-    // Guards the guard: Done must start below the screen, or it is in view whatever the sheet's
-    // layout does, and this test would pass on the old one.
-    const startsBelow = await done.evaluate(
-      element => element.getBoundingClientRect().bottom > window.innerHeight
-    );
-    expect(startsBelow, "Done must start below the screen").toBe(true);
-    await done.scrollIntoViewIfNeeded();
+    await expect(done).toBeInViewport();
+    await chooseRows(sheet, 2);
     await expect(done).toBeInViewport();
     await done.click();
     await expect(sheet).toBeHidden();
