@@ -10,6 +10,11 @@
  *
  * @module domains/flush-content-change
  */
+import {
+  buildCollectionRevalidationIntent,
+  buildSingleRevalidationIntent,
+  readRevalidateConfig,
+} from "../revalidation/intent-builders";
 import type {
   CacheRevalidator,
   RevalidationIntent,
@@ -40,5 +45,33 @@ export async function flushContentChange(
     await container.get<CacheRevalidator>("cacheRevalidator").flush([intent]);
   } catch (error) {
     logger?.error?.(`Cache revalidation failed after ${what}`, { error });
+  }
+}
+
+/**
+ * The intent that expires the cached reads of a collection or Single being
+ * deleted, from the `revalidate` value its registry row stores: a JSON string
+ * on SQLite and the raw-insert path, an object on PostgreSQL and MySQL.
+ * `undefined` when it opts out. Read from the row the delete removes, inside
+ * its transaction, so the setting is the current one rather than a cached copy.
+ */
+export function deletedEntityIntent(
+  kind: "collection" | "single",
+  slug: string,
+  stored: unknown
+): RevalidationIntent | undefined {
+  const revalidate = readRevalidateConfig({ revalidate: parsed(stored) });
+  return kind === "collection"
+    ? buildCollectionRevalidationIntent(slug, revalidate)
+    : buildSingleRevalidationIntent(slug, revalidate);
+}
+
+/** A stored JSON value, parsed; one that does not parse reads as unset. */
+function parsed(stored: unknown): unknown {
+  if (typeof stored !== "string") return stored;
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return undefined;
   }
 }

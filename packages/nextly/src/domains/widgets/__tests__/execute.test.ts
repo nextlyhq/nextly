@@ -3,14 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const find = vi.fn();
 const count = vi.fn();
 const group = vi.fn();
+const timeseries = vi.fn();
 
 vi.mock("../../../direct-api/nextly", () => ({
-  requireNextly: () => ({ find, count, group }),
+  requireNextly: () => ({ find, count, group, timeseries }),
 }));
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { executeWidgetQuery } from "../execute";
-import { validateWidgetQuery } from "../query";
+import { openWindowEnd, rangeWindow, validateWidgetQuery } from "../query";
 import { clearSources, registerSource } from "../sources";
 
 const caller = {
@@ -168,6 +169,20 @@ describe("executeWidgetQuery", () => {
 
     expect(count).not.toHaveBeenCalled();
     expect(result).toMatchObject({ op: "list", total: 42 });
+  });
+
+  it("reads a list at depth 0 only when its options ask, and at core's default otherwise", async () => {
+    // A declared widget's data read may ask for its links as stored ids. The
+    // depth reaches core's own `find` as `find` takes it; a read that asks
+    // nothing names no depth at all, so core's default expansion stands.
+    const q = validateWidgetQuery({ source: "collection:posts", op: "list" });
+
+    await executeWidgetQuery(q, caller, { depth: 0 });
+    await executeWidgetQuery(q, caller);
+
+    expect(find).toHaveBeenCalledTimes(2);
+    expect(find.mock.calls[0][0]).toMatchObject({ depth: 0 });
+    expect(find.mock.calls[1][0]).not.toHaveProperty("depth");
   });
 
   it("describes the selected fields, in the order they were selected", async () => {
@@ -388,5 +403,38 @@ describe("executeWidgetQuery", () => {
       "Invalid widget query: unavailable source or unsupported op"
     );
     expect(err.logContext?.widgetQuery).toMatch(/collection:posts/);
+  });
+});
+
+describe("a series over a range", () => {
+  it("counts in its last interval the rows its filter keeps to the end of the second it is read in", async () => {
+    // 🔴 The row filter ends at the batch's whole second (`openWindowEnd`); a
+    // series whose own rows ended at its last interval's end dropped a row
+    // MySQL stored rounded across that boundary, which a windowed count kept.
+    registerSource({
+      id: "collection:events",
+      label: "Events",
+      kind: "collection",
+      supports: ["timeseries"],
+      fields: [{ name: "createdAt", type: "date" }],
+    });
+    timeseries.mockResolvedValue({ points: [], interval: "day" });
+    // A fifth of a second before midnight, UTC.
+    const now = new Date("2026-06-15T23:59:59.800Z");
+    await executeWidgetQuery(
+      validateWidgetQuery({
+        source: "collection:events",
+        op: "timeseries",
+        dateField: "createdAt",
+        range: "7d",
+      }),
+      caller,
+      { now }
+    );
+    expect(timeseries).toHaveBeenCalledTimes(1);
+    const [args] = timeseries.mock.calls[0] as [Record<string, unknown>];
+    expect(args.rowsEnd).toEqual(openWindowEnd(now));
+    // The intervals are still placed by the batch's instant.
+    expect(args.now).toEqual(rangeWindow("7d", now).anchor);
   });
 });

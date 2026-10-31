@@ -29,13 +29,12 @@ import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/intro
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
-import { describeError, NextlyError } from "../../errors/index";
+import { NextlyError } from "../../errors/index";
+import { exitWithError } from "../errors";
+import { resolveModeRequired } from "../errors/areas/migrations";
 import { createContext, type CommandContext } from "../program";
-import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 import { maybeForceUnlock } from "./migrate";
@@ -71,9 +70,7 @@ function pickMode(opts: ResolveCommandOptions): {
   ].filter((x): x is readonly [ResolveMode, string] => x !== null);
 
   if (chosen.length !== 1) {
-    throw new Error(
-      "Provide exactly one of --applied, --rolled-back, or --failed-cleanup."
-    );
+    throw resolveModeRequired(chosen.length);
   }
   return { mode: chosen[0][0], filename: chosen[0][1] };
 }
@@ -149,11 +146,7 @@ export async function runMigrateResolve(
 
   logger.header("Migrate Resolve");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
   const dialect = dbValidation.dialect;
 
   const configResult = await loadConfig({
@@ -335,8 +328,7 @@ export function registerMigrateResolveCommand(program: Command): void {
       try {
         await runMigrateResolve(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

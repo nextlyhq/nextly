@@ -1,11 +1,13 @@
 /**
- * Validating a plugin's `contributes.admin.widgets` and reducing them to the
- * values the browser receives.
+ * Validating widgets in the older `contributes.admin.widgets` shape and
+ * reducing them to the values the browser receives, and the startup gate that
+ * refuses a plugin carrying that key at all.
  *
- * The same two-caller shape as `./validate-client-config`, for the same reason:
- * boot rejects a widget that cannot be delivered before anything depends on it,
- * and the admin-meta serializer needs the reduced value. One implementation, so
- * the request path cannot accept what boot refused.
+ * Startup refuses `contributes.admin.widgets` and `contributes.widgetSources`
+ * (`./removed-widget-keys`): a plugin's widgets are declared with
+ * `defineWidget` under `contributes.dashboard`. The reduction below still
+ * answers for whatever reaches it without passing startup, so the admin-meta
+ * serializer cannot publish a value `JSON.stringify` cannot carry.
  *
  * A contributed widget never passes through `registerWidget`, so the widget
  * REGISTRY's `structuredClone` gate does not stand between it and the wire —
@@ -21,6 +23,7 @@ import {
   actionGatesOf,
   collectionSettingField,
   knobQueriesField,
+  settingsField,
   textBoundsField,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
@@ -39,19 +42,21 @@ import {
   rangedLimitSettingProblem,
   textContentProblem,
   widgetValueProblem,
-  WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
 import type { WidgetQuerySpec } from "../domains/widgets/query";
 import {
   settingsSourceOf,
   widgetSettingsProblem,
 } from "../domains/widgets/settings";
-import { getNextlyLogger } from "../observability/logger";
 
 import type { PluginAdminWidget } from "./admin-contributions";
 import { adminWidgetError, adminWidgetShapeError } from "./admin-widget-error";
 import { jsonOnly, unserializableKeys } from "./json-round-trip";
 import type { PluginDefinition } from "./plugin-context";
+import {
+  assertNoRemovedWidgetKeys,
+  carriedRemovedKey,
+} from "./removed-widget-keys";
 
 /**
  * How a widget with no usable `id` is named in the failure.
@@ -151,8 +156,8 @@ function querylessProblem(widget: Record<string, unknown>): string | undefined {
  * reads that absence as still loading for the life of the page.
  *
  * An archetype in NEITHER set is not judged here at all: it belongs to a newer
- * core, and `warnUnknownArchetype` has already let it through. Requiring a
- * query of it would be guessing which half of a vocabulary we do not have.
+ * core. Requiring a query of it would be guessing which half of a vocabulary
+ * we do not have.
  *
  * `query` is checked for being an OBJECT and no further. What is inside it is
  * `validateWidgetQuery`'s job, at the point the query runs and against the
@@ -183,101 +188,9 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
     return typeof widget.query === "object" && widget.query !== null;
   }
 
-  // Unrecognised, and therefore a newer core's. Accepted for the same reason
-  // `warnUnknownArchetype` does not throw: the card reports itself, and the
-  // install stands.
+  // Unrecognised, and therefore a newer core's. Accepted: the card reports
+  // itself, and the install stands.
   return true;
-}
-
-/**
- * Says so when a widget names an archetype this core does not know, WITHOUT
- * refusing it.
- *
- * A boot failure here would be the worst outcome available. `assertAdminWidgets`
- * runs during plugin resolution, so a throw aborts the install -- and the
- * reachable cause is a plugin built against a NEWER core naming an archetype
- * this one has not learned yet. Trading the whole admin for one card it cannot
- * draw is not a trade anyone would choose, and it is the opposite of the
- * blast-radius argument the other refusals in this file rest on: those exist
- * because ONE unserializable widget breaks the workspace payload for every
- * admin. An unrecognised archetype is perfectly serializable. It costs its own
- * card and nothing else, and the grid already reports it there by name.
- *
- * Grafana answers the same question the same way -- an unknown panel type
- * renders "Panel plugin not found" in that panel and the dashboard stands --
- * and VS Code drops a single unrecognised contribution rather than the
- * extension.
- *
- * Logged rather than swallowed, because the other reachable cause is a typo,
- * and "metrics" for "metric" is a mistake whose card reads "not rendered yet"
- * -- a sentence that suggests waiting rather than fixing.
- *
- * Called from `assertAdminWidgets` and NOWHERE else, which is the boot gate and
- * runs once. `validatedAdminWidgets` is the wrong home for it despite being
- * where the check would naturally sit: `buildPluginAdminMeta` calls it on every
- * `/api/admin-meta` request, that route is public and unauthenticated because
- * the sign-in screen renders before a session exists, and the responses are
- * `no-store`. One mistyped archetype would have written a warning line per
- * anonymous request, forever -- burying the one occurrence that says something
- * under a stream of identical ones.
- */
-/**
- * What has already been warned about, as `plugin\u0000widget\u0000archetype`.
- *
- * `assertAdminWidgets` is called more than once per boot -- `registerServices`
- * runs it through `resolvePlugins` and then again on the transformed list, and
- * the CLI follows the same two-pass shape -- so an unchanged widget produced the
- * same warning at least twice. A diagnostic that repeats itself reads as two
- * problems, and the author counting occurrences learns nothing from the second.
- *
- * Module-level, so it lives as long as the process the warning describes. NUL as
- * the separator because a plugin name or widget id may contain anything else.
- */
-const WARNED_ARCHETYPES = new Set<string>();
-
-/**
- * Forgets what has been warned about.
- *
- * For tests, which share one module instance across cases and would otherwise
- * find the second case silent because the first already warned -- the same
- * reason `clearWidgets` exists on the registry. A running app never calls it:
- * the set describes one process, and re-warning inside it is exactly what was
- * being fixed.
- */
-export function resetArchetypeWarnings(): void {
-  WARNED_ARCHETYPES.clear();
-}
-
-function warnUnknownArchetype(
-  pluginName: string,
-  widget: { id?: unknown; archetype?: unknown }
-): void {
-  const archetype = widget.archetype;
-  if (typeof archetype !== "string") return;
-  if (
-    WIDGET_ARCHETYPES.includes(archetype as (typeof WIDGET_ARCHETYPES)[number])
-  ) {
-    return;
-  }
-  const widgetId = typeof widget.id === "string" ? widget.id : "";
-  const seenKey = `${pluginName}\u0000${widgetId}\u0000${archetype}`;
-  if (WARNED_ARCHETYPES.has(seenKey)) return;
-  WARNED_ARCHETYPES.add(seenKey);
-
-  getNextlyLogger().warn({
-    kind: "widget-archetype-unknown",
-    plugin: pluginName,
-    widget: widgetId === "" ? undefined : widgetId,
-    archetype,
-    known: WIDGET_ARCHETYPES,
-    message:
-      `Plugin "${pluginName}" contributes a widget with archetype ` +
-      `"${archetype}", which this version of Nextly does not draw. Its card ` +
-      "will say so and the rest of the dashboard is unaffected. If that is a " +
-      "typo, the known archetypes are: " +
-      WIDGET_ARCHETYPES.join(", ") +
-      ".",
-  });
 }
 
 /**
@@ -442,11 +355,14 @@ function undrawableReason(widget: Record<string, unknown>): string | undefined {
 export function validatedAdminWidgets(
   plugin: PluginDefinition
 ): PluginAdminWidget[] | undefined {
-  const declared = plugin.contributes?.admin?.widgets;
-  if (declared === undefined) return undefined;
-  if (!Array.isArray(declared)) {
+  const carried = carriedRemovedKey(plugin, "admin.widgets");
+  if (carried === undefined) return undefined;
+  if (!Array.isArray(carried)) {
     throw adminWidgetError(plugin.name, "#0", []);
   }
+  // Read as unknown entries: the key is no field of the contributions type,
+  // so nothing about what it holds is known until each entry is checked.
+  const declared: readonly unknown[] = carried;
 
   const publishable: PluginAdminWidget[] = [];
   for (const [index, widget] of declared.entries()) {
@@ -474,22 +390,15 @@ export function validatedAdminWidgets(
 }
 
 /**
- * Boot-time check over every plugin, disabled ones included.
+ * Boot-time check over every plugin, disabled ones included: refuses a plugin
+ * that adds widgets or widget data sources through a key other than
+ * `contributes.dashboard`, naming the plugin, the key and the replacement.
  *
- * Disabled plugins are checked too even though `buildPluginAdminMeta` withholds
- * their widgets. Enabling a plugin is a config edit, not a code change, and it
- * must not be the thing that turns a healthy install into a workspace endpoint
- * that answers 500 — boot is where that is still cheap to say.
+ * Plugin resolution runs it over the declared list and again over the list
+ * `setup` transformers leave, so a transformer cannot add either key back.
  */
 export function assertAdminWidgets(plugins: PluginDefinition[]): void {
-  for (const plugin of plugins) {
-    // The widgets that survived, so the warning describes what will actually be
-    // published rather than what was declared.
-    const widgets = validatedAdminWidgets(plugin) ?? [];
-    for (const widget of widgets) {
-      warnUnknownArchetype(plugin.name, widget);
-    }
-  }
+  assertNoRemovedWidgetKeys(plugins);
 }
 
 /**
@@ -609,6 +518,9 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     // a placement's text to: a contribution's settings passed the registry's
     // own check above, so they are read as declared.
     ...textBoundsField(widget.settings),
+    // Its settings, so the layout write holds a changed value to the rule it
+    // is read back by.
+    ...settingsField(widget.settings),
     // Its Collection setting, so a card is judged by the collection it reads
     // whichever channel declared the widget.
     ...collectionSettingField(widget.settings),

@@ -5,19 +5,8 @@
  * watch the write it feeds, so a save that sent the draft untrimmed -- and left
  * an over-limit dashboard refused on every save -- fails here.
  */
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-
-// The read a reset asks for when this one worked out no Get started steps.
-const { fetchGetStartedOnRestore } = vi.hoisted(() => ({
-  fetchGetStartedOnRestore: vi.fn(),
-}));
-vi.mock("@admin/hooks/queries/useDashboardLayout", async importOriginal => ({
-  ...(await importOriginal<
-    typeof import("@admin/hooks/queries/useDashboardLayout")
-  >()),
-  fetchGetStartedOnRestore,
-}));
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
@@ -138,92 +127,19 @@ describe("staging a reset", () => {
     return {
       stage: () => result.current.stageReset(),
       staged: () => staged,
-      // The reader edits the draft, as any later change replaces it.
-      edit: (placements: WidgetPlacement[]) => {
-        staged = staged ? { ...staged, placements } : staged;
-      },
     };
   }
 
-  it("stages the default of the read that works out Get started's steps, when this one did not", async () => {
-    // 🔴 This read's default leaves the card out only because it worked no
-    // steps out: a reset lands on a default that may draw it.
-    fetchGetStartedOnRestore.mockResolvedValue({
-      defaultPlacements: [card("core/get-started"), card("core/team")],
-    });
+  it("stages this read's default at once, asking for nothing more", () => {
+    // The setup card is placed or left out by its own rules in the default
+    // the read answers, so the reset lands on exactly that default.
     const { stage, staged } = staging({
-      defaultPlacements: [card("core/team")],
-      getStarted: { drawn: false, answer: null },
+      defaultPlacements: [card("core/setup"), card("core/team")],
     });
     act(() => stage());
-    await waitFor(() =>
-      expect(staged()?.stagedReset?.map(p => p.widgetId)).toEqual([
-        "core/get-started",
-        "core/team",
-      ])
-    );
-  });
-
-  it("stages this read's default at once, while the read that works the steps out is asked", async () => {
-    let answer: (value: {
-      defaultPlacements: WidgetPlacement[];
-    }) => void = () => {};
-    fetchGetStartedOnRestore.mockReturnValue(
-      new Promise(resolve => {
-        answer = resolve;
-      })
-    );
-    const { stage, staged } = staging({
-      defaultPlacements: [card("core/team")],
-      getStarted: { drawn: false, answer: null },
-    });
-    act(() => stage());
-    expect(staged()?.stagedReset?.map(p => p.widgetId)).toEqual(["core/team"]);
-    await act(async () =>
-      answer({
-        defaultPlacements: [card("core/get-started"), card("core/team")],
-      })
-    );
     expect(staged()?.stagedReset?.map(p => p.widgetId)).toEqual([
-      "core/get-started",
+      "core/setup",
       "core/team",
     ]);
-  });
-
-  it("drops a late answer once the reader has edited the draft since", async () => {
-    // 🔴 Applied to whatever draft is open when it lands, a slow answer would
-    // overwrite edits the reader made after staging the reset.
-    let answer: (value: {
-      defaultPlacements: WidgetPlacement[];
-    }) => void = () => {};
-    fetchGetStartedOnRestore.mockReturnValue(
-      new Promise(resolve => {
-        answer = resolve;
-      })
-    );
-    const { stage, staged, edit } = staging({
-      defaultPlacements: [card("core/team")],
-      getStarted: { drawn: false, answer: null },
-    });
-    act(() => stage());
-    edit([card("core/note")]);
-    await act(async () =>
-      answer({ defaultPlacements: [card("core/get-started")] })
-    );
-    expect(staged()?.placements.map(p => p.widgetId)).toEqual(["core/note"]);
-  });
-
-  it("stages this read's default when it already holds the steps, asking nothing more", () => {
-    fetchGetStartedOnRestore.mockClear();
-    const { stage, staged } = staging({
-      defaultPlacements: [card("core/team")],
-      getStarted: {
-        drawn: false,
-        answer: { unknown: false, steps: [], done: 0, total: 0 },
-      },
-    });
-    act(() => stage());
-    expect(staged()?.stagedReset?.map(p => p.widgetId)).toEqual(["core/team"]);
-    expect(fetchGetStartedOnRestore).not.toHaveBeenCalled();
   });
 });

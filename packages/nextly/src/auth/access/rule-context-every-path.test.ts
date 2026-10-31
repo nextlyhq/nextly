@@ -2,7 +2,7 @@
  * Every way a rule is asked hands it the one context, with permissions
  * spelled as the role screen spells them.
  *
- * Seven places ask a rule: the one decision, the RBAC service for a session,
+ * Seven places ask a rule: the one decision, `nextly.access.check` for a session,
  * a visitor and a plugin's person, the key gates on a read and on a write, and
  * the field-rule passes. Each is asked here with a rule that checks the role
  * screen's spelling (`read-posts`) and records what it was handed, so a path
@@ -35,6 +35,8 @@ const GRANTS: GrantedPermission[] = [
 vi.mock("../../services/lib/permissions", async importOriginal => ({
   ...(await importOriginal<typeof import("../../services/lib/permissions")>()),
   isSuperAdmin: vi.fn(async () => false),
+  isSuperAdminOrRefuse: vi.fn(async () => false),
+  isSuperAdminOrThrow: vi.fn(async () => false),
   hasPermission: vi.fn(async () => true),
   listRoleSlugsForUser: vi.fn(async () => ["editor"]),
   listEffectiveGrants: vi.fn(async () => GRANTS),
@@ -46,6 +48,8 @@ vi.mock("../../services/lib/permissions", async importOriginal => ({
 }));
 
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import type { NextlyContext } from "../../direct-api/namespaces/context";
+import { createAccessNamespace } from "../../direct-api/namespaces/rbac";
 import { makePrincipal } from "../../plugins/principals/principal";
 import { listPublicGrants } from "../../services/lib/permissions";
 import {
@@ -75,6 +79,15 @@ function roleScreenRule() {
 }
 
 let rbac: RBACAccessControlService;
+/** `nextly.access.check` over the service the rules are registered on. */
+const sessionCheck = (args: {
+  userId: string;
+  operation: "read" | "update";
+  resource: string;
+}) =>
+  createAccessNamespace({
+    rbacAccessControlService: rbac,
+  } as unknown as NextlyContext).check(args);
 let warn: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   rbac = new RBACAccessControlService();
@@ -110,7 +123,7 @@ describe("a collection or Single rule", () => {
     const { rule, seen } = roleScreenRule();
     rbac.registerCollectionAccess("posts", { read: rule });
     await expect(
-      rbac.checkAccess({ userId: "u1", operation: "read", resource: "posts" })
+      sessionCheck({ userId: "u1", operation: "read", resource: "posts" })
     ).resolves.toBe(true);
     expect(seen[0].target).toEqual({ kind: "collection", slug: "posts" });
     expect(seen[0].user).toEqual({ id: "u1" });
@@ -121,7 +134,7 @@ describe("a collection or Single rule", () => {
     const { rule, seen } = roleScreenRule();
     rbac.registerSingleAccess("site", { update: rule });
     await expect(
-      rbac.checkAccess({ userId: "u1", operation: "update", resource: "site" })
+      sessionCheck({ userId: "u1", operation: "update", resource: "site" })
     ).resolves.toBe(true);
     expect(seen[0].target).toEqual({ kind: "single", slug: "site" });
   });
@@ -185,7 +198,7 @@ describe("a collection or Single rule", () => {
       permissions.includes("posts:read");
     rbac.registerCollectionAccess("posts", { read: rule });
     await expect(
-      rbac.checkAccess({ userId: "u1", operation: "read", resource: "posts" })
+      sessionCheck({ userId: "u1", operation: "read", resource: "posts" })
     ).resolves.toBe(false);
     expect(warn).not.toHaveBeenCalled();
   });

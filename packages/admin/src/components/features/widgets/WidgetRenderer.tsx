@@ -40,6 +40,10 @@ import type { CardState } from "./frame/card-state";
 import { listDensityOf } from "./frame/list-rows";
 import type { CardEmptyContent, SkeletonShape } from "./frame/states";
 import type { AnswerSize } from "./frame/tier";
+import {
+  useHiddenWhileEmpty,
+  useHidesWhenAnswerEmpty,
+} from "./hidden-while-empty";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
@@ -50,23 +54,45 @@ import { WidgetCard } from "./WidgetCard";
  * shape is what keeps the card from jumping when the data lands.
  */
 /**
+ * What the card's skeleton is drawn as: the display a declared widget says it looks like (its
+ * `skeleton`, published as its `sketch`), else its archetype's. The ONE value its shape, its rows
+ * and their layout are all read from, so a declared list's skeleton is a list's rows and a
+ * declared table's a table's, never a list's shape with a custom card's rows.
+ */
+function skeletonDisplayOf(definition: DashboardWidget): string {
+  return definition.sketch ?? definition.archetype;
+}
+
+/**
+ * The columns a declared table's skeleton holds the place of, beside its title: a table drawn by
+ * the widget's own component asks no query the count could be read from, so the skeleton stands
+ * in with two, which draws a table's heading and columns at the large tier and a row's detail
+ * line below it.
+ */
+const DECLARED_TABLE_COLUMNS = 2;
+
+/**
  * The items setting a list or table card's skeleton holds the place of, from the query as asked;
  * `null` for one that declared no limit, which draws the default number, and `undefined` for any
  * other card, whose skeleton draws its default rows.
  */
 function skeletonItemsFor(definition: DashboardWidget): unknown {
-  if (definition.archetype !== "list" && definition.archetype !== "table")
-    return undefined;
+  const display = skeletonDisplayOf(definition);
+  if (display !== "list" && display !== "table") return undefined;
   return definition.query?.limit ?? null;
 }
 
 /**
  * How many columns a list or table card selects, which is how its skeleton is laid out at each
- * tier. Undefined for any other card, whose skeleton has no rows to lay out.
+ * tier. Undefined for any other card, whose skeleton has no rows to lay out. A declared table,
+ * which asks no query, stands in with `DECLARED_TABLE_COLUMNS`.
  */
 function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
-  if (definition.archetype !== "list" && definition.archetype !== "table")
-    return undefined;
+  const display = skeletonDisplayOf(definition);
+  if (display !== "list" && display !== "table") return undefined;
+  if (definition.query === undefined && display === "table") {
+    return DECLARED_TABLE_COLUMNS;
+  }
   return definition.query?.select?.length ?? 0;
 }
 
@@ -195,6 +221,12 @@ export interface WidgetRendererProps {
   subtitle?: string | undefined;
   /** The card's one quick setting, which the frame draws before `headerAction`. */
   quick?: ReactNode;
+  /**
+   * Draws the card's title as a control: the dashboard's cards open their quick popover from it.
+   *
+   * @internal Set by the dashboard grid only, never part of the widget kit.
+   */
+  titleTrigger?: ((title: string) => ReactNode) | undefined;
   /** The drag handle in customise mode, drawn before the title. */
   leading?: ReactNode;
   /** Customise mode: the card's content stays visible but out of reach. */
@@ -272,24 +304,28 @@ function sharedCardProps(
     WidgetRendererProps,
     | "headerAction"
     | "quick"
+    | "titleTrigger"
     | "leading"
     | "customizing"
     | "answerSize"
     | "subtitle"
-  >
+  > & { hiddenWhileEmpty: boolean; hidesWhenAnswerEmpty: boolean }
 ) {
+  const { hiddenWhileEmpty, hidesWhenAnswerEmpty, ...rest } = controls;
+  const hides = definition.hidesWhenEmpty === true;
   return {
     title: definition.title,
     link: definition.link,
-    ...controls,
-    hidesWhenEmpty: definition.hidesWhenEmpty === true,
+    ...rest,
+    hiddenWhileEmpty: hides && hiddenWhileEmpty,
+    hidesWhenAnswerEmpty: hides && hidesWhenAnswerEmpty,
     cardId: placement?.id ?? definition.id,
     widgetId: definition.id,
     // The card's height, which its list rows are counted from.
     ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     // The display the widget says it looks like, else its archetype's: a
     // declared card's `skeleton`, published as its `sketch`.
-    skeleton: skeletonFor(definition.sketch ?? definition.archetype),
+    skeleton: skeletonFor(skeletonDisplayOf(definition)),
     skeletonItems: skeletonItemsFor(definition),
     // The density the card's list rows, and the skeleton holding their place, are drawn at.
     listDensity: listDensityOf(placement?.settings),
@@ -530,6 +566,7 @@ export function WidgetRenderer({
   placement,
   headerAction,
   quick,
+  titleTrigger,
   leading,
   customizing = false,
   onRetry,
@@ -538,13 +575,20 @@ export function WidgetRenderer({
   answerSize,
   subtitle,
 }: WidgetRendererProps): JSX.Element {
+  // Taken off the dashboard while empty by the layout read's verdict, held for the visit; or, for
+  // a widget the layout read cannot answer, by its own answer as it is drawn.
+  const hiddenWhileEmpty = useHiddenWhileEmpty(placement?.id);
+  const hidesWhenAnswerEmpty = useHidesWhenAnswerEmpty(definition.id);
   const shared = sharedCardProps(definition, placement, {
     headerAction,
     quick,
+    titleTrigger,
     leading,
     customizing,
     answerSize,
     subtitle,
+    hiddenWhileEmpty,
+    hidesWhenAnswerEmpty,
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);

@@ -14,8 +14,8 @@
  * Which of them the default dashboard holds, and in what order, is
  * `CORE_DEFAULT_LAYOUT` in `./ids`, written as a site writes its own `defaultLayout`.
  *
- * Collections, Singles and Team draw inside the shared frame like every other
- * card, so they read as one product. The other `custom` ones still carry
+ * Content, Team and the per-collection cards draw inside the shared frame like
+ * every other card, so they read as one product. The other `custom` ones still carry
  * `chrome: "none"` until each moves into the frame: each draws a titled section
  * with its own rules, loading skeleton and error state. `title` is still required and
  * still meaningful -- it is what names the card in the layout editor, where a
@@ -47,7 +47,7 @@
  * - `core/upcoming-releases` is gated. `ReleasesService.find` authorizes by
  *   THROWING, so an ungranted reader gets a card stuck in its error state
  *   rather than an empty one -- see its own note.
- * - `core/recent-activity` is not. Its feed takes the caller's readable
+ * - `core/team-activity` is not. Its feed takes the caller's readable
  *   collections as a scope and defaults that scope to NOTHING, so a reader
  *   entitled to none of it is shown an empty feed. That is a card correctly
  *   saying there is nothing to report, which needs no gate; a gate would
@@ -60,39 +60,45 @@
 import type { WidgetDefinition } from "../definition";
 
 import { breakdownWidget } from "./breakdown";
-import { contentWidget } from "./content";
+import { contentTableWidget } from "./content-table";
+import { continueWidget } from "./continue";
 import { countWidget } from "./count";
-import { getStartedWidget } from "./get-started";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
 import { quickCreateWidget } from "./quick-create";
-import { recentActivityWidget } from "./recent-activity";
 import { recentEntriesWidget } from "./recent-entries";
-import { recentlyEditedWidget } from "./recently-edited";
+import { setupWidget } from "./setup";
+import { systemHealthWidget } from "./system-health";
 import { teamWidget } from "./team";
+import { teamActivityWidget } from "./team-activity";
 import { upcomingReleasesWidget } from "./upcoming-releases";
 
 /**
- * Core's widgets declared with `defineWidget`, as a plugin declares its own.
- * Registered through the same call as everyone's declarations, under core.
+ * Core's widgets declared with `defineWidget`, as a plugin declares its own,
+ * in core's order. Registered through the same call as everyone's
+ * declarations, under core; each card's data is answered on the server by its
+ * declaration's `load`.
  */
-export const CORE_DECLARATIONS = [noteWidget] as const;
+export const CORE_DECLARATIONS = [
+  setupWidget,
+  countWidget,
+  breakdownWidget,
+  needsAttentionWidget,
+  noteWidget,
+  recentEntriesWidget,
+  overTimeWidget,
+  systemHealthWidget,
+] as const;
 
 /** Core's widgets still written as definitions: every one not declared. */
 const CORE_WIDGET_LITERALS = [
-  getStartedWidget,
-  contentWidget,
+  contentTableWidget,
   quickCreateWidget,
   teamWidget,
-  needsAttentionWidget,
-  recentlyEditedWidget,
+  continueWidget,
   upcomingReleasesWidget,
-  recentActivityWidget,
-  countWidget,
-  breakdownWidget,
-  recentEntriesWidget,
-  overTimeWidget,
+  teamActivityWidget,
 ] as const satisfies readonly WidgetDefinition[];
 
 /**

@@ -17,7 +17,11 @@
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetSizeDeclaration } from "../grid-size";
 import type { RangeInterval, TimeseriesRange } from "../query";
-import type { DeclaredComponentProps, WidgetRenderSize } from "../result";
+import type {
+  DeclaredComponentProps,
+  SettingEditorProps,
+  WidgetRenderSize,
+} from "../result";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "../sources";
 import type { WidgetScope } from "../widget-scope";
 
@@ -30,6 +34,8 @@ import type {
 import type {
   DateRange,
   DependentSettings,
+  SettingEditorPathOf,
+  SettingEditorValueAt,
   SettingValues,
   WidgetFilter,
   WidgetSettings,
@@ -176,6 +182,15 @@ export interface WidgetReadServices {
        * @experimental
        */
       total?: true;
+      /**
+       * `0` to answer each link (a relationship or an upload) as the id it
+       * stores, unexpanded. Absent, links are expanded as they are today, as
+       * core's own read expands them by default. `0` is the only depth a read
+       * may name.
+       *
+       * @experimental
+       */
+      depth?: 0;
       signal?: AbortSignal;
     }
   ): Promise<{
@@ -519,9 +534,8 @@ export interface WidgetDeclarationInput<
    */
   preview?: PreviewFor<DisplayOf<View>, Preview, SettingValues<S>>;
   /**
-   * A label and a count for the dashboard's header. Typed for the release
-   * whose header reads it: until then a declaration using it is refused at
-   * startup, rather than started with a summary nothing shows.
+   * A label and a count for the dashboard's header, counted as the reader for
+   * each card of the widget they are shown, and left out of the line at none.
    *
    * @experimental
    */
@@ -830,9 +844,16 @@ export type ComponentPathOf<W> = W extends {
  * ```
  */
 export type WidgetComponentMap<W extends AnyWidget> = {
-  [Path in ComponentPathOf<W>]: (
-    props: PropsOfEach<WidgetsAt<W, Path>>
-  ) => unknown;
+  // Each setting's own editor sits beside the views, by the path its setting
+  // names, taking that setting's value: an editor written for another
+  // setting's value is refused as a view written for another widget is. One
+  // mapped type, not an intersection of two, so a missing path is reported
+  // the same way either side.
+  [Path in
+    | ComponentPathOf<W>
+    | SettingEditorPathOf<W>]: Path extends ComponentPathOf<W>
+    ? (props: PropsOfEach<WidgetsAt<W, Path>>) => unknown
+    : (props: SettingEditorProps<SettingEditorValueAt<W, Path>>) => unknown;
 };
 
 /** The widgets among `W` that name this component path. */

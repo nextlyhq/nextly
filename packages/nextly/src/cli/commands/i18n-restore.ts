@@ -31,9 +31,14 @@ import {
 } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
-import { describeError } from "../../errors/index";
+import { exitWithError } from "../errors";
+import {
+  restoreCollectionRequired,
+  restoreEntityRefusal,
+} from "../errors/areas/sync";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv, withAdapter } from "../utils/adapter";
+import { withAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 export interface I18nRestoreCommandOptions {
@@ -64,20 +69,11 @@ export async function runI18nRestore(
 
   const slug = options.collection;
   if (!slug) {
-    logger.error("--collection <slug> is required.");
-    process.exit(1);
+    exitWithError(logger, restoreCollectionRequired());
   }
 
   // Fail before touching the network if the DB env is unusable.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) logger.error(error);
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
+  requireDatabaseEnv(logger);
 
   const configResult = await loadConfig({
     configPath: options.config,
@@ -104,8 +100,15 @@ export async function runI18nRestore(
   ];
   const chosen = chooseRestoreEntity(slug, matches, options.kind);
   if ("problem" in chosen) {
-    logger.error(`${chosen.problem} Looked in your config and ui-schema.json.`);
-    process.exit(1);
+    exitWithError(
+      logger,
+      restoreEntityRefusal({
+        slug,
+        kind: options.kind,
+        found: matches.length,
+        problem: chosen.problem,
+      })
+    );
   }
   const { entity } = chosen;
 
@@ -210,8 +213,7 @@ export function registerI18nRestoreCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

@@ -43,11 +43,15 @@ declare const settingValue: unique symbol;
  * - `Kind` is the definition's `type`, so a dependency can require a sibling
  *   of a kind.
  * - `On` is the sibling this setting depends on, when it depends on one.
+ * - `Editor` is the path of the component it is drawn with instead of its own
+ *   field, when it names one, kept as the literal the author wrote so the
+ *   component map can hold that component to this setting's value.
  */
 export interface SettingDeclaration<
   Value,
   Kind extends string = string,
   On extends string = never,
+  Editor extends string = never,
 > {
   readonly type: Kind;
   /** What the settings sheet calls it: a setting is never shown by its key. */
@@ -63,15 +67,58 @@ export interface SettingDeclaration<
   readonly defaultValue?: Value;
   /** The setting this one depends on, and is reset with. */
   readonly of?: On;
-  /** Whether it sits on the card's header (at most one per widget). */
+  /**
+   * Whether it is changed on the card itself: in its quick popover, which holds
+   * at most three per widget, and on its header, which draws the first.
+   */
   readonly quick?: boolean;
+  /**
+   * The component the settings sheet draws in place of the setting's own
+   * field, as `"<module>#<Export>"`, handed `SettingEditorProps<Value>`.
+   *
+   * @experimental
+   */
+  readonly editor?: { readonly component: Editor };
   readonly [settingValue]?: Value;
 }
 
 /** Anything a widget may hold under `settings`. */
 export type WidgetSettings = Readonly<
-  Record<string, SettingDeclaration<unknown, string, string>>
+  Record<string, SettingDeclaration<unknown, string, string, string>>
 >;
+
+/** A setting builder's editor key: the component drawn in place of its field. */
+type EditorConfig<Editor extends string> = {
+  /**
+   * `"<module>#<Export>"`: a component taking `SettingEditorProps` of this
+   * setting's value, drawn in the settings sheet in place of its own field.
+   *
+   * @experimental
+   */
+  editor?: { component: Editor };
+};
+
+/** Each of `S`'s settings that names an editor: its path, and the value it edits. */
+type EditorEntries<S> = {
+  [K in keyof S]: S[K] extends {
+    readonly editor?: { readonly component: infer Path extends string };
+    readonly [settingValue]?: infer Value;
+  }
+    ? { path: Path; value: Value }
+    : never;
+}[keyof S];
+
+/** The editor paths a widget's settings name. */
+export type SettingEditorPathOf<W> = W extends { readonly settings?: infer S }
+  ? EditorEntries<S>["path"]
+  : never;
+
+/** The value the setting naming `Path` as its editor edits, in widget `W`. */
+export type SettingEditorValueAt<W, Path> = W extends {
+  readonly settings?: infer S;
+}
+  ? Extract<EditorEntries<S>, { path: Path }>["value"]
+  : never;
 
 /**
  * The values a widget's settings hand to every reader.
@@ -121,7 +168,8 @@ export type DependentSettings<S> = {
   readonly [K in keyof S]: SettingDeclaration<
     unknown,
     string,
-    CollectionSettingNames<S>
+    CollectionSettingNames<S>,
+    string
   >;
 };
 
@@ -227,16 +275,26 @@ type Quick = {
  * One declaration, in the definitions' own vocabulary, so the object needs no
  * translation on its way to registration. The quick flag is written only when
  * true, so an unmarked setting's declaration has no `quick` key at all.
+ *
+ * The editor path is `NoInfer` in the result: a builder's `Editor` comes from
+ * the `editor` it is handed, or is none. Inferred from where the declaration
+ * goes, a widget's settings bound (any path) would name an editor for every
+ * setting written without one.
  */
-function declare<Value, Kind extends string, On extends string = never>(
+function declare<
+  Value,
+  Kind extends string,
+  On extends string = never,
+  Editor extends string = never,
+>(
   type: Kind,
   { quick, ...config }: Record<string, unknown> & { quick?: boolean }
-): SettingDeclaration<Value, Kind, On> {
+): SettingDeclaration<Value, Kind, On, NoInfer<Editor>> {
   return {
     type,
     ...config,
     ...(quick === true ? { quick: true } : {}),
-  } as SettingDeclaration<Value, Kind, On>;
+  } as SettingDeclaration<Value, Kind, On, Editor>;
 }
 
 /**
@@ -253,76 +311,97 @@ function declare<Value, Kind extends string, On extends string = never>(
  */
 export const setting = {
   /** A line of text. */
-  text: (config: SettingConfig<object, string, true>) =>
-    declare<string, "text">("text", config),
+  text: <const Editor extends string = never>(
+    config: SettingConfig<object, string, true> & EditorConfig<Editor>
+  ) => declare<string, "text", never, Editor>("text", config),
   /**
    * Text over several lines, at most `maxLength` characters when given,
    * counted in code points.
    */
-  textarea: (config: SettingConfig<{ maxLength?: number }, string>) =>
-    declare<string, "textarea">("textarea", config),
+  textarea: <const Editor extends string = never>(
+    config: SettingConfig<{ maxLength?: number }, string> & EditorConfig<Editor>
+  ) => declare<string, "textarea", never, Editor>("textarea", config),
   /** A number, within `min` and `max` when given. */
-  number: (
-    config: SettingConfig<{ min?: number; max?: number }, number, true>
-  ) => declare<number, "number">("number", config),
+  number: <const Editor extends string = never>(
+    config: SettingConfig<{ min?: number; max?: number }, number, true> &
+      EditorConfig<Editor>
+  ) => declare<number, "number", never, Editor>("number", config),
   /** On or off. */
-  checkbox: (config: SettingConfig<object, boolean, true> & Quick) =>
-    declare<boolean, "checkbox">("checkbox", config),
+  checkbox: <const Editor extends string = never>(
+    config: SettingConfig<object, boolean, true> & Quick & EditorConfig<Editor>
+  ) => declare<boolean, "checkbox", never, Editor>("checkbox", config),
   /**
    * One of a fixed set, each with a label and a value. The value type is the
    * options' values, and `NoInfer` keeps the default from widening the set it
    * must belong to.
    */
-  select: <const Value extends string>(
+  select: <const Value extends string, const Editor extends string = never>(
     config: PickerConfig & {
       options: readonly { label: string; value: Value }[];
       defaultValue: NoInfer<Value>;
-    } & Quick
+    } & Quick &
+      EditorConfig<Editor>
   ) =>
-    declare<Value, "select">("select", {
+    declare<Value, "select", never, Editor>("select", {
       ...config,
       options: config.options.map(({ label, value }) => ({ label, value })),
     }),
   /** A date, as an ISO 8601 date string. */
-  date: (config: SettingConfig<object, string>) =>
-    declare<string, "date">("date", config),
+  date: <const Editor extends string = never>(
+    config: SettingConfig<object, string> & EditorConfig<Editor>
+  ) => declare<string, "date", never, Editor>("date", config),
 
   /**
    * Collection: the collection a card reads. It has no default: a card starts
    * on the collection whose group it was added from.
    */
-  collection: (config: PickerConfig) =>
-    declare<string, "collection">("collection", config),
+  collection: <const Editor extends string = never>(
+    config: PickerConfig & EditorConfig<Editor>
+  ) => declare<string, "collection", never, Editor>("collection", config),
   /**
    * A field of the collection the setting named by `of` chooses: one of the
    * fields that collection offers this reader, for a card's own `load` to read.
    */
-  fieldOf: <const On extends string>(
-    config: PickerConfig & { of: On; defaultValue?: string }
-  ) => declare<string, "field", On>("field", config),
+  fieldOf: <const On extends string, const Editor extends string = never>(
+    config: PickerConfig & {
+      of: On;
+      defaultValue?: string;
+    } & EditorConfig<Editor>
+  ) => declare<string, "field", On, Editor>("field", config),
   /** Date range: one of four spans, the last 30 days by default. */
-  dateRange: (config: PickerConfig & { defaultValue?: DateRange } & Quick) =>
-    declare<DateRange, "select">("select", {
+  dateRange: <const Editor extends string = never>(
+    config: PickerConfig & { defaultValue?: DateRange } & Quick &
+      EditorConfig<Editor>
+  ) =>
+    declare<DateRange, "select", never, Editor>("select", {
       ...config,
       defaultValue: config.defaultValue ?? "30d",
       options: DATE_RANGE_OPTIONS.map(option => ({ ...option })),
     }),
   /** Filter: the list view's conditions, over the collection `of` names. */
-  filter: <const On extends string>(config: PickerConfig & { of: On }) =>
-    declare<WidgetFilter, "filter", On>("filter", config),
+  filter: <const On extends string, const Editor extends string = never>(
+    config: PickerConfig & { of: On } & EditorConfig<Editor>
+  ) => declare<WidgetFilter, "filter", On, Editor>("filter", config),
   /** Sort: a field of the collection `of` names, with a direction. */
-  sort: <const On extends string>(
-    config: PickerConfig & { of: On; defaultValue?: string }
-  ) => declare<string, "sort", On>("sort", config),
+  sort: <const On extends string, const Editor extends string = never>(
+    config: PickerConfig & {
+      of: On;
+      defaultValue?: string;
+    } & EditorConfig<Editor>
+  ) => declare<string, "sort", On, Editor>("sort", config),
   /**
    * Fields: the fields each row of a list shows after its title, in order.
    *
    * @experimental
    */
-  fields: <const On extends string>(config: PickerConfig & { of: On }) =>
-    declare<string[], "fields", On>("fields", config),
+  fields: <const On extends string, const Editor extends string = never>(
+    config: PickerConfig & { of: On } & EditorConfig<Editor>
+  ) => declare<string[], "fields", On, Editor>("fields", config),
   /** Group by: status, or a choice field of the collection `of` names. */
-  groupBy: <const On extends string>(
-    config: PickerConfig & { of: On; defaultValue?: string }
-  ) => declare<string, "groupBy", On>("groupBy", config),
+  groupBy: <const On extends string, const Editor extends string = never>(
+    config: PickerConfig & {
+      of: On;
+      defaultValue?: string;
+    } & EditorConfig<Editor>
+  ) => declare<string, "groupBy", On, Editor>("groupBy", config),
 };

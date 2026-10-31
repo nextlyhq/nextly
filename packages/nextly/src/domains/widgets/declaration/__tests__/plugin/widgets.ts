@@ -154,7 +154,7 @@ export const widgets = [
 export const dashboard: DashboardContribution = {
   widgets,
   suggest: ["acme/orders-by-state"],
-  alternatives: { "acme/recent-orders": "core/recently-edited" },
+  alternatives: { "acme/recent-orders": "core/continue" },
   attention: [
     defineAttentionItem({
       id: "acme/unpaid",

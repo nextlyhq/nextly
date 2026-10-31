@@ -19,6 +19,10 @@
       "types": "./dist/testing.d.mts",
       "import": "./dist/testing.mjs"
     },
+    "./testing/widget-card": {
+      "types": "./dist/plugins/test-widget-card.d.mts",
+      "import": "./dist/plugins/test-widget-card.mjs"
+    },
     "./config": {
       "types": "./dist/config.d.mts",
       "import": "./dist/config.mjs"
@@ -86,6 +90,10 @@
     "./field-label": {
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"
+    },
+    "./core-widget-data": {
+      "types": "./dist/domains/widgets/core-widgets/data.d.mts",
+      "import": "./dist/domains/widgets/core-widgets/data.mjs"
     },
     "./query": {
       "types": "./dist/query/index.d.mts",
@@ -234,6 +242,10 @@
     "./api/email-provider-types": {
       "types": "./dist/api/email-provider-types.d.mts",
       "import": "./dist/api/email-provider-types.mjs"
+    },
+    "./api/dashboard-summary-types": {
+      "types": "./dist/api/dashboard-summary-types.d.mts",
+      "import": "./dist/api/dashboard-summary-types.mjs"
     },
     "./api/email-template-preview-types": {
       "types": "./dist/api/email-template-preview-types.d.mts",

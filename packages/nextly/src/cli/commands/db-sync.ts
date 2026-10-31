@@ -65,6 +65,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
@@ -76,8 +77,10 @@ import {
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { describeError } from "../../errors/index";
+import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
+import { exitWithError } from "../errors";
 import {
   createContext,
   type CommandContext,
@@ -85,16 +88,14 @@ import {
 } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
 } from "../utils/adapter";
 import {
-  loadConfig,
-  watchConfig,
-  clearConfigCache,
-  type LoadConfigResult,
-} from "../utils/config-loader";
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
+import { watchConfig, clearConfigCache } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration } from "../utils/logger";
 
@@ -202,36 +203,22 @@ export async function runDbSync(
 
   // Step 1: Validate database environment
   logger.debug("Validating database environment...");
-  const dbValidation = validateDatabaseEnv();
-
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
 
   logger.debug(`Database dialect: ${dbValidation.dialect}`);
 
   // Step 2: Load configuration
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       watch: options.watch,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -251,7 +238,7 @@ export async function runDbSync(
   // Step 3: Connect to database (needed for seeding even without collections)
   logger.newline();
   logger.info(
-    `Connecting to ${getDialectDisplayName(dbValidation.dialect!)}...`
+    `Connecting to ${getDialectDisplayName(dbValidation.dialect)}...`
   );
 
   let adapter: CLIDatabaseAdapter;
@@ -283,8 +270,7 @@ export async function runDbSync(
     (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry);
     logger.debug("Schema registry initialized with static tables");
   } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   try {
@@ -342,6 +328,15 @@ export async function runDbSync(
       },
       async () =>
         await runWithFieldTypes(configResult.fieldTypes, async () => {
+          // The configuration's new addresses, judged by the one address rule as a start judges
+          // them, before this sync reads or writes any schema.
+          const liveAdapter = adapter as unknown as DrizzleAdapter;
+          await assertConfiguredAddresses(
+            configResult.config,
+            await loadBuilderEntities(liveAdapter),
+            table => liveAdapter.tableExists(table)
+          );
+
           // Step 3.6: Register the runtime schema of every component in the database. The registry
           // built above holds STATIC system tables only, so `comp_` tables are unaddressable by
           // the ORM until this runs — and the orphan cleanup below has to delete rows from them.
@@ -575,8 +570,7 @@ export function registerDbSyncCommand(program: Command): void {
         try {
           exportDataLossConsent(cmdOptions.acceptDataLoss);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
 
         // Promote / demote short-circuit the full db:sync flow because
@@ -588,8 +582,7 @@ export function registerDbSyncCommand(program: Command): void {
             await runPromote(cmdOptions.promote, context);
             return;
           } catch (error) {
-            context.logger.error(describeError(error));
-            process.exit(1);
+            exitWithError(context.logger, error);
           }
         }
 
@@ -599,8 +592,7 @@ export function registerDbSyncCommand(program: Command): void {
             await runDemote(cmdOptions.demote, context);
             return;
           } catch (error) {
-            context.logger.error(describeError(error));
-            process.exit(1);
+            exitWithError(context.logger, error);
           }
         }
 
@@ -615,8 +607,7 @@ export function registerDbSyncCommand(program: Command): void {
         try {
           await runDbSync(resolvedOptions, context);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

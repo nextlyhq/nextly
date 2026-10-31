@@ -271,7 +271,7 @@ interface ReconcileAssessmentArgs {
  * Deriving both from one call makes a disagreement unrepresentable rather than merely unlikely.
  *
  * Preconditions, in order and before anything is decided:
- * - the group must exist (`getComponent` raises NOT_FOUND itself);
+ * - the group must exist (`getComponentForWrite` raises NOT_FOUND itself);
  * - a LOCKED group is refused: its definition lives in a config file, so repairing the row would
  *   be overwritten by the next code sync — the file is what needs fixing, and this message is the
  *   only place that tells the operator so;
@@ -287,7 +287,8 @@ async function assessFieldGroupReconcile(
 ): Promise<ReconcileAssessment> {
   const { registry, adapter, slug } = args;
 
-  const existing = await registry.getComponent(slug);
+  // As stored, past the registry row cache: the apply repairs the row from this.
+  const existing = await registry.getComponentForWrite(slug);
 
   // 🔴 A LOCKED group is code-managed, so its config file is the definition and a repaired row
   // would be overwritten by the next sync — but refusing outright makes the state TERMINAL, and it

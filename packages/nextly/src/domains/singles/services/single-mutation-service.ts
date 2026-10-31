@@ -30,6 +30,10 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -96,6 +100,7 @@ import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
@@ -151,6 +156,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionFoundMissing,
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
@@ -388,6 +394,34 @@ export class SingleMutationService extends BaseService {
    */
   private get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
     return this.queryService.fieldRuleVisitor;
+  }
+
+  /**
+   * The grants a refusal over shared fields names the caller's readable
+   * fields by, from inside the write's transaction: those resolved before it
+   * opened where the promotion gate asks, and otherwise read on `tx`. A
+   * trusted write resolves none beforehand, yet a routed one still answers to
+   * the field read rules, and a read on the pool would run outside the
+   * transaction and, for a visitor's Public role, wait on the connection the
+   * transaction holds.
+   */
+  private sharedConflictGrants(
+    tx: TransactionContext,
+    options: {
+      user?: Record<string, unknown>;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    resolved: (() => Promise<CallerGrants>) | undefined
+  ): () => Promise<CallerGrants> {
+    return (
+      resolved ??
+      callerAccessGrants(
+        options.user,
+        options.authenticatedScope,
+        tx.getDrizzle(),
+        this.fieldRuleVisitor
+      )
+    );
   }
 
   // ============================================================
@@ -730,7 +764,16 @@ export class SingleMutationService extends BaseService {
       return { success: true, statusCode: 200, data };
     } catch (error) {
       return {
-        ...buildSingleErrorResult(error, "Failed to take the live values"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, params.slug, {
+              trusted: fieldTrustOf(params),
+            })
+          ),
+          "Failed to take the live values"
+        ),
         data: undefined,
       };
     }
@@ -792,50 +835,61 @@ export class SingleMutationService extends BaseService {
     }
 
     // The drafts it removed, counted by the delete made under the lock.
-    return this.adapter.transaction(async tx => {
-      // No row means the document has never been written, which cannot have a
-      // pending change against it. The lock serializes this with the
-      // draft-save upserts that lock this row before writing the sidecar.
-      const entryId = await this.lockedSingleRowId(
-        tx,
-        singleMeta.tableName,
-        params.slug,
-        params.entryId,
-        "discard-working-draft-single-replaced"
-      );
-      if (entryId === undefined) return 0;
-
-      const draftLocale = workingDraftLocale({
-        documentLocalized: singleMeta.localized === true,
-        requestLocale: params.locale ?? null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      });
-      const discardedRef = {
-        scopeKind: "single" as const,
-        scopeSlug: params.slug,
-        entryId,
-      };
-      const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-        discardedRef,
-        draftLocale
-      );
-      await releaseSharedBase(tx, discardedRef, draftLocale);
-      // In the Single's history only when there was a draft to discard.
-      if (removed > 0) {
-        await recordWriteEvent(
+    return this.adapter
+      .transaction(async tx => {
+        // No row means the document has never been written, which cannot have a
+        // pending change against it. The lock serializes this with the
+        // draft-save upserts that lock this row before writing the sidecar.
+        const entryId = await this.lockedSingleRowId(
           tx,
-          { adapter: this.adapter },
-          {
-            subject: { kind: "single", slug: params.slug, id: entryId },
-            kind: "draftDiscarded",
-            actor: actorForWrite(params.actor ?? null, params.user),
-            personName: params.user?.name ?? null,
-            ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
-          }
+          singleMeta.tableName,
+          params.slug,
+          params.entryId,
+          "discard-working-draft-single-replaced"
         );
-      }
-      return removed;
-    });
+        if (entryId === undefined) return 0;
+
+        const draftLocale = workingDraftLocale({
+          documentLocalized: singleMeta.localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
+        const discardedRef = {
+          scopeKind: "single" as const,
+          scopeSlug: params.slug,
+          entryId,
+        };
+        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
+          discardedRef,
+          draftLocale
+        );
+        await releaseSharedBase(tx, discardedRef, draftLocale);
+        // In the Single's history only when there was a draft to discard.
+        if (removed > 0) {
+          await recordWriteEvent(
+            tx,
+            { adapter: this.adapter },
+            {
+              subject: { kind: "single", slug: params.slug, id: entryId },
+              kind: "draftDiscarded",
+              actor: actorForWrite(params.actor ?? null, params.user),
+              personName: params.user?.name ?? null,
+              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+            }
+          );
+        }
+        return removed;
+      })
+      .catch(async (error: unknown) => {
+        // A discard the database is not migrated for answers as such. Its
+        // transaction rolls back whole, so a failure never follows a kept write.
+        throw await asNotMigrated(
+          error,
+          // No caller trust to judge: a discard takes no `overrideAccess`, so
+          // it is told the Single alone.
+          singleNotMigrated(this.singleRegistryService, params.slug)
+        );
+      });
   }
 
   /**
@@ -1465,6 +1519,10 @@ export class SingleMutationService extends BaseService {
     // revalidation opt-outs — the durable-write signal the retention pass keys
     // off, so a Single that opts out of BOTH still triggers write-path cleanup.
     let committedWrite = false;
+    // This Single's translation table and the language written, once known,
+    // for the catch: a table dropped after its `ready` verdict was remembered
+    // fails any read or write of it, before the transaction or inside it.
+    let translations: { table: string; locale?: string } | undefined;
     // Whether the outbox event was actually appended: false when the Single
     // opted out of recording (`webhooks: false`), so the post-commit drain is
     // scheduled only for a write that recorded something. The three single.*
@@ -1795,6 +1853,12 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      if (companion) {
+        translations = {
+          table: companion.companionTableName,
+          locale: writeLocale,
+        };
+      }
       // The locale this write's content belongs to. `writeLocale` covers the
       // Single's own translations; when it has none, embedded components may
       // still be localized. Those were written at the requested locale, or at
@@ -2832,8 +2896,12 @@ export class SingleMutationService extends BaseService {
                       overrideAccess:
                         options.overrideAccess && !options.routeAuthorized,
                       authenticatedScope: options.authenticatedScope,
-                      // Resolved before the transaction opened.
-                      grants: promoteGrants,
+                      // Resolved before the transaction opened, or read on it.
+                      grants: this.sharedConflictGrants(
+                        tx,
+                        options,
+                        promoteGrants
+                      ),
                     });
                   }
                 }
@@ -4675,17 +4743,76 @@ export class SingleMutationService extends BaseService {
       if (transitionDeniedResult) {
         return transitionDeniedResult;
       }
+      // A translation table dropped after its `ready` verdict was remembered,
+      // met before the transaction or inside it: answered, for a write that
+      // did not commit, as the check before the write answers a table that is
+      // not there. A later step's failure keeps its own answer below.
+      const translationsGone = committedWrite
+        ? undefined
+        : this.translationsGoneRefusal(slug, translations, error);
+      if (translationsGone) {
+        return buildSingleErrorResult(
+          translationsGone,
+          "Failed to update Single document"
+        );
+      }
       this.logger.error("Failed to update Single document", { slug, error });
       // A post-commit step (afterChange/afterUpdate hook, response expansion)
       // can throw after the event is already durable; carry `eventRecorded` so
       // the fast-drain still fires for a committed-but-hook-failed write.
       return {
-        ...buildSingleErrorResult(error, "Failed to update Single document"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, slug, {
+              trusted: fieldTrustOf(options),
+            }),
+            { written: committedWrite }
+          ),
+          "Failed to update Single document"
+        ),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The refusal for a write that `error` failed because this Single's translation table is
+   * missing (`companionFoundMissing`, which forgets the table's `ready` verdict), or `undefined`
+   * for any other failure. The same 409, with the same remedy, as the check before a write gives
+   * a table it finds is not there. The table's name comes from the Single's own metadata, read
+   * before the write, so nothing is read again here.
+   */
+  private translationsGoneRefusal(
+    slug: string,
+    translations: { table: string; locale?: string } | undefined,
+    error: unknown
+  ): NextlyError | undefined {
+    if (!translations || !this.localization) return undefined;
+    if (
+      !companionFoundMissing(
+        this.adapter,
+        this.adapter.dialect,
+        translations.table,
+        error
+      )
+    ) {
+      return undefined;
+    }
+    return NextlyError.conflict({
+      reason: "state",
+      message: companionNotReadyMessage("single"),
+      logContext: {
+        cause: "localized-write-without-companion",
+        single: slug,
+        locale: translations.locale,
+        defaultLocale: this.localization.defaultLocale,
+        companionTable: translations.table,
+      },
+    });
   }
 
   /**

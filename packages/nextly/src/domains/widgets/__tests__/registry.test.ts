@@ -64,7 +64,7 @@ describe("widget registry", () => {
       'Widget "collection/x-count" cannot be registered: "collection/x-count" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.'
     );
     expect(() => registerWidget(def("single/about-card"))).toThrow(
-      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`
     );
     expect(listWidgets()).toEqual([]);
     // The control: the same definition outside those namespaces registers.
@@ -268,6 +268,32 @@ describe("the doors a widget whose data core builds may come through", () => {
     expect(() =>
       overrideWidget("acme/orders", declared("acme/orders"))
     ).toThrow(/overrideWidget\(\) with serverData/);
+  });
+
+  it("takes a setting's own editor through core's door alone", () => {
+    const settings: WidgetDefinition["settings"] = [
+      {
+        name: "goal",
+        label: "Goal",
+        type: "number",
+        editor: { component: "@acme/goals/admin#GoalEditor" },
+      },
+    ];
+    // A declared widget's editor joins the generated component map, so it is kept.
+    registerDeclaredDefinition(
+      { ...declared("acme/goal"), settings },
+      "plugin @acme/goals"
+    );
+    expect(getWidget("acme/goal")?.settings?.[0]?.editor).toEqual({
+      component: "@acme/goals/admin#GoalEditor",
+    });
+
+    // The same setting through the public door is refused at startup, naming
+    // the widget and the setting: nothing there would ever register its editor.
+    expect(() => registerWidget(def("acme/legacy-goal", { settings }))).toThrow(
+      /acme\/legacy-goal: setting "goal" declares an editor: custom setting editors need a defineWidget declaration/
+    );
+    expect(getWidget("acme/legacy-goal")).toBeUndefined();
   });
 
   it("cannot be handed a query by a patch", () => {

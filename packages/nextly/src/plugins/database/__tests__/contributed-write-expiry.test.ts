@@ -126,7 +126,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function surface() {
+function surface(
+  overrides: Partial<Parameters<typeof createPluginDatabase>[0]> = {}
+) {
   const db = drizzle({ client: sqlite });
   return createPluginDatabase({
     dialect: "sqlite",
@@ -157,6 +159,7 @@ function surface() {
       expired.push(target);
       return Promise.resolve();
     },
+    ...overrides,
   });
 }
 
@@ -237,6 +240,63 @@ describe("a contributed write expires its document's cached reads", () => {
   it("expires nothing for a table no collection or Single stores", async () => {
     expect(await setFlag("fx__notes", "n1")).toBe(1);
     expect(expired).toEqual([]);
+  });
+});
+
+describe("a contributed write whose document cannot be found", () => {
+  it("still resolves, the write kept, and says what was not expired", async () => {
+    const warn = vi.fn();
+    vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
+      error: vi.fn(),
+      warn,
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as never);
+    const failing = surface({
+      contentEntity: () => {
+        throw new Error("registry unavailable");
+      },
+    });
+
+    await expect(
+      failing.contributed("dc_posts", flagColumns).set("p1", { fxFlag: "on" })
+    ).resolves.toBe(1);
+    expect(
+      sqlite.prepare("SELECT fx_flag FROM dc_posts WHERE id = 'p1'").get()
+    ).toEqual({ fx_flag: "on" });
+    expect(expired).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "contributed-write-expiry-failed",
+        table: "dc_posts",
+        id: "p1",
+      })
+    );
+  });
+});
+
+describe("a contributed write whose expiry fails and whose logger throws", () => {
+  it("still resolves, the write kept", async () => {
+    vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
+      error: vi.fn(),
+      warn: () => {
+        throw new Error("logger down");
+      },
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as never);
+    const failing = surface({
+      contentEntity: () => {
+        throw new Error("registry unavailable");
+      },
+    });
+
+    await expect(
+      failing.contributed("dc_posts", flagColumns).set("p1", { fxFlag: "on" })
+    ).resolves.toBe(1);
+    expect(
+      sqlite.prepare("SELECT fx_flag FROM dc_posts WHERE id = 'p1'").get()
+    ).toEqual({ fx_flag: "on" });
   });
 });
 

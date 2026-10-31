@@ -41,9 +41,9 @@ import { DocumentBanners } from "@admin/components/features/entries/EntryForm/Do
 import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
 import {
   DOCUMENT_COLUMN_INSET,
-  DOCUMENT_PANEL_STICKY,
   DocumentEditorLayout,
 } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { DocumentSidePanel } from "@admin/components/features/entries/EntryForm/DocumentSidePanel";
 import { DocumentTitleBlock } from "@admin/components/features/entries/EntryForm/DocumentTitleBlock";
 import { DocumentTrail } from "@admin/components/features/entries/EntryForm/DocumentTrail";
 import {
@@ -80,7 +80,7 @@ import {
   type DocumentActionBindingsInput,
 } from "@admin/components/features/entries/EntryForm/useDocumentActionBindings";
 import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
-import { useDocumentPanelCollapsed } from "@admin/components/features/entries/EntryForm/useDocumentPanelCollapsed";
+import { useDocumentPanel } from "@admin/components/features/entries/EntryForm/useDocumentPanel";
 import {
   mapIntentToPayload,
   passwordFieldNames,
@@ -95,6 +95,7 @@ import {
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
@@ -131,6 +132,7 @@ import {
 } from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { SingleAdminOptions } from "@admin/types/entities";
+import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { relaxIdentityRequired } from "./identity-fields";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
@@ -143,7 +145,7 @@ import { useSinglePreviewPane } from "./useSinglePreviewPane";
 /**
  * Single schema data (from useSingleSchema hook)
  */
-export interface SingleSchema {
+export interface SingleSchema extends RemovedFromCodeMark {
   slug: string;
   label: string;
   description?: string;
@@ -399,13 +401,12 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
 }
 
 /**
- * The inline language panel, shown where the rail is not.
+ * The inline language panel, shown where the docked panel is not.
  *
- * The rail that otherwise carries the language workflow is
- * `hidden @4xl/content:flex`, so this is the exact complement: shown only
- * where the rail is not, and rendered unconditionally once the author
- * collapses it. Without it a single loses its language workflow entirely at
- * narrow widths, which is the failure this panel exists to remove.
+ * The exact complement of the docked column that otherwise carries the
+ * language workflow: shown once the author folds it, and at every width the
+ * panel floats or is a sheet at, where it opens only when asked for. Without
+ * it a single loses its language workflow whenever the column is away.
  */
 function SingleFormLanguagePanel({
   actionsDisabled,
@@ -415,7 +416,7 @@ function SingleFormLanguagePanel({
   hasStatus,
   locale,
   onLocaleChange,
-  railCollapsed,
+  panelDocked,
   translations,
 }: {
   actionsDisabled: boolean;
@@ -425,19 +426,14 @@ function SingleFormLanguagePanel({
   hasStatus: boolean;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  railCollapsed: boolean;
+  /** Whether the docked panel, which carries the language panel, is on screen. */
+  panelDocked: boolean;
   translations?: Record<string, { translated: boolean; status?: string }>;
 }) {
   if (!enabled) return null;
   return (
     // In line with the title and the fields, not indented past them.
-    <div
-      className={cn(
-        "pt-4",
-        DOCUMENT_COLUMN_INSET,
-        !railCollapsed && "@4xl/content:hidden"
-      )}
-    >
+    <div className={cn("pt-4", DOCUMENT_COLUMN_INSET, panelDocked && "hidden")}>
       <DocumentLanguagePanel
         translations={translations}
         locale={locale}
@@ -497,10 +493,10 @@ function SingleFormFieldsPanel({
 }
 
 /**
- * The metadata rail. Same shape and width as the entry editor's. Collapsed by
- * the shared pref; its document actions act on the LIVE document, so they are
- * withheld while a past version is on screen — the same withholding the
- * header's save affordances observe.
+ * The document panel, framed as the entry editor frames it (docked, floating
+ * or a sheet), with the same sections. Its document actions act on the LIVE
+ * document, so they are withheld while a past version is on screen — the
+ * same withholding the bar's save affordances observe.
  */
 function SingleFormRail({
   actionsDisabled,
@@ -508,41 +504,54 @@ function SingleFormRail({
   publishAllDisabled,
   entry,
   hasStatus,
+  documentStatus,
+  singleSlug,
   locale,
   onLocaleChange,
-  railCollapsed,
+  panel,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
   publishAllDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
+  documentStatus: React.ComponentProps<
+    typeof EntryFormSidebar
+  >["documentStatus"];
+  /** The Single's slug, which releases address it by with its id. */
+  singleSlug: string;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  railCollapsed: boolean;
+  panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
 }) {
-  if (railCollapsed) return null;
+  const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
-    <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-      {/* Sticks under the document bar, as the entry editor's panel does. */}
-      <div
-        className={cn(
-          DOCUMENT_PANEL_STICKY,
-          "overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col"
-        )}
-      >
-        <EntryFormSidebar
-          mode="edit"
-          entry={entry}
-          hasStatus={hasStatus}
-          actionsDisabled={actionsDisabled}
-          navigationDisabled={navigationDisabled}
-          publishAllDisabled={publishAllDisabled}
-          {...(locale === undefined ? {} : { locale })}
-          {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
-        />
-      </div>
-    </div>
+    <DocumentSidePanel
+      mode={panel.mode}
+      shown={panel.shown}
+      onClose={panel.hide}
+    >
+      <EntryFormSidebar
+        mode="edit"
+        entry={entry}
+        hasStatus={hasStatus}
+        {...(documentStatus === undefined ? {} : { documentStatus })}
+        {...(documentId === ""
+          ? {}
+          : {
+              releaseDocument: {
+                scopeKind: "single" as const,
+                scopeSlug: singleSlug,
+                entryId: documentId,
+              },
+            })}
+        actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
+        {...(locale === undefined ? {} : { locale })}
+        {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
+      />
+    </DocumentSidePanel>
   );
 }
 
@@ -766,13 +775,21 @@ export function SingleForm({
   // A user who may read this Single but not change it gets the same page,
   // read-only, with no claim made on the document.
   const updateAnswer = useUpdateAnswer(schema.slug);
-  const readOnlyForReader = updateAnswer === "refused";
+  // A Single removed from code refuses every write, for everyone: the page
+  // opens as it does for a reader, through the same gates.
+  const removedFromCode = isRemovedFromCode(schema);
+  const readOnlyForReader = updateAnswer === "refused" || removedFromCode;
+  // What the user's access allows, apart from the removal: previewing and
+  // sharing a preview follow it alone, since the server keeps preview links
+  // working for a removed Single and opening one writes nothing.
+  const accessAllowsEdits = editsOffered(updateAnswer);
   // While a language switch's answer is on its way, nothing that saves is
   // offered and a submit is held, though the page is not read-only.
-  const mayEdit = editsOffered(updateAnswer);
-  // What changing the Single needs is held with it: previewing and sharing a
-  // preview (minting a link needs it on the server) and a version's restore,
-  // for a reader and while a language switch's answer is on its way.
+  const mayEdit = accessAllowsEdits && !removedFromCode;
+  const previewHeld = !accessAllowsEdits;
+  // What changing the Single needs is held with it: a recovery point and a
+  // version's restore, for a reader, for a removed Single and while a
+  // language switch's answer is on its way.
   const updatesHeld = !mayEdit;
   // While a refused publish's recovery runs, every field it reaches is
   // read-only, as it is while someone else holds the Single.
@@ -781,6 +798,7 @@ export function SingleForm({
     slug: schema.slug,
     entryId: document.id,
     readOnlyForReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
   });
   const lock = heldWhileRecovering(lockSurface, recovering);
 
@@ -821,12 +839,16 @@ export function SingleForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
   const editsHeld = writesHeld || !mayEdit;
+  // A status write alone is held where the document's writes are, and for a
+  // Single removed from code, whose publish the server refuses as it refuses
+  // a save.
+  const statusWriteHold = writesHeld || removedFromCode;
   // Publishing every language changes only each language's status, so a
   // reader whose document nothing else holds is still offered it.
   const publishAllHeld = statusWritesHeld({
     editsHeld,
     refused: readOnlyForReader,
-    writesHeld,
+    writesHeld: statusWriteHold,
   });
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
@@ -912,7 +934,7 @@ export function SingleForm({
         // A reader's publish and unpublish still go, as the status alone.
         const status = readerStatusWrite(intent, {
           refused: readOnlyForReader,
-          writesHeld,
+          writesHeld: statusWriteHold,
         });
         return status === undefined ? submitHeld : writeStatus(status);
       }
@@ -983,7 +1005,7 @@ export function SingleForm({
       writePending,
       editsHeld,
       readOnlyForReader,
-      writesHeld,
+      statusWriteHold,
       writeStatus,
       document.id,
       schema,
@@ -1050,13 +1072,6 @@ export function SingleForm({
     status: documentStatus,
     hasWorkingDraft: hasPendingWorkingDraft(document),
   };
-
-  // Rail collapse pref (shared with collection EntryForm via the same
-  // localStorage key).
-  // Out of the way when the author collapsed it (shared with the collection
-  // editor), and while history is open, which takes its place.
-  const { collapsed: railCollapsed, toggle: toggleRail } =
-    useDocumentPanelCollapsed(historyEnabledFrom(schema) !== false);
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
@@ -1142,6 +1157,19 @@ export function SingleForm({
     savedCount,
     inTranslationMode: translationMode.source !== undefined,
     admin: schema.admin,
+  });
+  // Whether the pane is actually on screen, as the pane itself reads below.
+  // A removed Single keeps it: the preview follows access alone, as
+  // previewing writes nothing.
+  const previewOnScreen = previewPane.open && !documentView && !previewHeld;
+
+  // The document panel, as the entry editor decides it (`useDocumentPanel`):
+  // the collapse choice shared with it, history taking its place, and the
+  // preview pane sharing the right side with it.
+  const panel = useDocumentPanel({
+    historyAvailable: historyEnabledFrom(schema) !== false,
+    previewOpen: previewOnScreen,
+    closePreview: previewPane.onClose,
   });
 
   const localeCtx = useEntryLocaleContext({
@@ -1255,6 +1283,7 @@ export function SingleForm({
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
     canEdit: mayEdit,
+    writesRefused: removedFromCode,
     contributedActions: documentActions,
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
@@ -1318,7 +1347,7 @@ export function SingleForm({
                  * it there.
                  */
                 // Nor beside a document view, which takes the window alone.
-                open={previewPane.open && !documentView && !updatesHeld}
+                open={previewOnScreen}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1373,8 +1402,11 @@ export function SingleForm({
                               editor draws: one bar and one banner order on
                               both. */}
                             <DocumentEditorLayout
+                              frameRef={panel.measure}
+                              panelMode={panel.mode}
                               bar={
                                 <DocumentBar
+                                  panelMode={panel.mode}
                                   autosaveEnabled={autosaveScope !== null}
                                   // A recovery point newer than the stored document, still on offer:
                                   // its edits are not stored, whatever the form says.
@@ -1410,12 +1442,12 @@ export function SingleForm({
                                   // Sharing a preview needs the permission to change
                                   // the Single on the server, so a reader is not offered it.
                                   isLinkAvailable={
-                                    previewLink.isAvailable && !updatesHeld
+                                    previewLink.isAvailable && !previewHeld
                                   }
                                   // Withheld from a reader, so the share
                                   // popover cannot stay mounted for them.
                                   {...(previewLink.shareDocument ===
-                                    undefined || updatesHeld
+                                    undefined || previewHeld
                                     ? {}
                                     : {
                                         shareDocument:
@@ -1431,7 +1463,7 @@ export function SingleForm({
                                   // share link beside it: opening one mints a
                                   // credential the server grants only to a
                                   // user who may change the Single.
-                                  {...(updatesHeld ? {} : previewPane.toggle)}
+                                  {...(previewHeld ? {} : previewPane.toggle)}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.
@@ -1444,8 +1476,9 @@ export function SingleForm({
                                   // entry id.
                                   scope="single"
                                   documentLocked={lock.readOnly}
-                                  isRailCollapsed={railCollapsed}
-                                  onToggleRail={toggleRail}
+                                  writesRefused={removedFromCode}
+                                  isRailCollapsed={panel.collapsed}
+                                  onToggleRail={panel.toggle}
                                 />
                               }
                               banners={
@@ -1483,7 +1516,7 @@ export function SingleForm({
                                   isSubmitting={writePending}
                                 />
                                 <EntryMetaStrip
-                                  isRailCollapsed={railCollapsed}
+                                  panelCarriesId={panel.docked}
                                   documentId={document.id}
                                 />
 
@@ -1496,7 +1529,7 @@ export function SingleForm({
                                   navigationDisabled={navigationHeld}
                                   enabled={localizationEnabled}
                                   hasStatus={hasStatus}
-                                  railCollapsed={railCollapsed}
+                                  panelDocked={panel.docked}
                                   {...(singleTranslations === undefined
                                     ? {}
                                     : { translations: singleTranslations })}
@@ -1524,14 +1557,17 @@ export function SingleForm({
                                 />
                               </div>
 
-                              {/* Rail (collapsible). */}
+                              {/* The document panel, framed for the editor's
+                                width, as the entry editor's is. */}
                               <SingleFormRail
                                 actionsDisabled={contentHeld}
                                 publishAllDisabled={publishAllDisabled}
                                 navigationDisabled={navigationHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
-                                railCollapsed={railCollapsed}
+                                documentStatus={editedStatus}
+                                singleSlug={schema.slug}
+                                panel={panel}
                                 {...(locale === undefined ? {} : { locale })}
                                 {...(switchLocale === undefined
                                   ? {}

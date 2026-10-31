@@ -1646,15 +1646,44 @@ async function whenColumnsExist<T>(
  * `id` of `tableName` changed: now, or inside a transaction once it commits.
  * The row's document is found before the commit, on the write's own
  * connection, so a field group's parent read sees the transaction's rows.
+ *
+ * Best-effort, never thrown: outside a transaction the row has already been
+ * changed when this runs, so a failed lookup of its document must not tell
+ * the caller the write failed. It is logged, naming the row, and nothing is
+ * expired for it.
  */
 async function expireChangedContent(
   tableName: string,
   id: unknown,
   deps: PluginDatabaseDeps
 ): Promise<void> {
+  if (typeof id !== "string" && typeof id !== "number") return;
+  try {
+    await findAndExpire(tableName, id, deps);
+  } catch (error) {
+    // Guarded too, as `runCommitEffects` guards its logging: an app logger
+    // that throws must not reject a write that has already happened.
+    try {
+      getNextlyLogger().warn({
+        kind: "contributed-write-expiry-failed",
+        message: `The cached reads of the row "${String(id)}" of "${tableName}" were not expired after a contributed write: ${error instanceof Error ? error.message : String(error)}`,
+        table: tableName,
+        id: String(id),
+      });
+    } catch {
+      // Nothing is left to report it to.
+    }
+  }
+}
+
+/** Find the document a contributed write changed, and expire it or queue it. */
+async function findAndExpire(
+  tableName: string,
+  id: string | number,
+  deps: PluginDatabaseDeps
+): Promise<void> {
   const { contentEntity, entityTable, expireContent } = deps;
   if (!contentEntity || !entityTable || !expireContent) return;
-  if (typeof id !== "string" && typeof id !== "number") return;
   const target = await contentTarget(tableName, id, {
     contentEntity,
     entityTable,

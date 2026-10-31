@@ -232,8 +232,11 @@ export type Target = (typeof TARGETS)[number];
  *   statement that the caller is editing it.
  * - `capabilities`: what `GET /me/capabilities` tells the admin the caller
  *   may do, which is what the admin offers and withholds.
+ * - `bulk`: the REST bulk routes by ids, which the admin's entry list sends
+ *   its row and bulk Delete, Publish and Unpublish through, answered by the
+ *   entry's own result among the items.
  *
- * The last three were added after the others, and come last, so every column
+ * The last four were added after the others, and come last, so every column
  * already in the answers file keeps its place.
  */
 export const DOORS = [
@@ -250,8 +253,21 @@ export const DOORS = [
   "widget",
   "lock",
   "capabilities",
+  "bulk",
 ] as const;
 export type Door = (typeof DOORS)[number];
+
+/**
+ * The doors where asking for a write IS the write, each given rows of its
+ * own to write to. The others only ask a gate (`route`, `can`) or read, so
+ * nothing they answer can have been written.
+ */
+export const WRITING_DOORS: readonly Door[] = [
+  "rest",
+  "direct",
+  "service",
+  "bulk",
+];
 
 /**
  * With or without the access-control service registered. Without it, only
@@ -338,9 +354,8 @@ const REACH: Record<Door, Reach> = {
   },
   // Media, users and roles are read by the namespaces a principal cannot call
   // (only collection and Single operations can be made as one), so they are
-  // asked of the callers REST names there. A checked read of media names a
-  // signed-in caller before any decision, so a visitor is asked it nowhere
-  // here (`visitor-refused-before-the-decision.integration.test.ts`).
+  // asked of the callers REST names there. A checked read of media naming
+  // nobody is a visitor's, judged by the Public role's `read-media`.
   direct: {
     callers: PRESENTED,
     targets: {
@@ -352,7 +367,7 @@ const REACH: Record<Door, Reach> = {
       roles: READ,
     },
     callersOf: {
-      media: SIGNED_IN,
+      media: NOT_PRINCIPAL,
       users: NOT_PRINCIPAL,
       roles: NOT_PRINCIPAL,
     },
@@ -428,6 +443,12 @@ const REACH: Record<Door, Reach> = {
       "single-pub": PUBLISHING,
     },
   },
+  // The bulk routes change existing entries, as the list's actions do, and
+  // only a collection has a list.
+  bulk: {
+    callers: NOT_PRINCIPAL,
+    targets: { collection: ["update", "delete", ...PUBLISHING] },
+  },
 };
 
 /** What each door asks without the access-control service. */
@@ -472,6 +493,7 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
     service: REACH.service,
     population: REACH.population,
     system: REACH.system,
+    bulk: REACH.bulk,
   },
 };
 
@@ -879,8 +901,9 @@ function visitorAnswer(row: Row, action: Action): Verdict {
  * - a collection's read rule may answer a well-formed filter instead of
  *   `true`, which allows the entries it matches: a list or a count returns
  *   those alone, and a read of the probe entry, which it matches, is allowed.
- *   A delete rule may answer one too: the entry inside it is deleted and its
- *   twin outside it refused. A filter from any other rule refuses.
+ *   An update, delete, publish or unpublish rule may answer one too: the
+ *   entry inside it is changed and its twin outside it refused. A filter from
+ *   any other rule refuses.
  */
 export function oneAnswer(row: Row): Verdict {
   if (row.action === "new-pub") {

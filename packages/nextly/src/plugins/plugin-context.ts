@@ -68,7 +68,6 @@ import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
 import type { ContributedColumn } from "./database/access";
-import { expireContentTarget } from "./database/expire-content-target";
 import {
   createPluginDatabase,
   type PluginDatabase,
@@ -1407,7 +1406,14 @@ function buildPluginDatabase(
     // or field group the compiled schema seeded that table from, read per call
     // like the rest of the schema.
     contentEntity: tableName => active()?.entityOwners.get(tableName),
-    expireContent: expireContentTarget,
+    // Loaded on the first expiry rather than with the context: the context is
+    // built at every boot, and most never see a contributed write.
+    expireContent: async target => {
+      const { expireContentTarget } = await import(
+        "./database/expire-content-target"
+      );
+      await expireContentTarget(target);
+    },
     tableList: () => [
       ...(active()?.tables ?? []).map(table => ({
         name: table.name,

@@ -61,6 +61,7 @@ import {
 import type { SupportedDialect } from "../../../types/database";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
+import { flushContentChange } from "../../flush-content-change";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
@@ -938,8 +939,18 @@ export class CollectionSyncService extends BaseService {
             const tables = {
               dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
             };
-            await this.adapter.transaction(tx =>
+            const { expire } = await this.adapter.transaction(tx =>
               deleteEntityRegistryRow(tx, "collection", slug, tables)
+            );
+            // Its cached reads describe a collection that is gone from the
+            // registry: expired once that is durable, before the table drop,
+            // which can fail and would otherwise leave them live.
+            await this.afterCommit(() =>
+              flushContentChange(
+                expire,
+                this.logger,
+                "an orphaned collection was deleted"
+              )
             );
 
             const capabilities = this.adapter.getCapabilities();

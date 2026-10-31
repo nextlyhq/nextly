@@ -27,30 +27,55 @@ const settings: DashboardWidget["settings"] = [
   { name: "collection", label: "Collection", type: "collection" },
 ];
 
-const recentlyEdited: DashboardWidget = {
-  id: "core/recently-edited",
-  title: "Recently edited",
+/** A list over a system source that narrows by Collection and Only mine. */
+const recentSaves: DashboardWidget = {
+  id: "acme/recent-saves",
+  title: "Recent saves",
   archetype: "list",
   size: gridBounds(4),
-  query: { source: "system:recent-edits", op: "list", limit: 5 },
+  query: { source: "system:saves", op: "list", limit: 5 },
   settings,
   sourceFilters: ["collection", "onlyMine"],
 };
 
+/** Continue where you left off, as the payload carries it: its tab is its one filter. */
+const continueCard: DashboardWidget = {
+  id: "core/continue",
+  title: "Continue where you left off",
+  archetype: "custom",
+  component: "core#ContinueCard",
+  size: gridBounds(4),
+  query: { source: "system:continue", op: "list", limit: 5 },
+  settings: [
+    {
+      name: "tab",
+      label: "Show",
+      type: "select",
+      defaultValue: "mine",
+      quick: true,
+      options: [
+        { label: "Mine", value: "mine" },
+        { label: "Team", value: "team" },
+      ],
+    },
+  ],
+  sourceFilters: ["tab"],
+};
+
 describe("a widget as it is asked", () => {
   it("narrows a filtering source by the reader's Collection and Only mine", () => {
-    const asked = widgetAsAsked(recentlyEdited, {
+    const asked = widgetAsAsked(recentSaves, {
       collection: "pages",
       onlyMine: true,
     });
-    expect(asked.query?.source).toBe("system:recent-edits");
+    expect(asked.query?.source).toBe("system:saves");
     expect(asked.query?.where).toEqual({ collection: "pages", onlyMine: true });
   });
 
   it("asks a source without declared filters by its collection instead", () => {
     // 🔴 The must-differ case: the same settings without `sourceFilters` take
     // the collection knob's other branch, so the card's source is replaced.
-    const { sourceFilters: _filters, ...unfiltered } = recentlyEdited;
+    const { sourceFilters: _filters, ...unfiltered } = recentSaves;
     const asked = widgetAsAsked(
       {
         ...unfiltered,
@@ -63,7 +88,21 @@ describe("a widget as it is asked", () => {
   });
 
   it("keeps the widget itself when nothing is chosen", () => {
-    expect(widgetAsAsked(recentlyEdited, {}).query?.where).toBeUndefined();
+    expect(widgetAsAsked(recentSaves, {}).query?.where).toBeUndefined();
+  });
+
+  it("asks Continue for the tab its reader chose, and Mine by default", () => {
+    expect(widgetAsAsked(continueCard, { tab: "team" }).query?.where).toEqual({
+      tab: "team",
+    });
+    // The declared default is applied like a chosen value.
+    expect(widgetAsAsked(continueCard, {}).query?.where).toEqual({
+      tab: "mine",
+    });
+    // A stored value that is not one of its options reads back as the default.
+    expect(
+      widgetAsAsked(continueCard, { tab: "everyone" }).query?.where
+    ).toEqual({ tab: "mine" });
   });
 });
 
@@ -288,6 +327,76 @@ describe("whether a card can be asked", () => {
     expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
       false
     );
+  });
+
+  // Core's declared Breakdown and Recent entries, as the registry publishes them: no query, their
+  // data answered on the server, so the batch asks them nothing to judge by.
+  const declaredBreakdown = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "custom",
+    serverData: true,
+    settings: [
+      { name: "collection", type: "collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        defaultFrom: "collection",
+      },
+    ],
+  } as unknown as DashboardWidget;
+  const declaredRecent = {
+    id: "core/recent-entries",
+    title: "Recent entries",
+    archetype: "custom",
+    serverData: true,
+    settings: [{ name: "collection", type: "collection", rows: "titled" }],
+  } as unknown as DashboardWidget;
+  const titled: PublishedContentSource[] = [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: true,
+      titleField: "title",
+      fields: [
+        { name: "title", type: "string" },
+        { name: "updatedAt", type: "date" },
+      ],
+    },
+    ...sources.slice(1),
+  ];
+
+  it("offers a card core answers only where its load would read: something to divide by", () => {
+    expect(
+      askableWith(declaredBreakdown, { collection: "posts" }, sources)
+    ).toBe(true);
+    // 🔴 With no query to judge, every declared card read as askable, and a
+    // Breakdown was offered on a collection it divides by nothing.
+    expect(
+      askableWith(declaredBreakdown, { collection: "notes" }, sources)
+    ).toBe(false);
+  });
+
+  it("offers a titled list core answers only on a collection that titles its rows", () => {
+    expect(askableWith(declaredRecent, { collection: "posts" }, titled)).toBe(
+      true
+    );
+    // Notes publishes no title field to name its rows by.
+    expect(askableWith(declaredRecent, { collection: "notes" }, titled)).toBe(
+      false
+    );
+  });
+
+  it("offers a card core answers with no such setting wherever it is asked", () => {
+    const note = {
+      id: "core/note",
+      title: "Note",
+      archetype: "custom",
+      serverData: true,
+      settings: [{ name: "text", type: "textarea" }],
+    } as unknown as DashboardWidget;
+    expect(askableWith(note, {}, sources)).toBe(true);
   });
 
   it("asks a query with a source and, where grouped, a group key", () => {

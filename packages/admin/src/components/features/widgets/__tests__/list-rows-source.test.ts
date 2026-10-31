@@ -43,14 +43,18 @@ const REMOVED: readonly RegExp[] = [
 
 /**
  * Each list card's source, and the one canonical component it draws its rows through. Needs
- * attention lays its kinds out itself and draws each as an `EntityRow`.
+ * attention lays its kinds out itself and draws each as an `EntityRow`. Recent entries draws
+ * through the widget kit's table, as a plugin's list does, and the kit itself through `ListCard`.
  */
-const LIST_CARDS: ReadonlyArray<readonly [string, "ListCard" | "EntityRow"]> = [
-  ["dashboard/RecentlyEdited.tsx", "ListCard"],
-  ["dashboard/RecentActivity.tsx", "ListCard"],
-  ["dashboard/RecentEntriesCard.tsx", "ListCard"],
+const LIST_CARDS: ReadonlyArray<
+  readonly [string, "ListCard" | "EntityRow" | "WidgetTable"]
+> = [
+  ["dashboard/ContinueCard.tsx", "ListCard"],
+  ["dashboard/TeamActivity.tsx", "ListCard"],
+  ["dashboard/RecentEntriesCard.tsx", "WidgetTable"],
   ["dashboard/UpcomingReleases.tsx", "ListCard"],
   ["widgets/archetypes/tiered-rows.tsx", "ListCard"],
+  ["widgets/kit/list.tsx", "ListCard"],
   ["dashboard/NeedsAttention.tsx", "EntityRow"],
 ];
 
@@ -64,11 +68,11 @@ describe("the dashboard's lists", () => {
     // its own beside it would pass a check for the name alone.
     expect(text).toMatch(
       new RegExp(
-        `import[^;]*\\b${component}\\b[^;]*from "[^"]*frame/(list-card|entity-row)"`
+        `import[^;]*\\b${component}\\b[^;]*from "[^"]*(frame/(list-card|entity-row)|kit/list)"`
       )
     );
     expect(text).toMatch(new RegExp(`<${component}\\b`));
-    if (component === "ListCard") {
+    if (component !== "EntityRow") {
       expect(text).not.toMatch(OWN_LIST_MARKUP);
     }
   });

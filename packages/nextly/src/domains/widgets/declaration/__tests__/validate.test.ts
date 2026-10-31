@@ -69,11 +69,7 @@ function validComponent(overrides: Record<string, unknown> = {}): unknown {
   };
 }
 
-/**
- * A valid declaration carrying every field startup accepts today, each
- * written correctly: `summary` is the one it does not, as it is refused until
- * the dashboard's header reads it.
- */
+/** A valid declaration carrying every field startup accepts today, each written correctly. */
 function everyField(): Record<string, unknown> {
   return {
     ...(valid() as Record<string, unknown>),
@@ -90,6 +86,7 @@ function everyField(): Record<string, unknown> {
     preview: [
       { name: "Some paid", data: { buckets: [{ value: "paid", count: 3 }] } },
     ],
+    summary: { label: "orders waiting", count: async () => 1 },
   };
 }
 
@@ -351,14 +348,10 @@ describe("a widget declaration as startup receives it", () => {
     ]);
   });
 
-  it("refuses a summary until the dashboard's header reads it, and names a malformed one's faults", () => {
-    // 🔴 Typed already, but read by nothing yet: accepted, a summary would be
-    // started and never shown, so it is refused like `shows`.
+  it("accepts a summary the dashboard's header reads, and names a malformed one's faults", () => {
     expect(
       problemsOf(valid({ summary: { label: "Orders", count: async () => 1 } }))
-    ).toEqual([
-      "summary is available in a later release: until then a widget that declares it is not started, so a summary it states is never accepted and left unshown",
-    ]);
+    ).toEqual([]);
     expect(problemsOf(valid({ summary: "Orders" }))).toEqual([
       "summary must be { label, count }",
     ]);
@@ -739,6 +732,57 @@ describe("a widget declaration as startup receives it", () => {
       ]);
     });
 
+    it("with an editor that names no component, and passes one that does", () => {
+      const editorFault = (name: string) =>
+        `setting "${name}" editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from`;
+      expect(
+        problemsOf(
+          valid({
+            settings: {
+              goal: {
+                type: "number",
+                label: "Goal",
+                editor: { component: "@acme/goal/admin#GoalEditor" },
+              },
+              blank: {
+                type: "number",
+                label: "Blank",
+                editor: { component: " " },
+              },
+              bare: {
+                type: "text",
+                label: "Bare",
+                editor: "@acme/goal/admin#X",
+              },
+            },
+          })
+        )
+      ).toEqual([editorFault("blank"), editorFault("bare")]);
+    });
+
+    it("marking up to three quick, and refuses a fourth in the one report of every fault", () => {
+      const choice = (label: string) =>
+        setting.select({
+          label,
+          options: [
+            { label: "One", value: "one" },
+            { label: "Two", value: "two" },
+          ],
+          defaultValue: "one",
+          quick: true,
+        });
+      const three = { a: choice("A"), b: choice("B"), c: choice("C") };
+      expect(problemsOf(valid({ settings: three }))).toEqual([]);
+      // A fourth, beside a fault of another field, so both are reported together.
+      const problems = problemsOf(
+        valid({ settings: { ...three, d: choice("D") }, view: 7 })
+      );
+      expect(problems).toContain(
+        'settings "a", "b", "c", "d" are all marked quick; a widget may mark at most three'
+      );
+      expect(problems.length).toBeGreaterThan(1);
+    });
+
     it("over the limit, still saying so when one is malformed", () => {
       const many = Object.fromEntries(
         Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [
@@ -972,6 +1016,40 @@ describe("startup with several declarations", () => {
           'id "acme/orders-by-state" is already declared by plugin "@acme/shop"',
       },
     ]);
+  });
+
+  it("refuses one component drawn both as a view and as a setting's editor, naming both", () => {
+    /** A valid widget with a Goal setting edited by `editor`. */
+    const editedBy = (editor: string) =>
+      valid({
+        id: "acme/goal",
+        settings: {
+          ...(valid() as { settings: Record<string, unknown> }).settings,
+          goal: {
+            type: "number",
+            label: "Goal",
+            editor: { component: editor },
+          },
+        },
+      });
+    const groups = (editor: string) => [
+      { owner: 'plugin "@acme/shop"', declarations: [validComponent()] },
+      { owner: "the site config", declarations: [editedBy(editor)] },
+    ];
+    expect(
+      collectWidgetDeclarationFaults(groups("@acme/shop/admin#RevenueCard"))
+    ).toEqual([
+      {
+        owner: "the site config",
+        widget: "acme/goal",
+        problem:
+          'component "@acme/shop/admin#RevenueCard" is the editor of setting "goal" of widget "acme/goal" of the site config and the view of widget "acme/revenue" of plugin "@acme/shop"; a view and a setting editor are handed different props, so one component cannot be both',
+      },
+    ]);
+    // The must-differ half: an editor of its own passes beside the view.
+    expect(
+      collectWidgetDeclarationFaults(groups("@acme/shop/admin#GoalEditor"))
+    ).toEqual([]);
   });
 
   it("throws one error whose detail lists every fault", () => {

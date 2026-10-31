@@ -95,7 +95,8 @@ export function kindOption(kind: I18nTransitionKind): string {
   return Object.keys(KIND_OPTIONS).find(k => KIND_OPTIONS[k] === kind) ?? kind;
 }
 
-const KIND_NAMES: Record<I18nTransitionKind, string> = {
+/** How a message names each kind of entity. */
+export const KIND_NAMES: Record<I18nTransitionKind, string> = {
   collection: "collection",
   single: "single",
   fieldGroup: "field group",

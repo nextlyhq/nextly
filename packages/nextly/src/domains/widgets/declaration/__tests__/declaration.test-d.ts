@@ -16,7 +16,11 @@ import { expectTypeOf } from "vitest";
 
 import type { WidgetSizeDeclaration } from "../../grid-size";
 import { rangeWindow, type RangeInterval } from "../../query";
-import type { WidgetRenderSize, WidgetResultField } from "../../result";
+import type {
+  SettingEditorProps,
+  WidgetRenderSize,
+  WidgetResultField,
+} from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "../../sources";
 import type { CoreView } from "../displays";
@@ -149,6 +153,15 @@ expectTypeOf<WidgetRenderSize["tier"]>().toEqualTypeOf<
   "small" | "medium" | "large"
 >();
 
+// A setting's own editor is handed its value or none, and may set either:
+// `onChange(undefined)` clears a setting, so an editor can offer a Clear.
+expectTypeOf<SettingEditorProps<number>["value"]>().toEqualTypeOf<
+  number | undefined
+>();
+expectTypeOf<
+  Parameters<SettingEditorProps<number>["onChange"]>[0]
+>().toEqualTypeOf<number | undefined>();
+
 // A declaration states its size in the grid's own type, the one the site
 // config, a stored placement and the admin read.
 expectTypeOf<(typeof revenue)["size"]>().toEqualTypeOf<WidgetSizeDeclaration>();
@@ -246,7 +259,14 @@ expectTypeOf<
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
 >().toEqualTypeOf<
-  "where" | "sort" | "limit" | "select" | "status" | "total" | "signal"
+  | "where"
+  | "sort"
+  | "limit"
+  | "select"
+  | "status"
+  | "total"
+  | "depth"
+  | "signal"
 >();
 // A count's window: a range a series is drawn over, the date it places entries by, and the
 // window as long before it; and a list's total, asked for only as `true`.
@@ -258,6 +278,17 @@ expectTypeOf<
 expectTypeOf<
   NonNullable<Parameters<WidgetReadServices["find"]>[1]>["total"]
 >().toEqualTypeOf<true | undefined>();
+// A list's depth: `0` alone, its links as stored ids. Pinned exactly, so a
+// widened `number` or another depth fails here; `1` is refused outright.
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>["depth"]
+>().toEqualTypeOf<0 | undefined>();
+expectTypeOf<{ depth: 1 }>().not.toExtend<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>();
+expectTypeOf<{ depth: number }>().not.toExtend<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>();
 
 // The status a read may name, on every read: the published entries, or all of them.
 expectTypeOf<
