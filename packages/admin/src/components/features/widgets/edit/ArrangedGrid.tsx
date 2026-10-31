@@ -21,7 +21,7 @@
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
-import type { GridSize } from "nextly/config";
+import type { GridSize, WidgetSizeBounds } from "nextly/config";
 import type { JSX, RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
@@ -89,8 +89,24 @@ export interface ArrangedGridProps {
             config: Record<string, unknown>,
             callbacks: CardSettingsWriteCallbacks
           ) => void;
+          /**
+           * Save a card's size at once: the card menu's and the quick popover's Size. Absent
+           * where only a card's settings are written, as a card body's own controls write them.
+           */
+          resize?: (
+            placementId: string,
+            title: string,
+            size: GridSize,
+            /** The card's widget's bounds, which the size is held to. */
+            bounds: WidgetSizeBounds,
+            callbacks: CardSettingsWriteCallbacks
+          ) => void;
           isWriting: boolean;
           unavailable?: string;
+          /**
+           * Say a setting changed, in the grid's live region: for a card body's own controls,
+           * which offer no Undo. A quick setting says its change in the toast that offers one.
+           */
           announce: (
             title: string,
             setting: string,
@@ -189,7 +205,7 @@ function cellDragFor(
 }
 
 /**
- * The grid's settings write, bound to one card: its placement, and its title to announce by. No
+ * The grid's settings write, bound to one card: its placement, its title and its bounds. No
  * prop at all while the grid has none, so the cell draws no control that could not save.
  */
 function cellSettingsWrite(
@@ -197,6 +213,7 @@ function cellSettingsWrite(
   row: ArrangedWidget
 ): { settingsWrite?: CellSettingsWrite } {
   if (!settingsWrite) return {};
+  const { resize } = settingsWrite;
   return {
     settingsWrite: {
       write: (config, callbacks) =>
@@ -206,12 +223,22 @@ function cellSettingsWrite(
           config,
           callbacks
         ),
+      ...(resize === undefined
+        ? {}
+        : {
+            resize: (size: GridSize, callbacks: CardSettingsWriteCallbacks) =>
+              resize(
+                row.placementId,
+                row.widget.title,
+                size,
+                row.widget.size,
+                callbacks
+              ),
+          }),
       isWriting: settingsWrite.isWriting,
       ...(settingsWrite.unavailable === undefined
         ? {}
         : { unavailable: settingsWrite.unavailable }),
-      announce: (setting, value, shown) =>
-        settingsWrite.announce(row.widget.title, setting, value, shown),
     },
   };
 }

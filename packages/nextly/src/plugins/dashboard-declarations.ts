@@ -23,6 +23,7 @@ import {
 } from "../domains/widgets/declaration/validate";
 
 import type { PluginDefinition } from "./plugin-context";
+import { carriedRemovedKey } from "./removed-widget-keys";
 import { resolvePluginSelf } from "./self";
 
 /** How a fault names the plugin it is about. */
@@ -128,12 +129,15 @@ export function pluginWidgetDeclarationGroups(
   }));
 }
 
-/** The widget ids each enabled plugin declares in today's shape. */
+/**
+ * The widget ids each enabled plugin declares under `contributes.admin.widgets`,
+ * a key startup refuses.
+ */
 export function pluginLegacyWidgetIds(
   plugins: readonly PluginDefinition[]
 ): LegacyWidgetIds[] {
   return enabled(plugins).flatMap(plugin => {
-    const widgets: unknown = plugin.contributes?.admin?.widgets;
+    const widgets = carriedRemovedKey(plugin, "admin.widgets");
     if (!Array.isArray(widgets)) return [];
     const ids = widgets
       .map(widget => (widget as { id?: unknown } | null)?.id)

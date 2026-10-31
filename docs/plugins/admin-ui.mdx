@@ -449,10 +449,9 @@ admin: {
 }
 ```
 
-A widget contributed in the older shape (`contributes.admin.widgets`) is suggested by being
-declared, as it was placed before suggestions existed. These widgets go after the named
-suggestions, ascending by `defaultOrder`, and one that omits it comes after every one that
-states it.
+A plugin adds widgets only under `contributes.dashboard.widgets`, each declared with
+`defineWidget`. Startup refuses a plugin that still carries `contributes.admin.widgets` or
+`contributes.widgetSources`, naming the plugin and the key.
 
 A reader's saved layout, once they have arranged their dashboard, wins over all of this.
 Think of the default as where a card starts, not where it stays.
@@ -494,8 +493,10 @@ the card data the server answers.
 Every card draws in one frame: a header of one fixed height, the body, and at most one footer
 link. The header shows the card's subject as its title (a collection card set to Posts reads
 "Posts"), with the widget's own name beneath it when the two differ ("Count"), then the card's
-one quick control and its menu, in the same place on every card. A card does not say when its
-data arrived.
+quick control and its menu, in the same place on every card. A widget may mark up to three
+settings `quick`: the header draws the first, and the card's quick popover, opened from its
+title or from Settings in its menu, holds them all with the card's Collection and Size. The
+menu lists Settings, Size, Refresh and Remove. A card does not say when its data arrived.
 
 The frame also owns the states, so a card never draws its own: a skeleton while data has never
 arrived, the last value marked busy while it refreshes, an empty state, one "Not available to

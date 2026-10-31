@@ -5,8 +5,9 @@
  * own data (a collection's newest entry that reader may read, a Single's
  * document), who saved it as the trail lets that reader see, and a + only where
  * they may create. Then the ranking: each row by its own last update, though
- * one collection's saves fill the trail's window, and a Single's saver named
- * from past that window. Then the bound: with sixty collections, one load
+ * one collection's saves fill the trail's window; a Single's Updated and its
+ * saver taken together from its save past that window; and a publish on its
+ * own shown as the publish it was, by whoever made it. Then the bound: with sixty collections, one load
  * counts the rows it draws and no others, and reads the newest entry of at most
  * fifty, every one the trail's window names among them.
  */
@@ -190,10 +191,16 @@ async function saved(
   await savedEach(t, person, collection, [entryId], when);
 }
 
+/** What the trail records of an edit: the fields it changed. */
+const EDIT = { changedFields: ["title"] };
+/** What the trail records of a publish on its own: the status, and that it went live. */
+const PUBLISH = { changedFields: ["status"], published: true };
+
 /**
  * `person` saving each of `entryIds` at `when`, as the trail records a save:
  * written through the service, then given its instant, so the order is the
- * case's own. A collection's entries unless `subjectKind` says a Single's.
+ * case's own. A collection's entries unless `subjectKind` says a Single's; an
+ * edit unless `metadata` says otherwise.
  */
 async function savedEach(
   t: TestNextly,
@@ -201,7 +208,8 @@ async function savedEach(
   collection: string,
   entryIds: readonly string[],
   when: Date,
-  subjectKind: "collection" | "single" = "collection"
+  subjectKind: "collection" | "single" = "collection",
+  metadata: Record<string, unknown> = EDIT
 ): Promise<void> {
   const trail = () => t.adapter.select<TrailRow>("activity_log");
   const before = new Set((await trail()).map(row => row.id));
@@ -214,7 +222,7 @@ async function savedEach(
       entryId,
       entryTitle: "Saved",
       subjectKind,
-      metadata: { changedFields: ["title"] },
+      metadata,
     });
   }
   for (const row of (await trail()).filter(row => !before.has(row.id))) {
@@ -409,7 +417,7 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.total).toBe(3);
     });
 
-    it("names who saved a Single from past the trail's window, by the Single's own save", async () => {
+    it("takes a Single's Updated and who saved it together from its save past the trail's window", async () => {
       const t = await createTestNextly({
         dialect,
         collections: [
@@ -429,10 +437,15 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       current = t;
-      await t.adapter.insert("users", { ...ANA, is_active: true });
+      // Both people have accounts: the trail names an actor from the account
+      // it finds when it writes the save, and records one it cannot find as
+      // erased, with no name.
+      for (const person of [ANA, BEN]) {
+        await t.adapter.insert("users", { ...person, is_active: true });
+      }
       await grantTo(t, ANA.id, "read", [BUSY, HOME]);
       // Home's document, saved by Ben before any of busy's saves.
-      const home = await singleUpdatedAt(t, HOME, at(1));
+      const home = await singleUpdatedAt(t, HOME, at(30));
       await savedEach(t, BEN, HOME, [home], at(30), "single");
       // More entries of busy, each saved since, than the trail's window holds,
       // so Home's save lies past the window.
@@ -444,15 +457,116 @@ describe.each(getConfiguredTestDialects())(
 
       const answer = await contentTable(as(ANA), 2);
 
-      // 🔴 Dated by its document and naming Ben, though the window holds only
-      // busy's saves.
-      expect(answer.items[0]).toMatchObject({
+      // 🔴 Ben's save, though the window holds only busy's: its instant and
+      // his name together.
+      expect(answer.items.find(row => row.slug === HOME)).toMatchObject({
         kind: "single",
         slug: HOME,
-        updatedAt: at(1).toISOString(),
+        updatedAt: at(30).toISOString(),
         userName: BEN.name,
       });
       expect(answer.total).toBe(2);
+    });
+
+    it("shows a publish on its own as the latest change, its instant and who published together", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: NEWS,
+            status: true,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      current = t;
+      for (const person of [ANA, BEN]) {
+        await t.adapter.insert("users", { ...person, is_active: true });
+      }
+      await grantTo(t, ANA.id, "read", [NEWS]);
+      // Ana writes the story; Ben later publishes it, changing nothing else,
+      // which moves the entry's own instant too.
+      const story = await entry(
+        t,
+        NEWS,
+        { title: "story", status: "draft" },
+        at(10)
+      );
+      await saved(t, ANA, NEWS, story, at(20));
+      await savedEach(t, BEN, NEWS, [story], at(10), "collection", PUBLISH);
+
+      const [row] = (await contentTable(as(ANA))).items;
+
+      // 🔴 Ben's publish, not Ana's save beside the publish's instant.
+      expect(row).toMatchObject({
+        slug: NEWS,
+        updatedAt: at(10).toISOString(),
+        userName: BEN.name,
+        event: "published",
+      });
+    });
+
+    it("ranks a row by a save newer than its live entry, as it shows it", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: [NEWS, ARCHIVE].map(slug =>
+          defineCollection({
+            slug,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          })
+        ),
+      });
+      current = t;
+      for (const person of [ANA, BEN]) {
+        await t.adapter.insert("users", { ...person, is_active: true });
+      }
+      await grantTo(t, ANA.id, "read", [NEWS, ARCHIVE]);
+      const old = await entry(t, ARCHIVE, { title: "old" }, at(10));
+      await saved(t, ANA, ARCHIVE, old, at(10));
+      // A save of the published story kept as its working draft: the trail
+      // files it now, and the live entry keeps its earlier stamp.
+      const story = await entry(t, NEWS, { title: "story" }, at(30));
+      await saved(t, BEN, NEWS, story, at(5));
+
+      // A card with room for one row.
+      const answer = await contentTable(as(ANA), 1);
+
+      // 🔴 The story, showing Ben's save: ranked by its live stamp, the
+      // archive would take the row though it shows an older time.
+      expect(answer.items.map(row => row.slug)).toEqual([NEWS]);
+      expect(answer.items[0]).toMatchObject({
+        updatedAt: at(5).toISOString(),
+        userName: BEN.name,
+      });
+    });
+
+    it("shows a row's own date and no name where the trail's latest change is older than it", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: NEWS,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      current = t;
+      await t.adapter.insert("users", { ...ANA, is_active: true });
+      await grantTo(t, ANA.id, "read", [NEWS]);
+      // Ana's save of the story, then a later write the trail did not record.
+      const story = await entry(t, NEWS, { title: "story" }, at(5));
+      await saved(t, ANA, NEWS, story, at(20));
+
+      const [row] = (await contentTable(as(ANA))).items;
+
+      // 🔴 The story's own, newer instant, which the row is ranked by, and
+      // nobody named for a write the trail does not say who made.
+      expect(row).toMatchObject({ slug: NEWS, updatedAt: at(5).toISOString() });
+      expect(row).not.toHaveProperty("userName");
+      expect(row).not.toHaveProperty("event");
     });
   }
 );

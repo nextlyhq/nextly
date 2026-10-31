@@ -115,6 +115,7 @@ import type { CollectionsHandler } from "../collections-handler";
 
 import { readAheadAccess } from "./read-ahead-access";
 import type { ReadCaller } from "./readable-resources";
+import { systemProblemReaders } from "./system-health-source";
 
 /**
  * How far one collection's count reads: past it, the card shows "99+".
@@ -542,6 +543,8 @@ export async function readAttentionDigest(
   const now = opts?.now ?? new Date();
   const readers = [
     ...releaseReaders(caller),
+    // System problems, shown to super-admins alone (`systemProblemReaders`).
+    ...systemProblemReaders(caller),
     ...pluginItemReaders(caller, now),
   ];
   return runDigest(readers, opts?.signal);

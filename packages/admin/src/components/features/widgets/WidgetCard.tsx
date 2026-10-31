@@ -78,6 +78,7 @@ import {
   type CardFooterClaims,
   type FooterClaimRank,
 } from "./frame/footer-slot";
+import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
 import type { RowsSize } from "./frame/list-rows";
@@ -130,6 +131,14 @@ export interface WidgetCardProps {
   headerAction?: ReactNode;
   /** The card's one quick control, just before `headerAction`. */
   quick?: ReactNode;
+  /**
+   * Draws the title as a control, handed the title: the dashboard's cards make it open their
+   * quick popover. The heading around it, and the name it gives the card's region, stay as
+   * they are. Absent, the title is text.
+   *
+   * @internal Set by the dashboard grid only, never part of the widget kit.
+   */
+  titleTrigger?: ((title: string) => ReactNode) | undefined;
   /**
    * Customise mode: the body, footer and quick control become inert and dim, so their links and
    * controls are out of reach, while the title stays where it is.
@@ -329,6 +338,10 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
   // stops being drawn unmounts, and its unmount withdraws the count.
   const [titleCount, setTitleCount] = useState<number | undefined>(undefined);
+  // A line the body shows beneath the title (`useCardSubtitle`), withdrawn the same way.
+  const [bodySubtitle, setBodySubtitle] = useState<string | undefined>(
+    undefined
+  );
   const given = props.state ?? READY;
   const state = shownState(given, reported);
   const drawsBody = showsBody(given);
@@ -372,10 +385,12 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 title={title}
                 titleCount={titleCount}
                 subtitle={props.subtitle}
+                bodySubtitle={bodySubtitle}
                 leading={props.leading}
                 quick={props.quick}
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
+                titleTrigger={props.titleTrigger}
               />
 
               <CardContent
@@ -399,15 +414,17 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
                     <CardTitleCountContext.Provider value={setTitleCount}>
-                      <CardFooterSlotProvider value={footerSlot}>
-                        <CardFooterClaimProvider value={footer.claims}>
-                          {/* A card drawn inside this one is not the cell's card: it reports
-                            nothing in its place. */}
-                          <CardHiddenReportContext.Provider value={undefined}>
-                            {props.children}
-                          </CardHiddenReportContext.Provider>
-                        </CardFooterClaimProvider>
-                      </CardFooterSlotProvider>
+                      <CardSubtitleContext.Provider value={setBodySubtitle}>
+                        <CardFooterSlotProvider value={footerSlot}>
+                          <CardFooterClaimProvider value={footer.claims}>
+                            {/* A card drawn inside this one is not the cell's card: it reports
+                              nothing in its place. */}
+                            <CardHiddenReportContext.Provider value={undefined}>
+                              {props.children}
+                            </CardHiddenReportContext.Provider>
+                          </CardFooterClaimProvider>
+                        </CardFooterSlotProvider>
+                      </CardSubtitleContext.Provider>
                     </CardTitleCountContext.Provider>
                   </CardStateReportProvider>
                 ) : null}
@@ -576,12 +593,23 @@ function heldLayout(
   return fields === undefined ? undefined : rowsLayout(tier, fields);
 }
 
+/** The card's title inside its heading: as text, or as the control `trigger` draws it as. */
+function CardTitle({
+  title,
+  trigger,
+}: {
+  title: string;
+  trigger: WidgetCardProps["titleTrigger"];
+}): ReactNode {
+  return trigger ? trigger(title) : title;
+}
+
 /**
  * The card's header, one fixed height in every state, tier and mode.
  *
  * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
  * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
- * widget's own name. The quick control and the menu sit at the right end, always in that order,
+ * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`). The quick control and the menu sit at the right end, always in that order,
  * so the menu is in the same place on every card.
  */
 function WidgetCardHeader({
@@ -589,11 +617,13 @@ function WidgetCardHeader({
   subtitleId,
   title,
   titleCount,
-  subtitle,
+  subtitle: givenSubtitle,
+  bodySubtitle,
   leading,
   quick,
   quickInert,
   headerAction,
+  titleTrigger,
 }: {
   titleId: string;
   subtitleId: string;
@@ -601,11 +631,15 @@ function WidgetCardHeader({
   /** A count the body shows beside the title, muted; read after it as ", N items". */
   titleCount?: number | undefined;
   subtitle?: string | undefined;
+  /** What the body reports beneath the title; drawn only where the card is given no subtitle. */
+  bodySubtitle?: string | undefined;
   leading?: ReactNode;
   quick?: ReactNode;
   quickInert: boolean;
   headerAction?: ReactNode;
+  titleTrigger?: WidgetCardProps["titleTrigger"];
 }) {
+  const subtitle = givenSubtitle || bodySubtitle;
   return (
     <CardHeader
       // No rule under the header: a divider is the difference between a card and a panel.
@@ -625,7 +659,9 @@ function WidgetCardHeader({
           title={title}
           className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
-          <span className="truncate">{title}</span>
+          <span className="truncate">
+            <CardTitle title={title} trigger={titleTrigger} />
+          </span>
           {titleCount !== undefined && (
             <>
               <span

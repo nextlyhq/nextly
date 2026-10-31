@@ -148,7 +148,10 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.contributes?.admin).toBeUndefined();
-    expect(plugin.contributes?.widgetSources).toBeUndefined();
+    // Read as a property of the value: `widgetSources` is no field of the
+    // contributions type, so a typed read of it does not compile.
+    expect(plugin.contributes).toBeDefined();
+    expect(plugin.contributes).not.toHaveProperty("widgetSources");
   });
 
   it("is withheld when no collection carries the fields", () => {
