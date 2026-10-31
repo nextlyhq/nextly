@@ -168,12 +168,12 @@ describe.each(getConfiguredTestDialects())(
               richText({ name: "body", localized: true }),
             ],
           }),
-          // Readable in Spanish alone, the default language refused.
+          // Readable in every language but English, the default one.
           defineCollection({
             slug: "usesnotes",
             labels: { singular: "Note", plural: "Notes" },
             localized: true,
-            access: { read: ({ locale }) => locale === "es" },
+            access: { read: ({ locale }) => locale !== "en" },
             fields: [
               text({ name: "title" }),
               richText({ name: "body", localized: true }),
@@ -381,7 +381,7 @@ describe.each(getConfiguredTestDialects())(
       const guide = await translatedUse("usesguides", item.url, ["en", "es"]);
       // Used in Spanish alone, which is refused.
       const spanishGuide = await translatedUse("usesguides", item.url, ["es"]);
-      // Used in Spanish alone, readable in Spanish though not by default.
+      // Used in Spanish alone, readable in Spanish though not in English.
       const note = await translatedUse("usesnotes", item.url, ["es"]);
       const key = await keyWith(t, [
         "read-media",

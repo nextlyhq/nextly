@@ -511,6 +511,8 @@ describe.each(getConfiguredTestDialects())(
         documentId: id,
         fieldPath: "cover",
         locale: "",
+        // An upload field names the item by its id.
+        address: null,
       });
     });
 

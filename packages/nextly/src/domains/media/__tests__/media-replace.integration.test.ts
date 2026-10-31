@@ -588,6 +588,11 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps the old file while a JSON value names the item by its address", async () => {
       const image = await looseImage();
+      const reader = await keyWith(t, [
+        "read-media",
+        "update-media",
+        "read-replaceposts",
+      ]);
       const oldPath = String((await row(image.id))!.filename);
       await t
         .getService("collectionsHandler")
@@ -596,7 +601,7 @@ describe.each(getConfiguredTestDialects())(
           { title: "Settings", extra: { hero: { src: image.url } } }
         );
       // The use is recorded as one by address, from the reference itself.
-      const asked = await usageOf(editor, image.id, "?byAddress=true");
+      const asked = await usageOf(reader, image.id, "?byAddress=true");
       expect((asked.items as Doc[]).map(item => item.slug)).toEqual([
         "replaceposts",
       ]);
