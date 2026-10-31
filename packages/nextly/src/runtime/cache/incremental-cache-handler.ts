@@ -9,6 +9,8 @@
  *
  * @module runtime/cache/incremental-cache-handler
  */
+import { holdForNextFlush } from "../../revalidation/expiry-handoff";
+
 import { sharedEntries } from "./bounded-entries";
 import {
   expireTags,
@@ -88,6 +90,7 @@ const MAX_REMEMBERED_READS = 10_000;
 
 const globalForReads = globalThis as unknown as {
   __nextly_cache_reads?: Map<string, number>;
+  __nextly_cache_reads_overflowed_at?: number;
 };
 
 /**
@@ -104,22 +107,41 @@ function reads(): Map<string, number> {
 function rememberRead(key: string): void {
   const remembered = reads();
   const now = localNow();
+  remembered.delete(key);
   if (remembered.size >= MAX_REMEMBERED_READS) {
+    // Reads past the window mark no fill still running, so they go first.
     for (const [old, at] of remembered) {
-      if (now - at > FILL_WINDOW_MS) remembered.delete(old);
+      if (now - at <= FILL_WINDOW_MS) break;
+      remembered.delete(old);
     }
   }
-  remembered.delete(key);
+  if (remembered.size >= MAX_REMEMBERED_READS) {
+    // Still full, of reads whose fills may be running: none is dropped, since
+    // that fill would lose when it began. This read is not remembered, and
+    // its fill is judged as one begun at the window's start (`fillBegan`).
+    globalForReads.__nextly_cache_reads_overflowed_at = now;
+    return;
+  }
   remembered.set(key, now);
 }
 
-/** When the fill being stored for `key` began: its read, or now if none. */
+/**
+ * When the fill being stored for `key` began: its read; else, while reads have
+ * gone unremembered within the window, the window's start, so a fill whose
+ * read was not kept is judged stale by any expiry it may have run across;
+ * else now, for a fill no read began (a prerender, or one past the window).
+ */
 function fillBegan(key: string): number {
   const remembered = reads();
   const readAt = remembered.get(key);
   remembered.delete(key);
   const now = localNow();
-  return readAt !== undefined && now - readAt <= FILL_WINDOW_MS ? readAt : now;
+  if (readAt !== undefined && now - readAt <= FILL_WINDOW_MS) return readAt;
+  const overflowedAt = globalForReads.__nextly_cache_reads_overflowed_at;
+  if (overflowedAt !== undefined && now - overflowedAt <= FILL_WINDOW_MS) {
+    return now - FILL_WINDOW_MS;
+  }
+  return now;
 }
 
 export default class NextlyIncrementalCacheHandler {
@@ -177,7 +199,11 @@ export default class NextlyIncrementalCacheHandler {
   }
 
   async revalidateTag(tags: string | string[]): Promise<void> {
-    await expireTags(Array.isArray(tags) ? tags : [tags]);
+    const expired = Array.isArray(tags) ? tags : [tags];
+    // A refused record is retried by the next flush. No table is not: every
+    // request would expire the tags again, and until the migration runs no
+    // instance shares expiries to miss.
+    if ((await expireTags(expired)) === "failed") holdForNextFlush(expired);
   }
 
   // No `resetRequestCache`: this handler keeps no per-request state, and
