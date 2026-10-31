@@ -79,6 +79,9 @@ export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
 /** Withdraws the ledger and restores the in-process hand-off. */
 export function withdrawTagExpiryLedger(): void {
   publishTagExpiryLedger(null);
-  setExpiryHandoff(null);
+  // A second withdrawal before the next registration keeps the in-process
+  // hand-off the first installed, and the tags a write has left in it since:
+  // replacing it would drop them before any ledger could take them.
+  if (!isPendingExpiryHandoff(expiryHandoff())) setExpiryHandoff(null);
   globalForWiring.__nextly_tag_ledger_withdrawn = true;
 }

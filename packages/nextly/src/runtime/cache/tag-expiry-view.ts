@@ -19,7 +19,11 @@
  */
 import { getNextlyLogger } from "../../observability/logger";
 
-import { LEDGER_RETENTION_MS, type TagExpiryLedger } from "./tag-expiry-ledger";
+import {
+  LEDGER_RETENTION_MS,
+  TAG_EXPIRY_GRACE_MS,
+  type TagExpiryLedger,
+} from "./tag-expiry-ledger";
 
 /** How long a tag's answer from the ledger is reused before it is asked again. */
 export const TAG_LOOKUP_TTL_MS = 5_000;
@@ -43,10 +47,10 @@ interface ViewState {
    */
   own: Map<string, number>;
   /**
-   * The ledger times this process's own records stored, per tag. A lookup
-   * answering one of these is this process's write, judged by `own` alone:
-   * not by the grace other instances are held to (this process cleared its
-   * registry rows at once), nor by the database time a round trip after it.
+   * The ledger times this process's own records wrote, per tag. A lookup
+   * answering one of these is judged by `own` and by the database time the
+   * record read, not by the grace other instances are held to (this process
+   * cleared its registry rows at once).
    */
   mine: Map<string, number>;
   /** The database's clock less this process's, as of the last read that told it. */
@@ -207,15 +211,20 @@ export async function refreshTagExpiries(
 
 /**
  * The ledger's time for `tag` as this process judges by it: another
- * instance's, as stored; none for a time this process's own record stored.
- * That expiry is already in `own`, ordered with this process's entries by
- * `localNow`, while the stored time is the database's, a round trip later and
- * graced for other instances: judged by it, an entry filled during the round
- * trip, or within the grace, would be refused once more.
+ * instance's, as stored; for a time this process's own record stored, the
+ * database's time that record read, without the grace. This process's expiry
+ * is already in `own`, and the grace is for other instances, which may still
+ * hold registry rows this process cleared at once: judged by it, an entry this
+ * process filled within the grace would be refused once more. The time is
+ * still judged by its reading rather than ignored, because another instance
+ * may record the same tag in the same millisecond, and only the time says
+ * which: an entry begun before that reading is refused, whoever recorded it.
  */
 function recordedExpiry(view: ViewState, tag: string): number {
   const recorded = view.lookups.get(tag)?.expiredAt ?? 0;
-  return recorded > 0 && view.mine.get(tag) === recorded ? 0 : recorded;
+  return recorded > 0 && view.mine.get(tag) === recorded
+    ? recorded - TAG_EXPIRY_GRACE_MS
+    : recorded;
 }
 
 /** When `tag` last expired as far as this process knows, on the database's clock. */

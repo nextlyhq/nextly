@@ -103,6 +103,24 @@ describe("the revalidator outside Next.js", () => {
     await vi.waitFor(() => expect(takePendingExpiries()).toEqual(["posts"]));
   });
 
+  it("keeps such a write through a second release before the next registration", async () => {
+    const adapter = {
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      tableExists: async () => false,
+      getDrizzle: () => {
+        throw new Error("a statement reached the missing table");
+      },
+    } as never;
+    installTagExpiryLedger(adapter);
+    withdrawTagExpiryLedger();
+
+    await new HandOffRevalidator().flush(write("posts"));
+    withdrawTagExpiryLedger();
+    installTagExpiryLedger(adapter);
+
+    await vi.waitFor(() => expect(takePendingExpiries()).toEqual(["posts"]));
+  });
+
   it("hands nothing off with only the in-process hand-off installed", async () => {
     const ledger = ledgerThat(async () => new Map());
     setExpiryHandoff(null);
