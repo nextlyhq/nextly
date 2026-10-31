@@ -15,7 +15,8 @@
  * card draws, with what only the admin can learn: whether the project's
  * sample-content route refuses this reader. It is judged as the card's load
  * judges it (`setupCardData`), and recorded only when every step drawn is
- * done; a reader can retire only their own card.
+ * done; a reader can retire only their own card. When it is not recorded the
+ * request is refused as a conflict; any other change sent with it still holds.
  *
  * Internal to the admin, not published API.
  *
@@ -131,6 +132,17 @@ export const putDashboardSetup = withErrorHandler(async (req: Request) => {
     // retirement may now be recorded.
     await setupCardData(caller, new Date(), retire);
     state = await readSetupState(caller.user.id);
+    // Not recorded: a step the card draws is open as the host sees it now (the
+    // site changed since the card was read), or the record could not be
+    // written. Refused, so the card neither keeps saying it will not show
+    // again nor takes the request as done.
+    if (state.retiredAt === undefined) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "Setup is not all set: a step is still open. Reload the dashboard to see it.",
+      });
+    }
   }
   return respondMutation("Saved.", stateView(state));
 });
