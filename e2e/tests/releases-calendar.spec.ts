@@ -126,6 +126,36 @@ function chip(scope: Locator, title: string): Locator {
   return scope.getByRole("link").filter({ hasText: title });
 }
 
+/** The day `instant` falls on in New York, where the browser reads, as `YYYY-MM-DD`. */
+function newYorkDay(instant: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(instant);
+  const part = (type: string) => parts.find(p => p.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/**
+ * Open `day`'s full list from the day itself, which must be in the month on
+ * screen, and answer the list. By keyboard: at a desk's width the day's chips
+ * cover the middle of its button, where a pointer click would land on a chip.
+ */
+async function openDayList(page: Page, day: string): Promise<Locator> {
+  await page.locator(`[data-day="${day}"]`).focus();
+  await page.keyboard.press("Enter");
+  const sheet = page.getByRole("dialog", { name: longDay(day) });
+  await expect(sheet).toBeVisible();
+  return sheet.getByRole("list", { name: "Releases on this day" });
+}
+
+/** The row of the release titled `title`, in a day's full list. */
+function listRow(list: Locator, title: string): Locator {
+  return list.getByRole("listitem").filter({ hasText: title });
+}
+
 /** The date of the day button holding focus. */
 async function focusedDay(page: Page): Promise<string | null> {
   return page.evaluate(
@@ -260,19 +290,34 @@ test.describe("the Releases calendar", () => {
     }
     // Last, since Publish now runs a pass of the runner, which would run an
     // overdue release it found.
-    await leaveReleasesAsTheRunnerWould(page, attention);
+    const due = await leaveReleasesAsTheRunnerWould(page, attention);
 
+    // Read from each day's full list rather than its chips. The suite shares
+    // one database, and other specs leave releases on today and the hour
+    // before it, so a day here may hold more than its chips draw: the rest
+    // are counted in "+N more", and only the day's list names every one.
     await openCalendar(page);
-    const grid = page.getByRole("grid");
-    const today = grid.locator("td", {
-      has: page.locator('[aria-current="date"]'),
-    });
-    await expect(chip(today, published)).toContainText("Published");
+    const today =
+      (await page
+        .getByRole("grid")
+        .locator('[aria-current="date"]')
+        .getAttribute("data-day")) ?? "";
+    expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const todays = await openDayList(page, today);
+    await expect(listRow(todays, published)).toContainText("Published");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
+
     // Overdue and stopped were due an hour ago, which near midnight is
-    // yesterday, so they are found on the grid rather than on today.
-    await expect(chip(grid, overdue)).toContainText("Overdue");
-    await expect(chip(grid, overdue)).not.toContainText("Scheduled");
-    await expect(chip(grid, stopped)).toContainText("Stopped");
+    // yesterday, and on the first of a month is in the month before.
+    const dueDay = newYorkDay(due);
+    await showMonth(page, dueDay);
+    const dues = await openDayList(page, dueDay);
+    await expect(listRow(dues, overdue)).toContainText("Overdue");
+    await expect(listRow(dues, overdue)).not.toContainText("Scheduled");
+    await expect(listRow(dues, stopped)).toContainText("Stopped");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
 
     await showMonth(page, scheduledFor);
     await expect(chip(dayCell(page, scheduledFor), published)).toHaveCount(0);
