@@ -23,7 +23,7 @@
 
 /**
  * @experimental The widget component contract and the shapes its data arrives
- * in. No compatibility guarantee until `contributes.admin.widgets` graduates.
+ * in. No compatibility guarantee until the widget contract graduates.
  */
 export type {
   WidgetComponentProps,

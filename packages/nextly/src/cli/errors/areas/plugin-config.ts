@@ -728,6 +728,20 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
     ],
   },
 
+  NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL: {
+    cause:
+      "A plugin declares widgets or widget data sources through a key Nextly no longer reads.",
+    from: [
+      {
+        code: "NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL",
+        describe: error => ({
+          what: `Plugin "${field(error, "plugin")}" declares \`${field(error, "key")}\`, which Nextly no longer reads.`,
+          why: "A plugin adds dashboard widgets one way: each declared with `defineWidget()` under `contributes.dashboard.widgets`, whose `load` reads its data as the person asking.",
+          next: "Declare each widget with `defineWidget()` under `contributes.dashboard.widgets`, read its data in that widget's `load`, and remove the key. If the plugin is not yours, update it to a release that declares its widgets that way.",
+        }),
+      },
+    ],
+  },
   PLUGIN_ADMIN_WIDGET_NOT_JSON: {
     cause:
       "A plugin's admin widget holds a value that cannot be sent to the browser as JSON.",

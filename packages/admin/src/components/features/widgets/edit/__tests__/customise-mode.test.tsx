@@ -178,6 +178,8 @@ function layout(
     ],
     version: 3,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...patch,
@@ -329,9 +331,34 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ],
   ["a reset", user => confirmReset(user)],
   [
+    "a size from the quick popover",
+    async user => {
+      // Settings opens the card's quick popover; its Size is staged with the rest.
+      await choose(user, "Notes", "Settings");
+      const popover = await screen.findByRole("dialog", {
+        name: "Quick settings for Notes",
+      });
+      await user.click(
+        within(popover).getByRole("combobox", { name: "Width" })
+      );
+      await user.click(
+        await screen.findByRole("option", { name: "Half width, 6 columns" })
+      );
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    },
+  ],
+  [
     "a setting",
     async user => {
+      // Settings opens the card's quick popover, and More settings the sheet.
       await choose(user, "Notes", "Settings");
+      const popover = await screen.findByRole("dialog", {
+        name: "Quick settings for Notes",
+      });
+      await user.click(
+        within(popover).getByRole("button", { name: "More settings" })
+      );
       const sheet = await screen.findByRole("dialog");
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
       await user.click(within(sheet).getByRole("button", { name: "Done" }));
@@ -375,6 +402,53 @@ describe("customise mode writes nothing before Save", () => {
       expect(sizeLabels()).toEqual(sizes);
     }
   );
+});
+
+describe("the card menu and quick popover while customising", () => {
+  it("lists Settings, the size, the moves, then Remove", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await user.click(
+      screen.getByRole("button", { name: "Card actions for Notes" })
+    );
+    const menu = await screen.findByRole("menu");
+    const names = within(menu)
+      .getAllByRole("menuitem")
+      .map(item => item.textContent?.trim() ?? "");
+    expect(names[0]).toBe("Settings");
+    expect(names[1]).toMatch(/^Width/);
+    expect(names[2]).toMatch(/^Height/);
+    expect(names.slice(3, 7)).toEqual([
+      "Move to start",
+      "Move earlier",
+      "Move later",
+      "Move to end",
+    ]);
+    expect(names.at(-1)).toBe("Remove");
+  });
+
+  it("applies a size at once, with the popover still open, and keeps it for Save", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const before = sizeLabels();
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(within(popover).getByRole("combobox", { name: "Width" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Half width, 6 columns" })
+    );
+
+    // Drawn at once in the draft, the popover still open over the card, and nothing written.
+    await waitFor(() => expect(sizeLabels()).not.toEqual(before));
+    // The label's glyphs, then the name a screen reader hears.
+    expect(sizeLabels()).toContain("6×36 columns by 3 rows");
+    expect(
+      screen.getByRole("dialog", { name: "Quick settings for Notes" })
+    ).toBeInTheDocument();
+    expect(writes()).toBe(0);
+  });
 });
 
 describe("the bar", () => {

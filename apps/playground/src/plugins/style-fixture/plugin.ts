@@ -6,9 +6,45 @@
  * in the real admin (light and dark). Kept in the playground alongside the
  * form/page builders, which are here for the same reason.
  */
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { definePlugin, defineWidget, setting } from "@nextlyhq/plugin-sdk";
 
 import { STYLE_FIXTURE_PATH } from "./constants";
+
+/**
+ * A test fixture for e2e/tests/dashboard-card-settings.spec.ts: a card with
+ * settings, one of them quick (Accent, drawn on the card's header), and Rows,
+ * which its `load` reads. Drawn by core's list view, so it needs no component.
+ * Suggested for the default dashboard; the spec places it itself either way.
+ */
+const recentPostsWidget = defineWidget({
+  id: "style-fixture/recent",
+  title: "Fixture recent posts",
+  description: "Exists for the e2e suite: recent posts, with a quick setting.",
+  size: { default: { w: 4, h: 4 } },
+  access: { collections: ["posts"] },
+  settings: {
+    limit: setting.number({ label: "Rows", defaultValue: 3 }),
+    accent: setting.select({
+      label: "Accent",
+      quick: true,
+      defaultValue: "plain",
+      options: [
+        { label: "Plain", value: "plain" },
+        { label: "Bold", value: "bold" },
+      ],
+    }),
+  },
+  load: async ({ settings, services, signal }) => {
+    const { items } = await services.find("posts", {
+      select: ["title"],
+      sort: "-updatedAt",
+      limit: settings.limit,
+      signal,
+    });
+    return { items };
+  },
+  view: "list",
+});
 
 export const styleFixturePlugin = definePlugin({
   name: "style-fixture",
@@ -25,58 +61,10 @@ export const styleFixturePlugin = definePlugin({
       // Declared for tooling/the plugin doctor; the file is loaded by the
       // side-effect import in ./admin.
       styles: "playground/style-fixture/admin.css",
-      // A `text` widget, so e2e/tests/plugin-text-widget.spec.ts can prove
-      // that prose declared by a plugin reaches the dashboard through the
-      // whole path -- contribution, validation, layout, render -- and that a
-      // link to a scheme that runs code does not become a link.
-      widgets: [
-        {
-          id: "style-fixture/notes",
-          title: "Fixture notes",
-          archetype: "text",
-          size: { default: { w: 4, h: 4 } },
-          content: [
-            "## Release checklist",
-            "",
-            "Before a release, **drain the queue** and read [the runbook](https://nextlyhq.com/docs).",
-            "",
-            "- one",
-            "- two",
-            "",
-            "Do not [run this](javascript:alert%28document.cookie%29).",
-          ].join("\n"),
-        },
-        // A test fixture for e2e/tests/dashboard-card-settings.spec.ts: a card with settings,
-        // one of them quick, which no built-in widget offers yet. A `list` drawn by core, so it
-        // needs no component. Not placed by default (no `defaultOrder`): the spec places it.
-        {
-          id: "style-fixture/recent",
-          title: "Fixture recent posts",
-          archetype: "list",
-          size: { default: { w: 4, h: 4 } },
-          query: {
-            source: "collection:posts",
-            op: "list",
-            select: ["title"],
-            sort: "-updatedAt",
-            limit: 3,
-          },
-          settings: [
-            { name: "limit", type: "number", label: "Rows", defaultValue: 3 },
-            {
-              name: "accent",
-              type: "select",
-              label: "Accent",
-              quick: true,
-              defaultValue: "plain",
-              options: [
-                { label: "Plain", value: "plain" },
-                { label: "Bold", value: "bold" },
-              ],
-            },
-          ],
-        },
-      ],
+    },
+    dashboard: {
+      widgets: [recentPostsWidget],
+      suggest: ["style-fixture/recent"],
     },
   },
 });

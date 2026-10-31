@@ -321,11 +321,92 @@ describe("the Team activity card", () => {
     });
     const [only] = screen.getAllByTestId("entity-row");
     expect(within(only!).getByTestId("entity-row-title")).toHaveTextContent(
-      /Blog Posts/
+      "Ana saved an entry in Blog Posts"
     );
     expect(within(only!).getByTestId("entity-row-meta")).toHaveTextContent(
       "Blog Posts"
     );
     expect(only).not.toHaveTextContent("blog_posts");
+  });
+
+  describe("a deletion", () => {
+    const titleOf = (items: Record<string, unknown>[]) => {
+      draw({
+        slot: { ok: true, result: { op: "list", items } },
+        query: { ...LIST_QUERY, limit: 10 },
+      });
+      return screen
+        .getAllByTestId("entity-row-title")
+        .map(title => title.textContent);
+    };
+    const deletion = { action: "delete", event: "deleted" };
+
+    it("names the entry it deleted when the row carries its title", () => {
+      expect(
+        titleOf([
+          row(1, { ...deletion, entryTitle: "Spring launch announcement" }),
+        ])
+      ).toEqual(["Ana deleted Spring launch announcement"]);
+    });
+
+    it("says it deleted an entry in the collection when the row carries no title, never the collection itself", () => {
+      // 🔴 "Ana deleted Blog Posts" reads as though the collection went. The server drops a
+      // removed document's title and id, so this is how every deletion it redacts arrives.
+      mockBranding = {
+        widgetSources: [
+          {
+            collection: "blog_posts",
+            label: "Blog Posts",
+            lifecycle: true,
+            fields: [],
+          },
+        ],
+      };
+      expect(
+        titleOf([
+          row(1, {
+            ...deletion,
+            collection: "blog_posts",
+            entryId: null,
+            entryTitle: null,
+          }),
+        ])
+      ).toEqual(["Ana deleted an entry in Blog Posts"]);
+    });
+
+    it("names a Single by its label, and says a Single when the row carries none", () => {
+      expect(
+        titleOf([
+          row(1, {
+            ...deletion,
+            subjectKind: "single",
+            collection: "home",
+            entryTitle: "Home",
+          }),
+          row(2, {
+            ...deletion,
+            subjectKind: "single",
+            collection: "gone",
+            entryTitle: null,
+          }),
+        ])
+      ).toEqual(["Ana deleted Home", "Ana deleted a Single"]);
+    });
+
+    it("leaves a settings change named by its label, since it is about no entry", () => {
+      // The control for the wording above: only an entry's row says "an entry in".
+      expect(
+        titleOf([
+          row(1, {
+            action: "update",
+            event: undefined,
+            subjectKind: "settings",
+            collection: "email-providers",
+            entryId: null,
+            entryTitle: null,
+          }),
+        ])
+      ).toEqual(["Ana updated email-providers"]);
+    });
   });
 });

@@ -6,9 +6,9 @@
  * @module components/features/dashboard/SystemHealthCard.test
  */
 
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import type { DeclaredComponentProps } from "nextly/widget-result";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 
@@ -125,5 +125,33 @@ describe("the System health card", () => {
       expect(row.querySelector("[data-shape]")?.textContent).toBe("?");
       expect(within(row).getByText("Unknown").className).toContain("sr-only");
     }
+  });
+
+  describe("while it stays open", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("ages the storage failure on the clock, with no new answer", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.parse("2026-10-30T10:00:00.000Z"));
+      const lines = draw({
+        ...HEALTHY,
+        storage: {
+          status: "failed",
+          failedAt: "2026-10-30T10:00:00.000Z",
+          adapter: "s3",
+        },
+      });
+      expect(lines.storage.textContent).toContain("Last write failed just now");
+      // 🔴 Derived only when the answer changed, and batches do not poll: the
+      // failure read "just now" for as long as the dashboard was open.
+      act(() => {
+        vi.advanceTimersByTime(5 * 60 * 1000);
+      });
+      expect(screen.getByTestId("system-health-storage").textContent).toContain(
+        "Last write failed 5m ago"
+      );
+    });
   });
 });

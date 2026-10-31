@@ -75,6 +75,7 @@
   "NEXTLY_MIGRATION_PARTIALLY_APPLIED": "A migration that runs outside a transaction failed part-way, now or in its newest attempt, and the statements before the failure stayed applied.",
   "NEXTLY_MIGRATION_SNAPSHOT_MISSING": "`nextly migrate:resolve --applied` has no snapshot to compare the live schema with.",
   "NEXTLY_PERMISSION_COLLISION": "A plugin's custom permission repeats another, targets a resource Nextly reserves, or repeats one Nextly creates itself.",
+  "NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL": "A plugin declares widgets or widget data sources through a key Nextly no longer reads.",
   "NEXTLY_ROUTE_COLLISION": "Two plugin routes answer the same method and path.",
   "NEXTLY_ROUTE_INVALID_PATH": "A plugin declares a route whose path does not start with `/`.",
   "NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION": "A plugin relates to another plugin's entity without declaring that plugin in `dependsOn`.",

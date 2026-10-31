@@ -202,6 +202,12 @@ export interface UseDashboardLayoutResult {
    */
   isUnreadable: boolean;
   /**
+   * Whether the reader has arranged their dashboard, as the read says (`arranged`): a card they
+   * remove at rest is then taken out of their arrangement, where a reader following the default
+   * has it hidden.
+   */
+  isArranged: boolean;
+  /**
    * Whether ANY write against this layout is in flight.
    *
    * 🔴 All three channels, because they all send a whole-layout snapshot
@@ -434,6 +440,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     ...writeState(save, reset, [dismiss, cardSettings]),
     hasStoredRow: (query.data?.version ?? 0) > 0,
     isUnreadable: query.data?.source === "unreadable",
+    isArranged: query.data?.arranged === true,
     cached,
     reload: invalidate,
   };
