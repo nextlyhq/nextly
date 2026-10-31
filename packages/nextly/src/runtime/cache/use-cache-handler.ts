@@ -8,7 +8,7 @@
  *
  * @module runtime/cache/use-cache-handler
  */
-import { BoundedEntries } from "./bounded-entries";
+import { sharedEntries } from "./bounded-entries";
 import {
   expireTags,
   isEntryExpired,
@@ -31,7 +31,15 @@ interface StoredEntry {
   chunks: Uint8Array[];
 }
 
-const entries = new BoundedEntries<StoredEntry>();
+// Looked up on each use, so the store a test resets is the one read.
+const entries = () => sharedEntries<StoredEntry>("use-cache");
+
+/**
+ * Writes under way, per key. Next.js's contract asks a `get` for a key being
+ * written to wait for that write, so concurrent readers see the new value
+ * rather than the old one or a miss that starts a second fill.
+ */
+const writing = new Map<string, Promise<void>>();
 
 /** A new stream over stored chunks, for one reader. */
 function replay(chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> {
@@ -48,32 +56,43 @@ const useCacheHandler = {
     cacheKey: string,
     softTags: string[]
   ): Promise<CacheEntry | undefined> {
-    const stored = entries.get(cacheKey);
+    await writing.get(cacheKey);
+    const stored = entries().get(cacheKey);
     if (stored === undefined) return undefined;
     const tags = [...stored.entry.tags, ...softTags];
     await refreshTagExpiries(tags);
     if (isEntryExpired(tags, stored.entry.timestamp)) {
-      entries.delete(cacheKey);
+      entries().deleteIf(cacheKey, stored);
       return undefined;
     }
     return { ...stored.entry, value: replay(stored.chunks) };
   },
 
-  async set(
-    cacheKey: string,
-    pendingEntry: Promise<CacheEntry>
-  ): Promise<void> {
-    const { value, ...entry } = await pendingEntry;
-    const chunks: Uint8Array[] = [];
-    let bytes = 0;
-    const reader = value.getReader();
-    for (;;) {
-      const { done, value: chunk } = await reader.read();
-      if (done) break;
-      chunks.push(chunk);
-      bytes += chunk.byteLength;
-    }
-    entries.set(cacheKey, { entry, chunks }, bytes);
+  set(cacheKey: string, pendingEntry: Promise<CacheEntry>): Promise<void> {
+    const write = (async () => {
+      const { value, ...entry } = await pendingEntry;
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      const reader = value.getReader();
+      for (;;) {
+        const { done, value: chunk } = await reader.read();
+        if (done) break;
+        chunks.push(chunk);
+        bytes += chunk.byteLength;
+      }
+      entries().set(cacheKey, { entry, chunks }, bytes);
+    })();
+    // What a waiting `get` awaits: settled either way, so a write that fails
+    // leaves the reader to the entry before it rather than failing it too.
+    const settled = write.then(
+      () => undefined,
+      () => undefined
+    );
+    writing.set(cacheKey, settled);
+    void settled.then(() => {
+      if (writing.get(cacheKey) === settled) writing.delete(cacheKey);
+    });
+    return write;
   },
 
   // Nothing to do once per request: the ledger is asked about the tags each

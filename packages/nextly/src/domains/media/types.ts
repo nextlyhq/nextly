@@ -5,8 +5,6 @@
  * These types represent the public API surface for media operations.
  */
 
-import type { ImageSizeVariant } from "../../types/media";
-
 /**
  * Media file returned from operations
  */
@@ -22,17 +20,10 @@ export interface MediaFile {
   url: string;
   thumbnailUrl?: string | null;
   /**
-   * Generated image variants, keyed by the configured size name.
-   *
-   * Optional and nullable because the column is: a non-image, or an image
-   * uploaded before any size was configured, carries none. Every variant URL is
-   * in the same form as `url`, as the storage wrote it: a path on the local
-   * storage's base (`/uploads/...`) by default, which any page of the app
-   * resolves, and an absolute URL on cloud storage. For an email, a feed or
-   * anything else outside the app, make it absolute with `toPublicMediaUrl`.
+   * Horizontal focal point, 0 is the left edge and 100 the right. With
+   * `focalY`, what a site's `object-position` or an image loader reads to keep
+   * the subject in frame: image sizes are no longer cut around it.
    */
-  sizes?: Record<string, ImageSizeVariant> | null;
-  /** Horizontal focal point, 0 is the left edge and 100 the right. */
   focalX?: number | null;
   /** Vertical focal point, 0 is the top edge and 100 the bottom. */
   focalY?: number | null;

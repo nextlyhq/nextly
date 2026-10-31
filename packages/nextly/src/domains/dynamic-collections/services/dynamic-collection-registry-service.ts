@@ -678,12 +678,15 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     // Every cached read of it now describes rows that are gone. Only when this
     // call removed the row, with the setting it held: a repeated delete finds
-    // nothing and expires nothing.
+    // nothing and expires nothing. Once the delete is durable: after an
+    // enclosing transaction commits, and never for one that rolls back.
     if (removed > 0) {
-      await flushContentChange(
-        deletedEntityIntent("collection", slug, stored),
-        this.logger,
-        "a collection was deleted"
+      await this.afterCommit(() =>
+        flushContentChange(
+          deletedEntityIntent("collection", slug, stored),
+          this.logger,
+          "a collection was deleted"
+        )
       );
     }
   }

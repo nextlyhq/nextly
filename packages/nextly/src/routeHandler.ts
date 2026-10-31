@@ -71,13 +71,6 @@ import {
   getGeneralSettings,
   updateGeneralSettings,
 } from "./api/general-settings";
-import {
-  listImageSizes,
-  getImageSizeById,
-  createImageSize,
-  updateImageSize,
-  deleteImageSize,
-} from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { changeLanguages, getLanguages } from "./api/languages";
@@ -396,7 +389,6 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "languages",
   "previewLinks",
   "previewUrl",
-  "imageSizes",
   "dashboard",
   "documentLock",
   "translations",
@@ -501,40 +493,6 @@ async function handleGeneralSettingsRequest(
     case "PATCH": {
       return updateGeneralSettings(req);
     }
-    default:
-      return new Response(JSON.stringify({ error: "Method not allowed" }), {
-        status: 405,
-        headers: { "Content-Type": "application/json" },
-      });
-  }
-}
-
-/**
- * Delegate image sizes requests to the named handlers.
- * Handlers manage their own auth + body parsing.
- */
-async function handleImageSizesRequest(
-  req: Request,
-  httpMethod: string,
-  imageId?: string
-): Promise<Response> {
-  switch (httpMethod) {
-    case "GET":
-      return imageId ? getImageSizeById(req, imageId) : listImageSizes(req);
-    case "POST":
-      return createImageSize(req);
-    case "PATCH":
-      if (!imageId)
-        return new Response(JSON.stringify({ error: "ID required" }), {
-          status: 400,
-        });
-      return updateImageSize(req, imageId);
-    case "DELETE":
-      if (!imageId)
-        return new Response(JSON.stringify({ error: "ID required" }), {
-          status: 400,
-        });
-      return deleteImageSize(req, imageId);
     default:
       return new Response(JSON.stringify({ error: "Method not allowed" }), {
         status: 405,
@@ -1716,28 +1674,6 @@ async function serveServiceRequest(
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
   if (service === "generalSettings") {
     return handleGeneralSettingsRequest(req, httpMethod);
-  }
-
-  // ==================== IMAGE SIZES DIRECT DISPATCH ====================
-  if (service === "imageSizes") {
-    // Handle regeneration sub-routes
-    // Regeneration endpoints return "not yet available" until the service
-    // can actually download and reprocess original images from all adapters.
-    if (method === "regenerationStatus" || method === "regenerate") {
-      return Response.json(
-        {
-          data: {
-            pending: 0,
-            total: 0,
-            inProgress: false,
-            message: "Batch regeneration coming soon",
-          },
-        },
-        { status: 200 }
-      );
-    }
-    const imageId = routeParams?.imageId;
-    return handleImageSizesRequest(req, httpMethod, imageId);
   }
 
   // ==================== DASHBOARD DIRECT DISPATCH ====================

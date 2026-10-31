@@ -40,6 +40,7 @@ import { cn } from "@admin/lib/utils";
 import { useCardTier } from "../frame/tier";
 
 import { sizeAxes, type SizeAxis } from "./CardActionsMenu";
+import { settingsIntent } from "./LazyWidgetSettingsSheet";
 import type { PopoverSetting, QuickSetting } from "./quick-setting";
 import type { CardQuickPopoverModel } from "./useCardQuickSetting";
 
@@ -390,6 +391,7 @@ export function CardQuickPopover({
                 onMoreSettings();
               }}
               data-testid="card-quick-more-settings"
+              {...settingsIntent}
             >
               More settings
             </Button>

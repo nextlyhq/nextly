@@ -17,6 +17,19 @@ vi.mock("../../dashboard/dashboard-preferences", () => ({
       if (unreadable.now) return Promise.reject(new Error("preferences down"));
       return Promise.resolve(stored.get(`${userId}:${key}`));
     }
+    // Every key the reader asks for, in one read, as the repository answers.
+    getMany(
+      userId: string,
+      keys: readonly string[]
+    ): Promise<Map<string, string>> {
+      if (unreadable.now) return Promise.reject(new Error("preferences down"));
+      const values = new Map<string, string>();
+      for (const key of keys) {
+        const value = stored.get(`${userId}:${key}`);
+        if (value !== undefined) values.set(key, value);
+      }
+      return Promise.resolve(values);
+    }
   },
 }));
 vi.mock("../../../di/container", () => ({

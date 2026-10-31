@@ -31,7 +31,7 @@ import {
   resolveComponentTableName,
 } from "../../utils/resolve-table-name";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
-import { parseSqlSections } from "../../../../cli/commands/migrate";
+import { parseSqlSections } from "../../migrate/sql-sections";
 import { toMinimalEntities } from "../config-entities";
 import { generateMigration } from "../generate";
 import { writeSnapshot } from "../snapshot-io";

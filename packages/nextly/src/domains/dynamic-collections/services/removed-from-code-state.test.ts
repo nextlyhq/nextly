@@ -17,14 +17,19 @@ import {
 
 describe("removedFromCodeState", () => {
   it("names migrate:create while its tables exist and no migration drops it", () => {
-    expect(removedFromCodeState({ mainTablePresent: true, drops: [] })).toEqual(
-      { state: "not-dropped" }
-    );
+    expect(
+      removedFromCodeState({
+        migrationsRead: true,
+        mainTablePresent: true,
+        drops: [],
+      })
+    ).toEqual({ state: "not-dropped" });
   });
 
   it("names the unapplied file that drops it while its main table exists", () => {
     expect(
       removedFromCodeState({
+        migrationsRead: true,
         mainTablePresent: true,
         drops: [
           { file: "20261027_100000_drop_pages.sql", ledger: "pending" },
@@ -40,6 +45,7 @@ describe("removedFromCodeState", () => {
   it("is half-retired once an applied migration dropped its main table", () => {
     expect(
       removedFromCodeState({
+        migrationsRead: true,
         mainTablePresent: false,
         drops: [{ file: "20261027_100000_drop_pages.sql", ledger: "applied" }],
       })
@@ -51,6 +57,7 @@ describe("removedFromCodeState", () => {
     for (const mainTablePresent of [true, false]) {
       expect(
         removedFromCodeState({
+          migrationsRead: true,
           mainTablePresent,
           drops: [{ file: "a.sql", ledger: "stopped" }],
         })
@@ -59,10 +66,15 @@ describe("removedFromCodeState", () => {
     // The main table gone with no applied migration dropping it, whether or
     // not an unapplied one would.
     expect(
-      removedFromCodeState({ mainTablePresent: false, drops: [] })
+      removedFromCodeState({
+        migrationsRead: true,
+        mainTablePresent: false,
+        drops: [],
+      })
     ).toEqual({ state: "other" });
     expect(
       removedFromCodeState({
+        migrationsRead: true,
         mainTablePresent: false,
         drops: [{ file: "a.sql", ledger: "pending" }],
       })
@@ -70,10 +82,28 @@ describe("removedFromCodeState", () => {
     // A table present again after an applied drop.
     expect(
       removedFromCodeState({
+        migrationsRead: true,
         mainTablePresent: true,
         drops: [{ file: "a.sql", ledger: "applied" }],
       })
     ).toEqual({ state: "other" });
+  });
+});
+
+describe("removedFromCodeState, where the migrations could not be read", () => {
+  it("names no step, rather than one the unread files may contradict", () => {
+    // A server bundle without the migrations folder (a standalone build, a
+    // serverless function) reads none of its files: "no migration drops it"
+    // is then a guess, and `migrate:create` would write a second drop.
+    for (const mainTablePresent of [true, false]) {
+      expect(
+        removedFromCodeState({
+          migrationsRead: false,
+          mainTablePresent,
+          drops: [],
+        })
+      ).toEqual({ state: "other" });
+    }
   });
 });
 
@@ -131,6 +161,34 @@ describe("readRemovedFromCodeStates", () => {
       migration: "20261027_000000_drop_pages.sql",
     });
     expect(states.get("single:banner")).toEqual({ state: "not-dropped" });
+  });
+
+  it("names no step when the migrations folder is missing or not a folder", async () => {
+    const pages = [
+      { kind: "collection" as const, slug: "pages", tableName: "dc_pages" },
+    ];
+    await writeFile(join(dir, "not-a-folder"), "");
+    for (const migrationsDir of [
+      join(dir, "absent"),
+      join(dir, "not-a-folder"),
+    ]) {
+      const states = await readRemovedFromCodeStates({
+        adapter: adapterWith(["dc_pages"]),
+        migrationsDir,
+        entities: pages,
+      });
+      expect(states.get("collection:pages")).toEqual({ state: "other" });
+    }
+  });
+
+  it("still names migrate:create for a folder it reads that drops nothing", async () => {
+    // The control: an empty folder is read, and says no migration drops it.
+    const states = await readRemovedFromCodeStates({
+      adapter: adapterWith(["dc_pages"]),
+      migrationsDir: dir,
+      entities: [{ kind: "collection", slug: "pages", tableName: "dc_pages" }],
+    });
+    expect(states.get("collection:pages")).toEqual({ state: "not-dropped" });
   });
 
   it("reads nothing when no entity is removed", async () => {

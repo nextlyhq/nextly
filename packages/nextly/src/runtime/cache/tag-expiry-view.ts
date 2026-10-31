@@ -37,12 +37,17 @@ interface ViewState {
   lookups: Map<string, TagLookup>;
   /** Tags being asked about now, with the read that will answer them. */
   asking: Map<string, Promise<void>>;
-  /** Tags this process expired itself, on the database's clock as last known. */
+  /**
+   * Tags this process expired itself, on this process's clock: converted only
+   * when compared, so an offset learned later cannot misplace them.
+   */
   own: Map<string, number>;
   /** The database's clock less this process's, as of the last read that told it. */
   offsetMs: number;
   /** When stale answers were last dropped, on this process's clock. */
   sweptAt: number;
+  /** The last time `localNow` gave, so the next is strictly later. */
+  lastLocal: number;
   warned: boolean;
 }
 
@@ -57,6 +62,7 @@ function state(): ViewState {
     own: new Map(),
     offsetMs: 0,
     sweptAt: 0,
+    lastLocal: 0,
     warned: false,
   };
   return globalForView.__nextly_tag_expiry_view;
@@ -83,18 +89,39 @@ function warnOnce(reason: string, error: unknown): void {
 }
 
 /**
- * Drops what can no longer decide anything, at most once a TTL: answers past
- * their TTL, which the next read asks again, and own expiries older than the
- * ledger keeps one, which every entry they could expire is refused for by age.
- * The maps then hold the tags served lately, not every tag ever seen.
+ * This process's clock, strictly increasing: two calls in one millisecond are
+ * still ordered, so an entry stored just after this process's own expiry is
+ * never judged by it. Milliseconds, as `Date.now()`, with a fraction added
+ * where the clock has not moved.
+ */
+export function localNow(): number {
+  const view = state();
+  const now = Date.now();
+  view.lastLocal = now > view.lastLocal ? now : view.lastLocal + 0.001;
+  return view.lastLocal;
+}
+
+/**
+ * Drops what can no longer decide anything, at most once a TTL: answers that
+ * found no expiry, once past their TTL, which the next read asks again;
+ * answers that found one, and own expiries, once older than the ledger keeps
+ * one, which every entry they could expire is refused for by age. An expiry
+ * is kept through a refresh that fails, so a ledger that goes down cannot make
+ * an entry this process knew to be stale look fresh. The maps then hold the
+ * tags served lately and those expired lately, not every tag ever seen.
  */
 function sweep(view: ViewState, now: number): void {
   if (now - view.sweptAt < TAG_LOOKUP_TTL_MS) return;
   view.sweptAt = now;
+  const databaseHorizon = now + view.offsetMs - LEDGER_RETENTION_MS;
   for (const [tag, lookup] of view.lookups) {
-    if (now - lookup.askedAt >= TAG_LOOKUP_TTL_MS) view.lookups.delete(tag);
+    const drop =
+      lookup.expiredAt > 0
+        ? lookup.expiredAt < databaseHorizon
+        : now - lookup.askedAt >= TAG_LOOKUP_TTL_MS;
+    if (drop) view.lookups.delete(tag);
   }
-  const horizon = now + view.offsetMs - LEDGER_RETENTION_MS;
+  const horizon = now - LEDGER_RETENTION_MS;
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
@@ -163,17 +190,18 @@ export async function refreshTagExpiries(
 
 /** When `tag` last expired as far as this process knows, on the database's clock. */
 function expiryOf(view: ViewState, tag: string): number {
+  const own = view.own.get(tag);
   return Math.max(
     view.lookups.get(tag)?.expiredAt ?? 0,
-    view.own.get(tag) ?? 0
+    own === undefined ? 0 : own + view.offsetMs
   );
 }
 
 /**
- * Whether an entry stored at `storedAt` (this process's clock) carrying `tags`
- * must not be served: one of its tags expired at or after it was stored, or it
- * is older than the ledger keeps an expiry, past which a pruned row could no
- * longer say so. Asks nothing; `refreshTagExpiries` first.
+ * Whether an entry begun at `storedAt` (this process's clock) carrying `tags`
+ * must not be served: one of its tags expired after it began, or it is older
+ * than the ledger keeps an expiry, past which a pruned row could no longer say
+ * so. Asks nothing; `refreshTagExpiries` first.
  */
 export function isEntryExpired(
   tags: Iterable<string>,
@@ -183,10 +211,15 @@ export function isEntryExpired(
   const view = state();
   const storedOnDatabaseClock = storedAt + view.offsetMs;
   for (const tag of tags) {
-    const expiredAt = expiryOf(view, tag);
-    // At or after: an entry stored in the same millisecond as the expiry may
-    // hold the old value, and regenerating it once costs one read.
-    if (expiredAt > 0 && expiredAt >= storedOnDatabaseClock) return true;
+    // Another instance's expiry, on the database's clock, has no order with
+    // this process's events: at or after, since an entry begun in the same
+    // millisecond may hold the old value, and regenerating it costs one read.
+    const recorded = view.lookups.get(tag)?.expiredAt ?? 0;
+    if (recorded > 0 && recorded >= storedOnDatabaseClock) return true;
+    // This process's own expiry is ordered with its entries by `localNow`, so
+    // strictly after: an entry begun once the expiry was made is fresh.
+    const own = view.own.get(tag);
+    if (own !== undefined && own > storedAt) return true;
   }
   return false;
 }
@@ -209,7 +242,7 @@ export function latestExpiry(tags: Iterable<string>): number {
  */
 export async function expireTags(tags: readonly string[]): Promise<void> {
   const view = state();
-  const now = Date.now() + view.offsetMs;
+  const now = localNow();
   for (const tag of tags) view.own.set(tag, now);
   try {
     await view.ledger?.record(tags);
