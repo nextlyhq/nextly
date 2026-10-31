@@ -51,6 +51,17 @@ export function placesText(count: number): string {
   return `${count} ${count === 1 ? "place" : "places"}`;
 }
 
+/**
+ * The documents the reader may not open, counted and never named: "And 2
+ * more places you can't open", or on their own, "Used in 1 place you can't
+ * open".
+ */
+function hiddenUsesText(hidden: number, afterOthers: boolean): string {
+  return afterOthers
+    ? `And ${hidden} more ${hidden === 1 ? "place" : "places"} you can't open.`
+    : `Used in ${placesText(hidden)} you can't open.`;
+}
+
 /** How many uses there are in all, the ones not shown included. */
 export function usageTotal(usage: MediaUsage): number {
   return usage.items.length + usage.hidden;
@@ -98,9 +109,7 @@ export function MediaUsageList({
       )}
       {usage.hidden > 0 && (
         <p className="pt-2 text-xs text-muted-foreground">
-          {usage.items.length > 0 ? "And " : "Used in "}
-          {placesText(usage.hidden)}
-          {usage.items.length > 0 ? " more" : ""} you don&apos;t have access to.
+          {hiddenUsesText(usage.hidden, usage.items.length > 0)}
         </p>
       )}
     </div>

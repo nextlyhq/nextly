@@ -241,6 +241,14 @@ function LibraryRow({
     <button
       type="button"
       onClick={onSelect}
+      // The name said with its count, or with why there is none yet.
+      aria-label={
+        count !== undefined
+          ? `${label}, ${count}`
+          : countHint
+            ? `${label}, ${countHint}`
+            : label
+      }
       aria-current={current ? "page" : undefined}
       className={cn(
         "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition-colors cursor-pointer",
@@ -266,9 +274,12 @@ function LibraryRow({
           </span>
         ))}
       {count === undefined && countHint && (
-        <span className="text-xs text-muted-foreground" title={countHint}>
-          <span aria-hidden="true">…</span>
-          <span className="sr-only">{countHint}</span>
+        <span
+          className="text-xs text-muted-foreground"
+          title={countHint}
+          aria-hidden="true"
+        >
+          …
         </span>
       )}
     </button>
@@ -378,6 +389,9 @@ function FolderTreeItem({
             keyboard as by pointer. */}
         <button
           type="button"
+          aria-label={
+            counts ? `${folder.name}, ${counts[folder.id] ?? 0}` : folder.name
+          }
           aria-current={isActive ? "page" : undefined}
           onClick={event => {
             event.stopPropagation();
