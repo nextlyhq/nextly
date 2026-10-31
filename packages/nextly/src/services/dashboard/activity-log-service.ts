@@ -42,6 +42,7 @@ import {
   activityEventOf,
   activityMetadataOf,
   isContentSave,
+  isSettingsChange,
   isSettingsNamespace,
   type ActivityEvent,
 } from "./activity-changes";
@@ -96,11 +97,13 @@ export interface ActivityLogEntry {
   entryId: string | null;
   entryTitle: string | null;
   /**
-   * What the row is about, as it was recorded: a collection's entry, a
-   * Single, or an install-level settings change. NULL on a row written before
-   * the kind was recorded, which is a collection's or a settings change's.
-   * Lets a reader head a Single's row by its label rather than read
-   * `collection` as a collection's slug.
+   * What the row is about: a collection's entry, a Single, or an
+   * install-level settings change. A row written before the kind was recorded
+   * and filed under a settings namespace is a settings change, and says so
+   * (`isSettingsChange`, the rule the feed's runs and events read it by); any
+   * other such row is NULL, which is a collection's. Lets a reader head a
+   * Single's row by its label, and a settings change by what it changed,
+   * rather than read `collection` as a collection's slug.
    */
   subjectKind?: ActivitySubjectKind | null;
   metadata: Record<string, unknown> | null;
@@ -1886,7 +1889,11 @@ export class ActivityLogService extends BaseService {
       // Object#toString for non-primitive driver values.
       entryId: toNullableString(row.entryId),
       entryTitle: headingOf(row, singleLabels),
-      subjectKind: statedKindOf(row) ?? null,
+      // Classified here, by the one rule, so a reader that tells a settings
+      // change from an entry need not know the settings namespaces.
+      subjectKind: isSettingsChange(row)
+        ? "settings"
+        : (statedKindOf(row) ?? null),
       metadata,
       createdAt: instantText(createdAt),
       count: 1,
