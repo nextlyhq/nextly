@@ -20,7 +20,7 @@ import {
 } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { fileAccount, test } from "./support/test";
 import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
@@ -159,6 +159,27 @@ function queriesAfterWrite(sent: readonly Request[]): Request[] {
   return write === -1 ? [] : sent.slice(write + 1).filter(isQuery);
 }
 
+/**
+ * Gives the tests of the group it is called in a further seat of this file's account
+ * (`fileAccount`): an account of their own, with a REST budget of its own.
+ *
+ * The REST limit gives each signed-in user 500 reads a minute, and a test here spends about fifty:
+ * two dashboard loads, and the layout reads around them. On a production server the file's
+ * sixteen tests run in well under a minute, so through one account they spent past 500 by the
+ * last group, and whichever test was running then met a 429 and an admin that could not reach
+ * the server. Each group reads through a seat of its own instead, as a seeder spreads its writes
+ * over further seats, so no account spends more than about 300 of its 500. The first group, the
+ * quick setting at each width, keeps the file's own account, seat 0.
+ */
+function ownSeat(seat: number): void {
+  test.use({
+    storageState: async ({ baseURL }, use, testInfo) => {
+      if (!baseURL) throw new Error("[e2e] No baseURL configured.");
+      await use(await fileAccount(baseURL, testInfo, seat));
+    },
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   await gotoAdmin(page, "/");
   await enoughPosts(page, 4);
@@ -228,47 +249,53 @@ for (const viewport of WIDTHS) {
   });
 }
 
-for (const viewport of WIDTHS) {
-  test(`the quick popover applies a change at once, and Undo puts back the value before it (${viewport.name})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize(viewport);
-    await page.reload();
-    await expect(rows(page)).toHaveCount(3);
-    const sent = watchRequests(page);
+test.describe("the quick popover at each width", () => {
+  ownSeat(1);
 
-    const popover = await openPopover(page);
-    const accent = popover.getByRole("combobox", { name: "Accent" });
-    await expect(accent).toHaveText(/Plain/);
-    await accent.click();
-    await page.getByRole("option", { name: "Bold" }).click();
+  for (const viewport of WIDTHS) {
+    test(`the quick popover applies a change at once, and Undo puts back the value before it (${viewport.name})`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.reload();
+      await expect(rows(page)).toHaveCount(3);
+      const sent = watchRequests(page);
 
-    // Written on the change itself, with the popover still open and the card in view beside it.
-    await expect.poll(() => sent.filter(isSettingsWrite).length).toBe(1);
-    await expect(popover).toBeVisible();
-    await expect(cell(page)).toBeInViewport({ ratio: 0.25 });
-    await expect
-      .poll(async () => (await storedCard(page))?.config)
-      .toEqual({
-        accent: "bold",
-      });
+      const popover = await openPopover(page);
+      const accent = popover.getByRole("combobox", { name: "Accent" });
+      await expect(accent).toHaveText(/Plain/);
+      await accent.click();
+      await page.getByRole("option", { name: "Bold" }).click();
 
-    // Undo writes back what the card had just before the change: no setting of its own.
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
-    await expect
-      .poll(async () => (await storedCard(page))?.config ?? {})
-      .toEqual({});
-    await page.reload();
-    // The header draws a choice of two as a segmented control.
-    await expect(
-      cell(page)
-        .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
-        .getByRole("radio", { name: "Plain" })
-    ).toHaveAttribute("aria-checked", "true");
-  });
-}
+      // Written on the change itself, with the popover still open and the card in view beside it.
+      await expect.poll(() => sent.filter(isSettingsWrite).length).toBe(1);
+      await expect(popover).toBeVisible();
+      await expect(cell(page)).toBeInViewport({ ratio: 0.25 });
+      await expect
+        .poll(async () => (await storedCard(page))?.config)
+        .toEqual({
+          accent: "bold",
+        });
+
+      // Undo writes back what the card had just before the change: no setting of its own.
+      await page.getByRole("button", { name: "Undo", exact: true }).click();
+      await expect
+        .poll(async () => (await storedCard(page))?.config ?? {})
+        .toEqual({});
+      await page.reload();
+      // The header draws a choice of two as a segmented control.
+      await expect(
+        cell(page)
+          .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
+          .getByRole("radio", { name: "Plain" })
+      ).toHaveAttribute("aria-checked", "true");
+    });
+  }
+});
 
 test.describe("the quick popover and the card menu at rest", () => {
+  ownSeat(2);
+
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.reload();
@@ -361,6 +388,8 @@ test.describe("the quick popover and the card menu at rest", () => {
 });
 
 test.describe("the settings sheet", () => {
+  ownSeat(3);
+
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.reload();
