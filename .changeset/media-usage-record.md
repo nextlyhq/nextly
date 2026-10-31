@@ -46,10 +46,15 @@ counts and folder contents from the database.
   media item's rows go with them.
 - `nextly media reindex-usage` rebuilds the record from the stored content. Run it once after
   `nextly migrate`: until then, content written before this release is not in the record, and the
-  counts below say so (`usageRecorded: false`). A new site's record is complete from the start.
+  counts below say so (`usageRecorded: false`). A new site's record is complete from the start. Run it
+  from the project's own folder: from another one, or with a `--config` outside the project, it
+  rebuilds nothing and ends with `MEDIA_REINDEX_OUTSIDE_PROJECT`, as `media orphans --apply` does.
 - `GET /api/media/counts` answers every folder's item count, the items in no folder, and the counts
   of all items, images missing alt text and items nothing uses, in one query.
 - The media list takes `view=missing-alt` or `view=unused`.
+- The media list's and a folder's `type` filter now narrows to the kind each file is shown as:
+  `document` is a PDF, an office file or any text, and `other` is what no kind names. Before, both
+  matched nothing, as each kind was read as the first part of the MIME type.
 - A folder's contents (`GET /api/media/folders/:id/contents` and `/folders/root/contents`) now
   come a page at a time, sorted and filtered in the database: `page`, `limit` (at most 100),
   `search`, `type`, `sortBy` and `sortOrder`, as the media list takes them. The response adds
