@@ -5,6 +5,7 @@ import type {
   ArrayExpression,
   CallExpression,
   Expression,
+  ImportSpecifier,
   Node,
   ObjectExpression,
   ObjectMethod,
@@ -118,8 +119,11 @@ ${ON_LINES.join("\n")}`;
  * CommonJS, to resolve the handlers from the app's own node_modules.
  */
 const REQUIRE_IMPORT = 'import { createRequire } from "node:module";';
-const REQUIRE_DECLARATION = `// Resolves Nextly's cache handlers from this app's node_modules.
-const require = createRequire(import.meta.url);`;
+/** The declaration, calling `createRequire` by the name the file has it under. */
+const requireDeclaration = (createRequireName: string) =>
+  `// Resolves Nextly's cache handlers from this app's node_modules.
+const require = ${createRequireName}(import.meta.url);`;
+const REQUIRE_DECLARATION = requireDeclaration("createRequire");
 
 /**
  * Render a complete next.config.ts file for the selected database.
@@ -927,13 +931,13 @@ export async function patchNextConfig(
 
 /**
  * What Nextly's cache handlers came to in an existing app's config: `added`,
- * already `present`, or left out, with why, the lines to add by hand, and
- * whether the file also needs `require` defined for them.
+ * already `present`, or left out, with why, the lines to add by hand, and the
+ * lines that define `require` for them when the file has none.
  */
 type HandlerOutcome =
   | "added"
   | "present"
-  | { skipped: string; lines: string[]; needsRequire: boolean };
+  | { skipped: string; lines: string[]; requireSetup: string | null };
 
 /**
  * What turning Cache Components on in an existing app's config did.
@@ -953,7 +957,12 @@ export type CacheComponentsPatch =
       handlers: HandlerOutcome;
     }
   | { kind: "unchanged"; file: string; handlers: HandlerOutcome }
-  | { kind: "manual"; file: string; reason: string; esm: boolean };
+  | {
+      kind: "manual";
+      file: string;
+      reason: string;
+      requireSetup: string | null;
+    };
 
 /**
  * The exported config object, when every setting this edits can be read in
@@ -1014,23 +1023,107 @@ function loadsAsModule(file: string, body: Statement[]): boolean {
 }
 
 /**
+ * The name an ES module config imports `createRequire` under from
+ * `node:module`, whatever it renamed it to, or null when it imports none.
+ */
+function createRequireImport(body: Statement[]): string | null {
+  const fromNodeModule = body.flatMap(statement =>
+    statement.type === "ImportDeclaration" &&
+    (statement.source.value === "node:module" ||
+      statement.source.value === "module")
+      ? statement.specifiers
+      : []
+  );
+  const specifier = fromNodeModule.find(
+    item =>
+      item.type === "ImportSpecifier" && importedName(item) === "createRequire"
+  );
+  return specifier?.local.name ?? null;
+}
+
+/** The name an import specifier takes from its module, written plain or quoted. */
+function importedName(specifier: ImportSpecifier): string {
+  const { imported } = specifier;
+  return imported.type === "Identifier" ? imported.name : imported.value;
+}
+
+/** Whether the file binds `require` at its top level, by a declaration or an import. */
+function declaresRequire(body: Statement[]): boolean {
+  return body.some(statement => {
+    if (statement.type === "ImportDeclaration") {
+      return statement.specifiers.some(specifier =>
+        isNamed(specifier.local, "require")
+      );
+    }
+    const declaration =
+      statement.type === "ExportNamedDeclaration"
+        ? statement.declaration
+        : statement;
+    return (
+      declaration?.type === "VariableDeclaration" &&
+      declaration.declarations.some(declarator =>
+        isNamed(declarator.id, "require")
+      )
+    );
+  });
+}
+
+/**
+ * What an ES module config needs at its top for the handlers' `require`:
+ * nothing when it binds `require` already, the declaration alone, calling its
+ * own `createRequire` by its name, when it imports one, and otherwise the
+ * import and the declaration.
+ */
+function requireSetupFor(body: Statement[]): string | null {
+  if (declaresRequire(body)) return null;
+  const imported = createRequireImport(body);
+  return imported
+    ? requireDeclaration(imported)
+    : `${REQUIRE_IMPORT}\n\n${REQUIRE_DECLARATION}`;
+}
+
+/**
  * The edit that gives an ES module config `require`, before the first
  * statement that runs, and before the comments that lead it, such as a
  * `@type` annotation. Imports are hoisted, so one written further down still
  * loads first; the declaration is not, and a `require.resolve` evaluated
  * above it would throw.
  */
-function requireEdit(source: string, body: Statement[]): Edit {
+function requireEdit(source: string, body: Statement[], setup: string): Edit {
   const first = body.find(statement => statement.type !== "ImportDeclaration");
   const at = lineStart(
     source,
     first?.leadingComments?.[0]?.start ?? first?.start ?? 0
   );
-  return {
-    at,
-    remove: 0,
-    text: `${REQUIRE_IMPORT}\n\n${REQUIRE_DECLARATION}\n\n`,
-  };
+  return { at, remove: 0, text: `${setup}\n\n` };
+}
+
+/** Whether `node` is `require.resolve("<specifier>")`. */
+function resolvesTo(node: Node | undefined, specifier: string): boolean {
+  if (node?.type !== "CallExpression") return false;
+  const { callee, arguments: args } = node;
+  const [only] = args;
+  return (
+    callee.type === "MemberExpression" &&
+    isNamed(callee.object, "require") &&
+    isNamed(callee.property, "resolve") &&
+    args.length === 1 &&
+    only?.type === "StringLiteral" &&
+    only.value === specifier
+  );
+}
+
+/** Whether the config's cache settings are Nextly's handlers, as this writes them. */
+function hasNextlysHandlers(object: ObjectExpression): boolean {
+  const handlers = propertyValue(object, "cacheHandlers");
+  const memory = propertyValue(object, "cacheMaxMemorySize");
+  return (
+    resolvesTo(propertyValue(object, "cacheHandler"), "nextly/cache-handler") &&
+    handlers?.type === "ObjectExpression" &&
+    resolvesTo(propertyValue(handlers, "default"), "nextly/cache-handlers") &&
+    memory?.type === "NumericLiteral" &&
+    memory.value === 0
+  );
 }
 
 /** The settings that make a cache of the app's own: a handler for either cache. */
@@ -1058,7 +1151,7 @@ function handlerConflict(object: ObjectExpression): string | null {
   }
   const own = OWN_CACHE_SETTINGS.filter(name => setsValue(object, name));
   if (own.length > 0) {
-    return `it already sets ${own.join(", ")}, a cache of its own, which Nextly does not replace`;
+    return `it has cache handlers of its own (${own.join(", ")}), which were kept`;
   }
   const memory = propertyValue(object, "cacheMaxMemorySize");
   return memory && !(memory.type === "NumericLiteral" && memory.value === 0)
@@ -1078,11 +1171,8 @@ function handlerStep(
   esm: boolean
 ): { add: string[]; edits: Edit[]; outcome: HandlerOutcome } {
   const none = { add: [], edits: [] };
-  const own = OWN_CACHE_SETTINGS.filter(name => setsValue(object, name));
-  const memorySet = propertyValue(object, "cacheMaxMemorySize") !== undefined;
-  if (own.length === OWN_CACHE_SETTINGS.length && memorySet) {
-    return { ...none, outcome: "present" };
-  }
+  if (hasNextlysHandlers(object)) return { ...none, outcome: "present" };
+  const setup = esm ? requireSetupFor(body) : null;
   const conflict = handlerConflict(object);
   if (conflict) {
     return {
@@ -1090,30 +1180,38 @@ function handlerStep(
       outcome: {
         skipped: conflict,
         lines: HANDLER_PROPERTIES,
-        needsRequire: esm,
+        requireSetup: setup,
       },
     };
   }
+  const memorySet = propertyValue(object, "cacheMaxMemorySize") !== undefined;
   // A `cacheMaxMemorySize: 0` the app already has stays as it is.
   const add = HANDLER_PROPERTIES.filter(
     property => !(memorySet && property.startsWith("cacheMaxMemorySize"))
   );
-  if (!esm) return { add, edits: [], outcome: "added" };
-  if (
+  if (setup === null) return { add, edits: [], outcome: "added" };
+  // A `require` used without being bound, or a `createRequire` of the file's
+  // own that is not Node's, would clash with the lines that define them.
+  const clashes =
     referenceCount("require", body) > 0 ||
-    referenceCount("createRequire", body) > 0
-  ) {
+    (createRequireImport(body) === null &&
+      referenceCount("createRequire", body) > 0);
+  if (clashes) {
     return {
       ...none,
       outcome: {
         skipped:
-          "it is an ES module that already names require or createRequire, so the line that defines require for the handlers could clash",
+          "it is an ES module that uses require, or a createRequire not imported from node:module, without binding require, so the lines that define it could clash",
         lines: add,
-        needsRequire: false,
+        requireSetup: setup,
       },
     };
   }
-  return { add, edits: [requireEdit(source, body)], outcome: "added" };
+  return {
+    add,
+    edits: [requireEdit(source, body, setup)],
+    outcome: "added",
+  };
 }
 
 /** The edits that turn Cache Components on in a config, or why it cannot be changed. */
@@ -1178,7 +1276,7 @@ export async function turnOnCacheComponents(
       kind: "manual",
       file,
       reason: "the app has no Next config",
-      esm: loadsAsModule(file, []),
+      requireSetup: loadsAsModule(file, []) ? requireSetupFor([]) : null,
     };
   }
   const body = parseBody(source, file);
@@ -1187,15 +1285,16 @@ export async function turnOnCacheComponents(
       kind: "manual",
       file,
       reason: "it could not be parsed",
-      esm: loadsAsModule(file, []),
+      requireSetup: loadsAsModule(file, []) ? requireSetupFor([]) : null,
     };
   }
   const esm = loadsAsModule(file, body);
+  const requireSetup = esm ? requireSetupFor(body) : null;
   // Read structurally even when the file never names the options: a spread or
   // a wrapper can still set them, and only the parser can say it cannot tell.
   const plan = cacheComponentsPlan(source, file, esm);
   if ("reason" in plan) {
-    return { kind: "manual", file, reason: plan.reason, esm };
+    return { kind: "manual", file, reason: plan.reason, requireSetup };
   }
   if (plan.edits.length === 0) {
     return { kind: "unchanged", file, handlers: plan.handlers };
@@ -1207,7 +1306,7 @@ export async function turnOnCacheComponents(
       kind: "manual",
       file,
       reason: "the edit could not be confirmed",
-      esm,
+      requireSetup,
     };
   }
   await fs.writeFile(path.join(cwd, file), text, "utf-8");
@@ -1232,7 +1331,7 @@ export function cacheComponentsFiles(
     files.skipped.push({
       path: patch.file,
       why: `Cache Components was not turned on: ${patch.reason}. Nextly runs with Cache Components and Partial Prefetching on, with its cache handlers (${CACHE_COMPONENTS_DOCS_URL}); add these to the config object Next.js receives, in place of any value of theirs`,
-      toAdd: linesToAdd(ON_LINES, patch.esm),
+      toAdd: linesToAdd(ON_LINES, patch.requireSetup),
     });
     return files;
   }
@@ -1262,7 +1361,7 @@ export function cacheComponentsFiles(
       why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once (${CACHE_COMPONENTS_DOCS_URL}); to use them, put these in place of the config's own cache settings`,
       toAdd: linesToAdd(
         patch.handlers.lines.map(property => `  ${property},`),
-        patch.handlers.needsRequire
+        patch.handlers.requireSetup
       ),
     });
   }
@@ -1270,13 +1369,13 @@ export function cacheComponentsFiles(
 }
 
 /**
- * The config lines to add by hand. An ES module config also needs `require`
- * defined for the handlers, at the top of the file.
+ * The config lines to add by hand. An ES module config with no `require`
+ * also gets the lines that define it for the handlers, at the top of the file.
  */
-function linesToAdd(lines: string[], needsRequire: boolean): string {
+function linesToAdd(lines: string[], requireSetup: string | null): string {
   const config = lines.join("\n");
-  return needsRequire
-    ? `// At the top of the file:\n${REQUIRE_IMPORT}\n${REQUIRE_DECLARATION}\n\n// In the config object:\n${config}`
+  return requireSetup
+    ? `// At the top of the file:\n${requireSetup.replace("\n\n", "\n")}\n\n// In the config object:\n${config}`
     : config;
 }
 

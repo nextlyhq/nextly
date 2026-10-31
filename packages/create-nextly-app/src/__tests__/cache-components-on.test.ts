@@ -357,7 +357,9 @@ describe("an existing app with a cache of its own", () => {
     expect(text).toMatch(/cacheComponents: true/);
     expect(text).not.toMatch(/nextly\/cache-handler/);
     expect(files.skipped).toHaveLength(1);
-    expect(files.skipped[0]?.why).toMatch(/already sets cacheHandler/);
+    expect(files.skipped[0]?.why).toMatch(
+      /has cache handlers of its own \(cacheHandler\)/
+    );
     expect(files.skipped[0]?.why).toMatch(/in place of the config's own/);
     // An ES module: the lines need `require`, so the report says how to define it.
     expect(files.skipped[0]?.toAdd).toBe(REQUIRE_SETUP + HANDLERS.trimEnd());
@@ -407,19 +409,75 @@ describe("an existing app with a cache of its own", () => {
     }
   );
 
-  it("does not define `require` in an ES module that already names it", async () => {
+  // Under any name it was imported by: only the declaration is added, so the
+  // file never imports `createRequire` twice.
+  it.each([
+    ['import { createRequire } from "node:module";', "createRequire"],
+    [
+      'import { createRequire as makeRequire } from "node:module";',
+      "makeRequire",
+    ],
+  ])(
+    "uses the file's own `createRequire` (%s) to define `require`, and it loads",
+    async (imported, name) => {
+      await write(
+        "next.config.mjs",
+        `${imported}\nconst load = ${name}(import.meta.url);\nexport default { env: { HANDLER: load.resolve("nextly/cache-handler") } };\n`
+      );
+
+      const patch = await turnOnCacheComponents(dir);
+
+      expect(patch).toMatchObject({ kind: "turned-on", handlers: "added" });
+      const text = await read("next.config.mjs");
+      expect(text.match(/from "node:module"/g)).toHaveLength(1);
+      expect(text).toContain(`const require = ${name}(import.meta.url);`);
+      expectNextlyHandlers(await load("next.config.mjs"));
+    }
+  );
+
+  it("adds no definition to an ES module that binds `require` already", async () => {
+    await write(
+      "next.config.mjs",
+      'import { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);\nexport default {};\n'
+    );
+
+    await turnOnCacheComponents(dir);
+
+    const text = await read("next.config.mjs");
+    expect(text.match(/const require/g)).toHaveLength(1);
+    expectNextlyHandlers(await load("next.config.mjs"));
+  });
+
+  it("leaves the handlers out of an ES module that uses `require` without binding it, and prints its setup", async () => {
+    await write(
+      "next.config.mjs",
+      "export default { env: { CJS: String(typeof require) } };\n"
+    );
+
+    const files = cacheComponentsFiles(await turnOnCacheComponents(dir));
+
+    expect(await read("next.config.mjs")).not.toMatch(/nextly\/cache-handler/);
+    expect(files.skipped).toHaveLength(1);
+    expect(files.skipped[0]?.why).toMatch(/uses require/);
+    expect(files.skipped[0]?.toAdd).toBe(REQUIRE_SETUP + HANDLERS.trimEnd());
+  });
+
+  // All three set, to values that are not Nextly's: kept, and said.
+  it("keeps a full cache of the app's own, and says Nextly's lines", async () => {
     const config =
-      'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport default { sassOptions: { implementation: load.resolve("sass") } };\n';
-    await write("next.config.mjs", config);
+      'module.exports = {\n  cacheHandler: require.resolve("./my-cache.js"),\n  cacheMaxMemorySize: 52428800,\n  cacheHandlers: {},\n};\n';
+    await write("next.config.js", config);
 
     const patch = await turnOnCacheComponents(dir);
+    const files = cacheComponentsFiles(patch);
 
-    expect(patch).toMatchObject({
-      kind: "turned-on",
-      turnedOn: ["cacheComponents", "partialPrefetching"],
-      handlers: { skipped: expect.stringMatching(/createRequire/) },
-    });
-    expect(await read("next.config.mjs")).not.toMatch(/nextly\/cache-handler/);
+    expect(patch).toMatchObject({ kind: "turned-on" });
+    expect(await read("next.config.js")).not.toMatch(/nextly\/cache-handler/);
+    expect(files.skipped).toHaveLength(1);
+    expect(files.skipped[0]?.why).toMatch(
+      /has cache handlers of its own \(cacheHandler, cacheHandlers\), which were kept/
+    );
+    expect(files.skipped[0]?.toAdd).toBe(HANDLERS.trimEnd());
   });
 });
 
