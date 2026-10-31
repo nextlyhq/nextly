@@ -1,6 +1,5 @@
 // Dashboard Feature Components
 export { ContentStatsGrid } from "./ContentStatsGrid";
-export { OnboardingChecklist } from "./OnboardingChecklist";
 export { ContentStatusWidget } from "./ContentStatusWidget";
 export { ProjectStatsGrid } from "./ProjectStatsGrid";
 export {
@@ -10,7 +9,6 @@ export {
   ContentStatusSkeleton,
   CollectionQuickLinksSkeleton,
   ProjectStatsSkeleton,
-  OnboardingChecklistSkeleton,
   DashboardPageSkeleton,
 } from "./DashboardSkeleton";
 export { DynamicCollectionNav } from "./DynamicCollectionNav";

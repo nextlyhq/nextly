@@ -299,4 +299,41 @@ describe("useSeedStatus", () => {
     await waitFor(() => expect(result.current.status.kind).toBe("hidden"));
     expect(seedApi.setSkipped).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the offer while a decline is on its way, and after one that failed, with its error", async () => {
+    vi.mocked(seedApi.probe).mockResolvedValue({
+      available: true,
+      template: { slug: "blog", label: "Blog" },
+    });
+    vi.mocked(seedApi.getStatus).mockResolvedValue({
+      completedAt: null,
+      skippedAt: null,
+    });
+    let refuse: (error: Error) => void = () => undefined;
+    vi.mocked(seedApi.setSkipped).mockReturnValue(
+      new Promise<void>((_resolve, reject) => {
+        refuse = reject;
+      })
+    );
+    const onRecorded = vi.fn();
+
+    const { result } = renderHook(() => useSeedStatus(), { wrapper });
+    await waitFor(() => expect(result.current.status.kind).toBe("idle"));
+
+    act(() => {
+      result.current.skip(onRecorded);
+    });
+    // Declining, never declined, until the route answers.
+    await waitFor(() => expect(result.current.status.kind).toBe("declining"));
+
+    act(() => refuse(new Error("Decline failed (500)")));
+    await waitFor(() =>
+      expect(result.current.status).toEqual({
+        kind: "error",
+        message: "Decline failed (500)",
+        failed: "decline",
+      })
+    );
+    expect(onRecorded).not.toHaveBeenCalled();
+  });
 });
