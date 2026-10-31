@@ -36,7 +36,7 @@ import type {
 import type { CellSlotLookup } from "./archetypes/types";
 import { DeclaredComponent, useComponentDraw } from "./declared-component";
 import { DREW_NOTHING, missingComponentMessage } from "./draw-failures";
-import { preloadWidgetSettingsSheet } from "./edit/LazyWidgetSettingsSheet";
+import { preloadWidgetSettingsSheet } from "./edit/settings-sheet-code";
 import type { CardState } from "./frame/card-state";
 import { listDensityOf } from "./frame/list-rows";
 import type { CardEmptyContent, SkeletonShape } from "./frame/states";

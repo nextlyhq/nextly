@@ -61,7 +61,7 @@ import {
 } from "react";
 
 import { Link } from "@admin/components/ui/link";
-import { isDevelopmentRuntime } from "@admin/lib/forms/label-landing";
+import { isDevelopmentRuntime } from "@admin/lib/development-runtime";
 import { cn } from "@admin/lib/utils";
 
 import {

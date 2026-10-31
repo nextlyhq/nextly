@@ -34,7 +34,7 @@ import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import { AxisSection, sizeAxes } from "./CardActionsMenu";
-import { settingsIntent } from "./LazyWidgetSettingsSheet";
+import { settingsIntent } from "./settings-sheet-code";
 
 export interface CardMenuProps {
   title: string;
