@@ -48,6 +48,13 @@ export interface RetentionRunnerDeps {
   /** Injectable so tests can move time without sleeping. */
   now?: () => Date;
   logger?: Logger;
+  /**
+   * Whether the calling flow is inside a transaction that has not finished.
+   * A pass runs its own statements on the pool, outside that transaction and
+   * blind to its writes, so none is offered then: the turn waits for a write
+   * made outside one, or for the scheduled drain.
+   */
+  transactionOpen?: () => boolean;
 }
 
 export class RetentionRunner {
@@ -71,8 +78,20 @@ export class RetentionRunner {
    * each is attempted independently.
    */
   async maybeRun(maxBatches?: number): Promise<void> {
+    if (this.transactionOpen()) return;
     for (const pass of this.deps.passes) {
       await this.runOne(pass, maxBatches);
+    }
+  }
+
+  /** Whether a transaction is open in this flow; a check that fails counts as open. */
+  private transactionOpen(): boolean {
+    try {
+      return this.deps.transactionOpen?.() ?? false;
+    } catch {
+      // Skipping one offer costs a turn's delay; running inside a transaction
+      // it cannot see could escape it.
+      return true;
     }
   }
 
