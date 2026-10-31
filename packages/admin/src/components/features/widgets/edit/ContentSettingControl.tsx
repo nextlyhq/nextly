@@ -258,9 +258,9 @@ function FilterControl({
   setting: Extract<ContentSetting, { type: "filter" }>;
   fields: readonly Field[];
 }) {
-  // A chip begun and not finished (a field chosen, its value not yet given) writes nothing, so
-  // Done would keep the card without it while the panel shows it: refused instead, until it is
-  // finished or removed. Read through a ref, since the rule is asked when the form is checked.
+  // A row begun and not finished (added and left blank, or a field chosen and its value not yet
+  // given) writes nothing, so Done would keep the card without it while the panel shows it:
+  // refused instead, until it is finished or removed. Read through a ref, since the rule is asked when the form is checked.
   const unfinished = useRef(false);
   const { field, fieldState } = useController({
     name: setting.name,
@@ -278,9 +278,8 @@ function FilterControl({
   const [conditions, setConditions] = useState<(ConditionValue | undefined)[]>(
     () => whereToConditions(field.value, typesOf(fields)) ?? []
   );
-  unfinished.current = conditions.some(
-    condition => condition !== undefined && !isComplete(condition)
-  );
+  // Every row not yet complete, a row added and left blank included: each writes nothing.
+  unfinished.current = conditions.some(condition => !isComplete(condition));
   // The chip open for editing, by its place in the list, or none.
   const [editing, setEditing] = useState<number | undefined>(undefined);
   // What the chips last wrote, so a change made elsewhere -- a reset, another collection, the
@@ -311,6 +310,9 @@ function FilterControl({
     <div
       role="group"
       aria-labelledby={labelId}
+      // Refused, the group says so and can take focus, so the panel can bring the reader to it.
+      aria-invalid={fieldState.error === undefined ? undefined : true}
+      tabIndex={fieldState.error === undefined ? undefined : -1}
       className="flex flex-col gap-1.5"
     >
       <span id={labelId} className="text-sm font-medium">

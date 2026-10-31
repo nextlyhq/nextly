@@ -698,12 +698,14 @@ function PanelSection({
   label,
   saving,
   onReset,
+  advanced,
   children,
 }: {
   section: SettingSection;
   label: string;
   saving: boolean;
   onReset: () => void;
+  advanced: { open: boolean; onOpenChange: (open: boolean) => void };
   children: ReactNode;
 }) {
   const id = useId();
@@ -716,7 +718,11 @@ function PanelSection({
     );
   }
   return (
-    <Collapsible asChild>
+    <Collapsible
+      asChild
+      open={advanced.open}
+      onOpenChange={advanced.onOpenChange}
+    >
       <section aria-labelledby={id} className="flex flex-col gap-4">
         <CollapsibleTrigger asChild>
           <Button
@@ -812,6 +818,41 @@ function panelFocus(
  * refused staging named, and emptying its filters. One reading of the change (`keepable`) for
  * Done and for staging, so a change Done would refuse is never staged.
  */
+/**
+ * Showing what a check refused: Advanced, folded until the reader opens it, opens when a setting
+ * of its own is among those refused, and focus then lands on the first refused field, once the
+ * section has drawn it.
+ */
+function useRevealRefused(
+  settings: readonly AnyWidgetSetting[],
+  fieldsRef: RefObject<HTMLFieldSetElement | null>
+) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    if (asked === 0) return undefined;
+    const timer = window.setTimeout(() => {
+      fieldsRef.current
+        ?.querySelector<HTMLElement>("[aria-invalid='true']")
+        ?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [asked, fieldsRef]);
+  /** Reveal the settings named `refused`, by their names. */
+  const reveal = useCallback(
+    (refused: readonly string[]) => {
+      const inAdvanced = settings.some(
+        setting =>
+          refused.includes(setting.name) && sectionOf(setting) === "advanced"
+      );
+      if (inAdvanced) setAdvancedOpen(true);
+      setAsked(count => count + 1);
+    },
+    [settings]
+  );
+  return { advancedOpen, setAdvancedOpen, reveal };
+}
+
 function usePanelKeeping(args: {
   settings: readonly AnyWidgetSetting[];
   config: Record<string, unknown> | undefined;
@@ -820,8 +861,11 @@ function usePanelKeeping(args: {
   submit: (kept: PanelKept) => Promise<boolean>;
   holdsChanges: boolean;
   fieldsRef: RefObject<HTMLFieldSetElement | null>;
+  /** Show the settings a check refused, by name (`useRevealRefused`). */
+  reveal: (refused: readonly string[]) => void;
 }) {
   const { settings, config, form, own, submit, holdsChanges, fieldsRef } = args;
+  const { reveal } = args;
   // Set by a refused staging, and cleared by the next one.
   const refused = useRef(false);
 
@@ -835,9 +879,13 @@ function usePanelKeeping(args: {
         type: "maxLength",
         message: overlongMessage(overlong.maxLength),
       });
+      reveal([overlong.name]);
       return undefined;
     }
-    if (own.check() !== undefined) return undefined;
+    if (own.check() !== undefined) {
+      reveal([]);
+      return undefined;
+    }
     return {
       config: toStoredConfig(settings, values, config),
       ownTitle: own.ownTitle.trim(),
@@ -858,6 +906,7 @@ function usePanelKeeping(args: {
     refused.current = false;
     if (!holdsChanges) return undefined;
     const valid = await form.trigger(undefined, { shouldFocus: true });
+    if (!valid) reveal(Object.keys(form.formState.errors));
     const kept = valid ? keepable(form.getValues()) : undefined;
     if (kept !== undefined) return kept;
     refused.current = true;
@@ -873,11 +922,14 @@ function usePanelKeeping(args: {
       ?.focus();
   };
 
-  /** Every Filter setting emptied, as the reader's own change, so Done keeps it. */
+  /**
+   * Every Filter setting emptied, as the reader's own change, so Done keeps it: to no conditions
+   * rather than to unset, so a filter the widget sets by default is cleared too.
+   */
   const clearFilters = () => {
     for (const setting of settings) {
       if (setting.type === "filter") {
-        form.setValue(setting.name, "", { shouldDirty: true });
+        form.setValue(setting.name, {}, { shouldDirty: true });
       }
     }
   };
@@ -893,7 +945,17 @@ function usePanelKeeping(args: {
     }
     return staged === undefined ? true : submit(staged);
   };
-  return { done, stage, focusRefused, clearFilters, saveChecked };
+  /** Done's refusal by the form's own rules: the refused settings shown, by name. */
+  const refusedOnDone = (errors: Record<string, unknown>) =>
+    reveal(Object.keys(errors));
+  return {
+    done,
+    refusedOnDone,
+    stage,
+    focusRefused,
+    clearFilters,
+    saveChecked,
+  };
 }
 
 /**
@@ -947,6 +1009,7 @@ function PanelSections({
   resetSection,
   own,
   automatic,
+  advanced,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
@@ -956,6 +1019,8 @@ function PanelSections({
   resetSection: (section: SettingSection) => void;
   own: ReturnType<typeof useOwnTitle>;
   automatic: string;
+  /** Whether Advanced is unfolded, held by the panel so a refusal inside it can unfold it. */
+  advanced: { open: boolean; onOpenChange: (open: boolean) => void };
 }) {
   return (
     <>
@@ -972,6 +1037,7 @@ function PanelSections({
             section={section}
             label={label}
             saving={saving}
+            advanced={advanced}
             onReset={() => {
               resetSection(section);
               if (isDisplay) own.setOwnTitle("");
@@ -1060,6 +1126,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
   // Another card's settings asked for while this panel holds a change: what to open once the
   // reader has answered this panel's prompt.
   const [leaving, setLeaving] = useState<(() => void) | undefined>(undefined);
+  const refusal = useRevealRefused(settings, fieldsRef);
   const keeping = usePanelKeeping({
     settings,
     config,
@@ -1068,6 +1135,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
     submit,
     holdsChanges,
     fieldsRef,
+    reveal: refusal.reveal,
   });
   useOnePanelOpen(props.placementId, open, holdsChanges, {
     close: () => changeOpen(false),
@@ -1119,7 +1187,10 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
               // nothing back, so the result is voided deliberately rather than
               // handed to an attribute that would ignore it silently.
               onSubmit={event => {
-                void form.handleSubmit(keeping.done)(event);
+                void form.handleSubmit(
+                  keeping.done,
+                  keeping.refusedOnDone
+                )(event);
               }}
               className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4"
             >
@@ -1137,6 +1208,10 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
                   {...{ settings, sources, saving, resetNotices, resetSection }}
                   {...{ own, automatic }}
                   widget={props.widget}
+                  advanced={{
+                    open: refusal.advancedOpen,
+                    onOpenChange: refusal.setAdvancedOpen,
+                  }}
                 />
               </fieldset>
               <PanelActions

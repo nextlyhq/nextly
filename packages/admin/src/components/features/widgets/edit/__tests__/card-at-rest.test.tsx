@@ -426,4 +426,41 @@ describe("Settings for a card whose widget declares none", () => {
     const panel = await screen.findByRole("dialog", { name: "Plain settings" });
     expect(within(panel).getByLabelText("Title")).toBeInTheDocument();
   });
+
+  it("opens the panel straight from Settings where there is no popover, and hands focus back to the menu", async () => {
+    // A card of one size and no settings has no popover: Settings opens its panel itself.
+    const fixed = { w: 4, h: 3 };
+    const branded = branding();
+    mockBranding = {
+      ...branded,
+      widgets: [
+        ...(branded.widgets ?? []),
+        {
+          id: "core/fixed",
+          title: "Fixed",
+          archetype: "custom",
+          size: { default: fixed, min: fixed, max: fixed },
+          component: "core#AtRestBody",
+        },
+      ],
+    } as AdminBranding;
+    layoutResponse = {
+      ...layout(),
+      placements: [
+        ...layout().placements,
+        { id: "p3", widgetId: "core/fixed", ...fixed, removed: false },
+      ],
+    };
+    renderGrid();
+    const user = userEvent.setup();
+    const menu = await openMenu(user, "Fixed");
+    await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+    const panel = await screen.findByRole("dialog", { name: "Fixed settings" });
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Card menu for Fixed" })
+      ).toHaveFocus()
+    );
+  });
 });

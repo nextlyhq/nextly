@@ -14,7 +14,10 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PanelKept } from "../panel-values";
-import { requestSettingsPanel } from "../settings-panel-registry";
+import {
+  requestSettingsPanel,
+  stagePendingPanels,
+} from "../settings-panel-registry";
 import { SettingsPanel } from "../SettingsPanel";
 
 const sources: PublishedContentSource[] = [
@@ -189,6 +192,59 @@ describe("a change made to the card behind the open panel", () => {
   });
 });
 
+describe("a refused setting inside folded Advanced", () => {
+  // A note kept under Advanced, longer than its bound: Done refuses it.
+  const ADVANCED_NOTE: AnyWidgetSetting[] = [
+    { name: "collection", type: "collection", label: "Collection" },
+    {
+      name: "aside",
+      type: "textarea",
+      label: "Aside",
+      maxLength: 5,
+      section: "advanced",
+    },
+  ];
+
+  it("opens Advanced on Done and takes focus on the refused field", async () => {
+    const { onDone } = panel(
+      { collection: "posts", aside: "too long" },
+      ADVANCED_NOTE
+    );
+    const advanced = screen.getByRole("button", { name: "Advanced" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Advanced" })).toHaveAttribute(
+        "aria-expanded",
+        "true"
+      )
+    );
+    const aside = await screen.findByRole("textbox", { name: /Aside/ });
+    await waitFor(() => expect(aside).toHaveFocus());
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("opens Advanced when the dashboard's Save stages a refused change", async () => {
+    panel({ collection: "posts", aside: "too long" }, ADVANCED_NOTE);
+    // A change, so there is something to stage.
+    await userEvent.type(screen.getByLabelText("Title"), "Mine");
+    let staged: Awaited<ReturnType<typeof stagePendingPanels>> | undefined;
+    await act(async () => {
+      staged = await stagePendingPanels();
+    });
+    expect(staged).toBe("invalid");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Advanced" })).toHaveAttribute(
+        "aria-expanded",
+        "true"
+      )
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: /Aside/ })).toHaveFocus()
+    );
+  });
+});
+
 describe("the card's own title", () => {
   it("is kept on Done, trimmed, beside the settings", async () => {
     const { onDone } = panel({ collection: "posts" });
@@ -274,6 +330,16 @@ describe("the panel's filter chips", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
+  });
+
+  it("refuses a filter row added and left blank, as it refuses one half built", async () => {
+    const { onDone } = panel({ collection: "posts" });
+    await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(
+      await screen.findByText("Finish this filter, or remove it.")
+    ).toBeTruthy();
+    expect(onDone).not.toHaveBeenCalled();
   });
 
   it("removes one chip alone with its ✕", async () => {

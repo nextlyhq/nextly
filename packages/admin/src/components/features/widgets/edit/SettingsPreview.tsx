@@ -34,14 +34,18 @@ import { useSettingsPreview, type ShownAnswer } from "./useSettingsPreview";
 /** What the preview says while the panel's filters match nothing. */
 export const NO_FILTER_MATCH = "No entries match these filters";
 
-/** Whether any Filter setting in `draft` holds a condition. */
+/**
+ * Whether any Filter setting holds a condition in `settings`: the settings the preview's card is
+ * drawn with (`settingsAsAsked`), so a default filter counts as the card reads by it, though the
+ * stored settings leave a default out.
+ */
 function filtersApplied(
   widget: DashboardWidget,
-  draft: Record<string, unknown>
+  settings: Record<string, unknown>
 ): boolean {
   return (widget.settings ?? []).some(setting => {
     if (setting.type !== "filter") return false;
-    const value = draft[setting.name];
+    const value = settings[setting.name];
     return (
       typeof value === "object" &&
       value !== null &&
@@ -193,7 +197,8 @@ export function SettingsPreview(props: {
   const cardRef = useRef<HTMLDivElement>(null);
   const drawnState = useDrawnState(cardRef);
   const noMatch =
-    filtersApplied(props.widget, props.draft) && drawnState === "empty";
+    filtersApplied(props.widget, preview.placement.settings) &&
+    drawnState === "empty";
 
   return (
     <section

@@ -153,6 +153,39 @@ describe("the preview while the panel's filters match nothing", () => {
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 
+  it("says so too for a filter its widget sets by default, which the stored settings leave out", async () => {
+    // Stored settings hold only what departs from a default, so a default filter is absent from
+    // them while the card still reads by it.
+    const filteredByDefault: DashboardWidget = {
+      ...WIDGET,
+      settings: [
+        { name: "collection", type: "collection", label: "Collection" },
+        {
+          name: "where",
+          type: "filter",
+          label: "Filter",
+          of: "collection",
+          defaultValue: { title: { equals: "nothing" } },
+        },
+      ],
+    };
+    render(
+      <SettingsPreview
+        widget={filteredByDefault}
+        placementId="p1"
+        stored={{ collection: "posts" }}
+        draft={{ collection: "posts" }}
+        ownTitle=""
+        shown={{ slot: NONE, updatedAt: null, isFetching: false }}
+        size={{ w: 6, h: 4 }}
+        cardWidth={600}
+        onClearFilters={() => {}}
+      />,
+      { wrapper }
+    );
+    expect(await screen.findByText(NO_FILTER_MATCH)).toBeTruthy();
+  });
+
   it("leaves a card empty for another reason to say so in its own words", async () => {
     // The control: no filter in the panel, and the card's own answer is empty.
     const { box } = preview({ w: 6, cardWidth: 600, slot: NONE });

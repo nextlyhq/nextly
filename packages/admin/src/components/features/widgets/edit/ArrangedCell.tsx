@@ -285,6 +285,10 @@ function useCardControls(
     quick,
     popover,
     openSettings,
+    // Where focus goes back to as the panel closes: the control the popover was opened from,
+    // when the panel was reached through it, else the card's menu button, which opens the
+    // panel itself on a card with no popover.
+    panelReturnFocusTo: () => popover.returnFocusTo() ?? menus.button.current,
     customiseMenuRef: menus.customise,
     // The menu is the one control a card's header holds at rest: its Remove is the dismissal.
     header: restingMenuFor(props, widget, {
@@ -714,7 +718,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
             open={sheet.settingsOpen}
             onOpenChange={sheet.changeSettingsOpen}
             focusFirstField={sheet.focusFirstField}
-            returnFocusTo={controls.popover.returnFocusTo}
+            returnFocusTo={controls.panelReturnFocusTo}
           />
         </Suspense>
       ) : null}
