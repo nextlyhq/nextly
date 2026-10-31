@@ -602,13 +602,10 @@ function appendProperties(
 ): Edit[] {
   const open = (object.start ?? 0) + 1;
   const close = (object.end ?? 0) - 1;
-  const last = object.properties.at(-1);
   if (!spansLines(source, open, close)) {
-    const text = properties("", false).join(", ");
-    return last
-      ? [{ at: last.end ?? 0, remove: 0, text: `, ${text}` }]
-      : [{ at: open, remove: close - open, text: ` ${text} ` }];
+    return [appendOnTheSameLine(object, properties("", false).join(", "))];
   }
+  const last = object.properties.at(-1);
   const indent = last
     ? indentAt(source, last.start ?? 0)
     : `${indentAt(source, close)}  `;
@@ -621,6 +618,15 @@ function appendProperties(
     ? [{ at: last.end ?? 0, remove: 0, text: "," }]
     : [];
   return [...comma, beforeClosingBrace(source, close, lines)];
+}
+
+/** Properties added to an object written on one line, as `{ a: 1, b: 2 }`. */
+function appendOnTheSameLine(object: ObjectExpression, text: string): Edit {
+  const last = object.properties.at(-1);
+  const open = (object.start ?? 0) + 1;
+  return last
+    ? { at: last.end ?? 0, remove: 0, text: `, ${text}` }
+    : { at: open, remove: (object.end ?? 0) - 1 - open, text: ` ${text} ` };
 }
 
 /** Text put before an object's closing brace: on the line above it when the brace has a line of its own. */
@@ -1003,23 +1009,24 @@ function loadsAsModule(file: string, body: Statement[]): boolean {
   );
 }
 
-/** The edit that gives an ES module config `require`, after its last import. */
-function requireEdit(body: Statement[]): Edit {
-  const imports = body.filter(
-    statement => statement.type === "ImportDeclaration"
+/**
+ * The edit that gives an ES module config `require`, before the first
+ * statement that runs, and before the comments that lead it, such as a
+ * `@type` annotation. Imports are hoisted, so one written further down still
+ * loads first; the declaration is not, and a `require.resolve` evaluated
+ * above it would throw.
+ */
+function requireEdit(source: string, body: Statement[]): Edit {
+  const first = body.find(statement => statement.type !== "ImportDeclaration");
+  const at = lineStart(
+    source,
+    first?.leadingComments?.[0]?.start ?? first?.start ?? 0
   );
-  const last = imports.at(-1);
-  return last
-    ? {
-        at: last.end ?? 0,
-        remove: 0,
-        text: `\n${REQUIRE_IMPORT}\n\n${REQUIRE_DECLARATION}`,
-      }
-    : {
-        at: 0,
-        remove: 0,
-        text: `${REQUIRE_IMPORT}\n\n${REQUIRE_DECLARATION}\n\n`,
-      };
+  return {
+    at,
+    remove: 0,
+    text: `${REQUIRE_IMPORT}\n\n${REQUIRE_DECLARATION}\n\n`,
+  };
 }
 
 /**
@@ -1029,6 +1036,7 @@ function requireEdit(body: Statement[]): Edit {
  * replace.
  */
 function handlerStep(
+  source: string,
   object: ObjectExpression,
   body: Statement[],
   esm: boolean
@@ -1063,7 +1071,7 @@ function handlerStep(
   }
   return {
     add: HANDLER_PROPERTIES,
-    edits: [requireEdit(body)],
+    edits: [requireEdit(source, body)],
     outcome: "added",
   };
 }
@@ -1080,22 +1088,33 @@ function cacheComponentsPlan(
   if (!body) return { reason: "it could not be parsed" };
   const object = cacheComponentsObject(body);
   if (typeof object === "string") return { reason: object };
-  const edits: Edit[] = [];
-  const add: string[] = [];
-  const turnedOn: string[] = [];
+  const options = optionsPlan(object);
+  if ("reason" in options) return options;
+  const handlers = handlerStep(source, object, body, esm);
+  const add = [...options.add, ...handlers.add];
+  const edits = [...options.flips, ...handlers.edits];
+  if (add.length > 0)
+    edits.push(...appendProperties(source, object, () => add));
+  return { edits, turnedOn: options.turnedOn, handlers: handlers.outcome };
+}
+
+/** How to turn both options on: the values to flip, the properties to add, and which options change. */
+function optionsPlan(
+  object: ObjectExpression
+): { flips: Edit[]; add: string[]; turnedOn: string[] } | { reason: string } {
+  const plan = {
+    flips: [] as Edit[],
+    add: [] as string[],
+    turnedOn: [] as string[],
+  };
   for (const option of ON_OPTIONS) {
     const step = optionStep(object, option);
     if (typeof step === "string") return { reason: step };
-    if (step.flip) edits.push(step.flip);
-    if (step.add) add.push(step.add);
-    if (step.flip || step.add) turnedOn.push(option);
+    if (step.flip) plan.flips.push(step.flip);
+    if (step.add) plan.add.push(step.add);
+    if (step.flip || step.add) plan.turnedOn.push(option);
   }
-  const handlers = handlerStep(object, body, esm);
-  edits.push(...handlers.edits);
-  add.push(...handlers.add);
-  if (add.length > 0)
-    edits.push(...appendProperties(source, object, () => add));
-  return { edits, turnedOn, handlers: handlers.outcome };
+  return plan;
 }
 
 /**

@@ -258,7 +258,7 @@ describe("an existing app with an option off or missing", () => {
     expectNextlyHandlers(config);
   });
 
-  it("gives an ES module config `require` after its imports, and it loads", async () => {
+  it("gives an ES module config `require` before the config, and it loads", async () => {
     await write(
       "next.config.mjs",
       'import path from "node:path";\n\nexport default {\n  basePath: path.posix.join("/", "site"),\n  cacheComponents: false,\n};\n'
@@ -269,13 +269,33 @@ describe("an existing app with an option off or missing", () => {
     expect(result).toMatchObject({ kind: "turned-on", handlers: "added" });
     const text = await read("next.config.mjs");
     expect(text).toMatch(
-      /^import path from "node:path";\nimport \{ createRequire \} from "node:module";\n\n\/\/ .*\nconst require = createRequire\(import\.meta\.url\);\n\nexport default \{/
+      /^import path from "node:path";\n\nimport \{ createRequire \} from "node:module";\n\n\/\/ .*\nconst require = createRequire\(import\.meta\.url\);\n\nexport default \{/
     );
     const config = await load("next.config.mjs");
     expect(config.basePath).toBe("/site");
     expect(config.cacheComponents).toBe(true);
     expect(config.partialPrefetching).toBe(true);
     expectNextlyHandlers(config);
+  });
+
+  // Imports are hoisted and the declaration is not: placed after an import
+  // written below the config, `require.resolve` would run before it exists.
+  it("defines `require` above the config when an import comes after it, keeping the config's annotation", async () => {
+    await write(
+      "next.config.mjs",
+      '/** @type {import("next").NextConfig} */\nconst nextConfig = { cacheComponents: true };\n\nexport default nextConfig;\n\nimport "node:path";\n'
+    );
+
+    await turnOnCacheComponents(dir);
+
+    // Loaded first: placed wrongly, this is what throws.
+    const config = await load("next.config.mjs");
+    expect(config.partialPrefetching).toBe(true);
+    expectNextlyHandlers(config);
+    const text = await read("next.config.mjs");
+    expect(text).toMatch(
+      /^import \{ createRequire \} from "node:module";\n\n\/\/ .*\nconst require = createRequire\(import\.meta\.url\);\n\n\/\*\* @type \{import\("next"\)\.NextConfig\} \*\/\nconst nextConfig = \{/
+    );
   });
 
   it("says what it changed, why, and where it is explained", async () => {
