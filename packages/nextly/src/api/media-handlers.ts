@@ -50,6 +50,7 @@
  * - GET    /api/media/folders/root/contents  - Get root folder contents
  * - GET    /api/media/counts                 - Every folder's and view's item count
  * - GET    /api/media/:id/usage              - The documents using a media item
+ * - POST   /api/media/:id/replace            - Replace an item's file, keeping the item
  * - POST   /api/media/deletions              - Delete items, undoable for 10 s
  * - POST   /api/media/deletions/undo         - Bring back items inside the window
  *
@@ -160,6 +161,7 @@ const MEDIA_ACTION_BY_ROUTE: Partial<
   "upload-media": "create",
   "create-folder": "create",
   "update-media": "update",
+  "replace-media": "update",
   "move-media": "update",
   "update-folder": "update",
   "delete-media": "delete",
@@ -314,6 +316,7 @@ interface ParsedMediaRoute {
     | "get-root-contents"
     | "media-counts"
     | "media-usage"
+    | "replace-media"
     | "delete-media-later"
     | "undo-delete-media"
     | "not-found";
@@ -399,6 +402,12 @@ function parseMediaRoute(
     return { type: "not-found" };
   }
 
+  if (segments.length === 2 && segments[1] === "replace") {
+    if (method === "POST")
+      return { type: "replace-media", mediaId: segments[0] };
+    return { type: "not-found" };
+  }
+
   if (segments.length === 2 && segments[1] === "move") {
     if (method === "PATCH") return { type: "move-media", mediaId: segments[0] };
     return { type: "not-found" };
@@ -478,20 +487,17 @@ async function handleListMedia(request: Request): Promise<Response> {
   });
 }
 
-async function handleUploadMedia(
-  request: Request,
-  authUserId: string,
-  actor?: RequestActor
-): Promise<Response> {
-  const mediaService = await getMediaService();
-  const formData = await request.formData();
+/** The file a request sends as `file`, checked against the upload schema. */
+async function uploadedFile(
+  formData: FormData,
+  uploadedBy: string
+): Promise<{
+  buffer: Buffer;
+  filename: string;
+  mimeType: string;
+  size: number;
+}> {
   const file = formData.get("file") as File | null;
-  const folderId = formData.get("folderId") as string | null;
-
-  // The uploader is the authenticated caller, resolved from the session/API
-  // key — never a client-supplied `uploadedBy`, which could name anyone.
-  const uploadedByEnsured = authUserId;
-
   if (!file) {
     throw NextlyError.validation({
       errors: [
@@ -509,7 +515,7 @@ async function handleUploadMedia(
     filename: file.name,
     mimeType: resolveClaimedMimeType(file.name, file.type, buffer),
     size: file.size,
-    uploadedBy: uploadedByEnsured,
+    uploadedBy,
   };
 
   try {
@@ -518,27 +524,59 @@ async function handleUploadMedia(
     if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
     throw err;
   }
+  // The type the schema ACCEPTED, not a second resolution of the same
+  // question: validating one value and storing another means the record can
+  // carry a type nothing checked.
+  return {
+    buffer,
+    filename: file.name,
+    mimeType: input.mimeType,
+    size: file.size,
+  };
+}
 
-  const context = createAuthenticatedContext(uploadedByEnsured);
+async function handleUploadMedia(
+  request: Request,
+  authUserId: string,
+  actor?: RequestActor
+): Promise<Response> {
+  const mediaService = await getMediaService();
+  const formData = await request.formData();
+  const folderId = formData.get("folderId") as string | null;
+
+  // The uploader is the authenticated caller, resolved from the session/API
+  // key — never a client-supplied `uploadedBy`, which could name anyone.
+  const file = await uploadedFile(formData, authUserId);
+  const context = createAuthenticatedContext(authUserId);
 
   const mediaFile = await mediaService.upload(
-    {
-      buffer,
-      filename: file.name,
-      // The same resolution the schema was given above. Validating one value
-      // and storing another means the record can carry a type nothing checked.
-      // The value the schema ACCEPTED, not a second resolution of the same
-      // question. Two calls can diverge under any later edit, and the one that
-      // reaches storage would be the one nothing checked.
-      mimeType: input.mimeType,
-      size: file.size,
-      folderId: folderId || undefined,
-    },
+    { ...file, folderId: folderId || undefined },
     context,
     actor
   );
 
   return respondMutation("Media uploaded.", mediaFile, { status: 201 });
+}
+
+/**
+ * Replace an item's file, keeping the item, with the file the request
+ * sends, checked as an upload's is.
+ */
+async function handleReplaceMedia(
+  request: Request,
+  mediaId: string,
+  authUserId: string,
+  actor?: RequestActor
+): Promise<Response> {
+  const mediaService = await getMediaService();
+  const file = await uploadedFile(await request.formData(), authUserId);
+  const mediaFile = await mediaService.replaceFile(
+    mediaId,
+    file,
+    createAuthenticatedContext(authUserId),
+    actor
+  );
+  return respondMutation("Media file replaced.", mediaFile);
 }
 
 async function handleGetMedia(mediaId: string): Promise<Response> {
@@ -1027,6 +1065,14 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "create-folder":
             response = await handleCreateFolder(request, gate.authUserId!);
+            break;
+          case "replace-media":
+            response = await handleReplaceMedia(
+              request,
+              route.mediaId!,
+              gate.authUserId!,
+              gate.actor
+            );
             break;
           case "delete-media-later":
             response = await handleDeleteMediaLater(request, gate.actor);
