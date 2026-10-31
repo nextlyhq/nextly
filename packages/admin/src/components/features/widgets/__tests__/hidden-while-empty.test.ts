@@ -44,7 +44,6 @@ function answer(
     defaultPlacements: [],
     version: 0,
     source: "default",
-    // No row: the reader has not arranged anything, as the server reads it.
     arranged: false,
     scope: "tok",
     audience: "aud",

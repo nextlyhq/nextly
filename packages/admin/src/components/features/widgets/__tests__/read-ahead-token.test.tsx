@@ -76,7 +76,6 @@ function layoutOf(token: string, empty: boolean): DashboardLayoutResponse {
     defaultPlacements: [],
     version: 1,
     source: "own",
-    // The reader placed a card the default does not hold: their own arrangement.
     arranged: true,
     scope: "tok",
     audience: "aud",
