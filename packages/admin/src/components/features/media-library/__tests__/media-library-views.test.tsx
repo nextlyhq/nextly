@@ -366,8 +366,11 @@ describe("a view beside the folders", () => {
       folders: {},
     };
 
-    /** Unused open on a built answer, then the counts asked again. */
-    async function askedAgain(next: Promise<unknown>) {
+    /**
+     * Unused open on a built answer, then the counts asked again, answered
+     * by `next` (made when asked, so a refusal is never left unhandled).
+     */
+    async function askedAgain(next: () => Promise<unknown>) {
       const queryClient = createTestQueryClient();
       library.fetchMediaLibraryCounts.mockResolvedValue(built);
       api.fetchMedia.mockResolvedValue({
@@ -383,7 +386,7 @@ describe("a view beside the folders", () => {
       );
       // POSITIVE CONTROL: the built answer opens the view.
       expect(await waitFor(() => tile(1))).toBeInTheDocument();
-      library.fetchMediaLibraryCounts.mockReturnValue(next);
+      library.fetchMediaLibraryCounts.mockImplementation(next);
       act(() => {
         void queryClient
           .refetchQueries({ queryKey: ["media", "library-counts"] })
@@ -392,7 +395,7 @@ describe("a view beside the folders", () => {
     }
 
     it("lists nothing while the counts are asked again", async () => {
-      await askedAgain(new Promise(() => undefined));
+      await askedAgain(() => new Promise(() => undefined));
 
       expect(
         await screen.findByText(/still counting where items are used/i)
@@ -401,7 +404,7 @@ describe("a view beside the folders", () => {
     });
 
     it("lists nothing when asking the counts again fails", async () => {
-      await askedAgain(Promise.reject(new Error("counts failed")));
+      await askedAgain(() => Promise.reject(new Error("counts failed")));
 
       expect(
         await screen.findByText(/couldn't check where items are used/i)
