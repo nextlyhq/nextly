@@ -11,6 +11,7 @@
 import { holdForNextFlush } from "../../revalidation/expiry-handoff";
 
 import { sharedEntries } from "./bounded-entries";
+import { USE_CACHE_HANDLER_BRAND } from "./shared-handlers";
 import {
   expireTags,
   isEntryExpired,
@@ -54,6 +55,10 @@ function replay(chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> {
 }
 
 const useCacheHandler = {
+  // Recognised in the handlers Next.js registered, so reads it serves keep
+  // their lifetimes (see shared-handlers).
+  [USE_CACHE_HANDLER_BRAND]: true,
+
   async get(
     cacheKey: string,
     softTags: string[]

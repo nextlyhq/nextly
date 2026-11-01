@@ -63,8 +63,13 @@ export interface Running {
   b: Instance;
   /** Every log the leg wrote, for attaching to a failed test. */
   logs: () => { name: string; path: string }[];
-  /** Writes the note outside any request, through the Direct API, or straight into the table with `raw`. */
-  writeOutsideRequest: (value: string, raw?: boolean) => void;
+  /**
+   * Writes the note outside any request, through the Direct API, or straight
+   * into the table with `raw`, and returns when the write began, on this
+   * machine's clock: a freshness bound runs from then, not from when the
+   * writing process exited.
+   */
+  writeOutsideRequest: (value: string, raw?: boolean) => number;
   /** Stops both instances, then removes the leg's copies, its builds and its logs. */
   stop: () => Promise<void>;
 }
@@ -287,15 +292,25 @@ async function buildAndStart(
     ],
     writeOutsideRequest: (value, raw = false) => {
       writes++;
+      const writeLog = log(`write-${String(writes)}`);
       run(
         `writing ${value} outside a request`,
         TSX,
         ["scripts/write-note.ts", value, ...(raw ? ["--raw"] : [])],
         appA,
         env,
-        log(`write-${String(writes)}`),
+        writeLog,
         STEP_MS
       );
+      const startedAt = /write-started-at=(\d+)/.exec(
+        readFileSync(writeLog, "utf8")
+      );
+      if (!startedAt) {
+        throw new Error(
+          `writing ${value} printed no start time:\n${tail(writeLog)}`
+        );
+      }
+      return Number(startedAt[1]);
     },
     stop: async () => {
       await Promise.all([stop(a.server), stop(b.server)]);

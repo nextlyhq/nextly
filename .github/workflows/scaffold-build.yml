@@ -45,9 +45,12 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push supersedes its last run. Every other run (a push
+# to main through ci.yml, the nightly newest-minor) keeps a group of its own
+# event and commit, so one commit's run on main is never cancelled by the next.
 concurrency:
-  group: scaffold-build-${{ github.ref }}
-  cancel-in-progress: true
+  group: scaffold-build-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   scaffold-build:
@@ -168,22 +171,22 @@ jobs:
             source: local
             core: workspace
 
-          # The blog under Cache Components and Partial Prefetching. The scaffolder still
-          # writes both off, so this leg turns them on after scaffolding, then builds and
-          # serves on an empty database and again on seeded content. Rendering under Cache
-          # Components does not depend on the dialect, so one SQLite leg covers it.
+          # The blog served under Cache Components, which every scaffold has on: on an empty
+          # database and again on seeded content (`serveChecks`), each from a build of its own.
+          # Rendering under Cache Components does not depend on the dialect or the package
+          # manager, so one SQLite leg covers it.
           - name: blog-cache-components
             template: blog
             approach: code-first
             pm: npm
             source: local
             core: workspace
-            cacheComponents: "on"
+            serveChecks: "on"
 
           # Not a scaffold: an EXISTING app, as `create-next-app` makes it with its defaults,
           # which since 16.4 turn Cache Components on (`cacheComponents: true` and
-          # `partialPrefetching: true`). Nextly keeps Cache Components off by default, so
-          # adding Nextly to such an app turns it off. The leg asserts that on the config
+          # `partialPrefetching: true`). Nextly runs with both on, so adding Nextly to such an
+          # app keeps them and adds Nextly's cache handlers. The leg asserts that on the config
           # create-nextly-app leaves, then builds the app and boots it, so the user path
           # through the existing-app installer is exercised end to end: until this leg, no
           # job ran that installer at all.
@@ -549,9 +552,10 @@ jobs:
             npx --yes "create-next-app@$next_version" scaffolded-app --yes --use-npm --src-dir
             cd scaffolded-app
             # The fixture, checked before it is relied on: if create-next-app stops turning
-            # Cache Components on, this leg would pass while testing nothing.
+            # Cache Components on, this leg would test turning it on from off instead, which
+            # the scaffolder's unit tests cover, while claiming create-next-app's defaults.
             grep -q 'cacheComponents: true' next.config.ts || {
-              echo "create-next-app $next_version did not turn Cache Components on; nothing here tests turning it off"
+              echo "create-next-app $next_version did not turn Cache Components on; this leg no longer tests its defaults"
               cat next.config.ts
               exit 1
             }
@@ -567,22 +571,23 @@ jobs:
           fi
 
       # What the existing-app leg exists for: create-nextly-app left the app's config with
-      # Cache Components off, and without `partialPrefetching`, which Next.js refuses once
-      # Cache Components is off. Red on a create-nextly-app that leaves the config alone.
-      - name: Check create-nextly-app turned Cache Components off
+      # both options on and Nextly's cache handlers added beside them. Red on a
+      # create-nextly-app that leaves the config alone. What Next.js finally read from it is
+      # asserted after the build.
+      - name: Check create-nextly-app added Nextly's cache handlers
         if: matrix.existing == 'create-next-app'
         shell: bash
         run: |
           cd /tmp/scaffold-build/scaffolded-app
           cat next.config.ts
-          grep -q 'cacheComponents: false' next.config.ts || {
-            echo "next.config.ts still has Cache Components on after create-nextly-app"
-            exit 1
-          }
-          if grep -q 'partialPrefetching' next.config.ts; then
-            echo "next.config.ts still sets partialPrefetching, which Next.js refuses without Cache Components"
-            exit 1
-          fi
+          for line in 'cacheComponents: true' 'partialPrefetching: true' \
+            'cacheHandler: require.resolve("nextly/cache-handler")' 'cacheMaxMemorySize: 0' \
+            'cacheHandlers: { default: require.resolve("nextly/cache-handlers") }'; do
+            grep -qF "$line" next.config.ts || {
+              echo "next.config.ts does not set $line after create-nextly-app"
+              exit 1
+            }
+          done
 
       # The controls, before the build's verdict is worth anything. A job that scaffolded
       # nothing, or scaffolded into the wrong directory, would otherwise reach a build
@@ -753,38 +758,6 @@ jobs:
             [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
           fi
 
-      # What the leg is for, so it fails rather than builds the default when the
-      # generated config no longer reads as expected.
-      - name: Turn Cache Components on in the scaffold
-        if: matrix.cacheComponents == 'on'
-        shell: bash
-        run: |
-          cd /tmp/scaffold-build/scaffolded-app
-          node -e '
-            const fs = require("fs");
-            const config = fs.readFileSync("next.config.ts", "utf8");
-            // With the Nextly cache handlers: under Cache Components the default
-            // Next.js incremental cache serves the previous page shell once after a write.
-            const on = config.replace(
-              "cacheComponents: false,",
-              "cacheComponents: true,\n  partialPrefetching: true,\n" +
-                "  cacheHandler: require.resolve(\"nextly/cache-handler\"),\n" +
-                "  cacheMaxMemorySize: 0,\n" +
-                "  cacheHandlers: { default: require.resolve(\"nextly/cache-handlers\") },"
-            );
-            if (on === config) {
-              console.error("next.config.ts does not set cacheComponents: false");
-              process.exit(1);
-            }
-            fs.writeFileSync("next.config.ts", on);
-          '
-          cat next.config.ts
-          # Nextly's cached reads through the app's "use cache" function, as the stub
-          # file says to do under Cache Components.
-          if [ -f src/nextly/cached-read.cache-components.txt ]; then
-            cp src/nextly/cached-read.cache-components.txt src/nextly/cached-read.ts
-          fi
-
       # Only the nightly newest-minor run sets the input (see `on.workflow_call`).
       # The specs are passed through the environment, and the caller checks
       # their shape, so nothing from them is read as shell syntax.
@@ -813,6 +786,27 @@ jobs:
           cd /tmp/scaffold-build/scaffolded-app
           test -d .next || { echo "no .next: the build produced nothing"; exit 1; }
 
+          # Every app this CLI makes or joins runs with Cache Components and Partial
+          # Prefetching on, with Nextly's cache handlers. Read from the config Next.js
+          # resolved for the build, rather than from next.config's text, so a setting the
+          # file spells but Next.js never received fails here.
+          node -e '
+            const { config } = require("./.next/required-server-files.json");
+            const problems = [];
+            if (config.cacheComponents !== true) problems.push("cacheComponents is not on");
+            if (config.partialPrefetching !== true) problems.push("partialPrefetching is not on");
+            if (!/[\\/]nextly[\\/]dist[\\/]cache-handler\.mjs$/.test(config.cacheHandler ?? ""))
+              problems.push("cacheHandler is not Nextly'"'"'s: " + config.cacheHandler);
+            if (config.cacheMaxMemorySize !== 0) problems.push("cacheMaxMemorySize is not 0");
+            if (!/[\\/]nextly[\\/]dist[\\/]cache-handlers\.mjs$/.test(config.cacheHandlers?.default ?? ""))
+              problems.push("cacheHandlers.default is not Nextly'"'"'s: " + config.cacheHandlers?.default);
+            if (problems.length > 0) {
+              console.error("the build did not run with Nextly'"'"'s settings:\n- " + problems.join("\n- "));
+              process.exit(1);
+            }
+            console.log("the build ran with Cache Components and Partial Prefetching on, and Nextly'"'"'s cache handlers");
+          '
+
           # Nothing may have been fetched from Google at build time. Asserted on the
           # OUTPUT rather than on the log: Next emits these modules only when the
           # `next/font/google` loader actually runs, so their absence is structural.
@@ -827,7 +821,7 @@ jobs:
       # the Cache Components check after it first serves an EMPTY one, so the database the
       # build left is kept here, while no server holds it, for that check to put back.
       - name: Keep the empty database for the Cache Components check
-        if: matrix.cacheComponents == 'on'
+        if: matrix.serveChecks == 'on'
         shell: bash
         run: |
           cd /tmp/scaffold-build/scaffolded-app
@@ -1022,7 +1016,7 @@ jobs:
       # page of each kind, taken from its sitemap, must answer 200. Both serves fail on
       # Next.js reporting uncached data or the clock read too early.
       - name: Check the blog under Cache Components
-        if: matrix.cacheComponents == 'on'
+        if: matrix.serveChecks == 'on'
         shell: bash
         run: |
           cd /tmp/scaffold-build/scaffolded-app
@@ -1144,7 +1138,8 @@ jobs:
       # writes the routes, the instrumentation hook and the config Nextly starts from, so the
       # health route answering with a connected database is Nextly running in the user's
       # app, and the admin's setup page loading is its admin mounted there. The log must not
-      # carry Nextly's Cache Components warning: the config this app ended with has it off.
+      # carry Nextly's start-time warning about Cache Components being off: the config this
+      # app ended with has it on.
       - name: Boot the existing app and reach Nextly
         if: matrix.existing == 'create-next-app'
         shell: bash
@@ -1173,8 +1168,8 @@ jobs:
           status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3100/admin/setup)
           echo "admin setup page: $status"
           [ "$status" = 200 ] || { tail -40 /tmp/existing-app-start.log; exit 1; }
-          if grep -q "Cache Components isn't supported" /tmp/existing-app-start.log; then
-            echo "Nextly warned about Cache Components in an app whose config has it off"
+          if grep -q "Nextly supports only Cache Components and Partial Prefetching on" /tmp/existing-app-start.log; then
+            echo "Nextly warned that Cache Components is off in an app whose config has it on"
             exit 1
           fi
 

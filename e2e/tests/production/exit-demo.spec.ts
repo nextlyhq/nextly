@@ -1,4 +1,8 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "../support/visible";
+
+import { CACHE_COMPONENTS } from "../support/cache-components";
 
 /**
  * Phase 3's exit demo: a page built in the builder, served to a visitor from a
@@ -94,6 +98,17 @@ test.describe("the production exit demo", () => {
     // answered 500 on EVERY path, in a production build only. A 404 is the
     // route working; a 500 is the route broken in a way that looks like content.
     const missing = await request.get("/no-such-page-exists-here");
-    expect(missing.status()).toBe(404);
+    if (!CACHE_COMPONENTS) {
+      expect(missing.status()).toBe(404);
+      return;
+    }
+    // Under Cache Components the route streams its static shell before it
+    // knows the page does not exist, so the status is 200 by then, and the
+    // answer is the not-found page marked `noindex`: still the route working,
+    // and not a 500.
+    expect(missing.status()).toBe(200);
+    const html = await missing.text();
+    expect(html).toMatch(/<meta[^>]+name="robots"[^>]+content="noindex"/);
+    expect(html).toMatch(/could not be found/);
   });
 });
