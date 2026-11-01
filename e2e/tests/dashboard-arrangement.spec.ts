@@ -20,6 +20,7 @@ import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -58,17 +59,6 @@ async function visualOrder(page: Page): Promise<string[]> {
     .filter(box => box.visible)
     .sort((a, b) => a.top - b.top || a.left - b.left)
     .map(box => box.id);
-}
-
-/** Back to the default dashboard, through the guarded reset a reader uses. */
-async function resetToDefault(page: Page): Promise<void> {
-  const read = await page.request.get("/admin/api/dashboard/layout");
-  const body = (await read.json()) as { version: number; scope: string };
-  if (body.version === 0) return;
-  const reset = await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-  expect(reset.status()).toBe(200);
 }
 
 /**

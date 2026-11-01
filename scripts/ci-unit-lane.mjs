@@ -15,7 +15,9 @@
  * - `run <lane>`: the plan, executed through turbo, so each package's test
  *   task keeps its dependencies' builds and its cache: the packages that must
  *   run in full in one call, each narrowed package in a call of its own with
- *   its files passed through.
+ *   its files passed through. Only a package in `MEASURED_FOR_SELECTION` is
+ *   narrowed here; every other one runs in full, while `plan` still reports
+ *   what selection would run for it.
  * - `misses <plan file> <since ms>`: after a shadow run's full lane, each test
  *   file Vitest recorded as failed in this job that the plan left out, one
  *   `selection-miss:` line each. A package whose results show nothing run in
@@ -53,6 +55,53 @@ import {
   vitestList,
   workspaceDependencies,
 } from "./test-changed.mjs";
+
+/**
+ * The packages whose tests a selecting run may narrow. A package joins only
+ * after its shadow runs, each comparing what selection would have run with the
+ * full run beside it, have shown enough of them with no failure the selection
+ * left out; that measurement is kept outside this repository. Any package not
+ * named here, including one added later, runs its tests in full.
+ */
+export const MEASURED_FOR_SELECTION = new Set([
+  "nextly",
+  "@nextlyhq/admin",
+  "@nextlyhq/plugin-page-builder",
+  "@nextlyhq/plugin-commerce",
+  "@nextlyhq/plugin-mcp",
+  "@nextlyhq/plugin-sdk",
+  "@nextlyhq/plugin-seo",
+  "@nextlyhq/builder",
+  "@nextlyhq/ui",
+  "@nextlyhq/plugin-form-builder",
+  "@nextlyhq/plugin-accounts",
+  "@nextlyhq/storage-uploadthing",
+  "@nextlyhq/storage-vercel-blob",
+  "@nextlyhq/blocks-react",
+  "@nextlyhq/storage-s3",
+  "@nextlyhq/adapter-postgres",
+  "@nextlyhq/adapter-drizzle",
+  "@nextlyhq/adapter-mysql",
+  "@nextlyhq/adapter-sqlite",
+]);
+
+/**
+ * Each workspace with what it should run. `planOf` is a package's selection
+ * plan and `totalOf` its count of test files. When `select` is set, a package
+ * outside `MEASURED_FOR_SELECTION` runs in full without asking either; when it
+ * is not, every package's would-be selection is planned, so a shadow run keeps
+ * measuring the packages not yet listed.
+ */
+export function planWorkspaces(workspaces, { select, planOf, totalOf }) {
+  return workspaces.map(workspace => {
+    const plan =
+      select && !MEASURED_FOR_SELECTION.has(workspace.name)
+        ? { full: true, reason: "not yet measured for selection" }
+        : planOf(workspace);
+    const total = plan.full ? null : totalOf(workspace);
+    return { name: workspace.name, dir: workspace.dir, plan, total };
+  });
+}
 
 /**
  * The changed packages and every package that depends on one, directly or
@@ -154,8 +203,8 @@ function laneWorkspaces(root, lane, workspaces) {
   return workspaces.filter(workspace => names.has(workspace.name));
 }
 
-/** Every package of the lane with what it should run. */
-function planLane(root, lane, base) {
+/** Every package of the lane with what it should run, narrowed only for measured packages when `select` is set. */
+function planLane(root, lane, base, select) {
   const workspaces = workspacesFrom(pnpmWorkspaces(root), root);
   const paths = changedPaths(root, base);
   const { filters } = filtersFor(paths, workspaces, new Set(deletedPaths(root, base)));
@@ -170,10 +219,10 @@ function planLane(root, lane, base) {
     mergeBase: base,
     recordsReason: workspace => recordsDriftReason(recordsDrift(root, workspace.dir, base)),
   };
-  return laneWorkspaces(root, lane, workspaces).map(workspace => {
-    const plan = planFor(root, workspace, context);
-    const total = plan.full ? null : vitestList(root, workspace.dir, [])?.length;
-    return { name: workspace.name, dir: workspace.dir, plan, total };
+  return planWorkspaces(laneWorkspaces(root, lane, workspaces), {
+    select,
+    planOf: workspace => planFor(root, workspace, context),
+    totalOf: workspace => vitestList(root, workspace.dir, [])?.length,
   });
 }
 
@@ -250,9 +299,13 @@ function rootOf() {
   return git(process.cwd(), ["rev-parse", "--show-toplevel"]).stdout.trim();
 }
 
-/** `plan` and `run`: prints the plan, writes it to `--out=`, and for `run` executes it. */
+/**
+ * `plan` and `run`: prints the plan, writes it to `--out=`, and for `run`
+ * executes it. `run` is the selecting run, so only it holds unmeasured
+ * packages to their full suites; `plan` is the shadow run's report.
+ */
 function planCommand(root, [command, lane, ...rest]) {
-  const planned = planLane(root, lane, "HEAD^1");
+  const planned = planLane(root, lane, "HEAD^1", command === "run");
   for (const entry of planned) console.log(shadowLine(entry.name, entry.plan, entry.total));
   const out = rest.find(arg => arg.startsWith("--out="))?.slice("--out=".length);
   if (out) writeFileSync(out, JSON.stringify(planned));

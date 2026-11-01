@@ -28,6 +28,8 @@ export { definePlugin } from "nextly";
  * an author annotating one imports it from where `defineWidget` came from.
  * `WidgetLoadSize` is the `size` a `load` is handed: the card's `{ w, h }` and
  * its tier, the shape `WidgetRenderSize` hands its component.
+ * `WidgetSummaryCount` is what a `summary.count` answers: a number, or
+ * `{ count, atLeast }` for a floor the header shows as "N+".
  */
 export { defineWidget } from "nextly";
 /**
@@ -60,8 +62,18 @@ export type {
   WidgetRenderSize,
   WidgetSizeDeclaration,
   WidgetSummary,
+  WidgetSummaryCount,
   WidgetView,
 } from "nextly";
+/**
+ * The types a plugin's widget code is written in, intended to stay as they
+ * are: `AnyWidget`, any widget `defineWidget` made, for a function that
+ * returns one or a list that holds several; `WidgetReadServices`, the reads a
+ * widget's `load`, `shows` and `summary.count` are handed, already bound to
+ * the person asking, for a helper those functions share. Types only, core's
+ * own, so a plugin names them from here rather than from `nextly`.
+ */
+export type { AnyWidget, WidgetReadServices } from "nextly";
 
 /**
  * @experimental The number and change formatters a dashboard card's figures are

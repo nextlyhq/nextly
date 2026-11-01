@@ -42,6 +42,11 @@ export const nextlyMediaUsageSqlite = sqliteTable(
     // The language whose value uses the item; "" for a value every language
     // shares.
     locale: text("locale").notNull(),
+    // The address the field names the item by, as the library gave it out:
+    // the item's own when the content was saved, or an earlier one a Replace
+    // kept the file of. NULL when the field names the item by its id, so a
+    // Replace knows which uses go on showing the previous file.
+    address: text("address"),
   },
   // The indexes are declared once, in `core-indexes`, for every dialect.
   table => sqliteIndexes(MEDIA_USAGE_INDEXES, table)

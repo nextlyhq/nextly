@@ -41,11 +41,7 @@ import {
 import { revalidateMedia } from "./revalidate-media";
 import { StoredFileSearchReader } from "./stored-file-search";
 import { storedFilesOf } from "./stored-files";
-import {
-  addressUseRows,
-  recordKeptFiles,
-  type AddressPaths,
-} from "./usage/address-uses";
+import { recordKeptFiles } from "./usage/address-uses";
 import {
   listIdentifiedMediaUsage,
   mediaUsagePresent,
@@ -76,8 +72,6 @@ export interface ReplaceMediaFileDeps {
     generateThumbnail(buffer: Buffer): Promise<{ buffer: Buffer } | null>;
   };
   logger: Logger;
-  /** Which fields of each kind of document name an item by its address. */
-  addressPaths: AddressPaths;
   /**
    * How many records outside content (avatars, logos) keep an address,
    * as the `unused` view asks them.
@@ -219,37 +213,34 @@ async function removeNewFiles(
 }
 
 /**
- * Whether the files an item had before a Replace must be kept, and the usage
- * rows naming their address: while any document or any avatar or logo names
- * it, and, until the usage record has been built, always, since a document
- * the record does not cover yet may name it. Kept, too, when this cannot be
- * asked: a file kept is never a page broken.
+ * Whether the files an item had before a Replace must be kept: while any
+ * document names the item by an address (a usage row with one, as the
+ * reference the content made says), or any avatar or logo names it, and,
+ * until the usage record has been built, always, since a document the record
+ * does not cover yet may name it. Kept, too, when this cannot be asked: a
+ * file kept is never a page broken.
  */
 async function keepsOldFiles(
   deps: ReplaceMediaFileDeps,
   mediaId: string,
   previous: Media
-): Promise<{ keep: boolean; rows: string[] }> {
+): Promise<boolean> {
   try {
     const present = await mediaUsagePresent(deps.adapter, deps.logger);
     const recorded = present && (await mediaUsageRecorded(deps.adapter));
-    const rows = present
-      ? await addressUseRows(
-          await listIdentifiedMediaUsage(deps.adapter, mediaId),
-          deps.addressPaths
+    const byAddress = present
+      ? (await listIdentifiedMediaUsage(deps.adapter, mediaId)).some(
+          row => row.address !== null
         )
-      : [];
+      : false;
     const held = previous.url ? await deps.addressHolders(previous.url) : 0;
-    return {
-      keep: !recorded || rows.length > 0 || held > 0,
-      rows: rows.map(row => row.id),
-    };
+    return !recorded || byAddress || held > 0;
   } catch (error) {
     deps.logger.warn("[MediaService] Replaced file kept", {
       mediaId,
       error: errorForLog(error),
     });
-    return { keep: true, rows: [] };
+    return true;
   }
 }
 
@@ -309,13 +300,11 @@ export async function replaceMediaFile(
   const oldPaths = storedFilesOf(previous).paths.filter(
     path => !replacement.paths.includes(path)
   );
-  const decision = await keepsOldFiles(deps, mediaId, previous);
-  if (decision.keep) {
+  if (await keepsOldFiles(deps, mediaId, previous)) {
     await recordKeptFiles(
       deps.adapter,
       mediaId,
-      oldPaths.map(path => ({ path, url: previous.url })),
-      decision.rows
+      oldPaths.map(path => ({ path, url: previous.url }))
     );
     return next;
   }

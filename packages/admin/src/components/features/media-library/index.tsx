@@ -33,6 +33,7 @@ import {
   AlertDialogTitle,
   toast,
 } from "@nextlyhq/ui";
+import { MEDIA_DELETE_LIMIT } from "nextly/config";
 import * as React from "react";
 
 import { Breadcrumbs, Pagination } from "@admin/components/shared";
@@ -68,7 +69,6 @@ import { FolderBreadcrumbs } from "./FolderBreadcrumbs";
 import { FolderCardsRow } from "./FolderCardsRow";
 import {
   useDeleteMediaLater,
-  useMediaLibraryCounts,
   useReplaceMediaFile,
   useUndoMediaDelete,
 } from "./media-library-queries";
@@ -170,6 +170,26 @@ function emptyLibraryMessage({
   if (view === "unused") return "Every item is used somewhere.";
   if (canUpload) return "Drop files here, or use Upload files above.";
   return "Nothing has been added here yet.";
+}
+
+/**
+ * What the Unused view says in place of its list until the list itself says
+ * the usage record it read was built: that it is still loading, that it
+ * could not be read, or that older content is still being recorded (or was
+ * being rebuilt as it was read).
+ */
+function unusedPendingMessage(list: {
+  isError: boolean;
+  isFetching: boolean;
+  hasAnswer: boolean;
+}): string {
+  if (list.isError) {
+    return "Couldn't check where items are used, so the Unused view can't list them. Reload the page to try again.";
+  }
+  if (list.isFetching || !list.hasAnswer) {
+    return "Still counting where items are used, so the Unused view can't list them yet.";
+  }
+  return "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it.";
 }
 
 /**
@@ -275,12 +295,6 @@ export function MediaLibrary({
     resetPage();
   }, [activeFolderId, view, resetPage]);
 
-  // Whether the usage record covers older content, asked only for the Unused
-  // view, which cannot be trusted until it does.
-  const usageCounts = useMediaLibraryCounts(view === "unused");
-  const unusedPending =
-    view === "unused" && usageCounts.data?.usageRecorded === false;
-
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     React.useState(false);
   const [createFolderParentId, setCreateFolderParentId] = React.useState<
@@ -357,8 +371,27 @@ export function MediaLibrary({
   };
 
   // TanStack Query: Fetch media
-  const { data, isLoading, isFetching, isPlaceholderData, error, refetch } =
-    useMedia(queryParams);
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isPlaceholderData,
+    isSuccess,
+    isError,
+    error,
+    refetch,
+  } = useMedia(queryParams);
+
+  // The Unused view lists its items only on its own list's word that the
+  // usage record it read was complete, one build standing throughout the
+  // read: never on the counts', another request read at another moment,
+  // which a rebuild between the two would leave saying built over a list
+  // read mid-rebuild. While the list loads, is asked again or stands in for
+  // another page, and after it fails, it lists nothing, since an earlier
+  // answer may no longer hold.
+  const unusedPending =
+    view === "unused" &&
+    !(isSuccess && !isFetching && data.meta.usageRecorded === true);
 
   // A delete that can be undone, for one item or the selection.
   const { mutateAsync: deleteLater, isPending: isDeleting } =
@@ -451,8 +484,16 @@ export function MediaLibrary({
         for (const id of ids) next.delete(id);
         return next;
       });
-      const left = Date.parse(pending.deleteAfter) - Date.now();
-      if (!(left > 0)) {
+      // Undo takes back only what this delete marked: an item an earlier
+      // delete marked stays as that delete left it, with its own Undo.
+      // Offered until those items' own deadline, never the request's
+      // earliest, which an item already waiting can make shorter or past.
+      const own = pending.marked;
+      const left =
+        pending.markedDeleteAfter === null
+          ? 0
+          : Date.parse(pending.markedDeleteAfter) - Date.now();
+      if (!(left > 0) || own.length === 0) {
         setAnnouncement(`${label} deleted.`);
         toast(`${label} deleted`);
         return;
@@ -465,7 +506,7 @@ export function MediaLibrary({
         duration: left,
         action: {
           label: "Undo",
-          onClick: () => void handleUndoDelete(ids, label),
+          onClick: () => void handleUndoDelete(own, label),
         },
       });
     },
@@ -480,8 +521,16 @@ export function MediaLibrary({
     );
   }, [deleteWithUndo, mediaToDelete]);
 
+  // A selection larger than one delete may name is refused before the
+  // dialog opens: one request deletes the whole selection or none of it.
   const handleBulkDelete = React.useCallback(() => {
     if (selectedIds.size === 0) return;
+    if (selectedIds.size > MEDIA_DELETE_LIMIT) {
+      toast.error("Too many files to delete at once", {
+        description: `Select at most ${MEDIA_DELETE_LIMIT.toLocaleString()} files to delete together. ${selectedIds.size.toLocaleString()} are selected.`,
+      });
+      return;
+    }
     setIsBulkDeleteDialogOpen(true);
   }, [selectedIds]);
 
@@ -718,7 +767,11 @@ export function MediaLibrary({
       : undefined;
 
   const emptyStateMessage = unusedPending
-    ? "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it."
+    ? unusedPendingMessage({
+        isError,
+        isFetching,
+        hasAnswer: data !== undefined && !isPlaceholderData,
+      })
     : emptyLibraryMessage({
         filtered: Boolean(debouncedSearch) || typeFilter !== "all",
         canUpload,

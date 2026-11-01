@@ -35,6 +35,8 @@ export type DashboardSummaryPart =
       readonly card: string;
       readonly label: string;
       readonly count: number;
+      /** The count is a floor: the widget counted only so far. */
+      readonly atLeast?: true;
     };
 
 /** How the site marks its environment: the badge's label and tone. */

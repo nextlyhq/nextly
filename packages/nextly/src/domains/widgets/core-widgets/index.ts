@@ -67,7 +67,6 @@ import { countWidget } from "./count";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
-import { quickCreateWidget } from "./quick-create";
 import { recentEntriesWidget } from "./recent-entries";
 import { setupWidget } from "./setup";
 import { systemHealthWidget } from "./system-health";
@@ -95,7 +94,6 @@ export const CORE_DECLARATIONS = [
 /** Core's widgets still written as definitions: every one not declared. */
 const CORE_WIDGET_LITERALS = [
   contentTableWidget,
-  quickCreateWidget,
   teamWidget,
   continueWidget,
   upcomingReleasesWidget,

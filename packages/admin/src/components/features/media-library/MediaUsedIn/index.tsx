@@ -74,8 +74,14 @@ export function MediaUsageList({
   usage: MediaUsage;
 }): React.JSX.Element {
   if (usageTotal(usage) === 0) {
+    // Said to be unused only once the usage record is built: before then a
+    // use the record lacks may still be in older content.
     return (
-      <p className="text-sm text-muted-foreground">Not used anywhere yet.</p>
+      <p className="text-sm text-muted-foreground">
+        {usage.usageRecorded
+          ? "Not used anywhere yet."
+          : "The usage record is still being built, so this may still be used."}
+      </p>
     );
   }
   return (

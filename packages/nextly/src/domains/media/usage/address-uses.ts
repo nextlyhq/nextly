@@ -1,22 +1,23 @@
 /**
- * The uses of an item that name it by its address, and the files a Replace
- * keeps for them.
+ * The files a Replace keeps for the uses of an item that name it by its
+ * address, and the record of them.
  *
  * Most content refers to an item by its id (an upload field, a block
  * document's list, an attachment), and shows whatever file the item has now.
- * Rich text and an email template's `<img>` refer to it by its address, and
- * go on naming the address it had when they were written. So a Replace that
- * removed the old file would leave those pages pointing at nothing. Instead,
- * while any document uses the item by address, the old files are kept, and
- * the uses that still name the old address are recorded: by the usage rows
- * that stood when the file was replaced. A document saved again has its rows
- * written anew, so a row still on that list is one whose content has not
- * changed since, and still shows the previous file.
+ * Rich text, a JSON value's `src` or `url`, and an email template's `<img>`
+ * refer to it by its address, and go on naming the address it had when they
+ * were written. So a Replace that removed the old file would leave those
+ * pages pointing at nothing. Instead, while any document uses the item by
+ * address, the old files are kept. Which uses do is what the usage record's
+ * rows say (`address`), taken from the references the content makes; a use
+ * still naming a kept address is one that shows the previous file.
  *
- * The record is one `nextly_meta` row per item, `media.replaced:<id>`. The
- * kept files go when the item itself is deleted; until then nothing removes
- * them, and `media orphans`, which looks only at thumbnails, never lists the
- * original a page still shows.
+ * The record is one `nextly_meta` row per item, `media.replaced:<id>`, with
+ * one more per kept address (`kept-addresses`), so content saved again with
+ * the old address still counts as the item's use. The kept files go when the
+ * item itself is deleted; until then nothing removes them, and
+ * `media orphans`, which looks only at thumbnails, never lists the original
+ * a page still shows.
  *
  * @module domains/media/usage/address-uses
  */
@@ -24,9 +25,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
 
-import type { FieldConfig } from "../../../collections/fields/types";
 import type { Logger } from "../../../shared/types";
-import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   filesKeptByOthers,
   removeStoredFiles,
@@ -34,76 +33,20 @@ import {
 } from "../remove-stored-files";
 import { StoredFileSearchReader } from "../stored-file-search";
 
-import { TEMPLATE_ADDRESS_FIELD } from "./email-template-usage";
-import { addressFieldPaths } from "./media-references";
-import type { MediaUsageRow, UsageSubjectKind } from "./media-usage-store";
+import { keptAddressKey } from "./kept-addresses";
 
-/**
- * The fields of a collection or a Single that name items by address, by
- * path; for an email template, its HTML.
- */
-export type AddressPaths = (
-  kind: UsageSubjectKind,
-  slug: string
-) => Promise<ReadonlySet<string>>;
-
-/**
- * The rows among `rows` whose field names the item by its address, each
- * collection's and Single's fields read once.
- */
-export async function addressUseRows<T extends MediaUsageRow>(
-  rows: readonly T[],
-  addressPaths: AddressPaths
-): Promise<T[]> {
-  const paths = new Map<string, Promise<ReadonlySet<string>>>();
-  const pathsOf = (kind: UsageSubjectKind, slug: string) => {
-    const key = `${kind} ${slug}`;
-    let found = paths.get(key);
-    if (!found) {
-      found = addressPaths(kind, slug);
-      paths.set(key, found);
-    }
-    return found;
-  };
-  const kept: T[] = [];
-  for (const row of rows) {
-    const named = await pathsOf(row.subjectKind, row.subjectSlug);
-    if (named.has(row.fieldPath)) kept.push(row);
-  }
-  return kept;
-}
-
-/** The registries a document's fields are read from. */
-export interface FieldRegistries {
-  collectionFields(slug: string): Promise<readonly FieldConfig[] | undefined>;
-  singleFields(slug: string): Promise<readonly FieldConfig[] | undefined>;
-}
-
-/** The address fields of each kind of document, read from the registries. */
-export function addressPathsFrom(registries: FieldRegistries): AddressPaths {
-  return async (kind, slug) => {
-    if (kind === "email-template") return new Set([TEMPLATE_ADDRESS_FIELD]);
-    const fields =
-      kind === "single"
-        ? await registries.singleFields(slug)
-        : await registries.collectionFields(slug);
-    if (!fields) return new Set();
-    const schemas = await resolveComponentSchemas([...fields]);
-    return addressFieldPaths(fields, schemas);
-  };
-}
+/** The `nextly_meta` key prefix of every item's replaced files. */
+const REPLACED_KEY_PREFIX = "media.replaced:";
 
 /** The `nextly_meta` key of an item's replaced files. */
 function replacedKey(mediaId: string): string {
-  return `media.replaced:${mediaId}`;
+  return `${REPLACED_KEY_PREFIX}${mediaId}`;
 }
 
 /** What is kept for an item's address uses after its file was replaced. */
 const replacedRecordSchema = z.object({
   /** Each file kept, by its stored path, and the address it was served at. */
   files: z.array(z.object({ path: z.string(), url: z.string() })),
-  /** The usage rows that named the old address when it was replaced. */
-  rows: z.array(z.string()),
 });
 export type ReplacedRecord = z.infer<typeof replacedRecordSchema>;
 
@@ -118,8 +61,12 @@ export async function readReplacedRecord(
       and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
     },
   });
-  if (!row) return null;
-  let value: unknown = row.value;
+  return row ? replacedRecordOf(row.value) : null;
+}
+
+/** A replaced-file record's stored value, or `null` when it is not one. */
+function replacedRecordOf(stored: unknown): ReplacedRecord | null {
+  let value: unknown = stored;
   if (typeof value === "string") {
     try {
       value = JSON.parse(value);
@@ -131,29 +78,101 @@ export async function readReplacedRecord(
   return read.success ? read.data : null;
 }
 
+/** The addresses of the files a record keeps, each once. */
+function keptAddressesOf(files: ReplacedRecord["files"]): string[] {
+  return [...new Set(files.map(file => file.url).filter(url => url !== ""))];
+}
+
 /**
- * Record that `files` are kept for the address uses `rowIds`, added to what
- * an earlier Replace of the same item kept.
+ * The addresses whose files a Replace kept for an item: those its uses by
+ * address may still name, each showing the previous file.
+ */
+export async function keptAddresses(
+  db: Pick<DrizzleAdapter, "select">,
+  mediaId: string
+): Promise<Set<string>> {
+  const record = await readReplacedRecord(db, mediaId);
+  return new Set(record ? keptAddressesOf(record.files) : []);
+}
+
+/** The statements recording kept files runs, on its own transaction. */
+type KeptFilesDb = Pick<DrizzleAdapter, "transaction">;
+
+/**
+ * Record that `files` are kept for the item's uses by address, added to what
+ * an earlier Replace of the same item kept, and each file's address as one
+ * the item is still known by, all on one transaction.
  */
 export async function recordKeptFiles(
-  db: Pick<DrizzleAdapter, "select" | "insert" | "delete">,
+  db: KeptFilesDb,
   mediaId: string,
-  files: ReplacedRecord["files"],
-  rowIds: readonly string[]
+  files: ReplacedRecord["files"]
 ): Promise<void> {
-  const earlier = await readReplacedRecord(db, mediaId);
-  const record: ReplacedRecord = {
-    files: [...(earlier?.files ?? []), ...files],
-    rows: [...new Set([...(earlier?.rows ?? []), ...rowIds])],
-  };
-  await db.delete("nextly_meta", {
-    and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
+  await db.transaction(async tx => {
+    const earlier = await readReplacedRecord(tx, mediaId);
+    const record: ReplacedRecord = {
+      files: [...(earlier?.files ?? []), ...files],
+    };
+    await tx.delete("nextly_meta", {
+      and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
+    });
+    await tx.insert("nextly_meta", {
+      key: replacedKey(mediaId),
+      value: JSON.stringify(record),
+      updated_at: new Date(),
+    });
+    await writeKeptAddresses(tx, mediaId, keptAddressesOf(files));
   });
-  await db.insert("nextly_meta", {
-    key: replacedKey(mediaId),
-    value: JSON.stringify(record),
-    updated_at: new Date(),
+}
+
+/** The statements writing kept addresses runs: a transaction's. */
+type KeptAddressWriter = Pick<DrizzleAdapter, "delete" | "insert">;
+
+/** Record each of `urls` as an address the item is still known by. */
+async function writeKeptAddresses(
+  tx: KeptAddressWriter,
+  mediaId: string,
+  urls: readonly string[]
+): Promise<void> {
+  for (const url of urls) {
+    await tx.delete("nextly_meta", {
+      and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
+    });
+    await tx.insert("nextly_meta", {
+      key: keptAddressKey(url),
+      value: JSON.stringify({ mediaId, url }),
+      updated_at: new Date(),
+    });
+  }
+}
+
+/**
+ * Record every address every Replace has kept a file for as one its item is
+ * still known by, from the items' replaced-file records: for the rebuild,
+ * before it reads any document, so content still naming an address kept by
+ * a Replace made before addresses were recorded counts as the item's use.
+ * Each item's on a transaction of its own; writing one again is harmless.
+ */
+export async function indexKeptAddresses(
+  db: Pick<DrizzleAdapter, "select" | "transaction">
+): Promise<number> {
+  const rows = await db.select<Record<string, unknown>>("nextly_meta", {
+    columns: ["key", "value"],
+    where: {
+      and: [{ column: "key", op: "LIKE", value: `${REPLACED_KEY_PREFIX}%` }],
+    },
   });
+  let indexed = 0;
+  for (const row of rows) {
+    const key = typeof row.key === "string" ? row.key : "";
+    const record = replacedRecordOf(row.value);
+    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
+    const mediaId = key.slice(REPLACED_KEY_PREFIX.length);
+    const urls = keptAddressesOf(record.files);
+    await db.transaction(tx => writeKeptAddresses(tx, mediaId, urls));
+    indexed += urls.length;
+  }
+  return indexed;
 }
 
 /**
@@ -182,6 +201,11 @@ export async function removeKeptFiles(
         kept
       );
     }
+  }
+  for (const url of keptAddressesOf(record.files)) {
+    await db.delete("nextly_meta", {
+      and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
+    });
   }
   await db.delete("nextly_meta", {
     and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],

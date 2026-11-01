@@ -18,6 +18,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { includingHidden, test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -37,17 +38,6 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  * anywhere else.
  */
 const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
-
-/** Back to the default dashboard, through the guarded reset a reader uses. */
-async function resetToDefault(page: Page): Promise<void> {
-  const read = await page.request.get("/admin/api/dashboard/layout");
-  const body = (await read.json()) as { version: number; scope: string };
-  if (body.version === 0) return;
-  const reset = await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-  expect(reset.status()).toBe(200);
-}
 
 function bar(page: Page) {
   return page.getByRole("group", { name: "Customize your dashboard" });
@@ -147,7 +137,11 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
   // Waited for: a card draws its links once its data arrives, after the
   // card itself, so a count taken at once can read an empty dashboard.
   const cardLinks = page.locator(`${CELLS} a[href]`);
-  await expect(cardLinks.first()).toBeVisible();
+  // A drawn card's link: a card hidden while empty (Upcoming releases with nothing scheduled) is
+  // still in the page with its own link, and whichever card answers first can put that hidden
+  // link first, so the first link alone is not one a reader sees.
+  const drawnCardLinks = cardLinks.filter({ visible: true });
+  await expect(drawnCardLinks.first()).toBeVisible();
 
   await customize(page);
   await expect(bar(page)).toBeFocused();
@@ -182,7 +176,8 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
   expect(intoCards.length, "Tab never reached the cards").toBeGreaterThan(0);
   expect(intoCards.filter(stop => !stop.isControl)).toEqual([]);
   // And the links are still drawn, each inside the fence.
-  await expect(cardLinks.first()).toBeVisible();
+  await expect(drawnCardLinks.first()).toBeVisible();
+  // Every link, the hidden cards' included, is inside the fence.
   expect(
     await cardLinks.evaluateAll(links =>
       links.every(link => link.closest("[inert]") !== null)

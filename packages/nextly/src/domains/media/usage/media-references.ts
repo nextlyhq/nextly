@@ -35,16 +35,27 @@ import { readFieldGroupType } from "../../field-groups/storage/field-group-type-
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { ComponentSchemaInfo } from "../../versions/restore-snapshot";
 
-/** One reference a value makes: to an item's id, or to its address. */
+/**
+ * One reference a value makes: to an item's id, or to its address. Which of
+ * the two it carries is the one account of how content names an item: the
+ * usage record keeps it with each row, and a Replace keeps the old file for
+ * exactly the rows that name the item by address.
+ */
 export interface MediaReference {
   /**
    * The field's name, after the names of the groups, repeaters and field
    * groups it sits in, joined by dots: `hero.image`, not `hero.0.image`.
    */
   fieldPath: string;
-  /** The item's id, for an upload field or a block document's list. */
+  /**
+   * The item's id: an upload field's, a block document's list, or an id read
+   * from a media route an address names.
+   */
   mediaId?: string;
-  /** The item's address, for a rich-text node. */
+  /**
+   * The item's address: a rich-text node's `src`, or a `src` or `url` in a
+   * block document or any other JSON value.
+   */
   url?: string;
 }
 
@@ -347,15 +358,9 @@ const collectBlockDocument: FieldCollector = (
   }
 };
 
-/**
- * The one kind of field whose references name an item by its address rather
- * than its id: rich text, whose image, video and gallery nodes keep `src`.
- */
-const ADDRESS_FIELD_TYPE = "richText";
-
 const COLLECTORS: Readonly<Record<string, FieldCollector>> = {
   upload: collectUpload,
-  [ADDRESS_FIELD_TYPE]: collectRichText,
+  richText: collectRichText,
   group: collectGroup,
   repeater: collectRepeater,
 };
@@ -518,65 +523,4 @@ function childReferences(
   const found: MediaReference[] = [];
   collectField(child, raw, path, schemas, found);
   for (const ref of found) into.push({ ...ref, translated });
-}
-
-/** The field-group schemas a field may hold, each not yet followed. */
-function unfollowedSchemas(
-  field: FieldConfig,
-  schemas: FieldGroupSchemas,
-  followed: ReadonlySet<string>
-): Array<[string, readonly FieldConfig[]]> {
-  const { single, many } = extractFieldGroupReferences(field);
-  const found: Array<[string, readonly FieldConfig[]]> = [];
-  for (const slug of [single, ...(many ?? [])]) {
-    if (slug === undefined || followed.has(slug)) continue;
-    const nested = schemas.get(slug);
-    if (nested) found.push([slug, nested.fields]);
-  }
-  return found;
-}
-
-/** Add to `into` the address fields among `list`, below `prefix`. */
-function addAddressFields(
-  list: readonly FieldConfig[],
-  prefix: string,
-  schemas: FieldGroupSchemas,
-  followed: ReadonlySet<string>,
-  into: Set<string>
-): void {
-  for (const field of list) {
-    const name = (field as { name?: unknown }).name;
-    if (typeof name !== "string" || name === "") continue;
-    const path = joinPath(prefix, name);
-    const type = (field as { type?: unknown }).type;
-    if (type === ADDRESS_FIELD_TYPE) {
-      into.add(path);
-    } else if (type === "group" || type === "repeater") {
-      addAddressFields(childFields(field), path, schemas, followed, into);
-    } else if (typeof type === "string" && isFieldGroupFieldType(type)) {
-      for (const [slug, fields] of unfollowedSchemas(
-        field,
-        schemas,
-        followed
-      )) {
-        const deeper = new Set([...followed, slug]);
-        addAddressFields(fields, path, schemas, deeper, into);
-      }
-    }
-  }
-}
-
-/**
- * The paths of the fields among `fields` whose references name an item by
- * its address, named as the references they make are named: inside groups,
- * repeaters and field groups, by the names they sit in, joined by dots. A
- * field group is followed through every schema it may hold, once each.
- */
-export function addressFieldPaths(
-  fields: readonly FieldConfig[],
-  schemas: FieldGroupSchemas = new Map()
-): Set<string> {
-  const into = new Set<string>();
-  addAddressFields(fields, "", schemas, new Set(), into);
-  return into;
 }

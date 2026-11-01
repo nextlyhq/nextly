@@ -511,6 +511,8 @@ describe.each(getConfiguredTestDialects())(
         documentId: id,
         fieldPath: "cover",
         locale: "",
+        // An upload field names the item by its id.
+        address: null,
       });
     });
 
@@ -694,7 +696,7 @@ describe.each(getConfiguredTestDialects())(
 
     const media = () => t.getService("mediaService");
 
-    it("counts every folder's items and each view's in one statement", async () => {
+    it("counts every folder's items and each view's in one statement, beside the record's mark", async () => {
       await t.getService("metaService").set(MEDIA_USAGE_RECORDED_KEY, {
         rebuiltAt: new Date().toISOString(),
       });
@@ -721,7 +723,9 @@ describe.each(getConfiguredTestDialects())(
         t.adapter.getDrizzle = original as typeof t.adapter.getDrizzle;
       }
 
-      expect(statements).toBe(1);
+      // One statement counts the library; the other two read the record's
+      // mark before and after it, by the one reader every caller asks.
+      expect(statements).toBe(3);
       expect(counts).toEqual({
         all: 8,
         // The two images in no folder or the other folder with none, and the
@@ -734,12 +738,91 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    /**
+     * `read()`, with a rebuild finishing just after it first reads the
+     * record's mark: the mark is written anew before anything else is read.
+     */
+    async function withRebuildAfterFirstMarkRead<T>(
+      read: () => Promise<T>
+    ): Promise<T> {
+      const meta = t.getService("metaService");
+      const original = t.adapter.select.bind(t.adapter);
+      let flipped = false;
+      t.adapter.select = (async (
+        table: string,
+        options?: Parameters<typeof original>[1]
+      ) => {
+        const rows = await original(table, options);
+        if (
+          !flipped &&
+          table === "nextly_meta" &&
+          JSON.stringify(options).includes(MEDIA_USAGE_RECORDED_KEY)
+        ) {
+          flipped = true;
+          await meta.set(MEDIA_USAGE_RECORDED_KEY, {
+            rebuiltAt: new Date(Date.now() + 1_000).toISOString(),
+          });
+        }
+        return rows;
+      }) as typeof t.adapter.select;
+      try {
+        return await read();
+      } finally {
+        t.adapter.select = original;
+        expect(flipped).toBe(true);
+      }
+    }
+
+    it("reads the record as unbuilt when a rebuild finishes while the library is counted", async () => {
+      await t.getService("metaService").set(MEDIA_USAGE_RECORDED_KEY, {
+        rebuiltAt: new Date().toISOString(),
+      });
+      const counts = await withRebuildAfterFirstMarkRead(() =>
+        media().countLibrary({})
+      );
+
+      expect(counts).toMatchObject({ usageRecorded: false });
+      // POSITIVE CONTROL: with no rebuild meanwhile, the same record reads
+      // as built.
+      expect(await media().countLibrary({})).toMatchObject({
+        usageRecorded: true,
+      });
+    });
+
+    // The Unused list answers for the build it read, never the counts': a
+    // rebuild between the counts and the list would otherwise show items
+    // content uses, with their delete controls.
+    it("reads Unused's list as unbuilt when a rebuild finishes while it is read", async () => {
+      await t.getService("metaService").set(MEDIA_USAGE_RECORDED_KEY, {
+        rebuiltAt: new Date().toISOString(),
+      });
+      const unused = () =>
+        media().listMedia({ view: "unused", limit: 100 }, {});
+
+      const listed = await withRebuildAfterFirstMarkRead(unused);
+
+      expect(listed.usageRecorded).toBe(false);
+      // POSITIVE CONTROL: with no rebuild meanwhile, the same list reads as
+      // built, and lists what the counts count.
+      const again = await unused();
+      expect(again.usageRecorded).toBe(true);
+      expect(again.pagination.total).toBe(7);
+    });
+
     it("says the record is still being built until it has been rebuilt", async () => {
       await t.getService("metaService").delete(MEDIA_USAGE_RECORDED_KEY);
 
       expect(await media().countLibrary({})).toMatchObject({
         usageRecorded: false,
       });
+      expect(
+        (await media().listMedia({ view: "unused", limit: 100 }, {}))
+          .usageRecorded
+      ).toBe(false);
+      // Only Unused answers for the record; no other list says anything of it.
+      expect(
+        await media().listMedia({ view: "missing-alt", limit: 100 }, {})
+      ).not.toHaveProperty("usageRecorded");
     });
 
     it("pages a folder's items in the database, sorted and narrowed there", async () => {

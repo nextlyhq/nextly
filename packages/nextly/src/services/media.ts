@@ -29,7 +29,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { count, desc, asc, eq, sql } from "drizzle-orm";
+import { count, desc, asc, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -286,39 +286,42 @@ export class MediaService extends BaseService {
    * item that content uses can read as unused.
    */
   async countLibrary(): Promise<MediaLibraryCounts> {
-    const { media, nextlyMeta } = this.tables;
+    const { media } = this.tables;
     const unused = await this.unusedSources();
     // Loaded when the library is read, not with the service.
     const [
       { mediaLibraryCountsOf, missingAltText, notPendingDelete, unusedItem },
-      { MEDIA_USAGE_RECORDED_KEY },
+      { readWithinOneBuild },
     ] = await Promise.all([
       import("../domains/media/media-library-query"),
       import("../domains/media/usage/media-usage-store"),
     ]);
-    const groups = await this.db
-      .select({
-        folderId: media.folderId,
-        items: count(),
-        missingAlt: sql<
-          number | string | null
-        >`SUM(CASE WHEN ${missingAltText(media)} THEN 1 ELSE 0 END)`,
-        unused: unused
-          ? sql<
-              number | string | null
-            >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
-          : sql<number>`0`,
-        // At most one marker row joins each item, so it multiplies nothing.
-        recorded: sql<
-          number | string | null
-        >`MAX(CASE WHEN ${nextlyMeta.key} IS NULL THEN 0 ELSE 1 END)`,
-      })
-      .from(media)
-      .leftJoin(nextlyMeta, eq(nextlyMeta.key, MEDIA_USAGE_RECORDED_KEY))
-      // Never an item deleted inside the Undo window, as every library read.
-      .where(notPendingDelete(media))
-      .groupBy(media.folderId);
-    return mediaLibraryCountsOf(groups, unused !== null);
+    // Counted within one build of the record (`readWithinOneBuild`): the
+    // counts are trusted as complete only when one build stood throughout,
+    // so a rebuild that starts or finishes meanwhile reads as unbuilt.
+    const present = unused !== null;
+    const countGroups = () =>
+      this.db
+        .select({
+          folderId: media.folderId,
+          items: count(),
+          missingAlt: sql<
+            number | string | null
+          >`SUM(CASE WHEN ${missingAltText(media)} THEN 1 ELSE 0 END)`,
+          unused: unused
+            ? sql<
+                number | string | null
+              >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
+            : sql<number>`0`,
+        })
+        .from(media)
+        // Never an item deleted inside the Undo window, as every library read.
+        .where(notPendingDelete(media))
+        .groupBy(media.folderId);
+    const { value: groups, recorded } = present
+      ? await readWithinOneBuild(this.adapter, countGroups)
+      : { value: await countGroups(), recorded: false };
+    return mediaLibraryCountsOf(groups, { present, recorded });
   }
 
   /**
@@ -346,33 +349,57 @@ export class MediaService extends BaseService {
       const { mediaQueryCondition } = await import(
         "../domains/media/media-library-query"
       );
-      const whereClause = mediaQueryCondition(
-        media,
-        view === "unused" ? await this.unusedSources() : null,
-        { folderId, search, type, view }
-      );
+      const unused = view === "unused" ? await this.unusedSources() : null;
+      const whereClause = mediaQueryCondition(media, unused, {
+        folderId,
+        search,
+        type,
+        view,
+      });
 
       const orderFn = sortOrder === "asc" ? asc : desc;
       const orderByClause = orderFn(media[sortBy]);
 
       const offset = (page - 1) * limit;
 
-      const countResult = await this.db
-        .select({ value: count() })
-        .from(media)
-        .where(whereClause);
-      const total = Number(countResult[0]?.value ?? 0);
+      const readPage = async () => {
+        const countResult = await this.db
+          .select({ value: count() })
+          .from(media)
+          .where(whereClause);
+        let query = this.db.select().from(media);
+        if (whereClause) {
+          query = query.where(whereClause);
+        }
+        const rows = await query
+          .orderBy(orderByClause)
+          .limit(limit)
+          .offset(offset);
+        return { total: Number(countResult[0]?.value ?? 0), rows };
+      };
 
-      let query = this.db.select().from(media);
-
-      if (whereClause) {
-        query = query.where(whereClause);
+      // Unused answers for the usage record it read itself: its page and
+      // total are read within one build of the record (`readWithinOneBuild`),
+      // so a rebuild that starts or finishes meanwhile reads as unbuilt, and
+      // the admin lists the view on this answer's own word rather than on the
+      // counts', which another request read at another moment. No other list
+      // reads the record, so none says anything of it.
+      let usageRecorded: boolean | undefined;
+      let listed: Awaited<ReturnType<typeof readPage>>;
+      if (view !== "unused") {
+        listed = await readPage();
+      } else if (unused === null) {
+        listed = await readPage();
+        usageRecorded = false;
+      } else {
+        const { readWithinOneBuild } = await import(
+          "../domains/media/usage/media-usage-store"
+        );
+        const read = await readWithinOneBuild(this.adapter, readPage);
+        listed = read.value;
+        usageRecorded = read.recorded;
       }
-
-      const results = await query
-        .orderBy(orderByClause)
-        .limit(limit)
-        .offset(offset);
+      const { total, rows: results } = listed;
 
       const totalPages = Math.ceil(total / limit);
 
@@ -386,6 +413,7 @@ export class MediaService extends BaseService {
           page,
           limit,
           totalPages,
+          ...(usageRecorded === undefined ? {} : { usageRecorded }),
         },
       };
     } catch (error) {

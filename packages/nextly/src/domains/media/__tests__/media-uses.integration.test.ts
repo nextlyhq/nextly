@@ -157,6 +157,28 @@ describe.each(getConfiguredTestDialects())(
               json({ name: "layout" }),
             ],
           }),
+          // Readable in every language but Spanish.
+          defineCollection({
+            slug: "usesguides",
+            labels: { singular: "Guide", plural: "Guides" },
+            localized: true,
+            access: { read: ({ locale }) => locale !== "es" },
+            fields: [
+              text({ name: "title" }),
+              richText({ name: "body", localized: true }),
+            ],
+          }),
+          // Readable in every language but English, the default one.
+          defineCollection({
+            slug: "usesnotes",
+            labels: { singular: "Note", plural: "Notes" },
+            localized: true,
+            access: { read: ({ locale }) => locale !== "en" },
+            fields: [
+              text({ name: "title" }),
+              richText({ name: "body", localized: true }),
+            ],
+          }),
           defineCollection({
             slug: "usessecrets",
             labels: { singular: "Secret", plural: "Secrets" },
@@ -306,6 +328,85 @@ describe.each(getConfiguredTestDialects())(
       expect(sent).not.toContain(secretId);
       expect(sent).not.toContain("Hidden");
       expect(sent).not.toContain("Welcome");
+    });
+
+    /**
+     * An entry of `collection` whose rich text names `url` in each of
+     * `languages`, its id.
+     */
+    async function translatedUse(
+      collection: string,
+      url: string,
+      languages: string[]
+    ): Promise<string> {
+      const handler = t.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: collection, overrideAccess: true, locale: "en" },
+        {
+          title: `${collection} entry`,
+          ...(languages.includes("en") ? { body: imageText(url) } : {}),
+        }
+      );
+      const id = String((created.data as { id?: unknown }).id);
+      for (const language of languages.filter(code => code !== "en")) {
+        await handler.updateEntry(
+          {
+            collectionName: collection,
+            entryId: id,
+            overrideAccess: true,
+            locale: language,
+          },
+          { title: `${collection} ${language}`, body: imageText(url) }
+        );
+      }
+      return id;
+    }
+
+    it("tells each language's use only where the reader may read the document in that language", async () => {
+      const item = {
+        id: randomUUID(),
+        url: `/uploads/2026/10/${randomUUID()}.png`,
+      };
+      await t.adapter.insert("media", {
+        id: item.id,
+        filename: item.url.slice("/uploads/".length),
+        originalFilename: "per-language.png",
+        mimeType: "image/png",
+        size: 1,
+        url: item.url,
+        uploadedAt: new Date(),
+        updatedAt: new Date(),
+      });
+      // Used in English and Spanish, readable in English alone.
+      const guide = await translatedUse("usesguides", item.url, ["en", "es"]);
+      // Used in Spanish alone, which is refused.
+      const spanishGuide = await translatedUse("usesguides", item.url, ["es"]);
+      // Used in Spanish alone, readable in Spanish though not in English.
+      const note = await translatedUse("usesnotes", item.url, ["es"]);
+      const key = await keyWith(t, [
+        "read-media",
+        "read-usesguides",
+        "read-usesnotes",
+      ]);
+
+      const { status, json: body } = await usageOf(key, item.id);
+
+      expect(status).toBe(200);
+      const told = (body.items as Doc[]).map(use => [
+        use.documentId,
+        (use.fields as Array<{ path: string; locales: string[] }>).map(
+          field => [field.path, field.locales]
+        ),
+      ]);
+      expect(told).toEqual([
+        [guide, [["body", ["en"]]]],
+        [note, [["body", ["es"]]]],
+      ]);
+      expect((body.meta as Doc).hidden).toEqual([
+        { scopeKind: "collection", scopeSlug: "usesguides", count: 1 },
+      ]);
+      // Nothing of the refused translation is sent.
+      expect(JSON.stringify(body)).not.toContain(spanishGuide);
     });
 
     it("refuses a caller who may not read media, and answers an unknown item as not found", async () => {

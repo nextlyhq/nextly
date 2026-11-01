@@ -8,7 +8,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fetchJson = vi.hoisted(() => vi.fn());
 vi.mock("@admin/services/mediaApi", () => ({ mediaFetchJson: fetchJson }));
 
-import { fetchMediaUsage } from "../media-library-api";
+import {
+  deleteMediaLater,
+  fetchMediaUsage,
+  undoMediaDelete,
+} from "../media-library-api";
 
 beforeEach(() => {
   fetchJson.mockReset();
@@ -37,14 +41,65 @@ describe("fetchMediaUsage", () => {
     );
   });
 
-  it("counts none and takes the record as built when the answer says nothing of them", async () => {
+  it("counts none, and takes the record as not yet built, when the answer says nothing of them", async () => {
     fetchJson.mockResolvedValue({ items: [], meta: {} });
 
     expect(await fetchMediaUsage("m1")).toEqual({
       items: [],
       hidden: 0,
       heldByAddress: 0,
-      usageRecorded: true,
+      usageRecorded: false,
     });
+  });
+
+  it("takes the record as built when the answer says so", async () => {
+    // POSITIVE CONTROL for the one above.
+    fetchJson.mockResolvedValue({ items: [], meta: { usageRecorded: true } });
+
+    expect((await fetchMediaUsage("m1")).usageRecorded).toBe(true);
+  });
+});
+
+/** `n` item ids, `m0` onward. */
+function ids(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => `m${i}`);
+}
+
+/** The ids each request to `path` sent, in order. */
+function sentTo(path: string): string[][] {
+  return fetchJson.mock.calls
+    .filter(([url]) => url === path)
+    .map(
+      ([, init]) => (JSON.parse(String(init.body)) as { ids: string[] }).ids
+    );
+}
+
+describe("a delete of many items", () => {
+  it("sends every item in one request, so the server marks them whole or not at all", async () => {
+    const deleteAfter = new Date(Date.now() + 10_000).toISOString();
+    fetchJson.mockImplementation((_url: string, init: RequestInit) => {
+      const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
+      return Promise.resolve({ ids: sent, marked: sent, deleteAfter });
+    });
+
+    const pending = await deleteMediaLater(ids(150));
+
+    expect(sentTo("/admin/api/media/deletions")).toEqual([ids(150)]);
+    expect(pending).toEqual({
+      ids: ids(150),
+      marked: ids(150),
+      deleteAfter,
+    });
+  });
+
+  it("undoes every item in one request", async () => {
+    fetchJson.mockImplementation((_url: string, init: RequestInit) => {
+      const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
+      return Promise.resolve({ restored: sent, gone: [] });
+    });
+
+    await undoMediaDelete(ids(150));
+
+    expect(sentTo("/admin/api/media/deletions/undo")).toEqual([ids(150)]);
   });
 });

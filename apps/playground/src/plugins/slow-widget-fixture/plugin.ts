@@ -33,8 +33,8 @@ const slowWidget = defineWidget({
   id: "slow-widget-fixture/slow",
   title: "Slow fixture",
   description: "A count that answers as late as the test asks",
-  // Core's size for a widget that states none (`UNSTATED_WIDGET_SIZE`): the
-  // card takes a full row of the default dashboard the other specs share.
+  // Core's size for a widget that states none (`UNSTATED_WIDGET_SIZE`): a full
+  // row of its own wherever the slow-card spec places it.
   size: { default: { w: 12, h: 4 }, min: { w: 3, h: 2 }, max: { w: 12, h: 6 } },
   load: async ({ signal }) => {
     await wait(slowWidgetDelayMs(), signal);
@@ -49,10 +49,9 @@ export const slowWidgetFixturePlugin = definePlugin({
   nextly: "*",
   contributes: {
     dashboard: {
+      // Offered, not placed: a plugin puts no card on core's default
+      // dashboard, so the slow-card spec places this one itself.
       widgets: [slowWidget],
-      // On the default dashboard, so the slow-card spec finds it beside
-      // every other card without placing it.
-      suggest: ["slow-widget-fixture/slow"],
     },
   },
 });

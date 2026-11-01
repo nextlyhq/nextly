@@ -785,7 +785,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "subject_slug" TEXT NOT NULL,
       "document_id" TEXT NOT NULL,
       "field_path" TEXT NOT NULL,
-      "locale" TEXT NOT NULL
+      "locale" TEXT NOT NULL,
+      "address" TEXT
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_media_usage_uidx"
       ON "${MEDIA_USAGE_TABLE}" ("subject_kind", "subject_slug", "document_id", "field_path", "locale", "media_id")`,

@@ -274,6 +274,21 @@ describe("reading a stored row", () => {
     ]);
   });
 
+  it("drops a core card retired by id, and keeps its live neighbours", () => {
+    // The Create card's id is retired: creating an entry is the header's New
+    // button. A saved row still holding it reads without it.
+    const row = readRow(
+      JSON.stringify({
+        schemaVersion: LAYOUT_SCHEMA_VERSION,
+        placements: [
+          card("create", "core/quick-create"),
+          card("team", "core/team"),
+        ],
+      })
+    );
+    expect(row.placements.map(p => p.widgetId)).toEqual(["core/team"]);
+  });
+
   it("lets a dropped card claim no placement id", () => {
     // A retired card sharing an id with a live one would otherwise rekey the
     // live card's repeat, for a card nobody can be shown.
