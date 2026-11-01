@@ -1030,6 +1030,12 @@ describe.each(getConfiguredTestDialects())(
 
       expect(alone.status).toBe(409);
       expect(withContents.status).toBe(409);
+      // Said to the person, so the admin can show why.
+      expect(
+        (withContents.json.error as { message?: string } | undefined)?.message
+      ).toBe(
+        "This folder holds items deleted moments ago that can still be brought back. Try again once their Undo has passed."
+      );
       const folders = await t.adapter.select<Doc>("media_folders", {
         where: { and: [{ column: "id", op: "=", value: own }] },
       });
