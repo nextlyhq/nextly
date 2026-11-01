@@ -10,14 +10,19 @@
  * @module cli/commands/generate-widget/run
  */
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 
 import { getCoreVersion } from "../../../plugins/core-version";
 
 import {
   adminExportEdit,
   adminExportLine,
+  type AdminExportEdit,
+} from "./admin-export";
+import {
   registrationEdit,
+  slashRelative,
+  type ConfigParser,
   type FileEdit,
 } from "./config-edit";
 import {
@@ -166,24 +171,34 @@ async function registrations(
     else manual.push(answer.instructions);
   }
   if (target.kind === "plugin" && paths.component) {
-    const { exportName: component } = componentRef(plan);
-    const index = await adminIndexOf(target.root);
-    if (index === undefined) {
-      manual.push(
-        `Export ${component} (from ${paths.component}) from your plugin's admin entry, so the dashboard can load it.`
-      );
-    } else {
-      edits.push(
-        adminExportEdit(
-          index,
-          await readFile(index, "utf8"),
-          component,
-          paths.component
-        )
-      );
-    }
+    const answer = await adminExport(plan, paths.component, parse);
+    if (answer.kind === "edit") edits.push(answer.edit);
+    else manual.push(answer.instructions);
   }
   return { edits, manual };
+}
+
+/** The export of a plugin's component from its admin entry, or what to do by hand. */
+async function adminExport(
+  plan: WidgetPlan,
+  component: string,
+  parser: ConfigParser
+): Promise<AdminExportEdit> {
+  const { exportName } = componentRef(plan);
+  const index = await adminIndexOf(plan.target.root);
+  if (index === undefined) {
+    return {
+      kind: "manual",
+      instructions: `Export ${exportName} (from ${component}) from your plugin's admin entry, so the dashboard can load it.`,
+    };
+  }
+  return adminExportEdit({
+    file: index,
+    text: await readFile(index, "utf8"),
+    parser,
+    exportName,
+    componentPath: component,
+  });
 }
 
 /** What the project has, that the next steps depend on. */
@@ -194,6 +209,23 @@ interface ProjectState {
   hasVitest: boolean;
   /** The dependencies the edits add, which only an install brings in. */
   added: readonly string[];
+  /** A dry run writes none of them, so there is nothing to install yet. */
+  dryRun: boolean;
+}
+
+/**
+ * The install the added dependencies need. A dry run has not added them, so
+ * it says what a run would add rather than sending the author to an install
+ * that changes nothing.
+ */
+function installStep(project: ProjectState): string[] {
+  if (project.added.length === 0) return [];
+  const added = project.added.join(", ");
+  return [
+    project.dryRun
+      ? `Run it without --dry-run to add ${added} to package.json, then install them: ${project.manager} install`
+      : `Install what it added to package.json (${added}): ${project.manager} install`,
+  ];
 }
 
 /** What to do next, in the order an author does it. */
@@ -201,13 +233,9 @@ function nextSteps(
   paths: ReturnType<typeof planPaths>,
   project: ProjectState
 ): string[] {
-  const rel = (path: string) => relative(project.root, path);
+  const rel = (path: string) => slashRelative(project.root, path);
   return [
-    ...(project.added.length > 0
-      ? [
-          `Install what it added to package.json (${project.added.join(", ")}): ${project.manager} install`,
-        ]
-      : []),
+    ...installStep(project),
     `Make it yours: ${rel(paths.declaration)}${paths.component ? ` and ${rel(paths.component)}` : ""}.`,
     "See it before it has data: start your dev server and open /admin/dev/widget-previews.",
     project.hasVitest
@@ -393,6 +421,7 @@ export async function runGenerateWidget(
     manager: await packageManagerOf(root),
     hasVitest: await exists(join(root, "node_modules", "vitest")),
     added: dependencies.added,
+    dryRun: options.dryRun === true,
   });
   if (!options.dryRun) await writeAll(files, edits, options.force);
   return {

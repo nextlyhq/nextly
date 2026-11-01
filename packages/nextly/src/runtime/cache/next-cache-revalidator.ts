@@ -22,7 +22,9 @@ import { recordAdvisoryNotice } from "../../hooks/side-effect-warnings";
 import {
   expiryHandoff,
   holdForNextFlush,
+  holdForNextRequest,
   isPendingExpiryHandoff,
+  takeHeldForNextRequest,
   takePendingExpiries,
   type ExpiryHandoff,
 } from "../../revalidation/expiry-handoff";
@@ -298,18 +300,25 @@ export class NextCacheRevalidator implements CacheRevalidator {
     const own = tagsToExpire(intents);
     // Expiries an earlier write handed to the in-process default go out with
     // this one, so a later request in the same process drains them.
-    const tags = [...new Set([...takePendingExpiries(), ...own])];
+    const pending = [...new Set([...takePendingExpiries(), ...own])];
+    // Tags an installed hand-off already took, which Next.js's own cache has
+    // still to expire. Outside a request they are only kept again: handing
+    // them off once more would record them again with every such write.
+    const handedOff = takeHeldForNextRequest();
+    const tags = [...new Set([...pending, ...handedOff])];
     if ("unresolved" in resolved) {
       // Next.js is here but its cache could not be loaded: every tag waits
       // for the out-of-request path rather than being skipped.
+      holdForNextRequest(handedOff);
       return this.defer(
-        new Map(tags.map(tag => [tag, resolved.unresolved])),
+        new Map(pending.map(tag => [tag, resolved.unresolved])),
         own
       );
     }
     const failed = expireTags(resolved, tags);
     if ("noRequest" in failed) {
-      return this.waitForRequest(tags, own, failed.noRequest);
+      holdForNextRequest(handedOff);
+      return this.waitForRequest(pending, own, failed.noRequest);
     }
     revalidatePaths(resolved, intents);
     if (failed.size === 0) return;
@@ -322,7 +331,8 @@ export class NextCacheRevalidator implements CacheRevalidator {
    * pending, each once, for the next write that runs inside a request to
    * expire; retaking and retrying every pending tag on each such write made a
    * run of N of them O(N²) attempts and log. An installed hand-off expires
-   * from outside a request, so there they are handed to it as any failure is.
+   * from outside a request, so there they are handed to it as any failure is,
+   * and kept, once each, for Next.js's own cache at the next request.
    */
   private async waitForRequest(
     tags: string[],
@@ -379,9 +389,16 @@ export class NextCacheRevalidator implements CacheRevalidator {
     return owned.length > 0 ? { deferredTags: owned } : undefined;
   }
 
-  /** Hands tags off through {@link handOffWithin}, to the installed hand-off. */
+  /**
+   * Hands tags off through {@link handOffWithin}, to the installed hand-off,
+   * and keeps them for Next.js's own cache at the next request: the in-process
+   * default already keeps them for that, and an installed one records them
+   * only where nextly's cache handlers read.
+   */
   private async handOff(tags: string[], reason: string): Promise<void> {
-    await handOffWithin(this.handoff(), tags, reason);
+    const handoff = this.handoff();
+    await handOffWithin(handoff, tags, reason);
+    if (!isPendingExpiryHandoff(handoff)) holdForNextRequest(tags);
   }
 }
 

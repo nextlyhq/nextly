@@ -1,18 +1,28 @@
 /**
- * A card's settings as its form holds them, and as they are stored.
+ * A card's settings as its settings panel reads and keeps them: the values the panel opens with,
+ * what Done stores, and what a section's Reset leaves. Pure, and apart from the panel itself, so
+ * the quick setting on the card reads the same rules without loading the panel.
  *
- * Apart from the settings sheet because the card's quick setting reads and
- * writes them too, at rest on every dashboard, while the sheet itself loads
- * only when a reader opens it (`LazyWidgetSettingsSheet`): it draws its form
- * with the entry editor's field renderer, which the dashboard has no other
- * need for.
- *
- * @module components/features/widgets/edit/settings-values
+ * @module components/features/widgets/edit/panel-values
  */
+import {
+  resolveWidgetSettings,
+  type AnyWidgetSetting,
+  type PublishedContentSource,
+} from "nextly/config";
 
-import { resolveWidgetSettings, type AnyWidgetSetting } from "nextly/config";
+import {
+  isDependentSetting,
+  sameSettingValue,
+  startingValue,
+} from "./content-settings";
 
-import { sameSettingValue } from "./content-settings";
+/** What Done keeps: the settings, as `toStoredConfig` builds them, and the card's own title. */
+export interface PanelKept {
+  config: Record<string, unknown>;
+  /** The title the reader gave the card, trimmed; `""` titles it automatically. */
+  ownTitle: string;
+}
 
 /**
  * The values the form opens with.
@@ -99,4 +109,44 @@ export function toStoredConfig(
     stored[setting.name] = value;
   }
   return stored;
+}
+
+/**
+ * What the form holds after "Reset to defaults" of the settings in `settings`, one section's.
+ *
+ * Every one goes back to its declared default, its dependents with it, except a Collection
+ * setting that declares no default, which Reset leaves as it is. Such a setting names the card's
+ * collection: it is the card's identity rather than a preference, chosen when the card was
+ * placed and changed with the Collection control itself, so Reset does not undo it, and does not
+ * empty it into a card of no collection at all. A Collection setting that declares a default
+ * (Recently edited's "All collections") resets like any other.
+ *
+ * A dependent goes back to its default only where the default names a field it may use over the
+ * collection kept, read from `values` where the collection is in another section; otherwise to
+ * none, so Reset never draws a choice the collection does not have.
+ */
+export function resetToDefaults(
+  settings: readonly AnyWidgetSetting[],
+  values: Record<string, unknown>,
+  sources?: readonly PublishedContentSource[]
+): Record<string, unknown> {
+  const reset: Record<string, unknown> = Object.create(null);
+  for (const setting of settings) {
+    const kept =
+      setting.type === "collection" &&
+      setting.defaultValue === undefined &&
+      Object.hasOwn(values, setting.name);
+    reset[setting.name] = kept
+      ? values[setting.name]
+      : (setting.defaultValue ?? "");
+  }
+  for (const setting of settings) {
+    if (isDependentSetting(setting)) {
+      const collection = Object.hasOwn(reset, setting.of)
+        ? reset[setting.of]
+        : values[setting.of];
+      reset[setting.name] = startingValue(setting, collection, sources);
+    }
+  }
+  return reset;
 }

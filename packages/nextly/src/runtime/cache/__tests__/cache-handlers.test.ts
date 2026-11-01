@@ -15,8 +15,15 @@ import { setNextlyLogger } from "../../../observability/logger";
 import { BoundedEntries } from "../bounded-entries";
 import IncrementalHandler from "../incremental-cache-handler";
 import type { TagExpiries, TagExpiryLedger } from "../tag-expiry-ledger";
-import { LEDGER_RETENTION_MS } from "../tag-expiry-ledger";
-import { publishTagExpiryLedger, TAG_LOOKUP_TTL_MS } from "../tag-expiry-view";
+import { LEDGER_RETENTION_MS, TAG_EXPIRY_GRACE_MS } from "../tag-expiry-ledger";
+import {
+  expireTags,
+  isEntryExpired,
+  localNow,
+  publishTagExpiryLedger,
+  refreshTagExpiries,
+  TAG_LOOKUP_TTL_MS,
+} from "../tag-expiry-view";
 import useCacheHandler from "../use-cache-handler";
 
 const T0 = Date.UTC(2026, 9, 30, 12, 0, 0);
@@ -39,7 +46,7 @@ function memoryLedger(skewMs = 0) {
   const ledger: TagExpiryLedger = {
     record: async tags => {
       for (const tag of tags) rows.set(tag, now());
-      return true;
+      return new Map(tags.map(tag => [tag, rows.get(tag) ?? 0] as const));
     },
     expiriesOf,
     prune: async () => 0,
@@ -373,7 +380,7 @@ describe("the incremental cache handler", () => {
       throw new Error("connection refused");
     });
     publishTagExpiryLedger({
-      record: async () => true,
+      record: async () => new Map(),
       expiriesOf,
       prune: async () => 0,
     });
@@ -389,6 +396,116 @@ describe("the incremental cache handler", () => {
     expect(warn.mock.calls[0][0]).toMatchObject({
       kind: "cache-tag-ledger-unreachable",
     });
+  });
+});
+
+describe("the writer's own expiry", () => {
+  it("is not judged again by the ledger time its record stored a round trip later", async () => {
+    // The database runs 50 ms ahead, and the record reads its time, graced,
+    // then takes 50 ms to commit: the stored time is after an entry this
+    // process began meanwhile.
+    const rows = new Map<string, number>();
+    const ahead = 50;
+    publishTagExpiryLedger({
+      record: async tags => {
+        const at = Date.now() + ahead + TAG_EXPIRY_GRACE_MS;
+        await new Promise(resolve => setTimeout(resolve, 50));
+        for (const tag of tags) rows.set(tag, at);
+        return new Map(tags.map(tag => [tag, at] as const));
+      },
+      expiriesOf: async tags => ({
+        now: Date.now() + ahead,
+        expired: new Map(
+          tags.flatMap(tag => {
+            const at = rows.get(tag);
+            return at === undefined ? [] : [[tag, at] as const];
+          })
+        ),
+      }),
+      prune: async () => 0,
+    });
+
+    const recording = expireTags(["t"]);
+    await vi.advanceTimersByTimeAsync(10);
+    const begunAt = localNow();
+    await vi.advanceTimersByTimeAsync(40);
+    await recording;
+
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await refreshTagExpiries(["t"]);
+    expect(isEntryExpired(["t"], begunAt)).toBe(false);
+  });
+
+  it("refuses an entry begun before its record read the time, which another instance may have recorded in the same millisecond", async () => {
+    // The record checks its table for 10 ms before it reads the time. Another
+    // instance that read the same millisecond, after its own write committed,
+    // stores the same time: only that time can say an entry is older.
+    const rows = new Map<string, number>();
+    publishTagExpiryLedger({
+      record: async tags => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const at = Date.now() + TAG_EXPIRY_GRACE_MS;
+        for (const tag of tags) rows.set(tag, at);
+        return new Map(tags.map(tag => [tag, at] as const));
+      },
+      expiriesOf: async tags => ({
+        now: Date.now(),
+        expired: new Map(
+          tags.flatMap(tag => {
+            const at = rows.get(tag);
+            return at === undefined ? [] : [[tag, at] as const];
+          })
+        ),
+      }),
+      prune: async () => 0,
+    });
+
+    const recording = expireTags(["t"]);
+    await vi.advanceTimersByTimeAsync(5);
+    const begunAt = localNow();
+    await vi.advanceTimersByTimeAsync(5);
+    await recording;
+    await vi.advanceTimersByTimeAsync(5);
+    const afterAt = localNow();
+
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await refreshTagExpiries(["t"]);
+    expect(isEntryExpired(["t"], begunAt)).toBe(true);
+    expect(isEntryExpired(["t"], afterAt)).toBe(false);
+  });
+
+  it("records into the state an older copy of the view made, which has no record of its own times", async () => {
+    // As a bundled or hot-reloaded copy finds it: every field but `mine`.
+    (
+      globalThis as { __nextly_tag_expiry_view?: unknown }
+    ).__nextly_tag_expiry_view = {
+      lookups: new Map(),
+      asking: new Map(),
+      own: new Map(),
+      offsetMs: 0,
+      sweptAt: 0,
+      lastLocal: 0,
+      warned: false,
+    };
+    const { ledger } = memoryLedger();
+    publishTagExpiryLedger(ledger);
+
+    await expect(expireTags(["t"])).resolves.toBe("recorded");
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await expect(refreshTagExpiries(["t"])).resolves.toBeUndefined();
+  });
+
+  it("still judges another instance's later expiry of the same tag", async () => {
+    const { ledger, recordElsewhere } = memoryLedger();
+    publishTagExpiryLedger(ledger);
+    await expireTags(["t"]);
+    vi.advanceTimersByTime(10);
+    const begunAt = localNow();
+    vi.advanceTimersByTime(10);
+    recordElsewhere("t");
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await refreshTagExpiries(["t"]);
+    expect(isEntryExpired(["t"], begunAt)).toBe(true);
   });
 });
 

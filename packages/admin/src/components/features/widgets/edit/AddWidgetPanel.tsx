@@ -54,7 +54,10 @@ import type {
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
 
+import { cardOuterWidth } from "../frame/tier";
 import { WidgetTilePreview } from "../preview/WidgetTilePreview";
+import { drawnSize } from "../sizes";
+import { useDashboardWidthAround } from "../useDashboardWidth";
 
 import {
   addWidths,
@@ -869,6 +872,42 @@ function StepChoices({
   );
 }
 
+/**
+ * The card as the add step would add it: its settings, and the width chosen, at its starting
+ * height, held to the widget's sizes. Drawn at that width on this dashboard where its width is
+ * known, so the preview is the card the reader will get, not the widget's default.
+ */
+function StepPreview({
+  step,
+  widget,
+}: {
+  step: AddStep;
+  widget: DashboardWidget;
+}): JSX.Element {
+  const dashboardWidth = useDashboardWidthAround();
+  const size = drawnSize(
+    { w: step.width, h: widget.size.default.h },
+    widget.size
+  );
+  return (
+    <SettingsPreview
+      widget={widget}
+      placementId={`gallery-add:${step.tile.id}`}
+      stored={undefined}
+      draft={stepSettings(step, widget) ?? {}}
+      shown={NOTHING_SHOWN}
+      // A card not placed yet: no title of the reader's own.
+      ownTitle=""
+      size={size}
+      cardWidth={
+        dashboardWidth === undefined
+          ? undefined
+          : cardOuterWidth(size.w, dashboardWidth)
+      }
+    />
+  );
+}
+
 /** The add step: the collection, the period and the width, with the card previewed. */
 function AddStepView({
   step,
@@ -912,13 +951,7 @@ function AddStepView({
       />
       <StepChoices step={step} widget={widget} onChange={onChange} />
       {widget !== undefined && chosen ? (
-        <SettingsPreview
-          widget={widget}
-          placementId={`gallery-add:${step.tile.id}`}
-          stored={undefined}
-          draft={stepSettings(step, widget) ?? {}}
-          shown={NOTHING_SHOWN}
-        />
+        <StepPreview step={step} widget={widget} />
       ) : null}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onBack}>
