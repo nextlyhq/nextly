@@ -52,20 +52,22 @@ import {
   dependentsOf,
   startingValue,
 } from "./content-settings";
+import { initialValues, toStoredConfig } from "./panel-values";
 import {
   popoverSettingsOf,
   quickSettingOf,
   quickValueLabel,
   type PopoverSetting,
 } from "./quick-setting";
-import { initialValues, toStoredConfig } from "./settings-values";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 
 /** How a cell at rest saves its card's settings and size, bound to that card by the grid. */
 export interface CellSettingsWrite {
+  /** Save the card's settings at once, and its own title where `ownTitle` is given. */
   write: (
     config: Record<string, unknown>,
-    callbacks: CardSettingsWriteCallbacks
+    callbacks: CardSettingsWriteCallbacks,
+    ownTitle?: string
   ) => void;
   /** Save the card's size at once; absent where only its settings can be written. */
   resize?: (size: GridSize, callbacks: CardSettingsWriteCallbacks) => void;
@@ -77,7 +79,7 @@ export interface CellSettingsWrite {
 
 /** How a cell stages its card's changes while customising: in the draft, kept until Save. */
 export interface CellStagedWrite {
-  config: (config: Record<string, unknown>) => void;
+  config: (config: Record<string, unknown>, ownTitle?: string) => void;
   size: (size: GridSize) => void;
   /** A layout write is in flight, which every customise control waits for. */
   isWriting: boolean;

@@ -22,6 +22,7 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX, ReactNode } from "react";
@@ -278,6 +279,12 @@ export interface WidgetRendererProps {
    */
   answerSize?: AnswerSize;
   /**
+   * The size tier to draw at, where the caller knows it better than the card's own measurement:
+   * a card drawn somewhere other than its place on the dashboard, as the settings panel's
+   * preview is, scaled to fit, whose measured width is not the width it will have.
+   */
+  tier?: SizeTier;
+  /**
    * Which CARD this render is, and what its reader configured.
    *
    * 🔴 Handed to a plugin's own component, because nothing else can reach it.
@@ -318,6 +325,7 @@ function sharedCardProps(
     | "customizing"
     | "answerSize"
     | "subtitle"
+    | "tier"
   > & { hiddenWhileEmpty: boolean; hidesWhenAnswerEmpty: boolean }
 ) {
   const { hiddenWhileEmpty, hidesWhenAnswerEmpty, ...rest } = controls;
@@ -583,6 +591,7 @@ export function WidgetRenderer({
   isFetching = false,
   answerSize,
   subtitle,
+  tier,
 }: WidgetRendererProps): JSX.Element {
   // Taken off the dashboard while empty by the layout read's verdict, held for the visit; or, for
   // a widget the layout read cannot answer, by its own answer as it is drawn.
@@ -598,6 +607,7 @@ export function WidgetRenderer({
     subtitle,
     hiddenWhileEmpty,
     hidesWhenAnswerEmpty,
+    ...(tier === undefined ? {} : { tier }),
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);

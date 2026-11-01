@@ -29,6 +29,8 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "../../core-components";
+import { cardOuterWidth } from "../../frame/tier";
+import { DashboardWidthProvider } from "../../useDashboardWidth";
 import type { GalleryRead, GalleryTile } from "../add-panel-model";
 import { AddWidgetPanel, type AddWidgetPanelProps } from "../AddWidgetPanel";
 
@@ -454,6 +456,32 @@ describe("the add step", () => {
     // The card previewed as it will be added.
     expect(within(step).getByTestId("settings-preview")).toBeInTheDocument();
     expect(within(step).getByRole("button", { name: "Back" })).toBeEnabled();
+  });
+
+  it("previews the card at the width chosen in the step, as it will be added", async () => {
+    const user = userEvent.setup();
+    const all = props();
+    // On a 1,200 px dashboard, so each width draws the card at its own width there.
+    render(
+      <DashboardWidthProvider value={1200}>
+        <AddWidgetPanel {...all} />
+      </DashboardWidthProvider>,
+      { wrapper }
+    );
+    await user.click(screen.getByRole("button", { name: "Add Over time" }));
+    const step = screen.getByTestId("add-panel-step");
+    await user.selectOptions(
+      within(step).getByRole("combobox", { name: "Collection" }),
+      "posts"
+    );
+    const preview = () => within(step).getByTestId("settings-preview");
+    // The control: the default width and full width draw the card at different widths.
+    expect(cardOuterWidth(6, 1200)).not.toBe(cardOuterWidth(12, 1200));
+    expect(preview().style.width).toBe(`${cardOuterWidth(6, 1200)}px`);
+    await user.click(
+      within(step).getByRole("radio", { name: "Full width, 12 columns" })
+    );
+    expect(preview().style.width).toBe(`${cardOuterWidth(12, 1200)}px`);
   });
 
   it("adds with what was chosen, then goes back to the gallery, focus on the tile", async () => {

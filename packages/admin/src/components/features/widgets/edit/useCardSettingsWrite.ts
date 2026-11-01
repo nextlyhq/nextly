@@ -36,7 +36,15 @@ import { landed, singleCardWrite } from "./single-card-write";
  * a default), or its size, held to its widget's bounds as the customise menu's resize is.
  */
 export type CardChange =
-  | { readonly kind: "settings"; readonly config: Record<string, unknown> }
+  | {
+      readonly kind: "settings";
+      readonly config: Record<string, unknown>;
+      /**
+       * The title the reader gave the card, where the change sets it: the settings panel's
+       * Title. Absent, the card keeps the title it has.
+       */
+      readonly ownTitle?: string;
+    }
   | {
       readonly kind: "size";
       readonly size: GridSize;
@@ -120,9 +128,18 @@ function applied(
     };
   }
   return {
-    placements: setPlacementConfig(placements, placementId, change.config),
-    // Compared by value: the settings come back from the server as a new object.
-    shows: placement => sameSettingValue(placement.config ?? {}, change.config),
+    placements: setPlacementConfig(
+      placements,
+      placementId,
+      change.config,
+      change.ownTitle
+    ),
+    // Compared by value: the settings come back from the server as a new object. The title as
+    // the write stores it, trimmed, absent when nothing is left.
+    shows: placement =>
+      sameSettingValue(placement.config ?? {}, change.config) &&
+      (change.ownTitle === undefined ||
+        (placement.title ?? "") === change.ownTitle.trim()),
     what: "settings",
   };
 }

@@ -16,22 +16,20 @@ import fs from "fs";
 import path from "path";
 
 import {
+  ADMIN_NAME_PREFIX,
   findUnscopedRules,
-  namespaceInternalProperties,
-  prefixKeyframes,
-  scopeCss,
+  hasHostElementShield,
+  isolateAdminStylesheet,
 } from "@nextlyhq/admin-css";
 
-import { compileTailwind, PACKAGE_ROOT, STYLES_ENTRY } from "./compile-tailwind.mjs";
+import {
+  compileTailwind,
+  PACKAGE_ROOT,
+  STYLES_ENTRY,
+} from "./compile-tailwind.mjs";
 
-
-/**
- * Prefix for the names this sheet publishes document-wide.
- *
- * Short and shared by both namespacing passes, so a keyframe and a custom
- * property that came from the same build are recognisable as one origin.
- */
-const NAME_PREFIX = "nx-";
+/** Prefix for the names this sheet publishes document-wide. */
+const NAME_PREFIX = ADMIN_NAME_PREFIX;
 const outputDir = path.join(PACKAGE_ROOT, "dist/styles");
 const outputFile = path.join(outputDir, "globals.css");
 const tempFile = path.join(outputDir, "globals.temp.css");
@@ -52,23 +50,10 @@ try {
   // Step 2: Post-process CSS to scope utilities within .nextly-admin
   let css = fs.readFileSync(tempFile, "utf-8");
 
-  // Apply scoping
-  css = scopeCss(css);
-
-  // Scoping selectors is not the whole job. Two kinds of name in this sheet are
-  // resolved for the whole DOCUMENT no matter which selector accompanies them,
-  // so a perfectly scoped stylesheet still reaches the host through them.
-  //
-  // `@keyframes` names are global: this sheet defines `spin`, `pulse` and
-  // `fade-in`, and a host that defines its own gets whichever loaded later.
-  //
-  // `@property` registrations are global too, and worse, because registering a
-  // name changes its semantics everywhere — an inherited custom property
-  // becomes non-inheriting and gains an initial value. A host running Tailwind
-  // itself registers the same `--tw-*` names, and the two registrations are
-  // not required to agree.
-  css = prefixKeyframes(css, NAME_PREFIX);
-  css = namespaceInternalProperties(css, NAME_PREFIX);
+  // Scope every selector, namespace the names a document resolves globally,
+  // and refuse a rule that escaped: the one sequence `@nextlyhq/admin-css`
+  // defines for every compile of this sheet, the playground's included.
+  css = isolateAdminStylesheet(css, { prefix: NAME_PREFIX });
 
   // Write scoped CSS to temp file
   const scopedTempFile = path.join(outputDir, "globals.scoped.css");
@@ -177,6 +162,20 @@ try {
     process.exit(1);
   }
 
+  // Step 7: Guard the shield against the host's element rules, on the file
+  // that ships. `isolateAdminStylesheet` adds it before the minifier runs, and
+  // its whole effect rides on its selector's weight, which a minifier could
+  // simplify away while keeping the rule: the admin would lose to a host's
+  // `h2 { font-size }` again with nothing in this build saying so.
+  if (!hasHostElementShield(built)) {
+    console.error(
+      "\n❌ The shipped stylesheet lost the shield against host element rules.\n" +
+        "\nThe minifier dropped or rewrote the `:where(.nextly-admin) :is(*, x …)`\n" +
+        "rule `isolateAdminStylesheet` adds. Without it, a host's unlayered\n" +
+        "`h2 { ... }` restyles the admin's headings again.\n"
+    );
+    process.exit(1);
+  }
 
   // Get file size
   const stats = fs.statSync(outputFile);

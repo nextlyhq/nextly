@@ -1,8 +1,9 @@
 /**
- * The card settings sheet's code, as one fetch, and the handlers that start it
- * ahead of an opening.
+ * The card settings panel's code (`CellSettings`: the panel, its sections and
+ * its preview), as one fetch, and the handlers that start it ahead of an
+ * opening.
  *
- * Apart from `LazyWidgetSettingsSheet`, which draws the sheet once this has
+ * Apart from `LazyWidgetSettingsSheet`, which draws the panel once this has
  * arrived: a card's empty state and its menus only start the fetch, and every
  * card is drawn by `WidgetRenderer`, which the widget preview page shares with
  * the dashboard. Importing the drawing half from there carried the loading and
@@ -17,17 +18,15 @@ import {
   type RetryableModule,
 } from "@admin/lib/retryable-module";
 
-import type { WidgetSettingsSheet } from "./WidgetSettingsSheet";
+import type CellSettings from "./CellSettings";
 
 /**
- * The sheet's code: one fetch shared by a preload and an opening, and, unlike
+ * The panel's code: one fetch shared by a preload and an opening, and, unlike
  * `React.lazy`, a failed fetch is not kept, so opening again fetches afresh
  * rather than throwing the dashboard into its error boundary.
  */
-export const settingsSheetModule: RetryableModule<typeof WidgetSettingsSheet> =
-  retryableModule(() =>
-    import("./WidgetSettingsSheet").then(m => m.WidgetSettingsSheet)
-  );
+export const settingsSheetModule: RetryableModule<typeof CellSettings> =
+  retryableModule(() => import("./CellSettings").then(m => m.default));
 
 /**
  * Start fetching the sheet's code ahead of its opening. A failed fetch says

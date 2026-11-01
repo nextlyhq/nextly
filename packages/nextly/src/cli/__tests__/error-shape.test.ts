@@ -108,10 +108,40 @@ async function runCli(
     if (!(error instanceof Exited)) throw error;
   }
   code = first ?? undefined;
-  const stderr = stripVTControlCharacters(lines.join("\n"))
-    .split(project)
-    .join("<project>");
+  const stderr = withProjectRedacted(
+    stripVTControlCharacters(lines.join("\n")),
+    project
+  );
   return { stderr, stdout: out.join("\n"), code };
+}
+
+/**
+ * `text` with the project `folder` written `<project>`, and each path under
+ * it separated by `/`, so a snapshot reads the same on every platform.
+ *
+ * The folder is printed as itself in a message, and JSON-escaped in the
+ * verbose context, where Windows' every `\` is doubled; replacing only the
+ * first spelling leaves the second as the runner's own temporary folder. The
+ * command shows a Windows user their own separator, which is right, so only
+ * the separator is made one here: the names below the folder stay pinned.
+ */
+function withProjectRedacted(text: string, folder: string): string {
+  let redacted = text;
+  for (const spelling of new Set([
+    folder,
+    JSON.stringify(folder).slice(1, -1),
+  ])) {
+    const [before, ...after] = redacted.split(spelling);
+    redacted = [
+      before,
+      ...after.map(rest =>
+        rest.replace(/^(?:(?:\\\\|\\|\/)[\w.-]+)+/, below =>
+          below.replace(/\\\\|\\/g, "/")
+        )
+      ),
+    ].join("<project>");
+  }
+  return redacted;
 }
 
 /** The four lines of the shape, each found by its label, or undefined where one is missing. */
