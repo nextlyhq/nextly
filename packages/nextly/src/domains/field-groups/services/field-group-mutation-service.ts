@@ -22,7 +22,10 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { keepDeniedAtStored } from "../../../shared/lib/denied-change";
-import { validateEntryData } from "../../../shared/lib/entry-validation";
+import {
+  validateEntryData,
+  type ValidationIssue,
+} from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldWriteAccess,
@@ -45,6 +48,7 @@ import {
   reachesPasswordField,
   storedPasswordValues,
 } from "../../../shared/lib/password-fields";
+import { issuesTheReaderMaySee } from "../../../shared/lib/unreadable-field-issues";
 import type { Logger } from "../../../shared/types";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -1999,7 +2003,14 @@ export class FieldGroupMutationService extends BaseService {
       )),
     ];
     if (issues.length > 0) {
-      throw NextlyError.validation({ errors: issues });
+      throw NextlyError.validation({
+        errors: await this.instanceIssuesTheWriterMaySee(issues, {
+          instance,
+          componentFields,
+          slug,
+          storedId,
+        }),
+      });
     }
     // After validation, which judges what the writer sent: each password an
     // update left out of a container keeps its stored hash, whoever writes.
@@ -2032,6 +2043,54 @@ export class FieldGroupMutationService extends BaseService {
    * what its defaults bring in for a new one; see `prepareInstanceForWrite`.
    * Returns the stored hashes an update's restore put back.
    */
+  /**
+   * `issues` as the writer may be told them: an instance can hold stored
+   * values, a promoted draft's among them, and an issue on a field of it the
+   * writer may not read is told without naming it or its value, by the field
+   * group's own read rules. Trusted writes are told every issue. A write
+   * with no caller to judge was already refused by the write rules
+   * (`applyInstanceWriteRules`), which ask the same.
+   */
+  private async instanceIssuesTheWriterMaySee(
+    issues: ValidationIssue[],
+    args: {
+      instance: ComponentInstanceData;
+      componentFields: FieldConfig[];
+      slug: string | undefined;
+      storedId: string | undefined;
+    }
+  ): Promise<ValidationIssue[]> {
+    const access = writeScope.getStore()?.access;
+    if (access === undefined || args.slug === undefined) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "field-group-write-unjudged",
+          fieldGroup: args.slug ?? null,
+        },
+      });
+    }
+    return issuesTheReaderMaySee(issues, {
+      kind: "fieldGroup",
+      slug: args.slug,
+      document: args.instance,
+      fields: args.componentFields,
+      entryId: args.storedId,
+      reader: {
+        user: access.user,
+        authenticatedScope: access.authenticatedScope,
+        overrideAccess: access.overrideAccess,
+        grants:
+          access.grants ??
+          callerAccessGrants(
+            access.user,
+            access.authenticatedScope,
+            undefined,
+            access.visitor
+          ),
+      },
+    });
+  }
+
   private async judgeInstanceForWrite(
     instance: ComponentInstanceData,
     componentFields: FieldConfig[],
