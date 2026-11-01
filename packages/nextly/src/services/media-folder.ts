@@ -832,11 +832,18 @@ export class MediaFolderService extends BaseService {
     return false;
   }
 
-  /** The folder and every folder under it, as `tx` reads them. */
+  /** The folder and every folder under it, each locked on `tx`. */
   private async subtreeOn(
     tx: TransactionContext,
     folderId: string
   ): Promise<string[]> {
+    // Each folder locked as it is read, the next level read only once the
+    // one above it is held: a file uploaded or moved into one of them, or a
+    // folder created under one, checks its parent row, so it waits for this
+    // transaction and then finds its folder gone. Nothing can arrive between
+    // what is read here and the delete. Read with a lock, so on MySQL each
+    // level is the latest committed, not an earlier snapshot.
+    await tx.lockRow("media_folders", folderId);
     const all = [folderId];
     let level = [folderId];
     while (level.length > 0) {
@@ -845,6 +852,7 @@ export class MediaFolderService extends BaseService {
         const rows = await tx.select<{ id: string }>("media_folders", {
           columns: ["id"],
           where: { and: [{ column: "parentId", op: "IN", value: run }] },
+          forUpdate: true,
         });
         next.push(...rows.map(row => String(row.id)));
       }
@@ -888,16 +896,15 @@ export class MediaFolderService extends BaseService {
       );
       if (refusal) return refusal;
 
-      // One transaction, all or nothing: every media row the folder and the
-      // folders under it hold is locked first, in the order a delete that
-      // can be undone locks its items in (`lockMediaItems`), and then their
-      // marks are read. An item marked since the check above refuses the
-      // whole delete before anything changes: deleting it would cut its Undo
-      // short, and moving it would bring it back outside its folder. A mark
-      // asked for later waits for these locks and finds its item gone or
-      // moved. The subtree is read on the transaction, so a folder created
-      // under this one meanwhile, which the delete cascades into, has its
-      // media read too.
+      // One transaction, all or nothing. The folder and every folder under
+      // it are locked first (`subtreeOn`), so nothing arrives in them while
+      // it runs; then every media row they hold is locked, in the order a
+      // delete that can be undone locks its items in (`lockMediaItems`), and
+      // then their marks are read. An item marked since the check above
+      // refuses the whole delete before anything changes: deleting it would
+      // cut its Undo short, and moving it would bring it back outside its
+      // folder. A mark asked for later waits for these locks and finds its
+      // item gone or moved.
       const removal = await this.adapter.transaction(async tx => {
         const folders = await this.subtreeOn(tx, folderId);
         const held = await this.heldMediaOn(tx, folders);
@@ -907,16 +914,26 @@ export class MediaFolderService extends BaseService {
         // the ones they hold at their removal: a crop committed since the
         // folder was checked is seen, and one reaching its commit while the
         // rows are held finds them gone and removes its own new sizes.
+        // Read with a lock, the latest committed on every dialect, and kept
+        // only while still in one of the folders: an item moved out before
+        // its lock was taken stays.
         const removed: StoredMediaRecord[] = [];
         if (deleteContents) {
+          const inSubtree = new Set(folders);
           for (const run of this.idRuns(held, 0)) {
-            const inRun = {
-              and: [{ column: "id", op: "IN" as const, value: run }],
-            };
-            const rows = await tx.select<StoredMediaRecord>("media", {
-              where: inRun,
+            const rows = (
+              await tx.select<StoredMediaRecord & { folderId?: unknown }>(
+                "media",
+                {
+                  where: { and: [{ column: "id", op: "IN", value: run }] },
+                  forUpdate: true,
+                }
+              )
+            ).filter(row => inSubtree.has(String(row.folderId)));
+            if (rows.length === 0) continue;
+            await tx.delete("media", {
+              and: [{ column: "id", op: "IN", value: rows.map(row => row.id) }],
             });
-            if (rows.length > 0) await tx.delete("media", inRun);
             removed.push(...rows);
           }
         }
