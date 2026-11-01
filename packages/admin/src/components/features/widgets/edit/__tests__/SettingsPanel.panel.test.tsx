@@ -439,6 +439,42 @@ describe("the panel's filter chips", () => {
     }
   });
 
+  it("keeps a filter whose last chip was removed empty, over the filter its widget sets by default", async () => {
+    // A Filter the widget sets by default: the card opens filtered, and the reader removes it.
+    const DEFAULTED: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection", label: "Collection" },
+      {
+        name: "where",
+        type: "filter",
+        of: "collection",
+        label: "Filter",
+        defaultValue: { title: { equals: "Hello" } },
+      },
+    ];
+    const { onDone } = panel({ collection: "posts" }, DEFAULTED);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter: Title is Hello" })
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    // No conditions, stored: unset, the default would filter the card again.
+    expect(kept(onDone)?.config.where).toEqual({});
+  });
+
+  it("opens a filter stored empty with no chip, though its widget sets one by default", () => {
+    panel({ collection: "posts", where: {} }, [
+      { name: "collection", type: "collection", label: "Collection" },
+      {
+        name: "where",
+        type: "filter",
+        of: "collection",
+        label: "Filter",
+        defaultValue: { title: { equals: "Hello" } },
+      },
+    ]);
+    expect(screen.queryByRole("button", { name: "Title is Hello" })).toBeNull();
+  });
+
   it("removes one chip alone with its ✕", async () => {
     const { onDone } = panel({
       collection: "posts",

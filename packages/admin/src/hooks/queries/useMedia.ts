@@ -140,15 +140,13 @@ export function useMedia(
     },
     // A new page, sort or search keeps showing the current results until its
     // own arrive, instead of dropping back to the loading skeleton. A new
-    // folder or view does not: its heading would sit over the old rows, and
+    // folder does not: its heading would sit over the old folder's rows, and
     // their edit and delete controls would act on files the reader just left.
-    placeholderData: (previous, previousQuery) => {
-      const before = previousQuery?.queryKey[1] as MediaParams | undefined;
-      return before?.folderId === params?.folderId &&
-        before?.view === params?.view
+    placeholderData: (previous, previousQuery) =>
+      (previousQuery?.queryKey[1] as MediaParams | undefined)?.folderId ===
+      params?.folderId
         ? previous
-        : undefined;
-    },
+        : undefined,
     ...options,
   });
 }

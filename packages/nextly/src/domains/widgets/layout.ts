@@ -125,8 +125,11 @@ export interface WidgetPlacement {
   config?: Record<string, unknown>;
   /**
    * The title the reader gave this card, trimmed, at most
-   * `MAX_CARD_TITLE_LENGTH` characters. Absent means the card is titled
-   * automatically from its widget and settings.
+   * `MAX_CARD_TITLE_LENGTH` characters. Absent or empty means the card is
+   * titled automatically from its widget and settings; empty is the reader
+   * having cleared a title, which a title the site's default gives the card
+   * does not undo. A row stored before empty titles were kept has none, and
+   * follows the default's title as it always did.
    *
    * On the PLACEMENT, beside `config` rather than in it: `config` is the
    * widget's own vocabulary, where a setting a plugin happened to name
@@ -227,14 +230,15 @@ function titleProblem(title: unknown): string | undefined {
 }
 
 /**
- * A placement's own title as stored: trimmed, and absent when nothing is left,
- * so a reader clearing the field returns the card to its automatic title
- * rather than storing an empty one.
+ * A placement's own title as stored: trimmed, and kept even when nothing is
+ * left. An empty title is the reader's clearing, which titles the card
+ * automatically as no title does, and which a live default's own title must
+ * not come back over (`dismissalsApplied`); dropped, the merge could not tell
+ * a cleared title from one never given.
  */
 function ownTitleOf(title: unknown): { title?: string } {
   if (typeof title !== "string") return {};
-  const trimmed = title.trim();
-  return trimmed === "" ? {} : { title: trimmed };
+  return { title: title.trim() };
 }
 
 /**

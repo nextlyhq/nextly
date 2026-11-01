@@ -33,12 +33,17 @@ import { createRegister, shutdownNextly } from "../init";
 import { withNextly } from "../next";
 import * as logger from "../observability/logger";
 import { applyCache, type UnstableCache } from "../runtime/cache/cached-find";
+import { flushQueuedCacheComponentsWarnings } from "../cache-components";
 import { recordCacheComponents } from "../runtime/cache/registered-read";
 
 /** The start-time check's once-per-process record, cleared so each case starts fresh. */
 const WARNED = Symbol.for("nextly/cache-components-off-warned");
+/** The lines waiting for an app logger, sent on and cleared the same way. */
+const QUEUED = Symbol.for("nextly/cache-components-queued-warnings");
 const forgetWarnings = () => {
+  flushQueuedCacheComponentsWarnings();
   delete (globalThis as Record<symbol, unknown>)[WARNED];
+  delete (globalThis as Record<symbol, unknown>)[QUEUED];
 };
 
 let warn: MockInstance<typeof console.warn>;
@@ -57,8 +62,15 @@ afterEach(() => {
 const OFF =
   /is off in .*Nextly supports only Cache Components and Partial Prefetching on/;
 
-/** Every warning printed so far, as one string. */
-const warned = () => warn.mock.calls.map(call => String(call[0])).join("\n");
+/**
+ * Every warning printed so far, as one string. With no app logger installed,
+ * the config's lines wait for one; `register()` or the process's exit sends
+ * them on, as this does first.
+ */
+const warned = () => {
+  flushQueuedCacheComponentsWarnings();
+  return warn.mock.calls.map(call => String(call[0])).join("\n");
+};
 
 describe("withNextly and Cache Components", () => {
   it("takes a config with both options on without a warning", () => {

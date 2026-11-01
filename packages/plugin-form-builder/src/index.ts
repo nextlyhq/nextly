@@ -58,6 +58,14 @@ export {
 export const formBuilderPlugin: ReturnType<typeof formBuilder>["plugin"] =
   formBuilder().plugin;
 
+// The New form submissions widget's id, for a site's own `defaultLayout` to
+// name, and the data its card draws.
+export {
+  NEW_SUBMISSIONS_WIDGET_ID,
+  type NewSubmissionRow,
+  type NewSubmissionsData,
+} from "./dashboard/new-submissions";
+
 // ============================================================
 // Type Exports
 // ============================================================

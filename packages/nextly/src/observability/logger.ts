@@ -56,6 +56,25 @@ export function setNextlyLogger(logger: NextlyLogger | undefined): void {
   // wrapper of its own and mask every line twice.
   currentLogger =
     (logger && registeredBehind.get(logger)) ?? logger ?? defaultLogger;
+  if (currentLogger !== defaultLogger) {
+    for (const listener of whenInstalled) listener();
+  }
+}
+
+/** Called each time an app installs a logger of its own. */
+const whenInstalled = new Set<() => void>();
+
+/**
+ * Calls `listener` whenever an app installs a logger of its own: a line said
+ * before one could be, while Next.js loads the config, can then reach it.
+ */
+export function onNextlyLoggerInstalled(listener: () => void): void {
+  whenInstalled.add(listener);
+}
+
+/** Whether an app has installed a logger of its own, rather than the default. */
+export function nextlyLoggerInstalled(): boolean {
+  return currentLogger !== defaultLogger;
 }
 
 /**

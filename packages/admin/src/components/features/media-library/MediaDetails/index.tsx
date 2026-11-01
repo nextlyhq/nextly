@@ -19,7 +19,6 @@ import {
   FileText,
   FolderInput,
   Music,
-  RefreshCw,
   Trash2,
   Video,
 } from "@admin/components/icons";
@@ -63,7 +62,6 @@ export interface MediaDetailsActionHandlers {
   onCopyUrl: (media: Media) => void;
   onDownload: (media: Media) => void;
   onMove?: (media: Media) => void;
-  onReplace?: (media: Media) => void;
   onDelete?: (media: Media) => void;
 }
 
@@ -393,7 +391,6 @@ export function MediaDetailsActions({
   onCopyUrl,
   onDownload,
   onMove,
-  onReplace,
   onDelete,
 }: MediaDetailsActionHandlers & { media: Media }): React.JSX.Element {
   return (
@@ -418,18 +415,6 @@ export function MediaDetailsActions({
         <Download className="h-4 w-4" aria-hidden="true" />
         Download
       </Button>
-      {onReplace && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="gap-1.5"
-          onClick={() => onReplace(media)}
-        >
-          <RefreshCw className="h-4 w-4" aria-hidden="true" />
-          Replace file
-        </Button>
-      )}
       {onMove && (
         <Button
           type="button"

@@ -46,7 +46,6 @@ import {
   type MediaSave,
 } from "../MediaDetails";
 import { isFocalPointKeyEvent } from "../MediaFocalPoint";
-import { MediaUsedIn, type MediaUsageState } from "../MediaUsedIn";
 
 import { useMediaDetailsPanelHeight } from "./useMediaDetailsPanelHeight";
 
@@ -67,11 +66,6 @@ export interface MediaDetailsPanelProps extends MediaDetailsActionHandlers {
   /** The item's folder's name, or null for an item at the top level. */
   folderName: string | null;
   /** A reader sees the details with nothing to edit. */
-  /**
-   * Where the item is used, as the library asked for it. Without it the
-   * details leave the section out.
-   */
-  usage?: MediaUsageState;
   readOnly: boolean;
   onSave: MediaSave;
   /** Absent at the first item, which has nothing before it. */
@@ -92,7 +86,6 @@ export function MediaDetailsPanel({
   onNext,
   onExpand,
   onClose,
-  usage,
   ...actions
 }: MediaDetailsPanelProps): React.JSX.Element {
   const titleRef = React.useRef<HTMLHeadingElement>(null);
@@ -179,7 +172,6 @@ export function MediaDetailsPanel({
         />
         <MediaDetailsFields media={media} onSave={onSave} readOnly={readOnly} />
         <MediaFileFacts media={media} folderName={folderName} />
-        {usage && <MediaUsedIn usage={usage} />}
       </div>
       <div className="border-t border-border p-3">
         <MediaDetailsActions media={media} {...actions} />

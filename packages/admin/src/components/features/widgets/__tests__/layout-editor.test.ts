@@ -498,8 +498,13 @@ describe("recording what a reader chose for one card", () => {
     expect(titled[0].title).toBe("Mine");
     // A quick setting changes settings alone: the title stays.
     expect(setPlacementConfig(titled, "a", { x: 1 })[0].title).toBe("Mine");
-    // Emptied, the card is titled automatically again: no title at all, as the write stores it.
-    expect("title" in setPlacementConfig(titled, "a", {}, " ")[0]).toBe(false);
+    // Emptied, the card is titled automatically again: an empty title, the reader's clearing,
+    // so a title the site's default gives the card does not come back over it.
+    expect(setPlacementConfig(titled, "a", {}, " ")[0].title).toBe("");
+    // A card with no title of its own takes none: nothing was cleared.
+    expect(
+      "title" in setPlacementConfig(placements("a"), "a", {}, " ")[0]
+    ).toBe(false);
   });
 
   it("sees a change of the card's own title alone as a change", () => {

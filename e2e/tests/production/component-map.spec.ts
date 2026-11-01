@@ -23,6 +23,7 @@ import {
   productionServerEnv,
 } from "../../production-server.mjs";
 import { stop } from "../../support/playground-dev-server";
+import { resetToDefault } from "../support/dashboard-layout";
 
 /**
  * A production build whose committed component map lacks a dashboard widget's
@@ -240,13 +241,7 @@ test.describe("a production build missing a widget's component", () => {
       ).toBeVisible();
     } finally {
       // The database is the suite's: the reader's layout goes back to the default.
-      const read = await page.request.get(
-        `${FIXTURE_URL}/admin/api/dashboard/layout`
-      );
-      const { version, scope } = (await read.json()) as Layout;
-      await page.request.delete(
-        `${FIXTURE_URL}/admin/api/dashboard/layout?version=${version}&scope=${encodeURIComponent(scope)}`
-      );
+      await resetToDefault(page, FIXTURE_URL);
     }
   });
 });

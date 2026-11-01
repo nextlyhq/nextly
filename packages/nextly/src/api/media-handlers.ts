@@ -49,10 +49,6 @@
  * - GET    /api/media/folders/:id/contents   - Get folder contents
  * - GET    /api/media/folders/root/contents  - Get root folder contents
  * - GET    /api/media/counts                 - Every folder's and view's item count
- * - GET    /api/media/:id/usage              - The documents using a media item
- * - POST   /api/media/:id/replace            - Replace an item's file, keeping the item
- * - POST   /api/media/deletions              - Delete items, undoable for 10 s
- * - POST   /api/media/deletions/undo         - Bring back items inside the window
  *
  * @module api/media-handlers
  */
@@ -65,18 +61,15 @@ import {
   isErrorResponse,
   isVisitorRefusal,
   requirePermission,
-  type AuthContext,
 } from "../auth/middleware";
 import { actorFromAuthContext, type RequestActor } from "../auth/request-actor";
 import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
-import type { PendingMediaDeletes } from "../domains/media/pending-delete";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
-import { getNextlyLogger } from "../observability/logger";
 import type {
   MediaService,
   ListMediaOptions,
@@ -158,20 +151,14 @@ const MEDIA_ACTION_BY_ROUTE: Partial<
   "get-folder-contents": "read",
   "get-root-contents": "read",
   "media-counts": "read",
-  "media-usage": "read",
   "upload-media": "create",
   "create-folder": "create",
   "update-media": "update",
-  "replace-media": "update",
   "move-media": "update",
   "update-folder": "update",
   "delete-media": "delete",
   "delete-folder": "delete",
   "bulk-delete-media": "delete",
-  // Both halves of a delete that can be undone ask the delete permission,
-  // checked by the gate before either writes or removes a mark.
-  "delete-media-later": "delete",
-  "undo-delete-media": "delete",
 };
 
 /** Route types that only read — the sole surface the public mount serves. */
@@ -210,9 +197,7 @@ async function gateMediaRoute(
   path: string[] | undefined,
   method: string,
   requireAuth: boolean
-): Promise<
-  { authUserId?: string; actor?: RequestActor; auth?: AuthContext } | Response
-> {
+): Promise<{ authUserId?: string; actor?: RequestActor } | Response> {
   if (!requireAuth) {
     if (!READ_ROUTE_TYPES.has(route.type)) {
       throwUnmatchedRoute(path, method);
@@ -249,13 +234,7 @@ async function gateMediaRoute(
   // Surface both the acting user id (for uploader attribution on the DB row)
   // and the full actor (session vs API key) so media writes record the true
   // caller on their outbox events.
-  // The whole auth context too, for a read that answers by what the caller
-  // may read (where an item is used).
-  return {
-    authUserId: auth.userId,
-    actor: actorFromAuthContext(auth),
-    auth,
-  };
+  return { authUserId: auth.userId, actor: actorFromAuthContext(auth) };
 }
 
 // ============================================================
@@ -316,10 +295,6 @@ interface ParsedMediaRoute {
     | "get-folder-contents"
     | "get-root-contents"
     | "media-counts"
-    | "media-usage"
-    | "replace-media"
-    | "delete-media-later"
-    | "undo-delete-media"
     | "not-found";
   mediaId?: string;
   folderId?: string;
@@ -341,18 +316,6 @@ function parseMediaRoute(
   // segments.length === 1 block so neither is mistaken for a media ID.
   if (segments[0] === "counts" && segments.length === 1) {
     if (method === "GET") return { type: "media-counts" };
-    return { type: "not-found" };
-  }
-
-  // "deletions" is matched before the generic one- and two-segment blocks
-  // so it is never read as a media id.
-  if (segments[0] === "deletions") {
-    if (segments.length === 1 && method === "POST") {
-      return { type: "delete-media-later" };
-    }
-    if (segments.length === 2 && segments[1] === "undo" && method === "POST") {
-      return { type: "undo-delete-media" };
-    }
     return { type: "not-found" };
   }
 
@@ -395,17 +358,6 @@ function parseMediaRoute(
   if (segments.length === 2 && segments[1] === "raw") {
     if (method === "GET")
       return { type: "serve-media-bytes", mediaId: segments[0] };
-    return { type: "not-found" };
-  }
-
-  if (segments.length === 2 && segments[1] === "usage") {
-    if (method === "GET") return { type: "media-usage", mediaId: segments[0] };
-    return { type: "not-found" };
-  }
-
-  if (segments.length === 2 && segments[1] === "replace") {
-    if (method === "POST")
-      return { type: "replace-media", mediaId: segments[0] };
     return { type: "not-found" };
   }
 
@@ -488,17 +440,20 @@ async function handleListMedia(request: Request): Promise<Response> {
   });
 }
 
-/** The file a request sends as `file`, checked against the upload schema. */
-async function uploadedFile(
-  formData: FormData,
-  uploadedBy: string
-): Promise<{
-  buffer: Buffer;
-  filename: string;
-  mimeType: string;
-  size: number;
-}> {
+async function handleUploadMedia(
+  request: Request,
+  authUserId: string,
+  actor?: RequestActor
+): Promise<Response> {
+  const mediaService = await getMediaService();
+  const formData = await request.formData();
   const file = formData.get("file") as File | null;
+  const folderId = formData.get("folderId") as string | null;
+
+  // The uploader is the authenticated caller, resolved from the session/API
+  // key — never a client-supplied `uploadedBy`, which could name anyone.
+  const uploadedByEnsured = authUserId;
+
   if (!file) {
     throw NextlyError.validation({
       errors: [
@@ -516,7 +471,7 @@ async function uploadedFile(
     filename: file.name,
     mimeType: resolveClaimedMimeType(file.name, file.type, buffer),
     size: file.size,
-    uploadedBy,
+    uploadedBy: uploadedByEnsured,
   };
 
   try {
@@ -525,59 +480,27 @@ async function uploadedFile(
     if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
     throw err;
   }
-  // The type the schema ACCEPTED, not a second resolution of the same
-  // question: validating one value and storing another means the record can
-  // carry a type nothing checked.
-  return {
-    buffer,
-    filename: file.name,
-    mimeType: input.mimeType,
-    size: file.size,
-  };
-}
 
-async function handleUploadMedia(
-  request: Request,
-  authUserId: string,
-  actor?: RequestActor
-): Promise<Response> {
-  const mediaService = await getMediaService();
-  const formData = await request.formData();
-  const folderId = formData.get("folderId") as string | null;
-
-  // The uploader is the authenticated caller, resolved from the session/API
-  // key — never a client-supplied `uploadedBy`, which could name anyone.
-  const file = await uploadedFile(formData, authUserId);
-  const context = createAuthenticatedContext(authUserId);
+  const context = createAuthenticatedContext(uploadedByEnsured);
 
   const mediaFile = await mediaService.upload(
-    { ...file, folderId: folderId || undefined },
+    {
+      buffer,
+      filename: file.name,
+      // The same resolution the schema was given above. Validating one value
+      // and storing another means the record can carry a type nothing checked.
+      // The value the schema ACCEPTED, not a second resolution of the same
+      // question. Two calls can diverge under any later edit, and the one that
+      // reaches storage would be the one nothing checked.
+      mimeType: input.mimeType,
+      size: file.size,
+      folderId: folderId || undefined,
+    },
     context,
     actor
   );
 
   return respondMutation("Media uploaded.", mediaFile, { status: 201 });
-}
-
-/**
- * Replace an item's file, keeping the item, with the file the request
- * sends, checked as an upload's is.
- */
-async function handleReplaceMedia(
-  request: Request,
-  mediaId: string,
-  authUserId: string,
-  actor?: RequestActor
-): Promise<Response> {
-  const mediaService = await getMediaService();
-  const file = await uploadedFile(await request.formData(), authUserId);
-  const mediaFile = await mediaService.replaceFile(
-    mediaId,
-    file,
-    createAuthenticatedContext(authUserId),
-    actor
-  );
-  return respondMutation("Media file replaced.", mediaFile);
 }
 
 async function handleGetMedia(mediaId: string): Promise<Response> {
@@ -826,182 +749,6 @@ async function handleMediaCounts(): Promise<Response> {
   return respondData(counts as unknown as Record<string, unknown>);
 }
 
-/** The Used in query: every use, or only those naming the item by address. */
-const usageQuerySchema = z.object({
-  byAddress: z
-    .enum(["true", "false"])
-    .optional()
-    .transform(value => value === "true"),
-});
-
-/** The ids a delete or its Undo names: one to a hundred items. */
-const deletionBodySchema = z.object({
-  ids: z.array(z.string().min(1)).min(1).max(100),
-});
-
-/** The library reads that finish deletes whose window has ended. */
-const LIBRARY_READS = new Set<ParsedMediaRoute["type"]>([
-  "list-media",
-  "get-folder-contents",
-  "get-root-contents",
-  "media-counts",
-]);
-
-/** The marks, over the booted adapter and the ordinary media delete. */
-async function pendingDeletes(): Promise<PendingMediaDeletes> {
-  const mediaService = await getMediaService();
-  // Loaded when a delete or a read needs it, not with the handlers.
-  const { PendingMediaDeletes } = await import(
-    "../domains/media/pending-delete"
-  );
-  return new PendingMediaDeletes({
-    db: getService("adapter"),
-    deleteItem: (mediaId, actor) =>
-      mediaService.delete(mediaId, createRequestContext(), actor),
-    logger: getNextlyLogger(),
-  });
-}
-
-/**
- * Finish the deletes whose window has ended. A read never fails for it: what
- * is left is tried again by the next.
- */
-async function sweepPendingDeletes(): Promise<void> {
-  try {
-    const pending = await pendingDeletes();
-    await pending.finalizeDue();
-  } catch (error) {
-    getNextlyLogger().warn({
-      kind: "media-delete-sweep-failed",
-      message:
-        "Deleted media items could not be finished; the next read tries again.",
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-/**
- * Delete items so that the delete can be undone: each is marked, leaves the
- * library at once, and is deleted with its files once the window ends, by a
- * timer here or by the next library read.
- */
-async function handleDeleteMediaLater(
-  request: Request,
-  actor?: RequestActor
-): Promise<Response> {
-  const { ids } = parseAtBoundary(
-    deletionBodySchema,
-    await readJsonBody(request)
-  );
-  const pending = await pendingDeletes();
-  const marked = await pending.mark(ids, actor);
-  const { PENDING_DELETE_WINDOW_MS } = await import(
-    "../domains/media/pending-delete"
-  );
-  // A moment after the window, so the marks are due when it runs. Unref'd:
-  // a waiting delete never keeps a process alive, and the sweep covers one
-  // that exits first.
-  setTimeout(() => {
-    void sweepPendingDeletes();
-  }, PENDING_DELETE_WINDOW_MS + 500).unref?.();
-  return respondAction("Media deleted.", {
-    ids: marked.ids,
-    deleteAfter: marked.deleteAfter,
-  });
-}
-
-/** Bring back items deleted inside the window; say which had already gone. */
-async function handleUndoDeleteMedia(request: Request): Promise<Response> {
-  const { ids } = parseAtBoundary(
-    deletionBodySchema,
-    await readJsonBody(request)
-  );
-  const pending = await pendingDeletes();
-  const undone = await pending.undo(ids);
-  return respondAction(
-    undone.gone.length === 0
-      ? "Delete undone."
-      : "Some items were already deleted.",
-    { restored: undone.restored, gone: undone.gone }
-  );
-}
-
-/**
- * What else a Replace keeps the old file for, beside the documents naming
- * the item by address: how many avatars and logos keep its address, and
- * whether the usage record has been built, without which the old file is
- * kept whatever the record lists.
- */
-async function addressUseMeta(
-  mediaService: MediaService,
-  address: string | undefined
-): Promise<{ heldByAddress: number; usageRecorded: boolean }> {
-  const { mediaUsagePresent, mediaUsageRecorded } = await import(
-    "../domains/media/usage/media-usage-store"
-  );
-  const adapter = getService("adapter");
-  const usageRecorded =
-    (await mediaUsagePresent(adapter)) && (await mediaUsageRecorded(adapter));
-  return {
-    heldByAddress: address ? await mediaService.addressHolderCount(address) : 0,
-    usageRecorded,
-  };
-}
-
-/**
- * The documents using one item that the caller may read, and the rest
- * counted by collection, read from the usage record. Served only on the
- * gated mount, since it names documents: the public mount answers it as an
- * unknown path. Per caller, so it is never cached for another.
- *
- * Asked for the uses by address, it also says what else keeps the old file
- * on a Replace: `meta.heldByAddress` avatars and logos, and
- * `meta.usageRecorded` false while the record is still being built.
- */
-async function handleMediaUsage(
-  request: Request,
-  mediaId: string,
-  auth: AuthContext | undefined
-): Promise<Response> {
-  // Only a gated mount reaches here, and it always carries the caller.
-  if (!auth) throw NextlyError.authRequired();
-  const mediaService = await getMediaService();
-  // An item that does not exist is not found, rather than used by nothing.
-  const item = await mediaService.findById(mediaId, createRequestContext());
-  // Loaded when it is asked, not with the handlers.
-  const [{ readCaller, PRIVATE_NO_STORE_HEADERS }, { mediaUsesOf }, source] =
-    await Promise.all([
-      import("./authenticated-read"),
-      import("../domains/media/usage/media-uses"),
-      import("../domains/media/usage/media-uses-source"),
-    ]);
-  // `?byAddress=true` asks only for the uses naming the item by its
-  // address, which keep the old file when it is replaced.
-  const { byAddress } = parseAtBoundary(
-    usageQuerySchema,
-    Object.fromEntries(new URL(request.url).searchParams)
-  );
-  const uses = await mediaUsesOf(
-    mediaId,
-    source.bootedMediaUsesSource(getService("adapter"), await readCaller(auth)),
-    { byAddressOnly: byAddress }
-  );
-  return respondList(
-    uses.items,
-    {
-      total: uses.items.length,
-      page: 1,
-      limit: uses.items.length,
-      totalPages: 1,
-      hasNext: false,
-      hasPrev: false,
-      ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
-      ...(byAddress ? await addressUseMeta(mediaService, item.url) : {}),
-    },
-    { headers: PRIVATE_NO_STORE_HEADERS }
-  );
-}
-
 // ============================================================
 // Public API
 // ============================================================
@@ -1049,10 +796,6 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
         );
         if (gate instanceof Response) return gate;
 
-        // The library's reads finish any delete whose window ended while no
-        // timer was left to finish it.
-        if (LIBRARY_READS.has(route.type)) await sweepPendingDeletes();
-
         let response: Response;
         switch (route.type) {
           case "list-media":
@@ -1075,13 +818,6 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "media-counts":
             response = await handleMediaCounts();
-            break;
-          case "media-usage":
-            response = await handleMediaUsage(
-              request,
-              route.mediaId!,
-              gate.auth
-            );
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "GET");
@@ -1115,20 +851,6 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "create-folder":
             response = await handleCreateFolder(request, gate.authUserId!);
-            break;
-          case "replace-media":
-            response = await handleReplaceMedia(
-              request,
-              route.mediaId!,
-              gate.authUserId!,
-              gate.actor
-            );
-            break;
-          case "delete-media-later":
-            response = await handleDeleteMediaLater(request, gate.actor);
-            break;
-          case "undo-delete-media":
-            response = await handleUndoDeleteMedia(request);
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "POST");

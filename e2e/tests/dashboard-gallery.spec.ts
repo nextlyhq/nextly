@@ -17,6 +17,7 @@ import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares the dashboard with other specs; see support/locks.ts.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -35,17 +36,6 @@ interface LayoutRead {
     removed?: boolean;
     config?: Record<string, unknown>;
   }>;
-}
-
-/** Back to the default dashboard, through the guarded reset a reader uses. */
-async function resetToDefault(page: Page): Promise<void> {
-  const read = await page.request.get("/admin/api/dashboard/layout");
-  const body = (await read.json()) as LayoutRead;
-  if (body.version === 0) return;
-  const reset = await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-  expect(reset.status()).toBe(200);
 }
 
 test.afterEach(async ({ page }) => {
