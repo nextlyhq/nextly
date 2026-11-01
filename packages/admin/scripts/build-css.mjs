@@ -18,6 +18,7 @@ import path from "path";
 import {
   ADMIN_NAME_PREFIX,
   findUnscopedRules,
+  hasHostElementShield,
   isolateAdminStylesheet,
 } from "@nextlyhq/admin-css";
 
@@ -157,6 +158,21 @@ try {
       `\nThe stylesheet defines these as "${NAME_PREFIX}<name>", so the\n` +
         "unprefixed name matches nothing and the animation silently does not\n" +
         "run. Prefix the name in the inline style.\n"
+    );
+    process.exit(1);
+  }
+
+  // Step 7: Guard the shield against the host's element rules, on the file
+  // that ships. `isolateAdminStylesheet` adds it before the minifier runs, and
+  // its whole effect rides on its selector's weight, which a minifier could
+  // simplify away while keeping the rule: the admin would lose to a host's
+  // `h2 { font-size }` again with nothing in this build saying so.
+  if (!hasHostElementShield(built)) {
+    console.error(
+      "\n❌ The shipped stylesheet lost the shield against host element rules.\n" +
+        "\nThe minifier dropped or rewrote the `:where(.nextly-admin) :is(*, x …)`\n" +
+        "rule `isolateAdminStylesheet` adds. Without it, a host's unlayered\n" +
+        "`h2 { ... }` restyles the admin's headings again.\n"
     );
     process.exit(1);
   }
