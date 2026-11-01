@@ -79,13 +79,18 @@ import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
 /**
- * Where keyboard focus is on the rail. The browser's outline is turned off,
- * and the ring drawn in its place on `:focus-visible` alone, so a pointer
- * click draws none. Offset onto the rail's own surface, so it stays clear of
- * a selected entry's fill and reads in both themes.
+ * Where keyboard focus is on the rail: a ring, drawn on `:focus-visible`
+ * alone, so a pointer click draws none. Offset onto the rail's own surface,
+ * so it stays clear of a selected entry's fill and reads in both themes.
+ *
+ * The browser's outline is hidden only where the ring takes its place, and
+ * by `outline-hidden` rather than `outline-none`: under forced colors, as in
+ * Windows High Contrast, a box shadow is not drawn, and `outline-hidden`
+ * draws a 2px outline there in the system's colour, where `outline-none`
+ * would leave focus with nothing drawn at all.
  */
 const RAIL_FOCUS_RING =
-  "outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar";
+  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar";
 
 interface DualSidebarProps {
   isMobile?: boolean;
