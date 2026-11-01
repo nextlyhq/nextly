@@ -1563,6 +1563,141 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    /** A fresh folder with this id under `parentId`. */
+    async function folderAt(id: string, parentId: string | null) {
+      await t.adapter.insert("media_folders", {
+        id,
+        name: `Tree ${id.slice(0, 6)}`,
+        parentId,
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    /**
+     * How many other sessions on this test's database are held in a
+     * statement now: on PostgreSQL, waiting for a lock; on MySQL, where a
+     * locking read of a key can wait before InnoDB lists its transaction,
+     * running one statement for a second or more.
+     */
+    async function sessionsWaitingForLocks(): Promise<number> {
+      const [counted] = await t.adapter.executeQuery<{ n: unknown }>(
+        dialect === "mysql"
+          ? "SELECT count(*) AS n FROM information_schema.processlist WHERE db = DATABASE() AND command = 'Query' AND id <> CONNECTION_ID() AND time >= 1"
+          : "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+      );
+      return Number(counted?.n ?? 0);
+    }
+
+    /**
+     * A folder service whose transactions pause at one folder lock: before
+     * taking it, or once it is taken, until `release` is called.
+     */
+    function pausingAtFolder(
+      folderId: string,
+      when: "before" | "after"
+    ): {
+      service: MediaFolderService;
+      paused: Promise<void>;
+      release: () => void;
+    } {
+      let reached!: () => void;
+      const paused = new Promise<void>(resolve => (reached = resolve));
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let done = false;
+      const service = new MediaFolderService(
+        lockingThrough(async (tx, table, id) => {
+          const here = !done && table === "media_folders" && id === folderId;
+          if (here && when === "before") {
+            done = true;
+            reached();
+            await released;
+          }
+          await tx.lockRow(table, id);
+          if (here && when === "after") {
+            done = true;
+            reached();
+            await released;
+          }
+        }),
+        console as never
+      );
+      return { service, paused, release };
+    }
+
+    // A folder moved under another inside a folder being deleted: the move
+    // writes the moved folder's row and its foreign-key check locks the new
+    // parent, the order opposite to the delete's when the new parent sorts
+    // first. Hierarchy changes take the folder tree's lock first, so the
+    // move waits for the delete and then finds its folder gone.
+    it.skipIf(dialect === "sqlite")(
+      "lets a folder moved under another inside a folder being deleted wait for the delete, never a deadlock",
+      async () => {
+        const parent = randomUUID();
+        const [under, moved] = [randomUUID(), randomUUID()].sort();
+        await folderAt(parent, null);
+        await folderAt(under, parent);
+        await folderAt(moved, parent);
+        // The delete holds the parent and the folder sorting first.
+        const deleting = pausingAtFolder(under, "after");
+        const deleted = deleting.service.deleteFolder(parent, true);
+        await deleting.paused;
+        const moving = new MediaFolderService(
+          t.adapter,
+          console as never
+        ).updateFolder(moved, { parentId: under });
+        // Released only once the move is waiting for a lock.
+        await expect
+          .poll(sessionsWaitingForLocks, { timeout: 10_000, interval: 50 })
+          .toBeGreaterThan(0);
+        deleting.release();
+
+        const [movedAnswer, deletedAnswer] = await Promise.all([
+          moving,
+          deleted,
+        ]);
+
+        expect(deletedAnswer).toMatchObject({ success: true });
+        expect(movedAnswer).toMatchObject({
+          success: false,
+          statusCode: 404,
+        });
+        for (const folder of [parent, under, moved]) {
+          expect(await folderExists(folder)).toBe(false);
+        }
+      }
+    );
+
+    // A file uploaded into a folder of the subtree the delete has not
+    // locked yet, committed while the delete waits: the delete must read it
+    // as committed then and remove it with the contents, never leave it
+    // moved to the library root by the folder's removal.
+    it.skipIf(dialect === "sqlite")(
+      "removes a file uploaded into a folder of the subtree while the delete waits to lock it",
+      async () => {
+        const parent = randomUUID();
+        const child = randomUUID();
+        await folderAt(parent, null);
+        await folderAt(child, parent);
+        const deleting = pausingAtFolder(child, "before");
+        const deleted = deleting.service.deleteFolder(parent, true);
+        await deleting.paused;
+        const late = await unusedFile();
+        await t.adapter.update(
+          "media",
+          { folderId: child },
+          { and: [{ column: "id", op: "=", value: late }] }
+        );
+        deleting.release();
+
+        expect(await deleted).toMatchObject({ success: true, deletedMedia: 1 });
+        expect(await row(late)).toBeUndefined();
+        expect(await folderExists(child)).toBe(false);
+      }
+    );
+
     // An item deleted at once (the ordinary delete route) inside another
     // delete's Undo window is gone for good: Undo must say so.
     it("answers an item deleted at once inside its Undo window as gone, never restored", async () => {

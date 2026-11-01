@@ -42,6 +42,7 @@ import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 import { getMediaStorage } from "@nextly/storage";
 
 import {
+  inFolderTreeTransaction,
   lockMediaFolders,
   lockMediaItems,
 } from "../domains/media/lock-media-items";
@@ -187,6 +188,15 @@ interface FolderStorageCleanup {
     successful: string[];
     failed: Array<{ filePath: string; error: string }>;
   }>;
+}
+
+/** A refused folder update, in the service's answer shape. */
+function folderRefusal(
+  statusCode: number,
+  code: ServiceErrorCode,
+  message: string
+): FolderResponse {
+  return { success: false, statusCode, code, message, data: null };
 }
 
 /**
@@ -646,28 +656,15 @@ export class MediaFolderService extends BaseService {
         };
       }
 
-      // Prevent moving folder into itself or its own subfolder
-      if (updates.parentId) {
-        if (updates.parentId === folderId) {
-          return {
-            success: false,
-            statusCode: 400,
-            code: "INVALID_INPUT",
-            message: "Cannot move folder into itself",
-            data: null,
-          };
-        }
-
-        const isSubfolder = await this.isSubfolder(folderId, updates.parentId);
-        if (isSubfolder) {
-          return {
-            success: false,
-            statusCode: 400,
-            code: "INVALID_INPUT",
-            message: "Cannot move folder into its own subfolder",
-            data: null,
-          };
-        }
+      // Prevent moving folder into itself
+      if (updates.parentId && updates.parentId === folderId) {
+        return {
+          success: false,
+          statusCode: 400,
+          code: "INVALID_INPUT",
+          message: "Cannot move folder into itself",
+          data: null,
+        };
       }
 
       const updateData: Record<string, unknown> = {
@@ -675,10 +672,52 @@ export class MediaFolderService extends BaseService {
         updatedAt: new Date(),
       };
 
-      await this.db
-        .update(mediaFolders)
-        .set(updateData)
-        .where(eq(mediaFolders.id, folderId));
+      if (updates.parentId !== undefined) {
+        // A new parent changes the folder hierarchy: under the tree lock
+        // (`inFolderTreeTransaction`), then the folder and its new parent in
+        // the one order, and checked there, where no other hierarchy change
+        // can move them meanwhile.
+        const parentId = updates.parentId || null;
+        updateData.parentId = parentId;
+        const refusal = await inFolderTreeTransaction(
+          this.adapter,
+          async tx => {
+            await lockMediaFolders(
+              tx,
+              parentId ? [folderId, parentId] : [folderId]
+            );
+            if (!(await this.parentOfOn(tx, folderId))) {
+              return folderRefusal(404, "NOT_FOUND", "Folder not found");
+            }
+            if (parentId) {
+              if (!(await this.parentOfOn(tx, parentId))) {
+                return folderRefusal(
+                  404,
+                  "NOT_FOUND",
+                  "Parent folder not found"
+                );
+              }
+              if (await this.isUnderOn(tx, parentId, folderId)) {
+                return folderRefusal(
+                  400,
+                  "INVALID_INPUT",
+                  "Cannot move folder into its own subfolder"
+                );
+              }
+            }
+            await tx.update("media_folders", updateData, {
+              and: [{ column: "id", op: "=", value: folderId }],
+            });
+            return null;
+          }
+        );
+        if (refusal) return refusal;
+      } else {
+        await this.db
+          .update(mediaFolders)
+          .set(updateData)
+          .where(eq(mediaFolders.id, folderId));
+      }
 
       return {
         success: true,
@@ -704,21 +743,38 @@ export class MediaFolderService extends BaseService {
     }
   }
 
-  private async isSubfolder(
-    folder1Id: string,
-    folder2Id: string
+  /**
+   * The folder's row as `tx` reads it, `{ parentId }`, or `null` when there
+   * is no such folder.
+   */
+  private async parentOfOn(
+    tx: TransactionContext,
+    folderId: string
+  ): Promise<{ parentId: string | null } | null> {
+    const [row] = await tx.select<{ parentId?: unknown }>("media_folders", {
+      columns: ["parentId"],
+      where: { and: [{ column: "id", op: "=", value: folderId }] },
+    });
+    if (!row) return null;
+    return {
+      parentId: typeof row.parentId === "string" ? row.parentId : null,
+    };
+  }
+
+  /** Whether `folderId` is `ancestorId` or a folder under it, as `tx` reads. */
+  private async isUnderOn(
+    tx: TransactionContext,
+    folderId: string,
+    ancestorId: string
   ): Promise<boolean> {
-    let currentId: string | null = folder2Id;
-
-    while (currentId) {
-      if (currentId === folder1Id) return true;
-
-      const folderResult = await this.getFolderById(currentId);
-      if (!folderResult.success || !folderResult.data) break;
-
-      currentId = folderResult.data.parentId;
+    const seen = new Set<string>();
+    let current: string | null = folderId;
+    // `seen` ends a walk over a loop a corrupt hierarchy could hold.
+    while (current !== null && !seen.has(current)) {
+      if (current === ancestorId) return true;
+      seen.add(current);
+      current = (await this.parentOfOn(tx, current))?.parentId ?? null;
     }
-
     return false;
   }
 
@@ -840,37 +896,34 @@ export class MediaFolderService extends BaseService {
     tx: TransactionContext,
     folderId: string
   ): Promise<string[]> {
-    // Each folder locked before the level under it is read, so a file
-    // uploaded or moved into one of them, or a folder created under one,
-    // waits for this transaction and then finds its folder gone: nothing
-    // lands between what is read here and the delete. A level's folders are
-    // found, locked in the one order (`lockMediaFolders`), and read again
-    // with a lock, the latest committed on MySQL too, which picks up one
-    // created between the two reads.
+    // Each level locked, in the one order (`lockMediaFolders`), before the
+    // level under it is read. The tree lock this runs under keeps every other
+    // hierarchy change out, and a folder created under a locked one, or a
+    // file uploaded or moved into it, waits for its lock and then finds it
+    // gone: what is read here is all the delete removes. Read committed
+    // (`inFolderTreeTransaction`), so each read is the latest on MySQL too.
     await lockMediaFolders(tx, [folderId]);
     const all = [folderId];
     let level = [folderId];
     while (level.length > 0) {
-      await lockMediaFolders(tx, await this.childFoldersOn(tx, level, false));
-      const next = await this.childFoldersOn(tx, level, true);
+      const next = await this.childFoldersOn(tx, level);
+      await lockMediaFolders(tx, next);
       all.push(...next);
       level = next;
     }
     return all;
   }
 
-  /** The folders directly under `parents`, read with a lock when asked. */
+  /** The folders directly under `parents`, as `tx` reads them. */
   private async childFoldersOn(
     tx: TransactionContext,
-    parents: readonly string[],
-    forUpdate: boolean
+    parents: readonly string[]
   ): Promise<string[]> {
     const children: string[] = [];
     for (const run of this.idRuns(parents, 0)) {
       const rows = await tx.select<{ id: string }>("media_folders", {
         columns: ["id"],
         where: { and: [{ column: "parentId", op: "IN", value: run }] },
-        forUpdate,
       });
       children.push(...rows.map(row => String(row.id)));
     }
@@ -911,16 +964,17 @@ export class MediaFolderService extends BaseService {
       );
       if (refusal) return refusal;
 
-      // One transaction, all or nothing. The folder and every folder under
-      // it are locked first (`subtreeOn`), so nothing arrives in them while
-      // it runs; then every media row they hold is locked, in the order a
-      // delete that can be undone locks its items in (`lockMediaItems`), and
-      // then their marks are read. An item marked since the check above
+      // One transaction, all or nothing, holding the folder tree's lock
+      // (`inFolderTreeTransaction`). The folder and every folder under it
+      // are locked next (`subtreeOn`), so nothing arrives in them while it
+      // runs; then every media row they hold is read, as committed now, and
+      // locked, in the order a delete that can be undone locks its items in
+      // (`lockMediaItems`), and then their marks are read. An item marked since the check above
       // refuses the whole delete before anything changes: deleting it would
       // cut its Undo short, and moving it would bring it back outside its
       // folder. A mark asked for later waits for these locks and finds its
       // item gone or moved.
-      const removal = await this.adapter.transaction(async tx => {
+      const removal = await inFolderTreeTransaction(this.adapter, async tx => {
         const folders = await this.subtreeOn(tx, folderId);
         const held = await this.heldMediaOn(tx, folders);
         await lockMediaItems(tx, held);
