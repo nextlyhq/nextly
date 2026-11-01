@@ -32,6 +32,10 @@ function countingDb(rows: { key: string; value: string }[]) {
       return Promise.resolve(rows as unknown as T[]);
     },
     upsert: <T>() => Promise.resolve(undefined as T),
+    // Reading setup state opens no transaction (only a locked change does), so
+    // one opened here fails the read rather than passing uncounted.
+    transaction: <T>() =>
+      Promise.reject<T>(new Error("a setup read opened a transaction")),
   };
   return { db, asked };
 }

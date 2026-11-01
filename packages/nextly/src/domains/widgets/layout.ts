@@ -31,8 +31,9 @@
  * can draw at all is the grid's own rule, so it is the one field judged here.
  *
  * One widget-id question IS answered here, because its answer never changes:
- * a card in a retired per-collection or per-Single namespace
- * (`retired-widget-namespaces.ts`) is dropped when the row is read. Any other
+ * a retired card, one in a retired per-collection or per-Single namespace or
+ * a core card retired by id (`retired-widget-namespaces.ts`), is dropped when
+ * the row is read. Any other
  * id the live registry does not know is kept, so a disabled plugin's cards
  * return with it.
  *
@@ -76,7 +77,7 @@ import {
   MAX_PLACEMENTS,
 } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
-import { inRetiredWidgetNamespace } from "./retired-widget-namespaces";
+import { isRetiredWidget } from "./retired-widget-namespaces";
 
 // The payload's version, writer and size check live in the import-free
 // `layout-payload.ts`, so the browser asks the endpoint's own question about
@@ -445,16 +446,16 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
   }
 
   // 🔴 A card core once minted per collection or per Single is DROPPED here,
-  // by namespace: no widget can answer to one again (the namespaces are
-  // reserved, so no plugin or site may declare one), and a card about one
-  // collection is now a core widget set to it. Dropped rather than carried
+  // by namespace, and so is a core card retired by id: no widget can answer
+  // to one again (the namespaces, and `core/`, are reserved, so no plugin or
+  // site may declare one), and each has a replacement. Dropped rather than carried
   // like a disabled plugin's card, which may come back. The read still
   // writes nothing; a write merges over these placements, so the reader's
   // next save of any kind stores the row without them. Before the repeat
   // check below, so a dropped card claims no placement id.
   const { placements, renamedIds } = underCurrentIds(
     readPlacements(decoded.placements).filter(
-      placement => !inRetiredWidgetNamespace(placement.widgetId)
+      placement => !isRetiredWidget(placement.widgetId)
     )
   );
   // 🔴 REPORTS a repeat rather than resolving one. Resolving across the whole

@@ -2781,11 +2781,13 @@ const DASHBOARD_ROUTES: Readonly<
     gallery: { operation: "list", method: "getDashboardGallery" },
     pins: { operation: "list", method: "getDashboardPins" },
     summary: { operation: "list", method: "getDashboardSummary" },
+    "new-types": { operation: "list", method: "getDashboardNewTypes" },
     setup: { operation: "list", method: "getDashboardSetup" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
     pins: { operation: "create", method: "postDashboardPin" },
+    "new-types": { operation: "create", method: "postDashboardNewType" },
   },
   PUT: {
     layout: { operation: "update", method: "putWidgetLayout" },
@@ -2812,6 +2814,8 @@ const DASHBOARD_ROUTES: Readonly<
  *   GET  /api/dashboard/pins           → getDashboardPins
  *   POST /api/dashboard/pins           → postDashboardPin
  *   DELETE /api/dashboard/pins         → deleteDashboardPin
+ *   GET  /api/dashboard/new-types      → getDashboardNewTypes
+ *   POST /api/dashboard/new-types      → postDashboardNewType
  *   GET  /api/dashboard/setup          → getDashboardSetup
  *   PUT  /api/dashboard/setup          → putDashboardSetup
  *

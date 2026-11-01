@@ -32,7 +32,7 @@ import {
 import { isUsableText, MAX_PLACEMENTS } from "../layout-limits";
 import { getWidget } from "../registry";
 import {
-  inRetiredWidgetNamespace,
+  isRetiredWidget,
   retiredWidgetReplacement,
 } from "../retired-widget-namespaces";
 import { startingValueProblem, type AnyWidgetSetting } from "../settings";
@@ -161,10 +161,10 @@ function unknownWidget(
   if (typeof id !== "string") {
     return `${where} must name a widget by its id, got ${quote(id)}`;
   }
-  // 🔴 Refused by NAMESPACE, ahead of the lookup: core no longer makes a card
-  // per collection or per Single, so an id there names nothing, and the
-  // nearest-match hint would point at an unrelated widget. The author is told
-  // what replaced it instead.
+  // 🔴 A retired card is refused ahead of the lookup: core no longer makes a
+  // card per collection or per Single, nor the cards it retired by id, so such
+  // an id names nothing, and the nearest-match hint would point at an
+  // unrelated widget. The author is told what replaced it instead.
   const replacement = retiredWidgetReplacement(id);
   if (replacement !== undefined)
     return `${where} names "${id}", which ${replacement}`;
@@ -487,7 +487,7 @@ function defaultCardProblems(
     unknown !== undefined &&
     card.optional === true &&
     typeof id === "string" &&
-    !inRetiredWidgetNamespace(id)
+    !isRetiredWidget(id)
   ) {
     return unknownKeys;
   }

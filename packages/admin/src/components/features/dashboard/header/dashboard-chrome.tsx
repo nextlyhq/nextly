@@ -34,6 +34,12 @@ type Register = (element: HTMLElement | null) => void;
 export interface DashboardChromeState {
   /** Whether the reader may customise: the grid draws an arrangement of theirs. */
   customizable: boolean;
+  /**
+   * Whether the reader's arrangement is still on its way, so whether they may
+   * customise is not known yet: `customizable` is false meanwhile, and says
+   * nothing.
+   */
+  awaitingArrangement: boolean;
   /** Whether customise mode is open: its bar then holds the controls. */
   editing: boolean;
   /** Whether a layout write is in flight, which beginning an edit waits for. */

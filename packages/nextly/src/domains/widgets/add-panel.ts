@@ -42,7 +42,6 @@ export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
 const CORE_GROUPS = {
   [CORE_WIDGET_ID.setup]: "overview",
   [CORE_WIDGET_ID.contentTable]: "overview",
-  [CORE_WIDGET_ID.quickCreate]: "overview",
   [CORE_WIDGET_ID.team]: "team",
   [CORE_WIDGET_ID.needsAttention]: "overview",
   [CORE_WIDGET_ID.continue]: "overview",
@@ -210,7 +209,6 @@ const CORE_GALLERY = {
   [CORE_WIDGET_ID.continue]: "activity",
   [CORE_WIDGET_ID.needsAttention]: "activity",
   [CORE_WIDGET_ID.contentTable]: "content",
-  [CORE_WIDGET_ID.quickCreate]: "content",
   [CORE_WIDGET_ID.upcomingReleases]: "activity",
   [CORE_WIDGET_ID.team]: "activity",
   [CORE_WIDGET_ID.setup]: "content",

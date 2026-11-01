@@ -61,6 +61,7 @@ import {
 import type { Entry } from "@admin/types/collection";
 
 import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
+import { useRecordNewType } from "./useDashboardNewTypes";
 
 /**
  * Options for useCreateEntry hook
@@ -194,6 +195,7 @@ export function useCreateEntry<
   unknown
 > {
   const queryClient = useQueryClient();
+  const recordNewType = useRecordNewType();
 
   // The mutation resolves to the whole envelope so the success path can report
   // what failed after the row committed; consumers still receive the entry.
@@ -205,6 +207,10 @@ export function useCreateEntry<
 
     onSuccess: result => {
       const data = result.item;
+      // An entry of this type now exists, so it is the reader's most recent
+      // type for the dashboard's New button: recorded here, on the create
+      // itself, rather than when a form is opened and maybe left.
+      recordNewType(collectionSlug);
       // Invalidate entry list queries for this collection
       void queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),

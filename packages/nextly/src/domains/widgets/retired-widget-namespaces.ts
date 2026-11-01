@@ -1,6 +1,6 @@
 /**
  * The widget namespaces core once filled with a card per collection and per
- * Single, and fills no longer.
+ * Single, and fills no longer; and the core cards retired one by one, by id.
  *
  * Core used to mint `collection/<slug>-<kind>` and `single/<slug>-<kind>` cards
  * from the install's content. Those are gone: a card about one collection is
@@ -12,6 +12,8 @@
  *
  * Judged by NAMESPACE, never by a list of the ids core once made: the ids were
  * derived from each install's own collections, so no list could be complete.
+ * A core card retired alone had one fixed id, so it is listed by that id
+ * ({@link RETIRED_CORE_CARDS}) and answered at the same four doors.
  *
  * Its own module importing only core's widget ids (themselves importing
  * nothing), so the config check, which runs wherever a config is read, the CLI
@@ -85,6 +87,17 @@ const RETIRED_CARD: Record<
     `is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (${CORE_WIDGET_ID.continue}).`,
 };
 
+/**
+ * Core cards retired by id, each with what took its place, said after its id
+ * as a namespace's card is.
+ */
+const RETIRED_CORE_CARDS: ReadonlyMap<string, string> = new Map([
+  [
+    "core/quick-create",
+    "is a retired card: creating entries now lives in the dashboard header's New button.",
+  ],
+]);
+
 /** The retired namespace `widgetId` is in, or `undefined`. */
 function retiredNamespaceOf(widgetId: string): RetiredNamespace | undefined {
   return RETIRED_WIDGET_NAMESPACES.find(namespace =>
@@ -92,15 +105,18 @@ function retiredNamespaceOf(widgetId: string): RetiredNamespace | undefined {
   );
 }
 
-/** Whether `widgetId` is in one of the retired namespaces. */
-export function inRetiredWidgetNamespace(widgetId: string): boolean {
-  return retiredNamespaceOf(widgetId) !== undefined;
+/** Whether `widgetId` names a retired card: a retired id, or one in a retired namespace. */
+export function isRetiredWidget(widgetId: string): boolean {
+  return (
+    RETIRED_CORE_CARDS.has(widgetId) ||
+    retiredNamespaceOf(widgetId) !== undefined
+  );
 }
 
 /**
  * What the card `widgetId` names is, as every door that refuses one says it
- * after the id (`"<id>" is a retired card: ...`), or `undefined` for an id in
- * no retired namespace.
+ * after the id (`"<id>" is a retired card: ...`), or `undefined` for an id
+ * that names no retired card.
  *
  * `collections` are the ones this door may name to the person it answers, the
  * ones they may read: the card's collection is named by its label when exactly
@@ -111,6 +127,8 @@ export function retiredWidgetReplacement(
   widgetId: string,
   collections: readonly NamedCollection[] = []
 ): string | undefined {
+  const retiredCore = RETIRED_CORE_CARDS.get(widgetId);
+  if (retiredCore !== undefined) return retiredCore;
   const namespace = retiredNamespaceOf(widgetId);
   return namespace === undefined
     ? undefined

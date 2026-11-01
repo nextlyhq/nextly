@@ -1,12 +1,11 @@
 /**
- * The dashboard's Team, Content, Create and Upcoming releases cards, in a
+ * The dashboard's Team, Content and Upcoming releases cards, in a
  * browser: each draws from its own answer and offers the way on that its name
  * promises.
  *
  * - Team draws the number of people and links to Users. It is not on the default dashboard:
  *   a reader who manages the team adds it.
  * - Content draws a tile per collection, each linking to its list.
- * - Create draws its shortcuts.
  * - Upcoming releases hides while nothing is scheduled, stopped or overdue, and
  *   otherwise leads to Releases.
  *
@@ -35,7 +34,6 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.releases] });
 const CARDS = [
   "core/team",
   "core/content-table",
-  "core/quick-create",
   "core/upcoming-releases",
 ] as const;
 
@@ -98,7 +96,7 @@ async function placeCards(page: Page): Promise<void> {
 const cell = (page: Page, id: string) => page.getByTestId(`widget-cell-${id}`);
 
 for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
-  test(`draws Team, Content, Create and Upcoming releases with their links (${theme})`, async ({
+  test(`draws Team, Content and Upcoming releases with their links (${theme})`, async ({
     page,
   }) => {
     await gotoAdmin(page, "/");
@@ -115,8 +113,6 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     const content = cell(page, "core/content-table");
     // At least one row of the Content table, its label a link to its list.
     await expect(content.getByRole("link").first()).toBeVisible();
-
-    await expect(cell(page, "core/quick-create")).toBeVisible();
 
     // Upcoming releases hides while nothing is scheduled, stopped or overdue, which is all this
     // spec makes, and a spec that ran before this one may have left a release scheduled, as the
