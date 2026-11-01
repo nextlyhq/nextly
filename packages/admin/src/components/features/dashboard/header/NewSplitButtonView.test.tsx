@@ -203,7 +203,7 @@ describe("NewSplitButtonView, as assistive technology meets it", () => {
         { ...authors, admin: { isPlugin: true, group: "Commerce" } },
       ],
       recentSlugs: ["posts"],
-      sidebarCollections: [posts],
+      ...sidebar,
     });
     render(<NewSplitButtonView menu={menu} />);
     expect(screen.getByRole("link", { name: "New Post" })).toBeVisible();
@@ -287,7 +287,7 @@ describe("NewSplitButtonView, as assistive technology meets it", () => {
       newMenu({
         creatable: [posts, pages],
         recentSlugs,
-        sidebarCollections: [posts, pages],
+        ...sidebar,
       });
     const view = render(<NewSplitButtonView menu={menuFor(["posts"])} />);
     const said = screen.getByTestId("dashboard-new-said");
