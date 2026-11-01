@@ -469,9 +469,11 @@ Take both backups at the same time, so they match each other. For the database:
 
 ```bash
 pg_dump "$DATABASE_URL" > nextly-before-sizes.sql      # PostgreSQL
-mysqldump --single-transaction nextly > nextly-before-sizes.sql   # MySQL
+mysqldump --single-transaction --host=your-host --port=3306 --user=your-user --password your-database > nextly-before-sizes.sql   # MySQL
 cp nextly.db nextly-before-sizes.db                   # SQLite: copy your database file, with the app stopped
 ```
+
+`mysqldump` does not read a connection URL, so take the host, port, user and database name from your `DATABASE_URL` (`mysql://your-user:password@your-host:3306/your-database`); it asks for the password.
 
 For the media storage, copy the folder or bucket the media collection uploads to:
 
@@ -506,7 +508,7 @@ Once no item names a size file, this drops `image_sizes` and then `media.sizes`.
 
 ### Restoring
 
-To undo the removal, restore both backups from step 3 together: the database dump (`psql "$DATABASE_URL" < nextly-before-sizes.sql`, `mysql nextly < nextly-before-sizes.sql`, or the copied SQLite file, with the app stopped), and the storage copy (`cp -R uploads-before-sizes/. public/uploads/`, or `aws s3 sync ./bucket-before-sizes s3://your-bucket`, or upload the files again to Vercel Blob or UploadThing under the same paths). Restoring one without the other leaves records and files that disagree.
+To undo the removal, restore both backups from step 3 together: the database dump (`psql "$DATABASE_URL" < nextly-before-sizes.sql`, `mysql --host=your-host --port=3306 --user=your-user --password your-database < nextly-before-sizes.sql`, or the copied SQLite file, with the app stopped), and the storage copy (`cp -R uploads-before-sizes/. public/uploads/`, or `aws s3 sync ./bucket-before-sizes s3://your-bucket`, or upload the files again to Vercel Blob or UploadThing under the same paths). Restoring one without the other leaves records and files that disagree.
 
 ## Focus point
 
