@@ -343,6 +343,26 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("clears the previous file's duration, which an upload never derives", async () => {
+      const clip = await usedLogo();
+      // As a video or audio item holds one.
+      await t.adapter.update(
+        "media",
+        { duration: 42 },
+        { and: [{ column: "id", op: "=", value: clip.id }] }
+      );
+      expect((await row(clip.id))?.duration).toBe(42);
+
+      const replaced = await replace(editor, clip.id, {
+        data: PNG_1X1,
+        name: "still.png",
+        type: "image/png",
+      });
+
+      expect(replaced.status).toBe(200);
+      expect((await row(clip.id))?.duration).toBeNull();
+    });
+
     it("refuses a file an upload would refuse, and leaves the item as it was", async () => {
       const logo = await usedLogo();
       const before = await row(logo.id);

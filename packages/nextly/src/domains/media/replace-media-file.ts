@@ -166,6 +166,8 @@ function replacementChanges(
     url: stored.url,
     thumbnailUrl: thumbnail?.url ?? null,
     sizes: null,
+    // An upload never derives a playing time, so the old file's goes with it.
+    duration: null,
     focalX: null,
     focalY: null,
     updatedAt: new Date(),
