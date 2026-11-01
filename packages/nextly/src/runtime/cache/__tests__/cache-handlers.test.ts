@@ -508,6 +508,43 @@ describe("the database's clock, learned from slow lookups", () => {
     expect(await getAfter(handler, "k", 0)).toBeNull();
   });
 
+  it("asks again about an expiry an earlier copy looked up after a failover, though this copy had learned an offset", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    const expiriesOf = vi.spyOn(ledger, "expiriesOf");
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    // This copy learns a database clock 30 s ahead.
+    timing.skewMs = 30_000;
+    rows.set("posts", T0 - 60_000);
+    await handler.set("warm", page(0), { tags: ["posts"] });
+    expect(await getAfter(handler, "warm", 0)).not.toBeNull();
+
+    // The database fails over to a clock matching this process's; another
+    // instance writes after the entry began; and an earlier copy, still
+    // loaded, looks the tag up and writes its answer, unstamped, into the
+    // shared state, inside this copy's lookup TTL.
+    timing.skewMs = 0;
+    await handler.set("k", page(1), { tags: ["posts"] });
+    const written = Date.now() + 100 + TAG_EXPIRY_GRACE_MS;
+    rows.set("posts", written);
+    vi.advanceTimersByTime(200);
+    (
+      globalThis as unknown as {
+        __nextly_tag_expiry_view: {
+          lookups: Map<string, { expiredAt: number; askedAt: number }>;
+        };
+      }
+    ).__nextly_tag_expiry_view.lookups.set("posts", {
+      expiredAt: written,
+      askedAt: Date.now(),
+    });
+
+    // Judged by the +30 s this copy learned before the failover, the entry
+    // would look begun after the write. Asked again, it is refused.
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+    expect(expiriesOf).toHaveBeenCalledTimes(2);
+  });
+
   it("asks again about an expiry an earlier copy of this module looked up, before judging by it", async () => {
     const { ledger, rows } = slowLedger();
     const expiriesOf = vi.spyOn(ledger, "expiriesOf");

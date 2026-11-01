@@ -152,7 +152,17 @@ interface TagLookup {
   expiredAt: number;
   /** When the ledger was asked, on this process's clock. */
   askedAt: number;
+  /** The copy of this module that asked; an earlier copy writes none. */
+  by?: symbol;
 }
+
+/**
+ * This copy of the module, as the lookups it writes name it. The lookups are
+ * shared with any other copy still loaded, after a hot reload say, and each
+ * copy learns the database's offset its own way: an expiry is judged only by
+ * the bound learned with it, so one another copy looked up is asked again.
+ */
+const THIS_COPY = Symbol("tag expiry view");
 
 interface ViewState {
   ledger?: TagExpiryLedger;
@@ -346,9 +356,9 @@ export async function refreshTagExpiries(
     if (asking !== undefined) pending.add(asking);
     else if (
       now - (lookup?.askedAt ?? -Infinity) >= TAG_LOOKUP_TTL_MS ||
-      // An expiry an earlier copy of this module looked up, with no offset
-      // this copy learned to judge it by: asked again, which tells it.
-      (view.lowerOffsetMs === undefined && (lookup?.expiredAt ?? 0) > 0)
+      // An expiry another copy of this module looked up, whose offset this
+      // copy has not learned with it: asked again, which tells it.
+      (lookup !== undefined && lookup.by !== THIS_COPY && lookup.expiredAt > 0)
     ) {
       stale.push(tag);
     }
@@ -379,6 +389,7 @@ export async function refreshTagExpiries(
                 givenUpAt + offsetOf(view)
               ),
               askedAt: givenUpAt,
+              by: THIS_COPY,
             });
           }
           return;
@@ -392,6 +403,7 @@ export async function refreshTagExpiries(
           view.lookups.set(tag, {
             expiredAt: answer?.expired.get(tag) ?? 0,
             askedAt: finishedAt,
+            by: THIS_COPY,
           });
         }
       } catch (error) {
@@ -400,9 +412,13 @@ export async function refreshTagExpiries(
         // not read on every request; what was known before is kept.
         const failedAt = Date.now();
         for (const tag of stale) {
+          const known = view.lookups.get(tag);
           view.lookups.set(tag, {
-            expiredAt: view.lookups.get(tag)?.expiredAt ?? 0,
+            expiredAt: known?.expiredAt ?? 0,
             askedAt: failedAt,
+            // Kept as whoever learned it: an answer another copy wrote is
+            // still not one this copy can judge by.
+            by: known?.by,
           });
         }
       } finally {
