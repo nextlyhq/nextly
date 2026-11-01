@@ -43,13 +43,12 @@ const api = vi.mocked(protectedApi);
 const ATTENTION = "core/needs-attention";
 const RELEASES = "core/upcoming-releases";
 
-/** A list card that hides while its answer is empty, up to the full row wide. */
-const listCard = (id: string, source: string, w: number) => ({
+/** A declared list card that hides while its answer is empty, up to the full row wide. */
+const listCard = (id: string, w: number) => ({
   id,
   title: id,
   archetype: "list",
   size: { default: { w, h: 4 }, min: { w: 4, h: 4 }, max: { w: 12, h: 8 } },
-  query: { source, op: "list", select: ["title"], limit: 5 },
   hidesWhenEmpty: true,
 });
 
@@ -57,11 +56,7 @@ const listCard = (id: string, source: string, w: number) => ({
 const ORDERS = "site/orders";
 
 const branding = {
-  widgets: [
-    listCard(ATTENTION, "collection:attention", 8),
-    listCard(RELEASES, "collection:releases", 4),
-    listCard(ORDERS, "collection:orders", 8),
-  ],
+  widgets: [listCard(ATTENTION, 8), listCard(RELEASES, 4), listCard(ORDERS, 8)],
 } as unknown as AdminBranding;
 
 /** The pair, each at its default width, as core's default places them. */
@@ -96,17 +91,17 @@ function layoutRead(
   };
 }
 
-/** Each source's rows: the attention card always has one; the releases card has `releases`. */
+/** Each card's rows: the attention card always has one; the releases card has `releases`. */
 function answerWith(releases: string[]): void {
   api.post.mockImplementation((_url, body) =>
     Promise.resolve({
-      results: (body as { queries: { source: string }[] }).queries.map(
+      results: (body as { queries: { widget: string }[] }).queries.map(
         query => ({
           ok: true,
           result: {
             op: "list",
             items:
-              query.source === "collection:releases"
+              query.widget === RELEASES
                 ? releases.map(title => ({ title }))
                 : [{ title: "Three unpublished changes" }],
           },

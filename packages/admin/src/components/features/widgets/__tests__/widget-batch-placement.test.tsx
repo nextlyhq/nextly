@@ -10,7 +10,6 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import type { WidgetQuery } from "nextly/config";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,9 +36,8 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-/** A card drawn by a plugin component, so `worthAsking` never withholds it. */
+/** A declared card drawn by a plugin component, with its own stored items setting. */
 function card(placementId: string, limit: number): BatchCard {
-  const query: WidgetQuery = { source: "collection:posts", op: "list", limit };
   const widget: DashboardWidget = {
     // The SAME widget in both cards. That is the whole fixture: two placements
     // of one widget is the state the old key could not represent.
@@ -47,9 +45,8 @@ function card(placementId: string, limit: number): BatchCard {
     title: "Posts",
     archetype: "custom",
     size: gridBounds(4),
-    query,
   };
-  return { placementId, widget };
+  return { placementId, widget, config: { items: limit } };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -77,9 +74,12 @@ describe("two placements of one widget are two questions", () => {
     // still went out -- the loss was on the way back -- so the count alone
     // cannot separate the implementations, and the slots below are what does.
     const body = vi.mocked(protectedApi.post).mock.calls[0]?.[1] as {
-      queries: WidgetQuery[];
+      queries: Array<{ widget: string; card: string }>;
     };
-    expect(body.queries.map(q => q.limit)).toEqual([1, 2]);
+    expect(body.queries).toEqual([
+      { widget: "core/posts", card: "p1" },
+      { widget: "core/posts", card: "p2" },
+    ]);
 
     // The separating assertion. Under the widget-id key there was ONE entry
     // under `core/posts` holding whichever answer arrived last, and both cards

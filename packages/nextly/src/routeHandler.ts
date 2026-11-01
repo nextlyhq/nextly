@@ -156,7 +156,6 @@ import {
 } from "./domains/i18n/configured-locales";
 import { hasLifecycle } from "./domains/versions/recorded-status";
 import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
-import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
   publishableContentSources,
@@ -2002,35 +2001,24 @@ const NO_WIDGETS: WidgetAudience = {
 };
 
 /**
- * One declaration with the actions this reader may not see withheld.
+ * One declaration with the empty-state action this reader may not take
+ * withheld.
  *
- * An `actions` widget's shortcuts each carry a gate of their own, and a
- * shortcut is a label and an href: shipped whole and hidden by the browser
- * afterwards, the protected ones are readable from the payload regardless.
- * A declared widget's empty-state action is the same kind of thing, and is
- * withheld the same way. Filtered on the same reading the card's own gate
- * gets. A declaration with neither passes through untouched.
+ * The action is a label and a link: shipped whole and hidden by the browser
+ * afterwards, a protected one is readable from the payload regardless, so it
+ * is filtered on the same reading the card's own gate gets. A declaration
+ * with none passes through untouched.
  */
 function actionsForAudience<
   W extends {
     id: string;
-    actions?: readonly WidgetAction[];
     empty?: { message?: string; action?: object };
   },
 >(widget: W, audience: WidgetAudience): W {
   const withheldEmpty = emptyForAudience(widget.empty, audience);
-  if (widget.actions === undefined && withheldEmpty === widget.empty) {
-    return widget;
-  }
+  if (withheldEmpty === widget.empty) return widget;
   return {
     ...widget,
-    ...(widget.actions === undefined
-      ? {}
-      : {
-          actions: widget.actions.filter(action =>
-            audience.holds(action.requiredPermission)
-          ),
-        }),
     ...(withheldEmpty === undefined ? {} : { empty: withheldEmpty }),
   };
 }

@@ -60,7 +60,6 @@ import {
   type JSX,
 } from "react";
 
-import { Link } from "@admin/components/ui/link";
 import { isDevelopmentRuntime } from "@admin/lib/development-runtime";
 import { cn } from "@admin/lib/utils";
 
@@ -72,7 +71,6 @@ import {
 } from "./frame/card-state";
 import { COLLAPSED_PADDING_CLASS, useFrameCollapsed } from "./frame/collapse";
 import {
-  CARD_FOOTER_LINK_CLASS,
   CardFooterClaimProvider,
   CardFooterSlotProvider,
   drawnClaim,
@@ -171,8 +169,6 @@ export interface WidgetCardProps {
    * as the card will at its tier (`rowsLayout`): a table, or rows with or without a detail line.
    */
   skeletonFields?: number;
-  /** A stats card's cell labels, which its loading skeleton draws under each held value. */
-  skeletonCells?: readonly string[];
   /**
    * The widget hides while empty and the layout read found this card empty, so the card is off
    * the dashboard for this visit; customise mode still shows it, marked, so it can be moved or
@@ -193,12 +189,6 @@ export interface WidgetCardProps {
    * hidden while empty is, and customise mode shows it marked, so it can be removed.
    */
   notShown?: boolean;
-  /**
-   * At most ONE. A footer is not a row of buttons. Shown beside a drawn body and under an empty
-   * one, where "View all" still leads somewhere; never while the card is loading, failed or not
-   * available, where its destination is the thing that did not answer.
-   */
-  link?: { label: string; href: string };
   /**
    * The card's id. Names the title (`frameIds`) and marks the root with `data-card-id`, so the
    * code drawing its customise controls can label them after the card.
@@ -367,12 +357,12 @@ function hiddenFlags(
 /**
  * What the frame derives from the state it shows, decided once so the markup below only reads it:
  * whether the grid should take the card out, whether customise mode marks it as hidden, whether
- * its quick control is out of reach, how its body is marked, and whether its footer link shows.
+ * its quick control is out of reach, and how its body is marked.
  */
 function frameFlags(
   props: Pick<
     WidgetCardProps,
-    "hiddenWhileEmpty" | "hidesWhenAnswerEmpty" | "notShown" | "link"
+    "hiddenWhileEmpty" | "hidesWhenAnswerEmpty" | "notShown"
   >,
   state: CardState,
   modes: {
@@ -391,9 +381,6 @@ function frameFlags(
     quickInert: state.kind === "loading" || customizing,
     busy: state.kind === "loading" || refreshing,
     refreshing,
-    // Beside a drawn body and under an empty one; never while loading, failed or not available.
-    footer:
-      props.link !== undefined && (showsBody(state) || state.kind === "empty"),
   };
 }
 
@@ -511,11 +498,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
               </CardContent>
 
               {collapsed ? null : (
-                <WidgetCardFooter
-                  link={ownFooterLink(flags.footer, footer.held, props.link)}
-                  inert={customizing}
-                  slotRef={setFooterSlot}
-                />
+                <WidgetCardFooter inert={customizing} slotRef={setFooterSlot} />
               )}
             </Card>
           </CardHeightContext.Provider>
@@ -559,10 +542,7 @@ function StateBody({
 }: {
   state: CardState;
   title: string;
-  props: Pick<
-    WidgetCardProps,
-    "skeleton" | "skeletonItems" | "skeletonFields" | "skeletonCells"
-  >;
+  props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
 }) {
   switch (state.kind) {
     case "loading":
@@ -639,10 +619,7 @@ function LoadingBody({
   props,
 }: {
   hint: SkeletonHint | undefined;
-  props: Pick<
-    WidgetCardProps,
-    "skeleton" | "skeletonItems" | "skeletonFields" | "skeletonCells"
-  >;
+  props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
 }) {
   const tier = useCardTier() ?? "medium";
   // The card's height and density, as the rows that will arrive are counted at.
@@ -653,7 +630,6 @@ function LoadingBody({
       shape={hint?.shape ?? props.skeleton}
       rows={hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density)}
       layout={hint?.layout ?? heldLayout(tier, props.skeletonFields)}
-      cells={props.skeletonCells}
     />
   );
 }
@@ -838,12 +814,10 @@ function TitleCountMark({ count }: { count: TitleCount | undefined }) {
 }
 
 /**
- * Whether a body's link holds the card's footer, and the claims it is drawn by: the footer holds
- * one link, so while any is held the widget's own is not drawn, and of the body's, one is
- * (`drawnClaim`).
+ * The claims a body's footer links are drawn by: the footer holds one link, so of the body's, one
+ * is (`drawnClaim`).
  */
 function useFooterClaims(widgetId: string | undefined): {
-  held: boolean;
   claims: CardFooterClaims;
 } {
   const [held, setHeld] = useState<{ id: number; rank: FooterClaimRank }[]>([]);
@@ -872,31 +846,18 @@ function useFooterClaims(widgetId: string | undefined): {
     );
   }, [explicit, widgetId]);
   const claims = useMemo(() => ({ claim, drawn }), [claim, drawn]);
-  return { held: held.length > 0, claims };
+  return { claims };
 }
 
-/** The widget's own footer link, where the frame draws a footer and no body's link holds it. */
-function ownFooterLink(
-  drawn: boolean,
-  held: boolean,
-  link: { label: string; href: string } | undefined
-): { label: string; href: string } | undefined {
-  return drawn && !held ? link : undefined;
-}
-
-/** The single footer link, on the right. */
 /**
  * The card's footer: one link's line, drawn whether or not it holds anything, so every card's body
- * is one height and every card ends on one line. It holds the widget's own link, beside a drawn
- * body and under an empty one, and whatever the body hands it (`CardFooterContent`): a list's
- * "View all (N)".
+ * is one height and every card ends on one line. It holds whatever the body hands it
+ * (`CardFooterContent`): a list's "View all (N)".
  */
 function WidgetCardFooter({
-  link,
   inert,
   slotRef,
 }: {
-  link: { label: string; href: string } | undefined;
   /** Customise mode: the footer's links are out of reach, like the body's. */
   inert: boolean;
   /** Receives the element a body's footer content is drawn into. */
@@ -914,8 +875,7 @@ function WidgetCardFooter({
         "flex h-7 shrink-0 items-center justify-end gap-3 border-0 bg-transparent p-0",
         // Clicks pass through the footer's own room to what is drawn under it: in a short card
         // the body's empty state, with its one action, runs into this room, and an empty footer
-        // laid over it took the click. Only what the footer holds, its link and anything a body
-        // draws into it, takes clicks.
+        // laid over it took the click. Only what a body draws into the footer takes clicks.
         "pointer-events-none",
         FRAME_FOOTER_GAP.className,
         // Out of reach in customise mode, and dimmed with the body so it does not look usable.
@@ -927,14 +887,6 @@ function WidgetCardFooter({
         data-testid="widget-card-footer-slot"
         className="pointer-events-auto contents"
       />
-      {link !== undefined && (
-        <Link
-          href={link.href}
-          className={cn(CARD_FOOTER_LINK_CLASS, "pointer-events-auto")}
-        >
-          {link.label}
-        </Link>
-      )}
     </CardFooter>
   );
 }

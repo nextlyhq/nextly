@@ -22,12 +22,11 @@
 
 import { answerHasNothing } from "nextly/widget-result";
 
-import { WithCollectionUnit } from "../charts/chart-unit";
 import { GroupsChart, type GroupsChartGroup } from "../charts/groups-chart";
 import type { CardEmptyContent } from "../frame/states";
 
 import { choiceLabel, type CellColumn } from "./cell-text";
-import type { ArchetypeAccepts, ArchetypeBody } from "./types";
+import type { ArchetypeBody } from "./types";
 
 /**
  * What a bucket that stores no readable value is called, and how it is keyed.
@@ -116,12 +115,6 @@ export function groupsEmpty(floor: boolean): CardEmptyContent {
       };
 }
 
-export const barsAccepts: ArchetypeAccepts = definition => {
-  if (definition.query) return undefined;
-  const name = definition.title ?? "This bars widget";
-  return `"${name}" is drawn from a query, and this widget declares none.`;
-};
-
 export const barsBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "groupBy") {
     return {
@@ -144,22 +137,17 @@ export const barsBody: ArchetypeBody = (result, definition) => {
     ok: true,
     node: (
       // The chart orders, cuts, colours and describes the groups; this adapter only reads them
-      // out of the answer.
-      // Counting a collection's entries, its tooltip names them ("7 posts").
-      <WithCollectionUnit source={definition.query?.source}>
-        {unit => (
-          <GroupsChart
-            groups={rows}
-            truncated={result.truncated === true}
-            // A source that counts only up to a bound says so, and every count is then drawn,
-            // described and tabled as a floor ("N+").
-            floors={result.atLeast === true}
-            title={definition.title ?? "Comparison"}
-            labelHeading={result.field?.label ?? "Value"}
-            unit={unit}
-          />
-        )}
-      </WithCollectionUnit>
+      // out of the answer. No unit: the answer does not say what it counts, so its tooltip
+      // gives the bare number.
+      <GroupsChart
+        groups={rows}
+        truncated={result.truncated === true}
+        // A source that counts only up to a bound says so, and every count is then drawn,
+        // described and tabled as a floor ("N+").
+        floors={result.atLeast === true}
+        title={definition.title ?? "Comparison"}
+        labelHeading={result.field?.label ?? "Value"}
+      />
     ),
   };
 };

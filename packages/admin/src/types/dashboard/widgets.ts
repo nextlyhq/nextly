@@ -2,35 +2,23 @@
  * What the admin knows about a dashboard widget and about the data one asked
  * for.
  *
- * The shared vocabulary (`WidgetSizeBounds`, the archetype, `WidgetQuery`) is
- * IMPORTED from core rather than restated, through `nextly/config`: this
- * package's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
- * importing from `"nextly"` shadows the package exports and drags core's whole
- * source tree in behind internal aliases this project does not declare.
- * Subpaths escape that mapping and resolve through the export map, exactly as a
- * consumer's import would.
- *
- * Two shapes below are declared here rather than imported, because
- * `nextly/config` does not re-export them: core's `WidgetDefinition` and
- * `WidgetResult` live in `domains/widgets`, which the config entry point
- * deliberately keeps out (its barrel carries `executeWidgetQuery`, and through
- * it the Direct API). `WidgetResult` is the wire shape of one slot in
- * `POST /api/dashboard/query`, so it is a client contract regardless of where
- * the server happens to declare it.
+ * The shared vocabulary (`WidgetSizeBounds`, the settings) is IMPORTED from
+ * core rather than restated, through `nextly/config`: this package's tsconfig
+ * maps the bare `nextly` specifier to `../nextly/src`, so importing from
+ * `"nextly"` shadows the package exports and drags core's whole source tree in
+ * behind internal aliases this project does not declare. Subpaths escape that
+ * mapping and resolve through the export map, exactly as a consumer's import
+ * would. The archetype is the published widget's own (`RegisteredWidgetMeta`),
+ * and the answer's wire shapes are `nextly/widget-result`'s, re-exported below.
  *
  * @module types/dashboard/widgets
  */
 
-import type {
-  AnyWidgetSetting,
-  WidgetAction,
-  SourcelessWidgetQuery,
-  WidgetQuery,
-  WidgetQueryCell,
-  WidgetSizeBounds,
-  WidgetStatCell,
-  WidgetDefinition,
-} from "nextly/config";
+import type { AnyWidgetSetting, WidgetSizeBounds } from "nextly/config";
+
+// The published widget's own type, so the archetype a card is drawn as is the
+// one the registry publishes, never a second list of them.
+import type { RegisteredWidgetMeta } from "../branding";
 
 /*
  * 🔴 RE-EXPORTED from core, not restated here. These describe what
@@ -56,6 +44,8 @@ export type {
 /**
  * A widget as the grid renders it: every field the card and the archetype need,
  * with nothing optional that the renderer would have to invent a default for.
+ * Every card is answered on the server from its widget's declaration, asked
+ * for by its card id, so nothing here describes a question for the admin to ask.
  *
  * Widgets arrive over the wire as the registry publishes them.
  * `resolveDashboardWidgets` in `resolve-widgets.ts` is the one place one
@@ -68,7 +58,7 @@ export interface DashboardWidget {
   description?: string;
   /** Lucide icon name, resolved to a component by the card. */
   icon?: string;
-  archetype: WidgetDefinition["archetype"];
+  archetype: RegisteredWidgetMeta["archetype"];
   /**
    * The sizes this widget's cards may take, in grid units, with every end
    * filled in: the size a new card starts at, and the smallest and largest it
@@ -79,17 +69,6 @@ export interface DashboardWidget {
    * a missing end its own way.
    */
   size: WidgetSizeBounds;
-  /**
-   * Present for the data archetypes; absent for `text`, `actions`, `custom`.
-   * Sourceless for a widget offered per collection until its card is set to
-   * one, and then never asked.
-   */
-  query?: WidgetQuery | SourcelessWidgetQuery;
-  /**
-   * Set when core builds this card's data on the server from the widget's
-   * declaration: the card is asked for by its id, never by a query, and has none.
-   */
-  serverData?: true;
   /**
    * The display its loading state, and its row in the add panel, are drawn as
    * when that is not its archetype's: a declared widget drawn by its own
@@ -117,13 +96,6 @@ export interface DashboardWidget {
    * anything at all. Field settings and the four content settings alike.
    */
   settings?: AnyWidgetSetting[];
-  /**
-   * Present for `stats`: one entry per number the card draws.
-   *
-   * Each carries its own query, so the card's numbers are ordinary
-   * access-controlled reads rather than one composite answer.
-   */
-  cells?: WidgetStatCell[] | WidgetQueryCell[];
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
   /**
@@ -131,15 +103,6 @@ export interface DashboardWidget {
    * so a card whose component is missing can say whose it is. Absent for any other widget.
    */
   owner?: string;
-  /**
-   * Present for `actions`, already filtered to the shortcuts this reader may
-   * use — `resolve-widgets` drops the rest, so the renderer never sees one it
-   * must hide.
-   */
-  actions?: WidgetAction[];
-  /** Present for `text`: the markdown the host draws, validated non-blank at boot. */
-  content?: string;
-  link?: { label: string; href: string };
   /**
    * The DECLARED default position, ascending; absent means "after everything
    * that states one".
@@ -155,27 +118,6 @@ export interface DashboardWidget {
    * where it is shown marked so it can still be moved or removed.
    */
   hidesWhenEmpty?: boolean;
-  /**
-   * Whether this reader may send the card away from the card itself.
-   *
-   * Carried through because the CONTROL is drawn per card, outside edit mode,
-   * and the cell has no other way to know a card offers one. Removing is what
-   * it performs -- the placement stays in the arrangement marked removed -- so
-   * a dismissed card is recoverable from the same controls as any other.
-   */
-  dismissible?: boolean;
-  /**
-   * Whether the batch sizes this `custom` widget's list query to the card, as
-   * it does for the lists core draws: the rows the card's size draws and one
-   * more. Unstated, a custom widget is asked exactly its declared query.
-   */
-  sizedQuery?: boolean;
-  /**
-   * The settings this widget's source narrows by rather than being replaced
-   * by, as core published them for a registered widget; the knobs read them
-   * when they apply the reader's settings to the query.
-   */
-  sourceFilters?: WidgetDefinition["sourceFilters"];
 }
 
 /**

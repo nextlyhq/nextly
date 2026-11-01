@@ -17,17 +17,13 @@ import { listBody } from "../list";
 import { CardEmpty } from "../../frame/states";
 import { gridBounds } from "../../__tests__/grid-bounds";
 
-const widget = (select?: string[]): DashboardWidget =>
+// A declared list card, answered on the server: its rows are drawn by the fields they carry.
+const widget = (): DashboardWidget =>
   ({
     id: "acme/recent",
     title: "Recent posts",
     archetype: "list",
     size: gridBounds(4),
-    query: {
-      source: "collection:posts",
-      op: "list",
-      ...(select && { select }),
-    },
   }) as DashboardWidget;
 
 const listOf = (items: Record<string, unknown>[]): WidgetResult => ({
@@ -55,26 +51,20 @@ function draw(result: WidgetResult, definition: DashboardWidget) {
 }
 
 describe("the list archetype", () => {
-  it("takes the row's label from the FIRST selected field", () => {
-    draw(
-      listOf([{ title: "Hello", slug: "hello" }]),
-      widget(["title", "slug"])
-    );
+  it("takes the row's label from the FIRST field its answer carries", () => {
+    draw(listOf([{ title: "Hello", slug: "hello" }]), widget());
     expect(screen.getByText("Hello")).toBeInTheDocument();
   });
 
-  it("shows the second selected field as the line under it", () => {
-    draw(
-      listOf([{ title: "Hello", slug: "hello" }]),
-      widget(["title", "slug"])
-    );
+  it("shows the second field as the line under it", () => {
+    draw(listOf([{ title: "Hello", slug: "hello" }]), widget());
     expect(screen.getByText("hello")).toBeInTheDocument();
   });
 
   it("puts the other described fields on the meta line under the title", () => {
     draw(
       describedListOf([{ title: "Hello", slug: "hello" }], ["title", "slug"]),
-      widget(["title", "slug"])
+      widget()
     );
     expect(screen.getByTestId("entity-row-title")).toHaveTextContent("Hello");
     expect(screen.getByTestId("entity-row-meta")).toHaveTextContent("hello");
@@ -90,7 +80,7 @@ describe("the list archetype", () => {
         [{ a: "one", b: "two", c: "three", d: "four", e: "five" }],
         names
       ),
-      widget(names)
+      widget()
     );
     expect(screen.getByTestId("entity-row-meta")).toHaveTextContent(
       "two · three · four"
@@ -98,27 +88,26 @@ describe("the list archetype", () => {
     expect(screen.queryByText("five")).not.toBeInTheDocument();
   });
 
-  it("refuses a list whose query selects nothing, by name", () => {
-    // Without `select` the rows carry whatever the collection holds, so core
-    // would be picking a key out of a document it knows nothing about — and the
-    // key it picked would change the day someone added a column.
-    const outcome = listBody(listOf([{ title: "Hello" }]), widget());
+  it("refuses rows that carry no field to draw, by name", () => {
+    // Rows with nothing in them: no field to title a row with, which no
+    // declaration check could have seen before the widget's `load` ran.
+    const outcome = listBody(listOf([{}]), widget());
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.message).toMatch(/Recent posts/);
     expect(outcome.ok === false && outcome.message).toMatch(
-      /selects no fields/i
+      /no fields to draw/i
     );
   });
 
   it("refuses a count payload, naming both ops", () => {
-    const outcome = listBody({ op: "count", total: 3 }, widget(["title"]));
+    const outcome = listBody({ op: "count", total: 3 }, widget());
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.message).toMatch(/expected a list/i);
     expect(outcome.ok === false && outcome.message).toMatch(/count/);
   });
 
   it("says nothing is there rather than drawing an empty list", () => {
-    draw(listOf([]), widget(["title"]));
+    draw(listOf([]), widget());
     // The frame's one empty state, not a list of nothing.
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
     expect(screen.queryByTestId("entity-row")).not.toBeInTheDocument();
@@ -126,7 +115,7 @@ describe("the list archetype", () => {
 
   it("caps the rows it draws", () => {
     const many = Array.from({ length: 12 }, (_, i) => ({ title: `Row ${i}` }));
-    draw(listOf(many), widget(["title"]));
+    draw(listOf(many), widget());
     expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
   });
 
@@ -134,10 +123,7 @@ describe("the list archetype", () => {
     // The exact defect a sibling widget shipped once: a relationship, repeater
     // or rich-text value arrives as an object, and `String(value)` renders
     // "[object Object]" — which looks like data rather than a bug.
-    draw(
-      listOf([{ title: { en: "Localised" }, slug: "x" }]),
-      widget(["title", "slug"])
-    );
+    draw(listOf([{ title: { en: "Localised" }, slug: "x" }]), widget());
     expect(screen.queryByText(/object Object/)).not.toBeInTheDocument();
     // The row still occupies its place, so the count matches the result.
     expect(screen.getAllByTestId("entity-row")).toHaveLength(1);
@@ -145,7 +131,7 @@ describe("the list archetype", () => {
 
   it("prints a zero rather than dropping it", () => {
     // `0` and `false` are answers; only null/undefined/blank are absences.
-    draw(listOf([{ views: 0 }]), widget(["views"]));
+    draw(listOf([{ views: 0 }]), widget());
     expect(screen.getByText("0")).toBeInTheDocument();
   });
 
@@ -157,7 +143,7 @@ describe("the list archetype", () => {
         [{ title: "First", slug: "first" }, { title: "Hello" }],
         ["title", "slug"]
       ),
-      widget(["title", "slug"])
+      widget()
     );
     const [first, second] = screen.getAllByTestId("entity-row");
     expect(first.textContent).toBe("Firstfirst");

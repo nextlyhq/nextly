@@ -133,16 +133,15 @@ interface Shown {
 /** How long a change's toast, and its Undo, stays: long enough to find the button. */
 const UNDO_SHOWN_MS = 10_000;
 
-/** Whether `config` changes what the card asks, compared with `current`. */
+/**
+ * Whether `config` changes what the card asks, compared with `current`: its settings are what its
+ * widget's `load` reads, so any change of them asks again.
+ */
 function changesQuery(
-  widget: DashboardWidget,
   current: Record<string, unknown> | undefined,
-  config: Record<string, unknown>,
-  sources: readonly PublishedContentSource[] | undefined
+  config: Record<string, unknown>
 ): boolean {
-  return (
-    questionOf(widget, current, sources) !== questionOf(widget, config, sources)
-  );
+  return questionOf(current) !== questionOf(config);
 }
 
 /**
@@ -365,7 +364,7 @@ function changeSetting(
   const label = setting.label ?? setting.name;
   // Captured now: Undo puts back what this setting was just before THIS change.
   const previous = config ?? {};
-  const asksAgain = changesQuery(ctx.widget, config, stored, sources);
+  const asksAgain = changesQuery(config, stored);
   const said = (value: unknown) => valueLabel(setting, value, sources);
   ctx.setShown(ahead => ({
     ...ahead,

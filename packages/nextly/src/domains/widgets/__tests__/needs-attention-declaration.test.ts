@@ -14,13 +14,14 @@ import * as loggerModule from "../../../observability/logger";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import type { AttentionDigestItem } from "../attention/digest-item";
 import { allWidgets } from "../canonical";
-import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
+import { CORE_DECLARATIONS } from "../core-widgets";
 import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import {
   needsAttentionWidget,
   provideAttentionDigest,
 } from "../core-widgets/needs-attention";
 import { createBatchScope } from "../batch-scope";
+import { declaredWidget } from "../declaration/declared-widgets";
 import { bindReadServices, boundCaller } from "../declaration/read-services";
 import { widgetDeclarationFaults } from "../declaration/validate";
 import { getWidget } from "../registry";
@@ -98,11 +99,8 @@ describe("core's Needs your attention, declared", () => {
     );
   });
 
-  it("is one of core's declarations, no longer a definition, 8 x 3 by default and at most 12 wide", () => {
+  it("is one of core's declarations, 8 x 3 by default and at most 12 wide", () => {
     expect(CORE_DECLARATIONS.map(widget => widget.id)).toContain(
-      "core/needs-attention"
-    );
-    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain(
       "core/needs-attention"
     );
     expect(needsAttentionWidget.hidesWhenEmpty).toBe(true);
@@ -171,9 +169,10 @@ describe("core's Needs your attention, declared", () => {
     expect(getWidget("core/needs-attention")).toMatchObject({
       archetype: "custom",
       component: "core#NeedsAttention",
-      serverData: true,
       hidesWhenEmpty: true,
     });
+    // Answered on the server from the declaration core keeps for it.
+    expect(declaredWidget("core/needs-attention")?.owner).toBe("core");
     const canonical = allWidgets().find(
       widget => widget.id === "core/needs-attention"
     );

@@ -19,6 +19,17 @@
 export const GRID_COLUMNS = 12;
 
 /**
+ * How much room a card has on the screen asking, narrowest first: the tier the
+ * admin predicts from the dashboard's width, which a card's `load` is handed
+ * with its size. Kept with the size vocabulary because a card is asked for
+ * with both, and the batch reads the asked tier against this list.
+ */
+export const CARD_TIERS = ["small", "medium", "large"] as const;
+
+/** One of {@link CARD_TIERS}. */
+export type CardTier = (typeof CARD_TIERS)[number];
+
+/**
  * The fewest rows a card may span. One row cannot hold the frame's padding,
  * header and gap, so no size is shorter than this.
  */

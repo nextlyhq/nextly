@@ -163,7 +163,8 @@ describe("plugin-sdk public export surface", () => {
   it("publishes none of the older widget shape's names", () => {
     // Held by name beside the snapshots, as the doors above are: a widget is
     // declared with `defineWidget` and drawn by its `view`, so the definition
-    // it was written as, the archetypes that drew it, the stats card's cells,
+    // it was written as, the archetypes that drew it, the stats and custom
+    // cards' cells and the text card's bound,
     // the contributed family, and the props a component drew a query's answer
     // with may not come back on any published subpath.
     const removed = new Set([
@@ -177,6 +178,12 @@ describe("plugin-sdk public export surface", () => {
       "WidgetStatCell",
       "WidgetQueryCell",
       "WidgetAction",
+      "WIDGET_CELL_TIERS",
+      "WIDGET_CELL_CONDITIONS",
+      "WidgetCellTier",
+      "WidgetCellCondition",
+      "MAX_STAT_CELLS",
+      "MAX_TEXT_CONTENT",
       "WidgetPatch",
       "PluginAdminWidget",
       "PluginAdminCustomWidget",

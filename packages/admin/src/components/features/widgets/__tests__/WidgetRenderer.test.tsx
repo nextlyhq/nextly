@@ -29,7 +29,6 @@ const metric: DashboardWidget = {
   title: "Published posts",
   archetype: "metric",
   size: gridBounds(3),
-  query: { source: "collection:posts", op: "count" },
 };
 
 const countSlot = (total: number): WidgetSlot => ({
@@ -116,21 +115,6 @@ describe("WidgetRenderer — metric", () => {
       "false"
     );
   });
-
-  it("renders the definition's single footer link", () => {
-    render(
-      <WidgetRenderer
-        definition={{
-          ...metric,
-          link: { label: "View all", href: "/dashboard/entries/posts" },
-        }}
-        slot={countSlot(3)}
-      />
-    );
-    const links = screen.getAllByRole("link");
-    expect(links).toHaveLength(1);
-    expect(links[0]).toHaveAttribute("href", "/dashboard/entries/posts");
-  });
 });
 
 describe("WidgetRenderer — an archetype named off Object.prototype", () => {
@@ -143,7 +127,6 @@ describe("WidgetRenderer — an archetype named off Object.prototype", () => {
     title: "Evil",
     archetype: "__proto__" as DashboardWidget["archetype"],
     size: gridBounds(3),
-    query: { source: "collection:posts", op: "count" },
   };
 
   it("does not mistake `__proto__` for a renderer", () => {
@@ -189,37 +172,6 @@ describe("WidgetRenderer — an archetype named off Object.prototype", () => {
   });
 });
 
-describe("WidgetRenderer — an archetype drawn without data", () => {
-  // `text` and `actions` are queryless by core's contract -- the registry
-  // validator refuses a query on them -- so they never enter the batch and no
-  // slot ever arrives. The outcome resolver used to read that absence as
-  // "drawn from a query, and this widget declares none", which would have made
-  // the FIRST body registered for one fail on every render, permanently.
-  const shortcuts: DashboardWidget = {
-    id: "core/shortcuts",
-    title: "Shortcuts",
-    archetype: "actions",
-    size: gridBounds(3),
-    actions: [{ label: "New post", href: "/admin/posts/new" }],
-  };
-
-  it("draws with NO slot, rather than reporting a missing query", () => {
-    render(<WidgetRenderer definition={shortcuts} slot={undefined} />);
-    expect(screen.getByTestId("widget-action")).toHaveTextContent("New post");
-    expect(screen.queryByTestId("widget-card-error")).not.toBeInTheDocument();
-  });
-
-  it("never waits on a request that is not coming", () => {
-    // The other half: absent must not read as "in flight" either, or the card
-    // sits loading for the life of the page with nothing saying why.
-    render(<WidgetRenderer definition={shortcuts} slot={undefined} />);
-    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
-      "aria-busy",
-      "false"
-    );
-  });
-});
-
 describe("WidgetRenderer — custom", () => {
   const custom: DashboardWidget = {
     id: "acme/panel",
@@ -229,85 +181,12 @@ describe("WidgetRenderer — custom", () => {
     component: "@acme/admin#Panel",
   };
 
-  it("renders the plugin component through the existing PluginSlot", () => {
-    registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
-    render(<WidgetRenderer definition={custom} slot={undefined} />);
-    expect(screen.getByText("acme body")).toBeInTheDocument();
-    expect(screen.getByText("Acme panel")).toBeInTheDocument();
-  });
-
-  /*
-   * 🔴 A plugin's component is the ONLY thing that can consume a `text`,
-   * `checkbox` or `select` setting -- core reads just the `limit` query knob.
-   * `plugin-sdk` is an author's only stable import surface, so a value it
-   * cannot receive as a prop it cannot observe at all: a reader could choose
-   * one and the card drawing it would never learn of it.
-   *
-   * The placement id travels with them because `widgetId` does not identify a
-   * card. The same widget can sit on a dashboard twice with different
-   * settings, and a component keying local state or a fetch on the widget id
-   * would have the two copies overwrite each other -- the defect the batch
-   * already had, one layer along.
-   */
-  it("hands the plugin component its placement and resolved settings", () => {
-    registerComponent(
-      "@acme/admin#Panel",
-      ({
-        placementId,
-        settings,
-      }: {
-        placementId?: string;
-        settings?: Record<string, unknown>;
-      }) => <div>{`${placementId}:${JSON.stringify(settings)}`}</div>
-    );
-    render(
-      <WidgetRenderer
-        definition={custom}
-        slot={undefined}
-        placement={{ id: "p-2", settings: { mode: "grid" } }}
-      />
-    );
-    expect(screen.getByText('p-2:{"mode":"grid"}')).toBeInTheDocument();
-  });
-
-  it("falls back to the widget id when rendered outside an arrangement", () => {
-    // The layout's own rule rather than a guess: `defaultPlacements` names each
-    // placement after its widget, because an unarranged dashboard is the one
-    // case where the two are genuinely one-to-one.
-    registerComponent(
-      "@acme/admin#Panel",
-      ({
-        placementId,
-        settings,
-      }: {
-        placementId?: string;
-        settings?: Record<string, unknown>;
-      }) => <div>{`${placementId}:${JSON.stringify(settings)}`}</div>
-    );
-    render(<WidgetRenderer definition={custom} slot={undefined} />);
-    expect(screen.getByText("acme/panel:{}")).toBeInTheDocument();
-  });
-
-  it("isolates a throwing plugin component behind the boundary", () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    registerComponent("@acme/admin#Panel", () => {
-      throw new Error("boom");
-    });
-    render(<WidgetRenderer definition={custom} slot={undefined} />);
-    expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
-    // The rest of the card is intact around the isolated body.
-    expect(screen.getByText("Acme panel")).toBeInTheDocument();
-  });
-
   it("offers the frame's Retry on a custom card whose answer failed", () => {
     const onRetry = vi.fn();
     registerComponent("@acme/admin#Panel", () => <div>never drawn</div>);
     render(
       <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "collection:posts", op: "count" },
-        }}
+        definition={custom}
         slot={{ ok: false, error: "down" }}
         onRetry={onRetry}
       />
@@ -317,21 +196,14 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.queryByText("never drawn")).toBeNull();
   });
 
-  it("marks a QUERIED custom card busy during a background refetch", () => {
+  it("marks a custom card busy during a background refetch", () => {
     // The card keeps the plugin's body through a window-focus refetch, exactly
     // as an archetype keeps its number, so the only thing telling a screen
     // reader the dashboard is reading again is `aria-busy`. This branch drew
     // the card without it while every other branch reported it.
     registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
     render(
-      <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "collection:posts", op: "count" },
-        }}
-        slot={countSlot(7)}
-        isFetching
-      />
+      <WidgetRenderer definition={custom} slot={countSlot(7)} isFetching />
     );
     expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
       "aria-busy",
@@ -341,17 +213,9 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("acme body")).toBeInTheDocument();
   });
 
-  it("shows a queried custom card's own body when its data landed", () => {
+  it("shows a custom card's own body when its data landed", () => {
     registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
-    render(
-      <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "collection:posts", op: "count" },
-        }}
-        slot={countSlot(7)}
-      />
-    );
+    render(<WidgetRenderer definition={custom} slot={countSlot(7)} />);
     expect(screen.getByText("acme body")).toBeInTheDocument();
     expect(screen.getByRole("region")).toHaveAttribute("data-state", "ready");
   });
@@ -364,10 +228,7 @@ describe("WidgetRenderer — custom", () => {
     registerComponent("@acme/admin#Panel", component);
     render(
       <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "collection:posts", op: "count" },
-        }}
+        definition={custom}
         slot={{ ok: false, error: "Source unavailable." }}
         onRetry={() => {}}
       />
@@ -385,24 +246,12 @@ describe("WidgetRenderer — custom", () => {
     registerComponent("@acme/admin#Panel", component);
     render(
       <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "collection:posts", op: "count" },
-        }}
+        definition={custom}
         slot={{ ok: false, error: "Not available.", code: "unavailable" }}
       />
     );
     expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
     expect(component).not.toHaveBeenCalled();
-  });
-
-  it("never marks a custom body busy for a batch it did not participate in", () => {
-    registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
-    render(<WidgetRenderer definition={custom} slot={undefined} />);
-    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
-      "aria-busy",
-      "false"
-    );
   });
 });
 
@@ -422,32 +271,9 @@ describe("WidgetRenderer — freshness", () => {
   });
 });
 
-describe("WidgetRenderer — a data archetype with nothing to draw from", () => {
-  it("says so rather than staying busy for a slot that will never arrive", () => {
-    render(
-      <WidgetRenderer
-        definition={{
-          id: "acme/queryless",
-          title: "Queryless",
-          archetype: "metric",
-          size: gridBounds(3),
-        }}
-        slot={undefined}
-      />
-    );
-    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
-      "aria-busy",
-      "false"
-    );
-    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
-      /declares none/i
-    );
-    expect(screen.getByText("Queryless")).toBeInTheDocument();
-  });
-
-  it("stays busy for a widget that DID ask and has not been answered", () => {
-    // The control for the case above: absence still means in flight when there
-    // is a request to be in flight.
+describe("WidgetRenderer — a card whose answer is on its way", () => {
+  it("stays busy while its answer has not arrived", () => {
+    // Every card is asked for by its id, so an absent answer is one in flight.
     render(<WidgetRenderer definition={metric} slot={undefined} />);
     expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
       "aria-busy",
@@ -462,17 +288,18 @@ describe("WidgetRenderer — archetypes not built yet", () => {
     render(
       <WidgetRenderer
         definition={{
-          id: "core/recent",
-          title: "Recent entries",
-          archetype: "list",
+          id: "acme/gauge",
+          title: "Load gauge",
+          archetype: "gauge" as DashboardWidget["archetype"],
           size: gridBounds(6),
-          query: { source: "collection:posts", op: "list" },
         }}
-        slot={{ ok: true, result: { op: "list", items: [] } }}
+        slot={countSlot(3)}
       />
     );
-    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(/list/i);
-    expect(screen.getByText("Recent entries")).toBeInTheDocument();
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      /"gauge" widget archetype is not rendered yet/i
+    );
+    expect(screen.getByText("Load gauge")).toBeInTheDocument();
   });
 });
 
@@ -490,7 +317,7 @@ describe("WidgetRenderer — every card is framed", () => {
           size: gridBounds(6),
           component: "@t/x#Body",
         }}
-        slot={undefined}
+        slot={countSlot(1)}
       />
     );
     expect(screen.getByTestId("widget-card-body")).toHaveTextContent("body");

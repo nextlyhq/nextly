@@ -17,7 +17,6 @@ import {
   applyWidgetSettings,
   CONTENT_SETTING_NOT_DRAWN,
   effectiveWidgetSettings,
-  fieldsSettingQueryProblem,
   MAX_CHOSEN_FIELDS,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
@@ -626,22 +625,6 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
         { name: "shown", type: "fields", of: "collection" },
       ])
     ).toEqual([]);
-  });
-
-  it("refuses a Fields setting on a widget whose query is not a list", () => {
-    const settings = [
-      { name: "collection", type: "collection", rows: "titled" },
-      { name: "shown", type: "fields", of: "collection" },
-    ];
-    for (const op of ["count", "groupBy", "timeseries"]) {
-      expect(
-        fieldsSettingQueryProblem({ settings, query: { op } }),
-        op
-      ).toMatch(/only a list query's rows can show/);
-    }
-    expect(
-      fieldsSettingQueryProblem({ settings, query: { op: "list" } })
-    ).toBeUndefined();
   });
 
   it("refuses a dependency that names no Collection setting of the widget", () => {

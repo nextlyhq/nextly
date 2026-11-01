@@ -134,7 +134,7 @@ describe("what follows the default's own cards", () => {
     // The add panel offers each of them; only the default's entries are placed.
     const widgets = [
       ...core,
-      widget("acme/revenue", { serverData: true }),
+      widget("acme/revenue"),
       widget("old/early", { defaultOrder: 5 }),
       widget("old/none"),
       widget("acme/per-collection", { offered: "per-collection" }),

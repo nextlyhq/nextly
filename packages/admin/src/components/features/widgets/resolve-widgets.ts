@@ -17,7 +17,6 @@ import {
   sizeBounds,
   sizeDeclarationProblems,
   UNSTATED_WIDGET_SIZE,
-  type WidgetAction,
   type WidgetSizeBounds,
   type WidgetSizeDeclaration,
 } from "nextly/config";
@@ -26,32 +25,6 @@ import { widgetGateHolds } from "nextly/widget-gate";
 import { adminHref } from "@admin/constants/routes";
 import type { RegisteredWidgetMeta } from "@admin/types/branding";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
-
-/**
- * A widget's shortcuts, less the ones this reader may not use.
- *
- * Gated HERE because this is the one place holding `hasPermission`, and the
- * same place the card's own `requiredPermission` is judged -- two gates for one
- * question drift, and the renderer would need the predicate threaded through
- * its signature to ask again.
- *
- * The two gates answer different questions and both are needed. The card's
- * permission decides whether the widget appears at all; an item's decides
- * whether that shortcut does. A card of five shortcuts where the reader may use
- * two should show two, not disappear -- and a shortcut to something they may
- * not do is worse than no shortcut, because it advertises a capability, costs a
- * click, and answers with a refusal screen.
- */
-function readableActions(
-  actions: WidgetAction[] | undefined,
-  hasPermission: (permission: string) => boolean
-): WidgetAction[] | undefined {
-  if (!actions) return undefined;
-  return actions.filter(
-    action =>
-      !action.requiredPermission || hasPermission(action.requiredPermission)
-  );
-}
 
 /**
  * A title with visible text, falling back to the widget's id.
@@ -92,16 +65,15 @@ function boundsOf(
  * One registered widget as the grid renders it, or `undefined` when the user
  * may not see it.
  *
- * A registered definition passed `validateWidgetDefinition`, which requires the
- * title, the archetype and the size, requires a query for every data
- * archetype and a component for `custom`, and forbids each where it does not
- * belong. Nothing here has a default to invent, and giving it one would
- * quietly accept a definition the registry would have refused.
+ * A registered widget is a `defineWidget` declaration as the registry
+ * publishes it: its title, archetype and size, with a component for `custom`.
+ * Nothing here has a default to invent, and giving it one would quietly
+ * accept a definition the registry would have refused.
  *
  * `hasPermission` is the `useCurrentUserPermissions` predicate, which is
  * closed-until-loaded: an undeclared permission renders, a declared one does
  * not render until the grant is known. Gating HERE rather than inside the card
- * is what keeps a denied widget's query out of the batch: a card that is never
+ * is what keeps a denied widget's card out of the batch: a card that is never
  * mounted must not cause a request on the user's behalf.
  */
 function resolveRegistered(
@@ -120,25 +92,14 @@ function resolveRegistered(
     archetype: meta.archetype,
     // A size that arrived malformed over the wire takes the unstated size.
     size: boundsOf(meta.size),
-    query: meta.query,
-    ...(meta.serverData === true ? { serverData: true as const } : {}),
     // What its loading state is drawn as, where it is not its archetype's.
     ...(meta.sketch === undefined ? {} : { sketch: meta.sketch }),
     ...declaredEmptyOf(meta.empty),
     settings: meta.settings,
     component: meta.component,
     ...(meta.owner === undefined ? {} : { owner: meta.owner }),
-    actions: readableActions(meta.actions, hasPermission),
-    content: meta.content,
-    cells: meta.cells,
-    link: meta.link,
     defaultOrder: meta.defaultOrder,
     hidesWhenEmpty: meta.hidesWhenEmpty,
-    dismissible: meta.dismissible,
-    sizedQuery: meta.sizedQuery,
-    ...(meta.sourceFilters === undefined
-      ? {}
-      : { sourceFilters: meta.sourceFilters }),
   };
 }
 

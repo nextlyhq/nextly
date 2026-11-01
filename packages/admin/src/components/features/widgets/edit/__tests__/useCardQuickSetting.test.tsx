@@ -5,7 +5,7 @@
  * just before THAT change; while customising it is staged in the draft and nothing is written. A
  * new collection resets the settings that work over it. Said once, in the toast that offers Undo,
  * once the card shows the change:
- * a change that alters the card's query is asked again for that card alone, and the old answer
+ * a change of the card's settings is asked again for that card alone, and the old answer
  * stays on screen until the new one arrives; a quiet re-ask that is refused keeps the old answer
  * for good, so it is announced as saved but not shown.
  */
@@ -39,24 +39,12 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ widgetSources: sources.value }),
 }));
 
-// No quick setting drives a query knob yet, so the query a setting asks is stood in for here:
-// the chosen range becomes part of the query, which is what makes the change ask again.
-vi.mock("../../widget-as-asked", () => {
-  const widgetAsAsked = (
-    widget: DashboardWidget,
-    config: Record<string, unknown> | undefined
-  ) => ({ ...widget, query: { ...widget.query, range: config?.range } });
-  return {
-    widgetAsAsked,
-    // What the card asks with, over the same stand-in: for a widget with a query, the real one
-    // is its query as `widgetAsAsked` writes it.
-    questionOf: (
-      widget: DashboardWidget,
-      config: Record<string, unknown> | undefined
-    ) => JSON.stringify(widgetAsAsked(widget, config).query),
-    askableWith: () => true,
-  };
-});
+// What a card asks is its settings, which its widget's `load` reads, so a change of range asks
+// again through the real reading of them; only which collections are offered is stood in for.
+vi.mock("../../widget-as-asked", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../widget-as-asked")>()),
+  askableWith: () => true,
+}));
 
 /** The widget's quick setting: its range. */
 const range: QuickSetting = {
@@ -78,7 +66,6 @@ const WIDGET: DashboardWidget = {
   archetype: "custom",
   // Resizable, so the popover holds a Size.
   size: { default: { w: 4, h: 3 }, min: { w: 3, h: 2 }, max: { w: 12, h: 6 } },
-  query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [
     range,
     // Changed in the sheet, never quick: what a later save changes beside the quick setting.
@@ -134,7 +121,7 @@ function base(
 type Props = Parameters<typeof useCardQuickSetting>[0];
 
 /**
- * The card asked again for a change that alters its query, and answered `at`: the new answer
+ * The card asked again for a change of its settings, and answered `at`: the new answer
  * when `at` is later than the one shown, the old one kept when the re-ask was refused.
  */
 function settle(rerender: (props: Props) => void, props: Props, at: Date) {
@@ -480,11 +467,12 @@ describe("a new collection from the popover", () => {
       source("pages", ["updatedAt"]),
     ];
     const { settingsWrite, write } = landingWrite();
-    const { result } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(settingsWrite, {
-        widget: LISTED,
-        config: { collection: "posts", sort: "title" },
-      }),
+    const props = base(settingsWrite, {
+      widget: LISTED,
+      config: { collection: "posts", sort: "title" },
+    });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
     });
     const collection = result.current.popover?.settings[0];
     if (collection?.type !== "collection")
@@ -496,6 +484,8 @@ describe("a new collection from the popover", () => {
     act(() => result.current.popover?.changeSetting(collection, "pages"));
     // Pages has no `title`, so the sort goes back to where it starts there: its default.
     expect(write.mock.calls[0]?.[0]).toEqual({ collection: "pages" });
+    // A new collection is a new question for the card's `load`: said once its answer arrives.
+    settle(rerender, props, REPLACED);
     expect(toast.success.mock.calls[0]?.[0]).toBe(
       "Activity: Collection set to Pages."
     );

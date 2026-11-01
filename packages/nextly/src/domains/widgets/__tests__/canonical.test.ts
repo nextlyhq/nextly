@@ -51,18 +51,12 @@ describe("the canonical widget set", () => {
   it("has no entry at all for a registration the admin cannot receive", () => {
     // A card the grid can never draw is not one the layout may place: a
     // registration JSON cannot carry never reaches the browser.
-    registerWidget(
-      registered({
-        id: "core/heavy",
-        archetype: "metric",
-        component: undefined,
-        query: {
-          source: "collection:posts",
-          op: "count",
-          where: { views: { greater_than: 10n } },
-        },
-      } as Partial<WidgetDefinition>)
-    );
+    // A `BigInt` under a key validation never reads: `structuredClone` stores
+    // it, and `JSON.stringify` cannot carry it.
+    registerWidget({
+      ...registered({ id: "core/heavy" }),
+      stray: { views: 10n },
+    } as WidgetDefinition);
     registerWidget(registered({ id: "core/light" }));
     expect(allWidgets().map(widget => widget.id)).toEqual(["core/light"]);
   });
@@ -83,30 +77,40 @@ describe("the canonical widget set", () => {
       defaultOrder: 20,
       // As the registration states it: the add panel draws its sketch from it.
       archetype: "custom",
-      // Always stated, as the empty list for a widget with no actions: the
-      // reader gate flattens it, and an absent list would be a second way to
-      // spell "no gates" beside the empty one.
+      // Always stated, as the empty list for a widget with no gated empty-state
+      // action: the reader gate flattens it, and an absent list would be a
+      // second way to spell "no gates" beside the empty one.
       actionGates: [],
     });
   });
 
-  it("carries the gate of every action, verbatim", () => {
-    // 🔴 An `actions` widget's shortcuts each carry a gate of their own, and
-    // the workspace payload withholds a shortcut on it before the declaration
-    // ships: verbatim, including the absent ones, so the count matches the
-    // actions.
+  it("carries the gate of the empty state's action, verbatim", () => {
+    // 🔴 The empty state's action is a label and a link, and the workspace
+    // payload withholds it from a reader without its gate before the
+    // declaration ships, so its gate is carried as declared.
     registerWidget(
       registered({
-        id: "acme/links",
-        archetype: "actions",
-        component: undefined,
-        actions: [
-          { label: "Open", href: "/open" },
-          { label: "Purge", href: "/purge", requiredPermission: "purge-notes" },
-        ],
+        id: "acme/notes",
+        empty: {
+          message: "Nothing yet",
+          action: {
+            label: "Purge",
+            link: "/purge",
+            requiredPermission: "purge-notes",
+          },
+        },
       })
     );
-    expect(allWidgets()[0]?.actionGates).toEqual([undefined, "purge-notes"]);
+    // The control: an action that opens the card's settings carries no gate.
+    registerWidget(
+      registered({
+        id: "acme/plain",
+        empty: { action: { label: "Set up", opens: "settings" } },
+      })
+    );
+    const byId = new Map(allWidgets().map(widget => [widget.id, widget]));
+    expect(byId.get("acme/notes")?.actionGates).toEqual(["purge-notes"]);
+    expect(byId.get("acme/plain")?.actionGates).toEqual([]);
   });
 
   it("omits what a declaration did not state", () => {
@@ -165,7 +169,6 @@ describe("a widget the site config overrides", () => {
           id: "acme/pinned",
           archetype: "metric",
           component: undefined,
-          query: { source: "collection:posts", op: "count" },
           settings: [
             {
               name: "source",

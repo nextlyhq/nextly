@@ -1,6 +1,6 @@
 /**
  * Every widget reaches the dashboard through one internal call: core's own
- * list, each plugin's `contributes.dashboard.widgets` and the site config's
+ * declarations, each plugin's `contributes.dashboard.widgets` and the site config's
  * `admin.dashboard.widgets`. Observed on the call itself, wrapped around the
  * real one, rather than reconstructed from what it registers.
  */
@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CORE_CONDITIONS,
   CORE_DECLARATIONS,
-  CORE_WIDGETS,
+  CORE_WIDGET_IDS,
 } from "../../domains/widgets/core-widgets";
 import * as declaredWidgets from "../../domains/widgets/declaration/declared-widgets";
 import {
@@ -51,14 +51,15 @@ afterEach(() => {
 });
 
 describe("the one call", () => {
-  it("takes core's list, each plugin's widgets and the site's, in one call per boot", () => {
+  it("takes core's declarations, each plugin's widgets and the site's, in one call per boot", () => {
     const site = { ...revenue, id: "site/revenue" };
     resetWidgetRegistries([shop], { widgets: [site] });
 
     const call = vi.mocked(declaredWidgets.registerDashboardWidgets);
     expect(call).toHaveBeenCalledTimes(1);
     const [given] = call.mock.calls[0];
-    expect(given.core).toBe(CORE_WIDGETS);
+    // Core is a group like any owner's: the call takes no list beside them.
+    expect(Object.keys(given).sort()).toEqual(["groups", "references"]);
     // Core's own declarations come first, marked as core's, then each
     // plugin's, then the site's own.
     expect(given.groups?.map(group => group.owner)).toEqual([
@@ -81,10 +82,8 @@ describe("the one call", () => {
     });
     // Through it, core's widgets reach the registry under core, and the
     // plugin's under the plugin.
-    for (const widget of CORE_WIDGETS) {
-      expect(widgetSource(widget.id), widget.id).toBe(
-        declaredWidgets.CORE_OWNER
-      );
+    for (const id of CORE_WIDGET_IDS) {
+      expect(widgetSource(id), id).toBe(declaredWidgets.CORE_OWNER);
     }
     expect(getWidget(revenue.id)).toBeDefined();
     // And the site's under the site config, as a plugin's are kept.

@@ -1,9 +1,11 @@
-import type { PublishedContentSource, WidgetDefinition } from "nextly/config";
+import type { PublishedContentSource } from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
   FieldTypeCategory,
 } from "nextly/field-catalog";
+// The widget as the workspace payload serves it, a type only.
+import type { PublishedWidget } from "nextly/widget-result";
 
 export interface ResolvedBrandingColors {
   primary?: string;
@@ -58,22 +60,17 @@ export interface PluginPageMeta {
 /**
  * A widget the registry publishes, as `/admin-meta/workspace` serializes it.
  *
- * Every widget reaches the registry through one call, whose validator requires
- * `title`, `archetype` and `size`, requires a `query` for every data archetype
- * and a `component` for `custom`, and forbids each where it does not belong.
- * So a widget arrives already complete, and the resolver has nothing to
- * default for it.
+ * Every widget reaches the registry as a `defineWidget` declaration, whose
+ * card the server answers from the declaration's `load`. What the admin
+ * receives is the declaration's published description: its title, archetype,
+ * size, settings and the rest, and never a query of its own.
  *
- * Aliased from core's own declaration: the server puts that exact object on
- * the wire, so a second spelling here would be one contract declared twice. It
- * is reachable through `nextly/config` specifically: this package's tsconfig
- * maps the BARE `nextly` specifier to `../nextly/src`, so importing from
- * `"nextly"` pulls core's whole source tree in behind internal `@nextly/*`
- * aliases this project does not declare, while `nextly/config` resolves
- * through the export map to the built declaration bundle, as a consumer's
- * would.
+ * It is core's `PublishedWidget`, the wire type `nextly/widget-result` derives
+ * from the function the registry publishes every widget through, rather than a
+ * shape restated here: the contract then has one declaration, and a field the
+ * server stops publishing leaves this type with it.
  */
-export type RegisteredWidgetMeta = WidgetDefinition;
+export type RegisteredWidgetMeta = PublishedWidget;
 
 /**
  * A plugin's public client configuration, served before a session exists.

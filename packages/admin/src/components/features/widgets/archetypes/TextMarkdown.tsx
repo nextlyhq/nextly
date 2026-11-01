@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * A `text` widget's prose, drawn read-only through the rich-text stack.
+ * A note card's prose, drawn read-only through the rich-text stack.
  *
  * The same Lexical the rich-text field edits with, in a composer that never
  * becomes editable: one rich-text stack in the product rather than a second
  * markdown renderer beside it, the editor's own nodes and (card-scaled) theme,
  * and no HTML string anywhere between the markdown and the DOM. Loaded lazily
- * by `textBody`, so a dashboard with no text card pays nothing for it.
+ * by `NoteCard`, so a dashboard with no note card pays nothing for it.
  *
  * The root is a plain element handed to the editor, not `ContentEditable`.
  * That component is an editor's surface: it takes `role="textbox"` and, when

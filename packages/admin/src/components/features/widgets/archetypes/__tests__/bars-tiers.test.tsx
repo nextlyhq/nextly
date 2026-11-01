@@ -26,7 +26,6 @@ const widget = {
   id: "acme/by-author",
   title: "Entries by author",
   archetype: "bars",
-  query: { source: "collection:posts", op: "groupBy", groupBy: "author" },
 } as DashboardWidget;
 
 /** `count` groups, largest first, as the server orders them. */

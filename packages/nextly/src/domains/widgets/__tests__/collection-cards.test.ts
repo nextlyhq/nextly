@@ -128,25 +128,6 @@ describe("the Collection settings as scope-token inputs", () => {
   it("is the same for the same declaration", () => {
     expect(token({ ...pinnedSetting })).toEqual(token(pinnedSetting));
   });
-
-  it("changes with a Collection setting no query of its widget drives", () => {
-    // A registration replaced the widget's query with one the setting does not
-    // reach, so the setting withholds nothing; the settings sheet and the
-    // workspace payload still show it, so a change to it must move the token.
-    // As the canonical summary carries it: with the queries its knobs read.
-    const undriven = (setting: AnyWidgetSetting) => {
-      const widget = {
-        id: "acme/pinned",
-        collectionSetting: setting,
-        knobQueries: [{ source: "single:homepage", op: "count" }],
-      };
-      return collectionSettingsToken([widget]);
-    };
-    expect(undriven(pinnedSetting)).toHaveLength(1);
-    expect(undriven({ ...pinnedSetting, defaultValue: "posts" })).not.toEqual(
-      undriven(pinnedSetting)
-    );
-  });
 });
 
 describe("a declaration as a reader is told it", () => {
@@ -189,40 +170,5 @@ describe("a declaration as a reader is told it", () => {
       id: "core/note",
     };
     expect(collectionDefaultForReader(bare, new Set())).toBe(bare);
-  });
-});
-
-describe("a Collection setting judged by the query it drives", () => {
-  it("withholds nothing for a setting no knob drives on the widget's effective query", () => {
-    // 🔴 A registration that overrides the query can leave the setting reaching
-    // nothing: the card reads a Single, not the collection the setting names.
-    const overridden = collectionWidgets([
-      {
-        id: "acme/pinned",
-        collectionSetting: pinnedSetting,
-        knobQueries: [{ source: "single:homepage", op: "count" }],
-      },
-    ]);
-    expect(
-      unreadableCollectionCard(
-        overridden,
-        new Set(["posts"])
-      )(card("acme/pinned", { source: "secret" }))
-    ).toBe(false);
-    // The must-differ half: over a collection's query the setting names the
-    // collection read, and the card is withheld.
-    const reading = collectionWidgets([
-      {
-        id: "acme/pinned",
-        collectionSetting: pinnedSetting,
-        knobQueries: [{ source: "collection:posts", op: "count" }],
-      },
-    ]);
-    expect(
-      unreadableCollectionCard(
-        reading,
-        new Set(["posts"])
-      )(card("acme/pinned", { source: "secret" }))
-    ).toBe(true);
   });
 });

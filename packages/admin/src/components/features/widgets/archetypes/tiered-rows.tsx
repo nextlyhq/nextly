@@ -1,5 +1,5 @@
 /**
- * A list or table card's rows, drawn from the answer the card's query got back.
+ * A list or table card's rows, drawn from the answer its widget's `load` gave.
  *
  * The bridge from a list answer to the one list card: the columns the source described become
  * the list's model (the card's label column is each row's title, a column of choices such as a
@@ -20,12 +20,10 @@ import type {
 
 import { ListCard, type ListModel, type ListTotal } from "../frame/list-card";
 import { useListDensity } from "../frame/list-rows";
-import { listViewHref } from "../frame/list-view-href";
 import { useCardTier, useRowsDrawn } from "../frame/tier";
 
 import { asPresentedText } from "./cell-text";
 import { presentedCell } from "./presented-cell";
-import type { ArchetypeBody } from "./types";
 
 type AnswerRow = Record<string, unknown>;
 
@@ -35,7 +33,6 @@ export interface TieredRowsProps {
   columns: readonly WidgetResultField[];
   /** The field that titles each row. */
   labelField: string;
-  query: Parameters<ArchetypeBody>[1]["query"];
   /** Where a row leads, for a card whose rows each open a document; plain text when absent. */
   hrefOf?: (item: AnswerRow) => string | undefined;
   /** The list's whole count, when the source gave one. */
@@ -46,7 +43,6 @@ export function TieredRows({
   items,
   columns,
   labelField,
-  query,
   hrefOf,
   total,
 }: TieredRowsProps): JSX.Element {
@@ -54,15 +50,15 @@ export function TieredRows({
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
   // Laid out at the card's tier, counted at its answer's size when that draws fewer; see
-  // `useRowsDrawn`.
-  const drawn = useRowsDrawn(tier, query?.limit, density);
+  // `useRowsDrawn`. No items setting to count from: the answer is what the widget's `load` read
+  // for the card's size, so the card's own room decides how many of its rows are drawn.
+  const drawn = useRowsDrawn(tier, undefined, density);
   return (
     <ListCard
       model={answerListModel(columns, labelField, hrefOf)}
       rows={items}
       drawn={drawn}
       total={total}
-      viewAllHref={listViewHref(query)}
       tier={tier}
       density={density}
     />

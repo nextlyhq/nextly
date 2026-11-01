@@ -255,7 +255,6 @@ describe("the settings sheet with content settings", () => {
             title: "Breakdown",
             archetype: "bars",
             settings: grouping,
-            query: { op: "groupBy", status: "all" },
           } as unknown as DashboardWidget
         }
         config={{ collection: "posts" }}

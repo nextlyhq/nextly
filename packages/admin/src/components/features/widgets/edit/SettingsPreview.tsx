@@ -132,9 +132,9 @@ function PreviewCard({
         definition={preview.definition}
         placement={preview.placement}
         slot={preview.slot}
-        {...(preview.slotFor === undefined ? {} : { slotFor: preview.slotFor })}
         subtitle={preview.subtitle}
         isFetching={preview.isFetching}
+        // The size the answer drawn was fetched at, so it draws no more rows than it holds.
         {...(preview.answerSize === undefined
           ? {}
           : { answerSize: preview.answerSize })}
@@ -197,7 +197,8 @@ export function SettingsPreview(props: {
     shown: props.shown,
     ownTitle: props.ownTitle,
     size,
-    tier,
+    // The tier the preview is drawn at, so its question is asked at the size it shows.
+    ...(tier === undefined ? {} : { tier }),
   });
   const { roomRef, scale } = usePreviewScale(cardWidth);
   const height = cardHeightPx(size.h);

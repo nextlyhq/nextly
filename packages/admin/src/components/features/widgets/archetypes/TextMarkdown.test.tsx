@@ -1,22 +1,21 @@
 /**
- * The `text` archetype draws its markdown, and nothing the markdown should not
- * be able to do.
+ * `TextMarkdown` draws its markdown, and nothing the markdown should not be
+ * able to do.
  *
- * Rendered through the real lazy body and the real Lexical composer, so what
- * is asserted is what the dashboard would show: the elements the markdown
- * asked for, raw HTML as text, an unsafe link left as the markdown it was
- * written in, and an external link that opens in a new tab.
+ * Rendered through the real Lexical composer, the one a note card draws its
+ * text with, so what is asserted is what the dashboard would show: the
+ * elements the markdown asked for, raw HTML as text, an unsafe link left as
+ * the markdown it was written in, and an external link that opens in a new tab.
  *
- * @module components/features/widgets/archetypes/text.test
+ * @module components/features/widgets/archetypes/TextMarkdown.test
  */
 
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import type { DashboardWidget } from "@admin/types/dashboard/widgets";
-
-import { textBody } from "./text";
-import { gridBounds } from "../__tests__/grid-bounds";
+// The component itself, drawn as a note card draws it: the prose is the
+// composer's, so the card around it is not what these assert.
+import { TextMarkdown } from "./TextMarkdown";
 
 beforeAll(() => {
   // Lexical scrolls the selection into view on some updates; jsdom has no
@@ -24,24 +23,12 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => undefined;
 });
 
-function widget(content: string): DashboardWidget {
-  return {
-    id: "acme/notes",
-    title: "Notes",
-    archetype: "text",
-    size: gridBounds(4),
-    content,
-  } as DashboardWidget;
-}
-
 async function drawn(content: string): Promise<HTMLElement> {
-  const outcome = textBody(widget(content));
-  if (!outcome.ok) throw new Error(outcome.message);
-  render(<>{outcome.node}</>);
-  // The renderer is lazy; the prose is there once the composer has drawn it.
-  // Given longer than the default second, because the lazy chunk and the
-  // composer both load on the first draw and a full suite runs them under
-  // load: measured at 1060ms once, which is a slow machine and not a defect.
+  render(<TextMarkdown content={content} />);
+  // The prose is there once the composer has drawn it.
+  // Given longer than the default second, because the composer loads on the
+  // first draw and a full suite runs it under load: measured at 1060ms once,
+  // which is a slow machine and not a defect.
   return waitFor(
     () => {
       const root = screen.getByTestId("widget-text");
@@ -52,7 +39,7 @@ async function drawn(content: string): Promise<HTMLElement> {
   );
 }
 
-describe("the text archetype", () => {
+describe("TextMarkdown", () => {
   it("draws headings, lists, emphasis and a link from markdown", async () => {
     const root = await drawn(
       "## Runbook\n\nBefore a release, **check** the queue.\n\n- one\n- two\n\nSee [the wiki](/admin/plugins/wiki)."

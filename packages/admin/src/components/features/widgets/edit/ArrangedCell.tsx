@@ -30,7 +30,6 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import type { CellSlotLookup } from "../archetypes/types";
 import {
   CardCollapseContext,
   collapsedRows,
@@ -42,11 +41,7 @@ import { CardHiddenReportContext } from "../hidden-while-empty";
 import type { MoveDirection } from "../layout-editor";
 import type { PlacementReport } from "../reported-placements";
 import { cardRowStyle, cardSpanClass, drawnSize } from "../sizes";
-import {
-  settingsAsAsked,
-  titleAsAsked,
-  widgetAsAsked,
-} from "../widget-as-asked";
+import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardSizeLabel } from "./CardActionsMenu";
@@ -102,19 +97,20 @@ export interface ArrangedCellProps {
   /**
    * What the batch answered for this card, or its absence.
    *
-   * One group because it is one answer: the renderer takes all four together,
+   * One group because it is one answer: the renderer takes them together,
    * and `updatedAt`/`isFetching` are `null`/`false` for a card that took no
    * part in the batch rather than being separately meaningful.
    */
   data: {
     slot: WidgetSlot | undefined;
-    /** How a `stats` card reaches each cell's answer; absent otherwise. */
-    slotFor?: CellSlotLookup;
     /** When this card's own answer arrived; `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
-    /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
-    answerSize?: AnswerSize;
+    /**
+     * The size the answer in `slot` was fetched at, which a card that grew draws that answer by
+     * until its new size's answer arrives; see `WidgetRenderer`'s own.
+     */
+    answerSize?: AnswerSize | undefined;
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };
@@ -661,18 +657,21 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
   const sheet = useSettingsSheet(props, hasSettings);
   const { setSettingsOpen } = sheet;
-  // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
+  // The reader's collections, which the card's title and its settings are read against.
   const sources = useBranding().widgetSources;
   const heading = useMemo(
     () => titleAsAsked(row.widget, row.config, sources, row.ownTitle),
     [row.widget, row.config, sources, row.ownTitle]
   );
-  const widget = useMemo(() => {
-    const asked = widgetAsAsked(row.widget, row.config, sources);
-    return heading.title === asked.title
-      ? asked
-      : { ...asked, title: heading.title };
-  }, [row.widget, row.config, sources, heading.title]);
+  // The widget under the title the card is drawn with: its own, or one its settings or its
+  // reader gave it.
+  const widget = useMemo(
+    () =>
+      heading.title === row.widget.title
+        ? row.widget
+        : { ...row.widget, title: heading.title },
+    [row.widget, heading.title]
+  );
   // The size the card is drawn at: its stored size, held to its widget's
   // current bounds. One reading for its span, its rows, its menu and the size
   // a declared component is handed.
@@ -691,8 +690,8 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. Only DECLARED names are returned, so a component
-   * cannot act on a key its widget never offered, and each as the card's query
-   * was asked with it, so a link the component builds matches its answer.
+   * cannot act on a key its widget never offered, and each as the card's
+   * `load` read it, so a link the component builds matches its answer.
    */
   const placement = useMemo(
     () => ({

@@ -28,13 +28,15 @@ import type {
 } from "nextly/config";
 import { useContext, useMemo, type JSX, type RefObject } from "react";
 
-import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
+import type { AskedWith } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
 import type {
+  DashboardWidget,
   WidgetPlacement,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { listDensityOf } from "../frame/list-rows";
 import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
@@ -44,7 +46,7 @@ import {
 import { widenLoneOfPair, WidenLonePairContext } from "../lone-pair";
 import { useReportedPlacements } from "../reported-placements";
 import { cardRowStyle, GRID_CLASS } from "../sizes";
-import { titleAsAsked } from "../widget-as-asked";
+import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
@@ -130,14 +132,16 @@ export interface ArrangedGridProps {
       | undefined;
   };
   slots: Record<string, WidgetSlot>;
-  cellSlots: CellSlots;
   requested: ReadonlySet<string>;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
   /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
   answeredAtFor: (placementId: string) => Date | null;
-  /** The size the answer one card shows was fetched at. */
-  fetchedSizeFor: (placementId: string) => AnswerSize | undefined;
+  /**
+   * What the answer one card shows was asked with, its size and settings: its own re-ask's, or
+   * the batch's.
+   */
+  fetchedAskFor: (placementId: string) => AskedWith | undefined;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   /** Reload one card's data on its own, from its error state's Retry. */
@@ -314,32 +318,57 @@ function shownTitleOf(
   return titleAsAsked(row.widget, row.config, sources, row.ownTitle).title;
 }
 
+/**
+ * The size an answer was fetched at, as a card counts its rows by it: its tier and height, and
+ * the density its settings asked for, read as the card reads its own (`settingsAsAsked`, then
+ * `listDensityOf`), so a density its widget sets by default counts as the card would have drawn
+ * it. `undefined` for an answer asked with no size.
+ */
+function answerSizeOf(
+  widget: DashboardWidget,
+  asked: AskedWith | undefined,
+  sources: ArrangedGridProps["writes"]["sources"]
+): AnswerSize | undefined {
+  if (asked?.size === undefined) return undefined;
+  return {
+    tier: asked.size.tier,
+    h: asked.size.h,
+    density: listDensityOf(settingsAsAsked(widget, asked.settings, sources)),
+  };
+}
+
 /** What the batch answered for one card, as its cell draws it (`ArrangedCellProps.data`). */
 function cellData(
-  placementId: string,
+  row: ArrangedWidget,
   answers: Pick<
     ArrangedGridProps,
     | "slots"
-    | "cellSlots"
     | "requested"
     | "answeredAtFor"
     | "fetchingPlacementIds"
-    | "fetchedSizeFor"
+    | "fetchedAskFor"
     | "retry"
-  >
+  >,
+  sources: ArrangedGridProps["writes"]["sources"]
 ): ArrangedCellProps["data"] {
+  const { placementId } = row;
   const asked = answers.requested.has(placementId);
   return {
     slot: answers.slots[placementId],
-    // This card's own answers, by cell key.
-    slotFor: key => answers.cellSlots[placementId]?.[key],
     // Only a card that actually ASKED can be waiting on an answer. Its own answer's time, not
     // the page's oldest: its quick change is said once its own answer is in.
     updatedAt: asked ? answers.answeredAtFor(placementId) : null,
     // 🔴 This card's own request, not the batch's: partitions settle independently, and a
     // settled card must not dim.
     isFetching: answers.fetchingPlacementIds.has(placementId),
-    answerSize: answers.fetchedSizeFor(placementId),
+    // The size and density its answer was fetched at: a card that grew or changed density keeps
+    // its old answer on screen while the new one loads, and drawn by the new ones that answer's
+    // one row past its rows, the sign that more exist, would read as a row.
+    answerSize: answerSizeOf(
+      row.widget,
+      answers.fetchedAskFor(placementId),
+      sources
+    ),
     // Retry only for a card in the batch: one rejected before it was asked has no question to
     // ask again, so the button could change nothing.
     onRetry: asked ? () => answers.retry(placementId) : undefined,
@@ -467,7 +496,7 @@ export function ArrangedGrid({
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}
-            data={cellData(row.placementId, answers)}
+            data={cellData(row, answers, writes.sources)}
             refs={{
               menu: focus.menuRef(row.placementId),
               dismiss: focus.dismissRef(row.placementId),
