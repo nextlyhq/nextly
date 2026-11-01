@@ -19,7 +19,7 @@
  * @module cache-components
  */
 
-import { consoleLogger } from "./shared/types";
+import { getNextlyLogger } from "./observability/logger";
 
 /** Where the settings an app needs, and why, are written up. */
 const CACHE_COMPONENTS_DOCS_URL =
@@ -63,10 +63,12 @@ export function cacheComponentsOffWarning(
 ): string {
   const named = off.map(option => `\`${option}\``).join(" and ");
   return (
-    `[Nextly] ${named} ${off.length === 1 ? "is" : "are"} off in ${where}. ` +
+    // The cache handlers are a separate cause, with a warning of their own
+    // (`cache-handlers-not-shared`), so this line names only these options.
+    `${named} ${off.length === 1 ? "is" : "are"} off in ${where}. ` +
     "Nextly supports only Cache Components and Partial Prefetching on: set " +
-    "`cacheComponents: true` and `partialPrefetching: true` in next.config, " +
-    `with Nextly's cache handlers. What to set, and why: ${CACHE_COMPONENTS_DOCS_URL}`
+    "`cacheComponents: true` and `partialPrefetching: true` in next.config. " +
+    `What to set, and why: ${CACHE_COMPONENTS_DOCS_URL}`
   );
 }
 
@@ -85,16 +87,21 @@ function warnedOptions(): Set<CacheComponentsOption> {
   return holder[WARNED];
 }
 
-/** Says `message` unless every option in `options` was already said in this process. */
+/**
+ * Says `message` unless every option in `options` was already said in this
+ * process. Through nextly's logger, under `kind`, as its other warnings are, so
+ * an app's own logger receives it and a line can be told apart by its cause.
+ */
 function warnOnceFor(
   options: readonly CacheComponentsOption[],
+  kind: string,
   message: (fresh: CacheComponentsOption[]) => string
 ): void {
   const warned = warnedOptions();
   const fresh = options.filter(option => !warned.has(option));
   if (fresh.length === 0) return;
   for (const option of fresh) warned.add(option);
-  consoleLogger.warn(message(fresh));
+  getNextlyLogger().warn({ kind, message: message(fresh) });
 }
 
 /**
@@ -106,8 +113,10 @@ export function warnIfCacheComponentsOff(
   settings: CacheComponentsSettings,
   where: string
 ): void {
-  warnOnceFor(cacheComponentsOptionsOff(settings), off =>
-    cacheComponentsOffWarning(off, where)
+  warnOnceFor(
+    cacheComponentsOptionsOff(settings),
+    "cache-components-off",
+    off => cacheComponentsOffWarning(off, where)
   );
 }
 
@@ -127,8 +136,9 @@ export function warnIfRegisteredWithCacheComponentsOff(value: unknown): void {
   }
   warnOnceFor(
     ["cacheComponents"],
+    "cache-components-unknown",
     () =>
-      "[Nextly] createRegister() was not passed the app's `cacheComponents` value, so Nextly cannot tell whether Cache Components is on. " +
+      "createRegister() was not passed the app's `cacheComponents` value, so Nextly cannot tell whether Cache Components is on. " +
       "Pass `{ cacheComponents: process.env.__NEXT_CACHE_COMPONENTS }` to it from instrumentation.ts. " +
       `Nextly supports only Cache Components and Partial Prefetching on: ${CACHE_COMPONENTS_DOCS_URL}`
   );

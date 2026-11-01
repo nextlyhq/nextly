@@ -435,6 +435,28 @@ describe("an existing app with a cache of its own", () => {
     }
   );
 
+  it("prints the handlers rather than writing them where `require` is declared after the config object", async () => {
+    // Written into the object, `require.resolve` would run while the
+    // declaration below it is still in its temporal dead zone, and the config
+    // would throw as Next.js loads it.
+    await write(
+      "next.config.mjs",
+      'import { createRequire } from "node:module";\nconst nextConfig = { reactStrictMode: true };\nconst require = createRequire(import.meta.url);\nexport default nextConfig;\n'
+    );
+
+    const patch = await turnOnCacheComponents(dir);
+    const files = cacheComponentsFiles(patch);
+
+    expect(await read("next.config.mjs")).not.toMatch(/nextly\/cache-handler/);
+    expect(files.skipped).toHaveLength(1);
+    expect(files.skipped[0]?.why).toMatch(
+      /declares require after its config object.*move that declaration above the object/
+    );
+    const config = await load("next.config.mjs");
+    expect(config.reactStrictMode).toBe(true);
+    expect(config.cacheComponents).toBe(true);
+  });
+
   it("adds no definition to an ES module that binds `require` already", async () => {
     await write(
       "next.config.mjs",
@@ -476,6 +498,10 @@ describe("an existing app with a cache of its own", () => {
     expect(files.skipped).toHaveLength(1);
     expect(files.skipped[0]?.why).toMatch(
       /has cache handlers of its own \(cacheHandler, cacheHandlers\), which were kept/
+    );
+    // What keeping them costs: the bound nextly applies without its handlers.
+    expect(files.skipped[0]?.why).toMatch(
+      /every cached public read refreshes at least once a minute/
     );
     expect(files.skipped[0]?.toAdd).toBe(HANDLERS.trimEnd());
   });

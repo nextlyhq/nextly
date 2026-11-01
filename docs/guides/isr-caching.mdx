@@ -87,12 +87,13 @@ its tags in the database, in a table `nextly migrate` creates:
   inside a request, and Nextly logs one line per process the first time that
   happens. A write from a separate process, such as the CLI or another
   instance, does not reach the app's cache, so in production Nextly keeps
-  every cached public read for at most a minute and refreshes it then. The
-  first read after that minute may still get the previous version while it
-  refreshes. Nextly logs one `cache-handlers-not-shared` line per process when
-  this bound is in force. To refresh pages straight away and keep longer
-  lifetimes, install the handlers, or run the write in a Route Handler or a
-  Server Action.
+  every cached public read for at most a minute: one older than 30 seconds is
+  refreshed in the background, and none older than a minute is served. Where
+  the app registers no `"use cache"` read function, a read past 30 seconds may
+  still get the previous version once while it refreshes. Nextly logs one
+  `cache-handlers-not-shared` line per process when this bound is in force.
+  To refresh pages straight away and keep longer lifetimes, install the
+  handlers, or run the write in a Route Handler or a Server Action.
 
 ### Several instances, and upgrading an app
 

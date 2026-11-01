@@ -19,6 +19,11 @@ const TEMPLATE = join(
   "../../../../templates/blog/src/nextly/cached-read.ts"
 );
 const GUIDE = join(__dirname, "../../../../docs/guides/isr-caching.mdx");
+/** Where nextly sets the revalidate of a read its cache handlers don't serve. */
+const SHARED_HANDLERS = join(
+  __dirname,
+  "../../../nextly/src/runtime/cache/shared-handlers.ts"
+);
 
 /** What the stand-ins record. */
 interface Calls {
@@ -83,6 +88,20 @@ describe("blog template: the Cache Components read function", () => {
       { revalidate: 60, expire: 120 },
       { revalidate: 5, expire: 60 },
     ]);
+  });
+
+  it("holds no entry longer than a minute at the revalidate nextly gives a read its handlers don't serve", async () => {
+    // nextly bounds such a read by its revalidate alone, and relies on this
+    // function to expire the entry: read from nextly's source, so a change to
+    // either side is judged against the other.
+    const source = await readFile(SHARED_HANDLERS, "utf8");
+    const seconds = Number(
+      /export const UNSHARED_READ_LIFETIME_SECONDS = (\d+);/.exec(source)?.[1]
+    );
+    expect(seconds, "nextly's bound").toBeGreaterThan(0);
+    calls.cacheLife.length = 0;
+    await cachedRead("k", [], seconds);
+    expect(calls.cacheLife).toEqual([{ revalidate: seconds, expire: 60 }]);
   });
 
   it("tags the entry and runs the reader registered for its key", async () => {

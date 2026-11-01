@@ -5,16 +5,9 @@
  * once per process, however often Next.js loads the config or runs
  * `register()`.
  */
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setNextlyLogger } from "../observability/logger";
 import {
   cacheComponentsOffWarning,
   cacheComponentsOptionsOff,
@@ -24,18 +17,23 @@ import {
 /** The process-wide record of what was said, as the module keeps it. */
 const WARNED = Symbol.for("nextly/cache-components-off-warned");
 
-let warn: MockInstance<typeof console.warn>;
+const warn = vi.fn();
 beforeEach(() => {
   delete (globalThis as Record<symbol, unknown>)[WARNED];
-  warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  warn.mockReset();
+  const ignore = () => undefined;
+  setNextlyLogger({ warn, error: ignore, info: ignore, debug: ignore });
 });
 afterEach(() => {
-  warn.mockRestore();
+  setNextlyLogger(undefined);
   delete (globalThis as Record<symbol, unknown>)[WARNED];
 });
 
-/** Every warning printed so far, one per line. */
-const warned = () => warn.mock.calls.map(call => String(call[0]));
+/** Every warning said so far, through nextly's logger. */
+const entries = () =>
+  warn.mock.calls.map(call => call[0] as { kind: string; message: string });
+/** Their messages, one per warning. */
+const warned = () => entries().map(entry => entry.message);
 
 describe("which options are off", () => {
   it('finds an option set false, or unset, off; true or Next.js\'s inlined "true" on', () => {
@@ -82,6 +80,10 @@ describe("the start-time warning", () => {
       /`cacheComponents` is off in this build\. Nextly supports only Cache Components and Partial Prefetching on.*cacheComponents: true.*partialPrefetching: true.*nextlyhq\.com\/docs\/getting-started\/installation#cache-components/
     );
     expect(warned()[0]).not.toMatch(/`partialPrefetching` is/);
+    // Its own kind, apart from the cache handlers' warning, which it leaves
+    // to that warning to name.
+    expect(entries()[0].kind).toBe("cache-components-off");
+    expect(warned()[0]).not.toMatch(/cache handlers?/i);
   });
 
   it("names both in one line when both are off", () => {
@@ -91,7 +93,7 @@ describe("the start-time warning", () => {
         "this next.config"
       )
     ).toMatch(
-      /^\[Nextly\] `cacheComponents` and `partialPrefetching` are off in this next\.config\./
+      /^`cacheComponents` and `partialPrefetching` are off in this next\.config\./
     );
   });
 

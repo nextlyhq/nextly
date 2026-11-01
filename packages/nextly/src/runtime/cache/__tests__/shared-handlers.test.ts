@@ -9,6 +9,9 @@ import {
   initializeCacheHandlers,
   setCacheHandler,
 } from "next/dist/server/use-cache/handlers";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setNextlyLogger } from "../../../observability/logger";
@@ -51,12 +54,13 @@ afterEach(() => {
 });
 
 describe("a cached public read without nextly's cache handlers, in production", () => {
-  it("is kept at most a minute, whatever it asked for", () => {
+  it("is given a revalidate of at most half a minute, whatever it asked for", () => {
     expect(publicReadLifetime(false, false)).toBe(
       UNSHARED_READ_LIFETIME_SECONDS
     );
     expect(publicReadLifetime(300, false)).toBe(UNSHARED_READ_LIFETIME_SECONDS);
-    expect(publicReadLifetime(30, false)).toBe(30);
+    // A shorter one stays as it is.
+    expect(publicReadLifetime(10, false)).toBe(10);
     expect(publicReadLifetime(false, true)).toBe(
       UNSHARED_READ_LIFETIME_SECONDS
     );
@@ -69,8 +73,37 @@ describe("a cached public read without nextly's cache handlers, in production", 
       kind: "cache-handlers-not-shared",
     });
     const message = String(warn.mock.calls[0][0].message);
-    expect(message).toContain('require.resolve("nextly/cache-handler")');
-    expect(message).toContain('require.resolve("nextly/cache-handlers")');
+    // The settings exactly as create-nextly-app writes them, and the page its
+    // own report links: two copies of one answer, held to each other here.
+    const generator = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../../../../create-nextly-app/src/generators/next-config.ts",
+          import.meta.url
+        )
+      ),
+      "utf8"
+    );
+    const block = /const HANDLER_PROPERTIES = \[([\s\S]*?)\];/.exec(generator);
+    const lines = [...(block?.[1] ?? "").matchAll(/^\s*(["'])(.+)\1,?$/gm)].map(
+      ([, , line]) => line
+    );
+    expect(lines).toHaveLength(3);
+    for (const line of lines) expect(message).toContain(line);
+    const docs = /CACHE_COMPONENTS_DOCS_URL =\s*"([^"]+)"/.exec(generator)?.[1];
+    expect(docs).toMatch(/installation#cache-components$/);
+    expect(message).toContain(docs);
+  });
+
+  it("names both causes: no handler installed, or one of the app's own", () => {
+    noteCachedRead(false);
+    const message = String(warn.mock.calls[0][0].message);
+    expect(message).toMatch(
+      /^Nextly's cache handlers don't serve this process/
+    );
+    expect(message).toMatch(
+      /none is installed, or the app keeps a cache handler of its own/
+    );
   });
 
   it("is bounded where cachedFind gives it its lifetime", async () => {
