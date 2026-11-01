@@ -224,6 +224,23 @@ function chipFor(condition: ConditionValue, fields: readonly Field[]): string {
   );
 }
 
+/**
+ * What a Filter holding no condition writes: unset, so the card follows its widget's filter, or,
+ * where the widget filters by default, an empty one (`{}`). Unset there, the default would filter
+ * the card again the moment the reader removed its last chip, and come back as a chip on reopening.
+ * The preview's Clear filters writes the same empty filter.
+ */
+function noFilter(
+  setting: Extract<ContentSetting, { type: "filter" }>
+): Record<string, never> | "" {
+  const fallback: unknown = setting.defaultValue;
+  const filtersByDefault =
+    fallback !== undefined &&
+    fallback !== "" &&
+    !sameSettingValue(fallback, {});
+  return filtersByDefault ? {} : "";
+}
+
 /** Whether a condition can be written yet: a chip says only what a complete one filters on. */
 function isComplete(condition: ConditionValue | undefined): boolean {
   return conditionsToWhere([condition]) !== undefined;
@@ -276,7 +293,7 @@ function FilterControl({
   /** Keep the chips as built, and write what of them can be written. */
   const write = (next: (ConditionValue | undefined)[]) => {
     setConditions(next);
-    const where = conditionsToWhere(next) ?? "";
+    const where = conditionsToWhere(next) ?? noFilter(setting);
     written.current = where;
     field.onChange(where);
   };

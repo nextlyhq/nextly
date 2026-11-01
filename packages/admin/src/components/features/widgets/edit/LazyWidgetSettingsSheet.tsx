@@ -67,8 +67,16 @@ function SheetLoading({
         // The loaded panel's width, so it does not jump once the form arrives.
         className="flex w-full flex-col overflow-hidden sm:w-[520px] sm:min-w-[480px] sm:max-w-[560px]"
         onInteractOutside={event => event.preventDefault()}
-        // Closed before the code arrives, focus goes back where the loaded panel's would.
-        onCloseAutoFocus={closeFocusTo(returnFocusTo)}
+        // Closed before the code arrives, focus goes back where the loaded panel's would. Gone
+        // while still open, it was replaced by the loaded panel, which is no close: focus stays
+        // where that panel puts it, on the field it was opened for where there is one.
+        onCloseAutoFocus={event => {
+          if (open) {
+            event.preventDefault();
+            return;
+          }
+          closeFocusTo(returnFocusTo)(event);
+        }}
       >
         <SheetHeader>
           <SheetTitle>{title} settings</SheetTitle>
