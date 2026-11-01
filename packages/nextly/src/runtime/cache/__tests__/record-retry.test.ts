@@ -145,6 +145,75 @@ describe("a record the ledger refused", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("still retries a later refusal after a retry found its tags already taken by a flush", async () => {
+    let refusing = true;
+    const record = ledgerThat(() => (refusing ? "refuse" : "ok"));
+    holdFailedRecord(["posts"]);
+    // The next flush drains the kept tags before the timer fires.
+    expect(takePendingExpiries()).toEqual(["posts"]);
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    expect(record).not.toHaveBeenCalled();
+
+    holdFailedRecord(["pages"]);
+    refusing = false;
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect([...record.mock.calls[0][0]]).toEqual(["pages"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps retrying a refusal that came in while a retry was recording", async () => {
+    let release: () => void = () => undefined;
+    const calls: string[][] = [];
+    const ledger: TagExpiryLedger = {
+      record: async tags => {
+        calls.push([...tags]);
+        if (calls.length === 1) {
+          await new Promise<void>(resolve => {
+            release = resolve;
+          });
+        }
+        return new Map(tags.map(tag => [tag, Date.now()] as const));
+      },
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    };
+    publishTagExpiryLedger(ledger);
+    holdFailedRecord(["posts"]);
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    expect(calls).toEqual([["posts"]]);
+
+    // Refused while the retry of "posts" is still recording.
+    holdFailedRecord(["pages"]);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+
+    expect(calls).toEqual([["posts"], ["pages"]]);
+    expect(takePendingExpiries()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("takes up the kept tags again when the next ledger is installed", async () => {
+    const adapter = {
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      tableExists: async () => true,
+      getDrizzle: () => {
+        throw new Error("connection reset");
+      },
+    } as never;
+    installTagExpiryLedger(adapter);
+    holdFailedRecord(["posts"]);
+    withdrawTagExpiryLedger();
+    expect(vi.getTimerCount()).toBe(0);
+
+    installTagExpiryLedger(adapter);
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(takePendingExpiries()).toEqual(["posts"]);
+  });
+
   it("leaves no timer once the ledger is withdrawn, and keeps the tags for the next one", async () => {
     const adapter = {
       getCapabilities: () => ({ dialect: "sqlite" as const }),

@@ -20,7 +20,11 @@ import {
   type ExpiryHandoff,
 } from "../../revalidation/expiry-handoff";
 
-import { holdFailedRecord, stopRecordRetry } from "./record-retry";
+import {
+  holdFailedRecord,
+  resumeRecordRetry,
+  stopRecordRetry,
+} from "./record-retry";
 import {
   ledgerFor,
   type TagExpiryLedger,
@@ -71,6 +75,8 @@ export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
   const handoff = new LedgerExpiryHandoff();
   setExpiryHandoff(handoff);
   globalForWiring.__nextly_tag_ledger_withdrawn = false;
+  // What a withdrawn ledger left kept is retried into this one.
+  resumeRecordRetry();
   if (waiting.length > 0) {
     void handoff.handOff(waiting, "waiting at registration");
     // The default kept them for Next.js's own cache too, which the ledger

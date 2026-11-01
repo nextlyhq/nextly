@@ -37,6 +37,8 @@ interface RetryState {
   running?: Promise<void>;
   /** When the last retry began, on this process's clock. */
   lastAttemptAt: number;
+  /** How many failed records have been kept, so a retry can tell whether more came in while it ran. */
+  held: number;
 }
 
 // One per process, across module copies, like the hand-off it retries into.
@@ -49,6 +51,7 @@ function state(): RetryState {
     delayMs: FIRST_RETRY_DELAY_MS,
     pending: false,
     lastAttemptAt: 0,
+    held: 0,
   };
   return globalForRetry.__nextly_record_retry;
 }
@@ -62,6 +65,7 @@ export function holdFailedRecord(tags: string[]): void {
   const retry = state();
   // The failure was an attempt: a read waits the backoff from it too.
   retry.lastAttemptAt = Date.now();
+  retry.held += 1;
   if (!retry.pending) {
     retry.pending = true;
     getNextlyLogger().warn({
@@ -91,36 +95,70 @@ function schedule(retry: RetryState): void {
 function retryFailedRecords(): Promise<void> {
   const retry = state();
   if (!retry.pending) return Promise.resolve();
-  retry.running ??= (async () => {
-    retry.lastAttemptAt = Date.now();
-    try {
-      const tags = takePendingExpiries();
-      if (tags.length === 0) {
-        settle(retry);
-        return;
-      }
-      const outcome = await expireTags(tags);
-      if (outcome === "recorded") {
-        settle(retry);
-        getNextlyLogger().info({
-          kind: "cache-tag-record-recovered",
-          message: `the cache tag expiry ledger recorded the ${tags.length} expiries it had refused`,
-        });
-        return;
-      }
-      holdForNextFlush(tags);
-      // No ledger or no table: a retry cannot help until one is installed.
-      if (outcome !== "failed") {
-        settle(retry);
-        return;
-      }
-      retry.delayMs = Math.min(retry.delayMs * 2, MAX_RETRY_DELAY_MS);
-      schedule(retry);
-    } finally {
-      retry.running = undefined;
+  if (retry.running) return retry.running;
+  const run = attempt(retry);
+  // Cleared once settled, and only if still this run: an attempt that
+  // finishes without awaiting has settled before it could be assigned.
+  retry.running = run;
+  void run.finally(() => {
+    if (retry.running === run) retry.running = undefined;
+  });
+  return run;
+}
+
+/** One retry of the kept tags. */
+async function attempt(retry: RetryState): Promise<void> {
+  retry.lastAttemptAt = Date.now();
+  // A record refused while this one runs is not among the tags it takes.
+  const heldBefore = retry.held;
+  const tags = takePendingExpiries();
+  if (tags.length === 0) {
+    finish(retry, heldBefore);
+    return;
+  }
+  const outcome = await expireTags(tags);
+  if (outcome === "recorded") {
+    if (finish(retry, heldBefore)) {
+      getNextlyLogger().info({
+        kind: "cache-tag-record-recovered",
+        message: `the cache tag expiry ledger recorded the ${tags.length} expiries it had refused`,
+      });
     }
-  })();
-  return retry.running;
+    return;
+  }
+  holdForNextFlush(tags);
+  // No ledger or no table: a retry cannot help until one is installed.
+  if (outcome !== "failed") {
+    settle(retry);
+    return;
+  }
+  retry.delayMs = Math.min(retry.delayMs * 2, MAX_RETRY_DELAY_MS);
+  schedule(retry);
+}
+
+/**
+ * Ends the retries after a successful attempt, unless a record was refused
+ * while it ran: those tags are kept but were not taken, so the next try is
+ * armed for them from the first wait. Whether the retries ended.
+ */
+function finish(retry: RetryState, heldBefore: number): boolean {
+  if (retry.held === heldBefore) {
+    settle(retry);
+    return true;
+  }
+  retry.delayMs = FIRST_RETRY_DELAY_MS;
+  schedule(retry);
+  return false;
+}
+
+/**
+ * Takes up the tags a withdrawn ledger left kept, when the next one is
+ * installed: the timer stopped with the withdrawal, and a quiet process may
+ * make no write to drain them.
+ */
+export function resumeRecordRetry(): void {
+  const tags = takePendingExpiries();
+  if (tags.length > 0) holdFailedRecord(tags);
 }
 
 /**
