@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import { navigateTo } from "@admin/lib/navigation";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -27,11 +28,23 @@ const posts = collection("posts", "Post");
 const pages = collection("pages", "Page");
 const authors = collection("authors", "Author");
 
+/** What the sidebar orders by: a reader who reads everything, no pins. */
+const sidebar = {
+  branding: undefined,
+  capabilities: buildCapabilities([], true, {
+    isSuperAdmin: true,
+    validUntil: null,
+    entities: {},
+  }),
+  pinnedCollections: new Set<string>(),
+};
+
+/** The types drawn in the order given, which the sidebar sorts by `order`. */
 function draw(creatable: ApiCollection[], recentSlugs: string[] = []) {
   const menu = newMenu({
-    creatable,
+    creatable: creatable.map((c, order) => ({ ...c, admin: { order } })),
     recentSlugs,
-    sidebarCollections: creatable,
+    ...sidebar,
   });
   return render(<NewSplitButtonView menu={menu} />);
 }
@@ -133,8 +146,8 @@ describe("NewSplitButtonView", () => {
           },
         ],
         recentSlugs: [],
-        sidebarCollections: [],
-        customGroups: [{ slug: "shop", name: "Commerce" }],
+        ...sidebar,
+        branding: { customGroups: [{ slug: "shop", name: "Commerce" }] },
       });
       render(<NewSplitButtonView menu={menu} />);
       await userEvent
