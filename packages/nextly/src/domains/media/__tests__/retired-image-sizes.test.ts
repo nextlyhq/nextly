@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
 import { Bucket } from "../../../storage/__tests__/stand-in-bucket";
 import type { IStorageAdapter } from "../../../storage/types";
-import { canonicalStoredPath, type ReferencedNow } from "../orphan-thumbnails";
+import { storedKeysOn, type ReferencedNow } from "../orphan-thumbnails";
 import {
   holdsStoredSizes,
   removeStoredImageSizes,
@@ -49,19 +49,22 @@ class MemoryStore implements RetiredSizesStore {
 /**
  * What the in-memory table's items use now as originals and thumbnails, read
  * from its rows when asked, through `storedFilesOf` as the database check
- * reads each row, without the retired sizes. The check itself, over a real
+ * reads each row, without the retired sizes, and compared as `storage` tells
+ * its files apart (local disk unless given). The check itself, over a real
  * media table, is the CLI's (`referencedNowIn`), covered beside the command.
  */
-function usedIn(store: MemoryStore): ReferencedNow {
+function usedIn(
+  store: MemoryStore,
+  storage: Pick<IStorageAdapter, "getType"> = { getType: () => "local" }
+): ReferencedNow {
+  const keys = storedKeysOn(storage.getType());
   return async paths => {
     const used = new Set(
       store.table.flatMap(row =>
-        storedFilesOf({ ...row, sizes: undefined }).paths.map(
-          canonicalStoredPath
-        )
+        storedFilesOf({ ...row, sizes: undefined }).paths.map(keys.path)
       )
     );
-    return new Set(paths.filter(path => used.has(canonicalStoredPath(path))));
+    return new Set(paths.filter(path => used.has(keys.path(path))));
   };
 }
 
@@ -602,6 +605,94 @@ describe("two sizes whose keys differ only in spelling", () => {
     expect([...adapter.files.keys()]).not.toContain("media/x.webp");
     expect([...adapter.files.keys()]).toContain(original.path);
     expect(store.cleared).toEqual(["twins"]);
+  });
+});
+
+describe("a size whose key differs from another item's original only in spelling", () => {
+  /** An item whose `small` size is stored at `sizePath`, beside `original`. */
+  async function itemWithSize(
+    adapter: IStorageAdapter,
+    sizePath: string
+  ): Promise<MediaSizesRow> {
+    const own = await put(adapter, "photo.png");
+    return {
+      id: "spelled",
+      filename: own.path,
+      url: own.url,
+      thumbnailUrl: null,
+      sizes: JSON.stringify({
+        small: { path: sizePath, url: adapter.getPublicUrl(sizePath) },
+      }),
+    };
+  }
+
+  // An object storage keeps `media//x.webp` and `media/x.webp` as two
+  // objects. Kept for the other item's original, which it is not, the size's
+  // own file would stay stored once its item's record is cleared.
+  it("is removed on a storage that keeps keys as written, and the original stays", async () => {
+    const adapter = new Bucket("s3");
+    adapter.files.set("media/x.webp", Buffer.from("original"));
+    adapter.files.set("media//x.webp", Buffer.from("size"));
+    const store = new MemoryStore([
+      {
+        id: "other",
+        filename: "media/x.webp",
+        url: adapter.getPublicUrl("media/x.webp"),
+        thumbnailUrl: null,
+        sizes: null,
+      },
+      await itemWithSize(adapter, "media//x.webp"),
+    ]);
+
+    const { code } = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store, adapter),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect([...adapter.files.keys()]).not.toContain("media//x.webp");
+    expect([...adapter.files.keys()]).toContain("media/x.webp");
+    expect(store.cleared).toEqual(["spelled"]);
+  });
+
+  // On local disk both spellings are one file, the other item's original:
+  // it stays, and the item is cleared.
+  it("is kept on local disk, where both spellings are one file (the control)", async () => {
+    const storage = await localDisk();
+    try {
+      const other = await put(storage.adapter, "x.webp");
+      const respelled = other.path.replace("/", "//");
+      expect(respelled).not.toBe(other.path);
+      const store = new MemoryStore([
+        {
+          id: "other",
+          filename: other.path,
+          url: other.url,
+          thumbnailUrl: null,
+          sizes: null,
+        },
+        await itemWithSize(storage.adapter, respelled),
+      ]);
+
+      const { code } = await removeStoredImageSizes({
+        store,
+        storage: storage.adapter,
+        objects,
+        apply: true,
+        referencedNow: usedIn(store, storage.adapter),
+        say: () => {},
+      });
+
+      expect(code).toBe(0);
+      expect(await storage.files()).toContain(other.path);
+      expect(store.cleared).toEqual(["spelled"]);
+    } finally {
+      await storage.dispose();
+    }
   });
 });
 

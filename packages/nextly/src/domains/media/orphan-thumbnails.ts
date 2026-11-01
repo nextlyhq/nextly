@@ -43,6 +43,44 @@ export function canonicalStoredPath(path: string): string {
   return path.replace(/\/{2,}/g, "/").replace(/^\//, "");
 }
 
+/**
+ * Whether a storage keeps each key exactly as written, so that
+ * `media//x.webp` and `media/x.webp` are two objects there. Local disk reads
+ * every spelling of a path as one file, and Vercel Blob writes a prefix's
+ * trailing slash once (`media/` stores `media/...`); any other storage, a
+ * custom one among them, may keep keys as written.
+ */
+function keepsKeysAsWritten(storageType: string): boolean {
+  return storageType !== "local" && storageType !== "vercel-blob";
+}
+
+/** How stored paths and URLs are compared on one storage (`storedKeysOn`). */
+export interface StoredKeys {
+  /** A stored path as compared: one key per file the storage holds. */
+  path: (path: string) => string;
+  /** A URL as compared: without its query and fragment, which name no other file. */
+  url: (url: string) => string;
+}
+
+/**
+ * The one decision of whether two records name the same stored file on a
+ * storage of `storageType`: their keys compared exactly where the storage
+ * keeps keys as written (`keepsKeysAsWritten`), where two spellings are two
+ * objects and taking one for the other keeps a file nothing names; and in
+ * their canonical form (`canonicalStoredPath`) where every spelling is one
+ * file.
+ */
+export function storedKeysOn(storageType: string): StoredKeys {
+  const withoutQuery = (url: string) => url.replace(/[?#].*$/, "");
+  if (keepsKeysAsWritten(storageType)) {
+    return { path: path => path, url: withoutQuery };
+  }
+  return {
+    path: canonicalStoredPath,
+    url: url => withoutQuery(canonicalStoredPath(url)),
+  };
+}
+
 /** A collection prefix as the folder the storage puts its files in. */
 function folderOf(prefix = ""): string {
   return canonicalStoredPath(prefix).replace(/^\/+|\/+$/g, "");
@@ -201,13 +239,11 @@ export async function findOrphanThumbnails(
   const orphans: string[] = [];
   const unconfirmed: Array<{ path: string; name?: string }> = [];
   let tooRecent = 0;
-  // Local disk reads every spelling of a path as one, and Vercel Blob
-  // writes a prefix's trailing slash once (`media/` stores `media/...`);
-  // any other storage, a custom one among them, may keep keys as written.
-  const type = adapter.getType();
-  const keysAsWritten = type !== "local" && type !== "vercel-blob";
+  const keysAsWritten = keepsKeysAsWritten(adapter.getType());
   for await (const entry of adapter.list()) {
     if (!isMediaThumbnail(entry, options.prefix, keysAsWritten)) continue;
+    // Canonical on every storage: here a match only keeps a file, which no
+    // record names either way, so taking two spellings as one loses nothing.
     if (referenced.has(canonicalStoredPath(entry.path))) continue;
     const stored = entry.lastModified?.getTime();
     // A time that is not a date (`new Date(NaN)`) is no time at all.

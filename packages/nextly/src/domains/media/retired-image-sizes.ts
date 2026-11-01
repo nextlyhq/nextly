@@ -28,9 +28,10 @@ import { isTransientError, withRetry } from "../../storage/retry";
 import { siblingStoredPath } from "../../storage/stored-path";
 
 import {
-  canonicalStoredPath,
   RECHECK_BATCH,
+  storedKeysOn,
   type ReferencedNow,
+  type StoredKeys,
 } from "./orphan-thumbnails";
 import { errorForLog, storedPathForLog } from "./remove-stored-files";
 import {
@@ -192,62 +193,58 @@ interface ItemPlan {
 
 /** The files media items use as originals or thumbnails, across the table. */
 interface InUse {
+  /** How this storage tells stored files apart (`storedKeysOn`). */
+  keys: StoredKeys;
   paths: Set<string>;
   urls: Set<string>;
   /** Last segments of thumbnails whose stored path cannot be worked out. */
   names: Set<string>;
 }
 
-/** A URL or path's last segment, without its query. */
-function lastSegment(pathOrUrl: string): string {
-  const located = canonicalStoredPath(pathOrUrl).replace(/[?#].*$/, "");
+/** A URL or path's last segment, without its query, as `keys` compares it. */
+function lastSegment(keys: StoredKeys, pathOrUrl: string): string {
+  const located = keys.url(pathOrUrl);
   return located.slice(located.lastIndexOf("/") + 1);
-}
-
-/** A URL as the in-use set compares it: without its query and fragment. */
-function urlKey(url: string): string {
-  return canonicalStoredPath(url).replace(/[?#].*$/, "");
 }
 
 /** Records the original and the thumbnail one row uses. */
 function addInUse(inUse: InUse, row: MediaSizesRow): void {
-  if (row.filename) inUse.paths.add(canonicalStoredPath(row.filename));
-  if (row.url) inUse.urls.add(urlKey(row.url));
+  const { keys } = inUse;
+  if (row.filename) inUse.paths.add(keys.path(row.filename));
+  if (row.url) inUse.urls.add(keys.url(row.url));
   if (!row.thumbnailUrl) return;
-  inUse.urls.add(urlKey(row.thumbnailUrl));
+  inUse.urls.add(keys.url(row.thumbnailUrl));
   const thumbnail = siblingStoredPath(
     { path: row.filename, url: row.url },
     row.thumbnailUrl
   );
-  if (thumbnail) inUse.paths.add(canonicalStoredPath(thumbnail));
-  else inUse.names.add(lastSegment(row.thumbnailUrl));
+  if (thumbnail) inUse.paths.add(keys.path(thumbnail));
+  else inUse.names.add(lastSegment(keys, row.thumbnailUrl));
 }
 
 /** Whether a size is the item's own thumbnail. */
 function isOwnThumbnail(
-  url: string,
-  path: string,
+  keys: StoredKeys,
+  { url, path }: { url: string; path: string },
   row: MediaSizesRow
 ): boolean {
   if (!row.thumbnailUrl) return false;
-  if (urlKey(url) === urlKey(row.thumbnailUrl)) return true;
+  if (keys.url(url) === keys.url(row.thumbnailUrl)) return true;
   const thumbnail = siblingStoredPath(
     { path: row.filename, url: row.url },
     row.thumbnailUrl
   );
-  return (
-    thumbnail !== undefined &&
-    canonicalStoredPath(thumbnail) === canonicalStoredPath(path)
-  );
+  return thumbnail !== undefined && keys.path(thumbnail) === keys.path(path);
 }
 
 /** Whether any media item uses a size's file as an original or a thumbnail. */
 function isInUse(inUse: InUse, url: string, path: string): boolean {
+  const { keys } = inUse;
   return (
-    inUse.paths.has(canonicalStoredPath(path)) ||
-    inUse.urls.has(urlKey(url)) ||
-    inUse.urls.has(urlKey(path)) ||
-    inUse.names.has(lastSegment(path))
+    inUse.paths.has(keys.path(path)) ||
+    inUse.urls.has(keys.url(url)) ||
+    inUse.urls.has(keys.url(path)) ||
+    inUse.names.has(lastSegment(keys, path))
   );
 }
 
@@ -345,13 +342,14 @@ function sizeVerdict(
   at: SizeContext
 ): KeptSize["reason"] | "elsewhere" | "remove" {
   const { row, inUse } = at;
-  if (inUse.urls.has(urlKey(url))) {
+  const { keys } = inUse;
+  if (inUse.urls.has(keys.url(url))) {
     const own =
-      row.thumbnailUrl != null && urlKey(url) === urlKey(row.thumbnailUrl);
+      row.thumbnailUrl != null && keys.url(url) === keys.url(row.thumbnailUrl);
     return own ? "thumbnail" : "in-use";
   }
   if (!servedHere(url, path, at.storage)) return "elsewhere";
-  if (isOwnThumbnail(url, path, row)) return "thumbnail";
+  if (isOwnThumbnail(keys, { url, path }, row)) return "thumbnail";
   if (isInUse(inUse, url, path)) return "in-use";
   return "remove";
 }
@@ -368,7 +366,12 @@ async function planSizeRemoval(
   store: Pick<RetiredSizesStore, "rows">,
   storage: SizeFileStorage
 ): Promise<ItemPlan[]> {
-  const inUse: InUse = { paths: new Set(), urls: new Set(), names: new Set() };
+  const inUse: InUse = {
+    keys: storedKeysOn(storage.getType()),
+    paths: new Set(),
+    urls: new Set(),
+    names: new Set(),
+  };
   const holding: MediaSizesRow[] = [];
   for await (const page of store.rows()) {
     for (const row of page) {

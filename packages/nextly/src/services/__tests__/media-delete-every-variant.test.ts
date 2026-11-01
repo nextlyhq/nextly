@@ -262,7 +262,7 @@ describe("an image size recorded by its URL alone", () => {
   }
 
   /** Every warning the delete wrote, as one text. */
-  function warned(warn: ReturnType<typeof vi.spyOn>): string {
+  function warned(warn: { mock: { calls: unknown[][] } }): string {
     return warn.mock.calls
       .map(args =>
         args
