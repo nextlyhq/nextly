@@ -144,6 +144,8 @@ const USED = {
     },
   ],
   hidden: 1,
+  total: 3,
+  hasNext: false,
   heldByAddress: 0,
   usageRecorded: true,
 };
@@ -157,6 +159,8 @@ function byAddress(
   return {
     items,
     hidden,
+    total: items.length + hidden,
+    hasNext: false,
     heldByAddress: extra.heldByAddress ?? 0,
     usageRecorded: extra.usageRecorded ?? true,
   };
@@ -421,7 +425,7 @@ describe("Used in", () => {
     const usedIn = await within(panel).findByRole("region", {
       name: "Used in 3",
     });
-    expect(library.fetchMediaUsage).toHaveBeenCalledWith("m1");
+    expect(library.fetchMediaUsage).toHaveBeenCalledWith("m1", { page: 1 });
     expect(
       within(usedIn).getByRole("link", { name: /Launch/ })
     ).toHaveAttribute("href", "/admin/collections/posts/p1");

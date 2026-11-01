@@ -52,11 +52,18 @@ export interface MediaUse {
   fields: MediaUseField[];
 }
 
-/** Where an item is used: what the reader may open, and how many more. */
+/**
+ * Where an item is used, as far as it has been read, a page of documents at
+ * a time: what the reader may open, and how many more.
+ */
 export interface MediaUsage {
   items: MediaUse[];
-  /** Documents using the item that the reader may not open. */
+  /** Documents read so far that the reader may not open. */
   hidden: number;
+  /** Every document using the item, readable or not, read yet or not. */
+  total: number;
+  /** Whether more documents follow those read. */
+  hasNext: boolean;
   /**
    * Avatars and logos keeping the item's address, which a Replace keeps the
    * previous file for; asked only with the uses by address.
@@ -116,28 +123,40 @@ export function fetchMediaLibraryCounts(): Promise<MediaLibraryCounts> {
 }
 
 /**
- * The documents using an item that the reader may open, and how many more;
- * with `byAddress`, only those naming it by its address.
+ * One page of the documents using an item (`page`, from 1) that the reader
+ * may open, how many more on it they may not, and how many in all; with
+ * `byAddress`, only those naming it by its address.
  */
 export async function fetchMediaUsage(
   mediaId: string,
-  options: { byAddress?: boolean } = {}
+  options: { byAddress?: boolean; page?: number } = {}
 ): Promise<MediaUsage> {
-  const query = options.byAddress ? "?byAddress=true" : "";
+  const params = new URLSearchParams();
+  if (options.byAddress) params.set("byAddress", "true");
+  if (options.page !== undefined && options.page > 1) {
+    params.set("page", String(options.page));
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const body = await mediaJson<{
     items: MediaUse[];
     meta?: {
+      total?: number;
+      hasNext?: boolean;
       hidden?: Array<{ count: number }>;
       heldByAddress?: number;
       usageRecorded?: boolean;
     };
   }>(`/${encodeURIComponent(mediaId)}/usage${query}`);
+  const hidden = (body.meta?.hidden ?? []).reduce(
+    (sum, scope) => sum + scope.count,
+    0
+  );
   return {
     items: body.items,
-    hidden: (body.meta?.hidden ?? []).reduce(
-      (sum, scope) => sum + scope.count,
-      0
-    ),
+    hidden,
+    // An answer that does not count them names every one it has.
+    total: body.meta?.total ?? body.items.length + hidden,
+    hasNext: body.meta?.hasNext === true,
     // Avatars and logos are counted only for the uses by address.
     heldByAddress: body.meta?.heldByAddress ?? 0,
     // Only an answer saying the record is built is taken as built: an answer
