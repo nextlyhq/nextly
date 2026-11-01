@@ -19,6 +19,7 @@
  * @module components/features/widgets/useGridAnnouncer
  */
 
+import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface GridAnnouncer {
@@ -146,31 +147,47 @@ function alternate(current: string, next: string): string {
   return `${next}${current.endsWith("\u200b") ? "" : "\u200b"}`;
 }
 
+/**
+ * Says where the batch came to rest, once per outcome.
+ *
+ * Removing, restoring or resizing a card re-asks the batch, and it settles with a new count. The
+ * change's own sentence already said what happened (`acted` is set while it stands), so a batch
+ * that came to rest whole would only replace it ("2 of 2 widgets updated" over "Note restored").
+ * A failure is still said: it is news the change's sentence could not carry.
+ */
+function useSettledAnnouncement(
+  next: string | null,
+  failed: number,
+  acted: RefObject<boolean>,
+  setAnnouncement: Dispatch<SetStateAction<string>>
+): void {
+  // What was last spoken, so an unchanged outcome does not re-fire. A ref
+  // rather than state because it must not itself cause a render.
+  const spoken = useRef("");
+  useEffect(() => {
+    if (!next || next === spoken.current) return;
+    spoken.current = next;
+    const ownChange = acted.current;
+    acted.current = false;
+    if (ownChange && failed === 0) return;
+    setAnnouncement(next);
+  }, [next, failed, acted, setAnnouncement]);
+}
+
 export function useGridAnnouncer(
   settling: boolean,
   counted: number,
   failed: number
 ): GridAnnouncer {
   const [announcement, setAnnouncement] = useState("");
-  // What was last spoken, so an unchanged outcome does not re-fire. A ref
-  // rather than state because it must not itself cause a render.
-  const spoken = useRef("");
   // Set when a reader's own change is said, until the batch that change re-asks has settled.
   const acted = useRef(false);
-  const next = settledAnnouncement(settling, counted, failed);
-
-  useEffect(() => {
-    if (!next || next === spoken.current) return;
-    spoken.current = next;
-    // Removing, restoring or resizing a card re-asks the batch, and it settles with a new count.
-    // The change's own sentence already said what happened, so a batch that came to rest whole
-    // would only replace it ("2 of 2 widgets updated" over "Note restored"). A failure is still
-    // said: it is news the change's sentence could not carry.
-    const ownChange = acted.current;
-    acted.current = false;
-    if (ownChange && failed === 0) return;
-    setAnnouncement(next);
-  }, [next, failed]);
+  useSettledAnnouncement(
+    settledAnnouncement(settling, counted, failed),
+    failed,
+    acted,
+    setAnnouncement
+  );
 
   /*
    * Every sentence goes through one setter, so the dedupe rule below is
