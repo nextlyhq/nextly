@@ -14,11 +14,20 @@
  * rules are in the document the admin renders into. The admin's elements are
  * compared on the computed properties such rules reach with a load of the
  * admin where no site rule exists.
+ *
+ * One part of the admin is meant to take the site's rules: the Page Builder's
+ * canvas, which draws the site's own page in the admin's document and has to
+ * look like the finished page. The second test holds both sides of that.
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+
+// The canvas test writes the homepage's layout, which other specs share; see
+// support/locks.ts. A lock holds for the whole file.
+test.describe.configure({ lock: [LOCK.homepage] });
 
 /**
  * Rules a site's own stylesheet commonly carries, written to differ from the
@@ -175,4 +184,67 @@ test("the admin's dashboard looks the same in a site that styles bare elements",
   expect(Object.fromEntries(shared.map(key => [key, amid[key]]))).toEqual(
     Object.fromEntries(shared.map(key => [key, alone[key]]))
   );
+});
+
+/** The homepage single's API, whose layout the Page Builder edits. */
+const HOMEPAGE_API = "/admin/api/singles/homepage";
+
+/** The homepage form's action that opens the Page Builder. */
+const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+
+/** A site rule no admin style or block style sets, so only its source decides. */
+const SITE_HEADING_RULE = "h2 { text-transform: uppercase; }";
+
+test("the Page Builder's canvas takes the site's element rules, and the rest of the admin does not", async ({
+  page,
+}) => {
+  // The site's rule on every document this page loads, as a site's own
+  // stylesheet is.
+  await page.addInitScript(rule => {
+    document.addEventListener("DOMContentLoaded", () => {
+      const style = document.createElement("style");
+      style.dataset.e2eSiteRule = "";
+      style.textContent = rule;
+      document.head.append(style);
+    });
+  }, SITE_HEADING_RULE);
+
+  const heading = "A heading the site styles";
+  const stored = await page.request.patch(HOMEPAGE_API, {
+    data: {
+      layout: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "site-styled",
+            type: "core/heading",
+            version: 1,
+            props: { text: heading, level: "h2" },
+          },
+        ],
+      },
+    },
+  });
+  expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
+    true
+  );
+
+  // In the canvas: drawn as the site draws an `h2`.
+  await gotoAdmin(page, "/singles/homepage");
+  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  const canvasHeading = page
+    .locator(".nx-canvas h2")
+    .filter({ hasText: heading })
+    .first();
+  await expect(canvasHeading).toBeVisible({ timeout: 30_000 });
+  await expect(canvasHeading).toHaveCSS("text-transform", "uppercase");
+
+  // Outside it, on the dashboard of the same admin: the rule is in the
+  // document, and a card title, also an `h2`, is drawn as the admin draws it.
+  await gotoAdmin(page, "");
+  await expect(page.locator("style[data-e2e-site-rule]")).toHaveCount(1);
+  const title = cardTitles(page).first();
+  await expect(title).toBeVisible({ timeout: 30_000 });
+  await expect(title).toHaveCSS("text-transform", "none");
 });

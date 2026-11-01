@@ -7,6 +7,8 @@
  * `:root, :host`, a reset on `html, :host`, a keyframe, a registered property.
  */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,16 +20,20 @@ import {
 /** The shield's selectors' common start, as the source and a minifier print it. */
 const WEIGHTED = ":is(*,x x x x x x x x x x)";
 
+/** The exemption for the Page Builder's canvas, as a minifier prints it. */
+const OUTSIDE_CANVAS = ":not(:where(.nx-canvas,.nx-canvas *))";
+
+/** The selector for everything inside the admin root but the canvas. */
+const INSIDE = `:where(.nextly-admin) ${WEIGHTED}${OUTSIDE_CANVAS}`;
+
 /**
  * The shield as the admin's minified build ships it: the Tailwind CLI's
  * lightningcss prints the `::before`/`::after` selectors with one colon and
  * the `::marker` selector as a rule of its own.
  */
 const MINIFIED_SHIELD =
-  `:where(.nextly-admin)${WEIGHTED},:where(.nextly-admin) ${WEIGHTED},` +
-  `:where(.nextly-admin) ${WEIGHTED}:before,:where(.nextly-admin) ${WEIGHTED}:after,` +
-  `:where(.nextly-admin) ${WEIGHTED}::placeholder{all:revert-layer}` +
-  `:where(.nextly-admin) ${WEIGHTED}::marker{all:revert-layer}`;
+  `:where(.nextly-admin)${WEIGHTED},${INSIDE},${INSIDE}:before,${INSIDE}:after,` +
+  `${INSIDE}::placeholder{all:revert-layer}${INSIDE}::marker{all:revert-layer}`;
 
 const SHEET = [
   "@layer theme {",
@@ -100,6 +106,26 @@ describe("isolateAdminStylesheet", () => {
     expect(out.trimEnd().endsWith("all: revert-layer;\n}")).toBe(true);
   });
 
+  it("leaves the Page Builder's canvas, by the builder's own class name, to the host's rules", () => {
+    // The class the builder marks its canvas root with, read from the
+    // builder's source, so renaming it there fails here instead of quietly
+    // putting the canvas back under the shield.
+    const builderSource = readFileSync(
+      new URL("../../builder/src/shell-state.ts", import.meta.url),
+      "utf8"
+    );
+    const canvasClass = builderSource.match(
+      /export const CANVAS_ROOT_CLASS = "([\w-]+)";/
+    )?.[1];
+    expect(canvasClass).toBe("nx-canvas");
+
+    const out = isolateAdminStylesheet(SHEET);
+    const exemption = `:not(:where(.${canvasClass}, .${canvasClass} *))`;
+    // Every selector inside the admin root carries it: the element and its
+    // four pseudo-elements. The root's own selector cannot be the canvas.
+    expect(out.split(exemption).length - 1).toBe(5);
+  });
+
   it("refuses a sheet with a rule it could not scope, naming it", () => {
     // A selector list over several lines: the scoper reads one rule to a line,
     // so the lines before the brace stay as written and escape.
@@ -126,9 +152,21 @@ describe("hasHostElementShield", () => {
     expect(hasHostElementShield(unweighted)).toBe(false);
   });
 
+  it("refuses a canvas exemption a minifier unwrapped from `:where()`", () => {
+    // `:not(.nx-canvas, …)` weighs (0,1,0), which takes the shield to
+    // (0,1,10): over the toast library's injected rules, which it must lose to.
+    const unwrapped = MINIFIED_SHIELD.replaceAll(
+      OUTSIDE_CANVAS,
+      ":not(.nx-canvas,.nx-canvas *)"
+    );
+
+    expect(unwrapped).toContain("{all:revert-layer}");
+    expect(hasHostElementShield(unwrapped)).toBe(false);
+  });
+
   it("refuses a shield missing one of its selectors", () => {
     const withoutMarker = MINIFIED_SHIELD.replace(
-      `:where(.nextly-admin) ${WEIGHTED}::marker{all:revert-layer}`,
+      `${INSIDE}::marker{all:revert-layer}`,
       ""
     );
 

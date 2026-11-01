@@ -31,6 +31,23 @@ const ANY_ELEMENT_WEIGHTED = `:is(*, ${Array(ELEMENT_ONLY_DEPTH)
   .join(" ")})`;
 
 /**
+ * The Page Builder's canvas root: `CANVAS_ROOT_CLASS` in `@nextlyhq/builder`
+ * (`src/shell-state.ts`), the class its hit-test and positioning code find
+ * the canvas by. A test here holds the two to the same name.
+ */
+const PAGE_BUILDER_CANVAS = ".nx-canvas";
+
+/**
+ * Everything but the Page Builder's canvas and what it draws.
+ *
+ * The canvas is not an iframe: it renders the page being composed inside the
+ * admin's own document, and it has to look like the finished page, which on
+ * the site takes the site's element rules. So the shield leaves it to them.
+ * Inside `:where()`, so the exemption weighs nothing.
+ */
+const OUTSIDE_PAGE_BUILDER_CANVAS = `:not(:where(${PAGE_BUILDER_CANVAS}, ${PAGE_BUILDER_CANVAS} *))`;
+
+/**
  * The admin's defence against a host's own element rules.
  *
  * The admin renders inside the host's document, so the host's global CSS is
@@ -64,14 +81,20 @@ const ANY_ELEMENT_WEIGHTED = `:is(*, ${Array(ELEMENT_ONLY_DEPTH)
  * plugin's scoped sheet. A host's `a:hover` or `*:focus-visible` is not
  * reverted: reaching those would also revert the toasts' own rules.
  *
- * The root is wrapped in `:where()` so it adds nothing, keeping the weight
- * exactly the one chosen. With no host rule in the document the shield
- * changes no computed value, by the definition of `revert-layer`.
+ * One part of the admin is exempt: the Page Builder's canvas (see
+ * `OUTSIDE_PAGE_BUILDER_CANVAS`), which draws the site's own page and so
+ * has to take the site's own rules.
+ *
+ * The root and the exemption are wrapped in `:where()` so they add nothing,
+ * keeping the weight exactly the one chosen. With no host rule in the
+ * document the shield changes no computed value, by the definition of
+ * `revert-layer`.
  */
 const SHIELD_SELECTORS = [
   `:where(.nextly-admin)${ANY_ELEMENT_WEIGHTED}`,
   ...["", "::before", "::after", "::marker", "::placeholder"].map(
-    pseudo => `:where(.nextly-admin) ${ANY_ELEMENT_WEIGHTED}${pseudo}`
+    pseudo =>
+      `:where(.nextly-admin) ${ANY_ELEMENT_WEIGHTED}${OUTSIDE_PAGE_BUILDER_CANVAS}${pseudo}`
   ),
 ];
 
