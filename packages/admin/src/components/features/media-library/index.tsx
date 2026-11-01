@@ -33,6 +33,7 @@ import {
   AlertDialogTitle,
   toast,
 } from "@nextlyhq/ui";
+import { MEDIA_DELETE_LIMIT } from "nextly/config";
 import * as React from "react";
 
 import { Breadcrumbs, Pagination } from "@admin/components/shared";
@@ -507,8 +508,16 @@ export function MediaLibrary({
     );
   }, [deleteWithUndo, mediaToDelete]);
 
+  // A selection larger than one delete may name is refused before the
+  // dialog opens: one request deletes the whole selection or none of it.
   const handleBulkDelete = React.useCallback(() => {
     if (selectedIds.size === 0) return;
+    if (selectedIds.size > MEDIA_DELETE_LIMIT) {
+      toast.error("Too many files to delete at once", {
+        description: `Select at most ${MEDIA_DELETE_LIMIT.toLocaleString()} files to delete together. ${selectedIds.size.toLocaleString()} are selected.`,
+      });
+      return;
+    }
     setIsBulkDeleteDialogOpen(true);
   }, [selectedIds]);
 

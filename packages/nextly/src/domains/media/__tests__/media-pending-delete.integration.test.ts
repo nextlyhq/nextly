@@ -367,6 +367,75 @@ describe.each(getConfiguredTestDialects())(
       expect(deleted.json).toMatchObject({ ids: [file], marked: [] });
     }, 30_000);
 
+    it("finishes an item marked later than the earliest at its own deadline", async () => {
+      const standing = await unusedFile();
+      const fresh = await unusedFile();
+      // One item marked nine seconds into its window, by a delete whose
+      // timer went with its process.
+      await t.adapter.insert("nextly_meta", {
+        key: pendingDeleteKey(standing),
+        value: JSON.stringify({}),
+        updated_at: new Date(Date.now() - PENDING_DELETE_WINDOW_MS + 1_000),
+      });
+
+      // Answered with the earlier deadline; the fresh item is due later.
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [standing, fresh] },
+      });
+      expect(deleted.status).toBe(200);
+
+      // No library read: only the delete's timers finish them.
+      await expect
+        .poll(async () => Boolean(await row(standing)), {
+          timeout: 5_000,
+          interval: 250,
+        })
+        .toBe(false);
+      await expect
+        .poll(async () => Boolean(await row(fresh)), {
+          timeout: PENDING_DELETE_WINDOW_MS + 6_000,
+          interval: 500,
+        })
+        .toBe(false);
+    }, 45_000);
+
+    it("marks a hundred and fifty items in one request, or none when one is missing", async () => {
+      const files: string[] = [];
+      for (let made = 0; made < 150; made += 1) files.push(await unusedFile());
+      const marks = async () =>
+        (
+          await t.adapter.select<Doc>("nextly_meta", {
+            columns: ["key"],
+            where: {
+              and: [
+                {
+                  column: "key",
+                  op: "IN",
+                  value: files.map(pendingDeleteKey),
+                },
+              ],
+            },
+          })
+        ).length;
+
+      const refused = await api(editor, "POST", ["deletions"], {
+        body: { ids: [...files, randomUUID()] },
+      });
+      expect(refused.status).toBe(404);
+      expect(await marks()).toBe(0);
+
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: files },
+      });
+      expect(deleted.status).toBe(200);
+      expect((deleted.json.marked as string[]).length).toBe(150);
+      expect(await marks()).toBe(150);
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: files },
+      });
+      expect((undone.json.restored as string[]).length).toBe(150);
+    }, 90_000);
+
     it("says which items a delete marked itself", async () => {
       const files = [await unusedFile(), await unusedFile()];
       const first = await api(editor, "POST", ["deletions"], {

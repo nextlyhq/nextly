@@ -795,6 +795,40 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("links an address an earlier Replace kept to its item when the record is rebuilt", async () => {
+      const image = await looseImage();
+      const handler = t.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "replaceposts", overrideAccess: true },
+        { title: "Earlier", body: imageText(image.url) }
+      );
+      const storyId = String((created.data as { id?: unknown }).id);
+      expect(await oldFileServedAfterReplace(image.id)).toBe(true);
+      // A Replace made before kept addresses were indexed: its record of
+      // kept files stands, the index of their addresses does not.
+      await t.adapter.delete("nextly_meta", {
+        and: [{ column: "key", op: "LIKE", value: "media.address:%" }],
+      });
+
+      await reindexMediaUsage({
+        adapter: t.adapter,
+        collections: {
+          slugs: async () => ["replaceposts"],
+          rebuild: slug =>
+            t.getService("collectionService").rebuildMediaUsage(slug),
+        },
+        singles: { slugs: async () => [], rebuild: async () => false },
+        meta: t.getService("metaService"),
+      });
+
+      const rows = await t.adapter.select<Doc>(MEDIA_USAGE_TABLE, {
+        where: { and: [{ column: "mediaId", op: "=", value: image.id }] },
+      });
+      expect(rows.map(found => [found.documentId, found.address])).toEqual([
+        [storyId, image.url],
+      ]);
+    });
+
     it("keeps the old file, and records it kept, while the usage record is still being built", async () => {
       const image = await looseImage();
       const meta = t.getService("metaService");

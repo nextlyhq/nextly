@@ -35,9 +35,12 @@ import { StoredFileSearchReader } from "../stored-file-search";
 
 import { keptAddressKey } from "./kept-addresses";
 
+/** The `nextly_meta` key prefix of every item's replaced files. */
+const REPLACED_KEY_PREFIX = "media.replaced:";
+
 /** The `nextly_meta` key of an item's replaced files. */
 function replacedKey(mediaId: string): string {
-  return `media.replaced:${mediaId}`;
+  return `${REPLACED_KEY_PREFIX}${mediaId}`;
 }
 
 /** What is kept for an item's address uses after its file was replaced. */
@@ -58,8 +61,12 @@ export async function readReplacedRecord(
       and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
     },
   });
-  if (!row) return null;
-  let value: unknown = row.value;
+  return row ? replacedRecordOf(row.value) : null;
+}
+
+/** A replaced-file record's stored value, or `null` when it is not one. */
+function replacedRecordOf(stored: unknown): ReplacedRecord | null {
+  let value: unknown = stored;
   if (typeof value === "string") {
     try {
       value = JSON.parse(value);
@@ -114,17 +121,58 @@ export async function recordKeptFiles(
       value: JSON.stringify(record),
       updated_at: new Date(),
     });
-    for (const url of keptAddressesOf(files)) {
-      await tx.delete("nextly_meta", {
-        and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
-      });
-      await tx.insert("nextly_meta", {
-        key: keptAddressKey(url),
-        value: JSON.stringify({ mediaId, url }),
-        updated_at: new Date(),
-      });
-    }
+    await writeKeptAddresses(tx, mediaId, keptAddressesOf(files));
   });
+}
+
+/** The statements writing kept addresses runs: a transaction's. */
+type KeptAddressWriter = Pick<DrizzleAdapter, "delete" | "insert">;
+
+/** Record each of `urls` as an address the item is still known by. */
+async function writeKeptAddresses(
+  tx: KeptAddressWriter,
+  mediaId: string,
+  urls: readonly string[]
+): Promise<void> {
+  for (const url of urls) {
+    await tx.delete("nextly_meta", {
+      and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
+    });
+    await tx.insert("nextly_meta", {
+      key: keptAddressKey(url),
+      value: JSON.stringify({ mediaId, url }),
+      updated_at: new Date(),
+    });
+  }
+}
+
+/**
+ * Record every address every Replace has kept a file for as one its item is
+ * still known by, from the items' replaced-file records: for the rebuild,
+ * before it reads any document, so content still naming an address kept by
+ * a Replace made before addresses were recorded counts as the item's use.
+ * Each item's on a transaction of its own; writing one again is harmless.
+ */
+export async function indexKeptAddresses(
+  db: Pick<DrizzleAdapter, "select" | "transaction">
+): Promise<number> {
+  const rows = await db.select<Record<string, unknown>>("nextly_meta", {
+    columns: ["key", "value"],
+    where: {
+      and: [{ column: "key", op: "LIKE", value: `${REPLACED_KEY_PREFIX}%` }],
+    },
+  });
+  let indexed = 0;
+  for (const row of rows) {
+    const key = typeof row.key === "string" ? row.key : "";
+    const record = replacedRecordOf(row.value);
+    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
+    const mediaId = key.slice(REPLACED_KEY_PREFIX.length);
+    const urls = keptAddressesOf(record.files);
+    await db.transaction(tx => writeKeptAddresses(tx, mediaId, urls));
+    indexed += urls.length;
+  }
+  return indexed;
 }
 
 /**

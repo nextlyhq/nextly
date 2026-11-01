@@ -22,6 +22,7 @@ import {
   type DocumentRef,
 } from "../../../services/dashboard/readable-headings";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import { configuredLocales } from "../../i18n/configured-locales";
 
 import { keptAddresses } from "./address-uses";
 import { listIdentifiedMediaUsage } from "./media-usage-store";
@@ -170,6 +171,9 @@ export function bootedMediaUsesSource(
   return {
     rows: mediaId => listIdentifiedMediaUsage(adapter, mediaId),
     keptAddresses: mediaId => keptAddresses(adapter, mediaId),
+    // The configured languages as they are now; none where the site has no
+    // localization or its languages cannot be read, which tells no language.
+    languages: () => Promise.resolve([...(configuredLocales() ?? [])]),
     headings: async reads => {
       const content = reads.filter(isContentRead);
       const templates = reads

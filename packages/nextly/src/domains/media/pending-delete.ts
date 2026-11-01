@@ -42,6 +42,9 @@ export const PENDING_DELETE_KEY_PREFIX = "media.deleting:";
 /** The most marks one sweep finalises; the rest wait for the next. */
 const SWEEP_LIMIT = 25;
 
+/** The most ids one statement of a mark reads by. */
+const READ_RUN = 200;
+
 const META_TABLE = "nextly_meta";
 
 /** The mark's key for an item. */
@@ -188,10 +191,28 @@ export class PendingMediaDeletes {
       // Each item's row locked, in one order, so two deletes of the same
       // items take turns: the second finds the first's marks and keeps them.
       for (const id of [...wanted].sort()) await tx.lockRow("media", id);
-      const found = await tx.select<Record<string, unknown>>("media", {
-        columns: ["id"],
-        where: { and: [{ column: "id", op: "IN", value: wanted }] },
-      });
+      const found: Array<Record<string, unknown>> = [];
+      const marked: Array<Record<string, unknown>> = [];
+      // In runs, so no statement binds more values than any dialect takes.
+      for (let start = 0; start < wanted.length; start += READ_RUN) {
+        const run = wanted.slice(start, start + READ_RUN);
+        found.push(
+          ...(await tx.select<Record<string, unknown>>("media", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "IN", value: run }] },
+          }))
+        );
+        marked.push(
+          ...(await tx.select<Record<string, unknown>>(META_TABLE, {
+            columns: ["key", "updatedAt"],
+            where: {
+              and: [
+                { column: "key", op: "IN", value: run.map(pendingDeleteKey) },
+              ],
+            },
+          }))
+        );
+      }
       const present = new Set(found.map(row => String(row.id)));
       const missing = wanted.filter(id => !present.has(id));
       if (missing.length > 0) {
@@ -199,14 +220,6 @@ export class PendingMediaDeletes {
           logContext: { reason: "media-delete-missing-items", missing },
         });
       }
-      const marked = await tx.select<Record<string, unknown>>(META_TABLE, {
-        columns: ["key", "updatedAt"],
-        where: {
-          and: [
-            { column: "key", op: "IN", value: wanted.map(pendingDeleteKey) },
-          ],
-        },
-      });
       const standing = new Set(marked.map(row => idOfKey(row.key)));
       for (const id of wanted) {
         if (standing.has(id)) continue;
@@ -351,6 +364,40 @@ export class PendingMediaDeletes {
       deleted.push(...(await this.finalizeRows(rows, due)));
     }
     return deleted;
+  }
+
+  /**
+   * When the earliest of `ids`' marks that are not yet due will be, or `null`
+   * when none waits: for a delete's timer, which finishes what is due and
+   * then waits again for the rest, so no mark is left without one. A mark put
+   * back after a failed delete is already due, and is left to the sweep.
+   */
+  async nextDeadline(ids: readonly string[]): Promise<Date | null> {
+    const wanted = [...new Set(ids)];
+    const due = this.cutoff();
+    let earliest: Date | null = null;
+    for (let start = 0; start < wanted.length; start += SWEEP_LIMIT) {
+      const run = wanted.slice(start, start + SWEEP_LIMIT);
+      const rows = await this.deps.db.select<Record<string, unknown>>(
+        META_TABLE,
+        {
+          columns: ["key", "updatedAt"],
+          where: {
+            and: [
+              { column: "key", op: "IN", value: run.map(pendingDeleteKey) },
+              { column: "updatedAt", op: ">", value: due },
+            ],
+          },
+        }
+      );
+      for (const row of rows) {
+        const time = markTime(row.updatedAt ?? row.updated_at);
+        if (time && (earliest === null || time < earliest)) earliest = time;
+      }
+    }
+    return earliest === null
+      ? null
+      : new Date(earliest.getTime() + this.windowMs);
   }
 
   /**

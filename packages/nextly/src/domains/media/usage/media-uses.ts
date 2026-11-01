@@ -106,6 +106,12 @@ export interface MediaUsesSource {
    */
   keptAddresses(mediaId: string): Promise<ReadonlySet<string>>;
   /**
+   * The site's languages as they are now, or none where it has no
+   * localization. A document is asked about only in these: a removed
+   * language's value is told nowhere.
+   */
+  languages(): Promise<readonly string[]>;
+  /**
    * The heading of each read the reader may make, by {@link mediaUseReadKey}.
    * One absent is a document they may not read in that language.
    */
@@ -193,19 +199,26 @@ function languagesOf(document: GatheredDocument): {
 
 /**
  * The reads that decide what the reader is told of a document: one in each
- * language whose value uses the item, and one in the default language when a
- * shared value does. An email template has no languages.
+ * of the site's languages whose value uses the item, and, when a shared
+ * value does, one in the default language and one in every language, since
+ * the reader sees a shared value in any translation they may read. An email
+ * template has no languages.
  */
-function readsOf(document: GatheredDocument): MediaUseRead[] {
+function readsOf(
+  document: GatheredDocument,
+  languages: readonly string[]
+): MediaUseRead[] {
   const { kind, slug, documentId } = document;
   if (kind === "email-template") {
     return [{ kind, slug, documentId, locale: null }];
   }
   const { named, shared } = languagesOf(document);
-  return [
-    ...(shared ? [{ kind, slug, documentId, locale: null }] : []),
-    ...named.map(locale => ({ kind, slug, documentId, locale })),
-  ];
+  const site = new Set(languages);
+  const locales = new Set<string | null>([
+    ...(shared ? [null, ...languages] : []),
+    ...named.filter(locale => site.has(locale)),
+  ]);
+  return [...locales].map(locale => ({ kind, slug, documentId, locale }));
 }
 
 /**
@@ -217,9 +230,10 @@ function readsOf(document: GatheredDocument): MediaUseRead[] {
  */
 function toldOf(
   document: GatheredDocument,
-  headings: ReadonlyMap<string, MediaUseHeading>
+  headings: ReadonlyMap<string, MediaUseHeading>,
+  languages: readonly string[]
 ): MediaUse | null {
-  const reads = readsOf(document);
+  const reads = readsOf(document, languages);
   const headingIn = (locale: string | null) =>
     headings.get(mediaUseReadKey({ ...document, locale }));
   const readable = reads.filter(read => headingIn(read.locale) !== undefined);
@@ -273,11 +287,16 @@ export async function mediaUsesOf(
     : new Set<string>();
   const documents = gathered(told, kept);
   if (documents.length === 0) return { items: [], hidden: [] };
-  const headings = await source.headings(documents.flatMap(readsOf));
+  const languages = documents.some(doc => doc.kind !== "email-template")
+    ? await source.languages()
+    : [];
+  const headings = await source.headings(
+    documents.flatMap(document => readsOf(document, languages))
+  );
   const items: MediaUse[] = [];
   const hidden = new Map<string, HiddenMediaUses>();
   for (const document of documents) {
-    const use = toldOf(document, headings);
+    const use = toldOf(document, headings, languages);
     if (use) {
       items.push(use);
       continue;

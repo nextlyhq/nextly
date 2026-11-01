@@ -442,22 +442,37 @@ export async function listMediaUsage(
 export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded:2";
 
 /**
- * Whether the record has been built for content written before it existed,
- * in its current format: its {@link MEDIA_USAGE_RECORDED_KEY} mark is there.
- * Until it is, a use the record lacks, or one it holds without its address,
- * may still be in some document. The one answer to this question: a Replace,
- * the usage answers and the library's counts all ask it here.
+ * Which build of the record stands, or `null` while none does: the mark's
+ * stored value, which each rebuild writes anew (`rebuiltAt`). Two reads that
+ * give the same build saw no rebuild finish between them, so what was read
+ * between them came from that one complete record.
  */
-export async function mediaUsageRecorded(
+export async function mediaUsageRecordBuild(
   db: Pick<UsageDb, "select">
-): Promise<boolean> {
-  const rows = await db.select("nextly_meta", {
-    columns: ["key"],
+): Promise<string | null> {
+  const rows = await db.select<Record<string, unknown>>("nextly_meta", {
+    columns: ["key", "value"],
     where: {
       and: [{ column: "key", op: "=", value: MEDIA_USAGE_RECORDED_KEY }],
     },
   });
-  return rows.length > 0;
+  if (rows.length === 0) return null;
+  const value = rows[0].value;
+  return typeof value === "string" ? value : JSON.stringify(value ?? null);
+}
+
+/**
+ * Whether the record has been built for content written before it existed,
+ * in its current format: its {@link MEDIA_USAGE_RECORDED_KEY} mark is there.
+ * Until it is, a use the record lacks, or one it holds without its address,
+ * may still be in some document. The one answer to this question, from the
+ * build that stands (`mediaUsageRecordBuild`): a Replace, the usage answers
+ * and the library's counts all ask it here.
+ */
+export async function mediaUsageRecorded(
+  db: Pick<UsageDb, "select">
+): Promise<boolean> {
+  return (await mediaUsageRecordBuild(db)) !== null;
 }
 
 /**

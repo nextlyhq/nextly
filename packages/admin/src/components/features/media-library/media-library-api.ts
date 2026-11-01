@@ -140,88 +140,24 @@ export async function fetchMediaUsage(
 }
 
 /**
- * The most items one delete or Undo request names: the server refuses more,
- * and marks or restores each request's items all or none.
+ * Delete items so the delete can be undone for a few seconds: one request,
+ * which the server marks whole or not at all, for any selection up to
+ * `MEDIA_DELETE_LIMIT` (the page refuses a larger one before asking).
  */
-const DELETION_BATCH = 100;
-
-/**
- * `ids` in runs of at most {@link DELETION_BATCH}; none as one empty run, so
- * the server answers it as it answers any request naming nothing.
- */
-function deletionBatches(ids: readonly string[]): string[][] {
-  if (ids.length === 0) return [[]];
-  const batches: string[][] = [];
-  for (let start = 0; start < ids.length; start += DELETION_BATCH) {
-    batches.push(ids.slice(start, start + DELETION_BATCH));
-  }
-  return batches;
-}
-
-/**
- * Delete items so the delete can be undone for a few seconds. A selection
- * larger than one request takes is sent in batches, one after another, and
- * answered as one delete: every id, and the earliest batch's deadline, since
- * an Undo after it would find that batch already gone. When a later batch
- * fails, the items the batches already taken marked are brought back before
- * the failure is reported, so the selection is deleted whole or not at all;
- * an item an earlier delete had marked already stays as that delete left it,
- * and one that cannot be brought back goes on with its window, as a delete
- * of its own would.
- */
-export async function deleteMediaLater(
+export function deleteMediaLater(
   ids: readonly string[]
 ): Promise<PendingMediaDelete> {
-  const taken: PendingMediaDelete[] = [];
-  try {
-    for (const batch of deletionBatches(ids)) {
-      taken.push(
-        await mediaJson<PendingMediaDelete>(
-          "/deletions",
-          jsonPost({ ids: batch })
-        )
-      );
-    }
-  } catch (error) {
-    await Promise.allSettled(
-      taken
-        .filter(done => done.marked.length > 0)
-        .map(done =>
-          mediaJson<UndoneMediaDelete>(
-            "/deletions/undo",
-            jsonPost({ ids: done.marked })
-          )
-        )
-    );
-    throw error;
-  }
-  const deadlines = taken.map(done => done.deleteAfter);
-  return {
-    ids: taken.flatMap(done => done.ids),
-    marked: taken.flatMap(done => done.marked),
-    deleteAfter: deadlines.reduce((earliest, next) =>
-      Date.parse(next) < Date.parse(earliest) ? next : earliest
-    ),
-  };
+  return mediaJson<PendingMediaDelete>("/deletions", jsonPost({ ids }));
 }
 
 /**
- * Bring back items deleted inside the window, in batches as the delete was
- * sent, answered as one: every item brought back, and every one already gone.
+ * Bring back items deleted inside the window: one request, which the server
+ * brings back whole or not at all.
  */
-export async function undoMediaDelete(
+export function undoMediaDelete(
   ids: readonly string[]
 ): Promise<UndoneMediaDelete> {
-  const undone: UndoneMediaDelete = { restored: [], gone: [] };
-  for (const batch of deletionBatches(ids)) {
-    const answer = await mediaJson<UndoneMediaDelete>(
-      "/deletions/undo",
-      jsonPost({ ids: batch })
-    );
-    undone.restored.push(...answer.restored);
-    undone.gone.push(...answer.gone);
-  }
-  return undone;
+  return mediaJson<UndoneMediaDelete>("/deletions/undo", jsonPost({ ids }));
 }
 
 /** Replace an item's file, keeping the item; the item as it now is. */

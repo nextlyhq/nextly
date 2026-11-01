@@ -74,110 +74,32 @@ function sentTo(path: string): string[][] {
     );
 }
 
-describe("a delete of more items than one request takes", () => {
-  it("sends the items in requests of at most a hundred, answering every id and the earliest deadline", async () => {
-    const early = new Date(Date.now() + 9_000).toISOString();
-    const late = new Date(Date.now() + 10_000).toISOString();
+describe("a delete of many items", () => {
+  it("sends every item in one request, so the server marks them whole or not at all", async () => {
+    const deleteAfter = new Date(Date.now() + 10_000).toISOString();
     fetchJson.mockImplementation((_url: string, init: RequestInit) => {
       const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
-      return Promise.resolve({
-        ids: sent,
-        marked: sent,
-        // The first batch was marked earlier, so its window ends first.
-        deleteAfter: sent[0] === "m0" ? early : late,
-      });
+      return Promise.resolve({ ids: sent, marked: sent, deleteAfter });
     });
 
     const pending = await deleteMediaLater(ids(150));
 
-    expect(sentTo("/admin/api/media/deletions")).toEqual([
-      ids(150).slice(0, 100),
-      ids(150).slice(100),
-    ]);
+    expect(sentTo("/admin/api/media/deletions")).toEqual([ids(150)]);
     expect(pending).toEqual({
       ids: ids(150),
       marked: ids(150),
-      deleteAfter: early,
+      deleteAfter,
     });
   });
 
-  it("brings back the batches already taken when a later one fails, and fails", async () => {
-    fetchJson.mockImplementation((url: string, init: RequestInit) => {
-      const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
-      if (url === "/admin/api/media/deletions/undo") {
-        return Promise.resolve({ restored: sent, gone: [] });
-      }
-      if (sent[0] === "m100") return Promise.reject(new Error("refused"));
-      return Promise.resolve({
-        ids: sent,
-        marked: sent,
-        deleteAfter: new Date(Date.now() + 10_000).toISOString(),
-      });
-    });
-
-    await expect(deleteMediaLater(ids(150))).rejects.toThrow("refused");
-
-    expect(sentTo("/admin/api/media/deletions/undo")).toEqual([
-      ids(150).slice(0, 100),
-    ]);
-  });
-
-  it("brings back only what this delete marked, leaving an item an earlier delete marked", async () => {
-    fetchJson.mockImplementation((url: string, init: RequestInit) => {
-      const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
-      if (url === "/admin/api/media/deletions/undo") {
-        return Promise.resolve({ restored: sent, gone: [] });
-      }
-      if (sent[0] === "m100") return Promise.reject(new Error("refused"));
-      return Promise.resolve({
-        ids: sent,
-        // `m5` was already waiting to be deleted, from another tab.
-        marked: sent.filter(id => id !== "m5"),
-        deleteAfter: new Date(Date.now() + 10_000).toISOString(),
-      });
-    });
-
-    await expect(deleteMediaLater(ids(150))).rejects.toThrow("refused");
-
-    expect(sentTo("/admin/api/media/deletions/undo")).toEqual([
-      ids(100).filter(id => id !== "m5"),
-    ]);
-  });
-
-  it("undoes in requests of at most a hundred, answering every id", async () => {
+  it("undoes every item in one request", async () => {
     fetchJson.mockImplementation((_url: string, init: RequestInit) => {
       const sent = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
-      // The last item's window had already ended.
-      return Promise.resolve({
-        restored: sent.filter(id => id !== "m149"),
-        gone: sent.filter(id => id === "m149"),
-      });
+      return Promise.resolve({ restored: sent, gone: [] });
     });
 
-    const undone = await undoMediaDelete(ids(150));
+    await undoMediaDelete(ids(150));
 
-    expect(sentTo("/admin/api/media/deletions/undo")).toEqual([
-      ids(150).slice(0, 100),
-      ids(150).slice(100),
-    ]);
-    expect(undone).toEqual({
-      restored: ids(149),
-      gone: ["m149"],
-    });
-  });
-
-  it("sends a delete of a hundred or fewer as one request", async () => {
-    // POSITIVE CONTROL: a selection within the limit is unchanged.
-    fetchJson.mockImplementation((_url: string, init: RequestInit) =>
-      Promise.resolve({
-        ids: (JSON.parse(String(init.body)) as { ids: string[] }).ids,
-        marked: (JSON.parse(String(init.body)) as { ids: string[] }).ids,
-        deleteAfter: new Date(Date.now() + 10_000).toISOString(),
-      })
-    );
-
-    await deleteMediaLater(ids(100));
-
-    expect(sentTo("/admin/api/media/deletions")).toEqual([ids(100)]);
+    expect(sentTo("/admin/api/media/deletions/undo")).toEqual([ids(150)]);
   });
 });

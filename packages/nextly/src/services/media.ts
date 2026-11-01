@@ -274,11 +274,16 @@ export class MediaService extends BaseService {
     // Loaded when the library is read, not with the service.
     const [
       { mediaLibraryCountsOf, missingAltText, notPendingDelete, unusedItem },
-      { mediaUsageRecorded },
+      { mediaUsageRecordBuild },
     ] = await Promise.all([
       import("../domains/media/media-library-query"),
       import("../domains/media/usage/media-usage-store"),
     ]);
+    // The record's build, read before the counting and again after it: the
+    // counts are trusted as complete only when one build stood throughout,
+    // so a rebuild that starts or finishes meanwhile reads as unbuilt.
+    const present = unused !== null;
+    const before = present ? await mediaUsageRecordBuild(this.adapter) : null;
     const groups = await this.db
       .select({
         folderId: media.folderId,
@@ -296,12 +301,10 @@ export class MediaService extends BaseService {
       // Never an item deleted inside the Undo window, as every library read.
       .where(notPendingDelete(media))
       .groupBy(media.folderId);
-    // Whether the record is built is asked of its one reader, so the counts
-    // and a Replace never disagree about it.
-    const present = unused !== null;
+    const after = present ? await mediaUsageRecordBuild(this.adapter) : null;
     return mediaLibraryCountsOf(groups, {
       present,
-      recorded: present && (await mediaUsageRecorded(this.adapter)),
+      recorded: before !== null && before === after,
     });
   }
 

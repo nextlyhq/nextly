@@ -72,6 +72,7 @@ import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
+import { MEDIA_DELETE_LIMIT } from "../domains/media/media-delete-limit";
 import type { PendingMediaDeletes } from "../domains/media/pending-delete";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
@@ -834,9 +835,12 @@ const usageQuerySchema = z.object({
     .transform(value => value === "true"),
 });
 
-/** The ids a delete or its Undo names: one to a hundred items. */
+/**
+ * The ids a delete or its Undo names: one to {@link MEDIA_DELETE_LIMIT}
+ * items, each request marked or brought back whole on one transaction.
+ */
 const deletionBodySchema = z.object({
-  ids: z.array(z.string().min(1)).min(1).max(100),
+  ids: z.array(z.string().min(1)).min(1).max(MEDIA_DELETE_LIMIT),
 });
 
 /** The library reads that finish deletes whose window has ended. */
@@ -860,6 +864,34 @@ async function pendingDeletes(): Promise<PendingMediaDeletes> {
       mediaService.delete(mediaId, createRequestContext(), actor),
     logger: getNextlyLogger(),
   });
+}
+
+/**
+ * Finish `ids`, a delete's items, at `deadline` (an instant in ms): every one
+ * then due, however many; any not due yet, marked later than the earliest,
+ * at their own deadline by a timer set again. A moment after the deadline,
+ * so the marks are due when it runs. Unref'd: a waiting delete never keeps a
+ * process alive, and the sweep covers one that exits first.
+ */
+function finishDeletesAt(ids: readonly string[], deadline: number): void {
+  const delay = Math.max(0, deadline - Date.now()) + 500;
+  setTimeout(() => {
+    void (async () => {
+      await sweepPendingDeletes(ids);
+      try {
+        const pending = await pendingDeletes();
+        const next = await pending.nextDeadline(ids);
+        if (next) finishDeletesAt(ids, next.getTime());
+      } catch (error) {
+        getNextlyLogger().warn({
+          kind: "media-delete-sweep-failed",
+          message:
+            "Deleted media items could not be scheduled; the next read finishes them.",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+  }, delay).unref?.();
 }
 
 /**
@@ -901,15 +933,10 @@ async function handleDeleteMediaLater(
   );
   const pending = await pendingDeletes();
   const marked = await pending.mark(ids, actor);
-  // A moment after the deadline this delete answers, which a mark already
-  // standing makes earlier than a fresh window, so the marks are due when it
-  // runs; it finishes every item this delete names, however many. Unref'd: a
-  // waiting delete never keeps a process alive, and the sweep covers one
-  // that exits first.
-  const due = Math.max(0, Date.parse(marked.deleteAfter) - Date.now());
-  setTimeout(() => {
-    void sweepPendingDeletes(marked.ids);
-  }, due + 500).unref?.();
+  // From the deadline this delete answers, which a mark already standing
+  // makes earlier than a fresh window; marks due later get a timer of their
+  // own when this one has run.
+  finishDeletesAt(marked.ids, Date.parse(marked.deleteAfter));
   return respondAction("Media deleted.", {
     ids: marked.ids,
     marked: marked.marked,

@@ -42,19 +42,21 @@ function row(
 
 /**
  * A source over these rows, where the reader may read each of `readable` in
- * its language (`null` the default one), and `kept` are the addresses whose
- * files the item's last Replace kept.
+ * its language (`null` the default one), `kept` are the addresses whose
+ * files the item's last Replace kept, and `languages` the site's.
  */
 function source(
   rows: IdentifiedUsageRow[],
   readable: Array<[MediaUseRead, MediaUseHeading]>,
-  kept: string[] = []
+  kept: string[] = [],
+  languages: string[] = ["en", "es", "fr"]
 ): MediaUsesSource & { asked: MediaUseRead[][] } {
   const asked: MediaUseRead[][] = [];
   return {
     asked,
     rows: () => Promise.resolve(rows),
     keptAddresses: () => Promise.resolve(new Set(kept)),
+    languages: () => Promise.resolve(languages),
     headings: reads => {
       asked.push([...reads]);
       return Promise.resolve(
@@ -185,7 +187,9 @@ describe("mediaUsesOf", () => {
         row("collection", "secrets", "s2", "cover"),
         row("email-template", "", "t1", "html"),
       ],
-      [[readIn(post), { title: "Hello", owner: "Posts" }]]
+      [[readIn(post), { title: "Hello", owner: "Posts" }]],
+      [],
+      ["en"]
     );
     const answer = await mediaUsesOf(ITEM, read);
 
@@ -197,13 +201,16 @@ describe("mediaUsesOf", () => {
     ]);
     expect(JSON.stringify(answer)).not.toContain("s1");
     // Every document is asked about once in each language its rows name,
-    // the default one for a shared value, all in one call.
+    // and for a shared value in the default one and every language, all in
+    // one call.
     expect(read.asked).toEqual([
       [
         readIn(post),
+        readIn(post, "en"),
         readIn(secret),
         readIn(secret, "en"),
         readIn({ ...secret, documentId: "s2" }),
+        readIn({ ...secret, documentId: "s2" }, "en"),
         readIn({ kind: "email-template", slug: "", documentId: "t1" }),
       ],
     ]);
@@ -353,6 +360,53 @@ describe("mediaUsesOf", () => {
           showsPreviousFile: false,
         },
       ],
+    ]);
+  });
+
+  it("tells a shared use to a reader who may read the document in a language but the default", async () => {
+    const answer = await mediaUsesOf(
+      ITEM,
+      source(
+        [row("collection", "posts", "p1", "cover")],
+        // The default language is refused; Spanish is readable.
+        [[readIn(post, "es"), { title: "Hola", owner: "Posts" }]],
+        [],
+        ["en", "es"]
+      )
+    );
+
+    expect(answer.items).toEqual([
+      {
+        ...post,
+        title: "Hola",
+        owner: "Posts",
+        fields: [
+          {
+            path: "cover",
+            locales: [],
+            byAddress: false,
+            showsPreviousFile: false,
+          },
+        ],
+      },
+    ]);
+    expect(answer.hidden).toEqual([]);
+  });
+
+  it("tells no use in a language the site no longer has", async () => {
+    const answer = await mediaUsesOf(
+      ITEM,
+      source(
+        [row("collection", "posts", "p1", "body", "de", "/a.png")],
+        [[readIn(post, "de"), { title: "Hallo", owner: "Posts" }]],
+        [],
+        ["en"]
+      )
+    );
+
+    expect(answer.items).toEqual([]);
+    expect(answer.hidden).toEqual([
+      { scopeKind: "collection", scopeSlug: "posts", count: 1 },
     ]);
   });
 

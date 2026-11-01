@@ -1,9 +1,8 @@
 /**
- * A bulk delete of more items than one request may name, on the whole page
- * with only the network stubbed: two pages selected in the list view make a
- * selection of 150, which is sent in requests of at most a hundred items,
- * offered back by one Undo, which also sends them in requests of at most a
- * hundred.
+ * A bulk delete across pages, on the whole page with only the network
+ * stubbed: two pages selected in the list view make a selection of 150,
+ * which is sent as one request, so the server marks it whole or not at all,
+ * and offered back by one Undo, which is one request too.
  */
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -111,8 +110,8 @@ beforeEach(() => {
   });
 });
 
-describe("a bulk delete of more than a hundred items", () => {
-  it("sends the selection in requests of at most a hundred, with one Undo for all of it", async () => {
+describe("a bulk delete of more than one page of items", () => {
+  it("sends the selection as one request, with one Undo for all of it", async () => {
     renderWithProviders(
       <MediaProvider>
         <MediaLibrary />
@@ -142,10 +141,7 @@ describe("a bulk delete of more than a hundred items", () => {
 
     const all = Array.from({ length: COUNT }, (_, n) => `m${n}`);
     await waitFor(() =>
-      expect(sentTo("/admin/api/media/deletions")).toEqual([
-        all.slice(0, 100),
-        all.slice(100),
-      ])
+      expect(sentTo("/admin/api/media/deletions")).toEqual([all])
     );
     // One toast, whose Undo is for the whole selection.
     await waitFor(() => expect(toasts.toast).toHaveBeenCalledTimes(1));
@@ -163,10 +159,7 @@ describe("a bulk delete of more than a hundred items", () => {
     act(() => options.action.onClick());
 
     await waitFor(() =>
-      expect(sentTo("/admin/api/media/deletions/undo")).toEqual([
-        all.slice(0, 100),
-        all.slice(100),
-      ])
+      expect(sentTo("/admin/api/media/deletions/undo")).toEqual([all])
     );
     await waitFor(() =>
       expect(toasts.toast.success).toHaveBeenCalledWith(
