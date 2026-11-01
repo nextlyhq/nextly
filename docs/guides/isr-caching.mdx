@@ -150,7 +150,13 @@ To add them to an app by hand:
 
 A tag that fails to expire is retried once. If it fails again, the write still
 succeeds: Nextly logs the tags and expires them with the next write in a
-request, and the REST and admin response says so with a notice:
+request, and the REST and admin response says so with a notice. If the database
+refuses the record that tells other instances, Nextly also retries that on its
+own: after 1 second, then waiting twice as long each time up to 30 seconds, and
+at the process's next cached read. Other instances then see the write within
+about a minute of the database answering again, and on serverless within a
+minute of the next invocation. It logs one line when these retries start and
+one when they succeed. The notice looks like this:
 
 ```json
 {

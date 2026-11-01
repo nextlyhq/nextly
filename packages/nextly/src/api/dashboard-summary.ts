@@ -288,11 +288,13 @@ async function widgetRead(
   );
   if (shown === undefined) return null;
   if (shown === "failed") return "failed";
-  // As its card's `load` is handed them: the person, and reads bound to
-  // them through the batch's own check, under the part's own signal.
+  // As its card's `load` is handed them: the person, reads bound to them
+  // through the batch's own check, under the part's own signal, and the
+  // owner's share of the request's scope, the one its `shows` was judged in.
   const count = await summary.count({
     user: batch.caller.user,
     signal,
+    scope: scope.forOwner(declared.owner),
     services: bindReadServices({
       caller: batch.caller,
       prepare: batch.check,

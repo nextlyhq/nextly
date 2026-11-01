@@ -107,7 +107,7 @@ function linePart(part: DashboardSummaryPart, now: Date): SummaryLinePart {
     case "widget":
       return {
         key: `widget:${part.widget}`,
-        text: `${part.count} ${part.label}`,
+        text: `${counted(part.count, part.atLeast)} ${part.label}`,
         widget: part.widget,
         card: part.card,
       };

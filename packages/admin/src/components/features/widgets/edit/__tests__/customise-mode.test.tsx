@@ -40,6 +40,12 @@ import { galleryFromLayout, isGalleryPath } from "./gallery-read";
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 
+// The header's New button reads collections and permissions of its own,
+// which this test does not set up; it is a marker here.
+vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
+  NewSplitButton: () => <div data-testid="dashboard-new" />,
+}));
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useAppName: () => "Acme Site",
@@ -135,7 +141,6 @@ function branding(): AdminBranding {
         title: "Home page",
         archetype: "custom",
         size: RESIZABLE,
-        chrome: "none",
         component: "core#LinkedSection",
       },
       {
@@ -157,12 +162,9 @@ function branding(): AdminBranding {
   } as unknown as AdminBranding;
 }
 
-/** One card, listed in the add panel's Overview group as core lists it. */
+/** One card, which a dashboard holds once. */
 function facts(): WidgetLayoutFacts {
-  return {
-    allowsSeveral: false,
-    group: "overview",
-  };
+  return { allowsSeveral: false };
 }
 
 const OPENED: WidgetPlacement[] = [

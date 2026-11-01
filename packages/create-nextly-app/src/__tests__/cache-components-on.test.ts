@@ -473,26 +473,54 @@ describe("an existing app with a cache of its own", () => {
     }
   );
 
-  it("prints the handlers rather than writing them where `require` is declared after the config object", async () => {
-    // Written into the object, `require.resolve` would run while the
-    // declaration below it is still in its temporal dead zone, and the config
-    // would throw as Next.js loads it.
+  it.each([
+    [
+      "in a statement of its own",
+      "const nextConfig = { reactStrictMode: true };\nconst require = createRequire(import.meta.url);",
+    ],
+    [
+      "in the config object's own statement",
+      "const nextConfig = { reactStrictMode: true },\n  require = createRequire(import.meta.url);",
+    ],
+  ])(
+    "prints the handlers rather than writing them where `require` is declared after the config object, %s",
+    async (_form, declarations) => {
+      // Written into the object, `require.resolve` would run while the
+      // declaration below it is still in its temporal dead zone, and the config
+      // would throw as Next.js loads it.
+      await write(
+        "next.config.mjs",
+        `import { createRequire } from "node:module";\n${declarations}\nexport default nextConfig;\n`
+      );
+
+      const patch = await turnOnCacheComponents(dir);
+      const files = cacheComponentsFiles(patch);
+
+      expect(await read("next.config.mjs")).not.toMatch(
+        /nextly\/cache-handler/
+      );
+      expect(files.skipped).toHaveLength(1);
+      expect(files.skipped[0]?.why).toMatch(
+        /declares require after its config object.*move that declaration above the object/
+      );
+      const config = await load("next.config.mjs");
+      expect(config.reactStrictMode).toBe(true);
+      expect(config.cacheComponents).toBe(true);
+    }
+  );
+
+  it("writes the handlers where `require` is declared before the config object in the same statement, and it loads", async () => {
     await write(
       "next.config.mjs",
-      'import { createRequire } from "node:module";\nconst nextConfig = { reactStrictMode: true };\nconst require = createRequire(import.meta.url);\nexport default nextConfig;\n'
+      'import { createRequire } from "node:module";\nconst require = createRequire(import.meta.url),\n  nextConfig = { reactStrictMode: true };\nexport default nextConfig;\n'
     );
 
-    const patch = await turnOnCacheComponents(dir);
-    const files = cacheComponentsFiles(patch);
+    await turnOnCacheComponents(dir);
 
-    expect(await read("next.config.mjs")).not.toMatch(/nextly\/cache-handler/);
-    expect(files.skipped).toHaveLength(1);
-    expect(files.skipped[0]?.why).toMatch(
-      /declares require after its config object.*move that declaration above the object/
-    );
-    const config = await load("next.config.mjs");
-    expect(config.reactStrictMode).toBe(true);
-    expect(config.cacheComponents).toBe(true);
+    expect(
+      (await read("next.config.mjs")).match(/const require/g)
+    ).toHaveLength(1);
+    expectNextlyHandlers(await load("next.config.mjs"));
   });
 
   it("adds no definition to an ES module that binds `require` already", async () => {

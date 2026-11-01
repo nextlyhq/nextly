@@ -3,6 +3,7 @@
  * row names and where it links, who saved it, its status label, whether it is
  * pinned, which tab the settings name, and the empty text per tab.
  */
+import type { CoreListWidgetData } from "nextly/core-widget-data";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,8 +14,11 @@ import {
   continueTab,
 } from "./continue-model";
 
+/** One row of the card's data, as JSON carries it. */
+type Row = CoreListWidgetData["items"][number];
+
 /** One row as `system:continue` answers it. */
-function row(overrides: Record<string, unknown> = {}) {
+function row(overrides: Row = {}): Row {
   return {
     id: "save-1",
     entryId: "doc-1",
@@ -96,7 +100,6 @@ describe("a Continue row", () => {
 
   it("keeps the answer's order, leaving out what it cannot read", () => {
     const rows = continueRows({
-      op: "list",
       items: [
         row({ id: "pin-a", entryTitle: "A", pinned: true }),
         row({ id: "broken", entryTitle: null }),
@@ -116,7 +119,7 @@ describe("the card's tab and empty text", () => {
   });
 
   it("says what fills Mine, and how far back Team looked", () => {
-    const empty = { op: "list" as const, items: [] };
+    const empty = { items: [] };
     expect(continueEmpty("mine", empty).title).toBe("Nothing to continue yet");
     expect(continueEmpty("team", empty).title).toBe("No edits by others yet");
     expect(continueEmpty("team", { ...empty, window: { days: 1 } }).title).toBe(

@@ -11,6 +11,9 @@
  * What the header ends the line with (`trailing`, "Resume setup") is drawn
  * after the parts whatever the summary says, as it is not one of them.
  *
+ * The line is a polite live region, so a change to it is said without moving
+ * the reader.
+ *
  * @module components/features/dashboard/header/SummaryLine
  */
 
@@ -124,7 +127,12 @@ export function SummaryLine({
       : summaryLine(summary, now);
   if (line.kind === "none" && trailing == null) return null;
   return (
+    // A polite live region, read whole: when the counts change under the reader (an item dealt
+    // with, a release scheduled), the new line is said once they pause, as one sentence rather
+    // than the one part that changed.
     <p
+      aria-live="polite"
+      aria-atomic="true"
       className="mt-[3px] text-[12.5px] text-muted-foreground"
       data-testid="dashboard-summary"
     >

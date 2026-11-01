@@ -36,6 +36,7 @@ import { MAX_PLACEMENTS } from "nextly/config";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useId,
   useMemo,
   useRef,
@@ -122,6 +123,16 @@ export interface AddWidgetPanelProps {
   onClosed: () => void;
 }
 
+/**
+ * One sentence the panel says, and which saying of it this is. The live region draws each saying
+ * as a node of its own (keyed by `id`), so a sentence equal to the last one, "1 widget." for two
+ * chips in turn or "Added Note." twice, still changes the region and is announced again.
+ */
+interface Utterance {
+  text: string;
+  id: number;
+}
+
 /** How long typing has to pause before the count is announced. */
 const COUNT_ANNOUNCE_DELAY_MS = 500;
 
@@ -137,34 +148,79 @@ interface AddStep {
  * The count, and the one sentence the panel is saying now, for its live region. Each visit starts
  * silent: the panel stays mounted while closed, so a sentence from the last visit, or a count
  * still waiting when it closed, would otherwise be said again on opening.
+ *
+ * The count is said when the reader narrows the gallery, by a search or by a chip they chose
+ * (`chosenChip`, `null` until they choose one this visit), and when the read lands under a
+ * search typed before it. Not when the count moves under the reader for another reason, as when
+ * a card put back leaves the Removed list: that add's own sentence is what the reader should
+ * hear, not a count spoken over it a moment later.
+ *
+ * Each narrowing is said at most once. Opening an add step (`inStep`) cancels a count still
+ * waiting and settles that narrowing as said: the gallery it counted is gone and focus is on the
+ * step, so "N widgets" there would describe nothing in front of the reader, and coming back from
+ * the step, by Back or by an add, does not say it again over what the reader is hearing then.
  */
-function usePanelVoice(found: number, query: string, open: boolean) {
-  const [spoken, setSpoken] = useState("");
+function usePanelVoice(
+  found: number,
+  query: string,
+  open: boolean,
+  chosenChip: GalleryChip | null,
+  ready: boolean,
+  inStep: boolean
+) {
+  const [spoken, setSpoken] = useState<Utterance>({ text: "", id: 0 });
+  // Each sentence a new saying, even one equal to the last.
+  const utter = useCallback(
+    (text: string) => setSpoken(last => ({ text, id: last.id + 1 })),
+    []
+  );
   // Cleared as the panel opens or closes, during render (React's pattern for state that follows
   // a prop), so no frame of a new visit draws the old sentence.
   const [visit, setVisit] = useState(open);
   if (visit !== open) {
     setVisit(open);
-    setSpoken("");
+    setSpoken(last => ({ text: "", id: last.id + 1 }));
   }
   const count = galleryCount(found, query);
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // What the reader narrowed the gallery to, or `null` before they narrowed it this visit.
+  const narrowing =
+    query.trim() === "" && chosenChip === null
+      ? null
+      : `${chosenChip ?? ""}\u0000${query}`;
+  // The narrowing last said, or settled by opening a step: never said twice.
+  const said = useRef<string | null>(null);
+  // Read when the announcement fires, so a later count is said without the count itself being
+  // what schedules one.
+  const sayCount = useEffectEvent(() => utter(`${count}.`));
   // Announced once typing pauses, so each keystroke does not interrupt the last. Never while
   // closed: closing clears a count still waiting, and none starts until the panel opens again.
   useEffect(() => {
-    if (!open || query.trim() === "") return undefined;
-    pending.current = setTimeout(
-      () => setSpoken(`${count}.`),
-      COUNT_ANNOUNCE_DELAY_MS
-    );
+    if (!open) {
+      said.current = null;
+      return undefined;
+    }
+    if (!ready || narrowing === null) return undefined;
+    if (inStep) {
+      said.current = narrowing;
+      return undefined;
+    }
+    if (said.current === narrowing) return undefined;
+    pending.current = setTimeout(() => {
+      said.current = narrowing;
+      sayCount();
+    }, COUNT_ANNOUNCE_DELAY_MS);
     return () => clearTimeout(pending.current);
-  }, [count, query, open]);
+  }, [narrowing, open, ready, inStep]);
   // A sentence said on purpose (an add, a cleared search) cancels a count still waiting, which
   // would otherwise land on top of it.
-  const say = useCallback((sentence: string) => {
-    clearTimeout(pending.current);
-    setSpoken(sentence);
-  }, []);
+  const say = useCallback(
+    (sentence: string) => {
+      clearTimeout(pending.current);
+      utter(sentence);
+    },
+    [utter]
+  );
   return { count, spoken, say };
 }
 
@@ -1066,7 +1122,7 @@ function PanelSheet({
   contentRef: RefObject<HTMLDivElement | null>;
   searchRef: RefObject<HTMLInputElement | null>;
   header: ReactNode;
-  spoken: string;
+  spoken: Utterance;
   children: ReactNode;
 }): JSX.Element {
   return (
@@ -1094,7 +1150,7 @@ function PanelSheet({
           className="sr-only"
           data-testid="add-panel-live"
         >
-          {spoken}
+          <span key={spoken.id}>{spoken.text}</span>
         </div>
       </SheetContent>
     </Sheet>
@@ -1227,12 +1283,26 @@ function useAddGallery({
 >) {
   const [query, setQuery] = useState("");
   const [chip, setChip] = useState<GalleryChip>("all");
+  // Whether the reader chose a chip this visit, so the count is said for it: the All the visit
+  // opens on was not chosen, and says nothing.
+  const [chipChosen, setChipChosen] = useState(false);
   const [step, setStep] = useState<AddStep | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const read = gallery.read;
   const model = useGalleryModel(read, placements, byId, chip, query);
-  const voice = usePanelVoice(foundCount(model.found), query, open);
+  const voice = usePanelVoice(
+    foundCount(model.found),
+    query,
+    open,
+    chipChosen ? chip : null,
+    read !== undefined,
+    step !== null
+  );
+  const chooseChip = (next: GalleryChip) => {
+    setChip(next);
+    setChipChosen(true);
+  };
   // A fresh gallery each time it opens: an old search, chip or step would hide what the reader
   // came to find. Reset during the render that opens it (React's pattern for state that follows
   // a prop), so the sheet's first frame already draws the search its focus goes to.
@@ -1242,6 +1312,7 @@ function useAddGallery({
     if (open) {
       setQuery("");
       setChip("all");
+      setChipChosen(false);
       setStep(null);
     }
   }
@@ -1257,18 +1328,18 @@ function useAddGallery({
     focusTile,
     keepFocusInPanel,
   });
+  // The count said is what the gallery lists once the search is gone: under the chip still on,
+  // which a cleared search leaves as it was.
   const clear = () => {
     setQuery("");
-    voice.say(
-      `${galleryCount(model.removed.length + model.tiles.length, "")}.`
-    );
+    voice.say(`${galleryCount(model.unsearched, "")}.`);
     searchRef.current?.focus();
   };
   return {
     query,
     setQuery,
     chip,
-    setChip,
+    chooseChip,
     step,
     setStep,
     searchRef,
@@ -1313,13 +1384,16 @@ function useGalleryModel(
     [placements, byId]
   );
   const collections = useMemo(() => read?.collections ?? [], [read]);
-  const found = useMemo(
-    () =>
-      searchGallery(
-        { removed, tiles: tilesInChip(tiles, chip), collections, canAsk },
-        query
-      ),
-    [removed, tiles, chip, collections, canAsk, query]
+  const inChip = useMemo(
+    () => ({ removed, tiles: tilesInChip(tiles, chip), collections, canAsk }),
+    [removed, tiles, chip, collections, canAsk]
+  );
+  const found = useMemo(() => searchGallery(inChip, query), [inChip, query]);
+  // What the chip keeps with no search, by the same search an empty query runs: what Clear
+  // brings back, and says.
+  const unsearched = useMemo(
+    () => foundCount(searchGallery(inChip, "")),
+    [inChip]
   );
   const suggestions = useMemo(
     () =>
@@ -1339,6 +1413,7 @@ function useGalleryModel(
     removed,
     collections,
     found,
+    unsearched,
     shownSuggestions: narrowed ? [] : suggestions,
     collectionsOf,
     startFor,
@@ -1392,7 +1467,7 @@ export function AddWidgetPanel({
     query,
     setQuery,
     chip,
-    setChip,
+    chooseChip,
     step,
     setStep,
     searchRef,
@@ -1422,7 +1497,7 @@ export function AddWidgetPanel({
                 query={query}
                 onQuery={setQuery}
                 chip={chip}
-                onChip={setChip}
+                onChip={chooseChip}
                 count={voice.count}
                 ready={read !== undefined}
               />
@@ -1440,7 +1515,7 @@ export function AddWidgetPanel({
           query={query}
           chip={chip}
           onClear={clear}
-          onShowAll={() => setChip("all")}
+          onShowAll={() => chooseChip("all")}
           suggestions={shownSuggestions}
           atCapacity={atCapacity}
           byId={byId}

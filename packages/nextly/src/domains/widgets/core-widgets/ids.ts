@@ -18,7 +18,6 @@ import type { DefaultLayoutCard } from "../declaration/dashboard";
 export const CORE_WIDGET_ID = {
   setup: "core/setup",
   contentTable: "core/content-table",
-  quickCreate: "core/quick-create",
   team: "core/team",
   needsAttention: "core/needs-attention",
   continue: "core/continue",
@@ -43,7 +42,6 @@ export type CoreWidgetId = (typeof CORE_WIDGET_ID)[keyof typeof CORE_WIDGET_ID];
 export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.setup,
   CORE_WIDGET_ID.contentTable,
-  CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.team,
   CORE_WIDGET_ID.needsAttention,
   CORE_WIDGET_ID.continue,
@@ -119,9 +117,10 @@ const FORM_SUBMISSIONS_WIDGET_ID = "form-builder/new-submissions";
  * and Team activity allow. Every size lies
  * within its widget's bounds, so none is clamped where it is placed.
  *
- * Team and Create are not on it: Team is for the people who manage the team,
- * who add it from the add panel. A site's own `defaultLayout` takes this
- * one's place whole.
+ * Team is not on it: it is for the people who manage the team, who add it
+ * from the add panel. Nor is a Create card: creating an entry is the
+ * header's New button. A site's own `defaultLayout` takes this one's place
+ * whole.
  *
  * Here, beside the ids and importing no widget, so the site dashboard's check
  * and the default's builder read it without loading every core card.

@@ -352,34 +352,24 @@ function sizesOf(
 
 /**
  * Each widget this reader may see, as the dashboard and its add panel need it:
- * whether a second card of it may be added, and where the panel lists it
- * (group, sub-group, description, category and sketch kind).
+ * whether a second card of it may be added, and what the panel shows beside
+ * its name (its description and category, and whether it is listed once per
+ * collection).
  *
  * Not its size bounds: the admin reads those from the widget's declaration,
  * which it already holds, so a second copy here could only disagree with it.
- *
- * The group is core's to assign, so the admin never works one out for itself;
- * {@link addPanelFacts} is the one place it is decided.
+ * Nor where the panel lists it or in what order: `available` is already in
+ * the panel's order (`inAddPanelOrder`), the one place it is decided.
  */
 function widgetFactsOf(widgets: readonly CanonicalWidget[]) {
-  // Each widget's place in the panel's order, by the rule that orders
-  // `available`, so the panel can list a placed widget (as "on dashboard")
-  // where it would be offered, without ordering anything itself. Every
-  // widget has one: the panel offers each widget the install declares.
-  const rank = new Map(
-    inAddPanelOrder(widgets).map((widget, index) => [widget.id, index])
-  );
   return Object.fromEntries(
-    widgets.map(widget => {
-      return [
-        widget.id,
-        {
-          allowsSeveral: sizeFacts(widget).allowsSeveral,
-          ...addPanelFacts(widget),
-          rank: rank.get(widget.id),
-        },
-      ];
-    })
+    widgets.map(widget => [
+      widget.id,
+      {
+        allowsSeveral: sizeFacts(widget).allowsSeveral,
+        ...addPanelFacts(widget),
+      },
+    ])
   );
 }
 
@@ -916,11 +906,11 @@ function refuseUnknownOrRepeated(
   visibleIds: ReadonlySet<string>,
   readable: ReadonlySet<string>
 ): void {
-  // A card in a namespace core once filled per collection or per Single
-  // (`collection/`, `single/`) is refused by its namespace before anything
-  // else, and told what replaced it. No widget answers to one (the registry
-  // refuses the namespaces), so the check below would refuse it too; this one
-  // says why. It discloses nothing: the namespaces are core's, the same for
+  // A retired card, in a namespace core once filled per collection or per
+  // Single (`collection/`, `single/`) or a core card retired by id, is refused
+  // before anything else, and told what replaced it. No widget answers to one
+  // (the registry refuses them), so the check below would refuse it too; this
+  // one says why. It discloses nothing: the retired cards are core's, the same for
   // every install and every reader, and the collection it may name is one
   // this reader may read.
   for (const { widgetId } of submitted) {

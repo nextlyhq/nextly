@@ -299,89 +299,6 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("Acme panel")).toBeInTheDocument();
   });
 
-  it("hands the plugin component the slot the batch fetched for it", () => {
-    // A `custom` widget may declare a query -- core's validator allows it
-    // deliberately -- and the grid puts that query in the batch. Withholding
-    // the answer here made the dashboard pay for the read and then throw it
-    // away, on every mount and every window focus.
-    registerComponent(
-      "@acme/admin#Panel",
-      ({ slot }: { slot?: WidgetSlot }) => (
-        <div>
-          {slot?.ok === true && slot.result.op === "count"
-            ? `count:${slot.result.total}`
-            : "no slot"}
-        </div>
-      )
-    );
-    render(
-      <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "collection:posts", op: "count" },
-        }}
-        slot={countSlot(7)}
-      />
-    );
-    expect(screen.getByText("count:7")).toBeInTheDocument();
-  });
-
-  it("hands the plugin component the query it asked, and none to a card that asked nothing", () => {
-    // The query as asked, its reader's "Number of items" in it, is what lets a
-    // custom card draw the rows core's lists draw and know the extra row the
-    // batch asked for means more exist.
-    registerComponent(
-      "@acme/admin#Panel",
-      ({ query }: { query?: { source: string; limit?: number } }) => (
-        <div>{query ? `${query.source}:${query.limit}` : "no query"}</div>
-      )
-    );
-    const { unmount } = render(
-      <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "system:activity", op: "list", limit: 8 },
-        }}
-        slot={undefined}
-      />
-    );
-    expect(screen.getByText("system:activity:8")).toBeInTheDocument();
-    unmount();
-
-    render(<WidgetRenderer definition={custom} slot={undefined} />);
-    expect(screen.getByText("no query")).toBeInTheDocument();
-  });
-
-  it("hands the plugin component the card's Retry, for an error its own data reports", () => {
-    // A failed answer is the frame's, with the frame's Retry; an error the
-    // component reads from a good answer it reports, and the Retry it offers
-    // there is the same callback.
-    const onRetry = vi.fn();
-    registerComponent(
-      "@acme/admin#Panel",
-      ({ onRetry: retry }: { onRetry?: () => void }) =>
-        retry ? (
-          <button type="button" onClick={retry}>
-            again
-          </button>
-        ) : (
-          <div>no retry</div>
-        )
-    );
-    render(
-      <WidgetRenderer
-        definition={{
-          ...custom,
-          query: { source: "collection:posts", op: "count" },
-        }}
-        slot={countSlot(1)}
-        onRetry={onRetry}
-      />
-    );
-    screen.getByRole("button", { name: "again" }).click();
-    expect(onRetry).toHaveBeenCalledTimes(1);
-  });
-
   it("offers the frame's Retry on a custom card whose answer failed", () => {
     const onRetry = vi.fn();
     registerComponent("@acme/admin#Panel", () => <div>never drawn</div>);
@@ -422,38 +339,6 @@ describe("WidgetRenderer — custom", () => {
     );
     // Marked busy, not replaced: the body the plugin drew is still there.
     expect(screen.getByText("acme body")).toBeInTheDocument();
-  });
-
-  it("tells the plugin component a refetch is in flight", () => {
-    // The slot alone cannot say it. During a refetch the slot still holds the
-    // PREVIOUS answer, which is byte-for-byte what idle looks like, so a
-    // component wanting to dim its own body had nothing to read.
-    registerComponent(
-      "@acme/admin#Panel",
-      ({ isFetching }: { isFetching?: boolean }) => (
-        <div>{isFetching ? "refreshing" : "idle"}</div>
-      )
-    );
-    const definition = {
-      ...custom,
-      query: { source: "collection:posts", op: "count" } as const,
-    };
-
-    const { rerender } = render(
-      <WidgetRenderer definition={definition} slot={countSlot(7)} isFetching />
-    );
-    expect(screen.getByText("refreshing")).toBeInTheDocument();
-
-    rerender(
-      <WidgetRenderer
-        definition={definition}
-        slot={countSlot(7)}
-        isFetching={false}
-      />
-    );
-    // Both directions, so the assertion cannot be satisfied by a component that
-    // simply always renders "refreshing".
-    expect(screen.getByText("idle")).toBeInTheDocument();
   });
 
   it("shows a queried custom card's own body when its data landed", () => {

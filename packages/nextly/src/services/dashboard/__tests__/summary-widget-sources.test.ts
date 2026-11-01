@@ -22,21 +22,25 @@ vi.mock("../resolve-readable-resources", () => ({
   resolveReadableResources: (...args: unknown[]) =>
     resolveReadableResources(...args) as unknown,
 }));
-// The verdicts this reader's grants give; the gate itself is the real one.
-vi.mock("../../../domains/widgets/visibility", async importOriginal => ({
-  ...(await importOriginal<
-    typeof import("../../../domains/widgets/visibility")
-  >()),
-  permissionVerdicts: (gates: readonly unknown[]) => {
-    const held = new Set(granted());
-    const slugs = gates.flatMap(gate =>
-      typeof gate === "string"
-        ? [gate]
-        : (gate as { allOf: (string | string[])[] }).allOf.flat()
-    );
-    return Promise.resolve(new Map(slugs.map(slug => [slug, held.has(slug)])));
-  },
-}));
+// The verdicts this reader's grants give, for every slug a gate names as the
+// gate's own reader reads it; the gate itself is the real one.
+vi.mock("../../../domains/widgets/visibility", async importOriginal => {
+  const { requiredPermissionSlugs } = await import(
+    "../../../domains/widgets/gate"
+  );
+  return {
+    ...(await importOriginal<
+      typeof import("../../../domains/widgets/visibility")
+    >()),
+    permissionVerdicts: (gates: readonly unknown[]) => {
+      const held = new Set(granted());
+      const slugs = gates.flatMap(gate => requiredPermissionSlugs(gate) ?? []);
+      return Promise.resolve(
+        new Map(slugs.map(slug => [slug, held.has(slug)]))
+      );
+    },
+  };
+});
 
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
 import {

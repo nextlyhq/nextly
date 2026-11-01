@@ -1,43 +1,33 @@
 /**
  * Core's own dashboard cards, as widgets.
  *
- * These are the widget system's FIRST consumers. Everything the grid can do --
- * the archetypes, the batched query path, the permission gate, the registry --
- * shipped before anything declared a widget, so a real dashboard drew none and
- * the whole grid rendered nothing. The cards a user actually sees were
- * hardcoded above it in `pages/dashboard/index.tsx`, which meant a layout the
- * reader could arrange would have arranged the empty half.
+ * Every one but Create is declared with `defineWidget`, as a plugin declares
+ * its own, and reaches the registry through the same call as everyone's
+ * declarations (`registerDashboardWidgets`), under core: each card's data is
+ * answered on the server by its declaration's `load`, as the person asking.
+ * Create is still written as a definition until it is retired. Which of them
+ * the default dashboard holds, and in what order, is `CORE_DEFAULT_LAYOUT` in
+ * `./ids`, written as a site writes its own `defaultLayout`.
  *
- * They go through `registerWidget`, the same door a plugin uses, rather than an
- * admin-side list the server cannot see. That is what lets a plugin
- * `extendWidget("core/team", ...)` to tighten a permission or relabel a card.
- * Which of them the default dashboard holds, and in what order, is
- * `CORE_DEFAULT_LAYOUT` in `./ids`, written as a site writes its own `defaultLayout`.
+ * Every card draws inside the shared frame, which draws its header, its
+ * loading skeleton and every state but ready, so they read as one product.
+ * `title` is what names the card in the layout editor, where a reader chooses
+ * what to show.
  *
- * Content, Team and the per-collection cards draw inside the shared frame like
- * every other card, so they read as one product. The other `custom` ones still carry
- * `chrome: "none"` until each moves into the frame: each draws a titled section
- * with its own rules, loading skeleton and error state. `title` is still required and
- * still meaningful -- it is what names the card in the layout editor, where a
- * reader chooses what to show. Stated as a property of that group rather than
- * as a count, because the count was written as "all four" and was wrong by two
- * before anyone reread it.
+ * Each card drawn by its own component names it as a `core#` STRING, resolved
+ * in the admin by `core-components.ts`. Nothing in either package can check
+ * that the two agree -- neither depends on the other -- so a card naming a path
+ * that was never registered draws the unresolved fallback, silently and only
+ * for the reader who has it. `core-widget-components.test.ts` in the admin is
+ * what holds the halves together; it reads this file.
  *
- * Each `custom` card names its body as a `core#` STRING, resolved in the admin
- * by `core-components.ts`. Nothing in either package can check that the two
- * agree -- neither depends on the other -- so a card naming a path that was
- * never registered draws the unresolved fallback, silently and only for the
- * reader who has it. `core-widget-components.test.ts` in the admin is what
- * holds the halves together; it reads this file.
- *
- * Deliberately no `requiredPermission` on the cards that predate the widget
- * grid but one. Every one of those is visible to any authenticated admin, and
- * adding a gate would hide a card someone currently sees -- a behaviour change
- * wearing the costume of a refactor. The exception is `core/team`, decided
- * rather than inherited: it is for the people who manage the team, so it is
- * offered to a reader who may read people AND may add or change them
- * (`TEAM_GATE`), and its `system:team` source asks the same gate before it
- * counts anyone.
+ * Deliberately no `access` gate on the cards that predate the widget grid but
+ * one. Every one of those is visible to any authenticated admin, and adding a
+ * gate would hide a card someone currently sees -- a behaviour change wearing
+ * the costume of a refactor. The exception is `core/team`, decided rather than
+ * inherited: it is for the people who manage the team, so it is offered to a
+ * reader who may read people AND may add or change them (`TEAM_GATE`), and its
+ * `system:team` source asks the same gate before it counts anyone.
  *
  * 🔴 A card added HERE is new to every reader, so that argument does not extend
  * to it: nothing is hidden that was previously visible, so the gate is decided
@@ -59,15 +49,16 @@
  */
 
 import type { WidgetDefinition } from "../definition";
+import type { WidgetCondition } from "../lifecycle";
 
 import { breakdownWidget } from "./breakdown";
 import { contentTableWidget } from "./content-table";
 import { continueWidget } from "./continue";
 import { countWidget } from "./count";
+import { CORE_WIDGET_ID } from "./ids";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
-import { quickCreateWidget } from "./quick-create";
 import { recentEntriesWidget } from "./recent-entries";
 import { setupWidget } from "./setup";
 import { systemHealthWidget } from "./system-health";
@@ -83,6 +74,11 @@ import { upcomingReleasesWidget } from "./upcoming-releases";
  */
 export const CORE_DECLARATIONS = [
   setupWidget,
+  contentTableWidget,
+  teamWidget,
+  continueWidget,
+  upcomingReleasesWidget,
+  teamActivityWidget,
   countWidget,
   breakdownWidget,
   needsAttentionWidget,
@@ -92,24 +88,41 @@ export const CORE_DECLARATIONS = [
   systemHealthWidget,
 ] as const;
 
+/**
+ * When each of core's declared widgets that is not always offered is offered,
+ * by its id: core's own conditions, handed to the one call with core's
+ * declarations and published on each as its `lifecycle` and `visibleWhen`, so
+ * the add panel offers the widget, and the layout's visibility token counts
+ * it, exactly while its condition holds. Internal to core: a plugin's
+ * declaration has no field for a condition.
+ */
+export const CORE_CONDITIONS: Readonly<Record<string, WidgetCondition>> = {
+  // Offered only while this reader has a collection or a Single to see that
+  // is neither internal nor hidden: a reader with nothing to list is not shown
+  // an empty table.
+  [CORE_WIDGET_ID.contentTable]: "content:present",
+  // With no collection or Single the reader may read, nobody's saves could
+  // reach a row, and the card would only ever say so.
+  [CORE_WIDGET_ID.continue]: "content:present",
+  // The feed leaves out every event about anything the reader may not read,
+  // so with no collection or Single to read it could never draw a row.
+  [CORE_WIDGET_ID.teamActivity]: "content:present",
+  // Once a release exists that the reader may read, not as an empty card on a
+  // site that has never made one; beside its gate, which is about access.
+  [CORE_WIDGET_ID.upcomingReleases]: "releases:present",
+};
+
 /** Core's widgets still written as definitions: every one not declared. */
-const CORE_WIDGET_LITERALS = [
-  contentTableWidget,
-  quickCreateWidget,
-  teamWidget,
-  continueWidget,
-  upcomingReleasesWidget,
-  teamActivityWidget,
-] as const satisfies readonly WidgetDefinition[];
+const CORE_WIDGET_LITERALS = [] as const satisfies readonly WidgetDefinition[];
 
 /**
  * Core's widgets still written as definitions, as every reader of a
  * definition sees them.
  *
  * The same array as `CORE_WIDGET_LITERALS`, typed as definitions: callers
- * read optional fields (`requiredPermission`, `chrome`, `lifecycle`) that a
- * literal type would only have on the entries that set them. NOT every core
- * widget: read core's ids from `CORE_WIDGET_IDS`.
+ * read optional fields (`requiredPermission`, `lifecycle`) that a literal type
+ * would only have on the entries that set them. NOT every core widget: read
+ * core's ids from `CORE_WIDGET_IDS`.
  */
 export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
 

@@ -21,6 +21,11 @@ import {
 } from "../../revalidation/expiry-handoff";
 
 import {
+  holdFailedRecord,
+  resumeRecordRetry,
+  stopRecordRetry,
+} from "./record-retry";
+import {
   ledgerFor,
   type TagExpiryLedger,
   type TagExpiryLedgerAdapter,
@@ -37,8 +42,10 @@ export class LedgerExpiryHandoff implements ExpiryHandoff {
   async handOff(tags: string[], _reason: string): Promise<void> {
     // Kept for this process's next flush unless the ledger took them: it
     // expires them in a request here, the most a write outside one can get
-    // without the ledger.
-    if ((await expireTags(tags)) !== "recorded") holdForNextFlush(tags);
+    // without the ledger. A refused record is retried by a timer as well.
+    const outcome = await expireTags(tags);
+    if (outcome === "failed") holdFailedRecord(tags);
+    else if (outcome !== "recorded") holdForNextFlush(tags);
   }
 }
 
@@ -68,6 +75,8 @@ export function installTagExpiryLedger(adapter: TagExpiryLedgerAdapter): void {
   const handoff = new LedgerExpiryHandoff();
   setExpiryHandoff(handoff);
   globalForWiring.__nextly_tag_ledger_withdrawn = false;
+  // What a withdrawn ledger left kept is retried into this one.
+  resumeRecordRetry();
   if (waiting.length > 0) {
     void handoff.handOff(waiting, "waiting at registration");
     // The default kept them for Next.js's own cache too, which the ledger
@@ -84,4 +93,6 @@ export function withdrawTagExpiryLedger(): void {
   // replacing it would drop them before any ledger could take them.
   if (!isPendingExpiryHandoff(expiryHandoff())) setExpiryHandoff(null);
   globalForWiring.__nextly_tag_ledger_withdrawn = true;
+  // The kept tags wait for the next ledger; no timer outlives this one.
+  stopRecordRetry();
 }
