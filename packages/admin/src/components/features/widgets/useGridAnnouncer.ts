@@ -155,23 +155,32 @@ export function useGridAnnouncer(
   // What was last spoken, so an unchanged outcome does not re-fire. A ref
   // rather than state because it must not itself cause a render.
   const spoken = useRef("");
+  // Set when a reader's own change is said, until the batch that change re-asks has settled.
+  const acted = useRef(false);
   const next = settledAnnouncement(settling, counted, failed);
 
   useEffect(() => {
     if (!next || next === spoken.current) return;
     spoken.current = next;
+    // Removing, restoring or resizing a card re-asks the batch, and it settles with a new count.
+    // The change's own sentence already said what happened, so a batch that came to rest whole
+    // would only replace it ("2 of 2 widgets updated" over "Note restored"). A failure is still
+    // said: it is news the change's sentence could not carry.
+    const ownChange = acted.current;
+    acted.current = false;
+    if (ownChange && failed === 0) return;
     setAnnouncement(next);
-  }, [next]);
+  }, [next, failed]);
 
   /*
    * Every sentence goes through one setter, so the dedupe rule below is
-   * applied to all of them rather than restated per sentence.
+   * applied to all of them rather than restated per sentence. Each is said
+   * for something the reader did, which the batch's next outcome defers to.
    */
-  const say = useCallback(
-    (sentence: string) =>
-      setAnnouncement(current => alternate(current, sentence)),
-    []
-  );
+  const say = useCallback((sentence: string) => {
+    acted.current = true;
+    setAnnouncement(current => alternate(current, sentence));
+  }, []);
 
   const announceMoved = useCallback(
     (title: string, from: number, to: number, count: number) =>
