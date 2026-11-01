@@ -288,10 +288,14 @@ const BATCH_FAILED_ERROR = "Dashboard data could not be loaded.";
  * failed could not tell that it now asks something else, so it stayed on the old failure.
  * Weakly held, so an error the cache lets go of takes its entry with it.
  */
-const askedWithByError = new WeakMap<object, AskedWith>();
+const askedWithByError = new WeakMap<object, PartitionAsk>();
 
-/** What a partition was asked with: each card's question. */
-interface AskedWith {
+/**
+ * What a partition was asked with: each card's question. Its own name, not `AskedWith`: that is
+ * the exported shape of what one answer was asked with, and two declarations of one name in a
+ * module merge into one interface.
+ */
+interface PartitionAsk {
   applied: Record<string, string>;
 }
 
