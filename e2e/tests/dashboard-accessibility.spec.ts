@@ -640,7 +640,8 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
   await page.keyboard.press("ArrowDown");
   await expect(search).toHaveAttribute("aria-activedescendant", /.+/);
   const active = await search.getAttribute("aria-activedescendant");
-  const reached = menu.locator(`[id="${active}"]`);
+  // Held to the drawn option: a page kept mounted but hidden could hold an element of that id.
+  const reached = menu.locator(`[id="${active}"]:visible`);
   await expect(reached).toHaveAttribute("aria-selected", "true");
   const second = await options.nth(1).getAttribute("data-testid");
   expect(await reached.getAttribute("data-testid")).toBe(second);
