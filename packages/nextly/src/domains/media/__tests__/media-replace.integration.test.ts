@@ -47,8 +47,17 @@ import {
   PENDING_DELETE_WINDOW_MS,
   PendingMediaDeletes,
 } from "../pending-delete";
-import { readReplacedRecord } from "../usage/address-uses";
-import { MEDIA_USAGE_RECORDED_KEY } from "../usage/media-usage-store";
+import { replaceMediaFile } from "../replace-media-file";
+import {
+  forgetKeptFiles,
+  readReplacedRecord,
+  recordKeptFiles,
+} from "../usage/address-uses";
+import { keptAddressKey } from "../usage/kept-addresses";
+import {
+  MEDIA_USAGE_RECORDED_KEY,
+  replaceDocumentUsage,
+} from "../usage/media-usage-store";
 import { reindexMediaUsage } from "../usage/reindex-usage";
 
 type Doc = Record<string, unknown>;
@@ -787,6 +796,18 @@ describe.each(getConfiguredTestDialects())(
       const meta = t.getService("metaService");
       const original = t.adapter.select.bind(t.adapter);
       let flipped = false;
+      // The rebuild is another writer, on a connection of its own: its write
+      // runs from here, outside whatever transaction the read is in, once
+      // the read asks for it.
+      let askRebuild = (): void => undefined;
+      const asked = new Promise<void>(resolve => {
+        askRebuild = resolve;
+      });
+      const rebuilt = asked.then(() =>
+        meta.set(MEDIA_USAGE_RECORDED_KEY, {
+          rebuiltAt: new Date(Date.now() + 1_000).toISOString(),
+        })
+      );
       // The executor is passed on: a transaction's own select comes through
       // here with its connection, and must stay on it.
       t.adapter.select = (async (
@@ -801,9 +822,8 @@ describe.each(getConfiguredTestDialects())(
           JSON.stringify(options).includes(MEDIA_USAGE_RECORDED_KEY)
         ) {
           flipped = true;
-          await meta.set(MEDIA_USAGE_RECORDED_KEY, {
-            rebuiltAt: new Date(Date.now() + 1_000).toISOString(),
-          });
+          askRebuild();
+          await rebuilt;
         }
         return rows;
       }) as typeof t.adapter.select;
@@ -1144,6 +1164,245 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     });
+
+    /**
+     * A Replace of `id` with a PDF, through the Replace itself, whose end
+     * asks `holders` how many avatars and logos keep the old address: the
+     * moment between the switch committing and the old file's fate being
+     * decided.
+     */
+    function replaceWith(
+      id: string,
+      holders: (address: string) => Promise<number>
+    ): Promise<unknown> {
+      return replaceMediaFile(
+        {
+          adapter: t.adapter,
+          storage: getMediaStorage(),
+          // A PDF is never read as an image.
+          images: {
+            isValidImage: async () => "valid",
+            getDimensions: async () => null,
+            generateThumbnail: async () => null,
+          },
+          logger: { debug() {}, info() {}, warn() {}, error() {} },
+          addressHolders: holders,
+        },
+        id,
+        {
+          buffer: pdfDocument(randomUUID()),
+          filename: "guide.pdf",
+          mimeType: "application/pdf",
+        }
+      );
+    }
+
+    // A document saved with the old address once the Replace has switched
+    // the item, before its end decides the old file: the use it records is
+    // seen by that decision, which keeps the file.
+    it("keeps the old file for a document naming its address saved while the Replace ends", async () => {
+      const logo = await usedLogo();
+      const before = (await row(logo.id))!;
+      const oldPath = String(before.filename);
+
+      await replaceWith(logo.id, async () => {
+        await t
+          .getService("collectionsHandler")
+          .createEntry(
+            { collectionName: "replaceposts", overrideAccess: true },
+            { title: "Saved meanwhile", body: imageText(String(before.url)) }
+          );
+        return 0;
+      });
+
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+      expect(await readReplacedRecord(t.adapter, logo.id)).not.toBeNull();
+      const uses = await t.adapter.select<Doc>(MEDIA_USAGE_TABLE, {
+        where: { and: [{ column: "mediaId", op: "=", value: logo.id }] },
+      });
+      expect(uses.map(use => use.address)).toContain(before.url);
+    });
+
+    /** A gate a transaction waits at until the test opens it. */
+    function gate(): { open: () => void; passed: Promise<void> } {
+      let open = (): void => undefined;
+      const passed = new Promise<void>(resolve => {
+        open = resolve;
+      });
+      return { open, passed };
+    }
+
+    /** How long a write is held open to show another waits for it. */
+    const HELD_MS = 600;
+
+    // SQLite runs one write transaction at a time, so these two never
+    // overlap there; on PostgreSQL and MySQL they do, and the item's row
+    // lock decides their order.
+    it.skipIf(dialect === "sqlite")(
+      "waits for a document's write naming a kept address, then keeps the old file",
+      async () => {
+        const logo = await usedLogo();
+        const before = (await row(logo.id))!;
+        const oldPath = String(before.filename);
+        const resolved = gate();
+        const release = gate();
+        let writing: Promise<unknown> = Promise.resolve();
+        let released = false;
+        let endedWhileHeld = false;
+        const ended = replaceWith(logo.id, async () => {
+          // The old address is now a kept one: a write naming it, still
+          // open, has recorded its use.
+          writing = t.adapter.transaction(async tx => {
+            await replaceDocumentUsage(
+              tx,
+              {
+                kind: "collection",
+                slug: "replaceposts",
+                documentId: randomUUID(),
+              },
+              [{ fieldPath: "body", locale: "", url: String(before.url) }],
+              t.adapter.getCapabilities().maxParamsPerQuery
+            );
+            resolved.open();
+            await release.passed;
+          });
+          await resolved.passed;
+          return 0;
+        }).then(() => {
+          endedWhileHeld = !released;
+        });
+        await new Promise(resolve => setTimeout(resolve, HELD_MS));
+        released = true;
+        release.open();
+        await Promise.all([ended, writing]);
+
+        // The end of the Replace waited for the write and saw its use.
+        expect(endedWhileHeld).toBe(false);
+        expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+        expect(await readReplacedRecord(t.adapter, logo.id)).not.toBeNull();
+      },
+      30_000
+    );
+
+    // The other order: the Replace's end holds the item while it forgets a
+    // kept address, and a write naming that address arrives meanwhile. The
+    // write waits, finds the address forgotten, and records no use of a
+    // file that is going.
+    it.skipIf(dialect === "sqlite")(
+      "records no use of a kept address forgotten while a document's write was naming it",
+      async () => {
+        const logo = await usedLogo();
+        const kept = {
+          path: `2026/11/${randomUUID()}-old.png`,
+          url: `/uploads/2026/11/${randomUUID()}-old.png`,
+        };
+        await t.adapter.transaction(async tx => {
+          await tx.lockRow("media", logo.id);
+          await recordKeptFiles(tx, logo.id, [kept]);
+        });
+        const held = gate();
+        const subject = {
+          kind: "collection" as const,
+          slug: "replaceposts",
+          documentId: randomUUID(),
+        };
+        const forgetting = forgetKeptFiles(
+          t.adapter,
+          logo.id,
+          [kept],
+          async () => {
+            held.open();
+            await new Promise(resolve => setTimeout(resolve, HELD_MS));
+            return false;
+          }
+        );
+        await held.passed;
+        // The write starts while the end holds the item, and reads the
+        // address as still kept.
+        const writing = t.adapter.transaction(tx =>
+          replaceDocumentUsage(
+            tx,
+            subject,
+            [{ fieldPath: "body", locale: "", url: kept.url }],
+            t.adapter.getCapabilities().maxParamsPerQuery
+          )
+        );
+        expect(await forgetting).toBe(true);
+        await writing;
+
+        expect(await readReplacedRecord(t.adapter, logo.id)).toBeNull();
+        const uses = await t.adapter.select<Doc>(MEDIA_USAGE_TABLE, {
+          where: {
+            and: [{ column: "documentId", op: "=", value: subject.documentId }],
+          },
+        });
+        expect(uses).toEqual([]);
+      },
+      30_000
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "keeps a later Replace's kept files when an earlier one's end takes its own out",
+      async () => {
+        const logo = await usedLogo();
+        const earlier = [
+          { path: "2026/11/earlier.png", url: "/uploads/2026/11/earlier.png" },
+        ];
+        const later = [
+          { path: "2026/11/later.png", url: "/uploads/2026/11/later.png" },
+        ];
+        await t.adapter.transaction(async tx => {
+          await tx.lockRow("media", logo.id);
+          await recordKeptFiles(tx, logo.id, earlier);
+        });
+        const recorded = gate();
+        const release = gate();
+        // A later Replace, as its transaction records its old files under
+        // the item's row lock, still open.
+        const replacing = t.adapter.transaction(async tx => {
+          await tx.lockRow("media", logo.id);
+          await recordKeptFiles(tx, logo.id, later);
+          recorded.open();
+          await release.passed;
+        });
+        await recorded.passed;
+        let released = false;
+        let forgotWhileHeld = false;
+        const forgetting = forgetKeptFiles(t.adapter, logo.id, earlier).then(
+          () => {
+            forgotWhileHeld = !released;
+          }
+        );
+        await new Promise(resolve => setTimeout(resolve, HELD_MS));
+        released = true;
+        release.open();
+        await Promise.all([replacing, forgetting]);
+
+        expect(forgotWhileHeld).toBe(false);
+        expect(await readReplacedRecord(t.adapter, logo.id)).toEqual({
+          files: later,
+        });
+        const addresses = await t.adapter.select<Doc>("nextly_meta", {
+          columns: ["key"],
+          where: {
+            and: [
+              {
+                column: "key",
+                op: "IN",
+                value: [
+                  keptAddressKey(earlier[0].url),
+                  keptAddressKey(later[0].url),
+                ],
+              },
+            ],
+          },
+        });
+        expect(addresses.map(found => found.key)).toEqual([
+          keptAddressKey(later[0].url),
+        ]);
+      },
+      30_000
+    );
 
     it("removes the kept file when a deleted item's window ends", async () => {
       const logo = await usedLogo();

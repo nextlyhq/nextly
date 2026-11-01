@@ -69,10 +69,13 @@ export interface MediaUsageRow {
   address: string | null;
 }
 
-/** The statements the record runs: a transaction's, or the adapter's own. */
+/**
+ * The statements the record runs: the transaction of the write that changed
+ * the document.
+ */
 export type UsageDb = Pick<
   TransactionContext,
-  "select" | "insertMany" | "delete"
+  "select" | "insertMany" | "delete" | "lockRow"
 >;
 
 /**
@@ -172,6 +175,109 @@ interface ResolvedItems {
   byUrl: Map<string, AddressMatch[]>;
 }
 
+/** `byUrl`'s matches for `url`, with `match` added. */
+function addMatch(
+  byUrl: Map<string, AddressMatch[]>,
+  url: string,
+  match: AddressMatch
+): void {
+  byUrl.set(url, [...(byUrl.get(url) ?? []), match]);
+}
+
+/**
+ * Each of `urls` that names an item, as the transaction reads them: the
+ * items whose address it is now, or else the item a Replace kept it for.
+ */
+async function addressMatches(
+  db: UsageDb,
+  urls: readonly string[],
+  maxParams: number
+): Promise<Map<string, AddressMatch[]>> {
+  const byUrl = new Map<string, AddressMatch[]>();
+  // Each address is one bound value.
+  for (const part of chunks(urls, maxParams)) {
+    const rows = await db.select<Record<string, unknown>>("media", {
+      columns: ["id", "url"],
+      where: { and: [{ column: "url", op: "IN", value: part }] },
+    });
+    for (const row of rows) {
+      const url = columnOf(row, "url", "url");
+      addMatch(byUrl, url, {
+        mediaId: columnOf(row, "id", "id"),
+        address: url,
+        current: true,
+      });
+    }
+  }
+  const kept = await findKeptAddresses(
+    db,
+    urls.filter(url => !byUrl.has(url)),
+    maxParams
+  );
+  for (const [url, found] of kept) {
+    addMatch(byUrl, url, {
+      mediaId: found.mediaId,
+      address: found.url,
+      current: false,
+    });
+  }
+  return byUrl;
+}
+
+/**
+ * The same as {@link addressMatches}, asked again once the items `locked`
+ * are locked, with each read taking the latest committed rows: the items by
+ * their ids, so only their rows are locked, and the kept addresses by key.
+ * A Replace, or the end of one that forgets a kept address, takes the same
+ * lock, so neither changes what this finds until the write holding it
+ * commits, and what it finds is what they last committed. An item gone is
+ * named by none of its addresses.
+ */
+async function lockedAddressMatches(
+  db: UsageDb,
+  urls: readonly string[],
+  locked: readonly string[],
+  maxParams: number
+): Promise<Map<string, AddressMatch[]>> {
+  const wanted = new Set(urls);
+  const present = new Set<string>();
+  const byUrl = new Map<string, AddressMatch[]>();
+  for (const part of chunks(locked, maxParams)) {
+    const rows = await db.select<Record<string, unknown>>("media", {
+      columns: ["id", "url"],
+      where: { and: [{ column: "id", op: "IN", value: part }] },
+      forUpdate: true,
+    });
+    for (const row of rows) {
+      const mediaId = columnOf(row, "id", "id");
+      const url = columnOf(row, "url", "url");
+      present.add(mediaId);
+      if (wanted.has(url)) {
+        addMatch(byUrl, url, { mediaId, address: url, current: true });
+      }
+    }
+  }
+  const kept = await findKeptAddresses(
+    db,
+    urls.filter(url => !byUrl.has(url)),
+    maxParams,
+    true
+  );
+  for (const [url, found] of kept) {
+    // An item not locked here was not one the address named a moment ago;
+    // it stays named, its presence asked with the ids below.
+    if (locked.includes(found.mediaId) && !present.has(found.mediaId)) {
+      continue;
+    }
+    addMatch(byUrl, url, {
+      mediaId: found.mediaId,
+      address: found.url,
+      current: false,
+    });
+  }
+  return byUrl;
+}
+
 /**
  * Which of the ids and addresses name a media item, and which item each
  * names: the ids found, and each address's items, in any of its forms
@@ -179,6 +285,14 @@ interface ResolvedItems {
  * a Replace kept (`kept-addresses`), so content still naming an item's
  * earlier address goes on counting as the item's use. A reference to
  * something that is not an item, or no longer is, records nothing.
+ *
+ * Every item an address names is locked, in one order, for the rest of the
+ * write, and the addresses are asked again under those locks
+ * ({@link lockedAddressMatches}): the lock a Replace takes, and the one the
+ * end of a Replace takes to decide whether an old file is still named. So
+ * that decision either waits for this write and sees its use, or comes first
+ * and this write sees the address forgotten, and never removes a file a use
+ * recorded here still names.
  */
 async function resolveItems(
   db: UsageDb,
@@ -188,33 +302,22 @@ async function resolveItems(
   const wantedUrls = [
     ...new Set(refs.flatMap(r => (r.url ? addressForms(r.url) : []))),
   ];
-  const byUrl = new Map<string, AddressMatch[]>();
-  // Each id or address is one bound value.
-  for (const part of chunks(wantedUrls, maxParams)) {
-    const rows = await db.select<Record<string, unknown>>("media", {
-      columns: ["id", "url"],
-      where: { and: [{ column: "url", op: "IN", value: part }] },
-    });
-    for (const row of rows) {
-      const url = columnOf(row, "url", "url");
-      const list = byUrl.get(url) ?? [];
-      list.push({
-        mediaId: columnOf(row, "id", "id"),
-        address: url,
-        current: true,
-      });
-      byUrl.set(url, list);
-    }
+  let byUrl = await addressMatches(db, wantedUrls, maxParams);
+  const named = [
+    ...new Set([...byUrl.values()].flat().map(match => match.mediaId)),
+  ].sort();
+  if (named.length > 0) {
+    for (const mediaId of named) await db.lockRow("media", mediaId);
+    byUrl = await lockedAddressMatches(db, [...byUrl.keys()], named, maxParams);
   }
-  const kept = await findKeptAddresses(
-    db,
-    wantedUrls.filter(url => !byUrl.has(url)),
-    maxParams
-  );
+  const keptItems = [...byUrl.values()]
+    .flat()
+    .filter(match => !match.current)
+    .map(match => match.mediaId);
   const wantedIds = [
     ...new Set([
       ...refs.flatMap(r => (r.mediaId ? [r.mediaId] : [])),
-      ...[...kept.values()].map(found => found.mediaId),
+      ...keptItems,
     ]),
   ];
   const ids = new Set<string>();
@@ -226,12 +329,12 @@ async function resolveItems(
     for (const row of rows) ids.add(columnOf(row, "id", "id"));
   }
   // A kept address counts only while its item is still there.
-  for (const [url, found] of kept) {
-    if (ids.has(found.mediaId)) {
-      byUrl.set(url, [
-        { mediaId: found.mediaId, address: found.url, current: false },
-      ]);
-    }
+  for (const [url, matches] of byUrl) {
+    const standing = matches.filter(
+      match => match.current || ids.has(match.mediaId)
+    );
+    if (standing.length > 0) byUrl.set(url, standing);
+    else byUrl.delete(url);
   }
   return { ids, byUrl };
 }

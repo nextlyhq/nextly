@@ -23,6 +23,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
 import type { Logger } from "../../../shared/types";
@@ -51,16 +52,21 @@ const replacedRecordSchema = z.object({
 });
 export type ReplacedRecord = z.infer<typeof replacedRecordSchema>;
 
-/** An item's replaced-file record, or `null` when it has none. */
+/**
+ * An item's replaced-file record, or `null` when it has none. With `latest`,
+ * on a transaction, as last committed and locked.
+ */
 export async function readReplacedRecord(
   db: Pick<DrizzleAdapter, "select">,
-  mediaId: string
+  mediaId: string,
+  latest = false
 ): Promise<ReplacedRecord | null> {
   const [row] = await db.select<Record<string, unknown>>("nextly_meta", {
     columns: ["key", "value"],
     where: {
       and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
     },
+    ...(latest ? { forUpdate: true } : {}),
   });
   return row ? replacedRecordOf(row.value) : null;
 }
@@ -111,7 +117,10 @@ export async function keptAddresses(
 }
 
 /** The statements a kept-file record is written with: a transaction's. */
-type KeptFilesTx = Pick<DrizzleAdapter, "select" | "delete" | "insert">;
+type KeptFilesTx = Pick<
+  TransactionContext,
+  "select" | "delete" | "insert" | "lockRow"
+>;
 
 /** Write an item's replaced-file record as `record`, or remove it when empty. */
 async function writeReplacedRecord(
@@ -135,6 +144,8 @@ async function writeReplacedRecord(
  * an earlier Replace of the same item kept, and each file's address as one
  * the item is still known by, on `tx`: the Replace's own transaction, so the
  * item never points at its new file without its old files recorded as its.
+ * `tx` holds the item's row lock, which every change to the record takes, so
+ * the record read is the last one committed.
  */
 export async function recordKeptFiles(
   tx: KeptFilesTx,
@@ -142,7 +153,7 @@ export async function recordKeptFiles(
   files: ReplacedRecord["files"]
 ): Promise<void> {
   if (files.length === 0) return;
-  const earlier = await readReplacedRecord(tx, mediaId);
+  const earlier = await readReplacedRecord(tx, mediaId, true);
   await writeReplacedRecord(tx, mediaId, {
     files: [...(earlier?.files ?? []), ...files],
   });
@@ -150,31 +161,51 @@ export async function recordKeptFiles(
 }
 
 /**
- * Take `files` back out of the item's record, once a Replace has found
- * nothing names them, with each address no file left in the record keeps,
- * all on one transaction. Before their files are removed, so a failure here
- * leaves the files and the record agreeing that they are kept.
+ * Take `files` back out of the item's record, with each address no file left
+ * in the record keeps, all on one transaction, unless `stillNamed` finds
+ * them named. Before their files are removed, so a failure here leaves the
+ * files and the record agreeing that they are kept. Answers whether they
+ * were taken out.
+ *
+ * The transaction first locks the item's row: the lock a Replace takes to
+ * add to the record, and the one a document's write takes when it names one
+ * of the item's addresses (`media-usage-store`). So `stillNamed`, asked
+ * under it, sees every use a write naming a kept address has committed, and
+ * a write still at work waits for this to commit and then finds the address
+ * forgotten; and a later Replace's files are never taken out with these.
  */
 export async function forgetKeptFiles(
   db: Pick<DrizzleAdapter, "transaction">,
   mediaId: string,
-  files: ReplacedRecord["files"]
-): Promise<void> {
-  if (files.length === 0) return;
+  files: ReplacedRecord["files"],
+  stillNamed: (tx: TransactionContext) => Promise<boolean> = () =>
+    Promise.resolve(false)
+): Promise<boolean> {
+  if (files.length === 0) return true;
   const same = (a: ReplacedRecord["files"][number]) =>
     files.some(file => file.path === a.path && file.url === a.url);
-  await db.transaction(async tx => {
-    const earlier = await readReplacedRecord(tx, mediaId);
-    const left = (earlier?.files ?? []).filter(file => !same(file));
-    await writeReplacedRecord(tx, mediaId, { files: left });
-    const stillKept = new Set(keptAddressesOf(left));
-    for (const url of keptAddressesOf(files)) {
-      if (stillKept.has(url)) continue;
-      await tx.delete("nextly_meta", {
-        and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
-      });
-    }
-  });
+  // Each statement reads what is committed when it runs, on MySQL as on
+  // PostgreSQL, rather than a snapshot fixed by the first: so `stillNamed`
+  // sees every use committed before the lock was granted, and two reads of
+  // the record's build either side of its rows tell a rebuild between them.
+  return db.transaction(
+    async tx => {
+      await tx.lockRow("media", mediaId);
+      if (await stillNamed(tx)) return false;
+      const earlier = await readReplacedRecord(tx, mediaId, true);
+      const left = (earlier?.files ?? []).filter(file => !same(file));
+      await writeReplacedRecord(tx, mediaId, { files: left });
+      const stillKept = new Set(keptAddressesOf(left));
+      for (const url of keptAddressesOf(files)) {
+        if (stillKept.has(url)) continue;
+        await tx.delete("nextly_meta", {
+          and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
+        });
+      }
+      return true;
+    },
+    { isolationLevel: "read committed" }
+  );
 }
 
 /** The statements writing kept addresses runs: a transaction's. */
@@ -215,10 +246,16 @@ export async function indexKeptAddresses(
     },
   });
   let indexed = 0;
-  for (const { mediaId, record } of replacedRecordsOf(rows)) {
-    const urls = keptAddressesOf(record.files);
-    await db.transaction(tx => writeKeptAddresses(tx, mediaId, urls));
-    indexed += urls.length;
+  for (const { mediaId } of replacedRecordsOf(rows)) {
+    // Under the item's row lock, from the record as last committed, so an
+    // address a Replace's end has just forgotten is not written back.
+    indexed += await db.transaction(async tx => {
+      await tx.lockRow("media", mediaId);
+      const record = await readReplacedRecord(tx, mediaId, true);
+      const urls = record ? keptAddressesOf(record.files) : [];
+      await writeKeptAddresses(tx, mediaId, urls);
+      return urls.length;
+    });
   }
   return indexed;
 }
