@@ -24,13 +24,14 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useRoutedPathname } from "@admin/context/RoutedPathnameContext";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
@@ -83,6 +84,18 @@ export interface DocumentViewBodyProps {
   viewingVersion: ViewedVersion | null;
   /** The document's top-level fields, from which a field-type view's is chosen. */
   fields?: readonly FieldConfig[];
+  /**
+   * Whether a refused publish's recovery is taking the live values: the view
+   * is read-only through the lock meanwhile, and marked busy for assistive
+   * technology. The recovery's own toast says so to everyone.
+   */
+  recovering?: boolean;
+  /**
+   * A strip about the whole document, such as its scheduled release, drawn
+   * first among the view's banners: inside the frame that shares the screen
+   * between them and the view, so the view keeps the rest of the height.
+   */
+  banner?: ReactNode;
 }
 
 /**
@@ -92,17 +105,27 @@ export interface DocumentViewBodyProps {
  * `?field=` still opens it — the author's intent is unambiguous — and the
  * address is corrected IN PLACE, so a reload or a shared link then reaches
  * exactly what is on screen, and Back does not return to the stale address.
+ *
+ * Only the view's own address is corrected: the one the admin's router drew
+ * this view for, which moves with the router when one view of the document
+ * gives way to another. Under Cache Components a visited page stays mounted
+ * but hidden, and Back shows it again with its effects before its router has
+ * read the address Back went to; the bar then holds that page's address, and
+ * writing the view's field onto it put the reader back on an address that
+ * names the view's field (`?field=`) but not the view.
  */
 function useFieldInAddress(
   editing: ReturnType<typeof resolveViewField>,
   requested: string | string[] | undefined
 ): void {
   const named = editing.kind === "field" ? editing.name : undefined;
+  const routed = useRoutedPathname();
   useEffect(() => {
+    if (routed !== undefined && window.location.pathname !== routed) return;
     if (named !== undefined && named !== requested) {
       setSearchParam("field", named, { replace: true });
     }
-  }, [named, requested]);
+  }, [named, requested, routed]);
 }
 
 /**
@@ -225,6 +248,8 @@ export function DocumentViewBody({
   recovery,
   viewingVersion,
   fields,
+  recovering = false,
+  banner,
 }: DocumentViewBodyProps): JSX.Element {
   /*
    * The view takes the window, less the primary rail. `canExit` is false
@@ -271,6 +296,7 @@ export function DocumentViewBody({
             validation refused is said here too, since none of the fields it
             names are on screen to say it themselves. */}
         <div className="shrink-0">
+          {banner}
           <DocumentLockBanner
             notice={lock.notice}
             onTakeOver={lock.takeOver}
@@ -289,7 +315,7 @@ export function DocumentViewBody({
         </div>
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
           <ViewArea
             editing={editing}
             refusal={refusal}

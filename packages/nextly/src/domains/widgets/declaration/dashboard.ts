@@ -3,14 +3,14 @@
  * site config's `admin.dashboard`.
  *
  * Both take the same `defineWidget()` declarations. What differs is what each
- * may ask for: a plugin may only ask (a suggested default place, an
+ * may ask for: a plugin may only offer (its widgets in the add panel, an
  * alternative to a built-in card), and the site decides (what is hidden, what
  * the default dashboard is, which alternative replaces which built-in).
  *
  * @module domains/widgets/declaration/dashboard
  */
 
-import type { CoreWidgetId } from "../core-widgets";
+import type { CoreWidgetId } from "../core-widgets/ids";
 import type { WidgetSizeDeclaration } from "../grid-size";
 
 import type { AnyWidget, WidgetDataInput } from "./define-widget";
@@ -21,7 +21,14 @@ import type { AnyWidget, WidgetDataInput } from "./define-widget";
  * misspelt id when it compiles, and the set follows core's widgets with no
  * second edit.
  */
-export type { CoreWidgetId } from "../core-widgets";
+export type { CoreWidgetId } from "../core-widgets/ids";
+
+/**
+ * The most Needs attention items one plugin may declare. Startup refuses a
+ * plugin that declares more, so a plugin with a line per something it reads
+ * builds no more lines than this.
+ */
+export const MAX_ATTENTION_ITEMS_PER_PLUGIN = 10;
 
 /**
  * A count for the Needs attention card: a whole number, or one marked as a
@@ -39,12 +46,21 @@ export type AttentionCount = number | { count: number; atLeast: true };
 export type AttentionItem = {
   id: string;
   label: string;
-  /** Counts as the person asking, through services bound to them. */
+  /**
+   * Counts as the person asking, through services bound to them. Handed no
+   * `size`: an item is one line of the Needs attention card, not a card of
+   * its own, so it has no size to be loaded for.
+   */
   count: (
-    input: Omit<WidgetDataInput<never>, "settings">
+    input: Omit<WidgetDataInput<never>, "settings" | "size">
   ) => Promise<AttentionCount>;
   /** A path relative to the admin, which core resolves. */
   link: string;
+  /**
+   * One line under the label saying why it is waiting, such as "Pages with no
+   * description". The card draws none when it is absent.
+   */
+  reason?: string;
 } & (
   | { permission: string; collections?: never }
   | { collections: readonly [string, ...string[]]; permission?: never }
@@ -67,11 +83,18 @@ export function defineAttentionItem(item: AttentionItem): AttentionItem {
  * the widgets' types are known, the same type refuses it when it compiles.
  */
 export interface DashboardContribution<W extends AnyWidget = AnyWidget> {
-  widgets: readonly W[];
+  /** Its widgets; absent for a plugin that adds only Needs attention items. */
+  widgets?: readonly W[];
   /**
-   * Widgets of this plugin to place on the default dashboard. Core places
-   * them after every built-in card, in the order the site lists its plugins,
-   * while there is room; a site may turn suggestions off.
+   * Widgets of this plugin it would like on the default dashboard. Still
+   * checked at startup (each must be one of the plugin's own widgets), and
+   * places NOTHING: no plugin widget is placed on a dashboard on its own. The
+   * add panel offers every widget a plugin declares; a site that wants one on
+   * its default names it in `admin.dashboard.defaultLayout`, marked
+   * `optional` where the plugin may be absent.
+   *
+   * @deprecated Places nothing. Leave the widget to the add panel, or ask the
+   * site to name it in its `defaultLayout`.
    */
   suggest?: readonly W["id"][];
   /**
@@ -102,11 +125,24 @@ export type WidgetRef = CoreWidgetId | (string & {});
  */
 export interface DefaultLayoutCard {
   widget: WidgetRef;
+  /**
+   * The card's own id, which a reader's choices about it are kept under. A
+   * widget placed once needs none: its card is named after the widget. Each
+   * further card of a widget placed more than once must name one, and no two
+   * cards, nor a card and a widget, may share one.
+   */
+  id?: string;
   /** Columns, of twelve. */
   w?: number;
   /** Rows. */
   h?: number;
   settings?: Readonly<Record<string, unknown>>;
+  /**
+   * Left out, with no fault, when no widget has this id: a plugin's widget on a
+   * site that does not install the plugin. An entry not marked so must name a
+   * widget the install has, or startup refuses it.
+   */
+  optional?: boolean;
 }
 
 /**
@@ -149,11 +185,19 @@ export interface AdminDashboardConfig<W extends AnyWidget = AnyWidget> {
   overrides?: Partial<Record<WidgetRef, WidgetOverride>>;
   /**
    * The default dashboard, in place of core's, for everyone who has not
-   * arranged theirs. A widget added here later is offered to people who have
+   * arranged theirs: the same cards for everyone, less, for each person, those
+   * they may not see. A widget added here later is offered to people who have
    * saved a dashboard, never placed on it.
    */
   defaultLayout?: readonly (WidgetRef | DefaultLayoutCard)[];
-  /** `false` ignores every plugin's suggestion. */
+  /**
+   * Still checked at startup (it must be `true` or `false`), and changes
+   * nothing: no widget is placed after the default's own cards, so there is
+   * nothing for it to turn off. A widget the site wants on its default is named
+   * in `defaultLayout`.
+   *
+   * @deprecated Changes nothing; remove it from the site config.
+   */
   suggestions?: boolean;
   /**
    * A plugin's offered alternative, in the place of the built-in it names, at

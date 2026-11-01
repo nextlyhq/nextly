@@ -76,14 +76,17 @@ export function cardAnswerProblem(
 export function cardAnswerResult(
   display: unknown,
   value: unknown,
-  widgetId: string
+  subject: { widget: string; owner: string }
 ): WidgetResult {
   const problem = cardAnswerProblem(display, value);
   if (problem !== undefined) {
+    // The owner and the widget, and where in the answer the fault is (a path
+    // and a type, never a value), so the operator can find it and the log
+    // carries none of the data.
     throw NextlyError.internal({
       logContext: {
         reason: "widget-data-answer-refused",
-        widget: widgetId,
+        ...subject,
         kind: problem.kind,
         detail: problem.detail,
       },

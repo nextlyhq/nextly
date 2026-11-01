@@ -1,10 +1,10 @@
 /**
  * A code-defined access rule is consulted for a caller with no session.
  *
- * `checkAccess` cannot answer this question. It returns `false` at `!userId`
+ * The signed-in check cannot answer this question. It refuses at `!userId`
  * before it reads the rule at all, because everything past that line resolves
- * roles and permissions from a user id. Its only caller in the collection
- * access service was gated on a truthy `user` for the same reason.
+ * roles and permissions from a user id. Its caller in the collection access
+ * service was gated on a truthy `user` for the same reason.
  *
  * The consequence was that `access: { create: false }` on a collection was
  * accepted at boot, recorded in the registry, and never consulted for the one
@@ -181,7 +181,7 @@ describe("a function rule's answer for a caller with no session", () => {
 });
 
 describe("a rule that answers with a filter, for a caller with no session", () => {
-  /** A read rule answering `filter`, which the rule type does not allow yet. */
+  /** A read rule answering `filter`, unchecked by the filter type, as untyped code may. */
   const answering = (filter: unknown) => () => filter as boolean;
 
   beforeEach(() => {

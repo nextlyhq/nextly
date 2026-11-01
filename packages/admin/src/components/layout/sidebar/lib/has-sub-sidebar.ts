@@ -1,3 +1,5 @@
+import { CONTENT_RAIL_ID } from "./content-rail";
+
 /**
  * Which rail categories own a secondary panel.
  *
@@ -5,6 +7,7 @@
  * they are recognised by prefix rather than enumerated.
  */
 const CATEGORIES_WITH_SUB_SIDEBAR: readonly string[] = [
+  CONTENT_RAIL_ID,
   "collections",
   "singles",
   "media",

@@ -26,10 +26,14 @@ import { refuseUnconsumedQueryFields } from "../widgets/sources";
 import { RELEASES_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
-import { RELEASE_ATTENTION_REASONS } from "./release-tabs";
+import {
+  RELEASE_ATTENTION_REASONS,
+  type ReleaseAttentionReason,
+} from "./release-tabs";
 import type { ReleaseRow } from "./releases-repository";
 import type {
   ReleaseActor,
+  ReleaseReadinessEntry,
   ReleasesService,
 } from "./services/releases-service";
 
@@ -59,6 +63,19 @@ const RELEASE_FIELDS = [
   { name: "title", type: "string" as const, label: "Release" },
   { name: "state", type: "string" as const, label: "State" },
   { name: "scheduledAt", type: "date" as const, label: "Scheduled" },
+  /*
+   * How many documents the release holds, and how many of them its checks
+   * report a hard problem on: the release list's own two reads,
+   * `memberCounts` and `readinessOf`, made only for a query that SELECTS the
+   * field, so a query that does not ask pays for neither. Both are counts the
+   * release list already shows this reader beside the release, documents they
+   * may not read included, so they tell the reader nothing the list does not.
+   * `issues` is `null` for a release the batch read leaves unchecked: one
+   * holding more documents than a release may now hold, which only its own
+   * page checks.
+   */
+  { name: "entries", type: "number" as const, label: "Entries" },
+  { name: "issues", type: "number" as const, label: "Issues" },
   // What a row is: `"release"`, or `"attention"` for a reason releases need
   // attention, with that reason and how many of the reader's releases it holds.
   { name: "kind", type: "string" as const, label: "Kind" },
@@ -126,16 +143,74 @@ function actorFor(caller: ReadCaller): ReleaseActor {
   };
 }
 
+/** What a release row carries beside its own columns, when the query asked for it. */
+interface ReleaseFacts {
+  entries?: ReadonlyMap<string, number>;
+  issues?: ReadonlyMap<string, number | null>;
+}
+
 /** A release row reduced to the fields this source declares. */
-function projected(row: ReleaseRow, names: readonly string[]) {
+function projected(
+  row: ReleaseRow,
+  names: readonly string[],
+  facts: ReleaseFacts
+) {
   const full: Record<string, unknown> = {
     kind: "release",
     id: row.id,
     title: row.title,
     state: row.state,
     scheduledAt: row.scheduledAt,
+    entries: facts.entries?.get(row.id),
+    issues: facts.issues?.get(row.id),
   };
   return Object.fromEntries(names.map(name => [name, full[name]]));
+}
+
+/**
+ * How many of a release's documents its checks report a hard problem on, as
+ * one reader is told it: the documents they may read with at least one hard
+ * finding, and the ones they may not, from the per-collection tally readiness
+ * gives for those. Counted by document, so one document with two problems is
+ * one issue; soft findings are notes and never stop a release. `null` for a
+ * release the batch read left unchecked.
+ */
+function issuesOf(entry: ReleaseReadinessEntry): number | null {
+  if (!entry.checked) return null;
+  const shown = new Set(entry.hard.map(finding => finding.memberId)).size;
+  return entry.hidden.reduce((count, part) => count + part.hard, shown);
+}
+
+/**
+ * The facts the query selected for these releases, each read once for all of
+ * them through the releases service as the caller, the reads the release list
+ * makes for its own page.
+ */
+async function releaseFacts(
+  rows: readonly ReleaseRow[],
+  names: readonly string[],
+  caller: ReadCaller
+): Promise<ReleaseFacts> {
+  const ids = rows.map(row => row.id);
+  if (ids.length === 0) return {};
+  const [counts, readiness] = await Promise.all([
+    names.includes("entries")
+      ? service().memberCounts(ids, actorFor(caller))
+      : undefined,
+    names.includes("issues")
+      ? service().readinessOf(ids, actorFor(caller))
+      : undefined,
+  ]);
+  return {
+    ...(counts && {
+      entries: new Map(ids.map(id => [id, counts[id]?.total ?? 0])),
+    }),
+    ...(readiness && {
+      issues: new Map(
+        readiness.map(entry => [entry.releaseId, issuesOf(entry)])
+      ),
+    }),
+  };
 }
 
 /**
@@ -211,9 +286,15 @@ function refuseUnconsumed(query: WidgetQuery): void {
  * and returns the FURTHEST-OUT releases for this question — with real rows, in
  * a plausible order, so nothing in the result says it is wrong.
  *
- * `scheduledAfter: now` rather than a fixed window: a release scheduled for
- * next year is still the next one when nothing is closer, and a window would
- * make the card empty rather than say so.
+ * `tab: "upcoming"`, the Releases list's own Upcoming tab, rather than a
+ * window of its own: a release scheduled for next year is still the next one
+ * when nothing is closer, and one a few minutes past its instant, which the
+ * runner reaches on its next pass, is still upcoming until the tab's rule says
+ * it is overdue. The rows and the attention line come from one read,
+ * `upcomingWithAttention`, which judges both tabs' queries at one instant, so
+ * every scheduled release is in exactly one of the card's rows or its overdue
+ * line, by the one rule and the one clock reading that decide both
+ * (`release-tabs`).
  *
  * Every field this source does not consume is REFUSED rather than ignored —
  * see `QUERY_FIELD_USE`. The declared fields are the allowlist a `where` is
@@ -228,12 +309,11 @@ async function resolveReleases(
 ): Promise<WidgetResult> {
   refuseUnconsumed(query);
 
-  const { rows } = await service().find(
+  const { upcoming: rows, attention } = await service().upcomingWithAttention(
     {
-      state: "scheduled",
-      scheduledAfter: new Date(),
-      order: "soonest",
       limit: query.limit ?? DEFAULT_LIMIT,
+      // The attention rows are opt-in: see `reason` in `RELEASE_FIELDS`.
+      attention: query.select?.includes("reason") === true,
     },
     actorFor(caller)
   );
@@ -241,12 +321,13 @@ async function resolveReleases(
   const names = query.select?.length
     ? query.select.filter(name => RELEASE_FIELDS.some(f => f.name === name))
     : DEFAULT_RELEASE_NAMES;
+  const facts = await releaseFacts(rows, names, caller);
 
   return {
     op: "list",
     items: [
-      ...(await attentionRows(query, caller, names)),
-      ...rows.map(row => projected(row, names)),
+      ...attentionRows(attention, names),
+      ...rows.map(row => projected(row, names, facts)),
     ],
     ...(describeFields(query.select) && {
       fields: describeFields(query.select),
@@ -257,31 +338,24 @@ async function resolveReleases(
 /**
  * The reasons this reader's releases need attention, each with how many it
  * holds, as rows before the upcoming ones -- only for a query that SELECTS
- * `reason`.
+ * `reason`, which is what asked the service for the counts at all.
  *
  * Opt-in, so every query that does not ask is answered exactly as it was before
- * these rows existed. Counted by the releases service's own `count` with
- * `tab: "attention"`, the count the Releases list shows for that reason, so the
- * card and the list cannot disagree; a reason holding none is absent rather
- * than a row reading 0. Not limited: `limit` sizes the upcoming releases, and
- * there is one row per reason at most.
+ * these rows existed. Counted by the Needs attention tab's own query for each
+ * reason, the count the Releases list shows for it, so the card and the list
+ * cannot disagree; a reason holding none is absent rather than a row reading 0.
+ * Not limited: `limit` sizes the upcoming releases, and there is one row per
+ * reason at most.
  */
-async function attentionRows(
-  query: WidgetQuery,
-  caller: ReadCaller,
+function attentionRows(
+  attention: Partial<Record<ReleaseAttentionReason, number>>,
   names: readonly string[]
-): Promise<Record<string, unknown>[]> {
-  if (!query.select?.includes("reason")) return [];
-  const counted = await Promise.all(
-    RELEASE_ATTENTION_REASONS.map(async reason => ({
-      kind: "attention",
-      reason,
-      count: await service().count(
-        { tab: "attention", reason },
-        actorFor(caller)
-      ),
-    }))
-  );
+): Record<string, unknown>[] {
+  const counted = RELEASE_ATTENTION_REASONS.map(reason => ({
+    kind: "attention",
+    reason,
+    count: attention[reason] ?? 0,
+  }));
   return counted
     .filter(row => row.count > 0)
     .map(row =>
@@ -332,6 +406,24 @@ export function callerMayReadAnyRelease(caller: ReadCaller): Promise<boolean> {
 export function overdueReleaseCount(caller: ReadCaller): Promise<number> {
   return service().count(
     { tab: "attention", reason: "overdue" },
+    actorFor(caller)
+  );
+}
+
+/**
+ * How many releases stopped, for this dashboard caller: a scheduled publish
+ * that failed and left the release unpublished. The releases domain's own count
+ * of its Needs attention tab narrowed to stopped, as {@link overdueReleaseCount}
+ * is to overdue, so "stopped" is decided there and nowhere else.
+ *
+ * Refused, as every release read is, for a caller who may not read releases;
+ * ask {@link callerMayReadReleases} first to leave the count out instead.
+ *
+ * @experimental
+ */
+export function stoppedReleaseCount(caller: ReadCaller): Promise<number> {
+  return service().count(
+    { tab: "attention", reason: "stopped" },
     actorFor(caller)
   );
 }

@@ -26,6 +26,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
+import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
@@ -33,6 +34,14 @@ import {
   publishedCollectionDbOptions,
 } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import {
+  declaredSlugsOf,
+  withoutRemovedFromCode,
+} from "../domains/dynamic-collections/services/removed-from-code";
+import {
+  publishDeclaredEntities,
+  restoreDeclaredEntities,
+} from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -120,6 +129,7 @@ import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
+import { refusedConfiguredAddresses } from "../shared/address-rule";
 import { consoleLogger } from "../shared/types";
 import type { SingleHooks } from "../singles/config/types";
 
@@ -160,6 +170,15 @@ interface AdapterLike {
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   // Whether the server can key the per-language unique index a translated unique field needs.
   getCapabilities(): ReturnType<DrizzleAdapter["getCapabilities"]>;
+  // Holds one connection for a statement the companion reconcile builds from the catalog.
+  transaction: DrizzleAdapter["transaction"];
+}
+
+/** An entity the configuration names: one without a slug cannot be addressed. */
+function hasSlug<T extends { slug?: string }>(
+  entity: T
+): entity is T & { slug: string } {
+  return typeof entity.slug === "string";
 }
 
 type CollectionDef = {
@@ -230,8 +249,8 @@ type ComponentDef = {
  *
  * That row is not merely cosmetic. Anything deciding whether an entity's table
  * can be queried reads it -- the widget source refresh does -- so a field edit
- * under `next dev` silently withdrew that entity's generated cards from the
- * dashboard for the rest of the session.
+ * under `next dev` silently withdrew that entity's widget source, and with it
+ * every card set to it, from the dashboard for the rest of the session.
  *
  * The edited set is taken from the SYNC'S OWN REPORT rather than from the
  * snapshot, because the snapshot answers "did this table exist before the
@@ -364,6 +383,7 @@ interface CollectionRegistrySurface {
       fields?: unknown[];
       status?: boolean;
       localized?: boolean;
+      source?: string;
     }>
   >;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
@@ -391,6 +411,7 @@ interface SingleRegistrySurface {
       tableName?: string;
       fields?: unknown[];
       status?: boolean;
+      source?: string;
     }>
   >;
 }
@@ -1066,11 +1087,26 @@ async function ensureLocalizedCompanionsForReload(
     versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
+    survivingCompanionRefusal,
   } = await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
     "../domains/singles/services/resolve-single-table-name"
+  );
+  // Every entity as the registry records it before this reload's metadata sync rewrites it, which
+  // every pass of this function runs before. It tells an entity whose translation this reload
+  // starts, and a field it newly translates, from what was translated before.
+  const { readRecordedEntities, recordedBeforeOf } = await import(
+    "../domains/i18n/migration/recorded-before"
+  );
+  const recordedBefore = await readRecordedEntities(
+    adapter as unknown as DrizzleAdapter,
+    config,
+    error =>
+      consoleLogger.warn(
+        `[nextly] The registry could not be read, so no translations column is judged this reload: ${error instanceof Error ? error.message : String(error)}`
+      )
   );
 
   type Localizable = {
@@ -1164,6 +1200,25 @@ async function ensureLocalizedCompanionsForReload(
         // creates this entity's companion once the apply has produced its main table.
         continue;
       }
+      // Before copying anything into a translations table that survived turning translation
+      // off: a column there that can no longer hold its field keeps the apply from running.
+      if (phase === "beforeApply") {
+        const refused = await survivingCompanionRefusal(adapter, {
+          builtBy: "codeFirst",
+          tableName,
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
+        });
+        if (refused) {
+          preservationFailed.push(entity.slug);
+          consoleLogger.warn(
+            `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
+              `Nothing was copied into it: ${refused.message}`
+          );
+          continue;
+        }
+      }
       const provisioned = await ensureCompanionTable(
         adapter,
         {
@@ -1238,7 +1293,7 @@ async function ensureLocalizedCompanionsForReload(
       // for. Running it early would compare the companion against a main table the apply has not
       // finished shaping.
       if (phase === "beforeApply") continue;
-      await reconcileCompanionColumns(
+      const columnsInStep = await reconcileCompanionColumns(
         adapter,
         {
           // Same config-edit path as the companion creation above.
@@ -1251,6 +1306,7 @@ async function ensureLocalizedCompanionsForReload(
           // Decides whether `_updated_at` can be seeded from version history for this
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
         },
         error => {
           consoleLogger.warn(
@@ -1258,9 +1314,16 @@ async function ensureLocalizedCompanionsForReload(
               `Newly translatable fields may fail to save until it is in step: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
+        },
+        message => {
+          consoleLogger.warn(
+            `[nextly] The translations table for "${entity.slug}": ${message}`
+          );
         }
       );
-      // Its per-language unique indexes, once its columns are in step. Best-effort, as above.
+      // Its per-language unique indexes, once its columns are in step. Best-effort, as above, and
+      // not after a column failure: a refused column is not the field's to index.
+      if (!columnsInStep) continue;
       const { reconcileCompanionUniqueIndexes } = await import(
         "../domains/i18n/runtime/companion-unique-reconcile"
       );
@@ -1504,6 +1567,8 @@ async function applyReloadHolding(
         plugins?: PluginDefinition[];
         /** Read for `db.schema` (app-level hooks) when recompiling below. */
         db?: unknown;
+        /** Read for the site dashboard the component-map check holds the map to. */
+        admin?: { dashboard?: unknown };
       }
     | undefined;
   /**
@@ -1598,6 +1663,7 @@ async function applyReloadHolding(
           webhookAuditEnabled?: boolean;
           plugins?: PluginDefinition[];
           db?: unknown;
+          admin?: { dashboard?: unknown };
         };
       }
     ).config;
@@ -1698,6 +1764,14 @@ async function applyReloadHolding(
   // nothing a refused reload did leaves its options live.
   const previousDbOptions = publishedCollectionDbOptions();
   reloadUndo.push(() => publishCollectionDbOptions(previousDbOptions));
+  // The declared collections and Singles the write guard judges by, likewise:
+  // published at commit, and the set in force put back when the reload does
+  // not land, so a refused reload neither refuses nor allows a write.
+  let previousDeclared: ReturnType<typeof publishDeclaredEntities>;
+  let declaredPublished = false;
+  reloadUndo.push(() => {
+    if (declaredPublished) restoreDeclaredEntities(previousDeclared);
+  });
   // The workflows in force when the reload started, put back if it does not
   // land, as the db options are.
   const previousWorkflows = publishedWorkflows();
@@ -1719,12 +1793,15 @@ async function applyReloadHolding(
       publishPluginDependencies(newConfig.plugins);
       // The plugins the admin's component check compares its map against, as
       // the reloaded config declares them, so a plugin added or changed in
-      // development is rewritten into the map without a restart.
-      setAdminComponentPlugins(newConfig.plugins);
+      // development is rewritten into the map without a restart. The site
+      // dashboard with them, as the loader carries it after every setup().
+      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
     );
+    previousDeclared = publishDeclaredEntities(newConfig);
+    declaredPublished = true;
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows
@@ -1766,6 +1843,42 @@ async function applyReloadHolding(
   // Resolution can succeed and still hand back no adapter, which is the same
   // outcome as it throwing: nothing below runs, so the reload never lands.
   if (!adapter) {
+    undoOptimisticReloadWork();
+    return;
+  }
+
+  // The reloaded configuration's new addresses, judged as a start judges them and before this
+  // reload changes anything: a collection, Single or field group added while `next dev` runs is a
+  // new address like one added before a start. A refused reload keeps the previous configuration.
+  // `AdapterLike` is a narrow view of the registered adapter, which is a `DrizzleAdapter` at runtime.
+  const liveAdapter = adapter as unknown as DrizzleAdapter;
+  let refusedAddresses: Awaited<ReturnType<typeof refusedConfiguredAddresses>>;
+  try {
+    refusedAddresses = await refusedConfiguredAddresses(
+      {
+        collections: (newConfig.collections ?? []).filter(hasSlug),
+        singles: (newConfig.singles ?? []).filter(hasSlug),
+        fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
+      },
+      await loadBuilderEntities(liveAdapter),
+      table => liveAdapter.tableExists(table)
+    );
+  } catch (err) {
+    // A check that could not read the database cannot pass the reload: it gives up the way
+    // every refused reload does, putting back what it installed optimistically.
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not check the configuration's addresses: ${msg}. Keeping the previously-loaded config.`
+    );
+    undoOptimisticReloadWork();
+    return;
+  }
+  if (refusedAddresses.length > 0) {
+    for (const { refusal } of refusedAddresses) {
+      logger?.error(
+        `[Nextly HMR] ${refusal.code}: ${refusal.message}. Keeping the previously-loaded config.`
+      );
+    }
     undoOptimisticReloadWork();
     return;
   }
@@ -2364,6 +2477,15 @@ async function applyReloadHolding(
   // Schema-Builder ones). HMR only knows nextly.config.ts; the shared helper
   // owns both the merge and the policy for an unreadable registry, so this
   // path and `db:sync` cannot drift apart again.
+  //
+  // A collection or Single removed from code is not preserved. Its row's
+  // stored fields would become desired schema, so this apply would create its
+  // dropped tables again or alter kept ones to match the row, and a table that
+  // had drifted from its row would hold up the whole apply on a confirmation.
+  // Left out, the apply never names it, and the drop guard keeps drizzle-kit
+  // from dropping a table outside the desired schema.
+  const declaredCollections = declaredSlugsOf(newConfig.collections);
+  const declaredSingles = declaredSlugsOf(newConfig.singles);
   Object.assign(
     desiredCollections,
     await mergeRegisteredCollectionsSafely(
@@ -2373,7 +2495,10 @@ async function applyReloadHolding(
           "collectionRegistryService"
         )) as CollectionRegistrySurface;
         return typeof collectionRegistry?.getAllCollections === "function"
-          ? await collectionRegistry.getAllCollections()
+          ? withoutRemovedFromCode(
+              await collectionRegistry.getAllCollections(),
+              declaredCollections
+            )
           : [];
       },
       logger
@@ -2388,7 +2513,12 @@ async function applyReloadHolding(
       "singleRegistryService"
     )) as SingleRegistrySurface;
     if (typeof singleRegistry?.getAllSingles === "function") {
-      const dbSingles = await singleRegistry.getAllSingles();
+      // Removed from code: left out, for the reason given above the
+      // collections merge.
+      const dbSingles = withoutRemovedFromCode(
+        await singleRegistry.getAllSingles(),
+        declaredSingles
+      );
       for (const s of dbSingles) {
         if (!s?.slug || !s?.tableName) continue;
         if (desiredSingles[s.slug]) continue; // code config wins
@@ -2397,10 +2527,10 @@ async function applyReloadHolding(
           tableName: s.tableName,
           fields: (s.fields ?? []) as DesiredSingle["fields"],
           status: s.status === true,
-          // Read from the row, not inferred from the row's presence. A code-first single dropped
-          // from the config keeps its registry row for optional orphan cleanup, so it reaches this
-          // loop while still owned by code; calling it the Builder's would widen its columns on the
-          // apply that follows, for a removal nobody requested.
+          // Read from the row, not inferred from the row's presence. A plugin's single whose
+          // plugin left the config keeps its row, so it reaches this loop while still owned by
+          // code; calling it the Builder's would widen its columns on the apply that follows,
+          // for a removal nobody requested.
           builderOwned: !isCodeOwned(s),
         };
       }

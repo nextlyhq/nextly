@@ -21,16 +21,17 @@ import { z } from "zod";
 
 import { LIST_READ_GATES, requireRouteListRead } from "../auth/list-read-gates";
 import { getService } from "../di";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { clampLimit } from "../domains/collections/query/query-parser";
 import type {
   CreateFieldGroupInput,
   FieldGroupMetadataService,
 } from "../domains/field-groups/services/field-group-metadata-service";
-import { MAX_FIELD_GROUP_SLUG_LENGTH } from "../domains/field-groups/services/field-group-schema-service";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
+import { addressSchema } from "../shared/address-rule";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { assertValidFieldsPayload } from "./fields-payload";
@@ -57,24 +58,10 @@ async function getFieldGroupMetadataService(): Promise<FieldGroupMetadataService
 }
 
 const createComponentSchema = z.object({
-  slug: z
-    .string()
-    .min(1, "Slug is required")
-    // Bounded by the longest IDENTIFIER a field group generates, not by the slug itself and not by
-    // any column width. The slug is prefixed into a table name and that table name is prefixed and
-    // suffixed into `idx_comp_<slug>_parent`, sixteen characters longer than what the caller typed.
-    // The product's usual 50 therefore still yields a 66-character index name: MySQL rejects past
-    // 64, and PostgreSQL silently truncates past 63 — leaving an index under a name nothing can
-    // address. Accepted here, the table is created and the index creation fails, so the field group
-    // is recorded failed with an unbound table and the route still answers 201.
-    .max(
-      MAX_FIELD_GROUP_SLUG_LENGTH,
-      `Slug must be ${MAX_FIELD_GROUP_SLUG_LENGTH} characters or less`
-    )
-    .regex(
-      /^[a-z][a-z0-9-]*$/,
-      "Slug must start with a letter and contain only lowercase letters, numbers, and hyphens"
-    ),
+  // The one address rule every road shares. It bounds a field group's address
+  // by the longest name its tables need (`idx_comp_<slug>_parent`), so a slug
+  // whose index the database would truncate or refuse is refused here.
+  slug: addressSchema("fieldGroup"),
   label: z.string().min(1, "Label is required"),
   description: z.string().optional(),
   // Validated against the shared manifest field rules after parse (see
@@ -94,7 +81,7 @@ const createComponentSchema = z.object({
 /**
  * GET handler for listing components with pagination and filters.
  *
- * Requires read-settings (or manage-settings), matching the dispatcher's
+ * Requires read-settings, matching the dispatcher's
  * components authorization — component definitions are builder-surface
  * metadata, not public content.
  *
@@ -163,7 +150,7 @@ export const GET = withErrorHandler(async (request: Request) => {
 /**
  * POST handler for creating a new UI component.
  *
- * Requires create-settings (or manage-settings), matching the dispatcher's
+ * Requires create-settings, matching the dispatcher's
  * components authorization. Creates a new component with source="ui" and
  * locked=false.
  *
@@ -193,8 +180,7 @@ export const POST = withErrorHandler(async (request: Request) => {
   const metadata = await getFieldGroupMetadataService();
 
   await requireRouteAnyPermission(request, [
-    { action: "create", resource: "settings" },
-    { action: "manage", resource: "settings" },
+    ...SYSTEM_WRITE_POLICY.fieldGroups.create.anyOf,
   ]);
 
   const body = await request.json();

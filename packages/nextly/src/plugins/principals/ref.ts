@@ -9,8 +9,7 @@
  *
  * @module plugins/principals/ref
  */
-import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
-import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
+import { EMAIL_DELIVERY_PRINCIPAL_ID_LENGTH } from "../../schemas/email-deliveries/widths";
 
 import { MAX_PRINCIPAL_ID_LENGTH } from "./recognise";
 import type { PrincipalRef } from "./types";
@@ -58,17 +57,11 @@ export const STAFF_PERSON_KIND = "staff";
  * The longest staff user id a delivery record can name: the narrowest column
  * a record keeps an id in. A staff user's id is not bound by the 128 characters
  * a plugin-defined person's is, and `users.id` is unbounded text on
- * PostgreSQL and SQLite, so this is the bound that decides. Read from the
- * columns rather than restated, so a column changed later moves it.
+ * PostgreSQL and SQLite, so this is the bound that decides. The width the
+ * column's declarations are written with rather than restated, so a column
+ * changed later moves it.
  */
-export const STAFF_PERSON_ID_MAX_LENGTH = Math.min(
-  ...[emailDeliveriesPg.principalId, emailDeliveriesMysql.principalId].map(
-    column => {
-      const length = (column as { length?: number }).length;
-      return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
-    }
-  )
-);
+export const STAFF_PERSON_ID_MAX_LENGTH = EMAIL_DELIVERY_PRINCIPAL_ID_LENGTH;
 
 /** A staff user, named by kind and id for a record that names a person. */
 export function staffPerson(userId: string): PrincipalRef {

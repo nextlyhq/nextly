@@ -261,6 +261,29 @@ acceptance suite adapts these rather than restating them: a browser harness
 carrying its own copy certifies its own copy, and would keep passing through
 exactly the correction it exists to catch.
 
+### The frame contract for block code
+
+Block code that measures itself, listens to the window or reads the viewport
+reaches the document and window through the node it renders
+(`ownerDocument`, `defaultView`) or through `useBlockEnvironment()` from
+`@nextlyhq/blocks-react/environment`, never through the globals. `Canvas`
+provides that hook with its root's own document and window, so once the canvas
+renders inside a frame, block code reads the frame's without changing. A block
+reading the globals still renders; only its measurements and listeners target
+the admin page instead.
+
+### Custom inspectors
+
+`InspectorPanel` takes `inspectors`, a `BlockInspectorResolver` the host
+supplies, since this package reaches no component registry. A block whose
+definition names `editor.component` and resolves gets that component in place
+of its generated content controls, given `BlockInspectorProps`
+(`{ node, props, commit, readOnly }`). Its identity fields, the Advanced tab
+and the Style tab stay generated. `commit` is the generated controls' own write
+path, refused while the block is locked, and inside a `contentOnly` area for
+any prop not declared `role: "content"`, whatever the component does. A path the host cannot resolve, or a component
+that throws, leaves the block on its generated controls.
+
 ### The op store
 
 `applyOp(document, op, limits?)` — apply one edit to a `BlockDocument`,
@@ -341,9 +364,11 @@ missing build wearing a different error message.
 `@nextlyhq/ui` declares it as one: an icon set resolved once by the host rather
 than bundled per package.
 
-React 19, matching the renderer it draws with. `@nextlyhq/blocks-react` requires
-`react: ^19.0.0`, and it is a dependency here rather than a peer, so a React 18
-host would hit an unsatisfiable peer one level down.
+React and React DOM in the supported range listed in
+[Requirements](https://nextlyhq.com/docs/getting-started/installation#requirements),
+matching the renderer it draws with. `@nextlyhq/blocks-react` requires the same
+range, and it is a dependency here rather than a peer, so a host on an older
+React would hit an unsatisfiable peer one level down.
 
 ## Install
 

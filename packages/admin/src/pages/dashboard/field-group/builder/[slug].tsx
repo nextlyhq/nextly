@@ -38,6 +38,7 @@ import {
 } from "@admin/hooks/queries/useFieldGroups";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
@@ -119,6 +120,8 @@ export default function FieldGroupBuilderEditPage({
 }: FieldGroupBuilderEditPageProps): React.ReactElement {
   const slug = params?.slug;
   const { data: fieldGroup, isLoading, error } = useFieldGroup(slug);
+  // The tab names the field group being edited once it has arrived.
+  useDocumentTitle(fieldGroup ? fieldGroupName(fieldGroup) : undefined);
 
   const builder = useFieldBuilder<FormData>({
     resolver: zodResolver(componentFormSchema),
@@ -269,7 +272,7 @@ export default function FieldGroupBuilderEditPage({
   if (!slug) {
     return (
       <BuilderNotFoundScreen
-        title="Field Group Not Found"
+        title="Field group not found"
         description="No field group slug was provided."
       />
     );
@@ -361,6 +364,7 @@ export default function FieldGroupBuilderEditPage({
 
       <BuilderSchemaChangeDialogs
         confirmation={confirmation}
+        kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
       />

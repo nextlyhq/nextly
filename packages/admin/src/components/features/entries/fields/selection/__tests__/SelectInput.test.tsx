@@ -77,6 +77,25 @@ describe("SelectInput — isClearable knob", () => {
     ).toBeInTheDocument();
   });
 
+  it("draws the clear button beside the trigger, where the keyboard reaches it", async () => {
+    // 🔴 Drawn over the trigger, the × crowded its chevron ("⌄×") and was taken
+    // out of the tab order, so only a pointer could clear the field.
+    render(
+      <Harness
+        field={
+          { ...baseField, admin: { isClearable: true } } as SelectFieldConfig
+        }
+        defaultValue="red"
+      />
+    );
+    const clear = screen.getByRole("button", { name: /clear selection/i });
+    expect(clear.closest('[role="combobox"]')).toBeNull();
+    await userEvent.tab();
+    expect(screen.getByRole("combobox")).toHaveFocus();
+    await userEvent.tab();
+    expect(clear).toHaveFocus();
+  });
+
   it("hides the clear button when value is empty even with isClearable on", () => {
     render(
       <Harness

@@ -23,6 +23,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
   registerComponentRuntimeSchema,
@@ -47,10 +48,11 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+// From the types module, not the barrel, which loads every dialect's tables.
 import {
   FIELD_GROUP_MIGRATION_STATUSES,
   type FieldGroupMigrationStatus,
-} from "../../schemas/dynamic-field-groups";
+} from "../../schemas/dynamic-field-groups/types";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -467,7 +469,8 @@ export const COMPONENTS_METHODS: Record<
           issuesDdl: true,
         },
         async () => {
-          const component = await svc.registry.getComponent(slug);
+          // As stored, past the registry row cache: its version is checked and advanced below.
+          const component = await svc.registry.getComponentForWrite(slug);
           if (!component) throw new Error("Component not found");
           refuseChangeDefinedInCode(component, "component", slug);
 
@@ -668,6 +671,9 @@ export const COMPONENTS_METHODS: Record<
               },
               { and: [{ column: "slug", op: "=", value: slug }] }
             );
+            // Written past the registry services, so the cached rows are cleared here: a read
+            // before or during the save may have cached the row from before it.
+            clearRegistryRowCache();
           } catch (err) {
             // 🔴 The DDL has ALREADY COMMITTED. Reporting success here is worse than the failure
             // itself: the tables hold the new shape, the row still describes the old one, and the
@@ -698,7 +704,8 @@ export const COMPONENTS_METHODS: Record<
               // past to the same field set, and the version alone would accept any later write.
               readBackSettled: async () => {
                 try {
-                  const current = await svc.registry.getComponent(slug);
+                  // As stored: whether this save's own write landed.
+                  const current = await svc.registry.getComponentForWrite(slug);
                   if (current.schemaHash !== expectedHash) return null;
                   if (current.schemaVersion !== newSchemaVersion) return null;
                   if ((current.localized === true) !== isLocalized) return null;

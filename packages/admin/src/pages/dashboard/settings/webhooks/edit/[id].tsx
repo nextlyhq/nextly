@@ -19,6 +19,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useUpdateWebhook, useWebhook } from "@admin/hooks/queries/useWebhooks";
 import { useCan } from "@admin/hooks/useCan";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useWebhookDeletion } from "@admin/hooks/useWebhookDeletion";
 import { useWebhookSecretActions } from "@admin/hooks/useWebhookSecretActions";
@@ -43,6 +44,8 @@ const WEBHOOK_PAGE = {
 } as const;
 const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const { data: webhook, isLoading, isError, error } = useWebhook(id);
+  // The tab names the webhook being edited once it has arrived.
+  useDocumentTitle(webhook?.name);
   const { mutate: doUpdate, isPending } = useUpdateWebhook();
   const secretActions = useWebhookSecretActions(id);
   // `null` while the document is loading — the hook refuses to delete on it.

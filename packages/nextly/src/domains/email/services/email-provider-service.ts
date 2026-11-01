@@ -20,13 +20,14 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, desc, ne } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
-import { emailProvidersMysql } from "../../../schemas/email-providers/mysql";
-import { emailProvidersPg } from "../../../schemas/email-providers/postgres";
-import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
+import type { emailProvidersMysql } from "../../../schemas/email-providers/mysql";
+import type { emailProvidersPg } from "../../../schemas/email-providers/postgres";
+import type { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
 import type {
   EmailProviderInsert,
   EmailProviderRecord,
@@ -269,13 +270,11 @@ export class EmailProviderService extends BaseService {
 
     switch (this.dialect) {
       case "postgresql":
-        this.emailProviders = emailProvidersPg;
-        break;
       case "mysql":
-        this.emailProviders = emailProvidersMysql;
-        break;
       case "sqlite":
-        this.emailProviders = emailProvidersSqlite;
+        // The loaded dialect's own table, so only that dialect's file is
+        // imported; `createAdapter` loads it.
+        this.emailProviders = loadedDialect(this.dialect).tables.emailProviders;
         break;
       default:
         // `this.dialect` is narrowed to `never` after the exhaustive switch;

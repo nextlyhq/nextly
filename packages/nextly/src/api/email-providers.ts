@@ -24,6 +24,10 @@ import { z } from "zod";
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
@@ -74,8 +78,7 @@ const createProviderSchema = z.object({
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_READ_POLICY.emailProviders.read.anyOf,
     ]);
 
     const service = await getEmailProviderService();
@@ -119,8 +122,7 @@ export const POST = withErrorHandler(
     // mutation through them recorded nothing -- the trail would have covered
     // one supported REST surface and not the other.
     const auth = await requireRouteAnyPermission(request, [
-      { action: "create", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_WRITE_POLICY.emailProviders.create.anyOf,
     ]);
 
     const body = await readJsonBody(request);

@@ -90,6 +90,50 @@ describe("the card frame", () => {
     expect(screen.getAllByRole("heading")).toHaveLength(1);
   });
 
+  it("dims only an answer while customising, never a state's message", () => {
+    // 🔴 A state's message is an instruction: dimmed to 55%, "Choose collection in the card's
+    // settings." measured 2.65:1 in light, under the 4.5:1 text needs. An answer is out of reach
+    // while arranging and is dimmed to say so.
+    const { rerender } = render(
+      <WidgetCard
+        title="Posts"
+        customizing
+        state={{
+          kind: "empty",
+          empty: {
+            title: "No collection chosen yet",
+            detail: "Choose collection in the card's settings.",
+          },
+        }}
+      >
+        <p>12 posts</p>
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-body")).not.toHaveClass(
+      "opacity-55"
+    );
+    for (const state of [
+      { kind: "no-access" } as const,
+      { kind: "error", message: "It failed" } as const,
+    ]) {
+      rerender(
+        <WidgetCard title="Posts" customizing state={state}>
+          <p>12 posts</p>
+        </WidgetCard>
+      );
+      expect(screen.getByTestId("widget-card-body")).not.toHaveClass(
+        "opacity-55"
+      );
+    }
+    // The control: the answer itself, while customising, is dimmed.
+    rerender(
+      <WidgetCard title="Posts" customizing>
+        <p>12 posts</p>
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-body")).toHaveClass("opacity-55");
+  });
+
   it("shows a skeleton, marked busy, while data has never arrived", () => {
     render(
       <WidgetCard title="Posts" state={{ kind: "loading" }} skeleton="figure">

@@ -10,9 +10,12 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
+import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
@@ -91,12 +94,38 @@ export function createDebouncedSync(
             adapter: adapter as unknown as DrizzleAdapter,
             logger,
             label: "db:sync watch",
+            // A command-line run: a held schema lock is waited for, about a minute, and then
+            // the run stops naming its holder.
+            whenHeld: "wait",
             mayCreateLock: options.autoSync !== false,
             // Ctrl+C is the documented way to stop watch mode, and a sync is idempotent, so a
             // claim stuck behind a dead watcher would block every later sync for no gain.
             releaseOnInterrupt: true,
           },
           async () => {
+            // The configuration's new addresses, judged by the one address rule as a start judges
+            // them, before this sync reads or writes any schema.
+            const liveAdapter = adapter as unknown as DrizzleAdapter;
+            await assertConfiguredAddresses(
+              configToSync.config,
+              await loadBuilderEntities(liveAdapter),
+              table => liveAdapter.tableExists(table)
+            );
+
+            // Every entity as the registry records it before the syncs below rewrite it, so the
+            // companion pass after them can tell a field this edit newly translates.
+            const recordedBefore =
+              options.autoSync !== false
+                ? await readRecordedEntities(
+                    adapter as unknown as DrizzleAdapter,
+                    configToSync.config,
+                    error =>
+                      logger.warn(
+                        `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+                      )
+                  )
+                : undefined;
+
             // Before the pushes, for the same reason the one-shot `db:sync` does it: a watched
             // edit that enables localization removes the translatable columns from the desired
             // schema, so the push wants to drop them. Copying first makes that drop a cleanup
@@ -106,7 +135,8 @@ export function createDebouncedSync(
                 configToSync.config,
                 adapter,
                 context,
-                "beforeApply"
+                "beforeApply",
+                { recordedBefore }
               );
             }
 
@@ -130,7 +160,9 @@ export function createDebouncedSync(
               await ensureLocalizedCompanions(
                 configToSync.config,
                 adapter,
-                context
+                context,
+                "afterApply",
+                { recordedBefore }
               );
             }
 

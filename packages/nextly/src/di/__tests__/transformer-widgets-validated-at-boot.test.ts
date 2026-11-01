@@ -1,14 +1,13 @@
 /**
- * A widget a `setup` transformer introduced is validated too.
+ * What a `setup` transformer introduces is checked too.
  *
- * `resolvePlugins` runs `assertAdminWidgets` over the plugin list the CALLER
- * supplied, and `registerServices` calls it BEFORE `applyPluginConfigTransformers`.
- * A transformer that adds or replaces `contributes.admin.widgets` therefore
- * produced widgets nothing had checked -- and the transformed list is the one
- * `setBootedConfig` publishes and `buildPluginAdminMeta` serializes, so a bigint
- * introduced there reached `JSON.stringify` and failed
- * `/api/admin-meta/workspace` for every admin. The same 500 through a second
- * door.
+ * `resolvePlugins` checks the plugin list the CALLER supplied, and
+ * `registerServices` calls it BEFORE `applyPluginConfigTransformers`. A
+ * transformer that adds a plugin therefore produced a list nothing had checked
+ * -- and the transformed list is the one `setBootedConfig` publishes and
+ * `buildPluginAdminMeta` serializes. So a transformer that adds a plugin
+ * carrying `contributes.admin.widgets`, a key startup refuses, must be refused
+ * as a declared one is.
  *
  * Asserted through `registerServices` rather than through `resolvePlugins`,
  * because the gap is an ORDERING one: a check on the resolver's argument is
@@ -33,14 +32,7 @@ const { registerServices } = await import("../register");
 /** An adapter that fails LATER than the plugin validation under test. */
 const failingAdapter = { connect: () => undefined };
 
-/** A widget whose `query.where` carries a bigint, which JSON cannot encode. */
-const bigintWidget = {
-  id: "acme/revenue",
-  component: "@acme/p/admin#Revenue",
-  query: { source: "collection:posts", op: "count", where: { id: 1n } },
-};
-
-/** A widget that survives the round trip unchanged. */
+/** A widget in the older shape that is otherwise well formed. */
 const validWidget = {
   id: "acme/posts",
   component: "@acme/p/admin#Posts",
@@ -48,19 +40,18 @@ const validWidget = {
 };
 
 /**
- * A plugin whose `setup` REPLACES the plugin list with one carrying `widget`.
+ * A plugin whose `setup` REPLACES the plugin list with one carrying `admin`.
  *
  * The transformer speaks for a plugin other than itself, which is the shape the
- * API permits and the shape the original check cannot see: the widgets it
- * validated belong to the list the caller passed, and this list did not exist
- * then.
+ * API permits and the shape a check on the caller's list cannot see: the list
+ * it checked is the one the caller passed, and this list did not exist then.
  */
-function pluginContributing(widget: unknown): PluginDefinition[] {
+function pluginContributing(admin: unknown): PluginDefinition[] {
   const contributor = {
     name: "@acme/p",
     version: "1.0.0",
     nextly: "*",
-    contributes: { admin: { widgets: [widget] } },
+    contributes: { admin },
   };
   return [
     {
@@ -93,19 +84,23 @@ function codeOf(error: unknown): string {
   return NextlyError.is(error) ? error.code : String(error);
 }
 
-describe("widgets a setup transformer introduces", () => {
-  it("refuses a bigint the transformer added, at boot", async () => {
-    expect(codeOf(await bootError(pluginContributing(bigintWidget)))).toBe(
-      "NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID"
-    );
+describe("contributes.admin.widgets on a plugin a setup transformer adds", () => {
+  it("is refused at boot, naming the plugin and the key", async () => {
+    expect(
+      await bootError(pluginContributing({ widgets: [validWidget] }))
+    ).toMatchObject({
+      code: "NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL",
+      logContext: { plugin: "@acme/p", key: "contributes.admin.widgets" },
+    });
   });
 
   // The positive control. Boot fails on the adapter either way, so without this
   // the refusal above is satisfied by any rejection at all -- including one that
-  // refuses every transformed widget.
-  it("carries a valid widget the transformer added past the check", async () => {
-    expect(codeOf(await bootError(pluginContributing(validWidget)))).not.toBe(
-      "NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID"
+  // refuses every transformed plugin with admin contributions.
+  it("carries the same plugin past the check without the key", async () => {
+    const menu = [{ label: "Posts", to: "/admin/collections/posts" }];
+    expect(codeOf(await bootError(pluginContributing({ menu })))).not.toBe(
+      "NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL"
     );
   });
 });

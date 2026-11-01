@@ -82,4 +82,17 @@ describe("the admin entry's component registration", () => {
     },
     IMPORT_GRAPH_BUDGET_MS
   );
+
+  it(
+    "exports the function the generated component map hands block modules to",
+    async () => {
+      // The map names this entry and this function by string (core's codegen,
+      // `PAGE_BUILDER_ADMIN_MODULE` and `BLOCK_EDITOR_REGISTRAR`), since core
+      // may not depend on this package. Renamed here alone, every site whose
+      // plugins contribute blocks would fail to build its admin.
+      const entry: Record<string, unknown> = await import("./index");
+      expect(entry.registerBlockEditorModules).toBeTypeOf("function");
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
 });

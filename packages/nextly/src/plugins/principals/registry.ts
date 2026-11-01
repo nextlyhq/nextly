@@ -9,10 +9,12 @@
  *
  * @module plugins/principals/registry
  */
-import { auditLog as mysqlAuditLog } from "../../schemas/audit/mysql";
-import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
-import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
-import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
+import {
+  AUDIT_ACTOR_KIND_LENGTH,
+  AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
+  AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
+} from "../../schemas/audit/widths";
+import { EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH } from "../../schemas/email-deliveries/widths";
 import type { PluginDefinition } from "../plugin-context";
 import { pluginAdminSlug } from "../plugin-slug";
 import { resolutionError } from "../resolution-error";
@@ -62,26 +64,15 @@ const ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
  * which holds anything, so the bounded declarations decide. A longer name
  * fails every audit write naming such a person, and audit writes are
  * fail-safe, so the failure would be a log line and the row would never
- * exist. Read from the columns rather than restated, so a column narrowed
- * later tightens the bound instead of silently disagreeing with it.
+ * exist. The widths the columns' declarations are written with rather than
+ * restated, so a column narrowed later tightens the bound instead of
+ * silently disagreeing with it.
  */
 export const PRINCIPAL_KIND_MAX_LENGTH = Math.min(
-  ...[
-    postgresAuditLog.actorKind,
-    postgresAuditLog.actorPrincipalKind,
-    postgresAuditLog.targetPrincipalKind,
-    mysqlAuditLog.actorKind,
-    mysqlAuditLog.actorPrincipalKind,
-    mysqlAuditLog.targetPrincipalKind,
-    emailDeliveriesPg.principalKind,
-    emailDeliveriesMysql.principalKind,
-  ].map(column => {
-    // Read as a plain property: the column-collecting helper is banned by
-    // the drizzle v1 legacy gate, and a table's columns are its own
-    // properties either way.
-    const length = (column as { length?: number }).length;
-    return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
-  })
+  AUDIT_ACTOR_KIND_LENGTH,
+  AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
+  AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
+  EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH
 );
 
 const ATTRIBUTE_TYPES: ReadonlySet<string> = new Set<PrincipalAttributeType>([

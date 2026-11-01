@@ -18,6 +18,7 @@ import type {
   SchemaRenameResolution,
 } from "@admin/services/schemaApi";
 
+import type { BuilderKind } from "./builder-config";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
 import type { SchemaChangeConfirmation } from "./types";
@@ -25,6 +26,8 @@ import type { SchemaChangeConfirmation } from "./types";
 type Props = {
   /** The pending change and the state describing it. */
   confirmation: SchemaChangeConfirmation;
+  /** The kind being changed; both dialogs name it in their copy. */
+  kind: BuilderKind;
   /** Slug of the entity being changed; both dialogs show it in their copy. */
   entityName: string;
   /**
@@ -39,14 +42,17 @@ type Props = {
 
 /**
  * Whether a preview can be applied without asking the user to resolve
- * anything: additive, with no rename the server wants a decision on, and no
- * field leaving translation. The short confirmation says the change does not
- * affect existing data, which is untrue when a field's other languages move to
- * the archive, so that change gets the full dialog and its notice.
+ * anything: additive, with no rename the server wants a decision on, no
+ * field leaving translation, and no field removed. The short confirmation
+ * says the change does not affect existing data, which is untrue when a
+ * field's other languages move to the archive, and when a field is removed:
+ * its column goes, and the preview's count of the values in it reads 0 when
+ * counting fails. Those changes get the full dialog, where a removal is red.
  */
 export function isSafeChange(preview: SchemaPreviewResponse): boolean {
   return (
     preview.classification === "safe" &&
+    preview.changes.removed.length === 0 &&
     !(preview.renamed && preview.renamed.length > 0) &&
     !(preview.leavingTranslation && preview.leavingTranslation.length > 0)
   );
@@ -54,6 +60,7 @@ export function isSafeChange(preview: SchemaPreviewResponse): boolean {
 
 export function BuilderSchemaChangeDialogs({
   confirmation,
+  kind,
   entityName,
   onConfirm,
 }: Props): JSX.Element | null {
@@ -67,7 +74,8 @@ export function BuilderSchemaChangeDialogs({
         key={previewId}
         open={isOpen}
         onOpenChange={setOpen}
-        collectionName={entityName}
+        kind={kind}
+        entityName={entityName}
         changes={preview.changes}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
@@ -80,7 +88,8 @@ export function BuilderSchemaChangeDialogs({
       key={previewId}
       open={isOpen}
       onOpenChange={setOpen}
-      collectionName={entityName}
+      kind={kind}
+      entityName={entityName}
       hasDestructiveChanges={preview.hasDestructiveChanges}
       classification={preview.classification}
       changes={preview.changes}

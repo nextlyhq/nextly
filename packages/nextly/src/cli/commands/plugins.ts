@@ -21,7 +21,7 @@
 import type { Command } from "commander";
 
 import type { NextlyServiceConfig } from "../../di/register";
-import { describeError } from "../../errors/index";
+import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent";
 import { pluginAdminSlug } from "../../plugins/admin-meta";
 import { getCoreVersion } from "../../plugins/core-version";
 import {
@@ -29,8 +29,14 @@ import {
   findPluginInfo,
   type PluginInfo,
 } from "../../plugins/plugin-introspection";
+import { exitWithError, failWithError } from "../errors";
+import { installTargetUnclear, pluginNotFound } from "../errors/areas/plugins";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig } from "../utils/config-loader";
+import {
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import type { Logger } from "../utils/logger";
 
 interface PluginsCommandOptions {
@@ -170,10 +176,7 @@ export async function runPluginsInfoCommand(
     infos.find(i => pluginAdminSlug(i.name) === name);
 
   if (!info) {
-    context.logger.error(
-      `Plugin "${name}" not found. Run \`nextly plugins list\` to see installed plugins.`
-    );
-    process.exitCode = 1;
+    failWithError(context.logger, pluginNotFound(name));
     return;
   }
   renderPluginInfo(info, context.logger);
@@ -209,8 +212,7 @@ export function registerPluginsCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 
@@ -236,10 +238,7 @@ export function registerPluginsCommand(program: Command): void {
         // meant to the parser's reading of the line.
         const target = installTarget(name, cmdOptions.all === true);
         if (target === null) {
-          context.logger.error(
-            'Name one plugin to install, or pass --all to install every configured plugin: "nextly plugins install <name>" or "nextly plugins install --all".'
-          );
-          process.exit(1);
+          exitWithError(context.logger, installTargetUnclear(name));
         }
         try {
           const options = { config: globalOpts.config, cwd: globalOpts.cwd };
@@ -249,8 +248,7 @@ export function registerPluginsCommand(program: Command): void {
           if (target === "all") await runPluginInstallAll(options, context);
           else await runPluginInstall(target.name, options, context);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );
@@ -259,16 +257,34 @@ export function registerPluginsCommand(program: Command): void {
     .command("uninstall <name>")
     .description("Undo a plugin's schema and run its onUninstall hook")
     .option("--keep-data", "Leave the plugin's tables in place", false)
-    .option("--yes", "Skip the confirmation before dropping tables", false)
+    // A full uninstall drops the plugin's tables, which takes the data-loss
+    // consent; `--keep-data` drops nothing and needs none.
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
+    // Still accepted, so a script passing it is not refused as malformed, but
+    // it no longer consents to dropping tables: no `--yes` authorises
+    // deleting data, and the refusal says so.
+    .option(
+      "--yes",
+      "No longer consents to dropping tables; use --accept-data-loss",
+      false
+    )
     .action(
       async (
         name: string,
-        cmdOptions: { keepData?: boolean; yes?: boolean },
+        cmdOptions: {
+          keepData?: boolean;
+          yes?: boolean;
+          acceptDataLoss?: AcceptDataLossOption;
+        },
         cmd: Command
       ) => {
         const globalOpts = cmd.optsWithGlobals();
         const context = createContext(globalOpts);
         try {
+          const consent = readDataLossConsent({
+            flag: cmdOptions.acceptDataLoss,
+            warn: message => context.logger.warn(message),
+          });
           const { runPluginUninstall } = await import(
             "./plugin-lifecycle-runner"
           );
@@ -279,12 +295,12 @@ export function registerPluginsCommand(program: Command): void {
               cwd: globalOpts.cwd,
               keepData: cmdOptions.keepData === true,
               yes: cmdOptions.yes === true,
+              consent,
             },
             context
           );
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );
@@ -304,8 +320,7 @@ export function registerPluginsCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

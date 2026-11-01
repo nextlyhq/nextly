@@ -36,6 +36,11 @@ const service = {
   ),
   create: vi.fn(async () => ({ id: "r1" })),
   addMember: vi.fn(async () => ({ id: "m1" })),
+  addMembers: vi.fn(async () => ({ release: { id: "r1" }, members: [] })),
+  scheduleDocument: vi.fn(async () => ({
+    release: { id: "r1" },
+    members: [],
+  })),
   update: vi.fn(async () => ({ id: "r1" })),
   delete: vi.fn(async () => undefined),
 };
@@ -342,6 +347,59 @@ describe("the calendar", () => {
         kind: "single",
       },
       expect.objectContaining({ userId: "u2", overrideAccess: false })
+    );
+  });
+});
+
+describe("the steps that add several documents", () => {
+  const doc = {
+    scopeKind: "collection" as const,
+    scopeSlug: "posts",
+    entryId: "e1",
+    locale: null,
+    action: "publish" as const,
+  };
+
+  it("hands the service the release and its documents, the caller only as the actor", async () => {
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await releases.addMembers({
+      releaseId: "r1",
+      members: [doc],
+      userId: "u2",
+    });
+    expect(service.addMembers).toHaveBeenCalledWith(
+      "r1",
+      [doc],
+      expect.objectContaining({ userId: "u2", overrideAccess: false })
+    );
+  });
+
+  it("schedules a document with the caller keys stripped from its input", async () => {
+    // Left in, `authenticatedScope` would reach the plan as a field of the
+    // input, a credential in a place it does not belong.
+    const releases = createReleasesNamespace(instance({}));
+    const scope = { actorType: "apiKey", permissions: [] } as never;
+    await releases.scheduleDocument({
+      into: "existing",
+      document: doc,
+      releaseId: "r1",
+      userId: "u1",
+      overrideAccess: false,
+      authenticatedScope: scope,
+      userRoles: ["editor"],
+      apiKeyId: "k1",
+    });
+    expect(service.scheduleDocument).toHaveBeenCalledWith(
+      { into: "existing", document: doc, releaseId: "r1" },
+      expect.objectContaining({
+        userId: "u1",
+        overrideAccess: false,
+        authenticatedScope: scope,
+        userRoles: ["editor"],
+        apiKeyId: "k1",
+      })
     );
   });
 });

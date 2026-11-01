@@ -7,13 +7,21 @@
  */
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { generateAdminPage } from "../generators/admin";
+import { readMediaRouteTemplates } from "../generators/media-routes";
 import { generateRoutes } from "../generators/routes";
 import type { ProjectInfo } from "../types";
+
+// The repository's templates, which the existing-app path reads before it
+// writes anything.
+const templates = await readMediaRouteTemplates(
+  resolve(dirname(fileURLToPath(import.meta.url)), "../../../../templates")
+);
 
 const info: ProjectInfo = {
   isNextJs: true,
@@ -44,7 +52,7 @@ const written = async () =>
 
 const run = async () => [
   ...(await generateRoutes(cwd, info)).skipped,
-  ...(await generateAdminPage(cwd, info)).skipped,
+  ...(await generateAdminPage(cwd, info, templates)).skipped,
 ];
 
 describe("the admin route and page in an app that sets pageExtensions", () => {
@@ -138,7 +146,7 @@ describe("the admin route and page in an app that sets pageExtensions", () => {
     await config("export default {};\n");
 
     const routes = await generateRoutes(cwd, info);
-    const admin = await generateAdminPage(cwd, info);
+    const admin = await generateAdminPage(cwd, info, templates);
 
     expect(routes.written).toEqual(["app/admin/api/[[...params]]/route.ts"]);
     expect(admin.written).toEqual([

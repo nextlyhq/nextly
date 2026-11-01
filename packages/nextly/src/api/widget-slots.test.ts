@@ -14,6 +14,7 @@ import type { WidgetQuery } from "../domains/widgets/query";
 import type { ResolverOptions } from "../domains/widgets/resolved-sources";
 import type { WidgetResult } from "../domains/widgets/result";
 import type { WidgetSource } from "../domains/widgets/sources";
+import * as loggerModule from "../observability/logger";
 
 import {
   answerReadyQueries,
@@ -156,6 +157,58 @@ describe("a declared card's own data in the batch", () => {
     });
     expect(aborted).toBe(true);
     expect(slots.get(1)).toEqual({ ok: true, result: count(2) });
+  });
+
+  it("names the widget and its owner in the log of a card that ran out of time", async () => {
+    vi.useFakeTimers();
+    const error = vi.fn();
+    const logger = vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
+      error,
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
+    try {
+      const answering = answerReadyQueries(
+        [card(0, () => new Promise(() => {}), "plugin @acme/blog")],
+        caller,
+        createBatchScope()
+      );
+      await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+      await answering;
+      // The operator is told which plugin's widget is hanging, not only which widget.
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0]?.[0]).toMatchObject({
+        logContext: {
+          reason: "widget-slot-timeout",
+          widget: "acme/card-0",
+          owner: "plugin @acme/blog",
+        },
+      });
+    } finally {
+      logger.mockRestore();
+    }
+  });
+
+  it("settles a card its answer decided before any data was read, beside one that was", async () => {
+    // A card whose widget needs a setting is answered without running its data function; the
+    // runner settles it exactly as answered, and its neighbour is drawn.
+    const needs = {
+      ok: false,
+      error: "No Collection chosen yet",
+      code: "needs-setting",
+      setting: "Collection",
+    } as const;
+    const slots = await answerReadyQueries(
+      [
+        card(0, async () => ({ settled: needs })),
+        card(1, async () => ({ result: count(4), empty: false })),
+      ],
+      caller,
+      createBatchScope()
+    );
+    expect(slots.get(0)).toEqual(needs);
+    expect(slots.get(1)).toEqual({ ok: true, result: count(4) });
   });
 
   it("never delivers an answer that arrives after its deadline, anywhere", async () => {

@@ -18,6 +18,7 @@ import {
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { isInteractiveTerminal } from "../../domains/schema/migrate/data-loss-consent";
 import {
   orderedMigrations,
   pluginModuleStatements,
@@ -37,6 +38,7 @@ import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
 import type { CommandContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
+import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
 import {
   downDatabaseDeps,
@@ -52,6 +54,7 @@ import {
   runPluginUninstallCommand,
   type LifecyclePlugin,
   type PreparedModuleDown,
+  type UninstallOptions,
 } from "./plugin-lifecycle";
 import { pluginModuleDown } from "./plugin-module-rollback";
 import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
@@ -150,7 +153,7 @@ async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
-  const { config, appConfig, pluginConsent } = await loadConfig({
+  const { config, appConfig, pluginConsent, projectRoot } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
@@ -368,25 +371,27 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const { withMigrateLock } = await import(
       "../../domains/schema/pipeline/locks"
     );
-    const outcome = await withMigrateLock(
-      drizzleAdapter.getDrizzle(),
-      dialect,
-      work,
-      {
-        mode: "wait",
-        logger: {
-          warn: m => context.logger.warn(m),
-          info: m => context.logger.info(m),
-        },
-      }
-    );
+    const outcome = await withMigrateLock(drizzleAdapter, dialect, work, {
+      // The schema lock, which `migrate` and every other schema change take. A held one is
+      // waited for, about a minute, and then the command stops naming its holder.
+      command: "nextly plugins install/uninstall",
+      mode: "wait",
+      logger: {
+        warn: m => context.logger.warn(m),
+        info: m => context.logger.info(m),
+      },
+    });
     if (!outcome.ran) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage:
           `Another migration is holding the migrate lock, so ${notRun}. ` +
           "Nothing was changed — re-run once it finishes.",
-        logContext: { ...logContext, reason: outcome.reason },
+        logContext: {
+          ...logContext,
+          reason: "plugin-lifecycle-lock-busy",
+          outcome: outcome.reason,
+        },
       });
     }
     return outcome.value;
@@ -582,7 +587,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
-        logContext: { plugin: plugin.name, hook },
+        logContext: {
+          reason: "plugin-hook-services-registered",
+          plugin: plugin.name,
+          hook,
+        },
       });
     }
 
@@ -599,8 +608,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // As the lifecycle command's boot: the install-state gate would refuse
       // the very plugin this command is installing or uninstalling.
       await asLifecycleCommandBoot(plugin.name, () =>
-        registerServices(
-          buildServiceConfig({
+        registerServices({
+          ...buildServiceConfig({
             // The config as the app wrote it. The boot runs every `setup`
             // transformer and contribution fold itself; booting from the
             // loader's `config`, which holds their result, ran each twice, so
@@ -620,8 +629,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             imageProcessor: getImageProcessor(),
             hookRegistry: getHookRegistry(),
             logger: context.logger,
-          })
-        )
+          }),
+          // The project `--cwd` names, not the directory the CLI ran in: the
+          // start check judges the Next.js and React that app installs.
+          appRoot: projectRoot,
+        })
       );
       const pluginContext = getInitializedPluginContext(plugin.name);
       if (pluginContext === undefined) {
@@ -689,7 +701,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage: `Event handlers that ${plugin.name}'s ${hook} set off were still running after ${LIFECYCLE_HANDLER_WAIT_MS / 1000}s, so the command stopped there. Run it again once what they do can finish.`,
-        logContext: { plugin: plugin.name, hook },
+        logContext: {
+          reason: "plugin-hook-handlers-running",
+          plugin: plugin.name,
+          hook,
+        },
       });
     }
   };
@@ -745,6 +761,28 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     prepareDowns,
     runDown,
     underMigrateLock,
+    // A full uninstall without consent asks the person at a terminal, and is
+    // refused at once where nobody is there to answer.
+    interactive: isInteractiveTerminal(),
+    askToDelete: askToDeleteInTerminal,
+    // Read through the schema pipeline's own introspection, so a column is
+    // judged present exactly as a push would see it.
+    liveColumns: async (tables: readonly string[]) => {
+      const { introspectLiveColumns } = await import(
+        "../../domains/schema/pipeline/diff/introspect-live"
+      );
+      const snapshot = await introspectLiveColumns(
+        drizzleAdapter.getDrizzle(),
+        dialect,
+        [...tables]
+      );
+      return new Map(
+        snapshot.tables.map(table => [
+          table.name,
+          new Set(table.columns.map(column => column.name)),
+        ])
+      );
+    },
   };
 }
 
@@ -776,7 +814,7 @@ export async function runPluginInstallAll(
 
 export async function runPluginUninstall(
   name: string,
-  options: RunnerOptions & { keepData: boolean; yes: boolean },
+  options: RunnerOptions & UninstallOptions,
   context: CommandContext
 ): Promise<void> {
   const deps = await connect(options, context);
@@ -787,7 +825,11 @@ export async function runPluginUninstall(
     // two of them leaves a state no snapshot describes.
     await runPluginUninstallCommand(
       name,
-      { keepData: options.keepData, yes: options.yes },
+      {
+        keepData: options.keepData,
+        yes: options.yes,
+        consent: options.consent,
+      },
       deps
     );
   } finally {

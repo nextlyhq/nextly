@@ -16,6 +16,7 @@
 
 import {
   isErrorResponse,
+  requireAllPermissions,
   requireAnyPermission,
   requireAuthentication,
   requireCollectionAccess,
@@ -64,6 +65,19 @@ export async function requireRoutePermission(
 }
 
 /**
+ * Require an authenticated caller holding EVERY one of the given permissions.
+ * Mirrors the dispatcher's `requireAllPermissions`.
+ */
+export async function requireRouteAllPermissions(
+  request: Request,
+  permissions: ReadonlyArray<{ action: string; resource: string }>
+): Promise<AuthContext> {
+  const result = await requireAllPermissions(request, permissions);
+  if (isErrorResponse(result)) throwAuthError(result);
+  return result;
+}
+
+/**
  * Require an authenticated caller holding ANY of the given permissions.
  * Mirrors the dispatcher's `requireAnyPermission`.
  */
@@ -94,7 +108,8 @@ export async function requireRouteCollectionAccess(
     request,
     action,
     collectionSlug,
-    operation
+    // This route requires a caller, so it never admits a visitor.
+    operation && { ...operation, admitsVisitor: false }
   );
   if (isErrorResponse(result)) throwAuthError(result);
   return result;

@@ -2,7 +2,7 @@
  * `nextly migrate:check`.
  *
  * CI-friendly integrity verification for migration files. Does NOT
- * connect to a database. Five checks run in order; first failure
+ * connect to a database. Six checks run in order; first failure
  * exits non-zero with a specific error code:
  *
  *   1. CHECKSUM_MISMATCH  - A `.sql` file's content differs from the
@@ -18,6 +18,9 @@
  *   5. SCHEMA_DRIFT       - `nextly.config.ts` has uncommitted changes
  *      relative to the latest snapshot (operator forgot to run
  *      `migrate:create` after editing config).
+ *   6. SETTINGS_DRIFT     - An entity's settings (labels, description, admin
+ *      options, a field's help text...) differ from the latest snapshot's
+ *      record of them. Skipped when that snapshot predates the record.
  *
  * Before the drift check it also warns, without failing, about each file
  * holding a statement `nextly migrate` or `migrate:down` would refuse
@@ -58,13 +61,24 @@ import {
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
+import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import {
+  toMinimalEntities,
+  withBuilderSettingsAll,
+} from "../../domains/schema/migrate-create/config-entities";
+import {
+  describeSettingsChange,
+  settingsChangesFor,
+  type EntitySettingsRecord,
+} from "../../domains/schema/migrate-create/entity-settings";
+import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
 import {
   EMPTY_SNAPSHOT,
@@ -88,21 +102,35 @@ import {
   resolveComponentTableName,
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
-import { describeError } from "../../errors/index";
+import { addressRefusalsError } from "../../shared/address-rule";
+import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import {
-  assertPluginFieldDeclarations,
-  describeDeclarationFailure,
-} from "../../shared/lib/assert-plugin-field-declarations";
+  type CliError,
+  configDeclarationError,
+  exitWithError,
+} from "../errors";
+import {
+  builderSnapshotMissing,
+  migrationFileEdited,
+  migrationSnapshotInvalid,
+  migrationSnapshotMissing,
+  schemaChangeWithoutMigration,
+  settingsChangeWithoutMigration,
+  snapshotWithoutMigration,
+} from "../errors/areas/migrations";
+import { builderSchemaConflict } from "../errors/areas/plugin-config";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import type { SupportedDialect } from "../utils/adapter";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
   getSortedBaseNames,
+  isBuilderWrittenMigration,
   selectVariant,
 } from "../utils/migration-discovery";
-
-import { parseSqlSections } from "./migrate";
 
 // ============================================================================
 // Types
@@ -137,32 +165,18 @@ export async function runMigrateCheck(
   // we just need to know which SQL flavor the diff engine should target
   // when computing the desired snapshot. Without this, drift-check
   // results would be inconsistent across dialects.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables. " +
-        "(migrate:check does not connect to the DB but needs the dialect to compare snapshots correctly.)"
-    );
-    process.exit(1);
-  }
-  const dialect = dbValidation.dialect!;
+  const dbValidation = requireDatabaseEnv(logger);
+  const dialect = dbValidation.dialect;
 
   // Load config.
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
   // first moment an unknown field type can be told apart from one a plugin had
@@ -180,8 +194,7 @@ export async function runMigrateCheck(
   } catch (error) {
     // Reported and exited rather than thrown, so an invalid declaration reads
     // like every other check failure instead of an unhandled crash.
-    logger.error(describeDeclarationFailure(error));
-    process.exit(1);
+    exitWithError(logger, configDeclarationError(error) ?? error);
   }
 
   const cwd = options.cwd ?? process.cwd();
@@ -195,8 +208,7 @@ export async function runMigrateCheck(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(`UI_SCHEMA_INVALID: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   // Materialize plugin extends that target Builder-made entities (P8) so the
@@ -232,8 +244,7 @@ export async function runMigrateCheck(
       ),
     });
   } catch (error) {
-    logger.error(describeDeclarationFailure(error));
-    process.exit(1);
+    exitWithError(logger, configDeclarationError(error) ?? error);
   }
 
   // Cross-file checks (slug collision, relation targets).
@@ -244,10 +255,7 @@ export async function runMigrateCheck(
     manifest,
   });
   if (crossIssues.length > 0) {
-    for (const issue of crossIssues) {
-      logger.error(`${issue.code}: ${issue.message}`);
-    }
-    process.exit(1);
+    exitWithError(logger, builderSchemaConflict(crossIssues));
   }
 
   // Merge code + UI entities (code-first wins) for the drift comparison.
@@ -288,6 +296,8 @@ export async function runMigrateCheck(
     desiredSnapshot,
     appStream,
     dialect,
+    // Each entity with its settings, as `migrate:create` records them.
+    entities: withBuilderSettingsAll(merged, manifest),
     logger,
   });
 }
@@ -312,6 +322,15 @@ export async function runChecks(args: {
    * check is skipped.
    */
   dialect?: SupportedDialect;
+  /**
+   * The declared entities with their settings, compared with the newest
+   * snapshot's settings record. Omitted, settings are not checked.
+   */
+  entities?: {
+    collections: readonly MinimalConfigEntity[];
+    singles: readonly MinimalConfigEntity[];
+    components: readonly MinimalConfigEntity[];
+  };
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -353,31 +372,30 @@ export async function runChecks(args: {
       // (fix = regenerate or upgrade nextly) apart from "snapshot is
       // missing entirely" (fix = git checkout).
       if (err instanceof SnapshotFileError) {
-        logger.error(`INVALID_SNAPSHOT: ${err.message}`);
-        process.exit(1);
-        return;
+        return exitWithError(logger, migrationSnapshotInvalid(err.message));
       }
       throw err;
     }
     if (!result.ok && result.expected === undefined) {
-      logger.error(
-        `MISSING_SNAPSHOT: ${sqlName} has no paired snapshot file in ${metaDir}. ` +
-          "If this migration was generated before F11 PR 3 (snapshot-based migrate:create), " +
-          "you can either delete it or re-create it with `nextly migrate:create --blank` and copy the SQL across."
-      );
-      process.exit(1);
-      return;
+      // A Builder save writes no snapshot. Its remedy is the file
+      // `migrate:create` writes for the change, which `nextly migrate` also
+      // asks for before it refuses to apply this one.
+      if (isBuilderWrittenMigration(sqlName.replace(/\.sql$/, ""))) {
+        return exitWithError(
+          logger,
+          builderSnapshotMissing(
+            "`nextly migrate:check` found a Schema Builder migration file with no snapshot, which `nextly migrate` does not apply.",
+            [sqlName]
+          )
+        );
+      }
+      return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
     }
     if (!result.ok) {
-      logger.error(`CHECKSUM_MISMATCH: ${sqlName}`);
-      logger.error(`  Expected SHA-256: ${result.expected}`);
-      logger.error(`  Actual SHA-256:   ${result.actual}`);
-      logger.error(
-        "  The migration file was edited after generation. Either revert the edit, " +
-          'or delete this file and re-generate via `nextly migrate:create --name="<migration-name>"`.'
+      return exitWithError(
+        logger,
+        migrationFileEdited(sqlName, result.expected, result.actual)
       );
-      process.exit(1);
-      return;
     }
   }
 
@@ -386,12 +404,10 @@ export async function runChecks(args: {
   for (const snapName of snapshotFiles) {
     const baseName = snapName.replace(/\.snapshot\.json$/, "");
     if (!sqlBaseNames.has(baseName)) {
-      logger.error(
-        `MISSING_MIGRATION: snapshot ${snapName} exists but ${baseName}.sql does not. ` +
-          "Restore the .sql file from version control, or delete the orphan snapshot."
+      return exitWithError(
+        logger,
+        snapshotWithoutMigration(snapName, baseName)
       );
-      process.exit(1);
-      return;
     }
   }
 
@@ -420,8 +436,9 @@ export async function runChecks(args: {
   // here as pending.
   let previousSnapshot: NextlySchemaSnapshot;
   let desiredSnapshot: NextlySchemaSnapshot;
+  let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
-    const latest = await loadLatestSnapshot(metaDir);
+    latest = await loadLatestSnapshot(metaDir);
     const stream = appStreamSnapshots({
       previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
       previousContributions: latest?.data.contributions ?? {},
@@ -433,29 +450,34 @@ export async function runChecks(args: {
   } catch (err) {
     // F11 PR 4 review fix #3: see INVALID_SNAPSHOT comment above.
     if (err instanceof SnapshotFileError) {
-      logger.error(`INVALID_SNAPSHOT: ${err.message}`);
-      process.exit(1);
-      return;
+      return exitWithError(logger, migrationSnapshotInvalid(err.message));
     }
     throw err;
   }
 
+  // Addresses, by the one address rule, before the drift a new entity also
+  // shows. A new one the rule refuses fails the check; one an entity already
+  // has (its table is in the latest snapshot) keeps working, and is reported
+  // once as a warning naming the address and the reason. A refusal ends in the
+  // CLI's error shape, as every other failed check here does.
+  const refused = reportMigrationAddresses(args.entities, latest, logger);
+  if (refused.length > 0) {
+    return exitWithError(logger, addressRefusalsError(refused));
+  }
+
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
   if (ops.length > 0) {
-    logger.error(`SCHEMA_DRIFT: ${ops.length} pending change(s) detected.`);
     // Cap the listed ops at 10 to keep CI logs readable on large drifts.
-    for (const op of ops.slice(0, 10)) {
-      logger.error(`  + ${describeOp(op)}`);
-    }
-    if (ops.length > 10) {
-      logger.error(`  ... and ${ops.length - 10} more`);
-    }
-    logger.error(
-      'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
+    const listed = ops.slice(0, 10).map(op => `+ ${describeOp(op)}`);
+    if (ops.length > 10) listed.push(`... and ${ops.length - 10} more`);
+    return exitWithError(
+      logger,
+      schemaChangeWithoutMigration(ops.length, listed)
     );
-    process.exit(1);
-    return;
   }
+
+  const settingsDrift = settingsInStep(args.entities, latest?.data.entities);
+  if (settingsDrift !== undefined) return exitWithError(logger, settingsDrift);
 
   logger.success(
     `migrate:check OK — ${sqlFiles.length} migration file(s), no drift.`
@@ -465,6 +487,35 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * Check 6: settings changed with no migration for them, as the error the
+ * check ends with; undefined when there are none.
+ *
+ * The delta is the one `migrate:create` writes a migration for. A newest
+ * snapshot written before settings were recorded says nothing about them, so
+ * its silence is never a difference: there is nothing to compare until the
+ * first `migrate:create` after upgrading records them.
+ */
+function settingsInStep(
+  entities:
+    | {
+        collections: readonly MinimalConfigEntity[];
+        singles: readonly MinimalConfigEntity[];
+        components: readonly MinimalConfigEntity[];
+      }
+    | undefined,
+  recorded: EntitySettingsRecord | undefined
+): CliError | undefined {
+  if (entities === undefined || recorded === undefined) return undefined;
+  const changes = settingsChangesFor(entities, recorded);
+  if (changes.length === 0) return undefined;
+  const listed = changes
+    .slice(0, 10)
+    .map(change => `~ ${describeSettingsChange(change)}`);
+  if (changes.length > 10) listed.push(`... and ${changes.length - 10} more`);
+  return settingsChangeWithoutMigration(changes.length, listed);
+}
 
 /**
  * What `nextly migrate` and `migrate:down` would make of each migration
@@ -578,8 +629,7 @@ export function registerMigrateCheckCommand(program: Command): void {
       try {
         await runMigrateCheck(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

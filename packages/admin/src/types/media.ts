@@ -46,19 +46,6 @@ export type MediaTypeFilter = "all" | MediaType;
  * };
  * ```
  */
-/**
- * Metadata for a single generated image size variant.
- */
-export interface ImageSizeVariant {
-  url: string;
-  path: string;
-  width: number;
-  height: number;
-  filesize: number;
-  mimeType: string;
-  filename: string;
-}
-
 export interface Media {
   id: string;
   filename: string;
@@ -72,7 +59,6 @@ export interface Media {
   thumbnailUrl?: string | null;
   focalX?: number | null; // Crop point X (0-100, percentage from left)
   focalY?: number | null; // Crop point Y (0-100, percentage from top)
-  sizes?: Record<string, ImageSizeVariant> | null; // Generated image size variants
   altText?: string | null;
   caption?: string | null;
   tags?: string[] | null;
@@ -148,8 +134,14 @@ export interface FolderContentsResponse {
   data: {
     folder: MediaFolder | null; // null for root
     subfolders: MediaFolder[];
-    mediaFiles: Media[];
+    /**
+     * One page of the folder's files, under the key the server sends
+     * (`files`): the first, unless a page is asked for.
+     */
+    files: Media[];
     breadcrumbs: Array<{ id: string; name: string }>;
+    /** How many files the folder holds in all, and which page `files` is. */
+    meta: { total: number; page: number; limit: number; totalPages: number };
   };
 }
 
@@ -218,14 +210,15 @@ export interface UploadProgress {
   file: File;
   filename: string;
   /**
-   * `error` is a server-side failure (retryable); `rejected` is a client-side
-   * validation failure (too large, wrong type, over the batch cap) that would
-   * fail identically on retry.
+   * `pending` is waiting its turn in the queue. `error` is a failure on the
+   * way or at the server (retryable); `rejected` is refused before upload
+   * (too large, a type not allowed) and would be refused again on retry.
    */
   status: "pending" | "uploading" | "success" | "error" | "rejected";
   /**
-   * True for rejected rows that were dropped only because the batch exceeded
-   * the per-upload file cap (reported as "skipped", not "failed").
+   * Was true for rows past a per-drop file cap. A drop has no cap any more,
+   * so the admin never sets it; kept so existing readers of the type still
+   * compile.
    */
   skipped?: boolean;
   progress?: number; // 0-100

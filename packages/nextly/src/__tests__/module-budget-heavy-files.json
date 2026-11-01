@@ -22,7 +22,6 @@
     "src/cli/commands/__tests__/migrate-create-plugin-closure.test.ts",
     "src/cli/commands/__tests__/migrate-field-groups.test.ts",
     "src/cli/commands/__tests__/plugin-lifecycle-runner-teardown.test.ts",
-    "src/cli/commands/__tests__/plugin-rollback-paths.test.ts",
     "src/cli/commands/migrate-check.test.ts",
     "src/cli/commands/migrate.test.ts",
     "src/cli/commands/webhooks-prune.test.ts",

@@ -36,7 +36,7 @@ import {
 } from "../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
-import { isListField } from "./diff/compute-diff";
+import { isListField } from "./diff/field-cardinality";
 
 /** Who is reading, and their grants, shared with the entity's own pass. */
 export interface ComponentReadCaller {

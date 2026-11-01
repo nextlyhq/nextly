@@ -3,10 +3,8 @@
  * configured dialect.
  *
  * The read names each widget the reader may add, with the group core assigns
- * it. A widget the reader may not see is not named at all; a card core derives
- * from a collection is retired and never offered, whatever the collection; and
- * content the site keeps off the dashboard (internal, or hidden from the
- * admin) has no card to offer in the first place.
+ * it. A widget the reader may not see is not named at all, and no widget is
+ * named after a collection: a card about one is a Content widget set to it.
  */
 
 // Must be set before the harness boots (env validation) and to sign tokens.
@@ -25,7 +23,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
-import { refreshCollectionWidgets } from "../collection-widgets";
+import { refreshContentSources } from "../content-sources";
 import { clearSources } from "../sources";
 
 // Each case makes real requests through the whole handler. Set
@@ -129,9 +127,9 @@ describeEachDialect("what the add panel is offered", dialect => {
       releases: { create: (a: { title: string }) => Promise<unknown> };
     };
     await nextly.releases.create({ title: "Launch" });
-    // A cold process: the derived cards below are the refresh's own work.
+    // A cold process: the sources the read offers are the refresh's own work.
     clearSources();
-    await refreshCollectionWidgets();
+    await refreshContentSources();
   });
 
   afterEach(async () => {
@@ -145,38 +143,39 @@ describeEachDialect("what the add panel is offered", dialect => {
     expect(named(layout).has(GATED)).toBe(true);
     expect(layout.widgets[GATED]?.group).toBe("overview");
     expect(layout.widgets["core/team"]?.group).toBe("team");
-    expect(layout.widgets["core/recent-activity"]?.group).toBe("team");
+    expect(layout.widgets["core/team-activity"]?.group).toBe("team");
   });
 
   it("does not name a widget the reader may not see", async () => {
     const layout = await read(reader);
     expect(named(layout).has(GATED)).toBe(false);
     expect(layout.widgets).not.toHaveProperty(GATED);
-    // The control: the same read names a built-in this reader may see. Recent
-    // activity, which has no gate and no condition. Not Team: it is offered
-    // only to someone who may read people and add or change them, which this
-    // reader, holding no grants, may not.
-    expect(named(layout).has("core/recent-activity")).toBe(true);
+    // The control: the same read names a built-in this reader may see. Note,
+    // which has no gate and no condition. Not Team: it is offered only to
+    // someone who may read people and add or change them, which this reader,
+    // holding no grants, may not; nor Team activity, offered only to a reader
+    // of some content.
+    expect(named(layout).has("core/note")).toBe(true);
+    expect(named(layout).has("core/team-activity")).toBe(false);
   });
 
-  it("offers no card derived from a collection, and has none for content kept off the dashboard", async () => {
+  it("names no widget per collection: a collection is reached through a Content widget", async () => {
     const layout = await read(admin);
-    const derived = Object.keys(layout.widgets).filter(id =>
-      id.startsWith("collection/")
-    );
-    // The control: the shown collection's derived cards exist and are still
-    // drawable, so their absence from the offer is the rule, not an empty set.
-    expect(derived.some(id => id.includes(POSTS))).toBe(true);
-    for (const id of derived) {
-      expect(layout.available, id).not.toContain(id);
-      expect(layout.widgets[id]?.group, id).toBeUndefined();
-    }
-    for (const slug of [INTERNAL, HIDDEN]) {
+    // 🔴 No id in a per-collection or per-Single namespace, and none spelled
+    // from any collection this install has, shown or kept off the dashboard.
+    const ids = Object.keys(layout.widgets);
+    expect(
+      ids.filter(id => id.startsWith("collection/") || id.startsWith("single/"))
+    ).toEqual([]);
+    for (const slug of [POSTS, INTERNAL, HIDDEN]) {
       expect(
-        derived.some(id => id.includes(slug)),
+        ids.filter(id => id.includes(slug)),
         slug
-      ).toBe(false);
+      ).toEqual([]);
     }
+    // The control: the Content widget a collection is reached through IS
+    // named, in the Content group, so the absence above is not an empty read.
+    expect(layout.widgets["core/count"]?.group).toBe("content");
     // Everything that IS offered has a group to be listed in.
     for (const id of layout.available) {
       expect(layout.widgets[id]?.group, id).toEqual(expect.any(String));

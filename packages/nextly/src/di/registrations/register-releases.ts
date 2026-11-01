@@ -15,10 +15,8 @@
  * @module di/registrations/register-releases
  */
 
-import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { nextly } from "../../direct-api/nextly";
-import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import {
   linkFieldKeysVisibleTo,
   releaseLinkReads,
@@ -28,6 +26,7 @@ import { runSweepNow } from "../../domains/jobs/jobs-runner";
 import { registerNoticeKind } from "../../domains/notices/notice-kinds";
 import { registerCoreReleaseCheckSources } from "../../domains/releases/readiness/core-sources";
 import { recordReleaseActivity } from "../../domains/releases/release-activity";
+import { RELEASE_OVERDUE_NOTICE } from "../../domains/releases/release-overdue-notice";
 import { RELEASE_STOPPED_NOTICE } from "../../domains/releases/release-stopped-notice";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
@@ -48,6 +47,11 @@ import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
 import {
+  languageChangeContentCache,
+  registryRevalidateConfigs,
+} from "./language-change-content-cache";
+import {
+  entriesMayAct,
   releaseDocumentChecks,
   singleRowExists,
 } from "./release-document-checks";
@@ -60,10 +64,12 @@ export function registerReleaseServices({
   // Core's checks, which every release's readiness, scheduling and Publish now
   // ask. Registered with the feature, so a boot that has releases has them.
   registerCoreReleaseCheckSources();
-  // The notice a stopped release's owner is given, which the one transition
-  // into `blocked` records: registered with the feature, so no boot can stop
-  // a release without being able to tell its owner.
+  // The notices a release's owner is given, which the transitions record: a
+  // stop, and a release that misses its time. Registered with the feature, so
+  // no boot can stop a release, or find one overdue, without being able to
+  // tell its owner.
   registerNoticeKind(RELEASE_STOPPED_NOTICE);
+  registerNoticeKind(RELEASE_OVERDUE_NOTICE);
 
   container.registerSingleton<ReleasesService>(
     "releasesService",
@@ -79,7 +85,14 @@ export function registerReleaseServices({
           adapter,
           container.has("cacheRevalidator")
             ? container.get<CacheRevalidator>("cacheRevalidator")
-            : undefined
+            : undefined,
+          // The opt-out and extra tags a release's flush must honour, read as a
+          // language change reads them; none where the registered revalidator
+          // flushes nothing (no Next runtime, the CLI), so those read no registry.
+          async () =>
+            languageChangeContentCache().revalidator()
+              ? registryRevalidateConfigs()
+              : { collections: [], singles: [] }
         ),
 
         // The system resource, whose three authorities are seeded by
@@ -285,10 +298,11 @@ export function registerReleaseServices({
         // container — the first reordering would break it silently.
         canActOnDocument: async ({
           userId,
+          scopeKind,
           scopeSlug,
+          entryId,
           action,
           authenticatedScope,
-          userRoles,
         }) => {
           if (!container.has("rbacAccessControlService")) {
             // No permission store means no basis for saying yes. A minimal boot
@@ -296,9 +310,6 @@ export function registerReleaseServices({
             // authorize anyone into a release.
             return false;
           }
-          const rbac = container.get<RBACAccessControlService>(
-            "rbacAccessControlService"
-          );
 
           // TWO questions, because two different principals are involved.
           //
@@ -307,31 +318,37 @@ export function registerReleaseServices({
           // materialisation and the recorded author's own grants are the only
           // thing that can authorize it. A member admitted on a key's authority
           // alone is one the drain will refuse forever, leaving the release
-          // scheduled with content that never appears.
+          // scheduled with content that never appears. So the author is
+          // resolved and judged as the run will act as them, outside this
+          // request, the readiness checks' own question asked of one document.
           //
           // The run writes the status alone, a publish or an unpublish judged
           // by that action's own grant and rule, not update's: the release
-          // admits exactly the author the run's write would.
-          const authorMay = await rbac.checkAccess({
-            userId,
-            operation: action,
-            resource: scopeSlug,
-          });
-          if (!authorMay) return false;
+          // admits exactly the author, and the document, the run's write would.
+          const checks = releaseDocumentChecks(adapter, logger);
+          const author = await checks.actingAs(userId);
+          if (author === null) return false;
+          const scope = { scopeKind, scopeSlug };
+          const authorMay = await checks.mayPerform(author, scope, action, [
+            entryId,
+          ]);
+          if (!authorMay.has(entryId)) return false;
 
           // And a scoped API key must hold the grants ITSELF, or a narrow key
           // borrows the owner's authority to schedule a write it was never
-          // given. `null` means the caller is not a key, and the author check
-          // above is then the whole answer.
-          const asUser = { id: userId, roles: userRoles };
-          const keyMayAct = await apiKeyWriteAllowed(
-            authenticatedScope,
-            action,
-            scopeSlug,
-            asUser,
-            rbac
+          // given: judged by its own grants and rules, a filter matched
+          // against this document as the author's is.
+          if (authenticatedScope === undefined) return true;
+          const keyMay = await runDetachedFromRequest(() =>
+            entriesMayAct(logger, {
+              user: author,
+              scope,
+              action,
+              entryIds: [entryId],
+              authenticatedScope,
+            })
           );
-          return keyMayAct ?? true;
+          return keyMay.has(entryId);
         },
       })
   );

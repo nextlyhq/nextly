@@ -15,6 +15,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { DOCUMENT_PANEL_STICKY } from "../../EntryForm/DocumentEditorLayout";
 import { TranslationPanes } from "../TranslationPanes";
 import type { SourcePaneDocument } from "../SourceDocumentPane";
 
@@ -99,6 +100,35 @@ describe("TranslationPanes", () => {
     expect(
       screen.getByRole("button", { name: /exit translation mode/i })
     ).toBeInTheDocument();
+  });
+
+  it("keeps the admin's top bar, so the trail to the document stays on screen", () => {
+    render(
+      <TranslationPanes source={SOURCE} onExit={() => {}}>
+        <p>the editor</p>
+      </TranslationPanes>
+    );
+
+    const request = suppress.mock.calls[0]?.[0] as { layers: string[] };
+    // The control: the mode does take the furniture beside the editor.
+    expect(request.layers).toContain("subSidebar");
+    expect(request.layers).not.toContain("header");
+  });
+
+  it("tells the editor how tall its scroll area is, which the sticky panel sizes itself by", () => {
+    // jsdom lays nothing out, so this pins the wiring: the target pane declares
+    // the variable the document panel reads. With the top bar kept above the
+    // mode's own bar, the page's default height would leave the panel's foot
+    // below the pane; a renamed variable on either side falls back to that
+    // default in silence.
+    render(
+      <TranslationPanes source={SOURCE} onExit={() => {}}>
+        <p>the editor</p>
+      </TranslationPanes>
+    );
+    const scroller = screen.getByText("the editor").closest(".overflow-y-auto");
+    expect(scroller?.className).toContain("[--editor-scrollport:");
+    expect(DOCUMENT_PANEL_STICKY).toContain("var(--editor-scrollport,");
   });
 
   it("leaves the mode when the exit is used", async () => {

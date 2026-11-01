@@ -20,7 +20,7 @@
  * ```
  */
 
-import { warnIfCacheComponentsOn } from "./cache-components";
+import { warnIfCacheComponentsOff } from "./cache-components";
 
 /**
  * Packages that must be loaded from node_modules at runtime
@@ -74,6 +74,9 @@ const NEXTLY_FILE_TRACING_INCLUDES = [
 /**
  * Wraps a Next.js config to add Nextly-required settings.
  *
+ * Warns once when the config has Cache Components or Partial Prefetching
+ * off: Nextly supports only both on.
+ *
  * Automatically adds server-external packages so database drivers
  * and adapters are loaded from node_modules at runtime instead of
  * being bundled (which fails on serverless platforms like Vercel).
@@ -107,9 +110,16 @@ const NEXTLY_FILE_TRACING_INCLUDES = [
 export function withNextly<T extends Record<string, unknown>>(
   nextConfig: T
 ): T {
-  // Read while Next.js loads the config, before anything builds or serves:
-  // the earliest place an app with Cache Components on can be told why.
-  warnIfCacheComponentsOn(nextConfig.cacheComponents, "this next.config");
+  // Read while Next.js loads the config, before anything builds or serves.
+  // Only here does Nextly see `partialPrefetching`: Next.js passes it to no
+  // code at run time.
+  warnIfCacheComponentsOff(
+    {
+      cacheComponents: nextConfig.cacheComponents,
+      partialPrefetching: nextConfig.partialPrefetching,
+    },
+    "this next.config"
+  );
 
   const existing =
     (nextConfig.serverExternalPackages as string[] | undefined) ?? [];

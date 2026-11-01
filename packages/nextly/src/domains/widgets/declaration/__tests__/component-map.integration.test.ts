@@ -5,9 +5,9 @@
  *   resolves the config through `loadConfig`, and the check reads the list the
  *   boot resolved. Both must give the same components, including a plugin a
  *   `setup` transformer adds.
- * - A dashboard widget whose component the map lacks refuses the admin in
- *   production, and in development when the running app may not rewrite
- *   generated files. A control passes with the map whole.
+ * - A dashboard widget whose component the map lacks never refuses the admin:
+ *   production does not look, and development, when the running app may not
+ *   rewrite generated files, warns, naming the widget the boot resolved.
  *
  * The config bundler is stubbed, as the loader's own tests stub it:
  * everything under test runs after it. The boot is real (`createTestNextly`);
@@ -37,7 +37,7 @@ import {
   clearConfigCache,
   loadConfig,
 } from "../../../../cli/utils/config-loader";
-import { NextlyError } from "../../../../errors/nextly-error";
+import * as loggerModule from "../../../../observability/logger";
 import { componentImportMapEntries } from "../../../../plugins/codegen/component-import-map";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
@@ -120,14 +120,21 @@ async function generatorPlugins(
   return loaded.config.plugins ?? [];
 }
 
-async function refusalOf(run: Promise<void>): Promise<NextlyError> {
+/** The logger's warnings while `run` checks the map. */
+async function warningsOf(run: () => Promise<void>): Promise<string[]> {
+  const warn = vi.fn();
+  const logger = loggerModule.getNextlyLogger();
+  const spy = vi
+    .spyOn(loggerModule, "getNextlyLogger")
+    .mockReturnValue({ ...logger, warn } as typeof logger);
   try {
-    await run;
-  } catch (error) {
-    expect(error).toBeInstanceOf(NextlyError);
-    return error as NextlyError;
+    await run();
+  } finally {
+    spy.mockRestore();
   }
-  throw new Error("expected the admin to be refused");
+  return warn.mock.calls.map(
+    ([logged]) => (logged as { message: string }).message
+  );
 }
 
 describe("the component map, against a real boot (sqlite)", () => {
@@ -145,40 +152,33 @@ describe("the component map, against a real boot (sqlite)", () => {
     ]);
   });
 
-  it("refuses the admin in production over a widget the map lacks, and serves it with the map whole", async () => {
+  it("serves the admin in production over a widget the map lacks, and warns nothing", async () => {
     handle = await createTestNextly({ plugins: [shop] });
     vi.stubEnv("NODE_ENV", "production");
-    const refused = await refusalOf(
+    const warnings = await warningsOf(() =>
       checkAdminComponents({
         config,
         registeredComponentPaths: ["@acme/shop/admin#Revenue"],
       })
     );
-    expect(refused.code).toBe("NEXTLY_ADMIN_COMPONENT_MAP_STALE");
-    expect(refused.logMessage).toContain(
-      '- plugin "@acme/stats", widget "stats/visits": `@acme/stats/admin#Visits`'
-    );
-    await expect(
-      checkAdminComponents({
-        config,
-        registeredComponentPaths: [
-          "@acme/shop/admin#Revenue",
-          "@acme/stats/admin#Visits",
-        ],
-      })
-    ).resolves.toBe(undefined);
+    expect(warnings).toEqual([]);
   });
 
-  it("refuses it in development when the app may not rewrite generated files", async () => {
+  it("serves it in development when the app may not rewrite generated files, naming each widget the boot resolved", async () => {
     handle = await createTestNextly({ plugins: [shop] });
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("NEXTLY_GENERATED_FILES_WRITE", "0");
-    const refused = await refusalOf(
+    const warnings = await warningsOf(() =>
       checkAdminComponents({ config, registeredComponentPaths: [] })
     );
-    expect(refused.logMessage).toContain(
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(
       "automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0)"
     );
-    expect(refused.logMessage).toContain('widget "acme/revenue"');
+    expect(warnings[0]).toContain('widget "acme/revenue"');
+    // The plugin the transformer added, which only the boot's resolution sees.
+    expect(warnings[0]).toContain(
+      '- missing: plugin "@acme/stats", widget "stats/visits": @acme/stats/admin#Visits'
+    );
   });
 });

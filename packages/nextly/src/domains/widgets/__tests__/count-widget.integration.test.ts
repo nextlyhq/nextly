@@ -1,13 +1,14 @@
 /**
- * The Count card's reads, against a real database: each cell as core declares
- * it, set to a collection, run through the executor with one frozen instant.
+ * The Count card's reads, against a real database: its declaration's `load`,
+ * set to a collection, run as a reader with one frozen instant.
  *
  * What only a database can settle:
  * - the number is the same read either way: a lifecycle collection's status
  *   split sums to the plain count;
- * - the trend and the period before it are adjacent and whole, on the UTC
- *   days the chart's bars are drawn on, so an entry is in exactly one of them;
- * - the chart's bars sum to the figure the card states for them.
+ * - the trend, a series over the last 30 days, and the period before it, a
+ *   count over the window as long that ends where the series starts, are
+ *   adjacent, so an entry is in one of them at most;
+ * - the chart's bars sum to the figure a count over the same window gives.
  *
  * Rows are backdated on the stored row, since a write stamps its own instant.
  */
@@ -28,11 +29,13 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshContentSources } from "../collection-widgets";
-import { CORE_WIDGETS } from "../core-widgets";
+import { refreshContentSources } from "../content-sources";
+import { countWidget } from "../core-widgets/count";
+import type { CountWidgetData } from "../core-widgets/data";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
-import type { WidgetResult } from "../result";
+
+import { loadCard, servicesFor } from "./core-card-load";
 
 let current: TestNextly | undefined;
 
@@ -48,12 +51,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The batch's one instant, mid-morning so no row sits on today's midnight. */
 const NOW = new Date("2026-06-15T10:00:00.000Z");
-/** The start of NOW's UTC day, where the day buckets and the spans step from. */
+/** The start of NOW's UTC day, where the series' last day starts. */
 const TODAY = new Date("2026-06-15T00:00:00.000Z");
-/** The first instant of the last 30 days, today included. */
-const RECENT_START = new Date(TODAY.getTime() - 29 * DAY_MS);
-/** The first instant of the 30 days before them. */
-const PRIOR_START = new Date(TODAY.getTime() - 59 * DAY_MS);
+/** The first instant of the last 30 days: the series' window, from the instant 30 days back. */
+const RECENT_START = new Date(NOW.getTime() - 30 * DAY_MS);
+/** The UTC day the series' first, partial, point starts. */
+const FIRST_DAY = new Date("2026-05-16T00:00:00.000Z");
+/** The first instant of the 30 days before them: the window as long, ending where they start. */
+const PRIOR_START = new Date(NOW.getTime() - 60 * DAY_MS);
 
 /** A reader the gate finds holding super-admin, seeded at each boot. */
 const admin: ReadCaller = { user: { id: "admin" } };
@@ -93,24 +98,15 @@ const POST_ROWS: Record<string, Row> = {
   },
 };
 
-const COUNT = CORE_WIDGETS.find(widget => widget.id === "core/count");
-
-/** One of Count's cells, as core declares it, set to `collection`. */
-function cellQuery(key: string, collection: string) {
-  const cell = (COUNT?.cells ?? []).find(
-    candidate => "query" in candidate && candidate.key === key
-  );
-  if (cell === undefined || !("query" in cell)) {
-    throw new Error(`core/count has no cell "${key}"`);
-  }
-  return validateWidgetQuery({
-    ...cell.query,
-    source: `collection:${collection}`,
+/** What a Count card set to `collection` answers, at `tier`, at the batch's instant. */
+function count(
+  collection: string,
+  tier: "small" | "medium" | "large"
+): Promise<CountWidgetData> {
+  return loadCard(countWidget, { collection }, admin, {
+    size: { w: 8, h: 3, tier },
+    now: NOW,
   });
-}
-
-async function run(key: string, collection: string): Promise<WidgetResult> {
-  return executeWidgetQuery(cellQuery(key, collection), admin, { now: NOW });
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -162,14 +158,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("states one number whichever read gives it: the split's buckets sum to the count", async () => {
       await boot();
-      const split = await run("split", POSTS);
-      if (split.op !== "groupBy") throw new Error(split.op);
-      const byStatus = Object.fromEntries(
-        split.buckets.map(bucket => [String(bucket.value), bucket.count])
-      );
-      expect(byStatus).toEqual({ published: 3, draft: 3 });
-
-      const summed = split.buckets.reduce((sum, b) => sum + b.count, 0);
+      const card = await count(POSTS, "medium");
+      expect(card.split).toEqual({ published: 3, draft: 3 });
       const plain = await executeWidgetQuery(
         validateWidgetQuery({
           source: `collection:${POSTS}`,
@@ -179,53 +169,50 @@ describe.each(getConfiguredTestDialects())(
         admin,
         { now: NOW }
       );
-      expect(plain).toEqual({ op: "count", total: summed });
-      expect(summed).toBe(Object.keys(POST_ROWS).length);
+      expect(plain).toEqual({ op: "count", total: card.total });
+      expect(card.total).toBe(Object.keys(POST_ROWS).length);
     });
 
     it("counts a collection without a lifecycle plainly", async () => {
       await boot();
-      expect(await run("total", NOTES)).toEqual({ op: "count", total: 2 });
+      expect(await count(NOTES, "medium")).toEqual({ total: 2 });
     });
 
-    it("puts each entry in exactly one of the trend and the period before it, on whole UTC days", async () => {
+    it("puts each entry in one of the trend and the period before it at most, the two windows adjacent", async () => {
       await boot();
-      const trend = await run("trend", POSTS);
-      if (trend.op !== "timeseries") throw new Error(trend.op);
-      // Thirty daily bars, the first starting where the recent period starts
-      // and the last being today.
-      expect(trend.points).toHaveLength(30);
+      const trend = (await count(POSTS, "large")).trend;
+      if (trend === undefined) throw new Error("a large card draws its trend");
+      // A bar for each of the 31 UTC days the window overlaps, the first of
+      // them partial, and the last being today.
+      expect(trend.points).toHaveLength(31);
       expect(new Date(trend.points[0].start).getTime()).toBe(
-        RECENT_START.getTime()
+        FIRST_DAY.getTime()
       );
-      expect(new Date(trend.points[29].start).getTime()).toBe(TODAY.getTime());
-      // recentFirst, recentDraft and today; not priorLast, a second earlier.
+      expect(new Date(trend.points[30].start).getTime()).toBe(TODAY.getTime());
+      // recentFirst, recentDraft and today; not priorLast, a second earlier,
+      // on the same first day.
       expect(trend.points[0].count).toBe(1);
       expect(trend.points.reduce((sum, p) => sum + p.count, 0)).toBe(3);
 
       // priorFirst and priorLast; not recentFirst, nor older a second before
       // the period opens.
-      expect(await run("prior", POSTS)).toEqual({ op: "count", total: 2 });
+      expect(trend.prior).toBe(2);
     });
 
-    it("draws bars that sum to the recent figure a count of the same span gives", async () => {
+    it("draws bars that sum to the recent figure a count over the same window gives", async () => {
       await boot();
-      const trend = await run("trend", POSTS);
-      if (trend.op !== "timeseries") throw new Error(trend.op);
-      const recent = await executeWidgetQuery(
-        validateWidgetQuery({
-          source: `collection:${POSTS}`,
-          op: "count",
-          status: "all",
-          since: "30d",
-        }),
-        admin,
-        { now: NOW }
-      );
-      expect(recent).toEqual({
-        op: "count",
-        total: trend.points.reduce((sum, p) => sum + p.count, 0),
+      const trend = (await count(POSTS, "large")).trend;
+      if (trend === undefined) throw new Error("a large card draws its trend");
+      const recent = await servicesFor(admin, NOW).count(POSTS, {
+        status: "all",
+        window: { range: "30d" },
       });
+      expect(recent).toBe(trend.points.reduce((sum, p) => sum + p.count, 0));
+    });
+
+    it("reads no trend for a card narrower than large", async () => {
+      await boot();
+      expect((await count(POSTS, "medium")).trend).toBeUndefined();
     });
   }
 );

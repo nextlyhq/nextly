@@ -11,35 +11,41 @@
 export {
   defineWidget,
   type AnyWidget,
-  type ContentQuery,
   type WidgetAccess,
+  type WidgetAccessGate,
+  type WidgetCollectionDescription,
+  type WidgetCollectionField,
   type WidgetComponentMap,
+  type WidgetCountWindow,
   type WidgetData,
   type WidgetDataInput,
   type WidgetEmpty,
+  type WidgetInterval,
+  // The size a card's `load` is handed, beside the input it arrives in.
+  type WidgetLoadSize,
   type WidgetPreviewCase,
   type WidgetProps,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
+  type WidgetSkeleton,
   type WidgetSummary,
 } from "./define-widget";
-export type {
-  AdminDashboardConfig,
-  CoreWidgetId,
-  DashboardContribution,
-  DefaultLayoutCard,
-  WidgetOverride,
-  WidgetRef,
-} from "./dashboard";
-export type {
-  ComponentDisplay,
-  CoreDisplay,
-  CoreView,
-  WidgetDisplay,
-  WidgetView,
-} from "./displays";
 export {
-  settings,
+  defineAttentionItem,
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
+  type AdminDashboardConfig,
+  type AttentionCount,
+  type AttentionItem,
+  type CoreWidgetId,
+  type DashboardContribution,
+  type DefaultLayoutCard,
+  type WidgetOverride,
+  type WidgetRef,
+} from "./dashboard";
+export type { CoreView, WidgetView } from "./displays";
+export {
+  setting,
   type ChartStyle,
   type DateRange,
   type WidgetFilter,

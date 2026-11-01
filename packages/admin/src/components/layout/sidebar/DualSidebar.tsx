@@ -2,7 +2,7 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import type React from "react";
-import { useState, useMemo } from "react";
+import { useCallback, useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
@@ -10,9 +10,17 @@ import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { Link } from "@admin/components/ui/link";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
-import { useCollections, useSingles } from "@admin/hooks/queries";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  NAV_SINGLES_PARAMS,
+  useCollections,
+  useSingles,
+} from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
@@ -27,7 +35,16 @@ import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
+import { shellAnswersMarker } from "../lib/shell-answers";
 
+import {
+  CONTENT_RAIL_ID,
+  contentItemHref,
+  contentSectionToOpen,
+  panelSectionIds,
+  railItemOf,
+  sectionShown,
+} from "./lib/content-rail";
 import { hasCollectionsSection as hasCollectionsSectionHelper } from "./lib/has-collections-section";
 import {
   hasPluginsSection,
@@ -39,13 +56,25 @@ import {
   hasSettingsSection as hasSettingsSectionHelper,
 } from "./lib/has-settings-section";
 import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
-import { placeStandalonePlugins } from "./lib/place-standalone-plugins";
+import {
+  placeStandalonePlugins,
+  standaloneEntryId,
+} from "./lib/place-standalone-plugins";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
+import {
+  railAnswersIn,
+  railAnswersPending,
+  settledRailItems,
+} from "./lib/settled-rail";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
-import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
+import type {
+  MainMenuCategory,
+  MainMenuItem,
+  RailItemId,
+} from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
@@ -67,6 +96,7 @@ export function DualSidebar({
     content,
   } = useCurrentUserPermissions();
   const branding = useBranding();
+  const { isPending: isWorkspacePending } = useBrandingStatus();
   const showBuilder = branding?.showBuilder ?? true;
 
   // Runtime-controlled builder visibility from /api/admin-meta
@@ -86,12 +116,23 @@ export function DualSidebar({
     [standalonePlugins, capabilities]
   );
 
+  const visibleStandaloneIds = useMemo(
+    () =>
+      new Set<string>(
+        visibleStandalonePlugins.map(p => standaloneEntryId(pluginSlug(p.name)))
+      ),
+    [visibleStandalonePlugins]
+  );
+
   // Standalone plugins take their place in the rail by the anchor they declare.
   // The placement rule lives in `lib/` with the other rail decisions; what stays
-  // here is the icon resolution, which needs this module's icon registry.
+  // here is the icon resolution, which needs this module's icon registry. EVERY
+  // standalone plugin is placed, and the reader's access decides below whether
+  // its entry shows: the rail then knows where an entry would go before the
+  // answer that decides it arrives, so it can hold the entries after it back.
   const filteredMenuItems = useMemo(() => {
     const iconMap = Icons as unknown as Record<string, React.ElementType>;
-    return placeStandalonePlugins(baseMenuItems, visibleStandalonePlugins, {
+    return placeStandalonePlugins(baseMenuItems, standalonePlugins, {
       slugOf: pluginSlug,
       iconFor: plugin => {
         // A menu item stores an ElementType rendered as `<Icon className=… />`,
@@ -105,27 +146,22 @@ export function DualSidebar({
         return iconMap[resolved.name] || Database;
       },
     });
-  }, [baseMenuItems, visibleStandalonePlugins]);
+  }, [baseMenuItems, standalonePlugins]);
 
-  // Fetch data for automatic navigation
+  // Fetch data for automatic navigation. The shared params keep these on the
+  // cache entries the browser tab's title reads its labels from, so naming a
+  // collection or Single in the tab costs no request of its own.
   const {
     data: collectionsData,
     isLoading: isCollectionsLoading,
     isError: isCollectionsError,
-  } = useCollections({
-    pagination: { page: 0, pageSize: 100 },
-    sorting: [{ field: "name", direction: "asc" }],
-  });
+  } = useCollections(NAV_COLLECTIONS_PARAMS);
 
   const {
     data: singlesData,
     isLoading: isSinglesLoading,
     isError: isSinglesError,
-  } = useSingles({
-    pagination: { page: 0, pageSize: 100 },
-    sorting: [],
-    filters: {},
-  });
+  } = useSingles(NAV_SINGLES_PARAMS);
 
   const pluginMetadata = branding?.plugins;
 
@@ -197,45 +233,51 @@ export function DualSidebar({
   });
   const hasBuildersSection = showBuilder;
 
-  const visibleMenuItems = useMemo(
-    () =>
-      filteredMenuItems.filter(item => {
-        // A slug declared on the entry is a hard gate, ahead of the per-section
-        // cases below: those decide whether a section has anything to SHOW,
-        // which is a different question from whether the reader may see it.
-        //
-        // While the grants are still loading the entry is shown, matching Media
-        // and Settings. The alternative flashes the rail — an item appearing a
-        // moment after the page settles reads as the UI changing its mind, and
-        // the destination refuses on its own anyway.
-        if (item.requiredPermission && !hasPermissionDataPending) {
-          // A LIST is any-of, matching the canonical declaration: that is how an
-          // umbrella permission is written, and treating it as all-of would hide
-          // a section from someone holding one of the grants that reaches it.
-          const needed = Array.isArray(item.requiredPermission)
-            ? item.requiredPermission
-            : [item.requiredPermission];
-          if (!needed.some(slug => hasPermission(slug))) return false;
-        }
-        switch (item.id) {
-          case "collections":
-            return hasCollectionsSection;
-          case "singles":
-            return hasSinglesSection;
-          case "plugins":
-            return pluginsSectionVisible;
-          case "media":
-            return hasMediaSection;
-          case "settings":
-            return hasSettingsSection;
-          case "builders":
-            return hasBuildersSection;
-          default:
-            return true;
-        }
-      }),
+  // Whether an entry shows, with an answer still loading read as "shown" for
+  // the entries that say so below. The panel and the routes read this; what the
+  // rail DRAWS is held to the entries already decided (`rail.items`).
+  const isMenuItemShown = useCallback(
+    (item: MainMenuItem): boolean => {
+      // A slug declared on the entry is a hard gate, ahead of the per-section
+      // cases below: those decide whether a section has anything to SHOW,
+      // which is a different question from whether the reader may see it.
+      //
+      // While the grants are still loading the entry is shown, matching Media
+      // and Settings. The alternative flashes the rail — an item appearing a
+      // moment after the page settles reads as the UI changing its mind, and
+      // the destination refuses on its own anyway.
+      if (item.requiredPermission && !hasPermissionDataPending) {
+        // A LIST is any-of, matching the canonical declaration: that is how an
+        // umbrella permission is written, and treating it as all-of would hide
+        // a section from someone holding one of the grants that reaches it.
+        const needed = Array.isArray(item.requiredPermission)
+          ? item.requiredPermission
+          : [item.requiredPermission];
+        if (!needed.some(slug => hasPermission(slug))) return false;
+      }
+      // A plugin's own entry shows by the access its plugin asks for.
+      if (item.id.startsWith("standalone-")) {
+        return visibleStandaloneIds.has(item.id);
+      }
+      switch (item.id) {
+        case CONTENT_RAIL_ID:
+          // Shown while either kind has something to list; the panel shows
+          // only the kinds that do.
+          return hasCollectionsSection || hasSinglesSection;
+        case "plugins":
+          return pluginsSectionVisible;
+        case "media":
+          return hasMediaSection;
+        case "settings":
+          return hasSettingsSection;
+        case "builders":
+          return hasBuildersSection;
+        default:
+          return true;
+      }
+    },
     [
-      filteredMenuItems,
+      visibleStandaloneIds,
       hasPermission,
       hasPermissionDataPending,
       hasCollectionsSection,
@@ -246,6 +288,39 @@ export function DualSidebar({
       hasBuildersSection,
     ]
   );
+
+  const visibleMenuItems = useMemo(
+    () => filteredMenuItems.filter(isMenuItemShown),
+    [filteredMenuItems, isMenuItemShown]
+  );
+
+  // What the rail draws: the entries shown, up to the first one whose answer
+  // has not arrived. An entry arriving later then lands below every entry
+  // already drawn instead of pushing them down. And whether every answer is
+  // in, which the rail marks for a reader of the page.
+  const rail = useMemo(() => {
+    const pending = railAnswersPending({
+      workspacePending: isWorkspacePending,
+      hydrated: isHydrated,
+      permissionsLoading: isPermissionsLoading,
+      contentAnswerPending,
+      collectionsLoading: isCollectionsLoading,
+      singlesLoading: isSinglesLoading,
+    });
+    return {
+      items: settledRailItems(filteredMenuItems, isMenuItemShown, pending),
+      settled: railAnswersIn(pending),
+    };
+  }, [
+    filteredMenuItems,
+    isMenuItemShown,
+    isWorkspacePending,
+    isHydrated,
+    isPermissionsLoading,
+    contentAnswerPending,
+    isCollectionsLoading,
+    isSinglesLoading,
+  ]);
 
   const activeCategory = useMemo(
     () =>
@@ -269,10 +344,32 @@ export function DualSidebar({
 
   const [selectedMain, setSelectedMain] =
     useState<MainMenuCategory>(activeCategory);
+  // Which content kinds the reader can see now, read by every content decision
+  // below so none can answer from a different pair.
+  const contentAvailable = {
+    collections: hasCollectionsSection,
+    singles: hasSinglesSection,
+  };
+  // What the sidebar shows for the selection, which may give way to the other
+  // content kind once the lists settle.
+  const shownMain = sectionShown(selectedMain, contentAvailable);
 
-  const [collectionSearch, setCollectionSearch] = useState("");
-  const [singleSearch, setSingleSearch] = useState("");
+  // One search for both content kinds: it carries over when the Content panel
+  // switches between Collections and Singles.
+  const [contentSearch, setContentSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState("");
+
+  /**
+   * Open a rail item's panel. Content opens on the part already showing, or
+   * on Collections, or on Singles when the reader has no collections to list.
+   */
+  const selectRailItem = (id: RailItemId) => {
+    if (id !== CONTENT_RAIL_ID) {
+      setSelectedMain(id);
+      return;
+    }
+    setSelectedMain(contentSectionToOpen(selectedMain, contentAvailable));
+  };
 
   // Follows the route: a navigation selects the section it lands in. Adjusted during render
   // rather than in an effect, since an effect runs after the paint, so the page arrived at was
@@ -317,7 +414,12 @@ export function DualSidebar({
       item,
       visibleStandalonePlugins,
       settingsHref,
-      capabilities.canManageSettings
+      capabilities.canManageSettings,
+      contentItemHref({
+        panelShown: !suppressedChrome.has("subSidebar"),
+        current: shownMain,
+        available: contentAvailable,
+      })
     );
 
   // Resolve collections for the active standalone plugin section
@@ -358,6 +460,9 @@ export function DualSidebar({
           "flex flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
           "w-[72px] shrink-0"
         )}
+        // Whether every answer the rail draws from is in, so a reader of the
+        // page (the layout-shift browser test) can tell when the rail is done.
+        data-shell-answers={shellAnswersMarker(rail.settled)}
       >
         {/* Logo */}
         <Link
@@ -373,9 +478,9 @@ export function DualSidebar({
 
         {/* Main Icons */}
         <nav className="flex-1 flex flex-col gap-4 w-full px-3">
-          {visibleMenuItems.map(item => {
+          {rail.items.map(item => {
             const Icon = item.icon;
-            const isSelected = selectedMain === item.id;
+            const isSelected = railItemOf(shownMain) === item.id;
             const href = resolveItemHref(item);
             /*
              * On mobile a category normally stays put and opens the panel
@@ -416,17 +521,24 @@ export function DualSidebar({
                   {renderAsLink ? (
                     <Link
                       href={href}
-                      onClick={() => setSelectedMain(item.id)}
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
+                      // Named for assistive technology: it draws an icon alone, and its tooltip
+                      // is shown on hover and does not name the control.
+                      aria-label={item.label}
                     >
                       {iconContent}
                     </Link>
                   ) : (
                     <button
-                      onClick={() => setSelectedMain(item.id)}
+                      type="button"
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
+                      // Named as the link beside it is: an icon alone, with a tooltip that does
+                      // not name the control.
+                      aria-label={item.label}
                     >
                       {iconContent}
                     </button>
@@ -447,17 +559,20 @@ export function DualSidebar({
       {/* 2. Sub Sidebar (Detail Menu) */}
       <SubSidebarPanel
         isMobile={Boolean(isMobile)}
-        selectedMain={selectedMain}
-        visibleMenuItemIds={visibleMenuItems.map(item => item.id)}
+        selectedMain={shownMain}
+        visibleMenuItemIds={panelSectionIds(
+          visibleMenuItems.map(item => item.id),
+          contentAvailable
+        )}
         isFolderTreeVisible={isFolderTreeVisible}
         standaloneLabel={standaloneLabel}
         content={{
-          selectedMain,
+          selectedMain: shownMain,
           standaloneLabel,
-          collectionSearch,
-          onCollectionSearchChange: setCollectionSearch,
-          singleSearch,
-          onSingleSearchChange: setSingleSearch,
+          contentSearch,
+          onContentSearchChange: setContentSearch,
+          hasCollectionsSection,
+          hasSinglesSection,
           pluginSearch,
           onPluginSearchChange: setPluginSearch,
           isActive,

@@ -52,18 +52,22 @@ function answerId(slot: WidgetSlot | undefined): number {
  * answer that broke it and fail again before the new one arrived, and stay
  * failed after. Without a refetch to wait for, Retry draws again at once.
  *
- * The grid is told, so it counts the card as failed while it is.
+ * The grid is told, so it counts the card as failed while it is: a card
+ * whose component is `missing` from the admin too, for as long as it is.
  */
 export function useComponentDraw({
   slot,
   isFetching,
   onRetry,
   placementId,
+  missing = false,
 }: {
   slot: WidgetSlot | undefined;
   isFetching: boolean;
   onRetry?: () => void;
   placementId: string;
+  /** Whether the card would draw a component the admin does not hold. */
+  missing?: boolean;
 }): {
   failed: boolean;
   drawKey: string;
@@ -76,7 +80,7 @@ export function useComponentDraw({
   } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [retrying, setRetrying] = useState<"asked" | "fetching" | null>(null);
-  const failed = failedOn !== null && failedOn.slot === slot;
+  const failed = missing || (failedOn !== null && failedOn.slot === slot);
 
   useEffect(() => {
     if (retrying === "asked" && isFetching) setRetrying("fetching");

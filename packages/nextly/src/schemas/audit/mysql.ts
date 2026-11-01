@@ -30,6 +30,13 @@ import {
   mysqlIndexes,
 } from "../_internal/core-indexes";
 
+import {
+  AUDIT_ACTOR_KIND_LENGTH,
+  AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
+  AUDIT_KIND_LENGTH,
+  AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
+} from "./widths";
+
 // Append-only by application convention, with two exceptions the application
 // itself performs and an operator hardening this table has to allow for:
 //
@@ -56,7 +63,7 @@ import {
 export function auditLogColumns() {
   return {
     id: varchar("id", { length: 191 }).primaryKey(),
-    kind: varchar("kind", { length: 64 }).notNull(),
+    kind: varchar("kind", { length: AUDIT_KIND_LENGTH }).notNull(),
     actorUserId: varchar("actor_user_id", { length: 191 }),
     targetUserId: varchar("target_user_id", { length: 191 }),
     ipAddress: varchar("ip_address", { length: 45 }),
@@ -82,10 +89,14 @@ export function auditLogColumns() {
     identityErasedAt: datetime("identity_erased_at"),
     // Who acted, and a plugin-defined person in columns of their own: see
     // the PostgreSQL definition.
-    actorKind: varchar("actor_kind", { length: 191 }),
-    actorPrincipalKind: varchar("actor_principal_kind", { length: 191 }),
+    actorKind: varchar("actor_kind", { length: AUDIT_ACTOR_KIND_LENGTH }),
+    actorPrincipalKind: varchar("actor_principal_kind", {
+      length: AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
+    }),
     actorPrincipalId: varchar("actor_principal_id", { length: 191 }),
-    targetPrincipalKind: varchar("target_principal_kind", { length: 191 }),
+    targetPrincipalKind: varchar("target_principal_kind", {
+      length: AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
+    }),
     targetPrincipalId: varchar("target_principal_id", { length: 191 }),
   };
 }

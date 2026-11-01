@@ -9,56 +9,49 @@
  * one through `POST /api/e2e/slow-widget`, so the other dashboard specs that
  * share the server see an ordinary card.
  */
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { definePlugin, defineWidget } from "@nextlyhq/plugin-sdk";
 
 import { slowWidgetDelayMs } from "./delay";
 
-export const SLOW_WIDGET_SOURCE_ID = "plugin:slow-widget-fixture/slow";
-
-/** Waits `ms`, or stops at once when `signal` aborts, as a well-behaved resolver does. */
-function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
+/** Waits `ms`, or stops at once when `signal` aborts, as a well-behaved load does. */
+function wait(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (ms <= 0) return resolve();
     const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
+    signal.addEventListener("abort", () => {
       clearTimeout(timer);
       reject(new Error("aborted"));
     });
   });
 }
 
+/**
+ * The slow card: a figure whose `load` answers after the delay the spec set,
+ * drawn by core's figure view, so it needs no component of its own.
+ */
+const slowWidget = defineWidget({
+  id: "slow-widget-fixture/slow",
+  title: "Slow fixture",
+  description: "A count that answers as late as the test asks",
+  // Core's size for a widget that states none (`UNSTATED_WIDGET_SIZE`): a full
+  // row of its own wherever the slow-card spec places it.
+  size: { default: { w: 12, h: 4 }, min: { w: 3, h: 2 }, max: { w: 12, h: 6 } },
+  load: async ({ signal }) => {
+    await wait(slowWidgetDelayMs(), signal);
+    return { total: 42 };
+  },
+  view: "figure",
+});
+
 export const slowWidgetFixturePlugin = definePlugin({
   name: "slow-widget-fixture",
   version: "0.0.0",
   nextly: "*",
   contributes: {
-    widgetSources: [
-      {
-        source: {
-          id: SLOW_WIDGET_SOURCE_ID,
-          label: "Slow fixture",
-          kind: "plugin",
-          supports: ["count"],
-          fields: [{ name: "total", type: "number" }],
-        },
-        // The unused query parameter carries a longer name: the Drizzle v1 legacy gate refuses the
-        // bare underscore-prefixed name, which is also Drizzle's removed relational escape hatch.
-        resolve: async (_widgetQuery, _caller, _ctx, opts) => {
-          await wait(slowWidgetDelayMs(), opts?.signal);
-          return { op: "count" as const, total: 42 };
-        },
-      },
-    ],
-    admin: {
-      widgets: [
-        {
-          id: "slow-widget-fixture/slow",
-          archetype: "metric",
-          title: "Slow fixture",
-          description: "A count that answers as late as the test asks",
-          query: { source: SLOW_WIDGET_SOURCE_ID, op: "count" },
-        },
-      ],
+    dashboard: {
+      // Offered, not placed: a plugin puts no card on core's default
+      // dashboard, so the slow-card spec places this one itself.
+      widgets: [slowWidget],
     },
   },
 });

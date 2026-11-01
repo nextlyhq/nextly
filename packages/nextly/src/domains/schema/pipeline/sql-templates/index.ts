@@ -21,6 +21,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Operation, TableSpec } from "../diff/types";
 
 import { generateMysqlSQL } from "./mysql";
+import { mysqlLiveStatements } from "./mysql-live-restate";
 import { generatePgSQL } from "./postgres";
 import { generateSqliteSQL } from "./sqlite";
 import { sqliteStatements } from "./sqlite-rebuild";
@@ -85,15 +86,17 @@ export function generateSQL(op: Operation, dialect: SupportedDialect): string {
 /**
  * SQL for a whole list of operations, in order — what a migration file holds.
  *
- * On PostgreSQL and MySQL this is exactly `generateSQL` per operation. SQLite
- * cannot add or drop a check or a foreign key on an existing table, and one
- * such operation does not say what the rest of the table looks like, so there
- * every check and foreign-key change on a table becomes ONE rebuild of that
- * table to its definition in `tablesAfter` (see `sqlite-rebuild.ts`). The
- * rebuild is a run of statements, so the result is not one entry per
- * operation on that dialect. A column whose default SQLite can only add to a
- * table with rows by rebuilding it — a current-timestamp default — is added
- * by the same rebuild.
+ * On PostgreSQL this is exactly `generateSQL` per operation. On MySQL too,
+ * except a nullability change and a column rename, which are each a short run
+ * of statements built from the live catalog when the file runs
+ * (`mysql-live-restate.ts`). SQLite cannot add or drop a check or a foreign
+ * key on an existing table, nor change a column's nullability or default, and
+ * one such operation does not say what the rest of the table looks like, so
+ * there every such change on a table becomes ONE rebuild of that table to its
+ * definition in `tablesAfter` (see `sqlite-rebuild.ts`). The rebuild is a run
+ * of statements, so the result is not one entry per operation on that
+ * dialect. A column whose default SQLite can only add to a table with rows by
+ * rebuilding it — a current-timestamp default — is added by the same rebuild.
  *
  * `tablesAfter` is the schema the list leads TO: the desired snapshot's
  * tables for an up migration, the previous snapshot's for the down that
@@ -106,6 +109,14 @@ export function generateStatements(
 ): string[] {
   if (dialect === "sqlite") {
     return sqliteStatements(ops, tablesAfter, generateSqliteSQL);
+  }
+  // A MySQL nullability change and a rename are built from the live catalog when the file runs, so
+  // they keep the comment, character set, collation and checks the snapshot does not record
+  // (`mysql-live-restate.ts`).
+  if (dialect === "mysql") {
+    return ops.flatMap(
+      op => mysqlLiveStatements(op) ?? [generateSQL(op, dialect)]
+    );
   }
   return ops.map(op => generateSQL(op, dialect));
 }

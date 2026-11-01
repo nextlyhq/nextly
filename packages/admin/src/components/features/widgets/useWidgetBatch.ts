@@ -59,6 +59,11 @@ export interface BatchCard {
    */
   h?: number;
   /**
+   * The card's width in grid columns, as it is drawn: with its tier and height, the size a card
+   * core answers on the server is loaded for. Absent where its tier is.
+   */
+  w?: number;
+  /**
    * The widget's query as DECLARED, when the card's settings change it: `widget` is then the
    * widget as its settings ask it. The batch keys the card by this and sends `widget.query`, so
    * one card's change of settings is not a new question for the whole dashboard. Absent when
@@ -103,6 +108,10 @@ export interface WidgetBatch {
   retry: (placementId: string) => void;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
+  answeredAtFor: (placementId: string) => Date | null;
+  /** Ask every card again, as the batch does on window focus. */
+  refresh: () => void;
   /**
    * The size the answer one card shows was fetched at. A card that grew keeps a smaller answer
    * on screen until a larger one lands, and draws no more rows than that answer was asked for.
@@ -187,21 +196,33 @@ function worthAsking(widget: DashboardWidget): boolean {
  * How a card core answers on the server is asked for: by its id while it is a
  * stored card with its stored settings, filed under those settings so a saved
  * change of them asks it again alone; with the settings it is drawn with while
- * the dashboard is being customised, when either may not be saved yet. Never
- * sized: core answers it as declared.
+ * the dashboard is being customised, when either may not be saved yet.
+ *
+ * With the size it is drawn at, where the dashboard has a width to predict its
+ * tier from: the widget's `load` is handed it, so a card resized or crossing a
+ * tier is a different question, filed under it and asked again alone
+ * (`cardSize`). Its query is never sized: core answers the card from its
+ * declaration, and the declaration reads the size if it wants it.
  */
 function cardAskFor(card: BatchCard): WidgetQueryRequest {
   const widget = card.widget.id;
+  const { tier, w, h } = card;
+  const size =
+    tier === undefined || w === undefined || h === undefined
+      ? {}
+      : { cardSize: { w, h, tier } };
   if (card.editing === true) {
     return {
       placementId: card.placementId,
       card: { widget, settings: card.config ?? {} },
+      ...size,
     };
   }
   return {
     placementId: card.placementId,
     card: { widget, card: card.placementId },
     ...(card.config === undefined ? {} : { config: card.config }),
+    ...size,
   };
 }
 
@@ -351,11 +372,14 @@ const NO_DRAW_FAILURES: ReadonlySet<string> = new Set();
 /**
  * `drawFailed` is the placements whose own component threw drawing a fine
  * answer (`draw-failures`): the answer cannot say so, so they are counted as
- * failed from here.
+ * failed from here. `readAheadToken` is the token of the layout answer the
+ * cards are drawn from: the batch is asked under it, and again, once, under
+ * each new one (`useWidgetQueries`).
  */
 export function useWidgetBatch(
   cards: BatchCard[],
-  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES
+  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES,
+  readAheadToken?: string
 ): WidgetBatch {
   // 🔴 Sorted by ID, not left in display order. `useWidgetQueries` puts the
   // request partitions into its TanStack query keys, so a key built from the
@@ -384,7 +408,7 @@ export function useWidgetBatch(
     [cards]
   );
 
-  const batch = useWidgetQueries(requests);
+  const batch = useWidgetQueries(requests, readAheadToken);
   const { isFetching, updatedAt } = batch;
 
   // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
@@ -463,7 +487,10 @@ export function useWidgetBatch(
         // announcement rather than counted as "updated" beside a card that says otherwise.
         .filter(
           outcome =>
-            outcome.state !== "self-drawn" && outcome.state !== "unavailable"
+            outcome.state !== "self-drawn" &&
+            outcome.state !== "unavailable" &&
+            // Left out of this person's dashboard, so not one of its cards to count.
+            outcome.state !== "not-shown"
         ),
     [cards, slots, cellSlots, drawFailed]
   );
@@ -480,6 +507,8 @@ export function useWidgetBatch(
     settling: outcomes.some(outcome => outcome.state === "loading"),
     retry,
     updatedAtFor,
+    answeredAtFor: retries.answeredAtFor,
+    refresh: () => void batch.refetch(),
     fetchedSizeFor,
   };
 }

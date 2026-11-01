@@ -22,7 +22,10 @@ import {
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import {
+  EVERY_TRANSLATION,
+  EXACT_STORED_LANGUAGE,
+} from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
@@ -62,6 +65,16 @@ import { INSTANCE_ORDER, instanceKey } from "./instance-query";
  * The caller context a component's related rows are judged against, mirroring
  * the relationship service's own options so it can be forwarded unchanged.
  */
+/**
+ * How a component read falls back from the language it asks for: as a parent
+ * read's `fallbackLocale`, or {@link EXACT_STORED_LANGUAGE} for the language
+ * named exactly as stored.
+ */
+export type ComponentFallbackLocale =
+  | string
+  | false
+  | typeof EXACT_STORED_LANGUAGE;
+
 /**
  * The caller context a component's related rows are judged against.
  *
@@ -111,7 +124,7 @@ export interface PopulateComponentDataParams {
    * `false`/`"none"` suppresses fallback so an untranslated embedded component field stays
    * blank (the admin's no-fallback edit mode); a named locale overrides the configured chain.
    */
-  fallbackLocale?: string | false;
+  fallbackLocale?: ComponentFallbackLocale;
   /**
    * Optional transaction-bound executor. When supplied, component-table reads
    * run on the transaction's connection (read-your-writes, #226) so a version
@@ -157,7 +170,7 @@ export interface PopulateComponentDataManyParams {
   /** i18n: requested read locale (see PopulateComponentDataParams.locale). */
   locale?: string;
   /** i18n: per-request fallback control (see PopulateComponentDataParams.fallbackLocale). */
-  fallbackLocale?: string | false;
+  fallbackLocale?: ComponentFallbackLocale;
   /** See PopulateComponentDataParams.access. */
   access?: ComponentReadAccess;
   /**
@@ -283,7 +296,7 @@ export class FieldGroupQueryService extends BaseService {
     meta: DynamicFieldGroupRecord,
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
-    fallbackLocale?: string | false,
+    fallbackLocale?: ComponentFallbackLocale,
     executor?: unknown
   ): Promise<void> {
     if (
@@ -348,16 +361,23 @@ export class FieldGroupQueryService extends BaseService {
     // Resolve an absent `locale` to the default (the parent read treats no explicit `?locale` as
     // the default locale), so a default-locale read still overlays the component's companion
     // values instead of returning the omitted main-table columns.
-    const requested = resolveRequestedLocale(this.localization, locale);
+    // A language read exactly as stored is taken as named, active or not: a
+    // removed language is kept, and validating it would read the default's
+    // values in its place.
+    const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
+    const requested =
+      exact && locale !== undefined
+        ? locale
+        : resolveRequestedLocale(this.localization, locale);
     // Through the shared resolver, so a component read falls back exactly as
     // the collection and single reads around it do. `requested` is already
     // resolved and is never `all` here, so the chain is never null; the
     // fallback keeps the contract this path always had rather than asserting.
-    const localeChain = resolveLocaleChain(
-      this.localization,
-      requested,
-      fallbackLocale
-    ) ?? [requested];
+    const localeChain = exact
+      ? [requested]
+      : (resolveLocaleChain(this.localization, requested, fallbackLocale) ?? [
+          requested,
+        ]);
     // Resolved before the overlay runs, because inside a transaction it can only be read and the
     // read itself must not be what fails.
     const readiness = await this.companionReadiness(companion, executor);
@@ -735,7 +755,7 @@ export class FieldGroupQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false,
+    fallbackLocale?: ComponentFallbackLocale,
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
@@ -790,7 +810,7 @@ export class FieldGroupQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false,
+    fallbackLocale?: ComponentFallbackLocale,
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
@@ -843,7 +863,7 @@ export class FieldGroupQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false,
+    fallbackLocale?: ComponentFallbackLocale,
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
@@ -953,7 +973,7 @@ export class FieldGroupQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false,
+    fallbackLocale?: ComponentFallbackLocale,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
     const { meta, componentFields, rows, reach } = await this.batchRead(
@@ -1013,7 +1033,7 @@ export class FieldGroupQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false,
+    fallbackLocale?: ComponentFallbackLocale,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
     const { rows, reach, meta, componentFields } = await this.batchRead(
@@ -1064,7 +1084,7 @@ export class FieldGroupQueryService extends BaseService {
     depth: number,
     currentDepth: number,
     locale?: string,
-    fallbackLocale?: string | false,
+    fallbackLocale?: ComponentFallbackLocale,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
@@ -1382,8 +1402,13 @@ export class FieldGroupQueryService extends BaseService {
           // The read's verdicts, so every component instance relating to one
           // target shares one question rather than asking it afresh.
           targetVerdicts: access.targetVerdicts,
+          // And the match columns built from those verdicts' filters.
+          targetRuleMatches: access.targetRuleMatches,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
+          // Every language the read falls back through, so a target's
+          // localized rule filter is judged as a direct read judges it.
+          localeChain: access.localeChain,
           status: access.status,
         }
       );

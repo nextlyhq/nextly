@@ -236,7 +236,11 @@ export class CollectionEntryService extends BaseService {
       this.hookService,
       fieldGroupDataService,
       localizationSource,
-      releaseVisibility
+      releaseVisibility,
+      // The write's own judgement, asked when the read shows a pending change
+      // to a caller who may publish and not update. Read when a read asks it,
+      // after the mutation service below exists.
+      args => this.mutationService.workingDraftPromotionRefused(args)
     );
     this.mutationService = new CollectionMutationService(
       adapter,
@@ -704,6 +708,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** API-key scope; judges the update gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
@@ -723,6 +729,21 @@ export class CollectionEntryService extends BaseService {
   }): Promise<Map<string, ValidationIssue[]>> {
     return withRuleLanguage(everyLanguageOf(this.localization), () =>
       this.mutationService.releasePublishIssues(params)
+    );
+  }
+
+  /**
+   * Which of these entries a write of the action by this caller would find
+   * inside its rule's filter, judged as a write to every language is. See the
+   * mutation service.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(
+    params: Parameters<CollectionMutationService["entriesWithinWriteFilter"]>[0]
+  ): ReturnType<CollectionMutationService["entriesWithinWriteFilter"]> {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.entriesWithinWriteFilter(params)
     );
   }
 
@@ -904,6 +925,14 @@ export class CollectionEntryService extends BaseService {
    */
   async warmLocalizedReadiness(collectionName: string): Promise<void> {
     return this.mutationService.warmLocalizedReadiness(collectionName);
+  }
+
+  /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * for `nextly media reindex-usage`. Returns how many entries it read.
+   */
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    return this.mutationService.rebuildMediaUsage(collectionName);
   }
 
   /**

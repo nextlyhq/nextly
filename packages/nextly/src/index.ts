@@ -610,13 +610,6 @@ export {
   type JsonValue,
   type PluginAdminContributions,
   type PluginAdminPage,
-  type PluginAdminWidget,
-  type PluginAdminCustomWidget,
-  type PluginAdminDataWidget,
-  type PluginAdminStatsWidget,
-  type PluginAdminDeclarativeWidget,
-  type PluginAdminQuerylessWidget,
-  type DeclarativeWidgetArchetype,
   type PluginCollectionView,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
@@ -640,17 +633,18 @@ export type {
 
 // @experimental Widgets declared once with `defineWidget()`, which a plugin
 // contributes under `contributes.dashboard`: the declaration, its setting
-// builders (as `widgetSettings`, since `settings` alone would read as the
-// site's own settings here), and the types a widget's component is written
-// against. Startup checks every declaration and reports each fault; the data
+// builders (`setting`, the collections' field builders as a card's settings
+// take them, with the collections' own `option` for a select's choices), and
+// the types a widget's component is written against. Startup checks every declaration and reports each fault; the data
 // code stays on the server, and the admin is sent data only.
 export {
+  defineAttentionItem,
   defineWidget,
-  settings as widgetSettings,
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
+  setting,
   type AnyWidget,
-  type ComponentDisplay,
-  type ContentQuery,
-  type CoreDisplay,
+  type AttentionCount,
+  type AttentionItem,
   type CoreView,
   type AdminDashboardConfig,
   type CoreWidgetId,
@@ -661,19 +655,37 @@ export {
   type WidgetRef,
   type ChartStyle,
   type WidgetAccess,
+  // The permission gate `access` takes.
+  type WidgetAccessGate,
+  // What `describe` answers, and a count's window.
+  type WidgetCollectionDescription,
+  type WidgetCollectionField,
   type WidgetComponentMap,
+  type WidgetCountWindow,
   type WidgetData,
   type WidgetDataInput,
-  type WidgetDisplay,
   type WidgetEmpty,
   type WidgetFilter,
+  // A series' interval and range.
+  type WidgetInterval,
+  // The size a card's `load` is handed.
+  type WidgetLoadSize,
   type WidgetPreviewCase,
   type WidgetProps,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
+  // A card's loading shape and add-panel sketch.
+  type WidgetSkeleton,
   type WidgetSummary,
   type WidgetView,
 } from "./domains/widgets/declaration/public";
+// @experimental The list rows a card of a given height draws at a density: what a widget's `load`
+// reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
+// cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
+export { rowsThatFit } from "./domains/widgets/card-geometry";
+// A setting's own editor component's props (experimental).
+export type { SettingEditorProps } from "./domains/widgets/result";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
 export type {
@@ -681,20 +693,19 @@ export type {
   WidgetsOf,
 } from "./plugins/declared-widgets";
 
-// The widget domain's public surface: the registry every core and
-// plugin-contributed widget shares, the source registry a query names, and
-// the validated query shape itself.
-// Every contract a published shape NAMES is published beside it. There is no
-// `nextly/widgets` subpath, so this is the only place a plugin author can
-// reach them, and a public property whose type has no public name can be
-// inferred but never annotated: `WidgetDefinition.size` is a
+// The widget domain's public surface: the grid's size vocabulary, the
+// source registry a query names, and the validated query shape itself.
+// Nothing here adds, changes or removes a widget or a source. A widget reaches
+// the registry only from a plugin's `contributes.dashboard.widgets`, the site
+// config's `admin.dashboard.widgets`, or core's own list, all through one
+// internal call; the registry and its writers stay internal to the widgets
+// domain. Every contract a published shape NAMES is published beside it.
+// There is no `nextly/widgets` subpath, so this is the only place a plugin
+// author can reach them, and a public property whose type has no public name
+// can be inferred but never annotated: a declaration's `size` is a
 // `WidgetSizeDeclaration` of `GridSize`s, and `WidgetSource` is built out of
 // `WidgetSourceField`, `WidgetSourceKind` and `WidgetOp`.
-// The last three are the data SOURCE contract that `contributes.widgetSources`
-// names: inference covers a resolver written inline, and these are what let an
-// author declare one as a named function instead.
 export {
-  WIDGET_ARCHETYPES,
   GRID_COLUMNS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
@@ -703,46 +714,28 @@ export {
   WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
-  registerWidget,
-  overrideWidget,
-  extendWidget,
-  deregisterWidget,
-  getWidget,
-  listWidgets,
-  registerSource,
   listSources,
   validateWidgetQuery,
   MAX_WIDGET_LIMIT,
-  type WidgetDefinition,
-  type WidgetAction,
   type WidgetSetting,
-  type WidgetStatCell,
   type WidgetQuery,
   type WidgetQuerySpec,
   type GridSize,
   type WidgetSizeDeclaration,
   type WidgetSizeBounds,
-  type WidgetArchetype,
-  type DataWidgetArchetype,
-  type QuerylessWidgetArchetype,
-  type CellWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
   type WidgetFieldChoice,
   type WidgetSourceFieldType,
   type WidgetSourceKind,
   type WidgetOp,
-  type WidgetPatch,
   type TimeseriesInterval,
   type WidgetLifecycle,
   type WidgetCondition,
   callerReadOptions,
   type WidgetSourceResolver,
-  type PluginSourceResolver,
-  type PluginManySourceResolver,
   type ResolverOptions,
   type WidgetScope,
-  type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";
 
@@ -1125,6 +1118,12 @@ export {
   type AccessRuleOperation,
   type AccessRuleTarget,
   type MinimalUser,
+  // A read rule may answer a filter, typed by the collection's fields.
+  type CollectionFilterRule,
+  type CollectionFilterRuleInput,
+  type CollectionRuleAnswer,
+  type CollectionRuleFilter,
+  type UntypedRuleFilter,
 } from "./collections/config";
 
 // Collection configuration validation
@@ -1397,14 +1396,12 @@ export {
 } from "./utils/validate-external-url";
 
 // ============================================================
-// MEDIA VARIANT HELPERS
+// MEDIA URL HELPERS
 // ============================================================
 
+// Image sizes are no longer made, so no helper picks one: an item's `url`
+// goes to `next/image`, and its `thumbnailUrl` serves a small preview.
 export {
-  getMediaVariant,
-  getSmallestMediaVariant,
   // @experimental: an absolute media URL for a consumer outside the app.
   toPublicMediaUrl,
-  type MediaLike,
-  type GetMediaVariantOptions,
 } from "./lib/media-variant";

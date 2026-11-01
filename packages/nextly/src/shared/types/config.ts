@@ -183,10 +183,12 @@ export interface DatabaseConfig {
   runMigrationsOnBoot?: boolean;
 
   /**
-   * Seconds a held migrate lock stays valid before another process may take it
-   * over (TTL). Tune up for unusually long migrations.
+   * The schema lock's lease, in seconds: how long the lock outlives a migration
+   * command that stopped without releasing it (killed, or its machine lost).
+   * A running holder renews the lock, so a migration of any length keeps it;
+   * this only bounds how long the next run waits on one that died.
    *
-   * @default 900
+   * @default 120
    */
   migrateLockTtlSeconds?: number;
 
@@ -574,6 +576,37 @@ export interface AdminBrandingColors {
 }
 
 /**
+ * Which deployment the admin is running in, as a badge beside the project's
+ * name on the dashboard, so nobody mistakes production for staging. Named by
+ * the site, never guessed from the process environment.
+ *
+ * @example
+ * // One config for every deployment: each sets its own label.
+ * admin: { environment: { label: process.env.NEXTLY_ENV_LABEL ?? "Production" } }
+ *
+ * @experimental While the dashboard's header is being built.
+ */
+export interface AdminEnvironmentConfig {
+  /** The badge's text, such as "Production" or "Staging": up to 24 characters. */
+  label: string;
+  /** How loudly the badge reads. Defaults to `"neutral"`. */
+  tone?: AdminEnvironmentTone;
+}
+
+/** The tones an environment badge may take. */
+export type AdminEnvironmentTone = "neutral" | "warning" | "critical";
+
+/** Every tone a badge may take, which the startup check holds a config to. */
+const ENVIRONMENT_TONES: readonly AdminEnvironmentTone[] = [
+  "neutral",
+  "warning",
+  "critical",
+];
+
+/** The most characters an environment label may hold: it is a badge. */
+const MAX_ENVIRONMENT_LABEL = 24;
+
+/**
  * Branding configuration for the Nextly admin UI.
  */
 export interface AdminBrandingConfig {
@@ -670,10 +703,18 @@ export interface AdminConfig {
   branding?: AdminBrandingConfig;
 
   /**
+   * The deployment this admin runs in, shown as a badge beside the project's
+   * name. No badge without it.
+   *
+   * @experimental While the dashboard's header is being built.
+   */
+  environment?: AdminEnvironmentConfig;
+
+  /**
    * How this site shapes its dashboard: its own widgets, widgets hidden for
    * everyone, a widget's title, description, widths and starting settings,
-   * the default dashboard, plugin suggestions, and a plugin's alternative in a
-   * built-in's place. Checked at startup against every widget the install has.
+   * the default dashboard, and a plugin's alternative in a built-in's place.
+   * Checked at startup against every widget the install has.
    *
    * @experimental While the dashboard widget SDK is being built.
    */
@@ -1085,7 +1126,9 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   migrationsDir: "./src/db/migrations",
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
-  migrateLockTtlSeconds: 900,
+  // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
+  // migration; it bounds only how long a run that died keeps the lock.
+  migrateLockTtlSeconds: 120,
   rawSqlPlugins: [],
 };
 
@@ -1192,7 +1235,63 @@ function authMinPasswordLength(value: number | undefined): number {
   });
 }
 
+/**
+ * `admin.environment`, checked: a label of 1 to 24 characters with text in it,
+ * and a tone this version draws, or absent.
+ *
+ * @throws {NextlyError} `VALIDATION_ERROR` naming the setting otherwise
+ */
+function checkedAdminEnvironment(environment: unknown): void {
+  if (environment === undefined) return;
+  const problems = adminEnvironmentProblems(environment);
+  if (problems.length === 0) return;
+  throw NextlyError.validation({ errors: problems });
+}
+
+/** Each fault in `admin.environment`, as a validation error naming its path. */
+function adminEnvironmentProblems(
+  environment: unknown
+): { path: string; code: "INVALID_VALUE"; message: string }[] {
+  const fault = (path: string, message: string) => ({
+    path,
+    code: "INVALID_VALUE" as const,
+    message,
+  });
+  if (
+    typeof environment !== "object" ||
+    environment === null ||
+    Array.isArray(environment)
+  ) {
+    return [fault("admin.environment", "Must be { label, tone? }.")];
+  }
+  const { label, tone } = environment as Record<string, unknown>;
+  return [
+    ...(typeof label === "string" && label.trim().length > 0
+      ? label.length > MAX_ENVIRONMENT_LABEL
+        ? [
+            fault(
+              "admin.environment.label",
+              `Must be at most ${MAX_ENVIRONMENT_LABEL} characters: it is drawn as a badge.`
+            ),
+          ]
+        : []
+      : [fault("admin.environment.label", "Must be text, not empty.")]),
+    ...(tone === undefined ||
+    ENVIRONMENT_TONES.includes(tone as AdminEnvironmentTone)
+      ? []
+      : [
+          fault(
+            "admin.environment.tone",
+            `Must be one of ${ENVIRONMENT_TONES.map(each => `"${each}"`).join(", ")}.`
+          ),
+        ]),
+  ];
+}
+
 export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
+  // The environment badge's label and tone, refused at boot rather than drawn
+  // wrong on every dashboard.
+  checkedAdminEnvironment(config.admin?.environment);
   // Validate apiKeys.rateLimit bounds — these are runtime-critical.
   if (config.apiKeys?.rateLimit?.requestsPerHour !== undefined) {
     if (

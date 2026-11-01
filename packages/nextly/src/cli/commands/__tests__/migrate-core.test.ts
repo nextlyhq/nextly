@@ -235,6 +235,50 @@ describe("migrateCore", () => {
     ]);
   });
 
+  it("asks the caller's precondition after the files and before the metadata, inside the lock", async () => {
+    const order: string[] = [];
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 1;
+      }),
+      beforeMetadata: vi.fn(async () => {
+        order.push("precondition");
+      }),
+      reconcileMetadataFn: vi.fn(async () => {
+        order.push("metadata");
+        return {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          marked: 0,
+          stillPending: 0,
+          unreadable: [],
+        };
+      }),
+    });
+
+    await migrateCore(d as never);
+
+    expect(order).toEqual(["files", "precondition", "metadata"]);
+  });
+
+  // Refused there, the registry keeps the definitions it had, and the next run judges the same
+  // change again; the files that ran stay applied.
+  it("records no metadata when the caller's precondition refuses, and throws its refusal", async () => {
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => 2),
+      beforeMetadata: vi.fn(async () => {
+        throw new Error("a translations column cannot hold its field");
+      }),
+    });
+
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /cannot hold its field/
+    );
+    expect(d.runFileMigrationsFn).toHaveBeenCalledOnce();
+    expect(d.reconcileMetadataFn).not.toHaveBeenCalled();
+  });
+
   it("THROWS (does not exit) when file migrations reject", async () => {
     const d = deps({
       runFileMigrationsFn: vi.fn(async () => {
@@ -459,5 +503,33 @@ describe("a plugin's migration history", () => {
     // what ran before it is under test here.
     await migrateCore(d as never).catch(() => undefined);
     expect(order).toEqual(["ledger", "core"]);
+  });
+});
+
+describe("how migrateCore asks for the schema lock", () => {
+  /** The options the lock was asked for, observed on the real call. */
+  async function lockOptions(over: Record<string, unknown> = {}) {
+    const withLock = vi.fn(
+      async (
+        _adapter: unknown,
+        _dialect: unknown,
+        fn: () => Promise<unknown>,
+        _options?: Record<string, unknown>
+      ) => ({ ran: true as const, value: await fn() })
+    );
+    await migrateCore(deps({ withLock, ...over }) as never);
+    return withLock.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
+  }
+
+  // A boot — production or development — runs inside a server, whose shutdown may let the
+  // migration run on after a signal; releasing the lock then would free it under running work.
+  it("leaves the lock to lapse on an interrupt unless its caller asks to release it", async () => {
+    expect((await lockOptions())?.releaseOnInterrupt).toBe(false);
+  });
+
+  it("releases it on an interrupt when the command asks, as `nextly migrate` does", async () => {
+    expect(
+      (await lockOptions({ lockReleaseOnInterrupt: true }))?.releaseOnInterrupt
+    ).toBe(true);
   });
 });

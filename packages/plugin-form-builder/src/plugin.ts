@@ -217,6 +217,15 @@ export function formBuilder(
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
       collections: [formsCol, submissionsCol],
+      // A visitor submits a form without an account, so the Public role, the
+      // role visitors are judged by, may create submissions. Granted once;
+      // an owner who takes it away closes public submissions for good.
+      publicGrants: [
+        {
+          collection: resolvedConfig.formSubmissionOverrides.slug,
+          action: "create",
+        },
+      ],
       // Custom permission — gates submission export beyond CRUD. The
       // canonical example third-party plugin authors copy.
       permissions: [

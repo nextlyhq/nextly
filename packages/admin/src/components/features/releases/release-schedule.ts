@@ -11,16 +11,7 @@
  */
 
 import { formatGlobalDateTime, isValidTimezone } from "@admin/lib/dates/format";
-import type { Release, ReleaseState } from "@admin/types/releases";
-
-/** What each state means to an editor, in their words rather than the schema's. */
-export const RELEASE_STATE_LABEL: Record<ReleaseState, string> = {
-  draft: "Draft",
-  scheduled: "Scheduled",
-  published: "Published",
-  cancelled: "Cancelled",
-  blocked: "Blocked",
-};
+import type { Release } from "@admin/types/releases";
 
 /**
  * The instant, rendered in the ZONE THE AUTHOR CHOSE.
@@ -44,7 +35,9 @@ export const RELEASE_STATE_LABEL: Record<ReleaseState, string> = {
  * the reader's own zone for one it cannot use — sensible for rendering, and a
  * lie once a label claims the time is Berlin's.
  */
-export function formatScheduledAt(release: Release): string | null {
+export function formatScheduledAt(
+  release: Pick<Release, "scheduledAt" | "timezone">
+): string | null {
   if (!release.scheduledAt) return null;
   const at = new Date(release.scheduledAt);
   if (Number.isNaN(at.getTime())) return null;

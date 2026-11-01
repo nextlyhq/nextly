@@ -1,23 +1,19 @@
 /**
  * The widget declarations each enabled plugin contributes, as startup reads
- * them for the one store of declared widgets.
- *
- * Two readings of a plugin: the widgets it declares with `defineWidget()`
- * under `contributes.dashboard.widgets`, and the ids it declares in today's
- * shape under `contributes.admin.widgets`, which take part only in the id
- * rules. A disabled plugin contributes neither, as it contributes no other
- * admin surface (`contributedWidgetSummaries`).
+ * them for the one store of declared widgets: the widgets it declares with
+ * `defineWidget()` under `contributes.dashboard.widgets`. A disabled plugin
+ * contributes none, as it contributes no other admin surface.
  *
  * @module plugins/dashboard-declarations
  */
 
-import type {
-  DeclaredWidgetGroup,
-  LegacyWidgetIds,
-} from "../domains/widgets/declaration/declared-widgets";
+import type { DeclaredWidgetGroup } from "../domains/widgets/declaration/declared-widgets";
 import { quote } from "../domains/widgets/declaration/quote";
 import { unknownKeyProblems } from "../domains/widgets/declaration/site-dashboard";
-import type { WidgetDeclarationFault } from "../domains/widgets/declaration/validate";
+import {
+  sparseListProblem,
+  type WidgetDeclarationFault,
+} from "../domains/widgets/declaration/validate";
 
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePluginSelf } from "./self";
@@ -40,6 +36,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  */
 export interface PluginDashboardSnapshot {
   readonly owner: string;
+  /** The plugin's name, which the add panel lists its widgets under. */
+  readonly plugin: string;
   /** Its `widgets`, as given: startup checks every declaration. */
   readonly widgets: unknown;
   /** Its `suggest`, copied where it is a list. */
@@ -48,6 +46,8 @@ export interface PluginDashboardSnapshot {
   readonly alternatives: unknown;
   /** Declared slug to the slug the site uses, for the plugin's collections. */
   readonly collections?: Readonly<Record<string, string>>;
+  /** Its `attention` items, copied where it is a list: startup checks each. */
+  readonly attention: unknown;
   /** Each key it carries that a contribution does not take, as a fault's words. */
   readonly unknownKeys: readonly string[];
 }
@@ -76,16 +76,24 @@ export function pluginDashboardSnapshots(
     const given: unknown = plugin.contributes?.dashboard;
     if (given === undefined) return [];
     const fields = isRecord(given) ? given : {};
-    const { widgets, suggest, alternatives } = fields;
+    const { widgets, suggest, alternatives, attention } = fields;
     return [
       {
         owner: pluginOwner(plugin),
+        plugin: plugin.name,
         widgets,
-        suggest: Array.isArray(suggest) ? [...(suggest as unknown[])] : suggest,
+        // Copied by `slice`, which keeps an empty slot where the list has one,
+        // so the check can name it; a spread would read it as `undefined`.
+        suggest: Array.isArray(suggest) ? suggest.slice() : suggest,
         alternatives: isRecord(alternatives)
           ? Object.fromEntries(Object.entries(alternatives))
           : alternatives,
         collections: resolvePluginSelf(plugin).collections,
+        // Copied with `slice`, which keeps an empty slot as one, so the startup
+        // check can name it rather than read it as an item that is undefined.
+        attention: Array.isArray(attention)
+          ? (attention as unknown[]).slice()
+          : attention,
         // A misspelt key would otherwise be dropped here, and what it asked for
         // would silently never happen.
         unknownKeys: unknownKeyProblems(
@@ -106,25 +114,15 @@ export function pluginDashboardSnapshots(
 export function pluginWidgetDeclarationGroups(
   dashboards: readonly PluginDashboardSnapshot[]
 ): DeclaredWidgetGroup[] {
-  return dashboards.map(({ owner, widgets, collections }) => ({
+  return dashboards.map(({ owner, plugin, widgets, collections }) => ({
     owner,
-    declarations: widgets,
+    plugin,
+    // Left out is a plugin that adds only Needs attention items: it declares
+    // no widget. Only `undefined` reads so; `null` is a list that is not one,
+    // and goes on to the shape check to be refused.
+    declarations: widgets === undefined ? [] : widgets,
     ...(collections === undefined ? {} : { collections }),
   }));
-}
-
-/** The widget ids each enabled plugin declares in today's shape. */
-export function pluginLegacyWidgetIds(
-  plugins: readonly PluginDefinition[]
-): LegacyWidgetIds[] {
-  return enabled(plugins).flatMap(plugin => {
-    const widgets: unknown = plugin.contributes?.admin?.widgets;
-    if (!Array.isArray(widgets)) return [];
-    const ids = widgets
-      .map(widget => (widget as { id?: unknown } | null)?.id)
-      .filter((id): id is string => typeof id === "string" && id !== "");
-    return ids.length > 0 ? [{ owner: pluginOwner(plugin), ids }] : [];
-  });
 }
 
 /**
@@ -160,6 +158,10 @@ function suggestFaults(
         problem: "suggest must be a list of the plugin's own widget ids",
       },
     ];
+  }
+  const sparse = sparseListProblem(suggest, "suggest");
+  if (sparse !== undefined) {
+    return [{ owner, widget: "(suggest)", problem: sparse }];
   }
   return (suggest as readonly unknown[])
     .filter(id => typeof id !== "string" || !own.has(id))

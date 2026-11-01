@@ -230,6 +230,52 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  it("keeps a card's needs-setting code with the setting it names, and its not-shown code", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: false,
+          error: "No Collection chosen yet",
+          code: "needs-setting",
+          setting: "Collection",
+        },
+        { ok: false, error: "Not shown for you", code: "not-shown" },
+        // Naming no setting, it could not ask for one: read as the failure it then is.
+        { ok: false, error: "Choose it", code: "needs-setting" },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "c-needs", query: countQuery("collection:a") },
+          { placementId: "c-hidden", query: countQuery("collection:b") },
+          { placementId: "c-nameless", query: countQuery("collection:c") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["c-nameless"]).toBeDefined()
+    );
+    // Lost here, each would be drawn as a failure with Retry rather than as what it is.
+    expect(result.current.slots["c-needs"]).toEqual({
+      ok: false,
+      error: "No Collection chosen yet",
+      code: "needs-setting",
+      setting: "Collection",
+    });
+    expect(result.current.slots["c-hidden"]).toEqual({
+      ok: false,
+      error: "Not shown for you",
+      code: "not-shown",
+    });
+    expect(result.current.slots["c-nameless"]).toEqual({
+      ok: false,
+      error: "Choose it",
+    });
+  });
+
   it("drops the unavailable code from a refusal with no usable message", async () => {
     // A slot missing its message is a broken answer that may recover; kept, the code would hide
     // that behind the unavailable state, which offers no Retry.
@@ -708,6 +754,85 @@ describe("useWidgetQueries", () => {
      * it: those hand the fields straight to the archetype and never cross this
      * boundary.
      */
+    /*
+     * 🔴 The same loss one property over: the Content card's subtitle reads how the list's total
+     * divides by kind, and a renderer test hands that straight to the card without crossing this
+     * boundary.
+     */
+    it("carries how a list's total divides by kind through", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ slug: "posts" }],
+            total: 13,
+            totalByKind: { collection: 8, single: 5 },
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ slug: "posts" }],
+          total: 13,
+          totalByKind: { collection: 8, single: 5 },
+        },
+      });
+    });
+
+    it.each([
+      ["a part that is not a whole count", { collection: 8, single: 1.5 }],
+      ["a negative part", { collection: -1 }],
+      ["a part that is text", { collection: "8" }],
+      ["a list where an object belongs", [8, 5]],
+      ["a number where an object belongs", 13],
+    ])(
+      "leaves out a breakdown with %s, and keeps the rest of the list",
+      async (_case, totalByKind) => {
+        expect(
+          await slotFor({
+            ok: true,
+            result: {
+              op: "list",
+              items: [{ slug: "posts" }],
+              total: 13,
+              totalByKind,
+            },
+          })
+        ).toEqual({
+          ok: true,
+          result: { op: "list", items: [{ slug: "posts" }], total: 13 },
+        });
+      }
+    );
+
+    it("keeps the window a list was read within, which a card's empty text names", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [], window: { days: 90 } },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "list", items: [], window: { days: 90 } },
+      });
+    });
+
+    it.each([
+      ["days that are not whole", { days: 1.5 }],
+      ["no days", {}],
+      ["days of zero", { days: 0 }],
+      ["a number where an object belongs", 90],
+    ])("leaves out a window with %s", async (_case, window) => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [], window },
+        })
+      ).toEqual({ ok: true, result: { op: "list", items: [] } });
+    });
+
     it("carries the column's declared type through", async () => {
       expect(
         await slotFor({

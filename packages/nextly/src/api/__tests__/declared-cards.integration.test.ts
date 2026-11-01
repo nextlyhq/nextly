@@ -24,7 +24,7 @@ import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, text } from "../../config";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
-import { settings } from "../../domains/widgets/declaration/setting-builders";
+import { setting } from "../../domains/widgets/declaration/setting-builders";
 import { clearSources } from "../../domains/widgets/sources";
 import { definePlugin } from "../../plugins/plugin-context";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
@@ -38,7 +38,11 @@ const NOTES = "notes";
 
 const orders = defineCollection({
   slug: ORDERS,
-  fields: [text({ name: "state" })],
+  fields: [
+    text({ name: "state" }),
+    // A field no reader may read, so no card's settings may offer it.
+    text({ name: "cost", access: { read: () => false } }),
+  ],
 });
 const notes = defineCollection({
   slug: NOTES,
@@ -53,6 +57,8 @@ let ownerUser: { id: string } | undefined;
 
 /** What each read the widgets below made reported, by the card it read for. */
 let reads: { widget: string; signal: AbortSignal }[] = [];
+/** The Field setting each run of the by-field widget's data function was handed. */
+let fieldsLoaded: unknown[] = [];
 /** Settled when the slow widget's data function has started. */
 let slowStarted: () => void = () => {};
 /** The signal the slow widget's data function was handed. */
@@ -86,7 +92,14 @@ const shop = definePlugin({
           category: "Shop",
           size: { default: { w: 12, h: 3 }, min: { w: 6, h: 3 } },
           access: `read-${ORDERS}`,
-          settings: { items: settings.items({ default: 5 }) },
+          settings: {
+            items: setting.number({
+              label: "Number of items",
+              defaultValue: 5,
+              min: 1,
+              max: 10,
+            }),
+          },
           load: async ({ settings: values, services, signal }) => {
             reads.push({ widget: "acme/open-orders", signal });
             const found = await services.find(ORDERS, {
@@ -126,6 +139,24 @@ const shop = definePlugin({
           }),
           view: "figure",
         }),
+        // A card over a collection and one of its fields, both the reader's choice.
+        defineWidget({
+          id: "acme/by-field",
+          title: "By field",
+          description: "One field of a chosen collection",
+          category: "Shop",
+          size: { default: { w: 12, h: 3 } },
+          access: `read-${ORDERS}`,
+          settings: {
+            collection: setting.collection({ label: "Collection" }),
+            field: setting.fieldOf({ of: "collection", label: "Field" }),
+          },
+          load: async ({ settings: values }) => {
+            fieldsLoaded.push(values.field);
+            return { total: 1 };
+          },
+          view: "figure",
+        }),
         defineWidget({
           id: "acme/slow",
           title: "Slow",
@@ -156,6 +187,7 @@ let otherId: string | undefined;
 
 beforeEach(async () => {
   reads = [];
+  fieldsLoaded = [];
   slowSignal = undefined;
   slowStarted = () => {};
   handle = await createTestNextly({ plugins: [shop] });
@@ -505,6 +537,116 @@ function abortOf(signal: AbortSignal): Promise<void> {
     else signal.addEventListener("abort", () => resolve(), { once: true });
   });
 }
+
+describe("a declared card's Field setting, judged before its data is read", () => {
+  /** The owner's card over `collection` and `field`, as the owner's session asks for it. */
+  async function cardWith(collection: string, field: string) {
+    await placeFor(ownerId!, [
+      {
+        id: "c-field",
+        widgetId: "acme/by-field",
+        config: { collection, field },
+      },
+    ]);
+    const [slot] = await slotBytes(await sessionOf(ownerId!), [
+      { widget: "acme/by-field", card: "c-field" },
+    ]);
+    return JSON.parse(slot) as unknown;
+  }
+
+  const needsField = {
+    ok: false,
+    error: "No field chosen yet",
+    code: "needs-setting",
+    setting: "Field",
+  };
+
+  it("loads a field the chosen collection offers its reader", async () => {
+    // The control: without it, a card that never loaded would pass the cases below.
+    expect(await cardWith(ORDERS, "state")).toEqual({
+      ok: true,
+      result: { op: "count", total: 1 },
+    });
+    expect(fieldsLoaded).toEqual(["state"]);
+  });
+
+  it("asks for the field again, without loading, when the collection no longer has it", async () => {
+    expect(await cardWith(ORDERS, "removed")).toEqual(needsField);
+    expect(fieldsLoaded).toEqual([]);
+  });
+
+  it("asks for the field again, without loading, when its reader may not read it", async () => {
+    expect(await cardWith(ORDERS, "cost")).toEqual(needsField);
+    expect(fieldsLoaded).toEqual([]);
+  });
+});
+
+describe("a declared card's Field setting, held on the layout write", () => {
+  /** The owner's layout endpoint, as their own session asks it. */
+  async function layout(method: "GET" | "PUT", body?: unknown) {
+    const { session } = await sessionOf(ownerId!);
+    const request = new Request("http://localhost/api/dashboard/layout", {
+      method,
+      headers: {
+        cookie: session,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const context = {
+      params: Promise.resolve({ params: ["dashboard", "layout"] }),
+    };
+    return method === "GET"
+      ? handlers().GET(request, context)
+      : handlers().PUT(request, context);
+  }
+
+  /** Saves the layout the owner was handed with a by-field card over orders added. */
+  async function saveField(field: string): Promise<Response> {
+    const read = await layout("GET");
+    expect(read.status).toBe(200);
+    const seen = (await read.json()) as {
+      placements: unknown[];
+      version: number;
+      scope: string;
+    };
+    return layout("PUT", {
+      placements: [
+        ...seen.placements,
+        {
+          id: "c-field",
+          widgetId: "acme/by-field",
+          w: 12,
+          h: 3,
+          removed: false,
+          config: { collection: ORDERS, field },
+        },
+      ],
+      version: seen.version,
+      scope: seen.scope,
+    });
+  }
+
+  it("saves a field the chosen collection offers its reader", async () => {
+    // The control: without it, a write refused for any reason would pass the
+    // cases below.
+    expect((await saveField("state")).status).toBe(200);
+  });
+
+  it.each([
+    ["one its reader may not read", "cost"],
+    ["one the collection does not have", "removed"],
+  ])(
+    "refuses %s, naming the setting, with one answer",
+    async (_case, field) => {
+      const res = await saveField(field);
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(await res.json())).toContain(
+        '\\"Field\\" names a field that is not available.'
+      );
+    }
+  );
+});
 
 describe("a reader who leaves gives a declared card up", () => {
   it.each([

@@ -246,14 +246,9 @@ pnpm test:integration:postgres15
 pnpm test:integration:postgres17
 ```
 
-On a pull request, CI runs the integration legs (PostgreSQL, MySQL, SQLite)
-only once it carries the `run-integration` label; without it they report
-`skipped`. The merge queue runs all three before merging, so a MySQL or SQLite
-failure is caught there at the latest. A documentation-only change (files under
-`docs/`, or Markdown) skips them everywhere, label or not. Add the label when you want that
-answer before the queue: it re-runs Integration on the pull request's head. On
-a pull request from a fork it cannot, so after adding the label, re-run the
-head's Integration run from the Actions tab.
+On a pull request, CI runs the integration legs (PostgreSQL, MySQL, SQLite) on
+every push, as the merge queue does. A documentation-only change (files under
+`docs/`, or Markdown) skips them everywhere.
 
 ### Writing a new integration test
 
@@ -312,7 +307,7 @@ The following hooks run automatically:
 
 If a hook fails, fix the issue and re-stage. **Never bypass with `--no-verify`** — the hooks exist to catch problems before CI does.
 
-The pre-push's unit tests are narrowed twice: to the packages the push touches (`scripts/gate-scope.mjs`), then, inside each, to the test files the change can affect (`scripts/test-changed.mjs`, which uses Vitest's `--changed` over the dependency records each test left on its last run). Tests that read files or spawn processes always run, since no record names what they read. A package runs in full when its own `tsconfig` or a workspace package it depends on changed too, and every package runs in full when the lockfile, `.nvmrc`, a root `tsconfig`, `packages/tsconfig` or a file turbo hashes into every task changed. A package whose test task declares a changed root file as an input (`turbo.jsonc`, e.g. `templates/**` for create-nextly-app) runs in full too. So does a package whose files changed since its last passing full run in a way this push does not account for (a pull, a rebase, a branch switch), since a dependency record lags behind an import the code gained. A package Vitest finds no test file in runs its own `test` script, which decides whether that passes. The root `scripts/` tests run when any file outside a workspace (a script, a hook, a workflow, the lockfile, the docs) or a Vitest config changed. `NEXTLY_PREPUSH_ALL_TESTS=1 git push` runs every test of the same packages instead. CI always runs everything.
+The pre-push's unit tests are narrowed twice: to the packages the push touches (`scripts/gate-scope.mjs`), then, inside each, to the test files the change can affect (`scripts/test-changed.mjs`, which uses Vitest's `--changed` over the dependency records each test left on its last run). Tests that read files or spawn processes always run, since no record names what they read. A package runs in full when its own `tsconfig` or a workspace package it depends on changed too, and every package runs in full when the lockfile, `.nvmrc`, a root `tsconfig`, `packages/tsconfig` or a file turbo hashes into every task changed. A package whose test task declares a changed root file as an input (`turbo.jsonc`, e.g. `templates/**` for create-nextly-app) runs in full too. So does a package whose files changed since its last passing full run in a way this push does not account for (a pull, a rebase, a branch switch), since a dependency record lags behind an import the code gained. A package Vitest finds no test file in runs its own `test` script, which decides whether that passes. The root `scripts/` tests run when any file outside a workspace (a script, a hook, a workflow, the lockfile, the docs) or a Vitest config changed. They run before the package tests, and a failure there stops the push without running those, so a red on them takes minutes to show rather than a quarter of an hour. `NEXTLY_PREPUSH_ALL_TESTS=1 git push` runs every test of the same packages instead. CI always runs everything.
 
 ---
 

@@ -1963,11 +1963,16 @@ describe("a preview that meets a writer mid-run", () => {
         logger,
         direction: "up",
         backupConfirmed: true,
+        // A writing run waits for a held lock as every command-line run does; not waiting keeps
+        // this to the refusal itself.
+        lockWaitMs: 0,
       })
     ).rejects.toSatisfy(
       error =>
         NextlyError.is(error) &&
-        error.logContext?.reason === "migration lock is held elsewhere"
+        error.code === "NEXTLY_MIGRATE_LOCK_BUSY" &&
+        (error.logContext?.holder as { kind?: string } | undefined)?.kind ===
+          "earlier-field-group-lock"
     );
 
     // 🔴 Zero, and that is the assertion. Against the very world a preview re-reads, a run that

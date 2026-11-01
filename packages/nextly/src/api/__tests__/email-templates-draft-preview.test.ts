@@ -115,7 +115,6 @@ describe("the draft email-template preview route", () => {
     const [, permissions] = requireRouteAnyPermission.mock.calls[0];
     expect(permissions).toEqual([
       { action: "create", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
     ]);
   });
 

@@ -264,18 +264,18 @@ describe("buildPluginAdminMeta", () => {
       });
     });
 
-    it("is manage-settings when it names none", () => {
+    it("is update-settings when it names none", () => {
       const meta = buildPluginAdminMeta(
         asPlugins([
           { ...base, contributes: { admin: { settings: settingsPage } } },
         ]),
         undefined
       );
-      expect(meta[0].settings?.permission).toBe("manage-settings");
+      expect(meta[0].settings?.permission).toBe("update-settings");
     });
   });
 
-  it("folds headerSlot + widgets for enabled plugins", () => {
+  it("folds headerSlot for enabled plugins, and publishes nothing a plugin carries under admin.widgets", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -298,12 +298,9 @@ describe("buildPluginAdminMeta", () => {
       undefined
     );
     expect(meta[0].headerSlot).toBe("@acme/p/admin#HeaderBadge");
-    expect(meta[0].widgets?.[0]).toMatchObject({
-      id: "stats",
-      component: "@acme/p/admin#Stats",
-      size: { default: { w: 6, h: 4 } },
-      requiredPermission: "read-stats",
-    });
+    // The key is no field, and startup refuses a plugin carrying it: a widget
+    // reaches the admin only through the registry.
+    expect(meta[0]).not.toHaveProperty("widgets");
   });
 
   it("folds contributes.admin.header (slot + hideDefaults + hide) for enabled plugins", () => {
@@ -366,7 +363,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].headerSlot).toBeUndefined();
   });
 
-  it("omits headerSlot + widgets for enabled:false plugins", () => {
+  it("omits headerSlot for enabled:false plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -383,7 +380,7 @@ describe("buildPluginAdminMeta", () => {
       undefined
     );
     expect(meta[0].headerSlot).toBeUndefined();
-    expect(meta[0].widgets).toBeUndefined();
+    expect(meta[0]).not.toHaveProperty("widgets");
   });
 
   it("serializes contributes.fieldTypes type→component, even when disabled", () => {

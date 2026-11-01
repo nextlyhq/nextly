@@ -2,7 +2,7 @@
  * Where the entry screen's miniature gets its block definitions.
  *
  * `PageRenderer` defaults to the process registry, and on the entry screen that
- * registry is EMPTY. `ensureCoreBlocksRegistered()` is called inside
+ * registry is EMPTY. `ensureEditorBlocksRegistered()` is called inside
  * `BlocksEditor` and nowhere else, deliberately — the field control renders on
  * every entry form holding a blocks field, whether or not the editor is ever
  * opened, so registering from there would do global work for a form that may
@@ -11,7 +11,7 @@
  * That decision is worth keeping, so this resolves without it. Passing
  * `PageRenderer` an explicit `blocks` resolver costs nothing globally: no
  * registration happens, no side effect outlives the render, and the reason
- * recorded at the `ensureCoreBlocksRegistered` call site stays true.
+ * recorded at the `ensureEditorBlocksRegistered` call site stays true.
  *
  * ## The registry is still asked FIRST
  *
@@ -21,6 +21,14 @@
  * resolves to `undefined`, which is what `PageRenderer` already draws a
  * `BlockPlaceholder` for; a page using a block this admin has never heard of
  * therefore reports that honestly rather than rendering a gap.
+ *
+ * ## Contributed blocks too
+ *
+ * A block another plugin contributes is handed to this package by the app's
+ * generated component map when the admin loads, before any editor mounts, so
+ * the miniature resolves it from there after the core set. Without that, a
+ * page holding one showed the unknown-block placeholder on its entry screen
+ * while the editor drew it.
  *
  * ## A function, not a captured value
  *
@@ -34,6 +42,8 @@ import { getBlock } from "@nextlyhq/blocks-engine";
 import type { BlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
+import { contributedBlock } from "./contributed-blocks";
+
 /**
  * The core set, indexed once at module load.
  *
@@ -45,8 +55,12 @@ const CORE_BY_NAME = new Map(coreBlocks.map(block => [block.name, block]));
 /**
  * A resolver that answers on the entry screen, where nothing is registered.
  *
- * @returns a resolver preferring a registered definition, falling back to core
+ * @returns a resolver preferring a registered definition, falling back to
+ *   core and then to the blocks plugins contributed
  */
 export function entryBlockResolver(): BlockResolver {
-  return { get: type => getBlock(type) ?? CORE_BY_NAME.get(type) };
+  return {
+    get: type =>
+      getBlock(type) ?? CORE_BY_NAME.get(type) ?? contributedBlock(type),
+  };
 }

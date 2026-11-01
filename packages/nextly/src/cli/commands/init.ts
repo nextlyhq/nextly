@@ -30,8 +30,9 @@ import { confirm, input } from "@inquirer/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 
-import { describeError } from "../../errors/index";
 import { projectUsesSrcLayout } from "../../shared/lib/generated-output-paths";
+import { exitWithError } from "../errors";
+import { projectAlreadyInitialized } from "../errors/areas/commands";
 import {
   createContext,
   type CommandContext,
@@ -117,9 +118,7 @@ export async function runInit(
 
   const configPath = join(cwd, "nextly.config.ts");
   if (existsSync(configPath) && !options.force) {
-    logger.error("Nextly is already initialized in this directory.");
-    logger.info("Use --force to overwrite existing configuration.");
-    process.exit(1);
+    exitWithError(logger, projectAlreadyInitialized(configPath));
   }
 
   const paths = initPaths(cwd);
@@ -713,8 +712,7 @@ export function registerInitCommand(program: Command): void {
       try {
         await runInit(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

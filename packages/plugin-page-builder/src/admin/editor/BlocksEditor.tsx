@@ -33,6 +33,7 @@ import type { JSX } from "react";
 import type { Control, FieldValues, Path } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -297,6 +298,10 @@ function editorInspector(view: EditorView): React.JSX.Element {
       // very document the page is drawn from, and titled from the row
       // the same read returned.
       componentLibrary={componentLibrary}
+      // A contributed block's own inspector, loaded by the app's generated
+      // component map; a block whose inspector did not load keeps its
+      // generated controls.
+      inspectors={contributedInspector}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}

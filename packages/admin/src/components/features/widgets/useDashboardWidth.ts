@@ -8,18 +8,67 @@
  *
  * @module components/features/widgets/useDashboardWidth
  */
-import type { RefObject } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  type Provider,
+  type RefObject,
+} from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
+
+/** The dashboard drawn now, whose width the layout read is sent; none off the dashboard. */
+let drawnDashboard: RefObject<HTMLElement | null> | undefined;
+
+/** A layout effect where there is a DOM, a passive one where there is not (`useMeasuredWidth`). */
+const useDrawnEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /**
  * The width of the dashboard at `ref`.
  *
  * `undefined` rather than a guess until the first measure: a tier predicted from a guessed
  * width would size a query for a card the dashboard then draws at another tier.
+ *
+ * Also names `ref` as the dashboard drawn now (`dashboardWidthNow`), from a layout effect, which
+ * runs before the layout read a mounting dashboard makes is sent.
  */
 export function useDashboardWidth(
   ref: RefObject<HTMLElement | null>
 ): number | undefined {
+  useDrawnEffect(() => {
+    drawnDashboard = ref;
+    return () => {
+      if (drawnDashboard === ref) drawnDashboard = undefined;
+    };
+  }, [ref]);
   return useMeasuredWidth(ref) ?? undefined;
+}
+
+/**
+ * The drawn dashboard's width as it measures now, by the measure `useMeasuredWidth` takes, or
+ * `undefined` off the dashboard or before it has a width (zero is none, as there). Read when the
+ * layout is asked for, so the layout read judges each card that hides while empty at the tier
+ * the card's first query will ask at (`predictedTier` of this same width).
+ */
+export function dashboardWidthNow(): number | undefined {
+  const width = drawnDashboard?.current?.getBoundingClientRect().width;
+  return width === undefined || width <= 0 ? undefined : width;
+}
+
+/**
+ * The dashboard's width, as the grid measured it, to the cards inside it: what a card that is
+ * drawn somewhere else as well, as its settings panel's preview is, reads its real width from
+ * (`cardOuterWidth`). `undefined` outside a dashboard and before it is measured.
+ */
+const DashboardWidthContext = createContext<number | undefined>(undefined);
+
+export const DashboardWidthProvider: Provider<number | undefined> =
+  DashboardWidthContext.Provider;
+
+/** The width of the dashboard this is drawn in, or `undefined`; see `DashboardWidthContext`. */
+export function useDashboardWidthAround(): number | undefined {
+  return useContext(DashboardWidthContext);
 }

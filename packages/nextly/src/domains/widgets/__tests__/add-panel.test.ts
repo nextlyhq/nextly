@@ -20,17 +20,17 @@ describe("the group each widget is listed in", () => {
   it("puts the team's two built-ins under Team, the content widgets under Content, and every other built-in under Overview", () => {
     // Every one of core's, its declarations included: the group is read by id.
     const groups = Object.fromEntries(
-      CORE_WIDGET_IDS.map(id => [id, addPanelFacts(core(id))?.group])
+      CORE_WIDGET_IDS.map(id => [id, addPanelFacts(core(id)).group])
     );
     expect(groups).toEqual({
-      "core/get-started": "overview",
-      "core/content": "overview",
+      "core/setup": "overview",
+      "core/content-table": "overview",
       "core/quick-create": "overview",
       "core/team": "team",
       "core/needs-attention": "overview",
-      "core/recently-edited": "overview",
+      "core/continue": "overview",
       "core/upcoming-releases": "overview",
-      "core/recent-activity": "team",
+      "core/team-activity": "team",
       // Offered per collection, inside each collection's part of Content.
       "core/count": "content",
       "core/breakdown": "content",
@@ -39,6 +39,8 @@ describe("the group each widget is listed in", () => {
       // Offered per collection, as Count is.
       "core/recent-entries": "content",
       "core/over-time": "content",
+      // Super-admins only, and one row of Overview for them.
+      "core/system-health": "overview",
     });
   });
 
@@ -49,28 +51,16 @@ describe("the group each widget is listed in", () => {
       plugin: "@acme/forms",
       category: "Team",
     });
-    expect(facts?.group).toBe("plugins");
-    expect(facts?.subgroup).toBe("@acme/forms");
-    expect(facts?.category).toBe("Team");
-  });
-
-  it("offers no card core derived from a collection: those are retired", () => {
-    // 🔴 Not Content: that group is the catalogue's, and a derived card
-    // listed there would appear in it the day it is turned on.
-    expect(
-      addPanelFacts({
-        id: "collection:posts/recent",
-        generated: true,
-        collection: "posts",
-      })
-    ).toBeUndefined();
+    expect(facts.group).toBe("plugins");
+    expect(facts.subgroup).toBe("@acme/forms");
+    expect(facts.category).toBe("Team");
   });
 
   it("puts any other widget the site has under Overview", () => {
     const facts = addPanelFacts({ id: "site/sales-target", category: "Shop" });
-    expect(facts?.group).toBe("overview");
-    expect(facts?.subgroup).toBeUndefined();
-    expect(facts?.category).toBe("Shop");
+    expect(facts.group).toBe("overview");
+    expect(facts.subgroup).toBeUndefined();
+    expect(facts.category).toBe("Shop");
   });
 
   it("names nothing a widget did not declare", () => {
@@ -85,7 +75,7 @@ describe("the group each widget is listed in", () => {
   it("carries the description and the sketch kind", () => {
     expect(
       addPanelFacts({
-        id: "core/recently-edited",
+        id: "core/continue",
         description: "The documents most recently left with unpublished edits.",
         archetype: "list",
       })
@@ -95,14 +85,14 @@ describe("the group each widget is listed in", () => {
       sketch: "list",
     });
     // A widget that names no kind is drawn as a component's sketch.
-    expect(addPanelFacts(core("site/x"))?.sketch).toBe("custom");
+    expect(addPanelFacts(core("site/x")).sketch).toBe("custom");
   });
 
   it("draws a widget's own sketch where it names one in place of its archetype's", () => {
     // A declared widget drawn by its own component says what it most looks like.
     expect(
       addPanelFacts({ id: "acme/orders", archetype: "custom", sketch: "bars" })
-        ?.sketch
+        .sketch
     ).toBe("bars");
   });
 });
@@ -113,10 +103,9 @@ describe("the order the panel lists widgets in", () => {
       { id: "forms/latest", plugin: "@acme/forms" },
       // Two of the site's own, declared in an order that is not alphabetical.
       core("site/zeta"),
-      { id: "collection:posts/recent", generated: true, collection: "posts" },
       core("core/team"),
       core("site/alpha"),
-      core("core/recently-edited"),
+      core("core/continue"),
       core("core/quick-create"),
       { id: "seo/issues", plugin: "@acme/seo" },
       { id: "forms/totals", plugin: "@acme/forms" },
@@ -125,11 +114,10 @@ describe("the order the panel lists widgets in", () => {
     expect(listed).toEqual([
       // Overview: built-ins in core's own order, whatever order they came in.
       "core/quick-create",
-      "core/recently-edited",
+      "core/continue",
       // Then the site's own, in the order they were declared.
       "site/zeta",
       "site/alpha",
-      // No derived collection card: not offered.
       // Team.
       "core/team",
       // Plugins: each plugin's widgets together, plugins in the order they came.

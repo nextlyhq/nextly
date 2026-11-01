@@ -28,6 +28,7 @@ import {
   type DrizzleTransactor,
   type PinnedConnection,
 } from "./pinned-transaction";
+import { type CatalogExecutor, tableExistsOn } from "./table-exists";
 import {
   createTransactionForwarders,
   transactionDrizzleHandles,
@@ -61,7 +62,11 @@ import type {
   AlterTableOperation,
   TableResolver,
 } from "./types";
-import { createDatabaseError, isDatabaseError } from "./types";
+import {
+  createDatabaseError,
+  isDatabaseError,
+  tableNotRegisteredError,
+} from "./types";
 import { buildUpdateStatement } from "./update-statement";
 
 /**
@@ -880,7 +885,8 @@ export abstract class DrizzleAdapter {
    * Set the table resolver for Drizzle query API support.
    * When a resolver is set, CRUD methods (select, insert, update, delete, upsert)
    * will use Drizzle's query API (db.select().from(), etc.) instead of raw SQL
-   * string building. Falls back to raw SQL if the resolver doesn't have the table.
+   * string building. A table the resolver does not hold is refused with
+   * `TABLE_NOT_REGISTERED_CODE` (`tableNotRegisteredError`).
    *
    * @param resolver - TableResolver implementation (e.g. SchemaRegistry)
    */
@@ -1647,12 +1653,9 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    // Table not found in schema registry - cannot use Drizzle query API
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    // A table the resolver does not hold: refused with the adapters' own code,
+    // so core answers it as an entity this instance has not registered.
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -1679,11 +1682,7 @@ export abstract class DrizzleAdapter {
   private requireTableObject(table: string): unknown {
     const tableObj = this.getTableObject(table);
     if (tableObj) return tableObj;
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -1887,11 +1886,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2002,11 +1997,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2054,11 +2045,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2111,11 +2098,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2247,11 +2230,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   // ============================================================
@@ -2530,82 +2509,33 @@ export abstract class DrizzleAdapter {
    * ```
    */
   async tableExists(tableName: string, schema?: string): Promise<boolean> {
+    return this.tableExistsThrough(
+      {
+        execute: <T = unknown>(sql: string, params?: SqlParam[]) =>
+          this.executeQuery<T>(sql, params),
+      },
+      tableName,
+      schema
+    );
+  }
+
+  /**
+   * {@link tableExists}, asked through `executor`: the same catalogue lookup,
+   * run on a transaction's own connection when the caller holds one. Asking
+   * the pool from inside a transaction waits, on a pool of one, for the
+   * connection that transaction holds; and as a catalogue read it cannot fail
+   * the way a statement against a missing table would, which on PostgreSQL
+   * aborts the transaction.
+   *
+   * @internal For Nextly's own packages; not part of the adapter's public API.
+   */
+  async tableExistsThrough(
+    executor: CatalogExecutor,
+    tableName: string,
+    schema?: string
+  ): Promise<boolean> {
     try {
-      let sql: string;
-      const params: SqlParam[] = [];
-
-      switch (this.dialect) {
-        case "postgresql":
-          sql = `
-            SELECT EXISTS (
-              SELECT FROM information_schema.tables
-              WHERE table_schema = COALESCE($1, (
-                SELECT n.nspname FROM pg_class c
-                JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE c.oid = to_regclass($2)
-              ))
-              AND table_name = $2
-            ) as exists
-          `;
-          // Unqualified DDL and DML resolve across the whole search path, not against one
-          // schema. Naming `public` reported a populated table as absent whenever a deployment
-          // used a schema of its own, and naming only the FIRST entry misses a table that lives
-          // further along it. `to_regclass` resolves exactly as the statements do, so the
-          // lookup and the ALTER cannot disagree about which table is meant. A caller that
-          // reads "absent" as "nothing to conflict with" would otherwise act on the wrong one.
-          params.push(schema ?? null, tableName);
-          break;
-
-        case "mysql":
-          sql = `
-            SELECT COUNT(*) as count
-            FROM information_schema.tables
-            WHERE table_schema = DATABASE()
-            AND table_name = ?
-          `;
-          params.push(tableName);
-          break;
-
-        case "sqlite":
-          sql = `
-            SELECT COUNT(*) as count
-            FROM sqlite_master
-            WHERE type = 'table'
-            AND name = ?
-          `;
-          params.push(tableName);
-          break;
-
-        default:
-          throw this.createDatabaseError(
-            "query",
-            `tableExists not implemented for dialect: ${String(this.dialect)}`,
-            undefined
-          );
-      }
-
-      const results = await this.executeQuery<Record<string, unknown>>(
-        sql,
-        params
-      );
-
-      if (results.length === 0) {
-        return false;
-      }
-
-      const row = results[0];
-
-      // PostgreSQL returns { exists: true/false }
-      if ("exists" in row) {
-        return row.exists === true || row.exists === "t" || row.exists === 1;
-      }
-
-      // MySQL/SQLite return { count: number }
-      if ("count" in row) {
-        return Number(row.count) > 0;
-      }
-
-      return false;
+      return await tableExistsOn(executor, this.dialect, tableName, schema);
     } catch (error) {
       throw this.handleQueryError(error, "tableExists", tableName);
     }
@@ -2624,6 +2554,28 @@ export abstract class DrizzleAdapter {
    * @throws {DatabaseError} If query fails
    */
   async listTables(schema?: string): Promise<string[]> {
+    return this.listTablesThrough(
+      {
+        execute: <T = unknown>(sql: string, params?: SqlParam[]) =>
+          this.executeQuery<T>(sql, params),
+      },
+      schema
+    );
+  }
+
+  /**
+   * {@link listTables}, asked through `executor`: the same catalogue listing,
+   * run on a transaction's own connection when the caller holds one, as
+   * {@link tableExistsThrough} asks for one table. Asking the pool from inside
+   * a transaction would wait, on a pool of one, for the connection that
+   * transaction holds, and would not see the tables it has dropped.
+   *
+   * @internal For Nextly's own packages; not part of the adapter's public API.
+   */
+  async listTablesThrough(
+    executor: CatalogExecutor,
+    schema?: string
+  ): Promise<string[]> {
     try {
       let sql: string;
       const params: SqlParam[] = [];
@@ -2671,7 +2623,7 @@ export abstract class DrizzleAdapter {
           );
       }
 
-      const results = await this.executeQuery<{ table_name: string }>(
+      const results = await executor.execute<{ table_name: string }>(
         sql,
         params
       );
@@ -2942,11 +2894,7 @@ export abstract class DrizzleAdapter {
   private resolvedTableObject(table: string): Record<string, unknown> {
     const tableObj = this.getTableObject(table);
     if (!tableObj || typeof tableObj !== "object") {
-      throw this.createDatabaseError(
-        "query",
-        `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-        undefined
-      );
+      throw tableNotRegisteredError(table);
     }
     return tableObj as Record<string, unknown>;
   }

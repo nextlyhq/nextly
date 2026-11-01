@@ -137,7 +137,7 @@ function render(
     draft: previewDraftGate({
       secret: SECRET,
       generation: GENERATION,
-      cookies: () => ({
+      cookies: async () => ({
         get: (name: string) =>
           name === PREVIEW_SCOPE_COOKIE && jar.link !== undefined
             ? { value: encodeURIComponent(jar.link) }

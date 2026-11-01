@@ -97,8 +97,56 @@ export type SharedFieldsConflictPublicData = {
   hiddenCount?: number;
 };
 
+/**
+ * Which entity an `ENTITY_REMOVED_FROM_CODE` refusal is about: its kind and
+ * the slug the caller named. Enough for a client to mark the entity and say
+ * what to do, and nothing the caller did not already send.
+ */
+export type RemovedFromCodePublicData = {
+  kind: "collection" | "single";
+  slug: string;
+};
+
+/**
+ * Which entity an `ENTITY_NOT_MIGRATED` answer is about and what the database
+ * lacks for it: a field's column, the entity's table, or any registration in
+ * this running instance. The kind and slug are the caller's own; `field` and
+ * `table` appear only for trusted server code, since both come from the
+ * registry rather than the request. No SQL and no driver text.
+ */
+export type NotMigratedPublicData = {
+  kind: "collection" | "single";
+  slug: string;
+  reason: "column" | "table" | "unregistered";
+  field?: string;
+  table?: string;
+};
+
+/**
+ * Why a sample-content load, decline or record was not done, for the person
+ * who asked: refused because the site's answer moved on (`answered`, a load
+ * `in-progress`, one loaded but `unrecorded`, a failed one awaiting `confirm`,
+ * or `not-this-run` for a record of a run that is not the one waiting), or
+ * `failed`, with what failed and when that load started. A super-admin's own
+ * load reports what failed, so the card can say it.
+ */
+export type SampleContentPublicData = {
+  reason:
+    | "answered"
+    | "in-progress"
+    | "unrecorded"
+    | "confirm"
+    | "not-this-run"
+    | "failed";
+  failure?: string;
+  startedAt?: string;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | SampleContentPublicData
+  | RemovedFromCodePublicData
+  | NotMigratedPublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
   | SingleAbsentPublicData

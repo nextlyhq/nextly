@@ -40,24 +40,26 @@ import {
 } from "nextly/config";
 import type { CSSProperties } from "react";
 
-/** One row's height, in pixels rather than rem so it does not follow the root font size. */
-export const ROW_HEIGHT_PX = 72;
-/** The gap down the grid, between rows, at every width. */
-export const ROW_GAP_PX = 16;
-/** The gap across the grid, between columns, below {@link WIDE_GAP_FROM_PX}. */
-export const COLUMN_GAP_PX = 16;
-/** The gap across the grid from {@link WIDE_GAP_FROM_PX}. */
-export const WIDE_COLUMN_GAP_PX = 24;
-/** From this dashboard width the gap across is the wide one. */
-export const WIDE_GAP_FROM_PX = 1280;
+// One row's height and the gap down the grid, in pixels, and a card's height from its rows: core's
+// own (`nextly/card-geometry`), the numbers a widget's server `load` counts its rows by, so the
+// grid drawn here and the rows a load reads cannot come to disagree. Re-exported for the grid's
+// readers, which name them from here.
+export { cardHeightPx, ROW_GAP_PX, ROW_HEIGHT_PX } from "nextly/card-geometry";
 
-/** From this dashboard width the cards of `w` 6 or less share a row two at a time. */
-export const TWO_UP_FROM_PX = 640;
-/** From this dashboard width every card is drawn at its own `w`. */
-export const AS_SIZED_FROM_PX = 1024;
-
-/** Half the grid: the span every card of this many columns or fewer takes in the middle band. */
-const HALF_GRID = GRID_COLUMNS / 2;
+// The gaps across, the bands and how many columns a card is drawn across in each (the table
+// above): core's own too, since the layout read works out the tier a card is drawn at from them
+// to judge a card that hides while empty on the answer its first query gets. Re-exported, as the
+// rows are, for the grid's readers.
+export {
+  AS_SIZED_FROM_PX,
+  COLUMN_GAP_PX,
+  columnGapPx,
+  drawnSpan,
+  isOneColumn,
+  TWO_UP_FROM_PX,
+  WIDE_COLUMN_GAP_PX,
+  WIDE_GAP_FROM_PX,
+} from "nextly/card-geometry";
 
 /**
  * The grid's own classes: twelve columns, rows of {@link ROW_HEIGHT_PX}, and the gaps.
@@ -71,36 +73,22 @@ const HALF_GRID = GRID_COLUMNS / 2;
 export const GRID_CLASS =
   "grid grid-flow-row grid-cols-12 auto-rows-[72px] gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
 
-/** The gap across the grid, in pixels, on a dashboard `dashboardWidth` wide. */
-export function columnGapPx(dashboardWidth: number): number {
-  return dashboardWidth >= WIDE_GAP_FROM_PX
-    ? WIDE_COLUMN_GAP_PX
-    : COLUMN_GAP_PX;
-}
-
-/** Whether a dashboard `dashboardWidth` wide draws one column. */
-export function isOneColumn(dashboardWidth: number): boolean {
-  return dashboardWidth < TWO_UP_FROM_PX;
-}
-
 /**
- * How many of the twelve columns a card of `w` is drawn across on a dashboard `dashboardWidth`
- * wide: the table above as numbers.
- *
- * The class text has to be written out in full for Tailwind, so it cannot be built from this;
- * a test reads the classes back and holds the two to the same answer at every band edge.
+ * The grid's columns and the gap across them, without its rows: for a grid that draws cards at
+ * the dashboard's widths but lays its rows out itself (the widget preview page, where each card
+ * sits under a label). The same classes as {@link GRID_CLASS}, which a test holds it to, so a
+ * card drawn there is as wide as on the dashboard and lands in the same tier.
  */
-export function drawnSpan(w: number, dashboardWidth: number): number {
-  if (isOneColumn(dashboardWidth)) return GRID_COLUMNS;
-  if (dashboardWidth < AS_SIZED_FROM_PX) {
-    return w <= HALF_GRID ? HALF_GRID : GRID_COLUMNS;
-  }
-  return w;
-}
+export const GRID_COLUMNS_CLASS =
+  "grid-cols-12 gap-x-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
 
 /**
  * Span classes per `w`, the table above as class text, keyed 1 to 12. Frozen because this is the
  * shared map, not a starting point a caller may edit for one grid.
+ *
+ * The class text has to be written out in full for Tailwind, so it cannot be built from
+ * `drawnSpan`, the table as numbers; a test reads the classes back and holds the two to the same
+ * answer at every band edge.
  */
 export const SPAN_CLASSES: Readonly<Record<number, string>> = Object.freeze({
   1: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-1",
@@ -153,11 +141,6 @@ export function cardSpanClass(w: number): string {
  */
 export function cardRowStyle(h: number): CSSProperties {
   return { gridRow: `span ${h} / span ${h}` };
-}
-
-/** A card's height in pixels at `h` rows: its rows and the gaps between them, at every width. */
-export function cardHeightPx(h: number): number {
-  return h * ROW_HEIGHT_PX + (h - 1) * ROW_GAP_PX;
 }
 
 /** The widths the card menu offers wherever a widget's bounds allow them: the common fractions. */

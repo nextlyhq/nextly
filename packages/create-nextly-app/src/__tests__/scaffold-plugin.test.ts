@@ -26,8 +26,10 @@ import {
 } from "vitest";
 
 import type { DatabaseConfig } from "../types";
-import { PLUGIN_NODE_ENGINES, satisfiesNodeRange } from "../utils/plugin-node";
+import { PLUGIN_NODE_ENGINES } from "../utils/plugin-node";
 import { copyTemplate } from "../utils/template";
+// The plugin floor is read through the CLI's shared range test.
+import { satisfiesRange } from "../utils/version-range";
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -328,8 +330,8 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     ]);
     const disagreements = samples.filter(
       version =>
-        satisfiesNodeRange(version, PLUGIN_NODE_ENGINES) !==
-        tools.every(range => satisfiesNodeRange(version, range))
+        satisfiesRange(version, PLUGIN_NODE_ENGINES) !==
+        tools.every(range => satisfiesRange(version, range))
     );
     expect(disagreements, `tsdown: ${tools[0]}; vitest: ${tools[1]}`).toEqual(
       []

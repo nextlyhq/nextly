@@ -173,6 +173,12 @@ async function migrate(t: TestNextly, dialect: TestDialect): Promise<boolean> {
       debug: () => {},
     } as never,
     lockMode: "fail-fast",
+    // The schema lock needs a whole adapter, which this wrapper is not, and it is exercised against
+    // real databases in its own suites; here it runs the work as given.
+    withLock: async (_adapter, _dialect, fn) => ({
+      ran: true,
+      value: await fn(),
+    }),
     ensureLedger: async () => {
       if ((await columnsOf(t, dialect, "nextly_schema_events")).length > 0) {
         return;

@@ -22,6 +22,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { normalizeDefault } from "./diff/normalize-default";
 import type {
   ChangeColumnTypeOp,
   Operation,
@@ -31,10 +32,11 @@ import type {
 /**
  * The operations a rename needs to finish, in order. Empty when it needs none.
  *
- * Empty for SQLite on purpose rather than by omission: it has no ALTER that changes a column's
- * type, and it needs none here, because it stores JSON as text — so the two sides of the one
- * convertible change name the same storage. Asking for a conversion there would raise
- * `SqliteUnsupportedOperationError` for a column that is already correct.
+ * No type conversion on SQLite, on purpose rather than by omission: it has no ALTER that changes a
+ * column's type, and it needs none here, because it stores JSON as text — so the two sides of the
+ * one convertible change name the same storage. Asking for a conversion there would raise
+ * `SqliteUnsupportedOperationError` for a column that is already correct. A nullability or default
+ * change made with the rename is still carried (`settingsCarried`).
  */
 /**
  * What the repaired column must still be afterwards, when the caller can say.
@@ -64,9 +66,14 @@ export function conversionForRename(
   dialect: SupportedDialect,
   context: RenameConversionContext = {}
 ): Operation[] {
-  if (dialect === "sqlite") return [];
-  if (!rename.fromType || !rename.toType) return [];
-  if (rename.fromType === rename.toType) return [];
+  // A rename that converts nothing still has to carry the nullability or default change made with
+  // it: the collapsed `add_column` was the only statement of either, so without these the column
+  // keeps its old setting under the new name while the snapshot written beside it says otherwise.
+  if (dialect === "sqlite") return settingsCarried(rename, context);
+  if (!rename.fromType || !rename.toType)
+    return settingsCarried(rename, context);
+  if (rename.fromType === rename.toType)
+    return settingsCarried(rename, context);
 
   const change: ChangeColumnTypeOp = {
     type: "change_column_type",
@@ -152,5 +159,50 @@ export function conversionForRename(
     });
   }
 
+  return ops;
+}
+
+/**
+ * The nullability and default changes a rename carries when it converts nothing, each as its own
+ * operation under the column's new name.
+ *
+ * Emitted only when the caller knows both sides, which `migrate:create` does from the two
+ * snapshots: the apply pipeline passes no context, and its schema push reconciles both settings
+ * itself. Each operation renders the way its dialect changes that one setting and nothing else:
+ * PostgreSQL alters it in place, MySQL sets the default in place and restates the column from the
+ * live catalog for its nullability, and SQLite rebuilds the table to the snapshot (`generateStatements`).
+ *
+ * The defaults are compared normalised, as the diff compares them, so two spellings of one default
+ * are not a change.
+ */
+function settingsCarried(
+  rename: RenameColumnOp,
+  context: RenameConversionContext
+): Operation[] {
+  const { source, target } = context;
+  if (source === undefined || target === undefined) return [];
+  const ops: Operation[] = [];
+  if (source.nullable !== undefined && source.nullable !== target.nullable) {
+    ops.push({
+      type: "change_column_nullable",
+      tableName: rename.tableName,
+      columnName: rename.toColumn,
+      fromNullable: source.nullable,
+      toNullable: target.nullable,
+    });
+  }
+  const columnType = rename.toType ?? rename.fromType;
+  if (
+    normalizeDefault(source.default, columnType) !==
+    normalizeDefault(target.default, columnType)
+  ) {
+    ops.push({
+      type: "change_column_default",
+      tableName: rename.tableName,
+      columnName: rename.toColumn,
+      fromDefault: source.default,
+      toDefault: target.default,
+    });
+  }
   return ops;
 }

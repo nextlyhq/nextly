@@ -12,8 +12,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  type RecordedEntities,
+  recordedBeforeOf,
+} from "../../domains/i18n/migration/recorded-before";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import {
   bindTransitionRecorder,
@@ -24,7 +29,10 @@ import {
   settleI18nTransition,
 } from "../../domains/i18n/migration/transition-state";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
-import { deleteEntityRegistryRow } from "../../domains/versions/entity-teardown";
+import {
+  deleteEntityRegistryRow,
+  mediaUsageTablePresent,
+} from "../../domains/versions/entity-teardown";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import {
@@ -741,8 +749,13 @@ async function handleRemovedSingles(
       // Delete the registry entry directly, then the Single's autosaves and
       // version pins, in one transaction and in that order, as the
       // registry's own delete does: see `deleteEntityRegistryRow`.
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(adapter),
+        mediaUsagePresent: await mediaUsageTablePresent(adapter),
+      };
       await adapter.transaction(tx =>
-        deleteEntityRegistryRow(tx, "single", slug)
+        deleteEntityRegistryRow(tx, "single", slug, tables)
       );
 
       // Drop the data table
@@ -920,6 +933,13 @@ export async function ensureLocalizedCompanions(
      * --repair-localization`), which is how the one missing fact, the language, gets supplied.
      */
     repairUntracked?: boolean;
+    /**
+     * Every entity as the registry recorded it before this run's first sync or migration
+     * (`readRecordedEntities`). With it, a field the run newly translates over a translations
+     * column already there is judged before that column is taken as the field's; without it,
+     * nothing is judged.
+     */
+    recordedBefore?: RecordedEntities;
   } = {}
 ): Promise<void> {
   const { logger } = context;
@@ -936,6 +956,7 @@ export async function ensureLocalizedCompanions(
     versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
+    survivingCompanionRefusal,
   } = await import("../../domains/i18n/runtime/companion-io");
   // Where transitions are recorded. Resolved whether or not the app configures a default locale:
   // an app that has just removed its `localization` block still has companions to unwind, and
@@ -1039,6 +1060,28 @@ export async function ensureLocalizedCompanions(
         // creates this entity's companion once its table exists.
         continue;
       }
+      // Before copying anything into a translations table that survived turning translation
+      // off: a column there that can no longer hold its field stops the run, before the push.
+      if (phase === "beforeApply") {
+        const refused = await survivingCompanionRefusal(
+          adapter as unknown as DrizzleAdapter,
+          {
+            ...companionEntityArgs,
+            recordedBefore: recordedBeforeOf(
+              options.recordedBefore,
+              kind,
+              entity.slug
+            ),
+          }
+        );
+        if (refused) {
+          reportCompanionFailure(
+            "prepare",
+            "Nothing was copied into it and the schema was not changed"
+          )(refused);
+          continue;
+        }
+      }
       // `ensureCompanionTable` resolves even on failure (a first boot may not have
       // the main table yet), so the reporter — not a try/catch — is what surfaces
       // a real problem.
@@ -1104,21 +1147,35 @@ export async function ensureLocalizedCompanions(
       // then splits the value into a companion column that does not exist. Additive only,
       // Additive only. The reload path reconciles too — it is dev-only, behind its own
       // production return — so the two stay in step.
-      await reconcileCompanionColumns(
+      const columnsInStep = await reconcileCompanionColumns(
         adapter as unknown as DrizzleAdapter,
         {
           ...companionEntityArgs,
           // Decides whether `_updated_at` can be seeded from version history for this
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
+          recordedBefore: recordedBeforeOf(
+            options.recordedBefore,
+            kind,
+            entity.slug
+          ),
         },
         reportCompanionFailure(
           "update",
           "Newly translatable fields will fail to save until it matches"
-        )
+        ),
+        // A column left as it is that cannot hold its field is reported, never counted as a
+        // failure: the run did not change it, and an install nobody touched must not start failing.
+        message =>
+          logger.warn(
+            `The translations table for "${entity.slug}" (${tableName}_locales): ${message}`
+          )
       );
       // Its per-language unique indexes, once its columns are in step. A field whose rule cannot
-      // hold is reported, which fails the command, and left without its index.
+      // hold is reported, which fails the command, and left without its index. Not after a column
+      // failure: a refused column is not the field's, and on MySQL an index built over it would
+      // stay in place though the run fails.
+      if (!columnsInStep) continue;
       const { reconcileCompanionUniqueIndexes } = await import(
         "../../domains/i18n/runtime/companion-unique-reconcile"
       );
@@ -1142,6 +1199,7 @@ export async function ensureLocalizedCompanions(
       reason: "state",
       message: `Localization could not be brought into step for: ${failures.join(", ")}. Until it succeeds, translations for these entities are either unwritable or unreadable.`,
       logContext: {
+        reason: "localization-not-provisioned",
         cause: "companion-provisioning-failed",
         entities: failures,
       },

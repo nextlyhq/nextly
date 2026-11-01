@@ -18,7 +18,14 @@
  * left tables in would fail these cases for a reason that is not theirs.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -27,13 +34,13 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  parseSqlSections,
   previewMigrate,
   runFileMigrations,
 } from "../../../../cli/commands/migrate";
+import { parseSqlSections } from "../../../schema/migrate/sql-sections";
 import {
   downDatabaseDeps,
   migrateDownCore,
@@ -46,6 +53,7 @@ import {
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
 import { withMigrateLock } from "../../../schema/pipeline/locks";
+import { stepFileOf } from "../step-windows";
 import {
   createScratchDatabase,
   type ScratchDatabase,
@@ -180,15 +188,43 @@ for (const entry of DIALECTS) {
         });
       }
 
+      /**
+       * `nextly migrate`, as a run that stopped before the files `held` matches: they are put
+       * aside while it runs and back after, so the ledger records only what ran. `--step` can't
+       * stand in for this inside a move between translated and shared, since it runs on through.
+       */
+      async function migrateStoppingBefore(
+        held: (file: string) => boolean
+      ): Promise<number> {
+        const aside = resolve(migrationsDir, "aside");
+        await mkdir(aside, { recursive: true });
+        const files = (await readdir(migrationsDir)).filter(
+          f => f.endsWith(".sql") && held(f)
+        );
+        for (const f of files) {
+          await rename(resolve(migrationsDir, f), resolve(aside, f));
+        }
+        try {
+          return await migrate();
+        } finally {
+          for (const f of files) {
+            await rename(resolve(aside, f), resolve(migrationsDir, f));
+          }
+        }
+      }
+
       /** `nextly migrate:down --step <n> --allow-data-loss --yes`, reading each file's DOWN. */
-      async function migrateDown(step: number): Promise<string[]> {
+      async function migrateDown(
+        step: number,
+        logger = quiet
+      ): Promise<string[]> {
         const result = await migrateDownCore({
           ...(await downDatabaseDeps({
             adapter: adapter as unknown as DrizzleAdapter,
             dialect,
           })),
           nodeEnv: "test",
-          logger: quiet,
+          logger,
           options: {
             step,
             allowDataLoss: true,
@@ -207,6 +243,7 @@ for (const entry of DIALECTS) {
             return {
               sql: parseSqlSections(content).downSql,
               transaction: !marksNoTransaction(content),
+              stepFile: stepFileOf(content, name),
             };
           },
           withLock: withMigrateLock,
@@ -293,14 +330,121 @@ for (const entry of DIALECTS) {
         await expectShared();
       });
 
-      it("adds no archive rows when the archive file runs again", async () => {
+      it("runs a move out of translation whole under --step, saying so", async () => {
         await migrateCreate(translated);
         await migrate();
         await seed();
         await migrateCreate(shared);
+        const logger = createLogger({ quiet: true });
+        const info = vi.spyOn(logger, "info");
+
+        // `migrate --step 2` would stop after the main file, with the main column there and
+        // empty: an app already storing the field there could write a value the shared file's
+        // copy then replaces. The run goes on through the shared file instead.
+        expect(
+          await runFileMigrations({
+            adapter: adapter as never,
+            db: adapter.getDrizzle(),
+            dialect,
+            migrationsDir,
+            logger,
+            step: 2,
+          })
+        ).toBe(3);
+        expect(info).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(
+              `--step ends inside a move between translated and shared \\("body" in collection "${slug}"\\)`
+            )
+          )
+        );
+        await expectShared();
+        // Nothing is left for the next run.
+        expect(await migrate()).toBe(0);
+      });
+
+      it("runs a move into translation whole under --step, saying so", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        // `price` joins translation: its joins file copies it into the companion, and the main
+        // file after it drops the main column.
+        await migrateCreate({
+          ...translated,
+          fields: [
+            { name: "body", type: "text", localized: true },
+            { name: "price", type: "number", localized: true },
+          ],
+        });
+        const logger = createLogger({ quiet: true });
+        const info = vi.spyOn(logger, "info");
+
+        // `migrate --step 1` would stop after the joins file, leaving the main column for an app
+        // to write into before the main file drops it.
+        expect(
+          await runFileMigrations({
+            adapter: adapter as never,
+            db: adapter.getDrizzle(),
+            dialect,
+            migrationsDir,
+            logger,
+            step: 1,
+          })
+        ).toBe(2);
+        expect(info).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(
+              `--step ends inside a move between translated and shared \\("price" in collection "${slug}"\\)`
+            )
+          )
+        );
+        expect(await columnsOf(table)).not.toContain("price");
+        expect(await columnsOf(companion)).toContain("price");
+      });
+
+      it("rolls a move out of translation back whole under migrate:down --step, saying so", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        await migrateCreate(shared);
+        await migrate();
+        const logger = createLogger({ quiet: true });
+        const info = vi.spyOn(logger, "info");
+
+        // `migrate:down --step 1` would stop after the shared file's DOWN, with the companion
+        // column back and the main column still there until the main file's DOWN drops it.
+        expect(await migrateDown(1, logger)).toHaveLength(2);
+        expect(info).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(
+              `--step ends inside a move between translated and shared \\("body" in collection "${slug}"\\)`
+            )
+          )
+        );
+        expect(await columnsOf(table)).not.toContain("body");
+        expect(await columnsOf(companion)).toContain("body");
+      });
+
+      it("keeps to --step outside a move out of translation", async () => {
+        await migrateCreate(translated);
+        await migrateCreate(shared);
+
+        // The first run's main file, then its companion file: neither is inside a move.
+        expect(await migrate(1)).toBe(1);
+        expect(await migrate(1)).toBe(1);
+      });
+
+      it("adds no archive rows when the archive file runs again", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        const before = new Set(await readdir(migrationsDir));
+        await migrateCreate(shared);
         // The archive file alone, as a run that stopped after it leaves the database; the companion
         // still has the column its statements read.
-        await migrate(1);
+        await migrateStoppingBefore(
+          f => !before.has(f) && !f.includes("_archive_localization_")
+        );
         expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
 
         const file = (await readdir(migrationsDir)).find(f =>
@@ -353,6 +497,42 @@ for (const entry of DIALECTS) {
           `ALTER TABLE ${q(companion)} DROP COLUMN ${q("body")}`
         );
         expect(await archived()).toEqual([]);
+        expect(await columnsOf(companion)).toContain("body");
+      });
+
+      it("lists the whole move out of translation in a dry run with --step", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        await migrateCreate(shared);
+        const printed: string[] = [];
+        const capture = new Proxy(
+          {},
+          {
+            get:
+              () =>
+              (...parts: unknown[]) => {
+                printed.push(parts.map(String).join(" "));
+              },
+          }
+        ) as Parameters<typeof previewMigrate>[0]["logger"];
+
+        // As `nextly migrate --dry-run --step 2`: what a real `--step 2` run applies.
+        await previewMigrate({
+          adapter: adapter as never,
+          db: adapter.getDrizzle(),
+          dialect,
+          migrationsDir,
+          plugins: [],
+          logger: capture,
+          step: 2,
+        });
+
+        const output = printed.join("\n");
+        expect(output).toMatch(/3 migrations/);
+        expect(output).toContain(
+          `ALTER TABLE ${q(companion)} DROP COLUMN ${q("body")}`
+        );
         expect(await columnsOf(companion)).toContain("body");
       });
 
@@ -430,8 +610,8 @@ for (const entry of DIALECTS) {
         await migrate();
         await seed();
         await migrateCreate(shared);
-        // The archive file and the main file.
-        await migrate(2);
+        // The archive file and the main file, as a run that stopped before the shared file.
+        await migrateStoppingBefore(f => f.includes("_shared_localization_"));
         await adapter.executeQuery(
           `ALTER TABLE ${q(companion)} RENAME COLUMN ${q("body")} TO ${q("body_moved")}`
         );

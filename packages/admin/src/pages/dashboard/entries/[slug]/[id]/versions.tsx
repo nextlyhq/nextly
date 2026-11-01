@@ -19,6 +19,7 @@ import {
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import type { PageProps } from "@admin/lib/routing";
 
 export default function EntryVersionsPage({
@@ -38,6 +39,9 @@ export default function EntryVersionsPage({
     { kind: "collection", slug, entryId: id },
     locale
   );
+  // The tab names the entry whose history this is, by the same name the
+  // comparison's heading uses.
+  useDocumentTitle(documentTitle);
 
   return (
     <VersionComparePage

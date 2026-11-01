@@ -13,6 +13,7 @@
  *
  * @module cli/commands/migrate-down
  */
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -20,15 +21,32 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import {
+  filesWithinStep,
+  stepContinuedNotice,
+  stepFileOf,
+  type StepFile,
+} from "../../domains/i18n/migration/step-windows";
+import {
+  isPluginLedgerRow,
+  ledgerFilename,
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
+import { standingsByFilename } from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
   type SchemaEventRow,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
+import {
+  ACCEPT_DATA_LOSS_HELP,
+  isInteractiveTerminal,
+  judgeDataLoss,
+  resolveDataLossConsent,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
 import {
   concurrentRunError,
   failedAttemptMayBePartial,
@@ -50,6 +68,7 @@ import {
   marksNoTransaction,
   splitSqlStatements,
 } from "../../domains/schema/migrate/split-sql";
+import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import {
   assertNoForeignDrops,
   columnsAfter,
@@ -67,17 +86,22 @@ import { findUnexpectedDestructiveStatements } from "../../domains/schema/pipeli
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  askToDeleteInTerminal,
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
-import { parseSqlSections } from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -94,7 +118,7 @@ import {
  * table and its rows, so its `DROP TABLE` is not counted: the statements
  * `rebuildBlockStatements` names — judged against the table's live columns,
  * as the drop guard judges them — which is how a constraint-only SQLite DOWN
- * needs no --allow-data-loss. Everything else is handed to the classifier
+ * needs no data-loss consent. Everything else is handed to the classifier
  * with an empty approved-rebuild set, so a DROP TABLE outside a complete
  * block, or of a twin missing a live column, still counts.
  */
@@ -114,8 +138,10 @@ export function isDestructiveDown(
 
 /**
  * Newest-applied-first filenames, limited to `step`. A file counts as applied
- * only when the NEWEST event for it is `applied` (a later rolled_back retires
- * it). Ordered by that newest event's startedAt, descending.
+ * when its standing says so (`standingsByFilename`): an app migration's latest
+ * outcome is `applied` (a later rolled_back retires it; an attempt that failed
+ * or stopped does not), a plugin module's newest record is. Ordered by that
+ * applied record's startedAt, descending.
  *
  * Migrations recorded in the same millisecond — a run of plugin modules
  * adopted together, say — share a `startedAt`, and the ledger is read with no
@@ -132,15 +158,77 @@ export function selectAppliedTargets(
   plugin?: string
 ): string[] {
   const applied: { filename: string; at: number }[] = [];
-  for (const [filename, newest] of newestEventsByFilename(rows)) {
-    if (newest.status === "applied") {
-      applied.push({ filename, at: newest.startedAt.getTime() });
+  for (const [filename, standing] of standingsByFilename(rows)) {
+    if (standing.state === "applied" && standing.outcome !== undefined) {
+      applied.push({ filename, at: standing.outcome.startedAt.getTime() });
     }
   }
   applied.sort(
     (a, b) => b.at - a.at || laterInRunOrder(a.filename, b.filename, plugin)
   );
   return applied.slice(0, Math.max(0, step)).map(a => a.filename);
+}
+
+/**
+ * The files `migrate:down --step` rolls back, newest first: `step` of them, and on through a move
+ * between translated and shared it would otherwise end inside, saying so (`filesWithinStep`). Each
+ * applied file is read for what it is for; one that is missing or can't be read opens and closes
+ * nothing, and its own refusal comes from `planRollback` if it is a target. `reads` hands those
+ * reads on, so the plan is made from the DOWN the window was judged from, read once per pass. A
+ * plugin's modules move no translation, so its stream keeps to the step.
+ */
+async function targetsWithinStep(
+  rows: SchemaEventRow[],
+  step: number,
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "options" | "fileExists" | "readDownSql" | "logger"
+  >,
+  notify: boolean
+): Promise<{ targets: string[]; reads?: ReadonlyMap<string, DownRead> }> {
+  if (deps.options.plugin !== undefined) {
+    return {
+      targets: selectAppliedTargets(rows, step, deps.options.plugin),
+    };
+  }
+  const applied = selectAppliedTargets(rows, Number.POSITIVE_INFINITY);
+  const reads = new Map<string, DownRead>();
+  const files = await Promise.all(
+    applied.map(async filename => {
+      if (!(await deps.fileExists(filename))) {
+        return { filename, ...NO_STEP_FILE };
+      }
+      const read = await readDown(filename, deps);
+      reads.set(filename, read);
+      const stepFile = "down" in read ? read.down.stepFile : undefined;
+      return { filename, ...(stepFile ?? NO_STEP_FILE) };
+    })
+  );
+  const within = filesWithinStep(
+    files.map(file => ({ file, done: false })),
+    step,
+    "down"
+  );
+  if (notify && within.continued !== undefined) {
+    deps.logger.info(stepContinuedNotice(within.continued));
+  }
+  return { targets: within.run.map(f => f.filename), reads };
+}
+
+const NO_STEP_FILE: StepFile = { collections: [], singles: [], components: [] };
+
+/** A file's DOWN, or why it couldn't be read, which `planRollback` turns into its refusal. */
+type DownRead = { down: MigrationDown } | { unreadable: unknown };
+
+async function readDown(
+  filename: string,
+  deps: Pick<MigrateDownCoreDeps, "readDownSql">
+): Promise<DownRead> {
+  try {
+    return { down: await deps.readDownSql(filename) };
+  } catch (unreadable) {
+    return { unreadable };
+  }
 }
 
 /**
@@ -160,11 +248,32 @@ function laterInRunOrder(a: string, b: string, plugin?: string): number {
 export interface MigrateDownCoreDeps {
   dialect: SupportedDialect;
   db: unknown;
+  /**
+   * The adapter the schema lock is taken through (`downDatabaseDeps` supplies it). Optional only
+   * so a test that replaces `withLock` need not build one; the real lock refuses without it.
+   */
+  adapter?: DrizzleAdapter;
+  /** What holds the lock while this runs, as another run's refusal names it. */
+  lockCommand?: string;
+  /**
+   * The owner registry read again, for the plan made inside the lock. `downDatabaseDeps` supplies
+   * it; absent, the plan inside the lock uses the rows read before it.
+   */
+  readOwners?: () => Promise<
+    Pick<MigrateDownCoreDeps, "owners" | "elementOwners">
+  >;
   nodeEnv: string | undefined;
   logger: CommandContext["logger"];
   options: {
     step?: number;
+    /**
+     * The earlier spelling of the consent: covers a DOWN that loses data, as
+     * it did before. Read only when `consent` is absent; the command line
+     * folds it into `consent`, naming it deprecated.
+     */
     allowDataLoss?: boolean;
+    /** The data-loss consent a DOWN that loses data needs. */
+    consent?: DataLossConsent;
     yes?: boolean;
     dryRun?: boolean;
     /** Name whose migration rows to act on; undefined means the app's own. */
@@ -215,6 +324,20 @@ export interface MigrateDownCoreDeps {
     transaction: boolean
   ) => Promise<void>;
   /**
+   * Records, durably and before the first statement, that a DOWN started:
+   * an attempt with no outcome yet (`downStartRecordedFirst`). Returns its id.
+   * Optional so a caller with no ledger of its own supplies nothing, and the
+   * DOWN is recorded only once it ends, as it was before.
+   */
+  recordDownStarted?: (filename: string) => Promise<string>;
+  /**
+   * Removes a DOWN's started attempt once its ending is recorded, through
+   * `db`: the handle the rolled-back row was written on when it ended in a
+   * rollback, so the two commit together. The ending's own record then says
+   * how the attempt ended.
+   */
+  endDownAttempt?: (id: string, db?: unknown) => Promise<void>;
+  /**
    * Table-level owner rows for the drop guard; absent when no registry is
    * reachable, which reads as nothing being claimed.
    */
@@ -254,6 +377,31 @@ export interface MigrateDownCoreDeps {
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<ReadonlyMap<string, string>>;
   withLock: typeof withMigrateLock;
+  /**
+   * Whether a person is at a terminal to be asked before a DOWN loses data.
+   * Absent reads as no, so a rollback without consent is refused rather than
+   * run.
+   */
+  interactive?: boolean;
+  /** Asks that person a yes-or-no question; only called when `interactive`. */
+  askToDelete?: (question: string) => Promise<boolean>;
+}
+
+/**
+ * The adapter the lock is taken through. Refused rather than guessed when absent: a rollback run
+ * without the schema lock is the overlap the lock exists to prevent.
+ */
+function lockAdapter(deps: MigrateDownCoreDeps): DrizzleAdapter {
+  if (deps.adapter !== undefined) return deps.adapter;
+  // A stand-in `withLock` ignores its first argument, so a test that replaces the lock still runs;
+  // the real one reads `getCapabilities` off it and fails loudly on this placeholder.
+  return {
+    getCapabilities: () => {
+      throw NextlyError.internal({
+        logContext: { reason: "migrate:down was given no adapter to lock" },
+      });
+    },
+  } as unknown as DrizzleAdapter;
 }
 
 export interface MigrateDownResult {
@@ -265,6 +413,12 @@ export interface MigrationDown {
   sql: string;
   /** False when the migration is marked to run outside a transaction. */
   transaction: boolean;
+  /**
+   * What the file is for and the entities it names, which `--step` reads so it never ends inside
+   * a move between translated and shared (`filesWithinStep`). Absent for a plugin's module, which
+   * moves no translation.
+   */
+  stepFile?: StepFile;
 }
 
 /** One rollback target, as planned before anything runs. */
@@ -307,7 +461,7 @@ export function refusalOf(
   if (p.statements.length === 0) {
     return NextlyError.invalidInput({
       message: `${p.filename} has no down SQL — it is irreversible. Hand-write a -- DOWN section or use 'nextly migrate:fresh'.`,
-      logContext: { filename: p.filename },
+      logContext: { filename: p.filename, reason: "down-sql-missing" },
     });
   }
   try {
@@ -418,12 +572,20 @@ export async function rollBackOne(
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordFailed"
+    | "recordDownStarted"
+    | "endDownAttempt"
   >
 ): Promise<void> {
   if (!p.transaction) {
     deps.logger.warn(outsideTransactionNotice(p.filename));
   }
   const partial = failedAttemptMayBePartial(p, deps.dialect);
+  // Before the first statement, where a stop can leave part of the DOWN
+  // committed: the ledger then shows an attempt with no outcome, and the
+  // migration stays recorded applied until the DOWN's last statement ran.
+  const attempt = downStartRecordedFirst(p, deps.dialect)
+    ? await deps.recordDownStarted?.(p.filename)
+    : undefined;
   try {
     await deps.execDown(
       p.statements,
@@ -437,6 +599,13 @@ export async function rollBackOne(
           });
         }
         if (deps.options.plugin) await deps.recordPluginSchemaVersion?.(db);
+        // The rollback is recorded, and it resolves the start row, which is
+        // older: failing to remove that row never fails a DOWN whose
+        // statements ran. A start row is recorded only where a failed write
+        // leaves the transaction usable (MySQL, or no transaction at all).
+        if (attempt !== undefined) {
+          await deps.endDownAttempt?.(attempt, db).catch(() => undefined);
+        }
       }
     );
   } catch (err) {
@@ -447,8 +616,31 @@ export async function rollBackOne(
         p.transaction
       );
     }
+    // Recorded failed above; a lost race rolled back whole left nothing to
+    // record, and the other run's rollback is the migration's outcome. A
+    // start row left behind reads as a stopped DOWN, which is still true, so
+    // failing to remove it never hides the DOWN's own error.
+    if (attempt !== undefined) {
+      await deps.endDownAttempt?.(attempt).catch(() => undefined);
+    }
     throw err;
   }
+}
+
+/**
+ * Whether a DOWN's attempt is recorded before its first statement: an app
+ * migration's DOWN wherever a stop can leave part of it committed
+ * (`failedAttemptMayBePartial`, the predicate an UP's attempt is recorded
+ * by). A plugin module's DOWN keeps its history's record, written once it
+ * ends.
+ */
+function downStartRecordedFirst(
+  p: Pick<PlannedDown, "filename" | "transaction">,
+  dialect: SupportedDialect
+): boolean {
+  return (
+    !isPluginLedgerRow(p.filename) && failedAttemptMayBePartial(p, dialect)
+  );
 }
 
 /**
@@ -481,36 +673,65 @@ export async function planRollback(
     | "readLiveElements"
     | "readLiveTables"
     | "readLiveIndexTables"
-  >
+  >,
+  reads?: ReadonlyMap<string, DownRead>
 ): Promise<PlannedDown[]> {
   const planned: PlannedDown[] = [];
   for (const filename of filenames) {
-    try {
-      const down = await deps.readDownSql(filename);
-      const downSql = down.sql.trim();
-      planned.push({
-        filename,
-        downSql,
-        transaction: down.transaction,
-        statements: splitSqlStatements(downSql, deps.dialect, down),
-      });
-    } catch (unreadable) {
-      planned.push({
-        filename,
-        downSql: "",
-        transaction: true,
-        statements: [],
-        unreadable,
-      });
-    }
+    // A DOWN `targetsWithinStep` read for this pass is planned as it was read, not read again.
+    const read = reads?.get(filename) ?? (await readDown(filename, deps));
+    planned.push(plannedFrom(filename, read, deps.dialect));
   }
   await readLiveState(planned, deps);
   return planned;
 }
 
-export async function migrateDownCore(
-  deps: MigrateDownCoreDeps
-): Promise<MigrateDownResult> {
+/** One target's plan from its DOWN, or the reason it can't be planned. */
+function plannedFrom(
+  filename: string,
+  read: DownRead,
+  dialect: SupportedDialect
+): PlannedDown {
+  let unreadable: unknown = "unreadable" in read ? read.unreadable : undefined;
+  if ("down" in read) {
+    try {
+      const downSql = read.down.sql.trim();
+      return {
+        filename,
+        downSql,
+        transaction: read.down.transaction,
+        statements: splitSqlStatements(downSql, dialect, read.down),
+      };
+    } catch (error) {
+      unreadable = error;
+    }
+  }
+  return {
+    filename,
+    downSql: "",
+    transaction: true,
+    statements: [],
+    unreadable,
+  };
+}
+
+/**
+ * The targets a rollback would undo and its plan, with every guard a real run applies.
+ *
+ * Asked twice by a real run: once before the lock, so a refusal that is already certain needs no
+ * wait, and again once the lock is held, against the ledger, the owner registry and the live
+ * schema as they stand then. A run that waited for the lock may meet a database another run has
+ * since changed — a plugin install adding an owned column, another rollback undoing the target —
+ * and a plan approved before the wait would act on a database that is no longer there.
+ *
+ * The data-loss consent is judged in both, and asked about only in the first: `agreed` carries
+ * what the operator agreed to there into the second, which accepts it without asking again and
+ * refuses anything new rather than asking while other runs wait on the lock.
+ */
+async function planAndGuard(
+  deps: MigrateDownCoreDeps,
+  agreed?: readonly Deletion[]
+): Promise<GuardedPlan> {
   const step = deps.options.step ?? 1;
   // Plugin rows belong to their own migration stream, so they are excluded
   // unless `--plugin` names one; an unscoped run must never revert a plugin's
@@ -519,20 +740,86 @@ export async function migrateDownCore(
     await deps.listFileApplies(),
     deps.options.plugin
   );
-  const targets = selectAppliedTargets(rows, step, deps.options.plugin);
+  const { targets, reads } = await targetsWithinStep(
+    rows,
+    step,
+    deps,
+    agreed === undefined
+  );
+  if (targets.length === 0)
+    return { planned: [], deletions: [], declined: false };
+  const planned = await planRollback(targets, deps, reads);
+  if (deps.options.dryRun) return { planned, deletions: [], declined: false };
 
-  if (targets.length === 0) {
+  // Guards — evaluated up front for every target, before executing anything.
+  for (const p of planned) {
+    const refusal = refusalOf(p, deps);
+    if (refusal !== undefined) throw refusal;
+  }
+
+  // A DOWN that loses data takes the data-loss consent, judged for every
+  // target before the first runs. Each is judged by its statements as a
+  // whole, so it is named by its file: only the consent without targets
+  // covers it, and a list naming tables is refused rather than read as
+  // covering a DOWN it cannot be matched against.
+  const deletions: Deletion[] = planned
+    .filter(p => isDestructiveDown(p.statements, deps.dialect, p.liveColumns))
+    .map(p => ({
+      kind: "unnamed" as const,
+      description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
+      // The statements as judged: under the lock the DOWN is read again, and
+      // one that changed since it was agreed to is a different deletion.
+      fingerprint: createHash("sha256")
+        .update(p.statements.join("\n;\n"))
+        .digest("hex"),
+    }));
+  const first = agreed === undefined;
+  const verdict = await judgeDataLoss({
+    deletions,
+    consent:
+      deps.options.consent ??
+      resolveDataLossConsent({
+        honours: ["--allow-data-loss"],
+        earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
+      }),
+    interactive: first && deps.interactive === true,
+    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
+    print: first ? line => deps.logger.warn(line) : () => {},
+    approved: agreed,
+  });
+  if (verdict.kind === "refused") {
+    throw NextlyError.invalidInput({
+      message: verdict.message,
+      logContext: { reason: `data-loss-${verdict.reason}` },
+    });
+  }
+  return { planned, deletions, declined: verdict.kind === "declined" };
+}
+
+/** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
+interface GuardedPlan {
+  planned: PlannedDown[];
+  deletions: Deletion[];
+  /** The terminal was asked and said no: nothing is rolled back. */
+  declined: boolean;
+}
+
+export async function migrateDownCore(
+  deps: MigrateDownCoreDeps
+): Promise<MigrateDownResult> {
+  const guarded = await planAndGuard(deps);
+  const planned = guarded.planned;
+
+  if (planned.length === 0) {
     deps.logger.info("Nothing to roll back.");
     return { rolledBack: [] };
   }
 
-  const planned = await planRollback(targets, deps);
-
   // Dry-run is a non-destructive preview: it never throws and never
   // executes. Every refusal a real run would make is reported instead, by
   // the same function that makes it, so the preview and the run cannot
-  // disagree; so is what a real run would need --allow-data-loss for, so the
-  // operator can read the DOWN SQL before deciding to pass it.
+  // disagree; so is what a real run would need the data-loss consent for, so
+  // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
     deps.logger.info(`Would roll back ${planned.length} migration(s):`);
     for (const p of planned) {
@@ -546,7 +833,7 @@ export async function migrateDownCore(
       }
       if (isDestructiveDown(p.statements, deps.dialect, p.liveColumns)) {
         deps.logger.info(
-          "    ⚠ drops a table or column — a real run needs --allow-data-loss"
+          "    ⚠ drops a table or column — a real run needs --accept-data-loss"
         );
       }
       if (!p.transaction) {
@@ -557,41 +844,41 @@ export async function migrateDownCore(
     return { rolledBack: [] };
   }
 
-  // Guards — evaluated up front for every target, before executing anything.
-  for (const p of planned) {
-    const refusal = refusalOf(p, deps);
-    if (refusal !== undefined) throw refusal;
-    if (
-      isDestructiveDown(p.statements, deps.dialect, p.liveColumns) &&
-      !deps.options.allowDataLoss
-    ) {
-      throw NextlyError.invalidInput({
-        message: `Rolling back ${p.filename} drops a table or column (data loss). Re-run with --allow-data-loss to proceed.`,
-        logContext: { filename: p.filename },
-      });
-    }
+  if (guarded.declined) {
+    deps.logger.info("Nothing was rolled back.");
+    return { rolledBack: [] };
   }
 
   if (deps.nodeEnv === "production" && !deps.options.yes) {
     throw NextlyError.invalidInput({
       message:
         "Refusing to roll back in production without --yes. Prefer rolling forward with a corrective migration, or restore from backup. Re-run with --yes to override.",
+      logContext: { reason: "production-needs-yes" },
     });
   }
 
   const rolledBack: string[] = [];
   await deps.withLock(
-    deps.db,
+    lockAdapter(deps),
     deps.dialect,
     async () => {
-      for (const p of planned) {
-        await rollBackOne(p, deps);
+      // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
+      const held = { ...deps, ...(await deps.readOwners?.()) };
+      const { planned: current } = await planAndGuard(held, guarded.deletions);
+      if (current.length === 0) {
+        deps.logger.info("Nothing to roll back.");
+        return;
+      }
+      for (const p of current) {
+        await rollBackOne(p, held);
         rolledBack.push(p.filename);
         deps.logger.success(`Rolled back ${p.filename}`);
       }
     },
     {
-      mode: "fail-fast",
+      command: deps.lockCommand ?? "nextly migrate:down",
+      // A held lock is waited for, about a minute, and then the run stops naming its holder.
+      mode: "wait",
       logger: {
         warn: m => deps.logger.warn(m),
         info: m => deps.logger.info(m),
@@ -608,6 +895,7 @@ export async function migrateDownCore(
 
 interface MigrateDownCommandOptions {
   step?: number;
+  acceptDataLoss?: AcceptDataLossOption;
   allowDataLoss?: boolean;
   yes?: boolean;
   dryRun?: boolean;
@@ -653,8 +941,10 @@ export async function downDatabaseDeps(args: {
     MigrateDownCoreDeps,
     | "dialect"
     | "db"
+    | "adapter"
     | "owners"
     | "elementOwners"
+    | "readOwners"
     | "readLiveColumns"
     | "readLiveElements"
     | "readLiveTables"
@@ -664,6 +954,8 @@ export async function downDatabaseDeps(args: {
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordFailed"
+    | "recordDownStarted"
+    | "endDownAttempt"
   >
 > {
   const { adapter, dialect, plugin } = args;
@@ -674,15 +966,23 @@ export async function downDatabaseDeps(args: {
     schemaOwnersTableExists,
     tableOwnersByName,
   } = await import("../../domains/schema/ownership/schema-owners-repository");
-  const registryExists = await schemaOwnersTableExists(adapter);
-  const ownerRows = registryExists
-    ? await new OwnersRepo(db, dialect).read()
-    : [];
+  // Read through one function, so the plan made inside the lock reads the registry the same way.
+  let registryExists = false;
+  const readOwnerRows = async () => {
+    registryExists = await schemaOwnersTableExists(adapter);
+    return registryExists ? await new OwnersRepo(db, dialect).read() : [];
+  };
+  const ownerRows = await readOwnerRows();
   return {
     dialect,
     db,
+    adapter,
     owners: tableOwnersByName(ownerRows),
     elementOwners: ownerRows,
+    readOwners: async () => {
+      const fresh = await readOwnerRows();
+      return { owners: tableOwnersByName(fresh), elementOwners: fresh };
+    },
     readLiveColumns: lists => readLiveColumns(db, dialect, lists),
     readLiveElements: lists => readLiveElements(db, dialect, lists),
     readLiveTables: lists => readLiveTables(db, dialect, lists),
@@ -717,6 +1017,14 @@ export async function downDatabaseDeps(args: {
         owners: new OwnersRepo(handle, dialect),
       });
     },
+    recordDownStarted: filename =>
+      repo.recordStart({
+        eventType: "file_rollback",
+        source: "cli-migrate",
+        filename: ledgerFilename(filename),
+      }),
+    endDownAttempt: (id, handle) =>
+      (handle === undefined ? repo : repo.boundTo(handle)).discardAttempt(id),
     recordFailed: (filename, message, transaction) =>
       recordRollbackFailed({
         repo,
@@ -755,6 +1063,23 @@ function pluginModules(
   };
 }
 
+/**
+ * `migrate:down`'s data-loss consent: `--accept-data-loss` or
+ * `NEXTLY_ACCEPT_DATA_LOSS`, with `--allow-data-loss` honoured as the earlier
+ * spelling and named deprecated.
+ */
+export function downConsent(
+  options: Pick<MigrateDownCommandOptions, "acceptDataLoss" | "allowDataLoss">,
+  warn: (message: string) => void
+): DataLossConsent {
+  return readDataLossConsent({
+    flag: options.acceptDataLoss,
+    honours: ["--allow-data-loss"],
+    earlierFlags: options.allowDataLoss ? ["--allow-data-loss"] : [],
+    warn,
+  });
+}
+
 export async function runMigrateDown(
   options: ResolvedDownOptions,
   context: CommandContext
@@ -762,11 +1087,7 @@ export async function runMigrateDown(
   const { logger } = context;
   logger.header("Migrate Down");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
   const dialect = dbValidation.dialect;
 
   const configResult = await loadConfig({
@@ -839,6 +1160,7 @@ export async function runMigrateDown(
       return {
         sql: parseSqlSections(content).downSql,
         transaction: !marksNoTransaction(content),
+        stepFile: stepFileOf(content, name),
       };
     };
 
@@ -853,7 +1175,7 @@ export async function runMigrateDown(
       logger,
       options: {
         step: options.step,
-        allowDataLoss: options.allowDataLoss,
+        consent: downConsent(options, m => logger.warn(m)),
         yes: options.yes,
         dryRun: options.dryRun,
         plugin,
@@ -861,6 +1183,8 @@ export async function runMigrateDown(
       fileExists: () => Promise.resolve(true),
       readDownSql,
       withLock: withMigrateLock,
+      interactive: isInteractiveTerminal(),
+      askToDelete: askToDeleteInTerminal,
     });
 
     if (result.rolledBack.length > 0) {
@@ -882,11 +1206,8 @@ export function registerMigrateDownCommand(program: Command): void {
       "Roll back the most-recently-applied migration(s) using their -- DOWN section"
     )
     .option("--step <n>", "Roll back the last N migrations", parseInt)
-    .option(
-      "--allow-data-loss",
-      "Allow a rollback whose DOWN drops a table or column",
-      false
-    )
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
+    .option("--allow-data-loss", "Deprecated: use --accept-data-loss", false)
     .option(
       "--yes",
       "Confirm rollback in production (NODE_ENV=production)",
@@ -919,8 +1240,7 @@ export function registerMigrateDownCommand(program: Command): void {
       try {
         await runMigrateDown(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

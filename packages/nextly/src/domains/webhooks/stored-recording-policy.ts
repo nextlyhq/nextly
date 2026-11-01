@@ -18,14 +18,9 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { isNotNull } from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
+import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
-import { dynamicCollectionsMysql } from "../../schemas/dynamic-collections/mysql";
-import { dynamicCollectionsPg } from "../../schemas/dynamic-collections/postgres";
-import { dynamicCollectionsSqlite } from "../../schemas/dynamic-collections/sqlite";
 import type { StoredWebhookRecording } from "../../schemas/dynamic-collections/types";
-import { dynamicSinglesMysql } from "../../schemas/dynamic-singles/mysql";
-import { dynamicSinglesPg } from "../../schemas/dynamic-singles/postgres";
-import { dynamicSinglesSqlite } from "../../schemas/dynamic-singles/sqlite";
 
 import {
   applyStoredRecordingDecisions,
@@ -139,25 +134,15 @@ function isStoredOptOut(value: StoredPolicyRow["webhooks"]): boolean {
 }
 
 function collectionsTable(dialect: SupportedDialect): PolicyTable {
-  switch (dialect) {
-    case "mysql":
-      return dynamicCollectionsMysql;
-    case "sqlite":
-      return dynamicCollectionsSqlite;
-    case "postgresql":
-      return dynamicCollectionsPg;
-  }
+  // The loaded dialect's own table, so only that dialect's file is imported;
+  // `createAdapter` loads it.
+  return loadedDialect(dialect).tables.dynamicCollections;
 }
 
 function singlesTable(dialect: SupportedDialect): PolicyTable {
-  switch (dialect) {
-    case "mysql":
-      return dynamicSinglesMysql;
-    case "sqlite":
-      return dynamicSinglesSqlite;
-    case "postgresql":
-      return dynamicSinglesPg;
-  }
+  // The loaded dialect's own table, so only that dialect's file is imported;
+  // `createAdapter` loads it.
+  return loadedDialect(dialect).tables.dynamicSingles;
 }
 
 async function collectScope(

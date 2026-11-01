@@ -23,6 +23,7 @@ import { registerCreateAdminCommand } from "./commands/create-admin";
 import { registerDbSyncCommand } from "./commands/db-sync";
 import { registerGenerateManifestCommand } from "./commands/generate-manifest";
 import { registerGenerateTypesCommand } from "./commands/generate-types";
+import { registerGenerateWidgetCommand } from "./commands/generate-widget";
 import { registerI18nRestoreCommand } from "./commands/i18n-restore";
 import { registerInitCommand } from "./commands/init";
 import { createMediaCommand } from "./commands/media";
@@ -41,6 +42,7 @@ import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
 import { registerPluginsCommand } from "./commands/plugins";
 import { registerPruneCommand } from "./commands/prune";
+import { registerRepairColumnsCommand } from "./commands/repair-columns";
 import { registerSetupTokenCommand } from "./commands/setup-token";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
@@ -112,6 +114,7 @@ ${pc.bold("Examples:")}
   ${pc.gray("$")} next dev                      ${pc.gray("# Start the dev server (Nextly boots in-process)")}
   ${pc.gray("$")} nextly generate:types         ${pc.gray("# Generate TypeScript types")}
   ${pc.gray("$")} nextly generate:manifest --check ${pc.gray("# Fail if the committed block manifest is stale")}
+  ${pc.gray("$")} nextly generate:widget open-orders ${pc.gray("# Scaffold a dashboard widget and its test")}
   ${pc.gray("$")} nextly migrate                ${pc.gray("# Run pending migrations")}
   ${pc.gray("$")} nextly migrate:status         ${pc.gray("# Show migration status")}
 
@@ -175,6 +178,7 @@ function registerCommands(program: Command): void {
 
   // Type generation commands
   registerGenerateTypesCommand(program);
+  registerGenerateWidgetCommand(program); // scaffold a dashboard widget and its test
   registerGenerateSchemaCommand(program);
   // The manifest is also written by generate:types; this stands alone so CI can
   // check it is current without paying for type and Zod generation.
@@ -191,6 +195,7 @@ function registerCommands(program: Command): void {
   registerCreateAdminCommand(program, createContext); // create the first administrator from the CLI
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
+  registerRepairColumnsCommand(program, createContext); // report columns whose type or nullability differs from their field
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
   registerSetupTokenCommand(program, createContext); // replace or generate the production setup token
   registerMigrateFreshCommand(program);

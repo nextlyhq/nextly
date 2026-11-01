@@ -32,6 +32,11 @@
       "import": "./dist/testing.mjs",
       "default": "./dist/testing.mjs"
     },
+    "./testing/admin": {
+      "types": "./dist/testing/admin.d.ts",
+      "import": "./dist/testing/admin.mjs",
+      "default": "./dist/testing/admin.mjs"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "import": "./dist/client.mjs",
@@ -78,13 +83,14 @@
     "node": "^22.12.0 || >=24.0.0"
   },
   "dependencies": {
-    "@nextlyhq/blocks-engine": "workspace:*"
+    "@nextlyhq/blocks-engine": "workspace:*",
+    "@nextlyhq/ui": "workspace:*"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
     "nextly": "workspace:*",
-    "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "peerDependenciesMeta": {
     "@nextlyhq/admin": {
@@ -102,6 +108,7 @@
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^22.20.5",
     "@types/react": "19.3.0",
+    "jsdom": "^27.1.0",
     "nextly": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1",

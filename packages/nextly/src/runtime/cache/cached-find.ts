@@ -1,19 +1,25 @@
 /**
  * `cachedFind` — cache a content read and tag it so an on-write bust makes it
- * fresh. A thin wrapper over Next's `unstable_cache`, the tagging mechanism
- * supported across the whole `next` peer range (`^14 || ^15 || ^16`). Outside a
- * Next runtime (or when `next/cache` is unavailable) it runs the reader directly
- * so the same code works in tests and non-Next callers.
+ * fresh. A thin wrapper over Next's `unstable_cache`. Where Next.js is not
+ * installed (tests, non-Next callers) it runs the reader directly; that is a
+ * context, not a version.
  *
- * `next/cache` is resolved lazily via `createRequire` (Node's CommonJS resolver,
- * opaque to bundlers) — the same pattern the write-side adapter uses.
+ * `next/cache` is loaded through {@link loadNextModule}, the one lazy loader
+ * every Next.js API nextly uses goes through.
  *
  * @module runtime/cache/cached-find
  */
-import { createRequire } from "node:module";
-
 import { container } from "../../di/container";
 import type { LanguageRegistry } from "../../domains/i18n/language-registry";
+import { loadNextModule, requireNextApi } from "../next-api";
+
+import { readTags } from "./nextly-tags";
+import {
+  readThroughRegistered,
+  registeredCachedRead,
+  reportUnregisteredUnderCacheComponents,
+} from "./registered-read";
+import { noteCachedRead, publicReadLifetime } from "./shared-handlers";
 
 /** The subset of `unstable_cache` this helper uses. */
 export type UnstableCache = <T>(
@@ -26,14 +32,11 @@ let cachedUnstableCache: UnstableCache | null | undefined;
 
 function loadUnstableCache(): UnstableCache | null {
   if (cachedUnstableCache !== undefined) return cachedUnstableCache;
-  try {
-    const require = createRequire(import.meta.url);
-    const mod = require("next/cache") as { unstable_cache?: UnstableCache };
-    cachedUnstableCache =
-      typeof mod.unstable_cache === "function" ? mod.unstable_cache : null;
-  } catch {
-    cachedUnstableCache = null;
-  }
+  const mod = loadNextModule("next/cache");
+  // No Next.js installed: run uncached (context, not version).
+  cachedUnstableCache = mod
+    ? requireNextApi<UnstableCache>(mod, "next/cache", "unstable_cache")
+    : null;
   return cachedUnstableCache;
 }
 
@@ -143,12 +146,32 @@ export function applyCache<T>(
   reader: () => Promise<T>,
   options: CachedFindOptions
 ): Promise<T> {
+  // Each path's lifetime is bounded in production while nextly's cache
+  // handlers do not serve it, so a write from elsewhere shows within a minute.
+  // Under Cache Components, through the app's `"use cache"` function when it
+  // registered one: `unstable_cache` is the model Cache Components replaces,
+  // and a page read right after a write can be served its previous entry once.
+  const cachedRead = registeredCachedRead();
+  if (cachedRead) {
+    return readThroughRegistered(
+      cachedRead,
+      JSON.stringify(options.keyParts),
+      afterLanguagesRead(reader),
+      readTags(options.tags),
+      publicReadLifetime(options.revalidate ?? false, true),
+      () => noteCachedRead(true)
+    );
+  }
+  reportUnregisteredUnderCacheComponents();
   if (!unstableCache) return reader();
   const cached = unstableCache(afterLanguagesRead(reader), options.keyParts, {
-    tags: options.tags,
-    revalidate: options.revalidate ?? false,
+    // Each once, none longer than Next.js accepts, and no more than it keeps,
+    // in the order given: the routes put their own collection's or Single's
+    // tag first, and a caller's own `cachedFind` keeps its order.
+    tags: readTags(options.tags),
+    revalidate: publicReadLifetime(options.revalidate ?? false, false),
   });
-  return runCachedOrDirect(cached, reader);
+  return runCachedOrDirect(cached, reader, () => noteCachedRead(false));
 }
 
 /**
@@ -175,15 +198,20 @@ function afterLanguagesRead<T>(reader: () => Promise<T>): () => Promise<T> {
  * outside a Next request/build scope (a standalone script, a test, a non-Next
  * caller that still has `next` installed). Run the reader UNCACHED there rather
  * than surfacing a cryptic framework error — inside a Next scope the cache is
- * present and this fallback never runs. A genuine reader error is rethrown so
- * callers that rethrow-on-error keep working.
+ * present and this fallback never runs. That is a context, not a version: only
+ * that invariant is caught, and anything else, a genuine reader error included,
+ * is rethrown.
  */
 async function runCachedOrDirect<T>(
   cached: () => Promise<T>,
-  reader: () => Promise<T>
+  reader: () => Promise<T>,
+  onCached: () => void
 ): Promise<T> {
   try {
-    return await cached();
+    const value = await cached();
+    // Only a read that was cached tells anything about the cache handlers.
+    onCached();
+    return value;
   } catch (error) {
     if (isMissingCacheScopeError(error)) return reader();
     throw error;

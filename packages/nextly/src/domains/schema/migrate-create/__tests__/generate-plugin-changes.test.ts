@@ -281,14 +281,24 @@ describe("a change a dialect cannot make in place", () => {
     expect(generate(4, declared, [v1, before, filled])).toBeNull();
   });
 
-  it("leaves both directions to the author on MySQL for a nullability change", () => {
+  it("generates a nullability change on every dialect", () => {
+    // MySQL restates the column from its live catalog when the module runs, and SQLite rebuilds the
+    // table to the declared shape; neither is left to the author any more.
     const v3 = generate(
       3,
       everyDialect(() => events([score("int", false)])),
       [v1, before]
     )!;
-    expect(v3.handWritten).toEqual(["mysql", "sqlite"]);
-    expect(v3.module.dialects.mysql).toEqual({ up: [], down: [] });
+    expect(v3.handWritten).toEqual([]);
+    expect(v3.module.dialects.mysql.up.join("\n")).toMatch(
+      /MODIFY COLUMN `score` ', COLUMN_TYPE[\s\S]*' NOT NULL'/
+    );
+    expect(v3.module.dialects.mysql.down.join("\n")).toMatch(
+      /MODIFY COLUMN `score` ', COLUMN_TYPE[\s\S]*' NULL'/
+    );
+    expect(v3.module.dialects.sqlite.up.join("\n")).toMatch(
+      /CREATE TABLE "__new_acme__events" \([\s\S]*"score" int NOT NULL/
+    );
     expect(v3.module.dialects.postgresql.up.length).toBeGreaterThan(0);
   });
 });

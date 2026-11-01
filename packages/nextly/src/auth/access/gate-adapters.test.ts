@@ -15,11 +15,19 @@ import {
 } from "../../domains/collections/__tests__/collection-test-helpers";
 import { consoleLogger } from "../../shared/types";
 import type { CollectionAccessControl } from "../../shared/types/access";
+import { makePrincipal } from "../../plugins/principals/principal";
 import { apiKeyScope } from "../authenticated-scope";
 import { runWithCallerScope } from "../caller-scope";
 
 import type { AccessTarget } from "./decide";
 import { recordingDeviations } from "./deviations";
+import {
+  forgetRequestAccess,
+  rememberRouteVerdict,
+  runWithAccessMemo,
+} from "./request-memo";
+import type { RuleFilter } from "./rule-answer";
+import { currentRuleLanguage, withRuleLanguage } from "./rule-language";
 import { clearRuleAnswerNotices } from "./rule-answer-log";
 import {
   collectionGateVerdict,
@@ -27,22 +35,39 @@ import {
   type CollectionQuestion,
 } from "./gate-adapters";
 
+/** What the Public role grants in a test, and so what a visitor holds. */
+const publicRole = vi.hoisted(() => ({
+  grants: [] as { slug: string; action: string; resource: string }[],
+}));
+
 vi.mock("./resolve-actor", async importOriginal => {
   const fake = await import(
     "../../domains/collections/__tests__/collection-test-helpers"
   );
+  const { visitorActor } = await import("./actor");
   return {
     ...(await importOriginal<object>()),
     actorForUser: fake.fakeActorForUser,
+    actorForVisitor: async () => visitorActor(publicRole.grants),
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };
 });
 
+/** The Public role grants `actions` on `posts`. */
+function publicHolds(...actions: string[]): void {
+  publicRole.grants = actions.map(action => ({
+    slug: `${action}-posts`,
+    action,
+    resource: "posts",
+  }));
+}
+
 beforeEach(() => {
   resetCallerAccess();
   fakeActorForUser.mockClear();
   fakeUserIsSuperAdmin.mockClear();
+  publicRole.grants = [];
 });
 
 /** A question about `posts`, which declares `access`. */
@@ -110,6 +135,8 @@ describe("a rule's answer, at the collection gate", () => {
     );
 
   it("lets a visitor through only on true: null, undefined and a truthy value refuse", async () => {
+    // Public holds the read, so only the rule can refuse.
+    publicHolds("read");
     for (const value of [null, undefined, "yes"]) {
       expect((await answer(value)).allowed).toBe(false);
     }
@@ -125,6 +152,7 @@ describe("a rule's answer, at the collection gate", () => {
 
   it("names a refusal once where the answer let the caller in before, and not where it did not", async () => {
     const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    publicHolds("read");
     // A visitor was refused before only by `false`, so `null` let it in.
     await answer(null);
     await answer(null);
@@ -144,10 +172,11 @@ describe("a rule's answer, at the collection gate", () => {
 describe("a visitor's write", () => {
   const WRITES = ["create", "update", "delete"] as const;
 
-  it("is refused as needing a signed-in caller where no rule names it", async () => {
+  it("is refused as needing a signed-in caller where the Public role does not hold it", async () => {
     // `read: true` is declared so the target has an access object: only the
     // write's own rule is missing, which is the case the public default used
-    // to let through.
+    // to let through. Public holds the read alone.
+    publicHolds("read");
     for (const action of WRITES) {
       const verdict = await collectionGateVerdict(
         asked({ read: true }, { action })
@@ -170,7 +199,20 @@ describe("a visitor's write", () => {
     expect(verdict.allowed).toBe(false);
   });
 
-  it("is allowed where the target's rule answers true, plain or as a function", async () => {
+  it("is refused where the target's rule answers true but the Public role does not hold it", async () => {
+    for (const action of WRITES) {
+      const verdict = await collectionGateVerdict(
+        asked({ [action]: () => true }, { action })
+      );
+      expect(verdict, action).toEqual({
+        allowed: false,
+        refusal: "unauthenticated",
+      });
+    }
+  });
+
+  it("is allowed where the Public role holds it and the rule answers true, plain or as a function", async () => {
+    publicHolds(...WRITES);
     for (const action of WRITES) {
       const plain = await collectionGateVerdict(
         asked({ [action]: true }, { action })
@@ -183,11 +225,53 @@ describe("a visitor's write", () => {
     }
   });
 
-  it("leaves a visitor's read with no rule on the public default", async () => {
-    // The control for the refusals above: the same target with no rule at
-    // all still admits a visitor's read, so only writes changed.
+  it("is allowed where the Public role holds it and no rule names it", async () => {
+    publicHolds(...WRITES);
+    for (const action of WRITES) {
+      const verdict = await collectionGateVerdict(
+        asked({ read: true }, { action })
+      );
+      expect(verdict.allowed, action).toBe(true);
+    }
+  });
+
+  it("judges a visitor's read with no rule by the Public role's read alone", async () => {
+    // No public default: without Public's read the visitor is refused, and
+    // with it let through.
+    const refused = await collectionGateVerdict(asked({}, { action: "read" }));
+    expect(refused).toEqual({ allowed: false, refusal: "unauthenticated" });
+    publicHolds("read");
     const verdict = await collectionGateVerdict(asked({}, { action: "read" }));
     expect(verdict.allowed).toBe(true);
+  });
+});
+
+describe("a visitor the Public role does not grant the action", () => {
+  it("is refused as needing a signed-in caller, and its rule is not asked", async () => {
+    // The permission comes before the rule, as for a signed-in user: a rule
+    // is application code, and one that refuses or throws must not turn the
+    // permission's refusal into the rule's.
+    for (const rule of [
+      vi.fn(() => true),
+      vi.fn(() => false),
+      vi.fn(() => {
+        throw new Error("the rule ran");
+      }),
+    ]) {
+      const verdict = await collectionGateVerdict(asked({ read: rule }, {}));
+      expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
+      expect(rule).not.toHaveBeenCalled();
+    }
+  });
+
+  it("is refused by the rule once Public holds the action", async () => {
+    // The control: with the permission held, the same rule is asked and its
+    // refusal is the rule's.
+    publicHolds("read");
+    const rule = vi.fn(() => false);
+    const verdict = await collectionGateVerdict(asked({ read: rule }, {}));
+    expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+    expect(rule).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -338,6 +422,596 @@ describe("a super-admin named only by id", () => {
     });
     expect(fakeActorForUser).not.toHaveBeenCalled();
     expect(rule).not.toHaveBeenCalled();
+  });
+});
+
+describe("a yes-or-no asker under a read rule that answers a filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  beforeEach(() => {
+    callerMay("read");
+  });
+
+  it("answers yes: the caller may read the entries the filter matches", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("is refused without the flag, where the asker neither applies nor only asks", async () => {
+    // The control: the yes above is the flag's.
+    const verdict = await collectionGateVerdict(
+      asked({ read: () => OWN as unknown as boolean }, { user: { id: "u1" } })
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("still refuses a caller without the read permission", async () => {
+    callerMayNot("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("answers a visitor yes where the Public role grants the read, naming no refusal", async () => {
+    // A visitor is judged as a signed-in user is: Public's read held, the
+    // filter answers yes to a yes-or-no asker, and no "now refused" notice
+    // is named for an answer that refuses nothing.
+    clearRuleAnswerNotices();
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    publicHolds("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("still refuses a visitor the Public role does not grant the read", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
+  });
+});
+
+describe("a read whose route already authorized it", () => {
+  const OWN = { author: { equals: "u1" } };
+  const filtering = () => vi.fn(() => OWN as unknown as boolean);
+
+  beforeEach(() => {
+    callerMay("read");
+  });
+
+  /** A route's verdict kept for `userId`, on `slug`, in the language now. */
+  const kept = (userId: string, filter: unknown, slug = "posts") =>
+    rememberRouteVerdict(
+      { userId, slug, action: "read", language: currentRuleLanguage() },
+      { filter: filter as RuleFilter }
+    );
+  const routeRead = (userId = "u1", read: unknown = filtering()) =>
+    collectionGateVerdict(
+      asked(
+        { read: read as CollectionAccessControl["read"] },
+        { user: { id: userId }, routeAuthorized: true, appliesFilter: true }
+      )
+    );
+
+  it("answers the filter the route let the caller through on, asking no rule", async () => {
+    const rule = filtering();
+    const verdict = await runWithAccessMemo(async () => {
+      kept("u1", OWN);
+      return collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, routeAuthorized: true, appliesFilter: true }
+        )
+      );
+    });
+    // Not `allowed`, which would read every entry: the route's allow was for
+    // the entries the filter matches.
+    expect(verdict).toEqual({
+      allowed: false,
+      refusal: "only-matching-entries",
+      filter: OWN,
+    });
+    // The route asked the rule; a rule may call a service, and is not asked
+    // twice.
+    expect(rule).not.toHaveBeenCalled();
+  });
+
+  it("allows every entry where the route kept that verdict", async () => {
+    const verdict = await runWithAccessMemo(async () => {
+      rememberRouteVerdict(
+        {
+          userId: "u1",
+          slug: "posts",
+          action: "read",
+          language: currentRuleLanguage(),
+        },
+        { all: true }
+      );
+      return routeRead();
+    });
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("does not apply a filter the route kept for another collection", async () => {
+    // The route never judged this collection, so its read is judged as a
+    // route-authorized read with no kept verdict is.
+    const verdict = await runWithAccessMemo(async () => {
+      kept("u1", OWN, "pages");
+      return routeRead();
+    });
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("refuses a read in a language the route did not judge it in", async () => {
+    const verdict = await runWithAccessMemo(async () => {
+      kept("u1", OWN);
+      return withRuleLanguage({ locale: "fr", locales: ["fr"] }, () =>
+        routeRead()
+      );
+    });
+    expect(verdict.allowed).toBe(false);
+    expect(verdict).not.toMatchObject({ filter: OWN });
+  });
+
+  it("reads a route's verdict only for the key scope it was kept for", async () => {
+    // Two keys of one user in one request: the route kept every entry for
+    // the wider key, and the narrower key's read must not take it.
+    const grant = (resource: string) => ({
+      slug: `read-${resource}`,
+      action: "read",
+      resource,
+    });
+    const wide = apiKeyScope([grant("posts"), grant("secrets")], ["editor"]);
+    const narrow = apiKeyScope([grant("posts")], ["editor"]);
+    const readAs = (scope: typeof wide) =>
+      collectionGateVerdict(
+        asked(
+          { read: filtering() as CollectionAccessControl["read"] },
+          {
+            user: { id: "u1" },
+            scope,
+            routeAuthorized: true,
+            appliesFilter: true,
+          }
+        )
+      );
+    const [asWide, asNarrow] = await runWithAccessMemo(async () => {
+      rememberRouteVerdict(
+        {
+          userId: "u1",
+          scope: wide,
+          slug: "posts",
+          action: "read",
+          language: currentRuleLanguage(),
+        },
+        { all: true }
+      );
+      return [await readAs(wide), await readAs(narrow)];
+    });
+    expect(asWide).toEqual({ allowed: true });
+    expect(asNarrow.allowed).toBe(false);
+  });
+
+  /** A route's verdict kept for u1 on posts, as judged in `language`. */
+  const keptIn = (
+    language: { locale?: string; locales: string[] },
+    verdict: { all: true } | { filter: RuleFilter }
+  ) =>
+    rememberRouteVerdict(
+      { userId: "u1", slug: "posts", action: "read", language },
+      verdict
+    );
+  const routeReadIn = (language: { locale?: string; locales: string[] }) =>
+    withRuleLanguage(language, () => routeRead());
+
+  it("answers a read in one language from a route that judged a set including it", async () => {
+    // A history judged at the route in every language at once, then read in
+    // one of them.
+    const all = await runWithAccessMemo(async () => {
+      keptIn({ locales: ["en", "de"] }, { all: true });
+      return routeReadIn({ locale: "en", locales: ["en"] });
+    });
+    expect(all).toEqual({ allowed: true });
+    const filtered = await runWithAccessMemo(async () => {
+      keptIn({ locales: ["en", "de"] }, { filter: OWN as RuleFilter });
+      return routeReadIn({ locale: "en", locales: ["en"] });
+    });
+    expect(filtered).toMatchObject({ filter: OWN });
+  });
+
+  it("refuses a read in a language no route judged, though the route allowed every entry in others", async () => {
+    // A rule refusing German was asked about English and French only: its
+    // allow there says nothing of German.
+    const verdict = await runWithAccessMemo(async () => {
+      keptIn({ locales: ["en", "fr"] }, { all: true });
+      return routeReadIn({ locale: "de", locales: ["de"] });
+    });
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("allows every entry, asking no rule nor the permission, where no route kept a verdict", async () => {
+    // The route's allow was for every entry, and the permission is the
+    // route's to settle.
+    callerMayNot("read");
+    const rule = filtering();
+    const verdict = await runWithAccessMemo(() =>
+      collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, routeAuthorized: true, appliesFilter: true }
+        )
+      )
+    );
+    expect(verdict.allowed).toBe(true);
+    expect(rule).not.toHaveBeenCalled();
+  });
+
+  it("keeps the route's filter through a write that clears the request's lookups", async () => {
+    const verdict = await runWithAccessMemo(async () => {
+      kept("u1", OWN);
+      forgetRequestAccess();
+      return collectionGateVerdict(
+        asked(
+          { read: filtering() },
+          { user: { id: "u1" }, routeAuthorized: true, appliesFilter: true }
+        )
+      );
+    });
+    expect(verdict).toMatchObject({ filter: OWN });
+  });
+
+  it("does not hand one caller's route filter to another", async () => {
+    const verdict = await runWithAccessMemo(async () => {
+      kept("u1", OWN);
+      return collectionGateVerdict(
+        asked(
+          { read: filtering() },
+          { user: { id: "u2" }, routeAuthorized: true, appliesFilter: true }
+        )
+      );
+    });
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("cannot keep a route's filter outside a request", () => {
+    // So the route refuses the caller rather than let the read run unfiltered.
+    expect(kept("u1", OWN)).toBe(false);
+  });
+
+  it("asks a rule again for the same person once their attributes change", async () => {
+    // The rule is told the whole person: an answer for one tenant is no
+    // answer for another.
+    const rule = vi.fn(
+      ({ principal }: { principal: { attributes: { tenant: string } } }) =>
+        ({
+          tenant: { equals: principal.attributes.tenant },
+        }) as unknown as boolean
+    );
+    const as = (tenant: string) =>
+      collectionGateVerdict(
+        asked(
+          { read: rule as unknown as CollectionAccessControl["read"] },
+          {
+            principal: makePrincipal("members:member", "m1", { tenant }),
+            appliesFilter: true,
+          }
+        )
+      );
+    const [first, second] = await runWithAccessMemo(async () => [
+      await as("north"),
+      await as("south"),
+    ]);
+    expect(first).toMatchObject({ filter: { tenant: { equals: "north" } } });
+    expect(second).toMatchObject({ filter: { tenant: { equals: "south" } } });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a rule again for another caller in the same request", async () => {
+    const rule = filtering();
+    await runWithAccessMemo(async () => {
+      await collectionGateVerdict(
+        asked({ read: rule }, { user: { id: "u1" }, appliesFilter: true })
+      );
+      await collectionGateVerdict(
+        asked({ read: rule }, { user: { id: "u2" }, appliesFilter: true })
+      );
+    });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a rule again for the same key owner under a narrower scope", async () => {
+    // The rule reads the key's grants: a scope that drops one is a different
+    // question, even for the same key owner.
+    const rule = vi.fn(({ permissions }: { permissions: readonly string[] }) =>
+      permissions.includes("read-secrets")
+        ? (OWN as unknown as boolean)
+        : ({ author: { equals: "nobody" } } as unknown as boolean)
+    );
+    const grant = (resource: string) => ({
+      slug: `read-${resource}`,
+      action: "read",
+      resource,
+    });
+    const wide = apiKeyScope([grant("posts"), grant("secrets")], ["editor"]);
+    const narrow = apiKeyScope([grant("posts")], ["editor"]);
+    const [first, second] = await runWithAccessMemo(async () => [
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: wide, appliesFilter: true }
+        )
+      ),
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: narrow, appliesFilter: true }
+        )
+      ),
+    ]);
+    expect(first).toMatchObject({ filter: OWN });
+    expect(second).toMatchObject({ filter: { author: { equals: "nobody" } } });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a rule again for a key whose scope holds the same roles in another order", async () => {
+    // The rule is handed the roles in the scope's order, so one that reads
+    // the first is told something different by each.
+    const rule = vi.fn(({ roles }: { roles: readonly string[] }) =>
+      roles[0] === "editor"
+        ? (OWN as unknown as boolean)
+        : ({ author: { equals: "nobody" } } as unknown as boolean)
+    );
+    const posts = { slug: "read-posts", action: "read", resource: "posts" };
+    const editorFirst = apiKeyScope([posts], ["editor", "viewer"]);
+    const viewerFirst = apiKeyScope([posts], ["viewer", "editor"]);
+    const [first, second] = await runWithAccessMemo(async () => [
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: editorFirst, appliesFilter: true }
+        )
+      ),
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: viewerFirst, appliesFilter: true }
+        )
+      ),
+    ]);
+    expect(first).toMatchObject({ filter: OWN });
+    expect(second).toMatchObject({ filter: { author: { equals: "nobody" } } });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a rule again for a visitor once the Public role's grants change", async () => {
+    // A visitor's rule is told the Public role's grants: one revoked between
+    // two asks in the same request, the read kept, is a different question.
+    const NOBODY = { author: { equals: "nobody" } };
+    const rule = vi.fn(({ permissions }: { permissions: readonly string[] }) =>
+      permissions.includes("update-posts")
+        ? (OWN as unknown as boolean)
+        : (NOBODY as unknown as boolean)
+    );
+    const visitorRead = () =>
+      collectionGateVerdict(asked({ read: rule }, { appliesFilter: true }));
+    const [first, second] = await runWithAccessMemo(async () => {
+      publicHolds("read", "update");
+      const before = await visitorRead();
+      publicHolds("read");
+      return [before, await visitorRead()];
+    });
+    expect(first).toMatchObject({ filter: OWN });
+    expect(second).toMatchObject({ filter: NOBODY });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a visitor's rule once in a request while the Public role's grants stand", async () => {
+    // The control: the same visitor asked twice is one question.
+    const rule = filtering();
+    publicHolds("read");
+    await runWithAccessMemo(async () => {
+      await collectionGateVerdict(
+        asked({ read: rule }, { appliesFilter: true })
+      );
+      await collectionGateVerdict(
+        asked({ read: rule }, { appliesFilter: true })
+      );
+    });
+    expect(rule).toHaveBeenCalledTimes(1);
+  });
+
+  it("is allowed as before, asking no rule, where the asker applies no filter", async () => {
+    // The control: only an asker that applies a filter has it asked again.
+    const rule = filtering();
+    const verdict = await collectionGateVerdict(
+      asked({ read: rule }, { user: { id: "u1" }, routeAuthorized: true })
+    );
+    expect(verdict.allowed).toBe(true);
+    expect(rule).not.toHaveBeenCalled();
+  });
+});
+
+describe("a write whose route already authorized it", () => {
+  const OWN = { author: { equals: "u1" } };
+  const filtering = () => vi.fn(() => OWN as unknown as boolean);
+
+  beforeEach(() => {
+    callerMay("update");
+  });
+
+  /** A route's update verdict kept for `u1` on `posts`, in the language now. */
+  const kept = (verdict: { filter: RuleFilter } | { all: true }) =>
+    rememberRouteVerdict(
+      {
+        userId: "u1",
+        slug: "posts",
+        action: "update",
+        language: currentRuleLanguage(),
+      },
+      verdict
+    );
+  const routeUpdate = (appliesFilter: boolean) =>
+    collectionGateVerdict(
+      asked(
+        { update: filtering() },
+        {
+          action: "update",
+          user: { id: "u1" },
+          routeAuthorized: true,
+          appliesFilter,
+        }
+      )
+    );
+
+  it("answers the filter the route let the caller through on to an asker that applies it", async () => {
+    const verdict = await runWithAccessMemo(async () => {
+      kept({ filter: OWN });
+      return routeUpdate(true);
+    });
+    expect(verdict).toEqual({
+      allowed: false,
+      refusal: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("refuses an asker that cannot apply the filter the route let the caller through on", async () => {
+    // Not `allowed`, which would let the write change every entry: the
+    // route's allow was for the entries the filter matches.
+    const verdict = await runWithAccessMemo(async () => {
+      kept({ filter: OWN });
+      return routeUpdate(false);
+    });
+    expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+  });
+
+  it("allows every entry, whoever asks, where the route kept that verdict", async () => {
+    // The control: a route that allowed every entry vouches for every asker.
+    const verdict = await runWithAccessMemo(async () => {
+      kept({ all: true });
+      return routeUpdate(false);
+    });
+    expect(verdict).toEqual({ allowed: true });
+  });
+});
+
+describe("a write rule's filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  const filtering = () => vi.fn(() => OWN as unknown as boolean);
+
+  it("is handed back for a delete to an asker that matches its entry against it", async () => {
+    callerMay("delete");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { delete: filtering() },
+        { action: "delete", user: { id: "u1" }, appliesFilter: true }
+      )
+    );
+    expect(verdict).toEqual({
+      allowed: false,
+      refusal: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("refuses a delete to an asker that cannot match its entry against it", async () => {
+    // The control: the filter is handed back only where it is applied.
+    callerMay("delete");
+    const verdict = await collectionGateVerdict(
+      asked({ delete: filtering() }, { action: "delete", user: { id: "u1" } })
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+  });
+
+  it.each(["update", "publish", "unpublish"] as const)(
+    "is handed back for a user's %s to an asker that matches its entry against it",
+    async action => {
+      callerMay(action);
+      const verdict = await collectionGateVerdict(
+        asked(
+          { [action]: filtering() },
+          { action, user: { id: "u1" }, appliesFilter: true }
+        )
+      );
+      expect(verdict).toEqual({
+        allowed: false,
+        refusal: "only-matching-entries",
+        filter: OWN,
+      });
+    }
+  );
+
+  describe("for a key holding the grant", () => {
+    const keyScope = (action: string) =>
+      apiKeyScope(
+        [{ slug: `${action}-posts`, action, resource: "posts" }],
+        ["editor"]
+      );
+
+    it.each(["update", "publish", "unpublish"] as const)(
+      "is handed back for its %s to an asker that matches its entry against it",
+      async action => {
+        // A publish or unpublish is judged by its own rule alone, so this is
+        // a path of its own beside an update's.
+        const verdict = await collectionGateVerdict(
+          asked(
+            { [action]: filtering() },
+            {
+              action,
+              user: { id: "owner" },
+              scope: keyScope(action),
+              appliesFilter: true,
+            }
+          )
+        );
+        expect(verdict).toEqual({
+          allowed: false,
+          refusal: "only-matching-entries",
+          filter: OWN,
+        });
+      }
+    );
+
+    it("refuses its publish to an asker that cannot match its entry against it", async () => {
+      // The control: the filter is handed back only where it is applied.
+      const verdict = await collectionGateVerdict(
+        asked(
+          { publish: filtering() },
+          {
+            action: "publish",
+            user: { id: "owner" },
+            scope: keyScope("publish"),
+          }
+        )
+      );
+      expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+    });
+  });
+
+  it("refuses a visitor's delete, whose writes no filter limits yet", async () => {
+    const verdict = await collectionGateVerdict(
+      asked({ delete: filtering() }, { action: "delete", appliesFilter: true })
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict).not.toHaveProperty("filter");
   });
 });
 

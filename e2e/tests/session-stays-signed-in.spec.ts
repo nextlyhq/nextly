@@ -17,7 +17,6 @@
 import {
   copyFileSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -25,7 +24,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { expect, request, type Page } from "@playwright/test";
 
@@ -33,10 +31,8 @@ import {
   keepSessionFresh,
   SESSION_MAX_AGE_MS,
   STORAGE_STATE,
-} from "./support/session";
+} from "./support/session.mjs";
 import { test } from "./support/test";
-
-const TESTS = path.dirname(fileURLToPath(import.meta.url));
 
 /** Whether the server takes the session stored at `file` as signed in. */
 async function signedIn(baseURL: string, file: string): Promise<boolean> {
@@ -147,38 +143,4 @@ test.describe.serial("a spec file's own account", () => {
   test("is the same for every test in the file", async ({ page }) => {
     expect(await sessionEmail(page)).toBe(first);
   });
-});
-
-/** Every spec under `dir`, but the production suite's, which has its own config. */
-function specsUnder(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const at = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      return entry.name === "production" ? [] : specsUnder(at);
-    }
-    return entry.name.endsWith(".spec.ts") ? [at] : [];
-  });
-}
-
-test("every spec this config runs is written with the suite's test", () => {
-  // Playwright's `test` runs without the renewal, and a spec on it is signed
-  // out once the suite has run longer than the session's token lives. Spec
-  // files are outside lint, so this is where that is held.
-  const fromPlaywright = /import\s*\{([^}]*)\}\s*from\s*"@playwright\/test"/g;
-  const onPlaywrightTest = specsUnder(TESTS).filter(file =>
-    [...readFileSync(file, "utf8").matchAll(fromPlaywright)].some(match =>
-      match[1]
-        .split(",")
-        .map(name => name.trim())
-        .some(name => /^test(\s+as\s+\w+)?$/.test(name))
-    )
-  );
-  expect(
-    onPlaywrightTest.map(file => path.relative(TESTS, file)),
-    'These specs take `test` from "@playwright/test", which runs without the ' +
-      "session renewal and is signed out once a run passes 15 minutes. In each, " +
-      'take `test` from the suite instead: import { test } from "./support/test" ' +
-      '(or "../support/test" one folder down), keeping `expect` and the types ' +
-      'from "@playwright/test".'
-  ).toEqual([]);
 });

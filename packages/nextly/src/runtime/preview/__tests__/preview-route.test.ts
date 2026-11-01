@@ -10,8 +10,6 @@ import {
   createPreviewRoute,
   previewGrantsDraft,
   readPreviewScope,
-  type PreviewRouteConfig,
-  type PreviewScopeReaderConfig,
   type VerifiedPreviewLink,
 } from "../preview-route";
 
@@ -276,73 +274,6 @@ describe("the preview route", () => {
   });
 });
 
-/**
- * The shape Next's own cookie store hands back: more than this reader needs,
- * which is the point — the exported type has to accept it.
- */
-interface NextRequestCookie {
-  name: string;
-  value: string;
-}
-const storedCookie: NextRequestCookie = {
-  name: PREVIEW_SCOPE_COOKIE,
-  value: "",
-};
-
-describe("the reader shapes both supported Next majors supply", () => {
-  // These are COMPILE-time assertions. Vitest does not typecheck, so a runtime
-  // test of a sync reader passes whatever the exported signature says; what
-  // makes these load-bearing is `tsc --noEmit -p tsconfig.tests.json`, which
-  // CI runs. An app on Next 14 gets synchronous helpers and one on Next 15 gets
-  // promises, and the peer range covers both, so a signature that required
-  // either alone would fail to typecheck in half the supported apps.
-  const next14Cookies: PreviewScopeReaderConfig["cookies"] = () => ({
-    get: (_name: string): NextRequestCookie | undefined => storedCookie,
-  });
-  const next15Cookies: PreviewScopeReaderConfig["cookies"] = () =>
-    Promise.resolve({
-      get: (_name: string): NextRequestCookie | undefined => storedCookie,
-    });
-  const next14Draft: PreviewRouteConfig["draftMode"] = () => ({
-    enable: () => undefined,
-  });
-  const next15Draft: PreviewRouteConfig["draftMode"] = () =>
-    Promise.resolve({ enable: () => undefined });
-
-  it("reads a cookie store from either major", async () => {
-    for (const cookies of [next14Cookies, next15Cookies]) {
-      // The stored value is empty, so this exercises the call rather than a
-      // grant; the assertion that matters is that both assignments above
-      // compile.
-      expect(
-        await readPreviewScope({
-          secret: TEST_SECRET,
-          generation: GENERATION,
-          cookies,
-        })
-      ).toBeNull();
-    }
-  });
-
-  it("enables draft mode from either major", async () => {
-    const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
-      generation: GENERATION,
-      minter: "minter-1",
-    });
-
-    for (const draftMode of [next14Draft, next15Draft]) {
-      const response = await createPreviewRoute({
-        secret: TEST_SECRET,
-        generation: GENERATION,
-        redirectTo: () => "/pages/entry-1",
-        draftMode,
-      }).GET(request(token));
-
-      expect(response.status).toBe(307);
-    }
-  });
-});
-
 describe("request input the reader must survive", () => {
   it("treats a cookie that cannot be decoded as no session", async () => {
     // A cookie is request input whoever wrote it, and "%" alone makes
@@ -355,36 +286,6 @@ describe("request input the reader must survive", () => {
     });
 
     expect(scope).toBeNull();
-  });
-
-  it("accepts synchronous cookies(), as Next 14 supplies", async () => {
-    // The peer range covers Next 14, where these helpers are synchronous.
-    const scope = await readPreviewScope({
-      secret: TEST_SECRET,
-      generation: GENERATION,
-      cookies: () => ({ get: () => undefined }),
-    });
-
-    expect(scope).toBeNull();
-  });
-
-  it("accepts a synchronous draftMode(), as Next 14 supplies", async () => {
-    const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
-      generation: GENERATION,
-      minter: "minter-1",
-    });
-    const enable = vi.fn();
-    const route = createPreviewRoute({
-      secret: TEST_SECRET,
-      generation: GENERATION,
-      redirectTo: () => "/pages/entry-1",
-      draftMode: () => ({ enable }),
-    });
-
-    const response = await route.GET(request(token));
-
-    expect(response.status).toBe(307);
-    expect(enable).toHaveBeenCalledOnce();
   });
 });
 
@@ -538,7 +439,7 @@ describe("the link's own record", () => {
 
   it("ends a session already in flight once its record refuses it", async () => {
     const { token } = await recordedToken();
-    const cookies = () => ({
+    const cookies = async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE
           ? { value: encodeURIComponent(token) }

@@ -14,15 +14,19 @@
  * @module api/widget-query
  */
 
+import { z } from "zod";
+
 import {
   authorizationScheduler,
   canReadEntity,
 } from "../auth/entity-read-access";
+import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
 import { createBatchScope } from "../domains/widgets/batch-scope";
-import { refreshContentSources } from "../domains/widgets/collection-widgets";
+import { refreshContentSources } from "../domains/widgets/content-sources";
+import type { ReadAheadSide } from "../domains/widgets/declaration/read-services";
 import {
   entityRead,
   resolveExecutableSource,
@@ -51,7 +55,12 @@ import {
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
-import { isCardEntry, prepareCards } from "./widget-cards";
+import {
+  isCardEntry,
+  prepareCards,
+  readableCollectionsOnce,
+  type CardBatch,
+} from "./widget-cards";
 import {
   answerReadyQueries,
   failedSlot,
@@ -125,6 +134,51 @@ function parseQueriesBody(body: unknown): unknown[] {
     });
   }
   return queries;
+}
+
+/**
+ * The longest read-ahead token a batch may carry. The layout read mints a
+ * UUID, of 36 characters; the bound keeps a client from having an arbitrary
+ * string of its choosing looked up.
+ */
+const MAX_READ_AHEAD_TOKEN_LENGTH = 64;
+
+/** A batch's `readAheadToken`, when it carries one. */
+const READ_AHEAD_TOKEN = z
+  .string()
+  .min(1)
+  .max(MAX_READ_AHEAD_TOKEN_LENGTH)
+  .optional();
+
+/**
+ * The dashboard load this batch answers, as the layout read named it (its
+ * answer's `readAheadToken`), sent back so a card may be handed what was read
+ * ahead for that load and for no other. Absent, the batch is no load's, and
+ * every card reads anew.
+ *
+ * Trusted to choose among this caller's own loads and nothing more: what was
+ * read ahead is found under the caller the batch resolved as well, so a token
+ * names nobody else's. Refused as the body's other malformed fields are, with
+ * the field's path.
+ */
+function parseReadAhead(body: unknown): ReadAheadSide | undefined {
+  const parsed = READ_AHEAD_TOKEN.safeParse(
+    (body as { readAheadToken?: unknown } | null)?.readAheadToken
+  );
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "readAheadToken",
+          code: "INVALID_VALUE",
+          message: `"readAheadToken" must be a string of 1 to ${MAX_READ_AHEAD_TOKEN_LENGTH} characters, as the layout read answered it.`,
+        },
+      ],
+    });
+  }
+  return parsed.data === undefined
+    ? undefined
+    : { side: "batch", token: parsed.data };
 }
 
 /**
@@ -411,6 +465,28 @@ async function checkedAgainst(
 }
 
 /**
+ * Declared cards asked as `caller`: each card's own reads checked by the door
+ * a batch entry goes through. ONE construction, for the query endpoint's batch
+ * and for a dashboard judging which of its cards are shown, so a card's reads
+ * are decided alike wherever it is asked. `mayRead` is the batch's own read
+ * decisions where it keeps them, shared with its queries.
+ */
+export function cardBatchFor(
+  auth: AuthContext,
+  caller: ReadCaller,
+  mayRead: (slug: string) => Promise<boolean> = readDecisionsFor(caller)
+): CardBatch {
+  return {
+    auth,
+    caller,
+    check: raw => checkedQuery(raw, mayRead),
+    // Read once for every card the batch answers, the default's cards judged
+    // together included.
+    readableCollections: readableCollectionsOnce(caller),
+  };
+}
+
+/**
  * A query a declared widget's card or data function asks, checked exactly as a
  * batch entry is, throwing the refusal that entry's slot would carry.
  */
@@ -480,6 +556,7 @@ async function prepareBatch(req: Request): Promise<PreparedBatch> {
   // one here.
   const body = await readJsonBody(req);
   const queries = parseQueriesBody(body);
+  const readAhead = parseReadAhead(body);
 
   await getCachedNextly();
 
@@ -500,10 +577,11 @@ async function prepareBatch(req: Request): Promise<PreparedBatch> {
   // A declared widget's cards, asked by card rather than by query: looked up
   // in what this caller was handed, before the first byte, like every other
   // whole-batch step. Each one's own reads are checked by the same door.
+  // With the dashboard load the batch names, so a card read ahead for that
+  // load may be handed what was read for it.
   const cards = await prepareCards(queries, {
-    auth,
-    caller,
-    check: raw => checkedQuery(raw, mayRead),
+    ...cardBatchFor(auth, caller, mayRead),
+    ...(readAhead === undefined ? {} : { readAhead }),
   });
 
   // Read and resolve every query entry FIRST, so the batch's distinct entities

@@ -40,7 +40,9 @@ import { effectiveWidgetLimit } from "./query-limits";
 import {
   failUnavailableSourceOrOp,
   getSource,
+  isWidgetTab,
   sourceKindFromId,
+  WIDGET_TABS,
   type WidgetOp,
   type WidgetSource,
 } from "./sources";
@@ -169,13 +171,25 @@ export const TIMESERIES_RANGES = ["7d", "30d", "90d", "12m"] as const;
 /** @experimental */
 export type TimeseriesRange = (typeof TIMESERIES_RANGES)[number];
 
-/** The interval each range is drawn in. */
-const RANGE_INTERVAL: Readonly<Record<TimeseriesRange, TimeseriesInterval>> = {
+/**
+ * The interval each range is drawn in. Kept literal (`as const`), so the
+ * intervals a range can be drawn in are a type of their own
+ * ({@link RangeInterval}), read from this one table.
+ */
+const RANGE_INTERVAL = {
   "7d": "day",
   "30d": "day",
   "90d": "week",
   "12m": "month",
-};
+} as const satisfies Readonly<Record<TimeseriesRange, TimeseriesInterval>>;
+
+/** The intervals a range is drawn in: a day, a week or a month. @experimental */
+export type RangeInterval = (typeof RANGE_INTERVAL)[TimeseriesRange];
+
+/** Whether an interval is one a range is drawn in ({@link RangeInterval}). @experimental */
+export function isRangeInterval(value: unknown): value is RangeInterval {
+  return (Object.values(RANGE_INTERVAL) as readonly unknown[]).includes(value);
+}
 
 /** Whether a value is one of {@link TIMESERIES_RANGES}. @experimental */
 export function isTimeseriesRange(value: unknown): value is TimeseriesRange {
@@ -190,7 +204,7 @@ export function isTimeseriesRange(value: unknown): value is TimeseriesRange {
  * @experimental
  */
 export interface RangeWindow {
-  interval: TimeseriesInterval;
+  interval: RangeInterval;
   /** The range's first instant: rows from here on are counted. */
   start: Date;
   /**
@@ -227,6 +241,24 @@ export function rangeWindow(range: TimeseriesRange, now: Date): RangeWindow {
     intervals += 1;
   }
   return { interval, start, anchor, intervals };
+}
+
+/**
+ * The exclusive upper bound of a window that ends at `now`: one millisecond
+ * past the whole second at or after it, so the window keeps that second.
+ *
+ * 🔴 MySQL stores a DATETIME to the second, rounding to the nearest, so a row
+ * written just before `now` can be stored up to half a second after it, and a
+ * window ending at `now` would miss it until the clock passes the stored
+ * value. Every stored value of a row written by `now` is at most that whole
+ * second. On a dialect that keeps milliseconds, the most this admits is a row
+ * written later in the same second. Only the open end moves: interval edges,
+ * and a window's start, are where they were.
+ *
+ * @experimental
+ */
+export function openWindowEnd(now: Date): Date {
+  return new Date(Math.ceil(now.getTime() / 1000) * 1000 + 1);
 }
 
 /**
@@ -837,8 +869,8 @@ function heldAsSourceFilter(
 
 /**
  * Confirms a source filter's value is the one it takes: a collection by its
- * slug, Only mine as true or false. Who "mine" is, is never in the query: the
- * source reads it from the caller.
+ * slug, Only mine as true or false, a Tab as one of its values. Who "mine"
+ * is, is never in the query: the source reads it from the caller.
  */
 function assertFilterValue(key: string, value: unknown, source: string): void {
   if (key === "collection" && (typeof value !== "string" || value === "")) {
@@ -848,6 +880,11 @@ function assertFilterValue(key: string, value: unknown, source: string): void {
   }
   if (key === "onlyMine" && typeof value !== "boolean") {
     fail(`where filter "onlyMine" on "${source}" must be true or false`);
+  }
+  if (key === "tab" && !isWidgetTab(value)) {
+    fail(
+      `where filter "tab" on "${source}" must be one of: ${WIDGET_TABS.join(", ")}`
+    );
   }
 }
 
@@ -1156,13 +1193,12 @@ function assertTimeseriesAgreesWithOp(
  * target carries no status column, so both selectors reach the same rows and
  * two mutually exclusive questions come back with one answer. A card asking for
  * drafts would report the published count and say nothing about having been
- * ignored, which is the failure `statsWidget` already refuses to GENERATE --
- * this is the same refusal at the door, where a hand-written or plugin query
- * arrives.
+ * ignored, so it is refused at the door, wherever the query comes from: a
+ * core widget's card, a site's own widget or a plugin's.
  *
  * `all` stays legal for every source. It is not a claim that a lifecycle
  * exists, it is a statement that this read is not bounded by one, and it is
- * what the generated count, recent and timeline cards already send.
+ * what a card counting or listing every entry sends.
  */
 function assertValidStatus(
   source: WidgetSource,

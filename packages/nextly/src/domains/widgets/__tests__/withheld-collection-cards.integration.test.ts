@@ -21,6 +21,7 @@ import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
+import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -142,11 +143,14 @@ describe.each(getConfiguredTestDialects())(
             slug: TWIN_UNDERSCORE,
             fields: [text({ name: "title" })],
           }),
-          defineCollection({
-            slug: TWIN_HYPHEN,
-            fields: [text({ name: "title" })],
-          }),
         ],
+      });
+      // Two collections whose addresses differ only by `-` and `_` can exist only from before the
+      // address rule, which refuses the second as new on every road. So one of them is seeded
+      // the way a Builder collection made before the rule is stored.
+      await seedBuilderCollection(handle.adapter as never, {
+        slug: TWIN_HYPHEN,
+        fields: [{ name: "title", type: "text" }],
       });
       // The first account of an instance is its super admin.
       admin = await account("cv-admin@example.com");
@@ -291,8 +295,10 @@ describe.each(getConfiguredTestDialects())(
       // answer depends on cards they cannot see.
       const reader = await account("cv-hoarder@example.com");
       await grantTo(handle, reader, "read", [POSTS]);
+      // A plugin's cards the install does not have now: carried, not dropped,
+      // so the row keeps every one of them out of view.
       const hidden = Array.from({ length: MAX_PLACEMENTS }, (_, i) =>
-        card(`gone${i}`, `collection/cv-gone-${i}-count`)
+        card(`gone${i}`, `acme/cv-gone-${i}`)
       );
       await service().saveLayout("user", reader, hidden, 0);
       const seen = await read(reader);

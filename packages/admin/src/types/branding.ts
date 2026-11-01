@@ -1,8 +1,4 @@
-import type {
-  PluginAdminWidget,
-  PublishedContentSource,
-  WidgetDefinition,
-} from "nextly/config";
+import type { PublishedContentSource, WidgetDefinition } from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -60,44 +56,22 @@ export interface PluginPageMeta {
 }
 
 /**
- * A plugin dashboard widget, delivered via `/admin-meta`.
+ * A widget the registry publishes, as `/admin-meta/workspace` serializes it.
  *
- * DERIVED from the server's declaration rather than restated beside it.
- * `buildPluginAdminMeta` assigns `contributes.admin.widgets` to the meta
- * verbatim, so the two are one shape -- and while they were one shape declared
- * twice they drifted twice. First `component`: the server made it optional
- * while this kept it required, so a plugin adopting the server's shape reached
- * `PluginSlot` with `path === undefined` and rendered an empty grid cell
- * silently. Then the declarative half -- `title`, `description`, `icon`,
- * `category`, `archetype`, `size`, `query` and `link` -- which the server serializes on every contributed widget and this
- * copy never gained, so admin code reading a property that was PRESENT on the
- * wire got a type error for it.
+ * Every widget reaches the registry through one call, whose validator requires
+ * `title`, `archetype` and `size`, requires a `query` for every data archetype
+ * and a `component` for `custom`, and forbids each where it does not belong.
+ * So a widget arrives already complete, and the resolver has nothing to
+ * default for it.
  *
- * An alias makes that a compile error at the one declaration instead of a
- * convention two files have to keep. It is reachable through `nextly/config`
- * specifically: this package's tsconfig maps the BARE `nextly` specifier to
- * `../nextly/src`, so importing from `"nextly"` shadows the package exports and
- * pulls core's whole source tree in behind internal `@nextly/*` aliases this
- * project does not declare. Subpaths are not covered by that mapping, so
- * `nextly/config` resolves through the export map to the built declaration
- * bundle, exactly as a consumer's would.
- */
-export type PluginWidgetMeta = PluginAdminWidget;
-
-/**
- * A widget the running app REGISTERED, as `/admin-meta/workspace` serializes it.
- *
- * A different channel from `PluginWidgetMeta` above, not a variant of it. That
- * one is DECLARED in a plugin's `contributes.admin.widgets` and is almost
- * entirely optional; this one went through `registerWidget`, whose validator
- * requires `title`, `archetype` and `size`, requires a `query` for every
- * data archetype and a `component` for `custom`, and forbids each where it does
- * not belong. So a registered widget arrives already complete, and the resolver
- * has nothing to default for it.
- *
- * Aliased from core's own declaration for the same reason `PluginWidgetMeta` is:
- * the server puts that exact object on the wire, so a second spelling here would
- * be one contract declared twice.
+ * Aliased from core's own declaration: the server puts that exact object on
+ * the wire, so a second spelling here would be one contract declared twice. It
+ * is reachable through `nextly/config` specifically: this package's tsconfig
+ * maps the BARE `nextly` specifier to `../nextly/src`, so importing from
+ * `"nextly"` pulls core's whole source tree in behind internal `@nextly/*`
+ * aliases this project does not declare, while `nextly/config` resolves
+ * through the export map to the built declaration bundle, as a consumer's
+ * would.
  */
 export type RegisteredWidgetMeta = WidgetDefinition;
 
@@ -209,8 +183,6 @@ export interface PluginMetadata {
     hideDefaults?: boolean;
     hide?: Array<"github" | "discord" | "docs" | "notifications">;
   };
-  /** Dashboard widgets contributed via `contributes.admin.widgets`. */
-  widgets?: PluginWidgetMeta[];
   /**
    * Component rendered in the schema-builder pages (above the field list),
    * contributed via `contributes.admin.schemaBuilderSlot`. Receives `{ fields,
@@ -297,6 +269,14 @@ export interface AdminBranding {
   devReload?: boolean;
 
   /**
+   * Whether the RUNNING server serves the widget preview page's read, from the
+   * session-gated half alone: the same development check that gates the read.
+   * Only an explicit `true` registers the page; `undefined` means the answer
+   * has not arrived, which holds the page's address rather than showing it.
+   */
+  widgetPreviews?: boolean;
+
+  /**
    * INSTALLED plugin metadata, for sidebar rendering and plugin settings pages.
    *
    * Comes from the session-gated half alone, so its absence means the list has
@@ -316,22 +296,17 @@ export interface AdminBranding {
   pluginClientConfigs?: PluginClientConfigMeta[];
 
   /**
-   * Widgets the running app registered through `registerWidget`.
-   *
-   * Beside `plugins`, never inside it: a registration is not a plugin
-   * contribution, and the two reach the dashboard grid by different routes. A
-   * widget may legitimately appear in both -- an app that declares it AND
-   * registers it -- which is why the grid dedupes by id rather than assuming
-   * the lists are disjoint.
+   * The widgets the registry publishes for this reader: core's, each plugin's
+   * `contributes.dashboard.widgets` and the site config's.
    *
    * Comes from the session-gated half alone, so its absence means the registry
-   * has not arrived rather than that the app registered nothing.
+   * has not arrived rather than that there is nothing.
    */
   widgets?: RegisteredWidgetMeta[];
 
   /**
-   * An opaque token for the audience `widgets` and each plugin's widgets were
-   * filtered for, from the session-gated half alone. The dashboard layout read
+   * An opaque token for the audience `widgets` were filtered for, from the
+   * session-gated half alone. The dashboard layout read
    * reports the same token as `audience`, and a difference means this payload
    * was built for a different reader state than the layout being drawn.
    */

@@ -15,8 +15,11 @@ driven by your content, not a timer.
 
 1. A read tags its cached data with the `nextly:*` tags for the collection (and,
    for a detail page, the entry id).
-2. A write computes the same tags and, after it commits, calls Next's
-   `revalidateTag` for each — so any page tagged with them is invalidated.
+2. A write computes the same tags and, after it commits and before it
+   responds, expires each one, so any page tagged with them is invalidated.
+   In a Server Action it calls Next's `updateTag`, so the person who made the
+   change sees it on their next read. Everywhere else (a Route Handler, the
+   admin API) it calls `revalidateTag(tag, { expire: 0 })`.
 
 The write side is automatic once the admin route is wired (see below). You only
 add the read-side tags.
@@ -65,18 +68,113 @@ revalidator, and their writes would not refresh cached pages. A write in a
 context with no adapter registered is a silent no-op for revalidation (never an
 error), so it is safe but stale.
 
-### Writes must run inside a request
+### Writes outside a request
 
 Automatic revalidation fires for a write that runs **inside a Next.js request or
 render** — a Route Handler, a Server Action, or the admin API. That is where
-`revalidateTag` is valid, and it covers how content is normally edited.
+Next.js can expire a tag, and it covers how content is normally edited.
 
 A write from **outside** a request — a cron job, a CLI, or a background worker
-with no request in flight — cannot call `revalidateTag` (there is no cache scope
-to invalidate), so the adapter safely skips it (the write still succeeds). Those
-callers should either run the write in a Route Handler / Server Action, or
-invalidate the cache themselves. This mirrors how on-demand ISR works in Next.js
-generally: revalidation is request-scoped.
+with no request in flight — cannot expire a tag through Next.js: it has no
+cache scope to invalidate there. The write still succeeds, and Nextly records
+its tags in the database, in a table `nextly migrate` creates:
+
+- **With Nextly's cache handlers installed** (see Cache Components below),
+  every instance reads that record and stops serving the previous version
+  within about five seconds, whichever process made the write.
+- **Without them,** Next.js's own cache never reads the record. A write made
+  in the app's own process is expired there with the next write that runs
+  inside a request, and Nextly logs one line per process the first time that
+  happens. A write from a separate process, such as the CLI or another
+  instance, does not reach the app's cache, so in production Nextly keeps
+  every cached public read for at most a minute and refreshes it then. The
+  first read after that minute may still get the previous version while it
+  refreshes. Nextly logs one `cache-handlers-not-shared` line per process when
+  this bound is in force. To refresh pages straight away and keep longer
+  lifetimes, install the handlers, or run the write in a Route Handler or a
+  Server Action.
+
+### Several instances, and upgrading an app
+
+Nextly's cache handlers need nothing beyond the database the app already
+uses. Each instance keeps its cached entries in its own memory, and every
+instance shares when each tag last expired through one table in that database.
+No Redis or other cache service is involved.
+
+`create-nextly-app` installs them in every app it creates, and adds them when it
+joins an existing app. It leaves the handler settings out, and prints the lines
+to put in place, where the config already has a cache handler of its own, sets a
+handler setting to `undefined`, or sets `cacheMaxMemorySize` to anything but
+`0`. An app that keeps a handler of its own is served as an app without
+Nextly's: writes made outside a request don't reach that handler, so its cached
+public reads refresh at least once a minute in production.
+
+To add them to an app by hand:
+
+1. Run `nextly migrate`, which creates the `nextly_cache_tag_expiries` table.
+   Until it exists, Nextly warns once and each instance sees only the writes it
+   makes itself.
+2. Add the handler settings to `next.config.ts`, as in step 2 of
+   [Cache Components](#cache-components) below: `cacheHandler`,
+   `cacheMaxMemorySize: 0` and `cacheHandlers`.
+3. Deploy, load a page that reads content through Nextly on each instance, and
+   then check that instance's log. Nextly says `cache-handlers-not-shared` at
+   the first cached read the handlers don't serve, so the line's absence
+   means something only once such a read has run.
+
+### When the new version shows
+
+- **Server Action:** the expiry completes before the action returns, and
+  `updateTag` lets the person who made the change read it straight away.
+- **Route Handler and the admin API:** the expiry starts before the response is
+  sent and completes in the same invocation. A request made after the response
+  arrives reads the new version. A request already in flight while the write
+  ran may still read the previous one.
+- **Other instances:** with Nextly's cache handlers installed (see Cache
+  Components below), every other instance stops serving the previous version
+  within about five seconds. They treat the expiry as standing for one second
+  past the write, the time an instance may keep a collection's settings
+  cached, so a page one of them rebuilt from settings it read just before a
+  schema change is not served either. That second is the whole cost: a tag
+  written more than about once a second keeps the other instances rebuilding
+  the reads that carry it until the writes pause, while the instance making
+  the writes is not affected.
+
+### If an expiry fails
+
+A tag that fails to expire is retried once. If it fails again, the write still
+succeeds: Nextly logs the tags and expires them with the next write in a
+request, and the REST and admin response says so with a notice:
+
+```json
+{
+  "warnings": [
+    {
+      "severity": "notice",
+      "phase": "cache-expiry",
+      "collection": "posts",
+      "code": "CACHE_EXPIRY_DEFERRED",
+      "message": "The change is saved. Its public pages may show the previous version for a while."
+    }
+  ]
+}
+```
+
+The Direct API's mutations return the same notice in the result's `warnings`, so a caller can tell the expiry was deferred.
+
+### Which writes expire a page
+
+Every write that changes what a read returns:
+
+- creating, updating, publishing, unpublishing and deleting an entry, and a
+  slug change;
+- saving a Single;
+- a release that publishes or unpublishes its documents;
+- deleting a collection or a Single;
+- a plugin writing to columns it added to a collection, a Single or a component
+  with `ctx.db.contributed(...).set`. A component's row expires the entry or
+  Single it sits in. Inside `ctx.db.transaction` the expiry waits for the
+  commit, and a rolled-back write expires nothing.
 
 ## Tag a read
 
@@ -165,7 +263,14 @@ cross-tenant data leak, not a stale-cache annoyance. For genuinely public conten
 (the same for every reader, like a published blog post) a stable key is correct
 and gives the full caching benefit.
 
-## Opt a write out of revalidation
+## Opt out of revalidation
+
+A collection or Single whose pages manage their own freshness can opt out with
+`revalidate: { disable: true }` in its config. None of the writes above then
+expire its tags, a delete or a plugin's write included. One exception: when a
+write cannot read the setting, because the record is already gone or the
+registry cannot be reached, it expires the derived `nextly:*` tags anyway. An
+extra cache miss is the cheaper mistake; a page left stale is the worse one.
 
 A bulk import, seed, or CLI write that owns its own cache strategy can skip the
 per-row revalidation with `disableRevalidate`:
@@ -177,11 +282,94 @@ await nx.create({ collection: "posts", data, disableRevalidate: true });
 The write still records its outbox event (webhooks and retention are
 unaffected); it just does not bust any cache tags.
 
+## Cache Components
+
+Nextly runs with Cache Components and Partial Prefetching on. An app made by
+`create-nextly-app` has both, and so does one it joins, unless that app's
+config can't be changed safely: then the report prints the lines to add
+([Installation](/docs/getting-started/installation#cache-components)). Three
+things keep its cached reads fresh; with only some of them, a page read right
+after a write can still show the previous version. A new blog has all three. An
+app made by an earlier Nextly release, which turned Cache Components off, needs
+each of them.
+
+1. **Read through the app's own `"use cache"` function.** Once Cache Components
+   is on, Next.js caches non-fetch reads with `"use cache"` and `cacheTag`, and
+   the directive works only in code Next.js compiles. A scaffolded blog keeps
+   that function in `src/nextly/cached-read.ts`. In a blog made by an earlier
+   release that file is a stub that registers nothing: replace it with this.
+
+   ```ts
+   // src/nextly/cached-read.ts
+   import { cacheLife, cacheTag } from "next/cache";
+   import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
+
+   export async function cachedRead(
+     key: string,
+     tags: string[],
+     revalidate: number | false
+   ): Promise<unknown> {
+     "use cache";
+     cacheTag(...tags);
+     // `revalidate: false` is tag-only, as everywhere in Nextly: only a write
+     // expires the entry, never time. Next.js's "max" profile revalidates monthly.
+     if (revalidate === false) {
+       cacheLife({ revalidate: Infinity, expire: Infinity });
+     } else {
+       cacheLife({ revalidate, expire: Math.max(revalidate * 2, 60) });
+     }
+     return runRegisteredRead(key);
+   }
+
+   registerCachedRead(cachedRead, process.env.__NEXT_CACHE_COMPONENTS);
+   ```
+
+   Import it from every module that reads content through `cachedFind`; the
+   blog's query modules (`src/lib/queries`) already do. Nextly passes the
+   function only the read's key, tags and lifetime, which `"use cache"` can
+   cache, and runs the reader itself. Register it from a module Next.js
+   compiles as a server component: a copy imported from `instrumentation.ts`
+   is not a cached function. A read with `revalidate: false`, the default, is
+   cached until a write expires one of its tags, as with Cache Components off;
+   one with a number of seconds is served stale past it and refreshed in the
+   background. Outside a request or build, in a script or a background job,
+   the read runs directly, uncached.
+2. **Install Nextly's cache handlers** in `next.config.ts`. Next.js's default
+   incremental cache serves a page's previous shell once after its tags are
+   expired, so the first read after a write would still be the old version:
+
+   ```ts
+   cacheComponents: true,
+   partialPrefetching: true,
+   cacheHandler: require.resolve("nextly/cache-handler"),
+   cacheMaxMemorySize: 0,
+   cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
+   ```
+3. **Keep `createRegister`'s `cacheComponents` value** in `instrumentation.ts`
+   (`process.env.__NEXT_CACHE_COMPONENTS`). Nextly, loaded from
+   `node_modules`, learns the setting only from it: with it off, Nextly warns
+   once at start; with it on and no read function registered, Nextly warns at
+   the first cached read and keeps using `unstable_cache`.
+
+With Cache Components off, which Nextly does not support, Next.js refuses to
+build a `"use cache"` function, so a blog with it off needs the stub that
+registers nothing (`export {};`) in place of this file, and its reads are
+cached with `unstable_cache`.
+
 ## Notes
 
-- Works across the supported Next range (`^15.5.28 || ^16.4.1`) on the stable
+- Works across the supported Next.js range (see
+  [Requirements](/docs/getting-started/installation#requirements)) on the stable
   `revalidateTag` / `unstable_cache` primitives.
 - `cachedFind` runs the reader directly (no caching) outside a Next runtime, so
   the same code works in tests and non-Next callers.
 - Add `revalidate: <seconds>` to `cachedFind` for a time-based safety net on top
   of tag-based busting.
+- Next.js keeps at most 128 tags on one cached read and drops any tag longer
+  than 256 characters. `cachedFind` leaves out the over-long tags, keeps each
+  tag once in the order you give, and leaves off any past 128 with a warning
+  logged once. The routes Nextly provides put their own collection's or
+  Single's tag first, so a read that lists many related collections still
+  expires whenever its own content changes. A read that
+  lists many related collections still expires whenever its own content
+  changes.

@@ -5,7 +5,7 @@
  * reload. The shell is outside the route by construction; a wrapping shell
  * div here stands in for it, asserting it never leaves.
  */
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -141,5 +141,62 @@ describe("lazyRoute", () => {
     await waitFor(() =>
       expect(screen.getByTestId("page")).toHaveTextContent("news")
     );
+  });
+
+  it("logs why a chunk could not be fetched", async () => {
+    const error = new Error("chunk 404");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const Route = lazyRoute(() => Promise.reject(error));
+    renderInShell(<Route />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("route-load-error")).toBeTruthy()
+    );
+    expect(logged).toHaveBeenCalledWith(expect.any(String), error);
+    logged.mockRestore();
+  });
+
+  it("shows the spinner only once the fetch has taken 200 ms", () => {
+    vi.useFakeTimers();
+    try {
+      const Route = lazyRoute(() => new Promise<RouteModule>(() => {}));
+      renderInShell(<Route />);
+
+      // Announced at once, drawn only if it's slow: a fast load shows no flash.
+      expect(screen.getByRole("status")).toHaveTextContent("Loading");
+      expect(screen.queryByTestId("route-spinner")).toBeNull();
+      act(() => vi.advanceTimersByTime(199));
+      expect(screen.queryByTestId("route-spinner")).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByTestId("route-spinner")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fetches ahead on preload, and the visit uses that fetch", async () => {
+    const loader = vi.fn(() => Promise.resolve({ default: Page }));
+    const Route = lazyRoute(loader);
+
+    Route.preload();
+    Route.preload();
+    expect(loader).toHaveBeenCalledTimes(1);
+
+    renderInShell(<Route />);
+    await waitFor(() => expect(screen.getByTestId("page")).toBeTruthy());
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches afresh on the visit when a preload failed", async () => {
+    const loader = failingThenWorkingLoader();
+    const Route = lazyRoute(loader);
+
+    Route.preload();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    renderInShell(<Route />);
+
+    await waitFor(() => expect(screen.getByTestId("page")).toBeTruthy());
   });
 });

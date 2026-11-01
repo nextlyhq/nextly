@@ -9,7 +9,9 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 export default function CreateRolePage(): JSX.Element {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      {/* Wide: a row holds a collection's name, its levels side by side and
+          its switch, which a form's width cannot. */}
+      <PageContainer width="wide">
         <RoleBreadcrumbs currentPage="create" />
 
         <RoleForm />

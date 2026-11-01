@@ -56,7 +56,11 @@ import type { UseFormSetError, FieldValues } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
+import {
+  type RefusedForm,
+  reloadDocument,
+  useSharedFieldsRecovery,
+} from "@admin/hooks/useSharedFieldsRecovery";
 import {
   createServerErrorHandler,
   parseServerErrorMessage,
@@ -71,6 +75,8 @@ import {
   type UpdateEntryPayload,
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
+
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
  * Options for useUpdateEntry hook
@@ -117,6 +123,12 @@ export interface UseUpdateEntryOptions<
    * fields names them by; their names are used without them.
    */
   fields?: readonly { name?: string; label?: unknown }[];
+  /**
+   * The editor's form. A publish refused over out-of-date shared fields
+   * offers to take the live values only with it: the action saves the form as
+   * it is when taken, and has it show the values taken.
+   */
+  refusedForm?: RefusedForm;
 }
 
 /**
@@ -251,6 +263,7 @@ export function useUpdateEntry<
   draft,
   translationStatus = false,
   fields,
+  refusedForm,
 }: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
   Error,
@@ -266,11 +279,17 @@ export function useUpdateEntry<
       : null,
     locale,
     fields: fields ?? NO_FIELDS,
-    onTaken: useCallback(() => {
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-    }, [queryClient, collectionSlug, entryId]),
+    // Answers once the reloaded document is back, which the recovery waits
+    // for before letting the editor save again.
+    onTaken: useCallback(
+      () =>
+        reloadDocument(
+          queryClient,
+          entryKeys.detail(collectionSlug, entryId),
+          locale
+        ),
+      [queryClient, collectionSlug, entryId, locale]
+    ),
   });
   const { enabled: localizationEnabled } = useLocalization();
 
@@ -334,7 +353,11 @@ export function useUpdateEntry<
     },
 
     // Rollback on error
-    onError: (error: Error, variables, context) => {
+    onError: (error: Error, _variables, context) => {
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
+
       // Rollback to previous value
       if (optimistic && context?.previousEntry) {
         queryClient.setQueryData(localeKey, context.previousEntry);
@@ -349,18 +372,10 @@ export function useUpdateEntry<
       }
 
       // The out-of-date refusal reports itself, with the action that
-      // resolves it; saving the refused values without their status keeps
-      // them as the pending change.
-      if (!handledByForm) {
-        handledByForm = recoverSharedFields(error, () => {
-          const { status: _status, ...values } = variables;
-          return entryApi.update(
-            collectionSlug,
-            entryId,
-            values,
-            locale ? { locale, fallbackLocale } : undefined
-          );
-        });
+      // resolves it, which works on the editor's form, wherever that form
+      // may write now.
+      if (!handledByForm && refusedForm) {
+        handledByForm = recoverSharedFields(error, refusedForm);
       }
 
       // Show generic toast only if errors weren't mapped to form

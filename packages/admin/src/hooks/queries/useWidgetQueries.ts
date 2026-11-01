@@ -27,6 +27,7 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import {
+  hashKey,
   useQueries,
   useQueryClient,
   type QueryClient,
@@ -39,6 +40,7 @@ import {
   type ListDensity,
   type WidgetQuery,
 } from "nextly/config";
+import type { WidgetRenderSize } from "nextly/widget-result";
 import { useMemo } from "react";
 
 import type {
@@ -48,7 +50,12 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { fetchWidgetBatch, type CardAsk } from "./widget-query-stream";
+import { WIDGET_QUERIES_KEY } from "./widget-queries-key";
+import {
+  fetchWidgetBatch,
+  type CardAsk,
+  type SentCardAsk,
+} from "./widget-query-stream";
 
 export type { CardAsk } from "./widget-query-stream";
 
@@ -100,6 +107,16 @@ export interface WidgetQueryRequest {
    * unsaved. Present exactly when `query` is absent.
    */
   card?: CardAsk;
+  /**
+   * The size a card core answers on the server is drawn at: its grid size and the tier predicted
+   * for it, sent beside `card` and handed to the widget's `load`, which may read it.
+   *
+   * 🔴 Part of what the answer is filed as asked with (`appliedKey`), and kept out of the cache
+   * key, as `sized` is. The size a load saw is part of its answer's identity, so a card resized or
+   * crossing a tier asks again; filed by `appliedKey` it asks again ALONE (`useCardRetries`),
+   * while a size in the key would make one card's resize a new question for its whole partition.
+   */
+  cardSize?: WidgetRenderSize;
   /**
    * The stored settings a card asked for by id was asked with: what its answer
    * is filed under, so a saved change of them asks this card again alone.
@@ -171,23 +188,38 @@ export type CellsApplied = Readonly<Record<string, string>>;
  * The question a request asks with, before sizing, as one comparable string: what an answer is
  * filed as having been asked with, and what a card compares against when its settings change.
  *
- * A card's is its ask with the stored settings it was asked with, so a saved change of them is
- * a different question, and a preview's ask, which carries its own settings, never reads as the
- * stored card's.
+ * A card's is its ask with the stored settings it was asked with and the size it is drawn at, so
+ * a saved change of them, a resize or a change of tier is a different question, and a preview's
+ * ask, which carries its own settings, never reads as the stored card's.
  */
 export function appliedKey(request: WidgetQueryRequest): string {
   return request.card === undefined
     ? JSON.stringify(request.applied ?? request.query)
-    : JSON.stringify({ card: request.card, config: request.config ?? null });
+    : JSON.stringify({
+        card: request.card,
+        config: request.config ?? null,
+        // Its three numbers in one fixed order, so two equal sizes are one key however the object
+        // holding them was built.
+        size:
+          request.cardSize === undefined
+            ? null
+            : [request.cardSize.w, request.cardSize.h, request.cardSize.tier],
+      });
 }
 
-/** What one request sends as its entry of the batch: its card, or its query as sized and applied. */
+/**
+ * What one request sends as its entry of the batch: its card with the size it is drawn at, or its
+ * query as sized and applied.
+ */
 export function sentEntry(
   request: WidgetQueryRequest
-): WidgetQuery | CardAsk | undefined {
-  return (
-    request.card ?? request.sized?.query ?? request.applied ?? request.query
-  );
+): WidgetQuery | SentCardAsk | undefined {
+  if (request.card !== undefined) {
+    return request.cardSize === undefined
+      ? request.card
+      : { ...request.card, size: request.cardSize };
+  }
+  return request.sized?.query ?? request.applied ?? request.query;
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -233,6 +265,15 @@ export interface UseWidgetQueriesResult {
    * partition that answered a second ago.
    */
   updatedAt: Date | null;
+  /**
+   * When the request this card was asked in last answered, or `null` before it has, or for a
+   * card in no request.
+   *
+   * The card's OWN request's time, where `updatedAt` is the oldest of them: past
+   * `MAX_QUERIES_PER_REQUEST` the requests answer separately, so the time of one card's newer
+   * answer is not the batch's while another request's older answer stands.
+   */
+  answeredAtFor: (placementId: string) => Date | null;
   /**
    * The size a card's answer was fetched at, for a card whose request was sized; `undefined`
    * before its first fetch in this mount, or for a request that carried no size.
@@ -415,11 +456,12 @@ function readSlot(value: Record<string, unknown>): WidgetSlot {
     ok?: unknown;
     error?: unknown;
     code?: unknown;
+    setting?: unknown;
     result?: unknown;
     empty?: unknown;
   };
 
-  if (slot.ok === false) return refusal(slot.error, slot.code);
+  if (slot.ok === false) return refusal(slot.error, slot.code, slot.setting);
   if (slot.ok !== true) return malformed();
 
   const result = asResult(slot.result);
@@ -752,6 +794,8 @@ function asResult(value: unknown): WidgetResult | undefined {
     op?: unknown;
     total?: unknown;
     atLeast?: unknown;
+    totalByKind?: unknown;
+    window?: unknown;
     items?: unknown;
     fields?: unknown;
     buckets?: unknown;
@@ -765,7 +809,7 @@ function asResult(value: unknown): WidgetResult | undefined {
   if (result.op === "count") return asCount(result.total, result.atLeast);
 
   if (result.op === "list") {
-    return asList(result.items, result.fields, result.total, result.atLeast);
+    return asList(result);
   }
 
   if (result.op === "groupBy") {
@@ -793,28 +837,78 @@ function asResult(value: unknown): WidgetResult | undefined {
  * fails there rather than here -- the same shape as a count's `total`, one
  * level down.
  */
-function asList(
-  items: unknown,
-  fields: unknown,
-  total: unknown,
-  atLeast: unknown
-): WidgetResult | undefined {
+function asList({
+  items,
+  fields,
+  total,
+  atLeast,
+  totalByKind,
+  window,
+}: {
+  items?: unknown;
+  fields?: unknown;
+  total?: unknown;
+  atLeast?: unknown;
+  totalByKind?: unknown;
+  window?: unknown;
+}): WidgetResult | undefined {
   if (!Array.isArray(items)) return undefined;
   const rows: unknown[] = items;
   if (!rows.every(isObject)) return undefined;
   const described = asResultFields(fields);
-  // The list's whole count travels with its rows, so a card's "View all (N)" names the number
-  // the server counted. Kept only as a count can be: a whole number of at least zero; anything
-  // else is left out, and the card falls back to saying more exist as a floor.
-  const counted =
-    typeof total === "number" && Number.isInteger(total) && total >= 0;
+  // The list's whole count travels with its rows, so a card says the number the server counted
+  // (a list's "View all (N)", the Content card's subtitle). Kept only as a count can be: a whole
+  // number of at least zero; anything else is left out, and a card falls back to saying more
+  // exist as a floor. How it divides by kind is kept by the same rule, each part a count, or
+  // left out whole.
+  const counted = isCount(total);
+  const byKind = asCountsByKind(totalByKind);
+  // The span a source's rows were read within (the Continue card's trail window), so a card's
+  // empty text can name it; kept only as a whole number of days of at least one.
+  const span = asWindow(window);
   return {
     op: "list",
     items: rows,
     ...(described && { fields: described }),
     ...(counted && { total }),
     ...(counted && atLeast === true && { atLeast: true }),
+    ...(byKind && { totalByKind: byKind }),
+    ...(span && { window: span }),
   };
+}
+
+/** A list's `window` when it is `{ days }` with a whole number of days of at least one. */
+function asWindow(value: unknown): { days: number } | undefined {
+  if (!isObject(value)) return undefined;
+  const { days } = value as { days?: unknown };
+  return typeof days === "number" && Number.isInteger(days) && days >= 1
+    ? { days }
+    : undefined;
+}
+
+/** Whether `value` is a count: a whole number of at least zero. */
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * A list's `totalByKind` when it is a plain object of counts ({@link isCount}), each kind to
+ * its count; `undefined` for anything else, a single part that is not a count included, so a
+ * card never draws a part of a breakdown the server did not send. The rule core's display
+ * schema checks a declared widget's answer by (`LIST_DATA` in nextly's
+ * `domains/widgets/declaration/displays.ts`).
+ */
+function asCountsByKind(
+  value: unknown
+): Readonly<Record<string, number>> | undefined {
+  if (!isObject(value) || Array.isArray(value)) return undefined;
+  const counts: [string, number][] = [];
+  for (const [kind, count] of Object.entries(value)) {
+    if (!isCount(count)) return undefined;
+    counts.push([kind, count]);
+  }
+  // `fromEntries` defines each kind as the object's own data, a `__proto__` kind included.
+  return Object.fromEntries(counts);
 }
 
 /**
@@ -873,17 +967,30 @@ function malformed(): WidgetSlot {
  * failure -- refusing to show it would be a second, silent one -- so it falls
  * back rather than being discarded.
  */
-function refusal(error: unknown, code?: unknown): WidgetSlot {
+function refusal(
+  error: unknown,
+  code?: unknown,
+  setting?: unknown
+): WidgetSlot {
   const usable = typeof error === "string" && error.trim() !== "";
-  return {
-    ok: false,
-    error: usable ? error : MALFORMED_SLOT_ERROR,
-    // The one code the server sends for a source that is not available, kept so the card can
-    // say "Not available to you" rather than offering Retry for something that will not change.
-    // Only on a well-formed refusal: a slot missing its message is a broken answer that may
-    // recover, and the code would hide that behind a state that removes Retry.
-    ...(usable && code === "unavailable" && { code: "unavailable" as const }),
-  };
+  if (!usable) return { ok: false, error: MALFORMED_SLOT_ERROR };
+  // The codes the server sends for a card that is not a failure, each kept so the card says so
+  // rather than offering Retry for something a retry will not change: a source not available to
+  // the reader, a setting the card needs and lacks (naming it), and a widget not shown for them.
+  // Only on a well-formed refusal: a slot missing its message is a broken answer that may
+  // recover, and a code would hide that behind a state that removes Retry. So is a needs-setting
+  // that names no setting, which is read as the failure it then is.
+  if (code === "unavailable" || code === "not-shown") {
+    return { ok: false, error, code };
+  }
+  if (
+    code === "needs-setting" &&
+    typeof setting === "string" &&
+    setting.trim() !== ""
+  ) {
+    return { ok: false, error, code, setting };
+  }
+  return { ok: false, error };
 }
 
 /** One partition's answer as the cache holds it, filled in slot by slot while it streams. */
@@ -918,9 +1025,9 @@ interface PartitionAnswer {
 async function askPartition(
   partition: readonly WidgetQueryRequest[],
   queryClient: QueryClient,
-  queryKey: QueryKey,
-  signal: AbortSignal
+  ask: { queryKey: QueryKey; signal: AbortSignal; readAheadToken?: string }
 ): Promise<PartitionAnswer> {
+  const { queryKey, signal, readAheadToken } = ask;
   const sizes = sizesSent(partition);
   const applied = appliedSent(partition);
   const cellsApplied = cellsAppliedSent(partition);
@@ -984,6 +1091,10 @@ async function askPartition(
           positions.map(position => sentEntry(partition[position])),
           {
             signal,
+            // The token of the layout answer the dashboard is drawn from, the one this request's
+            // key carries: the server hands a card the answer that read worked out ahead under
+            // it, once, so this load is never handed another tab's.
+            ...(readAheadToken === undefined ? {} : { readAheadToken }),
             onSlots: arrived => {
               for (const { index, slot } of arrived) {
                 const position = positions[index];
@@ -1037,12 +1148,50 @@ function partitionRequests(
   return partitions;
 }
 
+/** The key of one partition's answer, before the load it is asked for. */
+function partitionKey(
+  partition: readonly WidgetQueryRequest[]
+): readonly unknown[] {
+  return [...WIDGET_QUERIES_KEY, partition.map(unsized)];
+}
+
+/**
+ * The latest answer held for the same partition under another load's token (or none), with when
+ * it was written: what a partition asked under a new token starts from, so its cards keep the
+ * numbers on screen while the new load's request runs, as a refetch keeps them under one key.
+ * Matched by the whole partition key, not by prefix: TanStack's partial match would take a
+ * partition that merely begins with this one's requests.
+ */
+function heldUnderAnotherLoad(
+  queryClient: QueryClient,
+  partition: readonly WidgetQueryRequest[]
+): { data: PartitionAnswer; at: number } | undefined {
+  const own = hashKey(partitionKey(partition));
+  let held: { data: PartitionAnswer; at: number } | undefined;
+  const entries = queryClient.getQueriesData<PartitionAnswer>({
+    queryKey: ["dashboard", "widget-queries"],
+  });
+  for (const [key, data] of entries) {
+    if (data === undefined || hashKey(key.slice(0, 3)) !== own) continue;
+    const at = queryClient.getQueryState(key)?.dataUpdatedAt ?? 0;
+    if (held === undefined || at > held.at) held = { data, at };
+  }
+  return held;
+}
+
 /**
  * Batches `queries` into as few requests as the endpoint allows and hands each
  * widget back its own slot.
+ *
+ * `readAheadToken` is the token of the layout answer the dashboard is drawn
+ * from, absent where there is none (or the batch is not a dashboard's own). It
+ * is part of each partition's key, so a layout answer with a new token asks the
+ * whole batch again, once, under that token, and the server can hand a card the
+ * answer that layout read worked out ahead for it; the same token asks nothing.
  */
 export function useWidgetQueries(
-  queries: WidgetQueryRequest[]
+  queries: WidgetQueryRequest[],
+  readAheadToken?: string
 ): UseWidgetQueriesResult {
   const partitions = useMemo(() => partitionRequests(queries), [queries]);
   const queryClient = useQueryClient();
@@ -1053,8 +1202,14 @@ export function useWidgetQueries(
       // for different widgets are different questions and must not share one cache entry;
       // TanStack hashes the array deterministically, so a re-render with an equal-but-new
       // array does not refetch. `sized` is left out so a change of tier is not a new question;
-      // see `WidgetQueryRequest.sized`.
-      queryKey: ["dashboard", "widget-queries", partition.map(unsized)],
+      // see `WidgetQueryRequest.sized`. Then the layout answer's token, when there is one: a new
+      // layout answer is a new load, whose cards the server may hand what it read ahead for it,
+      // so the batch is asked again under it, and a request that started under the token held
+      // before is not the one its cards are drawn from.
+      queryKey: [
+        ...partitionKey(partition),
+        ...(readAheadToken === undefined ? [] : [readAheadToken]),
+      ],
       // Built from this render's partition, and TanStack runs the latest observer's function,
       // so a refetch sends each card's CURRENT tier. The signal is TanStack's own, so a
       // dashboard the reader leaves stops reading, and the server gives up the batch.
@@ -1066,11 +1221,21 @@ export function useWidgetQueries(
         signal: AbortSignal;
       }): Promise<PartitionAnswer> => {
         try {
-          return await askPartition(partition, queryClient, queryKey, signal);
+          return await askPartition(partition, queryClient, {
+            queryKey,
+            signal,
+            ...(readAheadToken === undefined ? {} : { readAheadToken }),
+          });
         } catch (error) {
           return failedAsking(partition, error);
         }
       },
+      // Under a new token, the answer the partition held under the one before, with its time, so
+      // the cards keep their numbers and the freshness line while the new load is asked. Read
+      // when the new entry is made; never under the same token, which has its own answer.
+      initialData: () => heldUnderAnotherLoad(queryClient, partition)?.data,
+      initialDataUpdatedAt: () =>
+        heldUnderAnotherLoad(queryClient, partition)?.at,
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
       retry: 2,
@@ -1181,6 +1346,7 @@ export function useWidgetQueries(
   });
 
   const settledAt = results.map(answer => answer.dataUpdatedAt);
+  const answeredAtFor = usePartitionAnswerTimes(partitions, settledAt);
 
   // Stable while the sizes are, so a caller keyed on it does not run again on every render.
   const sizesKey = JSON.stringify(fetchedSizes);
@@ -1234,10 +1400,35 @@ export function useWidgetQueries(
       settledAt.length > 0 && settledAt.every(at => at > 0)
         ? new Date(Math.min(...settledAt))
         : null,
+    answeredAtFor,
     fetchedSizeFor,
     fetchedAppliedFor,
     fetchedCellsAppliedFor,
   };
+}
+
+/**
+ * Each card's own request's answer time (`UseWidgetQueriesResult.answeredAtFor`), from the
+ * partitions and each one's `dataUpdatedAt`, which is 0 until it has answered once. Stable while
+ * those times and the cards in each partition are, so a caller keyed on it does not run again on
+ * every render.
+ */
+function usePartitionAnswerTimes(
+  partitions: readonly (readonly WidgetQueryRequest[])[],
+  settledAt: readonly number[]
+): (placementId: string) => Date | null {
+  const timesKey = JSON.stringify(
+    partitions.flatMap((partition, index) =>
+      partition.map(entry => [entry.placementId, settledAt[index] ?? 0])
+    )
+  );
+  return useMemo(() => {
+    const times = new Map(JSON.parse(timesKey) as [string, number][]);
+    return (placementId: string): Date | null => {
+      const at = times.get(placementId) ?? 0;
+      return at > 0 ? new Date(at) : null;
+    };
+  }, [timesKey]);
 }
 
 /**
@@ -1337,14 +1528,15 @@ function sizesSent(
 }
 
 /**
- * A request as the cache keys it: everything but the sizing and the settings it is sent with.
+ * A request as the cache keys it: everything but the sizing (`sized`, `cardSize`) and the settings
+ * it is sent with.
  * Named field by field, so a field added to the request is a decision about the key rather than
  * an accident; TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as
  * before.
  */
 function unsized(
   request: WidgetQueryRequest
-): Omit<WidgetQueryRequest, "sized" | "applied" | "undrawn"> {
+): Omit<WidgetQueryRequest, "sized" | "applied" | "undrawn" | "cardSize"> {
   return {
     placementId: request.placementId,
     cellKey: request.cellKey,

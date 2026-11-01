@@ -10,6 +10,7 @@ import {
   overrideWidget,
   registerDeclaredDefinition,
   registerWidget,
+  type WidgetPatch,
 } from "../registry";
 
 const def = (
@@ -53,6 +54,22 @@ describe("widget registry", () => {
 
   it("validates at registration", () => {
     expect(() => registerWidget(def("nonamespace"))).toThrow(/namespace\/name/);
+  });
+
+  it("refuses an id in a retired namespace, saying what replaced it, and keeps none", () => {
+    // 🔴 Core no longer makes a card per collection or per Single. One
+    // registered there would be offered, then refused by every layout write
+    // and dropped by every read, so the registry refuses it at startup.
+    expect(() => registerWidget(def("collection/x-count"))).toThrow(
+      'Widget "collection/x-count" cannot be registered: "collection/x-count" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.'
+    );
+    expect(() => registerWidget(def("single/about-card"))).toThrow(
+      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`
+    );
+    expect(listWidgets()).toEqual([]);
+    // The control: the same definition outside those namespaces registers.
+    registerWidget(def("acme/x-count"));
+    expect(listWidgets().map(w => w.id)).toEqual(["acme/x-count"]);
   });
 
   it("lets a plugin replace a core widget wholesale", () => {
@@ -200,6 +217,47 @@ describe("the doors a widget whose data core builds may come through", () => {
     expect(() => registerWidget(spread)).toThrow(/with serverData/);
   });
 
+  it("is the only door an owner comes in by: a public one refuses a definition naming one", () => {
+    const owned = {
+      ...def("acme/owned"),
+      owner: 'plugin "@acme/shop"',
+    } as unknown as WidgetDefinition;
+    expect(() => registerWidget(owned)).toThrow(
+      /registerWidget\(\) with owner/
+    );
+    expect(getWidget("acme/owned")).toBeUndefined();
+    expect(() => overrideWidget("acme/owned", owned)).toThrow(
+      /overrideWidget\(\) with owner/
+    );
+  });
+
+  it("is refused on a patch too, which is spread whole into the stored definition", () => {
+    registerWidget(def("acme/patched"));
+    for (const field of ["owner", "serverData"]) {
+      const patch = {
+        [field]: 'plugin "@acme/other"',
+      } as unknown as WidgetPatch;
+      expect(() => extendWidget("acme/patched", patch)).toThrow(
+        new RegExp(`extendWidget\\(\\) with ${field}`)
+      );
+    }
+    expect(getWidget("acme/patched")).not.toHaveProperty("owner");
+    expect(getWidget("acme/patched")?.serverData).toBeUndefined();
+  });
+
+  it("is refused on a patch that carries the key with no value, which the spread would still write", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    for (const field of ["owner", "serverData"]) {
+      const patch = { [field]: undefined } as unknown as WidgetPatch;
+      expect(() => extendWidget("acme/orders", patch)).toThrow(
+        new RegExp(`extendWidget\\(\\) with ${field}`)
+      );
+    }
+    // Still built on the server: an `undefined` written over the flag would
+    // make it a card the admin draws without asking for its data.
+    expect(getWidget("acme/orders")?.serverData).toBe(true);
+  });
+
   it("cannot be replaced, since its card is answered from its declaration", () => {
     registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
     expect(() => overrideWidget("acme/orders", def("acme/orders"))).toThrow(
@@ -210,6 +268,32 @@ describe("the doors a widget whose data core builds may come through", () => {
     expect(() =>
       overrideWidget("acme/orders", declared("acme/orders"))
     ).toThrow(/overrideWidget\(\) with serverData/);
+  });
+
+  it("takes a setting's own editor through core's door alone", () => {
+    const settings: WidgetDefinition["settings"] = [
+      {
+        name: "goal",
+        label: "Goal",
+        type: "number",
+        editor: { component: "@acme/goals/admin#GoalEditor" },
+      },
+    ];
+    // A declared widget's editor joins the generated component map, so it is kept.
+    registerDeclaredDefinition(
+      { ...declared("acme/goal"), settings },
+      "plugin @acme/goals"
+    );
+    expect(getWidget("acme/goal")?.settings?.[0]?.editor).toEqual({
+      component: "@acme/goals/admin#GoalEditor",
+    });
+
+    // The same setting through the public door is refused at startup, naming
+    // the widget and the setting: nothing there would ever register its editor.
+    expect(() => registerWidget(def("acme/legacy-goal", { settings }))).toThrow(
+      /acme\/legacy-goal: setting "goal" declares an editor: custom setting editors need a defineWidget declaration/
+    );
+    expect(getWidget("acme/legacy-goal")).toBeUndefined();
   });
 
   it("cannot be handed a query by a patch", () => {

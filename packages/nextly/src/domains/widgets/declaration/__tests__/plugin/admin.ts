@@ -26,7 +26,7 @@ export function RevenueCard({
 }
 
 export function UnpaidCard({ data }: WidgetProps<typeof unpaidCount>) {
-  return data.atLeast === true ? `${data.total}+` : `${data.total}`;
+  return `${data.total}`;
 }
 
 /**

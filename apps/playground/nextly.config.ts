@@ -25,7 +25,8 @@
 
 import { formBuilder } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
-import { defineConfig } from "nextly/config";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+import { defineCollection, defineConfig, text } from "nextly/config";
 
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
@@ -37,9 +38,11 @@ import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { TranslatedPages } from "./src/collections/translated-pages";
 import { TranslatorNotes } from "./src/collections/translator-notes";
+import { siteNotesWidget } from "./src/dashboard/site-notes-widget";
 import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
+import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
@@ -53,6 +56,32 @@ import { SiteSettings } from "./src/singles/site-settings";
 // Set by e2e/playwright.config.ts for the suite's own server. Compared to
 // "1" rather than checked for presence so an empty value reads as off.
 const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
+
+/**
+ * First-party plugins this playground registers only when asked, by name, in
+ * a comma-separated `NEXTLY_PLAYGROUND_PLUGINS` (`seo`). Off by default: each
+ * one adds fields, routes or dashboard cards that a contributor's daily
+ * `pnpm dev:app` and every other browser spec would otherwise meet.
+ * `e2e/playwright.config.ts` names the ones the suite's own server runs with.
+ */
+const playgroundPlugins = new Set(
+  (process.env.NEXTLY_PLAYGROUND_PLUGINS ?? "")
+    .split(",")
+    .map(name => name.trim())
+    .filter(name => name !== "")
+);
+const seoPluginEnabled = playgroundPlugins.has("seo");
+
+/**
+ * The one collection the SEO plugin extends here, registered with it. Its own
+ * collection rather than Posts, so the `seo` group the plugin adds reaches no
+ * entry form, list or count another spec reads.
+ */
+const SeoPages = defineCollection({
+  slug: "seo-pages",
+  labels: { singular: "SEO page", plural: "SEO pages" },
+  fields: [text({ name: "title", label: "Title", required: true })],
+});
 
 export default defineConfig({
   admin: {
@@ -79,6 +108,14 @@ export default defineConfig({
       email: "dev@nextly.local",
       password: "DevPassword123!",
     },
+    // A widget the site declares itself, offered in the Add panel like a
+    // plugin's, for site-widget.spec.ts.
+    dashboard: { widgets: [siteNotesWidget] },
+    // The environment badge in the dashboard's header, only when a contributor
+    // names one: never guessed, as an app is told to configure it.
+    ...(process.env.NEXTLY_ENV_LABEL
+      ? { environment: { label: process.env.NEXTLY_ENV_LABEL } }
+      : {}),
   },
   localization: {
     locales: [
@@ -119,6 +156,8 @@ export default defineConfig({
     // in another needs a rule that answers by language; registered for the
     // e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatorNotes] : []),
+    // The collection the SEO plugin extends, by the plugin's own switch.
+    ...(seoPluginEnabled ? [SeoPages] : []),
   ],
   // Announcement is the localized single WITH the draft/published lifecycle,
   // registered for the same reason Authors is: so the per-language publish
@@ -181,6 +220,16 @@ export default defineConfig({
     // named as test fixtures. Moves to the dev-only widget preview page once
     // there is one.
     widgetKitFixturePlugin,
+    // Always on, for the same reason: the blocks it contributes reach the
+    // editor through the committed component map. Offered only in the Add
+    // panel, named as test fixtures, for plugin-blocks.spec.ts.
+    blockFixturePlugin,
+    // The SEO plugin as it ships, for the browser test of its dashboard card
+    // and its Needs attention line, by the switch above. No sitemap: a public
+    // route is not what that test is about.
+    ...(seoPluginEnabled
+      ? [seoPlugin({ collections: [SeoPages.slug], sitemap: false })]
+      : []),
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.
     ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"

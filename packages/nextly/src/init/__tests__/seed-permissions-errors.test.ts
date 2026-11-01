@@ -16,7 +16,10 @@ const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
 const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
+const recordPublicReadNotice = vi.fn();
+const withdrawUndeclaredPluginGrants = vi.fn();
 const seedPluginRoles = vi.fn();
+const rolesHoldingRetiredManage = vi.fn();
 
 /** The registered adapter: one object per registration of the services. */
 let adapter = { getCapabilities: () => ({ dialect: "postgresql" }) };
@@ -53,9 +56,15 @@ vi.mock("../../domains/auth/services/public-role", () => ({
   seedPublicRole,
 }));
 vi.mock("../../domains/auth/services/public-read-grant", () => ({
+  recordPublicReadNotice,
   seedPublicReadGrants,
+  withdrawUndeclaredPluginGrants,
 }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
+vi.mock("../../domains/auth/retired-manage", () => ({
+  rolesHoldingRetiredManage,
+  formatRetiredManageWarning: () => "roles holding a retired permission",
+}));
 
 const { awaitBootSeeding, holdBootSeeding, seedPermissionsAndRolePresets } =
   await import("../seed-permissions");
@@ -79,19 +88,90 @@ beforeEach(() => {
   seedRolePresets.mockResolvedValue(undefined);
   seedPublicRole.mockResolvedValue({ made: true });
   seedPublicReadGrants.mockResolvedValue(undefined);
+  recordPublicReadNotice.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
+  rolesHoldingRetiredManage.mockResolvedValue([]);
 });
 
 describe("seedPermissionsAndRolePresets", () => {
+  it("records whether the site is told which reads visitors lost before seeding anything", async () => {
+    // Decided by whether an earlier boot made the preset roles, so it must be
+    // read before this boot makes them.
+    await seedPermissionsAndRolePresets();
+
+    const [recorded] = recordPublicReadNotice.mock.invocationCallOrder;
+    expect(recorded).toBeLessThan(
+      seedSystemPermissions.mock.invocationCallOrder[0]
+    );
+    expect(recorded).toBeLessThan(seedRolePresets.mock.invocationCallOrder[0]);
+  });
+
+  it("makes no Public role until the notice's record is written, and tries again", async () => {
+    // Made without the record, the next boot would find the role made and
+    // record the site as not due, so it would never be told.
+    vi.useFakeTimers();
+    try {
+      recordPublicReadNotice.mockRejectedValueOnce(
+        new Error("connection reset")
+      );
+      await seedPermissionsAndRolePresets();
+      expect(seedPublicRole).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0]?.[0]).toContain(
+        "Seeding public read notice failed"
+      );
+      // POPULATION CONTROL: the rest of the seeding still runs.
+      expect(seedRolePresets).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await awaitBootSeeding();
+
+      expect(recordPublicReadNotice).toHaveBeenCalledTimes(2);
+      expect(seedPublicRole).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps quiet about a table that does not exist yet, in every step", async () => {
+    recordPublicReadNotice.mockRejectedValue(missingTable());
     seedSystemPermissions.mockRejectedValue(missingTable());
     seedRolePresets.mockRejectedValue(missingTable());
     seedPublicRole.mockRejectedValue(missingTable());
     seedPluginRoles.mockRejectedValue(missingTable());
+    rolesHoldingRetiredManage.mockRejectedValue(missingTable());
 
     await expect(seedPermissionsAndRolePresets()).resolves.toBeUndefined();
 
     expect(error).not.toHaveBeenCalled();
+  });
+
+  it("goes on without the retired manage check when its read stalls", async () => {
+    // A read that has not answered holds the boot only for the check's bound.
+    // It answers in `finally`, so an unbounded check fails here rather than
+    // leaving the seeding, and every later test that joins it, waiting.
+    vi.useFakeTimers();
+    let answer: () => void = () => {};
+    rolesHoldingRetiredManage.mockReturnValue(
+      new Promise(resolve => {
+        answer = () => resolve([]);
+      })
+    );
+    let finished = false;
+    const seeding = seedPermissionsAndRolePresets().then(() => {
+      finished = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1_900);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(finished).toBe(true);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      answer();
+      await seeding;
+      vi.useRealTimers();
+    }
   });
 
   it("logs any other failure as an error naming the step, and still seeds the presets", async () => {
@@ -196,11 +276,11 @@ describe("seedPermissionsAndRolePresets", () => {
     ]);
     // The role visitors are judged by is made whatever the steps before it did.
     expect(seedPublicRole).toHaveBeenCalled();
-    // Its reads wait for it.
+    // Its grants wait for it.
     expect(seedPublicReadGrants).not.toHaveBeenCalled();
   });
 
-  it("logs a failure of the Public role's reads the same way, and goes on", async () => {
+  it("logs a failure of the Public role's grants the same way, and goes on", async () => {
     seedPublicReadGrants.mockRejectedValue(new Error("connection reset"));
 
     await seedPermissionsAndRolePresets();
@@ -208,7 +288,7 @@ describe("seedPermissionsAndRolePresets", () => {
     // The failure logged is the grant step's own.
     expect(seedPublicReadGrants).toHaveBeenCalledTimes(1);
     expect(error.mock.calls.map(call => String(call[0]))).toEqual([
-      expect.stringContaining("Seeding public role's reads failed"),
+      expect.stringContaining("Seeding public role's grants failed"),
     ]);
     expect(seedPluginRoles).toHaveBeenCalled();
   });
@@ -279,6 +359,15 @@ describe("seedPermissionsAndRolePresets", () => {
 
     expect(seedPublicRole).toHaveBeenCalled();
     expect(seedPublicReadGrants).not.toHaveBeenCalled();
+    // A plugin grant no enabled plugin declares is still taken back.
+    expect(withdrawUndeclaredPluginGrants).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes back undeclared plugin grants within the whole grant step when every permission is seeded", async () => {
+    await seedPermissionsAndRolePresets();
+
+    expect(seedPublicReadGrants).toHaveBeenCalledTimes(1);
+    expect(withdrawUndeclaredPluginGrants).not.toHaveBeenCalled();
   });
 
   it("writes nothing during a production build", async () => {

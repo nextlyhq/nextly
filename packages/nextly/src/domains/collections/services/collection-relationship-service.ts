@@ -1,9 +1,15 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { inArray, sql } from "drizzle-orm";
+import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { relatedRowReads } from "../../../auth/access/population-read";
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
+import {
+  readOf,
+  type FilteredRead,
+  type RuleFilter,
+} from "../../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
@@ -76,6 +82,12 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  localizedFilterContext,
+  matchColumn,
+  ruleFilterCondition,
+  type DynamicSchema,
+} from "../query/filter-condition";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -121,6 +133,25 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  * Maximum allowed depth to prevent performance issues.
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
+
+/**
+ * The two link columns of a many-to-many junction. Every junction read and
+ * write asks this one place, so the columns the runtime queries are the
+ * columns the DDL made. The DDL names the source column from the source's
+ * TABLE (`dc_my_posts` gives `my_posts_id`), so a hyphen in the source slug is
+ * written as an underscore here too; a hyphen-free slug names the same column
+ * it always did. The DDL takes the target column from the target slug as
+ * written, so that side stays as written.
+ */
+export function junctionLinkColumns(
+  sourceCollectionName: string,
+  targetCollectionName: string
+): { sourceColumn: string; targetColumn: string } {
+  return {
+    sourceColumn: `${sourceCollectionName.replace(/-/g, "_")}_id`,
+    targetColumn: `${targetCollectionName}_id`,
+  };
+}
 
 /**
  * The depth an expansion runs to for the depth a read asked for: absent means
@@ -396,9 +427,12 @@ function trustsTarget(
 }
 
 /**
- * Options for relationship expansion.
+ * Options for relationship expansion. The match-column cache is carried by a
+ * nested hop as the verdict map is, and declared once, on the context it
+ * belongs to.
  */
-export interface RelationshipExpansionOptions {
+export interface RelationshipExpansionOptions
+  extends Pick<RelatedRowReadContext, "targetRuleMatches" | "localeChain"> {
   /**
    * Maximum depth to expand relationships (0-5).
    * - 0: No expansion, return IDs only
@@ -498,7 +532,7 @@ export interface RelationshipExpansionOptions {
    *
    * @internal
    */
-  targetVerdicts?: Map<string, Promise<boolean>>;
+  targetVerdicts?: Map<string, Promise<FilteredRead>>;
 
   /**
    * The caller's authenticated scope, when one applies.
@@ -773,6 +807,7 @@ function relatedRowAccessOf(
     trusted: assumedBound(options.trusted),
     authenticatedScope: options.authenticatedScope,
     locale: options.locale,
+    localeChain: options.localeChain,
     status: options.status,
     withheldByAccess: options.withheldByAccess,
     // One per expansion, so a relationship holding many references reads its
@@ -790,6 +825,8 @@ function relatedRowAccessOf(
     // And the access verdicts, likewise: the caller is the same on every hop,
     // so a target already judged for it is not asked again.
     targetVerdicts: options.targetVerdicts ?? new Map(),
+    // And the match columns, built from those verdicts' filters.
+    targetRuleMatches: options.targetRuleMatches ?? new Map(),
   };
 }
 
@@ -1411,6 +1448,13 @@ type TargetTableColumns = {
 };
 
 /**
+ * The key a related row's fetch selects the match of the target's read rule
+ * filter under, beside the row's own columns. A field name cannot begin with
+ * `$`, so it names no column.
+ */
+const RULE_MATCH = "$ruleMatch";
+
+/**
  * Strip a related row to its identity (`id` and `label`), in place: the answer
  * for a row whose schema cannot be resolved, which leaves no field to judge.
  */
@@ -1577,6 +1621,8 @@ export class CollectionRelationshipService extends BaseService {
       // The LIFECYCLE question, not the trust question — see widensLifecycle.
       overrideAccess: widensLifecycle(access),
       explicit: access.status,
+      // A visitor's expansion sees published rows only, as its own read does.
+      publishedOnly: readsAsVisitor(access),
     });
     return statusFilter;
   }
@@ -1596,7 +1642,8 @@ export class CollectionRelationshipService extends BaseService {
     // refused the whole target is not owed the difference between a row that
     // exists and one that does not, and a completeness check reads the
     // absence as deliberate either way.
-    if (!(await this.callerMayReadTarget(targetCollection, access))) {
+    const read = await this.callerMayReadTarget(targetCollection, access);
+    if (!read.allowed && read.filter === undefined) {
       this.recordWithheldIds(targetCollection, ids, access);
       return [];
     }
@@ -1616,14 +1663,45 @@ export class CollectionRelationshipService extends BaseService {
       access
     );
 
-    const entries = (await this.db
-      .select()
-      .from(schema)
-      .where(inArray(schema.id, ids))) as Record<string, unknown>[];
+    // A read rule that answered a filter shows the caller the rows it
+    // matches. Whether each row matches is selected as a column of this same
+    // fetch rather than added to its WHERE, so a row the filter does not
+    // match is still fetched and recorded below as withheld on purpose, and
+    // an id no row has stays unrecorded, as a dangling reference.
+    const filter = read.filter;
+    const match =
+      filter === undefined
+        ? undefined
+        : await this.memoizedRuleMatch(
+            access,
+            targetCollection,
+            statusFilter,
+            () =>
+              this.ruleMatch(
+                targetCollection,
+                filter,
+                schema,
+                statusFilter,
+                access
+              )
+          );
+    const entries = (await (
+      match === undefined
+        ? this.db.select().from(schema)
+        : this.db
+            .select({ ...getColumns(schema), [RULE_MATCH]: match })
+            .from(schema)
+    ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
-    const fetched = entries.map(entry =>
-      convertTimestampsToCamelCase({ ...entry })
-    );
+    const matching = new Set<Record<string, unknown>>();
+    const fetched = entries.map(entry => {
+      // The match is taken off before the row goes further, so it is never
+      // redacted, labelled or returned as one of the row's fields.
+      const { [RULE_MATCH]: matches, ...columns } = entry;
+      const row = convertTimestampsToCamelCase(columns);
+      if (match === undefined || matches === 1) matching.add(row);
+      return row;
+    });
     // Filtered here rather than in the query above so the rows this removes are
     // recorded as deliberately withheld. Narrowing the fetch would drop them
     // before anything could distinguish "exists, wrong lifecycle" from "does
@@ -1646,7 +1724,7 @@ export class CollectionRelationshipService extends BaseService {
     );
     const revealed = new Set(decisions.reveal);
     const hidden = new Set(decisions.hide);
-    const rows = statusFilter
+    const lifecycleRows = statusFilter
       ? fetched.filter(row => {
           const id = typeof row.id === "string" ? row.id : null;
           // Withdrawn wins over the stored status: the row still says
@@ -1660,6 +1738,7 @@ export class CollectionRelationshipService extends BaseService {
           );
         })
       : fetched;
+    const rows = lifecycleRows.filter(row => matching.has(row));
     this.recordWithheld(targetCollection, fetched, rows, access);
 
     // Redaction runs before any caller derives a label from a row: a label
@@ -1670,13 +1749,60 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Whether this caller may read the target collection at all — decided
-   * before its rows are queried, and once per expansion for a dynamic target.
+   * Whether each row of the target matches its read rule's `filter`, as a
+   * column to select: `1` for a row it matches, `0` for one it does not.
+   * Built in the language the read resolved to and under its Draft/Published
+   * filter, as a direct read of the target builds it. `undefined` for a
+   * filter that constrains nothing, which every row matches. A filter that
+   * cannot be built matches no row.
+   */
+  private async ruleMatch(
+    targetCollection: string,
+    filter: RuleFilter,
+    schema: DynamicSchema,
+    statusFilter: StatusFilter | null,
+    access: RelatedRowAccess
+  ): Promise<SQL<number> | undefined> {
+    // Every language the surrounding read falls back through, as a direct
+    // read of the target is judged in; else the one it resolved to.
+    const localeChain =
+      access.localeChain ?? (access.locale ? [access.locale] : null);
+    const companion = localeChain
+      ? await this.resolveTargetCompanion(targetCollection, access)
+      : null;
+    const condition = await ruleFilterCondition(
+      {
+        collectionName: targetCollection,
+        filter,
+        schema,
+        localizedCtx: localizedFilterContext(
+          companion,
+          localeChain,
+          schema,
+          statusFilter?.values
+        ),
+      },
+      // A rule's filter may not name a field inside a component, which the
+      // builder refuses before it looks for a component table, so it is not
+      // told where they are.
+      {
+        getCollection: name => this.collectionService.getCollection(name),
+        adapter: this.adapter,
+      },
+      this.logger
+    );
+    return condition === undefined ? undefined : matchColumn(condition);
+  }
+
+  /**
+   * Which rows of the target collection this caller may read: all, none, or
+   * those its read rule's filter matches — decided before its rows are
+   * queried, and once per expansion for a dynamic target.
    */
   private async callerMayReadTarget(
     targetCollection: string,
     access: RelatedRowAccess
-  ): Promise<boolean> {
+  ): Promise<FilteredRead> {
     // Deliberately NOT keyed on `enforceFieldAccess`. That flag asks whether a
     // related row's FIELDS should be redacted; this asks whether the caller may
     // see the row at all, and the two have different callers. A Single's
@@ -1685,9 +1811,9 @@ export class CollectionRelationshipService extends BaseService {
     // preliminary view has to withhold it too, or the rule approves a document
     // on evidence the response then removes and side effects run in between.
     if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
-      return true;
+      return readOf(true);
     }
-    if (trustsTarget(access, targetCollection)) return true;
+    if (trustsTarget(access, targetCollection)) return readOf(true);
     if (isSystemEntity(targetCollection)) {
       // A system entity carries no stored collection rules, so the dynamic
       // path below has nothing to evaluate. A direct read of `users` requires
@@ -1705,17 +1831,21 @@ export class CollectionRelationshipService extends BaseService {
       // field otherwise, each a permission lookup.
       return this.memoizedVerdict(access, targetCollection, async () => {
         if (boundRefuses(access, targetCollection)) {
-          return canReadSystemResource(
-            targetCollection.toLowerCase(),
-            callerId(access),
-            access.authenticatedScope
+          return readOf(
+            await canReadSystemResource(
+              targetCollection.toLowerCase(),
+              callerId(access),
+              access.authenticatedScope
+            )
           );
         }
         // A read holding no bypass is asked what its direct read asks.
         // Answered "yes" for everyone before, which let a key or a person
         // refused `users` by name read a post's author through the
         // relationship.
-        return identifiedCallerMayRead(access, targetCollection.toLowerCase());
+        return readOf(
+          await identifiedCallerMayRead(access, targetCollection.toLowerCase())
+        );
       });
     }
 
@@ -1824,7 +1954,7 @@ export class CollectionRelationshipService extends BaseService {
     user: UserContext | undefined,
     targetCollection: string,
     access: RelatedRowAccess
-  ): Promise<boolean> {
+  ): Promise<FilteredRead> {
     return this.memoizedVerdict(access, targetCollection, () =>
       relatedRowReads(
         targetCollection,
@@ -1836,6 +1966,10 @@ export class CollectionRelationshipService extends BaseService {
           },
           scope: access.authenticatedScope,
           principal: currentPrincipal(),
+          // Without the access-control service, the Public role as this
+          // service's own database records it, as its direct gate reads it.
+          visitorWithoutService: () =>
+            this.resolveAccessService().ownDatabaseVisitor(),
         },
         container.has("rbacAccessControlService")
           ? container.get<RBACAccessControlService>("rbacAccessControlService")
@@ -1852,12 +1986,36 @@ export class CollectionRelationshipService extends BaseService {
   private memoizedVerdict(
     access: RelatedRowAccess,
     targetCollection: string,
-    decide: () => Promise<boolean>
-  ): Promise<boolean> {
+    decide: () => Promise<FilteredRead>
+  ): Promise<FilteredRead> {
     const cached = access.targetVerdicts?.get(targetCollection);
     if (cached) return cached;
     const pending = decide();
     access.targetVerdicts?.set(targetCollection, pending);
+    return pending;
+  }
+
+  /**
+   * The match column this expansion already built for the target, or
+   * `build`'s, kept for the rest of the expansion. The target's filter is its
+   * kept verdict's, fixed for the expansion, so the column depends only on the
+   * target, the status filter and the language it is built under.
+   */
+  private memoizedRuleMatch(
+    access: RelatedRowAccess,
+    targetCollection: string,
+    statusFilter: StatusFilter | null,
+    build: () => Promise<SQL<number> | undefined>
+  ): Promise<SQL<number> | undefined> {
+    const key = JSON.stringify([
+      targetCollection,
+      statusFilter?.values ?? null,
+      access.localeChain ?? access.locale ?? null,
+    ]);
+    const cached = access.targetRuleMatches?.get(key);
+    if (cached) return cached;
+    const pending = build();
+    access.targetRuleMatches?.set(key, pending);
     return pending;
   }
 
@@ -3952,6 +4110,8 @@ export class CollectionRelationshipService extends BaseService {
             // seeing the anonymous bearer who is actually asking.
             user: access.fieldAccessUser ?? access.user,
             overrideAccess: false,
+            // A visitor is handed the Public role the row gate above read.
+            visitor: this.resolveAccessService().fieldRuleVisitor,
           },
           redactions
         );
@@ -3980,7 +4140,12 @@ export class CollectionRelationshipService extends BaseService {
       // A scoped API key's own grants, never its owner's.
       state = {
         passes: new Map(),
-        grants: callerAccessGrants(user, access.authenticatedScope),
+        grants: callerAccessGrants(
+          user,
+          access.authenticatedScope,
+          undefined,
+          this.resolveAccessService().fieldRuleVisitor
+        ),
         redactions: new WeakMap(),
       };
       relatedFieldGroupState.set(access, state);
@@ -4170,8 +4335,12 @@ export class CollectionRelationshipService extends BaseService {
       targetCollectionName,
       field
     );
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const { sourceColumn, targetColumn } = junctionLinkColumns(
+      sourceCollectionName,
+      targetCollectionName
+    );
+    const sourceIdCol = sql.identifier(sourceColumn);
+    const targetIdCol = sql.identifier(targetColumn);
     const junctionQuery = sql`
       SELECT ${sourceIdCol} as source_id, ${targetIdCol} as target_id
       FROM ${sql.identifier(junctionTableName)}
@@ -4262,8 +4431,12 @@ export class CollectionRelationshipService extends BaseService {
 
     try {
       // Query junction table to get related IDs using sql tagged template
-      const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-      const targetIdCol = sql.identifier(targetCollectionName + "_id");
+      const { sourceColumn, targetColumn } = junctionLinkColumns(
+        sourceCollectionName,
+        targetCollectionName
+      );
+      const sourceIdCol = sql.identifier(sourceColumn);
+      const targetIdCol = sql.identifier(targetColumn);
 
       const junctionQuery = sql`
         SELECT ${targetIdCol} as target_id
@@ -4399,8 +4572,12 @@ export class CollectionRelationshipService extends BaseService {
       throw error;
     }
 
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const { sourceColumn, targetColumn } = junctionLinkColumns(
+      sourceCollectionName,
+      targetCollectionName
+    );
+    const sourceIdCol = sql.identifier(sourceColumn);
+    const targetIdCol = sql.identifier(targetColumn);
 
     // Insert each relationship. A genuine failure (for example a foreign-key
     // violation from a bad target id) is allowed to propagate: junction writes
@@ -4474,7 +4651,10 @@ export class CollectionRelationshipService extends BaseService {
       field
     );
 
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
+    const sourceIdCol = sql.identifier(
+      junctionLinkColumns(sourceCollectionName, targetCollectionName)
+        .sourceColumn
+    );
     const query = sql`
       DELETE FROM ${sql.identifier(junctionTableName)}
       WHERE ${sourceIdCol} = ${sourceEntryId}
@@ -4500,8 +4680,12 @@ export class CollectionRelationshipService extends BaseService {
       return field.options.junctionTable;
     }
 
-    // Auto-generate junction table name (same logic as in dynamic-collections.ts)
-    const sourceTableName = `dc_${sourceCollectionName}`;
+    // Auto-generate the junction name as the DDL does. The DDL names it from
+    // the source's TABLE, where a hyphen in the slug is an underscore, so the
+    // source side resolves through `getTableName`; a hyphen-free slug gives
+    // the same `dc_<slug>` as before. The DDL spells the target as
+    // `dc_<target slug>` as written, so the target side stays as written.
+    const sourceTableName = getTableName(sourceCollectionName);
     const targetTableName = `dc_${targetCollectionName}`;
     const tables = [sourceTableName, targetTableName].sort();
     return `${tables[0]}_${tables[1]}_${field.name}`;

@@ -3,7 +3,9 @@
  * and drawn by their own components, so e2e/tests/plugin-widget-kit.spec.ts can
  * prove a plugin card built only from `@nextlyhq/plugin-sdk/admin`'s widget kit
  * draws beside core's in light and dark, and that a component throwing while it
- * draws is that card's error alone.
+ * draws is that card's error alone. Beside them, widgets drawn by core displays:
+ * one whose data function throws, one its `shows` leaves out, and the layout
+ * cases the other dashboard specs need.
  *
  * Always registered, unlike the gated fixtures: a widget drawn by its own
  * component must be in the committed component map, which is generated with
@@ -13,12 +15,14 @@
  */
 // Through the plugin SDK, as a plugin imports them, so this fixture proves
 // the SDK's own exports.
-import { definePlugin, defineWidget } from "@nextlyhq/plugin-sdk";
+import { definePlugin, defineWidget, setting } from "@nextlyhq/plugin-sdk";
 
 /** The two components, as the generated component map imports them. */
 const KIT_CARD_COMPONENT = "@/plugins/widget-kit-fixture/admin#KitCard";
 const THROWING_CARD_COMPONENT =
   "@/plugins/widget-kit-fixture/admin#ThrowingCard";
+const UNLABELLED_CONTROL_COMPONENT =
+  "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard";
 
 /** A card built only from the widget kit: a figure and a chart of groups. */
 export const kitCardWidget = defineWidget({
@@ -37,6 +41,20 @@ export const kitCardWidget = defineWidget({
   }),
   view: { component: KIT_CARD_COMPONENT },
   isEmpty: data => data.groups.length === 0,
+  // What the development preview page draws its ready state from, so the
+  // widget-preview spec finds a plugin widget drawn from a case.
+  preview: [
+    {
+      name: "Busy week",
+      data: {
+        total: 4321,
+        groups: [
+          { key: "open", label: "Open", count: 12, value: "open" },
+          { key: "paid", label: "Paid", count: 30, value: "paid" },
+        ],
+      },
+    },
+  ],
 });
 
 /** A card whose component throws while it draws. */
@@ -85,6 +103,79 @@ const fullWidthWidget = defineWidget({
   size: { default: { w: 12, h: 2 }, min: { w: 12, h: 2 } },
   load: async () => ({ total: 12 }),
   view: "figure",
+  // A core view's case, for the preview page: drawn by the figure display.
+  preview: [{ name: "Twelve", data: { total: 12 } }],
+});
+
+/**
+ * A card whose component draws a text input with no label, planted so the
+ * widget-preview spec can prove the preview page's accessibility check fails
+ * on a serious or critical finding. Never placed on a dashboard; met only in
+ * the add panel and on the development preview page, named as a test fixture.
+ */
+export const unlabelledControlWidget = defineWidget({
+  id: "widget-kit-fixture/unlabelled-control",
+  title: "Test fixture: unlabelled control",
+  description:
+    "Exists for the e2e suite: draws a control with no label, which the accessibility check must refuse.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 2 }, min: { w: 6, h: 2 } },
+  load: async () => ({ query: "" }),
+  view: { component: UNLABELLED_CONTROL_COMPONENT },
+  isEmpty: () => false,
+  preview: [{ name: "Blank", data: { query: "" } }],
+});
+
+/**
+ * A card whose data function throws on the server, drawn by a core display, so the spec can prove
+ * that card shows its own error with Retry while the cards beside it draw. Its message names a
+ * customer, which must never reach the reader.
+ */
+const loadThrowsWidget = defineWidget({
+  id: "widget-kit-fixture/load-throws",
+  title: "Test fixture: failing data",
+  description:
+    "Exists for the e2e suite: its data function throws; the error stays in its own card.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 2 }, min: { w: 6, h: 2 } },
+  load: async (): Promise<{ total: number }> => {
+    throw new Error("the row for customer 42 could not be read");
+  },
+  view: "figure",
+});
+
+/**
+ * A card its widget never shows for anyone: off the dashboard at rest, and shown marked
+ * "Not shown for you right now" in customise mode, where it can still be removed.
+ */
+const notShownWidget = defineWidget({
+  id: "widget-kit-fixture/not-shown",
+  title: "Test fixture: not shown",
+  description:
+    "Exists for the e2e suite: its widget says it is not shown for this person.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 2 }, min: { w: 6, h: 2 } },
+  shows: () => false,
+  load: async () => ({ total: 7 }),
+  view: "figure",
+});
+
+/**
+ * A card whose one setting, its collection, has no starting value: until its reader picks one it
+ * answers that it needs it, and its empty state's button opens the card's settings to do so.
+ */
+const needsCollectionWidget = defineWidget({
+  id: "widget-kit-fixture/needs-collection",
+  title: "Test fixture: needs a collection",
+  description:
+    "Exists for the e2e suite: asks for its collection before it shows anything.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 2 }, min: { w: 6, h: 2 } },
+  settings: { collection: setting.collection({ label: "Collection" }) },
+  load: async ({ settings, services }) => ({
+    total: await services.count(settings.collection),
+  }),
+  view: "figure",
 });
 
 export const widgetKitFixturePlugin = definePlugin({
@@ -98,6 +189,10 @@ export const widgetKitFixturePlugin = definePlugin({
         throwingCardWidget,
         hidesWhenEmptyWidget,
         fullWidthWidget,
+        loadThrowsWidget,
+        notShownWidget,
+        needsCollectionWidget,
+        unlabelledControlWidget,
       ],
     },
   },

@@ -18,8 +18,9 @@ const count = (total: number): WidgetSlot => ({
   result: { op: "count", total },
 });
 
+// A stats card as a plugin declares one; its id is only a name here.
 const card: DashboardWidget = {
-  id: "collection/posts-stats",
+  id: "acme/posts-stats",
   title: "posts health",
   archetype: "stats",
   size: gridBounds(4),

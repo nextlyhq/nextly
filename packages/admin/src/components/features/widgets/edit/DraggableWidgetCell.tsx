@@ -43,8 +43,8 @@ import {
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { CELL_PLACEMENT_ATTRIBUTE } from "./drag/cell-placement";
 import { handleLabel } from "./drag/drag-messages";
-import { CELL_PLACEMENT_ATTRIBUTE } from "./drag/useCardDrag";
 
 /** What the cell's handle does, while dragging is on. */
 export interface CellDrag {
@@ -103,6 +103,9 @@ export function DraggableWidgetCell({
   return (
     <div
       ref={setNodeRef}
+      // A place to land, focusable only programmatically: the header's summary
+      // sends focus to the card a part names.
+      tabIndex={-1}
       data-testid={testId}
       {...{ [CELL_PLACEMENT_ATTRIBUTE]: id }}
       data-highlighted={highlighted || undefined}
@@ -110,6 +113,7 @@ export function DraggableWidgetCell({
       style={style}
       className={cn(
         className,
+        "rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring",
         // Ringed in the primary colour, offset from the card so it reads in both schemes. It
         // fades in only where motion is welcome; with reduced motion it simply appears.
         highlighted &&

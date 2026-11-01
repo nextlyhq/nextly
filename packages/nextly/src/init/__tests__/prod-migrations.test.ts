@@ -129,29 +129,27 @@ describe("runProdMigrationsIfEnabled", () => {
   });
 
   /**
-   * `forceUnlock` deletes the Postgres lock ROW and returns immediately for
-   * every other dialect, so telling a MySQL operator to run it during an
-   * incident sends them to a no-op. MySQL's lock is session-scoped and dies
-   * with its connection, which makes restarting the holder the real recovery.
+   * The schema lock is a row on every dialect, renewed by its holder, so the
+   * recovery is the same everywhere: a holder that stopped lets it lapse, and
+   * `--force-unlock` clears it at once. Advice that differed by dialect would
+   * now be wrong on one of them.
    */
-  it("gives dialect-appropriate recovery guidance", async () => {
+  it("gives the same recovery guidance on every dialect", async () => {
     process.env.NODE_ENV = "production";
     const notRun = () => ({ applied: 0, coreChanged: false, ran: false });
 
     const pg = args({ migrateCore: vi.fn(async () => notRun()) });
-    await expect(runProdMigrationsIfEnabled(pg as never)).rejects.toMatchObject(
-      {
-        publicMessage: expect.stringContaining("--force-unlock"),
-      }
-    );
+    const pgErr = await runProdMigrationsIfEnabled(pg as never).catch(e => e);
 
     _resetBootMigrationsGateForTest();
 
     const my = args({ migrateCore: vi.fn(async () => notRun()) });
     my.adapter.dialect = "mysql";
-    const err = await runProdMigrationsIfEnabled(my as never).catch(e => e);
-    expect(err.publicMessage).not.toContain("--force-unlock");
-    expect(err.publicMessage).toContain("released when that connection ends");
+    const myErr = await runProdMigrationsIfEnabled(my as never).catch(e => e);
+
+    expect(pgErr.publicMessage).toContain("--force-unlock");
+    expect(pgErr.publicMessage).toContain("lapse on its own");
+    expect(myErr.publicMessage).toBe(pgErr.publicMessage);
   });
 
   /**
@@ -249,6 +247,17 @@ describe("runProdMigrationsIfEnabled", () => {
     await runProdMigrationsIfEnabled(a as never);
     expect(a.migrateCore).toHaveBeenCalledOnce();
     expect(a.migrateCore.mock.calls[0][0].lockMode).toBe("wait");
+  });
+
+  it("refuses a Schema Builder file with no snapshot, as nextly migrate does", async () => {
+    // The boot applies the same pending files the CLI does, so it asks for the
+    // same refusal: off, a production boot would apply a Builder-written file
+    // with no snapshot that the command refuses.
+    const a = args();
+    await runProdMigrationsIfEnabled(a as never);
+    expect(
+      a.migrateCore.mock.calls[0][0].refuseBuilderFilesWithoutSnapshot
+    ).toBe(true);
   });
 
   it("hands migrateCore a full logger (with .success) so runFileMigrations cannot crash on boot", async () => {

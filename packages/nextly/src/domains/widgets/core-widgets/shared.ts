@@ -6,15 +6,30 @@
 
 import {
   DENSITY_OPTIONS,
-  settings,
+  setting,
   type SettingDeclaration,
+  type WidgetFilter,
 } from "../declaration/setting-builders";
 import type { WidgetSetting } from "../definition";
-import type { AnyWidgetSetting } from "../settings";
+import { MAX_WIDGET_ROWS } from "../query-limits";
+import { WIDGET_TABS, type WidgetTab } from "../sources";
 
 /**
- * Recent activity's "Number of items": the one offer every card makes, from the
- * builder, named `limit` so it sets the card's query.
+ * A list card's "Number of items", from 1 to the most rows a card draws
+ * (`MAX_WIDGET_ROWS`), so the editor never offers rows the card would not draw.
+ * Keyed `limit` by every card that declares it, the name the knob that sets a
+ * query's rows reads.
+ */
+export const LIST_ITEMS = setting.number({
+  label: "Number of items",
+  defaultValue: 5,
+  min: 1,
+  max: MAX_WIDGET_ROWS,
+});
+
+/**
+ * Recent activity's "Number of items": the one offer every list card makes,
+ * under the name `limit`, so it sets the card's query.
  *
  * Held as the public `WidgetSetting` rather than written into the list: the
  * builder's own type carries a value brand only declarations read, which the
@@ -22,8 +37,7 @@ import type { AnyWidgetSetting } from "../settings";
  */
 export const RECENT_ACTIVITY_ITEMS: WidgetSetting = {
   name: "limit",
-  label: "Number of items",
-  ...settings.items(),
+  ...LIST_ITEMS,
 };
 
 /**
@@ -35,90 +49,139 @@ const NOTE_MAX_LENGTH = 2000;
 
 /**
  * A note's text: Markdown over several lines, empty until its reader writes it.
- *
  * A setting of the note's declaration, which names it by its key (`text`).
- * Its label rides beside the builder's fields: startup holds it to the rules
- * every setting's label is held to, and the settings sheet names it "Note".
  */
-export const NOTE_TEXT: SettingDeclaration<string, "textarea"> & {
-  readonly label: string;
-} = {
-  ...settings.textarea({ default: "", maxLength: NOTE_MAX_LENGTH }),
+export const NOTE_TEXT = setting.textarea({
   label: "Note",
-};
-
-/** Recent entries' "Number of items", the same offer under the same name. */
-export const RECENT_ENTRIES_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
+  defaultValue: "",
+  maxLength: NOTE_MAX_LENGTH,
+});
 
 /**
- * Every list card's Density: default or compact rows, default unless chosen.
- * One declaration, so each list card offers the same choice under one name,
- * and the admin reads it by that name to decide how many rows fit.
+ * Where every list card's Density is drawn: folded under Advanced in the
+ * card's settings panel, since how tightly rows are spaced is a preference
+ * few readers change. One value for both forms of the setting below.
+ */
+const DENSITY_SECTION = "advanced";
+
+/**
+ * Every list card's Density, as a declaration takes it: default or compact
+ * rows, default unless chosen, one option for every density the admin sizes
+ * rows by (`DENSITY_OPTIONS`), so core's list cards and a plugin's offer the
+ * same choice. Keyed `density` by every card that declares it, the name the
+ * admin reads to decide how many rows fit.
+ */
+export const LIST_DENSITY_SETTING = setting.select({
+  label: "Density",
+  options: DENSITY_OPTIONS,
+  defaultValue: "default",
+  section: DENSITY_SECTION,
+});
+
+/**
+ * The same Density, as a definition lists it. Written out rather than spread
+ * from the declaration: a builder's type does not carry the options a select
+ * definition must state.
  */
 export const LIST_DENSITY: WidgetSetting = {
   name: "density",
-  label: "Density",
+  label: LIST_DENSITY_SETTING.label,
   type: "select",
   defaultValue: "default",
-  // The builder's own options, one per density the admin sizes rows by, so core's list cards
-  // and a plugin's offer the same choice.
   options: [...DENSITY_OPTIONS],
+  section: DENSITY_SECTION,
+};
+
+/** The card's Collection: the collection it reads, set from the group it is added from. */
+export const CARD_COLLECTION = setting.collection({ label: "Collection" });
+
+/**
+ * The card's Filter over its Collection: the list view's conditions, none
+ * until its reader sets some. Starting at no conditions rather than at none
+ * at all, so a card whose reader set none is loaded with every entry, never
+ * asked for a filter first; a Filter of no conditions adds nothing to a query.
+ *
+ * 🔴 Its type is written, not inferred: inferred, the spread copies the
+ * builder's private value brand into a type the published declaration cannot
+ * name (TS4023). Written over the builders' own exported `SettingDeclaration`,
+ * the published type says exactly what the setting is.
+ */
+export const CARD_FILTER: SettingDeclaration<
+  WidgetFilter,
+  "filter",
+  "collection"
+> & { readonly defaultValue: WidgetFilter } = {
+  ...setting.filter({ of: "collection", label: "Filter" }),
+  defaultValue: {},
 };
 
 /**
- * Over time's Date range, its one quick setting: the range its chart draws,
- * which becomes its query's `range`.
+ * The card's Collection, read as titled rows: each row is asked by the
+ * collection's own title field, its status where it has one, and when it was
+ * updated. Written as a type, rather than left to the spread to infer, so the
+ * published declaration names it by the builders' own `SettingDeclaration`.
  */
-export const OVER_TIME_DATE_RANGE: WidgetSetting = {
-  name: "dateRange",
-  label: "Date range",
-  type: "select",
-  defaultValue: "30d",
-  quick: true,
-  // Named for the reader, as the card's header shows them; each value is a
-  // range the query draws (`TIMESERIES_RANGES`).
-  options: [
-    { label: "Last 7 days", value: "7d" },
-    { label: "Last 30 days", value: "30d" },
-    { label: "Last 90 days", value: "90d" },
-    { label: "Last 12 months", value: "12m" },
-  ],
+export const TITLED_COLLECTION: SettingDeclaration<string, "collection"> & {
+  readonly rows: "titled";
+} = { ...CARD_COLLECTION, rows: "titled" };
+
+/**
+ * The card's Group by over its Collection, with no static default:
+ * collections need not share a field. Unset, or set to a field this reader may
+ * not use, it groups by what the collection divides by (status, else its first
+ * groupable choice field). Written as a type for the reason `TITLED_COLLECTION` is.
+ */
+export const COLLECTION_GROUP_BY: SettingDeclaration<
+  string,
+  "groupBy",
+  "collection"
+> & { readonly defaultFrom: "collection" } = {
+  ...setting.groupBy({ of: "collection", label: "Group by" }),
+  defaultFrom: "collection",
 };
 
+/**
+ * Over time's Date range, its one quick setting, on the card's header: the
+ * range its chart draws, the last 30 days unless chosen, in the builders' own
+ * ranges and words.
+ */
+export const OVER_TIME_DATE_RANGE = setting.dateRange({
+  label: "Date range",
+  quick: true,
+});
+
 /** Over time's Chart style: a line, or one bar per interval. */
-export const OVER_TIME_CHART_STYLE: WidgetSetting = {
-  name: "chartStyle",
+export const OVER_TIME_CHART_STYLE = setting.select({
   label: "Chart style",
-  type: "select",
-  defaultValue: "line",
   options: [
     { label: "Line", value: "line" },
     { label: "Bars", value: "bars" },
   ],
-};
+  defaultValue: "line",
+});
 
-/** Recently edited's "Number of items", the same offer under the same name. */
-export const RECENTLY_EDITED_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
+/** Continue where you left off's "Number of items", the same offer under the same name. */
+export const CONTINUE_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
 
-/**
- * Recently edited's "Only mine": the reader's own saves alone. Its source
- * narrows by it (`onlyMine` among its filters), so the knob sets the query's
- * `where` rather than the card's source.
- */
-export const RECENTLY_EDITED_ONLY_MINE: WidgetSetting = {
-  name: "onlyMine",
-  label: "Only mine",
-  ...settings.onlyMine(),
+/** What each tab is called on the card's header. */
+const TAB_LABELS: Readonly<Record<WidgetTab, string>> = {
+  mine: "Mine",
+  team: "Team",
 };
 
 /**
- * Recently edited's "Collection": one collection's saves, or every collection
- * the reader may read when none is chosen, which is the default. Its source
- * reads across collections and narrows by one, so the knob sets the query's
- * `where` and the card keeps its source.
+ * Continue where you left off's Tab, its one quick setting: the reader's own
+ * work (Mine, the default) or other people's (Team). Its source narrows by it
+ * (`tab` among its filters), so the knob sets the query's `where`. The values
+ * are the Tab filter's own (`WIDGET_TABS`).
  */
-export const RECENTLY_EDITED_COLLECTION: AnyWidgetSetting = {
-  name: "collection",
-  label: "Collection",
-  ...settings.collection(),
+export const CONTINUE_TAB: WidgetSetting = {
+  name: "tab",
+  label: "Show",
+  type: "select",
+  defaultValue: "mine",
+  quick: true,
+  options: WIDGET_TABS.map(value => ({ label: TAB_LABELS[value], value })),
+  // Drawn with the card's data in its settings panel: it narrows whose work the card reads.
+  section: "data",
 };

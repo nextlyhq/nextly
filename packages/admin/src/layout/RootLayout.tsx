@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
+import { WidgetPreviewsRegistrar } from "../components/features/widgets/preview/WidgetPreviewsRegistrar";
 import { AdminPending } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
@@ -15,6 +16,7 @@ import { PublicRoute } from "../components/guards/PublicRoute";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
+import { DocumentTitleProvider } from "../context/providers/DocumentTitleProvider";
 import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSync";
 import {
   ThemePaintScript,
@@ -22,6 +24,7 @@ import {
   useTheme,
 } from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
+import { RoutedPathnameContext } from "../context/RoutedPathnameContext";
 import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
@@ -40,7 +43,7 @@ const RestartOverlay = lazy(() =>
  * Handles theme synchronization via React state instead of manual DOM manipulation.
  */
 function AdminAppContent({ nonce }: RootLayoutProps) {
-  const { route, isHydrated } = useRouter();
+  const { route, isHydrated, pathname } = useRouter();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
@@ -176,6 +179,8 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         <BrandingProvider>
           {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
           <PluginPageRegistrar />
+          {/* Registers the widget preview page on the server's development answer alone. */}
+          <WidgetPreviewsRegistrar />
           {/* The settings sync applies the admin timezone to date rendering,
                 and mounting it starts the ["generalSettings"] query — an
                 endpoint gated by settings permissions, so on the signed-out
@@ -185,7 +190,18 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
                 rather than around it, for the load-bearing reasons recorded
                 on GeneralSettingsSync itself. */}
           {routeType !== "public" && <GeneralSettingsSync />}
-          {content}
+          {/* Names the browser tab after the routed screen and the site. Inside
+              branding, which supplies the site's name, and around the screen,
+              whose detail pages add the name of the item they show. Rendered
+              only once a route is resolved, so the host's own title stands
+              until the admin knows which screen it is on. */}
+          <DocumentTitleProvider route={route} pathname={pathname}>
+            {/* The address the router drew this screen for, which a screen
+                writing the address compares with the bar's. */}
+            <RoutedPathnameContext.Provider value={pathname}>
+              {content}
+            </RoutedPathnameContext.Provider>
+          </DocumentTitleProvider>
         </BrandingProvider>
       </PortalProvider>
     </div>

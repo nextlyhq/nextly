@@ -234,6 +234,34 @@ describe("ListCard", () => {
     ).toHaveLength(5);
   });
 
+  it("takes the place of the widget's own link, so the footer holds one link", () => {
+    const card = (viewAllHref?: string) => (
+      <WidgetCard title="Posts" link={{ label: "Open posts", href: "/posts" }}>
+        <ListCard
+          model={model}
+          rows={posts(6)}
+          drawn={5}
+          {...(viewAllHref === undefined ? {} : { viewAllHref })}
+          tier="medium"
+          density="default"
+        />
+      </WidgetCard>
+    );
+    const { rerender } = render(card("/admin/collections/posts"));
+    const footer = screen.getByTestId("widget-card-footer");
+    expect(within(footer).getAllByRole("link")).toHaveLength(1);
+    expect(within(footer).getByRole("link")).toHaveAttribute(
+      "href",
+      "/admin/collections/posts"
+    );
+    // With no list of its own to open, the widget's link is the footer's again.
+    rerender(card());
+    expect(within(footer).getAllByRole("link")).toHaveLength(1);
+    expect(
+      within(footer).getByRole("link", { name: "Open posts" })
+    ).toHaveAttribute("href", "/posts");
+  });
+
   it("draws a row's trailing fields as keyed children, so React has nothing to warn of", () => {
     // 🔴 Handed to the row as a bare array, two trailing elements (a status pill, a time) make
     // React warn that each child in a list needs a key, on every row of every list card.

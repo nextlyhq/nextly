@@ -480,6 +480,7 @@ export type {
   BlockDefinition,
   BlockEditorMeta,
   BlockIcon,
+  BlockInspectorProps,
   BlockIsland,
   BlockExample,
   BlockSeoContribution,

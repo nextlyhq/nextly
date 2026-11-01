@@ -1,12 +1,13 @@
 /**
  * The Count card's scheduled figure, against a real database, as callers with
- * different read rights.
+ * different read rights: the card's `load`, set to a collection, at the medium
+ * tier where the figure is first drawn.
  *
  * What only a database can settle: that the figure counts exactly the entries
  * a scheduled release will publish, through the entry list's own condition;
  * that it reads zero where the caller has a release to read and none holds
  * these entries; and that a caller barred from releases is answered exactly as
- * a site without releases is, "not available", never zero.
+ * a site without releases is, the figure left out, never zero.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -29,11 +30,10 @@ import {
   RELEASE_MEMBERS_TABLE,
   RELEASES_TABLE,
 } from "../../releases/release-tables";
-import { refreshContentSources } from "../collection-widgets";
-import { CORE_WIDGETS } from "../core-widgets";
-import { executeWidgetQuery } from "../execute";
-import { validateWidgetQuery } from "../query";
-import { isUnavailableSourceRefusal } from "../sources";
+import { refreshContentSources } from "../content-sources";
+import { countWidget } from "../core-widgets/count";
+
+import { loadCard } from "./core-card-load";
 
 let current: TestNextly | undefined;
 
@@ -60,34 +60,16 @@ function scoped(permissions: string[]): ReadCaller {
 const READS_POSTS = [`read-${POSTS}`, `read-${PAGES}`];
 const READS_RELEASES = [...READS_POSTS, "read-content-releases"];
 
-/** Count's scheduled cell, as core declares it, set to `collection`. */
-function scheduledQuery(collection: string) {
-  const count = CORE_WIDGETS.find(widget => widget.id === "core/count");
-  const cell = (count?.cells ?? []).find(
-    candidate => "query" in candidate && candidate.key === "scheduled"
-  );
-  if (cell === undefined || !("query" in cell)) {
-    throw new Error('core/count has no cell "scheduled"');
-  }
-  return validateWidgetQuery({
-    ...cell.query,
-    source: `collection:${collection}`,
+/** What a medium Count card set to `collection` answers `caller`. */
+function card(caller: ReadCaller, collection = POSTS) {
+  return loadCard(countWidget, { collection }, caller, {
+    size: { w: 4, h: 2, tier: "medium" },
   });
 }
 
-/** The scheduled figure for `caller`, or the refusal it was answered with. */
+/** The card's scheduled figure for `caller`, or `undefined` when it is left out. */
 async function scheduled(caller: ReadCaller, collection = POSTS) {
-  try {
-    const result = await executeWidgetQuery(scheduledQuery(collection), caller);
-    if (result.op !== "count") throw new Error(result.op);
-    return { total: result.total };
-  } catch (error) {
-    if (!isUnavailableSourceRefusal(error)) throw error;
-    return {
-      unavailable: true,
-      message: (error as { publicMessage?: string }).publicMessage,
-    };
-  }
+  return (await card(caller, collection)).scheduled;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -167,24 +149,27 @@ describe.each(getConfiguredTestDialects())(
     it("counts exactly the entries a scheduled release will publish", async () => {
       const { t, ids } = await boot();
       await release(t, POSTS, ids.get("held")!);
-      expect(await scheduled(scoped(READS_RELEASES))).toEqual({ total: 1 });
+      expect(await scheduled(scoped(READS_RELEASES))).toBe(1);
     });
 
     it("reads zero where the caller has a release to read and none holds these entries", async () => {
       const { t, ids } = await boot();
       // The one release publishes a page, not a post.
       await release(t, PAGES, ids.get("page")!);
-      expect(await scheduled(scoped(READS_RELEASES))).toEqual({ total: 0 });
+      expect(await scheduled(scoped(READS_RELEASES))).toBe(0);
     });
 
     it("answers a caller barred from releases exactly as a site without releases, never as zero", async () => {
       const { t, ids } = await boot();
       // No release yet: a reader who may read releases has none to read.
-      const withoutReleases = await scheduled(scoped(READS_RELEASES));
+      const withoutReleases = await card(scoped(READS_RELEASES));
       await release(t, POSTS, ids.get("held")!);
       // A release holds a post, and this reader may not read releases.
-      const barred = await scheduled(scoped(READS_POSTS));
-      expect(withoutReleases).toMatchObject({ unavailable: true });
+      const barred = await card(scoped(READS_POSTS));
+      // The figure is left out, and the card is otherwise the same: its
+      // number stands, and nothing in it tells the two apart.
+      expect(withoutReleases.scheduled).toBeUndefined();
+      expect(withoutReleases.total).toBe(2);
       expect(barred).toEqual(withoutReleases);
     });
   }

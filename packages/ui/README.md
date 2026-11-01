@@ -179,9 +179,11 @@ This does not apply to `styles.css`, where the rules are document-wide and
 
 | Tool           | Version                                                                                  |
 | -------------- | ---------------------------------------------------------------------------------------- |
-| React          | 18 or 19                                                                                 |
+| React          | The supported range in [Requirements][requirements]                                      |
 | Tailwind CSS   | 4+ (`@nextlyhq/ui/tailwind-preset` also works as a Tailwind v3 preset, with `theme.css`) |
 | `lucide-react` | 0.400+                                                                                   |
+
+[requirements]: https://nextlyhq.com/docs/getting-started/installation#requirements
 
 ## Documentation
 

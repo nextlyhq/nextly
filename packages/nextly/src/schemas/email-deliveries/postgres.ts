@@ -76,6 +76,11 @@ import {
 
 import { emailProvidersPg } from "../email-providers/postgres";
 
+import {
+  EMAIL_DELIVERY_PRINCIPAL_ID_LENGTH,
+  EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH,
+} from "./widths";
+
 export const emailDeliveriesPg = pgTable(
   "email_deliveries",
   {
@@ -189,8 +194,12 @@ export const emailDeliveriesPg = pgTable(
      * erases only the rows that name them. Once the person is reported
      * deleted, the id is replaced by the keyed digest of kind and id.
      */
-    principalKind: varchar("principal_kind", { length: 191 }),
-    principalId: varchar("principal_id", { length: 191 }),
+    principalKind: varchar("principal_kind", {
+      length: EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH,
+    }),
+    principalId: varchar("principal_id", {
+      length: EMAIL_DELIVERY_PRINCIPAL_ID_LENGTH,
+    }),
     // The keyed digest of the idempotency key the send carried, on every
     // record of that send; cleared on all of them when any one is erased.
     keyDigest: varchar("key_digest", { length: 64 }),

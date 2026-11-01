@@ -19,6 +19,10 @@
       "types": "./dist/testing.d.mts",
       "import": "./dist/testing.mjs"
     },
+    "./testing/widget-card": {
+      "types": "./dist/plugins/test-widget-card.d.mts",
+      "import": "./dist/plugins/test-widget-card.mjs"
+    },
     "./config": {
       "types": "./dist/config.d.mts",
       "import": "./dist/config.mjs"
@@ -26,6 +30,16 @@
     "./runtime": {
       "types": "./dist/runtime.d.mts",
       "import": "./dist/runtime.mjs"
+    },
+    "./cache-handler": {
+      "types": "./dist/cache-handler.d.mts",
+      "import": "./dist/cache-handler.mjs",
+      "default": "./dist/cache-handler.mjs"
+    },
+    "./cache-handlers": {
+      "types": "./dist/cache-handlers.d.mts",
+      "import": "./dist/cache-handlers.mjs",
+      "default": "./dist/cache-handlers.mjs"
     },
     "./db-operators": {
       "types": "./dist/db-operators.d.mts",
@@ -78,6 +92,22 @@
     "./attention-keys": {
       "types": "./dist/domains/widgets/attention-keys.d.mts",
       "import": "./dist/domains/widgets/attention-keys.mjs"
+    },
+    "./card-geometry": {
+      "types": "./dist/domains/widgets/card-geometry.d.mts",
+      "import": "./dist/domains/widgets/card-geometry.mjs"
+    },
+    "./field-label": {
+      "types": "./dist/collections/fields/field-label.d.mts",
+      "import": "./dist/collections/fields/field-label.mjs"
+    },
+    "./media-categories": {
+      "types": "./dist/domains/media/media-categories.d.mts",
+      "import": "./dist/domains/media/media-categories.mjs"
+    },
+    "./core-widget-data": {
+      "types": "./dist/domains/widgets/core-widgets/data.d.mts",
+      "import": "./dist/domains/widgets/core-widgets/data.mjs"
     },
     "./query": {
       "types": "./dist/query/index.d.mts",
@@ -227,6 +257,10 @@
       "types": "./dist/api/email-provider-types.d.mts",
       "import": "./dist/api/email-provider-types.mjs"
     },
+    "./api/dashboard-summary-types": {
+      "types": "./dist/api/dashboard-summary-types.d.mts",
+      "import": "./dist/api/dashboard-summary-types.mjs"
+    },
     "./api/email-template-preview-types": {
       "types": "./dist/api/email-template-preview-types.d.mts",
       "import": "./dist/api/email-template-preview-types.mjs"
@@ -303,8 +337,10 @@
     "@nextlyhq/adapter-postgres": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "esbuild": "^0.28.1",
-    "next": "^15.5.28 || ^16.4.1",
+    "next": "^16.4.1",
     "nodemailer": "^10.2.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "sharp": "^0.35.5"
   },
   "peerDependenciesMeta": {
@@ -331,6 +367,7 @@
     "better-sqlite3": "^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.7",
     "@clack/prompts": "^1.1.0",
     "@inquirer/prompts": "^7.3.2",
     "@nextlyhq/adapter-drizzle": "workspace:*",
@@ -346,6 +383,7 @@
     "isomorphic-dompurify": "^2",
     "jose": "^6.2.2",
     "liquidjs": "^10.30.0",
+    "parse5": "^8.0.0",
     "picocolors": "^1.1.1",
     "safe-regex2": "^5.1.1",
     "semver": "^7.6.0",

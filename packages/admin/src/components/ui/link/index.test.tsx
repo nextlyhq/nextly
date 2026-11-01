@@ -8,10 +8,12 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { navigateTo } from "@admin/lib/navigation";
+import { preloadRoute } from "@admin/lib/route-preload";
 
 import { Link } from "./index";
 
 vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
+vi.mock("@admin/lib/route-preload", () => ({ preloadRoute: vi.fn() }));
 
 function clickLink(init: Parameters<typeof fireEvent.click>[1] = {}) {
   const anchor = screen.getByRole("link");
@@ -121,5 +123,29 @@ describe("Link", () => {
 
     expect(onClick).toHaveBeenCalled();
     expect(navigateTo).toHaveBeenCalledWith("/entries");
+  });
+
+  it.each([
+    ["hovered", (a: HTMLElement) => fireEvent.mouseEnter(a)],
+    ["focused", (a: HTMLElement) => fireEvent.focus(a)],
+    ["touched", (a: HTMLElement) => fireEvent.touchStart(a)],
+  ])("starts loading its page when %s", (_, act) => {
+    render(<Link href="/admin/media">Media</Link>);
+    act(screen.getByText("Media"));
+    expect(preloadRoute).toHaveBeenCalledWith("/admin/media");
+  });
+
+  it("loads nothing ahead for a link out of the admin or a download", () => {
+    render(
+      <>
+        <Link href="https://example.com">Out</Link>
+        <Link href="/admin/export.csv" download>
+          File
+        </Link>
+      </>
+    );
+    fireEvent.mouseEnter(screen.getByText("Out"));
+    fireEvent.mouseEnter(screen.getByText("File"));
+    expect(preloadRoute).not.toHaveBeenCalled();
   });
 });

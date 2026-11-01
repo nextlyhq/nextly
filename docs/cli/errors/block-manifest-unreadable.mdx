@@ -1,0 +1,24 @@
+---
+title: BLOCK_MANIFEST_UNREADABLE
+description: "The block manifest exists but could not be read."
+---
+
+## Cause
+
+The block manifest exists but could not be read.
+
+A manifest that is absent and one that cannot be read are told apart: reading an unreadable file as absent would let a stale manifest stand. The file is there, but reading it failed, for example on its permissions or because the path is a folder.
+
+## Fix
+
+- Check that the file the error names can be read by the user running the command.
+- Or remove it, and run `nextly generate:manifest` to write it again.
+
+## Example
+
+```text
+✗ The block manifest at /home/you/app/src/types/generated/blocks.manifest.json could not be read.
+  Why:  EACCES: permission denied, open '/home/you/app/src/types/generated/blocks.manifest.json'
+  Next: Check that the file can be read, or remove it and run `nextly generate:manifest` to write it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/block-manifest-unreadable  (BLOCK_MANIFEST_UNREADABLE)
+```

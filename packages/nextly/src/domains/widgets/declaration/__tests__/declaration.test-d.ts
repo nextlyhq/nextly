@@ -15,29 +15,40 @@
 import { expectTypeOf } from "vitest";
 
 import type { WidgetSizeDeclaration } from "../../grid-size";
-import type { WidgetRenderSize, WidgetResultField } from "../../result";
+import { rangeWindow, type RangeInterval } from "../../query";
+import type {
+  SettingEditorProps,
+  WidgetRenderSize,
+  WidgetResultField,
+} from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
-import type { CoreView, QueryAnswer } from "../displays";
+import type { WidgetFieldChoice, WidgetSourceFieldType } from "../../sources";
+import type { CoreView } from "../displays";
 import {
   defineWidget,
   type WidgetAccess,
+  type WidgetInterval,
+  type WidgetAccessGate,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetData,
   type WidgetPreviewCase,
   type WidgetProps,
   type WidgetSettingValues,
 } from "../define-widget";
+import { option } from "../../../../collections/fields/helpers";
 import {
-  settings,
+  setting,
   type ChartStyle,
   type DateRange,
   type WidgetFilter,
 } from "../setting-builders";
+import type { TransportableValue } from "../transportable";
 
 import type { RevenueCard } from "./plugin/admin";
 import type { ordersByState, revenue, unpaidCount } from "./plugin/widgets";
 
-// Every builder, standard and custom, and a dependent setting, in one widget.
+// Every builder, field and picker, and each dependent setting, in one widget.
 // The data function asserts what it is handed; the declaration below it asserts
 // that a component would be handed the same.
 const everySetting = defineWidget({
@@ -47,18 +58,28 @@ const everySetting = defineWidget({
   category: "Test",
   size: { default: { w: 12, h: 4 } },
   settings: {
-    collection: settings.collection(),
-    filter: settings.filter({ of: "collection" }),
-    sort: settings.sort({ of: "collection" }),
-    groupBy: settings.groupBy({ of: "collection" }),
-    items: settings.items({ default: 5 }),
-    range: settings.dateRange(),
-    style: settings.chartStyle(),
-    mine: settings.onlyMine(),
-    note: settings.text({ default: "" }),
-    limit: settings.number({ default: 3, min: 1 }),
-    compact: settings.toggle({ default: false }),
-    tone: settings.select({ options: ["calm", "loud"], default: "calm" }),
+    collection: setting.collection({ label: "Collection" }),
+    filter: setting.filter({ of: "collection", label: "Filter" }),
+    sort: setting.sort({ of: "collection", label: "Sort" }),
+    groupBy: setting.groupBy({ of: "collection", label: "Group by" }),
+    columns: setting.fields({ of: "collection", label: "Fields" }),
+    field: setting.fieldOf({ of: "collection", label: "Field" }),
+    range: setting.dateRange({ label: "Date range" }),
+    style: setting.select({
+      label: "Chart style",
+      options: [option("Line", "line"), option("Bars", "bars")],
+      defaultValue: "line",
+    }),
+    mine: setting.checkbox({ label: "Only mine", defaultValue: false }),
+    note: setting.text({ label: "Note", defaultValue: "" }),
+    body: setting.textarea({ label: "Body", maxLength: 200 }),
+    since: setting.date({ label: "Since" }),
+    limit: setting.number({ label: "Rows", defaultValue: 3, min: 1 }),
+    tone: setting.select({
+      label: "Tone",
+      options: [option("Calm", "calm"), option("Loud", "loud")],
+      defaultValue: "calm",
+    }),
   },
   load: async ({ settings }) => {
     // 🔴 In the data function: each setting at its exact type.
@@ -66,15 +87,17 @@ const everySetting = defineWidget({
     expectTypeOf(settings.filter).toEqualTypeOf<WidgetFilter>();
     expectTypeOf(settings.sort).toEqualTypeOf<string>();
     expectTypeOf(settings.groupBy).toEqualTypeOf<string>();
-    expectTypeOf(settings.items).toEqualTypeOf<number>();
+    expectTypeOf(settings.columns).toEqualTypeOf<string[]>();
+    expectTypeOf(settings.field).toEqualTypeOf<string>();
     expectTypeOf(settings.range).toEqualTypeOf<DateRange>();
     expectTypeOf(settings.style).toEqualTypeOf<ChartStyle>();
     expectTypeOf(settings.mine).toEqualTypeOf<boolean>();
     expectTypeOf(settings.note).toEqualTypeOf<string>();
+    expectTypeOf(settings.body).toEqualTypeOf<string>();
+    expectTypeOf(settings.since).toEqualTypeOf<string>();
     expectTypeOf(settings.limit).toEqualTypeOf<number>();
-    expectTypeOf(settings.compact).toEqualTypeOf<boolean>();
     expectTypeOf(settings.tone).toEqualTypeOf<"calm" | "loud">();
-    return { total: settings.items };
+    return { total: settings.limit };
   },
   view: "figure",
 });
@@ -87,38 +110,17 @@ expectTypeOf<WidgetSettingValues<typeof everySetting>>().toEqualTypeOf<{
   readonly filter: WidgetFilter;
   readonly sort: string;
   readonly groupBy: string;
-  readonly items: number;
+  readonly columns: string[];
+  readonly field: string;
   readonly range: DateRange;
   readonly style: ChartStyle;
   readonly mine: boolean;
   readonly note: string;
+  readonly body: string;
+  readonly since: string;
   readonly limit: number;
-  readonly compact: boolean;
   readonly tone: "calm" | "loud";
 }>();
-
-// 🔴 In a query core runs: the builder reads the same settings, typed.
-defineWidget({
-  id: "test/query-reads-settings",
-  title: "Query",
-  description: "A query written from its settings",
-  category: "Test",
-  size: { default: { w: 12, h: 4 } },
-  settings: {
-    collection: settings.collection(),
-    items: settings.items(),
-    range: settings.dateRange(),
-  },
-  load: {
-    query: ({ settings }) => {
-      expectTypeOf(settings.collection).toEqualTypeOf<string>();
-      expectTypeOf(settings.items).toEqualTypeOf<number>();
-      expectTypeOf(settings.range).toEqualTypeOf<DateRange>();
-      return { collection: settings.collection, op: "count" };
-    },
-  },
-  view: "figure",
-});
 
 // 🔴 In a component, through `import type` of the declaration: its settings
 // and its data, both props typed by the same widget. The component file (`plugin/admin.ts`) compiles against these
@@ -151,6 +153,15 @@ expectTypeOf<WidgetRenderSize["tier"]>().toEqualTypeOf<
   "small" | "medium" | "large"
 >();
 
+// A setting's own editor is handed its value or none, and may set either:
+// `onChange(undefined)` clears a setting, so an editor can offer a Clear.
+expectTypeOf<SettingEditorProps<number>["value"]>().toEqualTypeOf<
+  number | undefined
+>();
+expectTypeOf<
+  Parameters<SettingEditorProps<number>["onChange"]>[0]
+>().toEqualTypeOf<number | undefined>();
+
 // A declaration states its size in the grid's own type, the one the site
 // config, a stored placement and the admin read.
 expectTypeOf<(typeof revenue)["size"]>().toEqualTypeOf<WidgetSizeDeclaration>();
@@ -180,17 +191,16 @@ expectTypeOf<
   >
 >();
 
-// Who may be offered it: a permission today, and the two forms typed for the
-// release that judges them (startup refuses them until then).
+// Who may be offered it: a permission, the collections it reads, or a
+// function of the person, each judged per card before its data function runs.
 expectTypeOf<(typeof ordersByState)["access"]>().toEqualTypeOf<
   WidgetAccess | undefined
 >();
 
-// A component over a query core runs is handed that query's answer, the wire
-// shape for its op.
-expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
-  QueryAnswer<"count">
->();
+// A component is handed exactly what its widget's data function answers.
+expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<{
+  total: number;
+}>();
 
 // A widget drawn by a core view has that view's data, whatever its own
 // function's literal answer was.
@@ -241,11 +251,144 @@ defineWidget({
 });
 
 // A data function's reads take no person, user or access option: who reads is bound by core, so
-// the only options are the ones a read carries. Pinned exactly, so an option added to either is
-// a decision made here, not an accident.
+// the only options are the ones a read carries. Pinned exactly, so an option added to any of them
+// is a decision made here, not an accident.
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["count"]>[1]>
->().toEqualTypeOf<"where" | "signal">();
+>().toEqualTypeOf<"where" | "status" | "window" | "signal">();
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
->().toEqualTypeOf<"where" | "sort" | "limit" | "select" | "signal">();
+>().toEqualTypeOf<
+  | "where"
+  | "sort"
+  | "limit"
+  | "select"
+  | "status"
+  | "total"
+  | "depth"
+  | "signal"
+>();
+// A count's window: a range a series is drawn over, the date it places entries by, and the
+// window as long before it; and a list's total, asked for only as `true`.
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["count"]>[1]>["window"]
+>().toEqualTypeOf<
+  { range: WidgetRange; dateField?: string; previous?: true } | undefined
+>();
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>["total"]
+>().toEqualTypeOf<true | undefined>();
+// A list's depth: `0` alone, its links as stored ids. Pinned exactly, so a
+// widened `number` or another depth fails here; `1` is refused outright.
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>["depth"]
+>().toEqualTypeOf<0 | undefined>();
+expectTypeOf<{ depth: 1 }>().not.toExtend<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>();
+expectTypeOf<{ depth: number }>().not.toExtend<
+  NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>();
+
+// The status a read may name, on every read: the published entries, or all of them.
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["count"]>[1]>["status"]
+>().toEqualTypeOf<"published" | "all" | undefined>();
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["groupBy"]>[1]>
+>().toEqualTypeOf<"field" | "where" | "status" | "limit" | "signal">();
+expectTypeOf<
+  keyof Parameters<WidgetReadServices["timeseries"]>[1]
+>().toEqualTypeOf<"range" | "dateField" | "where" | "status" | "signal">();
+
+// What a grouping and a series read answer: the shapes the `bars` and `series` views draw, the
+// series with the interval its points were counted in.
+expectTypeOf<
+  Awaited<ReturnType<WidgetReadServices["groupBy"]>>
+>().toEqualTypeOf<{
+  buckets: readonly { value: string | null; count: number }[];
+  truncated?: boolean;
+  atLeast?: boolean;
+}>();
+// What a list read answers: its rows as JSON carries them, and, asked for, how many it matched.
+expectTypeOf<Awaited<ReturnType<WidgetReadServices["find"]>>>().toEqualTypeOf<{
+  items: { readonly [field: string]: TransportableValue }[];
+  total?: number;
+  atLeast?: boolean;
+}>();
+// What `describe` answers: the collection's title field, its status, and each field a reader
+// may read, labelled.
+expectTypeOf<
+  Awaited<ReturnType<WidgetReadServices["describe"]>>
+>().toEqualTypeOf<
+  | {
+      title?: string;
+      status: boolean;
+      fields: readonly {
+        name: string;
+        label: string;
+        type: WidgetSourceFieldType;
+        choices?: readonly WidgetFieldChoice[];
+        groupable?: false;
+        presentable?: false;
+      }[];
+    }
+  | undefined
+>();
+expectTypeOf<Parameters<WidgetReadServices["describe"]>>().toEqualTypeOf<
+  [collection: string]
+>();
+expectTypeOf<
+  Awaited<ReturnType<WidgetReadServices["timeseries"]>>
+>().toEqualTypeOf<{
+  points: readonly { start: string; count: number }[];
+  interval: WidgetInterval;
+}>();
+// The interval is one a range is drawn in, as the range's own window says, and a range is one a
+// Date range setting offers.
+expectTypeOf<WidgetInterval>().toEqualTypeOf<RangeInterval>();
+expectTypeOf<WidgetInterval>().toEqualTypeOf<"day" | "week" | "month">();
+expectTypeOf<
+  ReturnType<typeof rangeWindow>["interval"]
+>().toEqualTypeOf<WidgetInterval>();
+expectTypeOf<WidgetRange>().toEqualTypeOf<DateRange>();
+
+// Each answer is data its view draws as it comes: a function may answer it unchanged.
+defineWidget({
+  id: "test/grouped-read",
+  title: "Orders by state",
+  description: "Answers a grouping read as it comes",
+  category: "Test",
+  size: { default: { w: 6, h: 4 } },
+  load: async ({ services }) => services.groupBy("orders"),
+  view: "bars",
+});
+defineWidget({
+  id: "test/series-read",
+  title: "Orders over time",
+  description: "Answers a series read as it comes",
+  category: "Test",
+  size: { default: { w: 12, h: 4 } },
+  settings: { range: setting.dateRange({ label: "Date range" }) },
+  load: async ({ services, settings }) =>
+    services.timeseries("orders", { range: settings.range, status: "all" }),
+  view: "series",
+});
+
+// The permission gate `access` takes: one permission, any of several, or all of several, each
+// entry one permission or any of several. A list on its own is none of them.
+expectTypeOf<WidgetAccessGate>().toEqualTypeOf<
+  | string
+  | { anyOf: readonly string[] }
+  | { allOf: readonly (string | { anyOf: readonly string[] })[] }
+>();
+expectTypeOf<{ anyOf: ["read-orders"] }>().toExtend<WidgetAccess>();
+expectTypeOf<{
+  allOf: ["read-orders", { anyOf: ["update-orders", "create-orders"] }];
+}>().toExtend<WidgetAccess>();
+expectTypeOf<{ collections: ["orders"] }>().toExtend<WidgetAccess>();
+expectTypeOf<readonly ["read-orders"]>().not.toExtend<WidgetAccess>();
+// A predicate may answer anything, a promise included: only `true` admits.
+expectTypeOf<
+  (input: { user: unknown }) => Promise<boolean>
+>().toExtend<WidgetAccess>();

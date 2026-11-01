@@ -82,6 +82,10 @@ afterEach(async () => {
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    // A refused link falls through to the published document read as a
+    // visitor, judged by the Public role a real boot makes, which reads the
+    // Single by its rule.
+    seedPublic: true,
     singles: [settings(), landing()],
   });
   // The install's first account is made its administrator, whom no rule
@@ -125,7 +129,7 @@ function gate(token: string) {
   return previewSingleDraftGate({
     secret: SECRET,
     generation: GENERATION,
-    cookies: () => ({
+    cookies: async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE
           ? { value: encodeURIComponent(token) }

@@ -26,16 +26,32 @@ import {
   holdsGrant,
   singleGateVerdict,
 } from "../../../auth/access/gate-adapters";
+import {
+  ownDatabaseVisitor,
+  visitorWithoutAccessService,
+} from "../../../auth/access/own-database-visitor";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
+import {
+  withRuleLanguage,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -91,6 +107,7 @@ import {
   callerAccessGrants,
   runFieldHooks,
   type ReadAccessRedactions,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -100,7 +117,9 @@ import {
 } from "../../../shared/lib/password-fields";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordWriteEvent } from "../../content-events/write-event";
+import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
@@ -109,8 +128,10 @@ import { passwordReachOf } from "../../field-groups/password-reach";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
+  fillCompanionFields,
   populateCompanionFields,
   populateTranslationStatus,
+  selectEntryWithCompanion,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -122,6 +143,7 @@ import {
   buildCompanionSchema,
   splitLocalizedWrite,
   upsertCompanionRow,
+  type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
 import {
   isCompanionReady,
@@ -296,6 +318,14 @@ export async function checkSingleAccess(params: {
   // The caller's authenticated scope. A scoped API key is judged on its OWN
   // stamped grants for the publish/unpublish transition, not the owner's RBAC.
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * Without the access-control service, where a visitor's Public grants are
+   * read: the asking service's own database (`fieldRuleVisitor`), so the gate
+   * and that service's field rules judge one Public role. Absent, through the
+   * global container, which such a setup may not have filled, or may have
+   * filled for another instance.
+   */
+  visitor?: VisitorGrantsLoader;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -306,6 +336,7 @@ export async function checkSingleAccess(params: {
     routeAuthorized,
     rbacAccessControlService,
     authenticatedScope,
+    visitor,
     logger,
   } = params;
 
@@ -324,6 +355,7 @@ export async function checkSingleAccess(params: {
       scope: authenticatedScope,
       principal: currentPrincipal(),
       rules: rbacAccessControlService,
+      ...(visitor ? { visitorWithoutService: () => visitor() } : {}),
     });
   const verdict = await ask(operation);
   if (verdict.allowed) return null;
@@ -362,6 +394,17 @@ export async function checkSingleAccess(params: {
       refusalReason: `the caller may not read single "${slug}", so its ${operation} is answered as missing`,
     };
   }
+  // A caller with no identity that signing in could let through is asked to
+  // sign in, as REST asks it, rather than told what it may not do.
+  if (verdict.refusal === "unauthenticated") {
+    return {
+      success: false,
+      statusCode: NEXTLY_ERROR_STATUS.AUTH_REQUIRED,
+      code: "AUTH_REQUIRED",
+      refusalReason: `${operation} on single "${slug}" requires an authenticated user`,
+      message: genericPublicMessage("AUTH_REQUIRED"),
+    };
+  }
   // The caller is told what was refused in the site's words. Which check
   // refused rides along for the server's log, written where the refusal
   // reaches its caller: a caller asking only whether it may is not refused.
@@ -369,10 +412,7 @@ export async function checkSingleAccess(params: {
     success: false,
     statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
     code: "FORBIDDEN",
-    refusalReason:
-      verdict.refusal === "unauthenticated"
-        ? `${operation} on single "${slug}" requires an authenticated user`
-        : `the caller may not ${operation} single "${slug}"`,
+    refusalReason: `the caller may not ${operation} single "${slug}"`,
     // Named by the service's caller, so its slug is the site's own.
     message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };
@@ -471,6 +511,43 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * A Single's translations read that failed, as the read answers it. A companion read failure
+ * propagates, and the result builder puts a bare Error's own message on the wire — the failed
+ * query, with companion table and column names in it — so one is answered as an internal error.
+ */
+function translationLoadFailure(slug: string, error: unknown): NextlyError {
+  return NextlyError.is(error)
+    ? error
+    : NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { single: slug, reason: "translation-load-failed" },
+      });
+}
+
+/** A Single's translations, read in the same query as its document. */
+interface JoinedTranslations {
+  /** The Single's registered Drizzle table, which its document was read through. */
+  mainTable: unknown;
+  companion: CompanionSchema;
+  localeChain: string[];
+  companionRows: Record<string, unknown>[];
+}
+
+/**
+ * Whether the field rules refuse a caller the promotion of a Single's working
+ * draft: `SingleMutationService.workingDraftPromotionRefused`, handed in by the
+ * service that holds both, so a read asks the write's own judgement.
+ */
+export type SingleDraftPromotionRefused = (args: {
+  slug: string;
+  snapshot: unknown;
+  draftLocale: string | null;
+  locale: string | undefined;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}) => Promise<boolean>;
+
 export class SingleQueryService extends BaseService {
   /** Persists version snapshots; used when a versioned Single is auto-created. */
   private readonly versionCapture = new VersionCaptureService();
@@ -557,10 +634,38 @@ export class SingleQueryService extends BaseService {
      * A null object by default, so a construction site without releases wired
      * needs no special case and cannot narrow a read by forgetting one.
      */
-    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY,
+    /**
+     * Whether the field rules refuse a caller the promotion of the Single's
+     * working draft, from the service that writes it. A read shows a pending
+     * change to a caller who may publish and not update only where this says
+     * no; absent, it shows them none.
+     */
+    private readonly draftPromotionRefused?: SingleDraftPromotionRefused
   ) {
     super(adapter, logger);
   }
+
+  /**
+   * Where this service's Single gate and field rules read a visitor's Public
+   * grants: this service's own database without an access-control service, as
+   * the collection gate reads it, and the process's cached copy with one. The
+   * mutation path reads it from here, so a Single's reads and writes over one
+   * database judge one Public role.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return visitorWithoutAccessService(
+      this.rbacAccessControlService,
+      this.ownDatabaseVisitor
+    );
+  }
+
+  /** The Public role as this service's own database records it. */
+  private readonly ownDatabaseVisitor = ownDatabaseVisitor({
+    adapter: this.adapter,
+    logger: this.logger,
+    db: () => this.db,
+  });
 
   /**
    * Build the document a caller would receive from a stored row.
@@ -592,6 +697,8 @@ export class SingleQueryService extends BaseService {
   }): Promise<{
     draftLocale: string | null;
     componentSchemas: ComponentSchemas;
+    /** Shown on publish alone, so only where the caller could put it live. */
+    publishOnly: boolean;
   } | null> {
     const { slug, singleMeta, options } = params;
 
@@ -618,9 +725,8 @@ export class SingleQueryService extends BaseService {
       return null;
     }
 
-    if (!(await this.callerMayEditSingle(slug, singleMeta, options))) {
-      return null;
-    }
+    const viewer = await this.draftViewer(slug, options);
+    if (viewer === null) return null;
 
     const componentSchemas = await resolveComponentSchemas(singleMeta.fields);
     const decision = resolveDraftOverlay({
@@ -629,37 +735,52 @@ export class SingleQueryService extends BaseService {
       callerMayEdit: true,
     });
     return decision.overlay
-      ? { draftLocale: decision.draftLocale, componentSchemas }
+      ? {
+          draftLocale: decision.draftLocale,
+          componentSchemas,
+          publishOnly: viewer === "publisher",
+        }
       : null;
   }
 
   /**
-   * Whether this caller may EDIT the Single, which is what a pending change is
-   * shown to.
+   * Who this caller is to the Single's pending change: an `editor`, who may
+   * update it; a `publisher`, who may put it live without updating it and is
+   * shown it only where the field rules would let them; or `null`, shown the
+   * live document.
    *
    * `routeAuthorized` is deliberately not consulted: on the read path it attests
    * that a READ was authorized, so trusting it would hand one author's
    * unpublished work to any authenticated reader.
    */
-  private async callerMayEditSingle(
+  private async draftViewer(
     slug: string,
-    singleMeta: DynamicSingleRecord,
     options: GetSingleOptions
-  ): Promise<boolean> {
-    if (options.overrideAccess === true) return true;
-    if (options.user === undefined) return false;
+  ): Promise<"editor" | "publisher" | null> {
+    if (options.overrideAccess === true) return "editor";
+    if (options.user === undefined) return null;
 
-    const updateDenied = await checkSingleAccess({
-      slug,
-      operation: "update",
-      user: options.user,
-      overrideAccess: false,
-      routeAuthorized: false,
-      rbacAccessControlService: this.rbacAccessControlService,
-      authenticatedScope: options.authenticatedScope,
-      logger: this.logger,
-    });
-    return !updateDenied;
+    const { user } = options;
+    const denied = (operation: "update" | "publish") =>
+      checkSingleAccess({
+        slug,
+        operation,
+        user,
+        overrideAccess: false,
+        routeAuthorized: false,
+        rbacAccessControlService: this.rbacAccessControlService,
+        authenticatedScope: options.authenticatedScope,
+        visitor: this.fieldRuleVisitor,
+        logger: this.logger,
+      });
+    if (!(await denied("update"))) return "editor";
+    // Asked as the status write that would put the change live asks it: in
+    // that write's language, not every language this read involves.
+    const publishDenied = await withRuleLanguage(
+      writeLanguagesFor(this.localization, options.locale),
+      () => denied("publish")
+    );
+    return publishDenied ? null : "publisher";
   }
 
   /**
@@ -676,7 +797,8 @@ export class SingleQueryService extends BaseService {
   private relatedRowAccess(
     options: GetSingleOptions,
     enforceRelatedFieldAccess: boolean,
-    readLocale: string | undefined
+    // The languages the read falls back through, the one it resolved to first.
+    readChain: readonly string[] | null | undefined
   ): RelatedRowReadContext {
     return {
       enforceFieldAccess: enforceRelatedFieldAccess,
@@ -693,7 +815,8 @@ export class SingleQueryService extends BaseService {
       // dropping it here would silently restore the full bypass.
       trusted: assumedBound(options.trusted),
       authenticatedScope: options.authenticatedScope,
-      locale: readLocale,
+      locale: readChain?.[0],
+      localeChain: readChain ?? undefined,
       // Only "read everything" propagates, and only when asked for: the
       // admin sends it on every read, a public caller never does.
       status: expansionStatusScope({
@@ -739,6 +862,23 @@ export class SingleQueryService extends BaseService {
       view.draftLocale
     );
     if (!workingDraft) return doc;
+    // Shown on publish alone only where the field rules let this caller put
+    // it live, so no pending value they could never publish reaches them.
+    if (
+      view.publishOnly &&
+      (options.user === undefined ||
+        this.draftPromotionRefused === undefined ||
+        (await this.draftPromotionRefused({
+          slug,
+          snapshot: workingDraft.snapshot,
+          draftLocale: view.draftLocale,
+          locale: options.locale,
+          user: options.user,
+          authenticatedScope: options.authenticatedScope,
+        })))
+    ) {
+      return doc;
+    }
 
     const shaped = shapeDraftSnapshot({
       snapshot: workingDraft.snapshot as Record<string, unknown>,
@@ -778,7 +918,7 @@ export class SingleQueryService extends BaseService {
           this.localization,
           options.locale,
           options.fallbackLocale
-        )?.[0]
+        )
       ),
       // As the live read does: the caller is threaded, so nested targets can
       // be judged too.
@@ -809,6 +949,8 @@ export class SingleQueryService extends BaseService {
      * where the document holds something reads that absence as permission.
      */
     enforceRelatedFieldAccess: boolean;
+    /** The document's translations, when they were read with it. */
+    translations?: JoinedTranslations;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -831,37 +973,28 @@ export class SingleQueryService extends BaseService {
         doc,
         options.locale,
         options.fallbackLocale,
-        statusFilterValues
+        statusFilterValues,
+        params.translations
       );
     } catch (error) {
-      // A companion read failure propagates, and the result builder puts a bare
-      // Error's own message on the wire — the failed query, with companion table
-      // and column names in it.
-      throw NextlyError.is(error)
-        ? error
-        : NextlyError.internal({
-            cause: error instanceof Error ? error : undefined,
-            logContext: {
-              single: slug,
-              reason: "translation-load-failed",
-            },
-          });
+      throw translationLoadFailure(slug, error);
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
     doc = await this.readUploadFields(doc, singleMeta.fields, options);
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
-    const readLocale = resolveLocaleChain(
+    const readChain = resolveLocaleChain(
       this.localization,
       options.locale,
       options.fallbackLocale
-    )?.[0];
+    );
+    const readLocale = readChain?.[0];
     doc = await this.expandRelationshipFields(
       doc,
       singleMeta.fields,
       options.depth,
-      this.relatedRowAccess(options, enforceRelatedFieldAccess, readLocale),
+      this.relatedRowAccess(options, enforceRelatedFieldAccess, readChain),
       // The read path threads a caller, so the target collection's field rules
       // can be evaluated for the rows this pulls in.
       true
@@ -899,8 +1032,10 @@ export class SingleQueryService extends BaseService {
             targetPolicies: new Map(),
             targetCompanions: new Map(),
             targetVerdicts: new Map(),
+            targetRuleMatches: new Map(),
             authenticatedScope: options.authenticatedScope,
             locale: readLocale,
+            localeChain: readChain ?? undefined,
             status: expansionStatusScope({
               status: options.status,
               overrideAccess: options.overrideAccess,
@@ -962,7 +1097,13 @@ export class SingleQueryService extends BaseService {
       // One grants resolver for both passes, so the caller's roles and
       // permissions are read once and both passes judge with one authority:
       // a scoped API key's own grants, never its owner's.
-      grants: callerAccessGrants(fieldAccessUser, options.authenticatedScope),
+      grants: callerAccessGrants(
+        fieldAccessUser,
+        options.authenticatedScope,
+        undefined,
+        // A visitor's Public grants as this service's gate read them.
+        this.fieldRuleVisitor
+      ),
     };
     // The rules on fields inside field groups, which the Single's own pass
     // does not reach, judged with the same grants resolver. Before
@@ -1014,7 +1155,12 @@ export class SingleQueryService extends BaseService {
     slug: string,
     options: GetSingleOptions = {}
   ): Promise<SingleResult> {
-    this.logger.debug("Getting Single document", { slug, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Getting Single document", {
+      slug,
+      locale: options.locale,
+    });
 
     // ONE instant for this read. Both visibility checks below resolve releases
     // against it, so a release becoming due between them cannot admit the row
@@ -1044,6 +1190,9 @@ export class SingleQueryService extends BaseService {
         // A scoped API key is judged on its OWN read grant, so a super-admin-owned
         // key does not skip the read gate via the owner's roles.
         authenticatedScope: options.authenticatedScope,
+        // A visitor is judged by the Public role this service's field rules
+        // read below.
+        visitor: this.fieldRuleVisitor,
         logger: this.logger,
       });
       if (accessDenied) {
@@ -1055,6 +1204,7 @@ export class SingleQueryService extends BaseService {
           (singleMeta as { status?: boolean }).status === true,
         overrideAccess: options.overrideAccess === true,
         explicit: options.status,
+        publishedOnly: readsAsVisitor(options),
       });
 
       // 2. Build shared context for hooks (seed with caller-provided context)
@@ -1096,15 +1246,20 @@ export class SingleQueryService extends BaseService {
       // reusing the row an access decision loaded before them: a `beforeRead`
       // hook may write, and a response built from the earlier snapshot would
       // report values the read no longer finds.
-      let doc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
+      const read = await this.readDocument(slug, singleMeta, options);
+      const { translations } = read;
+      let { doc } = read;
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
+        // A Single removed from code is not given a document by a read:
+        // creating one is a write, which it refuses. It answers as a Single
+        // holding no document does.
+        if (await entityRemovedFromCode("single", slug)) {
+          return singleAbsentResult(slug);
+        }
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocumentOnce(singleMeta);
       }
@@ -1142,6 +1297,7 @@ export class SingleQueryService extends BaseService {
         options,
         statusFilterValues: statusFilter ? statusFilter.values : undefined,
         enforceRelatedFieldAccess: true,
+        translations,
       });
 
       // On a trusted draft-view read, surface this Single's pending change in
@@ -1227,8 +1383,113 @@ export class SingleQueryService extends BaseService {
       };
     } catch (error) {
       this.logger.error("Failed to get Single document", { slug, error });
-      return buildSingleErrorResult(error, "Failed to get Single document");
+      // A read the database is not migrated for answers as such, not as a 500.
+      return buildSingleErrorResult(
+        await asNotMigrated(
+          error,
+          singleNotMigrated(this.singleRegistryService, slug, {
+            trusted: fieldTrustOf(options),
+          })
+        ),
+        "Failed to get Single document"
+      );
     }
+  }
+
+  /** The Single's translations table, as its reads describe it; null when it has none. */
+  private companionOf(
+    slug: string,
+    singleMeta: DynamicSingleRecord
+  ): CompanionSchema | null {
+    return buildCompanionSchema({
+      slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+  }
+
+  /**
+   * The Single's stored document, or null when it has none yet. A translated Single takes its
+   * translations in the same query as its document, once its translations table is there to join
+   * to: one round trip where reading them after it took two. Read through the Single's own
+   * registered table, as the adapter reads its document.
+   */
+  private async readDocument(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<{
+    doc: SingleDocument | null;
+    translations: JoinedTranslations | undefined;
+  }> {
+    const joinable = await this.joinableTranslations(
+      slug,
+      singleMeta,
+      options.locale,
+      options.fallbackLocale
+    );
+    if (!joinable) {
+      const doc = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+      return { doc, translations: undefined };
+    }
+    // As the translations read it stands for fails: the database's own message, which names the
+    // translations table and its columns, never reaches the answer.
+    const joined = await selectEntryWithCompanion({
+      db: this.adapter.getDrizzle(),
+      mainTable: joinable.mainTable,
+      where: undefined,
+      companionTable: joinable.companion.table,
+      localeChain: joinable.localeChain,
+    }).catch((error: unknown) => {
+      throw translationLoadFailure(slug, error);
+    });
+    const doc = (joined.entry as SingleDocument | undefined) ?? null;
+    return {
+      doc,
+      translations: doc
+        ? { ...joinable, companionRows: joined.companionRows }
+        : undefined,
+    };
+  }
+
+  /**
+   * What a Single's read needs to take its translations in the same query as its document: the
+   * language chain, the translations table, and the Single's own registered table, which the
+   * adapter reads the document through. Null, and the read stays as it was, when
+   * `populateLocalized` would resolve nothing, when the translations table is not there yet, or
+   * when the adapter holds no table for the Single.
+   */
+  private async joinableTranslations(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      locale,
+      fallbackLocale
+    );
+    if (!localeChain || singleMeta.localized !== true) return null;
+    const companion = this.companionOf(slug, singleMeta);
+    if (!companion) return null;
+    if (
+      (await resolveCompanionSchemaReadiness(this.adapter, companion)) !==
+      "ready"
+    ) {
+      return null;
+    }
+    const mainTable = (
+      this.adapter as unknown as {
+        tableResolver?: { getTable(name: string): unknown } | null;
+      }
+    ).tableResolver?.getTable(singleMeta.tableName);
+    return mainTable ? { mainTable, companion, localeChain } : null;
   }
 
   /**
@@ -1242,8 +1503,24 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     locale: string | undefined,
     fallbackLocale: string | false | undefined,
-    statusFilterValues: readonly string[] | undefined
+    statusFilterValues: readonly string[] | undefined,
+    /** The document's translations, when they were read with it: resolved, not read again. */
+    translations?: JoinedTranslations
   ): Promise<void> {
+    if (translations) {
+      fillCompanionFields({
+        rows: [doc],
+        companionRows: translations.companionRows,
+        localizedFields: translations.companion.localizedFields,
+        localeChain: translations.localeChain,
+        idKey: "id",
+        statusValues:
+          translations.companion.hasStatus && statusFilterValues
+            ? statusFilterValues
+            : undefined,
+      });
+      return;
+    }
     const localeChain = resolveLocaleChain(
       this.localization,
       locale,
@@ -1254,13 +1531,7 @@ export class SingleQueryService extends BaseService {
     // buildCompanionSchema would otherwise classify its text fields as translatable and query a
     // `single_<slug>_locales` table that doesn't exist. (The read swallows that, but skip it.)
     if (singleMeta.localized !== true) return;
-    const companion = buildCompanionSchema({
-      slug,
-      tableName: singleMeta.tableName,
-      fields: singleMeta.fields as { name: string; type: string }[],
-      dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
-    });
+    const companion = this.companionOf(slug, singleMeta);
     if (!companion) return;
     await populateCompanionFields({
       db: this.adapter.getDrizzle(),
@@ -2217,6 +2488,7 @@ export class SingleQueryService extends BaseService {
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
+          localeChain: access.localeChain,
           status: access.status,
         }
       );

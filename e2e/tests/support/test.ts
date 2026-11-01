@@ -17,8 +17,10 @@
  * is the file's account. A spec that sets `storageState` itself with
  * `test.use` replaces it.
  *
- * The suite holds every spec to this `test` rather than Playwright's, which
- * would run without any of it (`session-stays-signed-in.spec.ts`).
+ * Built on `./visible`'s `test`, which holds every page to its visible
+ * elements. The suite holds every spec to this `test` (the production suite to
+ * `./visible`'s) rather than Playwright's, which would run without any of it
+ * (`scripts/e2e-specs-take-suite-test.test.mjs`).
  *
  * @module tests/support/test
  */
@@ -27,7 +29,6 @@ import { readFileSync } from "node:fs";
 import {
   expect,
   request,
-  test as base,
   type APIRequestContext,
   type TestInfo,
 } from "@playwright/test";
@@ -39,7 +40,8 @@ import {
   type StorageState,
 } from "./accounts";
 import { configuredLocks } from "./configured-locks";
-import { keepSessionFresh, STORAGE_STATE } from "./session";
+import { keepSessionFresh, STORAGE_STATE } from "./session.mjs";
+import { test as visible } from "./visible";
 
 /** A document an editor claims, as the document-lock route names it. */
 interface DocumentRef {
@@ -188,7 +190,11 @@ async function signInNewAccount(
   return storageState;
 }
 
-export const test = base.extend<{ freshSession: string }>({
+export { includingHidden } from "./visible";
+
+// On `./visible`'s `test`, so every page a spec reaches is held to its visible
+// elements.
+export const test = visible.extend<{ freshSession: string }>({
   freshSession: [
     async ({ baseURL }, use) => {
       if (baseURL) await keepSessionFresh(baseURL);
@@ -201,3 +207,22 @@ export const test = base.extend<{ freshSession: string }>({
     await use(await fileAccount(baseURL, testInfo));
   },
 });
+
+/**
+ * Gives the tests of the group it is called in a further seat of their file's account
+ * (`fileAccount`): an account of their own, with a REST budget of its own.
+ *
+ * The REST limit gives each signed-in user 500 reads a minute. A file whose tests each load the
+ * dashboard and read its layout around it spends that budget faster than its tests take, so
+ * through one account the last of them met a 429, and an admin that could not reach the server.
+ * Each group reads through a seat of its own instead, as a seeder spreads its writes over
+ * further seats. A group that calls nothing keeps the file's own account, seat 0.
+ */
+export function ownSeat(seat: number): void {
+  test.use({
+    storageState: async ({ baseURL }, use, testInfo) => {
+      if (!baseURL) throw new Error("[e2e] No baseURL configured.");
+      await use(await fileAccount(baseURL, testInfo, seat));
+    },
+  });
+}

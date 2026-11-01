@@ -18,6 +18,8 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
+import { z } from "zod";
+
 import {
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
@@ -31,8 +33,9 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { UserContext } from "../../domains/collections/services/collection-types";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
@@ -83,11 +86,13 @@ import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
+import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
   routeAdmittedUpdate,
+  routeVouched,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
@@ -195,6 +200,20 @@ function formatToastSummary(summary: {
 }
 
 /**
+ * The fields the registry records for a collection before a Schema Builder change, as it records
+ * them, so a relationship the change adds over a column an earlier apply already added still gets
+ * its foreign key, and one that apply renamed does not. The preview and the apply both hand the
+ * pipeline this one list, so they plan the same keys.
+ */
+function recordedFieldsOf(collection: {
+  fields?: unknown;
+}): DesiredCollection["fields"] {
+  return Array.isArray(collection.fields)
+    ? (collection.fields as DesiredCollection["fields"])
+    : [];
+}
+
+/**
  * Both directions of the all-locales lifecycle, as one handler.
  *
  * Publishing every language of an entry at once has a twin, the takedown.
@@ -233,6 +252,39 @@ function allLocalesLifecycle(
       return respondMutation(result.message ?? successMessage, entry);
     },
   };
+}
+
+/**
+ * The `together` query parameter of a collection delete: slugs separated by
+ * commas, each spelled as a slug is. Absent or empty means none.
+ */
+const TogetherParam = z
+  .string()
+  .max(20_000)
+  .transform(value =>
+    value
+      .split(",")
+      .map(slug => slug.trim())
+      .filter(slug => slug !== "")
+  )
+  .pipe(
+    z
+      .array(
+        z
+          .string()
+          .regex(SLUG_PATTERN, "Each collection must be named by its slug.")
+      )
+      .max(500)
+  );
+
+function parseTogetherParam(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  try {
+    return TogetherParam.parse(value);
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
 }
 
 /**
@@ -515,8 +567,18 @@ const COLLECTIONS_METHODS: Record<
       };
 
       // The rows and the meta now describe one set, because the allowlist was
-      // a condition on the query that produced both.
-      return respondList(items, toPaginationMeta(baseMeta));
+      // a condition on the query that produced both. A collection removed from
+      // code stays listed, marked, so the admin can say so and name the step
+      // that retires it.
+      // Loaded on first use rather than with the dispatcher, so a module that
+      // imports the dispatcher and never lists does not load the mark.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      return respondList(
+        await withRemovedFromCodeMarks("collection", items),
+        toPaginationMeta(baseMeta)
+      );
     },
   },
   getCollection: {
@@ -537,7 +599,15 @@ const COLLECTIONS_METHODS: Record<
         [collection as CollectionWithAdmin],
         config?.plugins ?? []
       );
-      return respondDoc(collectionWithViews as unknown);
+      // Marked as the listing marks it, so the entity's own screens show the
+      // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      const [marked] = await withRemovedFromCodeMarks("collection", [
+        collectionWithViews as unknown as Record<string, unknown>,
+      ]);
+      return respondDoc(marked as unknown);
     },
   },
   updateCollection: {
@@ -564,12 +634,20 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   deleteCollection: {
-    // The deleted record is the `item`.
+    // The deleted record is the `item`. `?together=a,b` names the collections
+    // a bulk delete removes with this one, in the same operation: the whole
+    // set is checked before anything is removed, so collections that point
+    // only at one another can go together where each alone is refused.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      const result = await svc.deleteCollection({
+      // A variable rather than an inline literal: `CollectionsHandler` types
+      // its parameter by the one key it reads and forwards the object, whole,
+      // to the metadata service, which reads `together` from it.
+      const request: { collectionName: string; together: string[] } = {
         collectionName: p.collectionName,
-      });
+        together: parseTogetherParam(p.together),
+      };
+      const result = await svc.deleteCollection(request);
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
       });
@@ -647,6 +725,7 @@ const COLLECTIONS_METHODS: Record<
           (collection as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       return respondData(
@@ -918,6 +997,7 @@ const COLLECTIONS_METHODS: Record<
         localized: isLocalized,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       // A field leaving translation has preconditions of its own, asked before the push alters
@@ -1104,7 +1184,7 @@ const COLLECTIONS_METHODS: Record<
         );
         // Written past the registry services, so the cached rows are cleared
         // here: a read during the save may have cached the row from before it.
-        clearCollectionRowCache();
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
@@ -1358,10 +1438,12 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Route middleware already ran the RBAC/code-access gate for the
+          // caller it authenticated; attest it so the handler skips only that
+          // redundant re-check (field-level write access still runs). Never
+          // inferred from userId, and never for a visitor, whom the service
+          // judges itself.
+          routeAuthorized: routeVouched(),
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1486,10 +1568,12 @@ const COLLECTIONS_METHODS: Record<
         // Who performed the delete (user vs API key), recorded on the
         // `entry.deleted` outbox event — same attribution as create/update.
         actor: readAuthenticatedActor(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Route middleware already ran the RBAC/code-access gate for the
+        // caller it authenticated; attest it so the handler skips only that
+        // redundant re-check (field-level write access still runs). Never
+        // inferred from userId, and never for a visitor, whom the service
+        // judges itself.
+        routeAuthorized: routeVouched(),
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
         // and does not skip stored owner/role delete rules.

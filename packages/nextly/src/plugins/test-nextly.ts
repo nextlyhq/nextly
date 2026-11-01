@@ -43,6 +43,7 @@ import {
   resetWebhookActivation,
 } from "../domains/webhooks/recording-activation";
 import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-policy";
+import type { AdminDashboardConfig } from "../domains/widgets/declaration/dashboard";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
@@ -54,6 +55,7 @@ import {
   clearCachedSnapshot,
   clearLiveSnapshots,
 } from "../init/schema-snapshot-cache";
+import { seedPermissionsAndRolePresets } from "../init/seed-permissions";
 import { resetDispatcherForTests } from "../route-handler/auth-handler";
 import type { Logger } from "../services/shared";
 import { _resetEnvCache } from "../shared/lib/env";
@@ -283,6 +285,14 @@ export interface CreateTestNextlyOptions {
   pluginConsent?: PluginConsent;
   /** Code-first collections to register (tables created on the in-memory DB). */
   collections?: CollectionConfig[];
+  /**
+   * Widgets the site declares itself, as `admin.dashboard.widgets` in a site
+   * config: booted through the same path, so a site's widget can be tested
+   * without wrapping it in a plugin.
+   *
+   * @experimental Until the widget SDK's test helpers settle.
+   */
+  widgets?: AdminDashboardConfig["widgets"];
   /** Code-first singles. */
   singles?: SingleConfig[];
   /** Code-first field groups. */
@@ -297,6 +307,16 @@ export interface CreateTestNextlyOptions {
   security?: SecurityConfig;
   /** An app's password hasher, as `getNextly()` takes it. */
   passwordHasher?: NextlyServiceConfig["passwordHasher"];
+  /**
+   * Run the seeding a real boot runs once its services are registered, as
+   * `getNextly()` runs it: every permission the config's collections, Singles
+   * and plugins declare, the preset roles, the Public role and what boot
+   * grants it, plugins' `publicGrants` included. For a test that needs the
+   * Public role a real boot makes, since a visitor holds what that role
+   * grants and nothing without it. Off by default, so a test that makes its
+   * own roles meets no preset of the same slug.
+   */
+  seedPublic?: boolean;
 }
 
 export interface TestNextly {
@@ -347,6 +367,7 @@ interface ProvisionedDatabase {
 function snapshotEnv(): () => void {
   const previousUrl = process.env.DATABASE_URL;
   const previousDialect = process.env.DB_DIALECT;
+  const previousSecret = process.env.NEXTLY_SECRET;
   // One-shot. `destroy()` may be called more than once, and a repeat must not
   // reapply a snapshot that has already been honoured — by then the values it
   // holds are stale, and whatever set the environment since (the next test's
@@ -360,8 +381,36 @@ function snapshotEnv(): () => void {
     else process.env.DATABASE_URL = previousUrl;
     if (previousDialect === undefined) delete process.env.DB_DIALECT;
     else process.env.DB_DIALECT = previousDialect;
+    if (previousSecret === undefined) delete process.env.NEXTLY_SECRET;
+    else process.env.NEXTLY_SECRET = previousSecret;
     _resetEnvCache();
   };
+}
+
+/**
+ * A secret for an instance booted without one, so a test that signs a person
+ * in (`runWidgetLoad`) works as written. Random per instance and put back by
+ * the instance's environment snapshot; one already set is kept.
+ */
+function giveTestSecret(): void {
+  process.env.NEXTLY_SECRET ??= randomBytes(32).toString("hex");
+}
+
+/**
+ * The secret for a boot on the caller's own adapter (`supplied`), which
+ * changes nothing else about the environment: given only when none is set,
+ * with a snapshot to put it back by (the one an abandoned instance left, when
+ * there is one). A boot that makes its own adapter gives the secret there.
+ */
+function secretForCallerAdapter(
+  supplied: TestAdapter | undefined,
+  inherited: (() => void) | undefined
+): (() => void) | undefined {
+  if (!supplied || process.env.NEXTLY_SECRET !== undefined) return inherited;
+  const restore = inherited ?? snapshotEnv();
+  giveTestSecret();
+  _resetEnvCache();
+  return restore;
 }
 
 /**
@@ -463,6 +512,7 @@ async function provisionDatabase(
   try {
     process.env.DATABASE_URL = serverUrl;
     process.env.DB_DIALECT = dialect;
+    giveTestSecret();
     // Everything that reads the dialect through the `env` proxy — the boolean
     // conversion in `toDialectBool`, the schema services' fallback — would
     // otherwise answer for whichever dialect booted first in this process.
@@ -633,7 +683,7 @@ export async function createTestNextly(
   // step that throws — an unset server URL, an unreachable server — and until
   // this instance owns the pending snapshot there is nothing to put the
   // environment back with.
-  let restoreEnv: (() => void) | undefined = inheritedRestore;
+  let restoreEnv = secretForCallerAdapter(adapter, inheritedRestore);
   if (!adapter && opts.dialect && opts.dialect !== "sqlite") {
     try {
       provisioned = await provisionDatabase(
@@ -649,24 +699,7 @@ export async function createTestNextly(
     adapter = provisioned.adapter;
   }
   if (!adapter) {
-    // The inherited snapshot points further back than one taken now would, so
-    // it wins when there is one.
-    restoreEnv = inheritedRestore ?? snapshotEnv();
-    // Force the SQLite dialect so the env validation the factory triggers
-    // (env.DATABASE_URL access) passes without a configured database — SQLite
-    // needs no DATABASE_URL, and production-only checks are skipped under test.
-    process.env.DB_DIALECT = "sqlite";
-    // Same reason as the provisioned path: a previous boot on another dialect
-    // would otherwise still be the one this process's `env` reports.
-    _resetEnvCache();
-    // `memory: true` forces an in-memory DB. The factory otherwise falls back
-    // to a default SQLite *file*, which would persist across test runs. The
-    // SqliteAdapter honours `memory` ahead of any url, but the factory's
-    // AdapterConfig type doesn't declare it — hence the cast.
-    adapter = await createAdapter({
-      type: "sqlite",
-      memory: true,
-    } as Parameters<typeof createAdapter>[0]);
+    ({ adapter, restoreEnv } = await defaultSqliteAdapter(inheritedRestore));
   }
   const logger = opts.logger ?? defaultTestLogger;
   adapter = guardAgainstAbortedTransactions(adapter);
@@ -704,6 +737,46 @@ export async function createTestNextly(
 }
 
 /**
+ * The in-memory SQLite adapter a boot given none runs on, with the snapshot
+ * that puts back what it changes about the environment.
+ *
+ * The environment is changed before the adapter exists, and the boot's own
+ * failure path only starts once it does, so an adapter that cannot be created
+ * (the package or its native module missing) puts the environment back here,
+ * as a failed boot would, before the error goes on: nothing else holds the
+ * snapshot yet.
+ */
+async function defaultSqliteAdapter(
+  inheritedRestore: (() => void) | undefined
+): Promise<{ adapter: TestAdapter; restoreEnv: () => void }> {
+  // The inherited snapshot points further back than one taken now would, so
+  // it wins when there is one.
+  const restoreEnv = inheritedRestore ?? snapshotEnv();
+  // Force the SQLite dialect so the env validation the factory triggers
+  // (env.DATABASE_URL access) passes without a configured database — SQLite
+  // needs no DATABASE_URL, and production-only checks are skipped under test.
+  process.env.DB_DIALECT = "sqlite";
+  giveTestSecret();
+  // Same reason as the provisioned path: a previous boot on another dialect
+  // would otherwise still be the one this process's `env` reports.
+  _resetEnvCache();
+  try {
+    // `memory: true` forces an in-memory DB. The factory otherwise falls back
+    // to a default SQLite *file*, which would persist across test runs. The
+    // SqliteAdapter honours `memory` ahead of any url, but the factory's
+    // AdapterConfig type doesn't declare it — hence the cast.
+    const adapter = await createAdapter({
+      type: "sqlite",
+      memory: true,
+    } as Parameters<typeof createAdapter>[0]);
+    return { adapter, restoreEnv };
+  } catch (error) {
+    restoreEnv();
+    throw error;
+  }
+}
+
+/**
  * The boot itself, split out so a failure anywhere in it can release the
  * database its caller created.
  */
@@ -730,6 +803,10 @@ async function bootServices(
       plugins: opts.plugins,
       pluginConsent: opts.pluginConsent,
       collections: opts.collections,
+      // A site's own widgets reach boot where a site config puts them.
+      ...(opts.widgets
+        ? { admin: { dashboard: { widgets: opts.widgets } } }
+        : {}),
       singles: opts.singles,
       fieldGroups: opts.fieldGroups,
       localization: opts.localization
@@ -750,6 +827,10 @@ async function bootServices(
   // Physical tables for code-first + plugin-contributed collections are created
   // non-interactively by the runtime auto-sync during registerServices (the
   // applyDesiredSchema add_table fast-path), so no harness-side DDL is needed.
+
+  // The boot's seeding, where the test asks for it (`seedPublic`). Each step
+  // logs its own failure, as at boot.
+  if (opts.seedPublic === true) await seedPermissionsAndRolePresets();
 
   // A handle a caller assigned over `nextly`. The property was a plain data
   // property before it became lazy, and `TestNextly.nextly` is not declared

@@ -25,6 +25,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { MetaService } from "../../meta/services/meta-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { withSchemaLock } from "../../schema/pipeline/schema-lock";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
   indexCatalog,
@@ -74,6 +75,7 @@ import {
   withMigrationSession,
   type LockObservation,
   type MigrationDialect,
+  type MigrationSession,
 } from "./session";
 import {
   beginMigration,
@@ -233,6 +235,11 @@ export interface RunMigrationArgs {
    * There is no state for a backup to restore.
    */
   backupConfirmed?: boolean;
+  /**
+   * How long a writing run waits for a held schema lock, in milliseconds. Absent, about a minute,
+   * as every command-line run waits; a test shortens it.
+   */
+  lockWaitMs?: number;
 }
 
 /**
@@ -460,388 +467,423 @@ export async function runFieldGroupMigration(
       ? JSON.stringify(error.logContext ?? {})
       : String(error);
 
+  /**
+   * One attempt, given the session it runs in.
+   *
+   * A writing run holds the schema lock, the one every schema change takes, so `nextly migrate`,
+   * `db:sync` and the Builder saves are excluded for the whole of it, and the field-group registry
+   * is never read by one of them before its rename and written after it. A dry run observes the
+   * field-group lock instead of taking any, so it writes nothing at all and stays available to a
+   * read-only role. It reports contention through `lock` rather than raising it as a refusal:
+   * nothing acts on a preview, so a stale answer costs a re-read rather than a wrong write.
+   */
   const runOnce = (finalAttempt: boolean): Promise<MigrationOutcome> =>
-    withMigrationSession(
-      {
-        adapter,
-        dialect,
-        label: `field-group-migration:${direction}`,
-        // A dry run observes the lock instead of taking it, so it writes nothing
-        // at all and stays available to a read-only role. It reports contention
-        // through `lock` rather than raising it as a refusal: nothing acts on
-        // a preview, so a stale answer costs a re-read rather than a wrong write.
-        mode: dryRun ? "observe" : "claim",
-      },
-      async session => {
-        // First, so it describes this attempt whatever this attempt goes on to raise.
-        observedLock = session.lock;
-        const state = await readMigrationState(meta);
-        const rows = await readRegistryRows(
-          adapter,
-          dialect,
-          identifierCase,
-          state.appliedManifest ?? []
-        );
-
-        // Settled at the generation this run would produce: the work is done.
-        // Confirmed against the catalog rather than taken from the marker alone,
-        // because the two can disagree — storage restored from a backup taken
-        // before the run, or a table dropped since — and a marker believed on its
-        // own would report success over storage the read path cannot serve.
-        if (state.status === "settled" && state.generation === generation) {
-          // 🔴 Asked before the catalog, because it is the question the catalog
-          // cannot answer. A marker written by an older build claims a generation
-          // that build defined, and this one performs work that build did not:
-          // the tables and columns would all check out while stored field
-          // definitions, ledger keys and parent pointers still held the legacy
-          // vocabulary. Refusing is the only honest answer — the data steps
-          // address the registry under its legacy name, so this build cannot
-          // simply finish the job on storage whose registry has already moved.
-          if (
-            state.generation === "field-groups-v2" &&
-            state.version !== undefined &&
-            state.version < MIN_COMPLETE_MARKER_VERSION
-          ) {
-            throw NextlyError.serviceUnavailable({
-              logMessage:
-                "field-group migration cannot accept a marker written before this build's storage work existed",
+    dryRun
+      ? withMigrationSession(
+          {
+            adapter,
+            dialect,
+            label: `field-group-migration:${direction}`,
+            mode: "observe",
+          },
+          session => attemptIn(session, finalAttempt)
+        )
+      : withSchemaLock(
+          {
+            adapter,
+            command: `nextly migrate:field-groups --apply (${direction})`,
+            // A command-line run: a held lock is waited for, about a minute, and then the run
+            // stops naming its holder.
+            whenHeld: "wait",
+            ...(args.lockWaitMs !== undefined
+              ? { waitMs: args.lockWaitMs }
+              : {}),
+            releaseOnInterrupt: true,
+            logger: {
+              warn: message => logger.warn(message),
+              info: message => logger.info(message),
+            },
+          },
+          session => attemptIn(session, finalAttempt)
+        ).then(outcome => {
+          // `ran: false` comes only from an `isSettled` wait, which this does not ask for.
+          if (!outcome.ran) {
+            throw NextlyError.internal({
               logContext: {
-                phase: FIELD_GROUP_MIGRATION_PHASE,
-                reason: "settled marker predates work this build performs",
-                recordedVersion: state.version,
-                requiredVersion: MIN_COMPLETE_MARKER_VERSION,
+                reason: "schema lock settled without a settle check",
               },
             });
           }
-          await assertStorageAtGeneration({
-            adapter,
-            dialect,
-            rows,
-            identifierCase,
-            generation,
-            // The rows are checked as well as the structure. A marker can be
-            // current and the content still wrong — restored from a backup taken
-            // before the run, or repaired by hand — and a stale `_parent_table`
-            // is invisible to a structural check while making nested content
-            // invisible to a reader. The recorded plan is what names the storage
-            // this run's generation renamed away; without one there is nothing to
-            // scan for.
-            renamedAway: renamedAwayNames(state.appliedManifest, generation),
-            owned: ownedDataTableNames({
-              rows,
-              entries: state.appliedManifest ?? [],
-            }),
-          });
-          return {
-            ran: false,
-            reason: "already-migrated",
-            // Carried on this exit too, and re-read rather than taken from the session's opening
-            // observation. This exit reaches the same window every other one does: a `down` run
-            // that claimed the lock AFTER the preview began is exactly what makes "already
-            // migrated" a moving answer, and reporting the opening `not-held` beside it would
-            // conceal the writer this field was added to expose. Both exits ask the same accessor
-            // so they cannot disagree about who was holding it.
-            ...(dryRun ? { lock: await observeContention() } : {}),
-          };
-        }
+          return outcome.value;
+        });
 
-        // A rollback needs the plan that was applied; nothing else can supply it,
-        // because the database cannot say which names this migration created.
-        if (
-          direction === "down" &&
-          state.status === "settled" &&
-          state.appliedManifest === undefined
-        ) {
+  const attemptIn = async (
+    session: MigrationSession,
+    finalAttempt: boolean
+  ): Promise<MigrationOutcome> => {
+    // First, so it describes this attempt whatever this attempt goes on to raise.
+    observedLock = session.lock;
+    const state = await readMigrationState(meta);
+    const rows = await readRegistryRows(
+      adapter,
+      dialect,
+      identifierCase,
+      state.appliedManifest ?? []
+    );
+
+    // Settled at the generation this run would produce: the work is done.
+    // Confirmed against the catalog rather than taken from the marker alone,
+    // because the two can disagree — storage restored from a backup taken
+    // before the run, or a table dropped since — and a marker believed on its
+    // own would report success over storage the read path cannot serve.
+    if (state.status === "settled" && state.generation === generation) {
+      // 🔴 Asked before the catalog, because it is the question the catalog
+      // cannot answer. A marker written by an older build claims a generation
+      // that build defined, and this one performs work that build did not:
+      // the tables and columns would all check out while stored field
+      // definitions, ledger keys and parent pointers still held the legacy
+      // vocabulary. Refusing is the only honest answer — the data steps
+      // address the registry under its legacy name, so this build cannot
+      // simply finish the job on storage whose registry has already moved.
+      if (
+        state.generation === "field-groups-v2" &&
+        state.version !== undefined &&
+        state.version < MIN_COMPLETE_MARKER_VERSION
+      ) {
+        throw NextlyError.serviceUnavailable({
+          logMessage:
+            "field-group migration cannot accept a marker written before this build's storage work existed",
+          logContext: {
+            phase: FIELD_GROUP_MIGRATION_PHASE,
+            reason: "settled marker predates work this build performs",
+            recordedVersion: state.version,
+            requiredVersion: MIN_COMPLETE_MARKER_VERSION,
+          },
+        });
+      }
+      await assertStorageAtGeneration({
+        adapter,
+        dialect,
+        rows,
+        identifierCase,
+        generation,
+        // The rows are checked as well as the structure. A marker can be
+        // current and the content still wrong — restored from a backup taken
+        // before the run, or repaired by hand — and a stale `_parent_table`
+        // is invisible to a structural check while making nested content
+        // invisible to a reader. The recorded plan is what names the storage
+        // this run's generation renamed away; without one there is nothing to
+        // scan for.
+        renamedAway: renamedAwayNames(state.appliedManifest, generation),
+        owned: ownedDataTableNames({
+          rows,
+          entries: state.appliedManifest ?? [],
+        }),
+      });
+      return {
+        ran: false,
+        reason: "already-migrated",
+        // Carried on this exit too, and re-read rather than taken from the session's opening
+        // observation. This exit reaches the same window every other one does: a `down` run
+        // that claimed the lock AFTER the preview began is exactly what makes "already
+        // migrated" a moving answer, and reporting the opening `not-held` beside it would
+        // conceal the writer this field was added to expose. Both exits ask the same accessor
+        // so they cannot disagree about who was holding it.
+        ...(dryRun ? { lock: await observeContention() } : {}),
+      };
+    }
+
+    // A rollback needs the plan that was applied; nothing else can supply it,
+    // because the database cannot say which names this migration created.
+    if (
+      direction === "down" &&
+      state.status === "settled" &&
+      state.appliedManifest === undefined
+    ) {
+      throw NextlyError.serviceUnavailable({
+        logMessage:
+          "field-group migration cannot roll back: no record of what was applied",
+        logContext: {
+          phase: FIELD_GROUP_MIGRATION_PHASE,
+          reason: "rollback has no recorded plan",
+        },
+      });
+    }
+
+    // Derived from the rows so a resume that has to rebuild it - a crash
+    // before the marker's first write - produces the same value rather than a
+    // second identity for the same work.
+    const migrationId =
+      state.status === "migrating" ? state.migrationId : newMigrationId(rows);
+
+    // The canonical plan is always legacy-to-migrated. A run in flight
+    // executes the one it recorded; a rollback reverses the recorded one; a
+    // fresh run builds it from the registry.
+    const entries: readonly ManifestEntry[] =
+      state.status === "migrating"
+        ? state.appliedManifest
+        : direction === "down" && state.appliedManifest !== undefined
+          ? state.appliedManifest
+          : buildMigrationManifest(rows).entries;
+
+    const registryHash = hashRegistryIdentity(rows);
+    const manifestHash = hashManifest(entries);
+
+    let tables: string[];
+    let columns: TableColumns[];
+    let reconciled: ReconciledEntry[];
+    const directed = directedRenameEntries(direction, entries);
+    lastKnownRenames = directed.flatMap(tableRenamesOf);
+    // Above the try because the steps below the try need them, and none of
+    // the three depends on the catalog read the try guards.
+    //
+    // Enumerated from what Nextly knows it owns rather than recognised by
+    // shape. Nextly runs inside the user's own database, and a table of
+    // theirs that happens to carry the parent-pointer column would otherwise
+    // be rewritten. Both spellings of every rename are included, because a
+    // resumed run can meet either one in the catalog.
+    const owned = ownedDataTableNames({ rows, entries: directed });
+    const dataSteps = dataStepCount({ meta, migrationId });
+    const offset = renamePositionOffset(direction, dataSteps);
+    try {
+      if (state.status === "migrating") {
+        if (state.plan.registryHash !== registryHash) {
           throw NextlyError.serviceUnavailable({
             logMessage:
-              "field-group migration cannot roll back: no record of what was applied",
+              "field-group migration cannot resume: the set of field groups changed since the interrupted run",
             logContext: {
               phase: FIELD_GROUP_MIGRATION_PHASE,
-              reason: "rollback has no recorded plan",
+              reason:
+                "the set of field groups changed since the interrupted run",
+              recorded: state.plan.registryHash,
+              current: registryHash,
             },
           });
         }
-
-        // Derived from the rows so a resume that has to rebuild it - a crash
-        // before the marker's first write - produces the same value rather than a
-        // second identity for the same work.
-        const migrationId =
-          state.status === "migrating"
-            ? state.migrationId
-            : newMigrationId(rows);
-
-        // The canonical plan is always legacy-to-migrated. A run in flight
-        // executes the one it recorded; a rollback reverses the recorded one; a
-        // fresh run builds it from the registry.
-        const entries: readonly ManifestEntry[] =
-          state.status === "migrating"
-            ? state.appliedManifest
-            : direction === "down" && state.appliedManifest !== undefined
-              ? state.appliedManifest
-              : buildMigrationManifest(rows).entries;
-
-        const registryHash = hashRegistryIdentity(rows);
-        const manifestHash = hashManifest(entries);
-
-        let tables: string[];
-        let columns: TableColumns[];
-        let reconciled: ReconciledEntry[];
-        const directed = directedRenameEntries(direction, entries);
-        lastKnownRenames = directed.flatMap(tableRenamesOf);
-        // Above the try because the steps below the try need them, and none of
-        // the three depends on the catalog read the try guards.
-        //
-        // Enumerated from what Nextly knows it owns rather than recognised by
-        // shape. Nextly runs inside the user's own database, and a table of
-        // theirs that happens to carry the parent-pointer column would otherwise
-        // be rewritten. Both spellings of every rename are included, because a
-        // resumed run can meet either one in the catalog.
-        const owned = ownedDataTableNames({ rows, entries: directed });
-        const dataSteps = dataStepCount({ meta, migrationId });
-        const offset = renamePositionOffset(direction, dataSteps);
-        try {
-          if (state.status === "migrating") {
-            if (state.plan.registryHash !== registryHash) {
-              throw NextlyError.serviceUnavailable({
-                logMessage:
-                  "field-group migration cannot resume: the set of field groups changed since the interrupted run",
-                logContext: {
-                  phase: FIELD_GROUP_MIGRATION_PHASE,
-                  reason:
-                    "the set of field groups changed since the interrupted run",
-                  recorded: state.plan.registryHash,
-                  current: registryHash,
-                },
-              });
-            }
-            if (state.direction !== direction) {
-              // 🔴 A preview REPORTS this, a run that writes refuses it — but reporting it requires
-              // the same evidence every other contended answer does: that something MOVED.
-              //
-              // Answering on the first look was wrong. A claim survives the process that made it
-              // until its expiry passes, so a CRASHED `down` run leaves both its migrating marker
-              // and a still-live row behind — and the marker outlives the claim, so the stranded
-              // state remains long after the row frees. Read once, that is indistinguishable from
-              // a live run, and a preview would
-              // describe a stranded migration awaiting recovery as ordinary traffic — the operator
-              // most needing to act being told to wait.
-              //
-              // So it is classified and thrown like any other retryable failure, and the shared
-              // machinery decides: a live run advances its step between attempts and is reported as
-              // contention, while a crashed one presents the identical world every time and is
-              // raised. The recorded step travels in the refusal precisely so that movement is
-              // visible to the comparison.
-              throw NextlyError.serviceUnavailable({
-                logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
-                logContext: {
-                  phase: FIELD_GROUP_MIGRATION_PHASE,
-                  reason: "a run in the other direction is in flight",
-                  [REFUSAL_KIND_KEY]: "torn-read",
-                  recorded: state.direction,
-                  recordedStep: state.step,
-                  requested: direction,
-                },
-              });
-            }
-          }
-
-          // 🔴 The try opens HERE — before the marker's own consistency checks, not merely before the
-          // catalog read — so every retryable failure in the plan-scoring window leaves by one path.
-          // The recorded-hash comparison and the opposite-direction check are both raised from inside
-          // it: each is a judgement about a world a writer may be moving, and each was previously
-          // thrown past the only place that builds the documented fallback. A torn catalog read surfaces as the driver's
-          // missing-table error rather than as a refusal, and handling that only in the outer loop
-          // meant it was retried but never reported: exhaustion rethrew the database error instead of
-          // the documented unreconciled outcome, so an operator met a raw driver failure in exactly
-          // the contended case this path exists to describe.
+        if (state.direction !== direction) {
+          // 🔴 A preview REPORTS this, a run that writes refuses it — but reporting it requires
+          // the same evidence every other contended answer does: that something MOVED.
           //
-          // It does NOT open earlier. Before this point the registry rows have not been read, and
-          // without them no manifest exists to name the renames — reporting a plan there would mean
-          // reporting an empty one, which reads as "nothing to do". A preview that cannot read the
-          // registry has nothing honest to say and refuses.
-          ({ tables, columns } = await readCatalog(adapter, dialect));
-
-          // Reconciled in the direction that will execute. A rollback scored
-          // against the canonical plan asks whether the legacy names are present,
-          // finds the migrated ones instead, and refuses the very run that would
-          // restore them. Declared above the try because the fallback names its renames from it.
-          reconciled = reconcilePlan({
-            entries: directed,
-            rows,
-            tables,
-            columns,
-            // Translated out of whole-plan coordinates. The marker counts every
-            // step, and going up the data rewrites hold the first positions, so a
-            // recorded position handed over untranslated would mark that many
-            // renames as already verified.
-            run: renameRunRecord({
-              status: state.status,
-              direction:
-                state.status === "migrating" ? state.direction : direction,
-              step: state.status === "migrating" ? state.step : 0,
-              offset,
-            }),
-            direction,
-            identifierCase,
-          });
-        } catch (error) {
-          // Only a preview re-reads, only for a failure a concurrent writer can manufacture, and
-          // only when a writer is demonstrably there. Everything else — a run that writes, a
-          // refusal about the database's actual shape, a torn-SHAPED refusal on a database nobody
-          // is writing to — leaves by the same door it always did.
+          // Answering on the first look was wrong. A claim survives the process that made it
+          // until its expiry passes, so a CRASHED `down` run leaves both its migrating marker
+          // and a still-live row behind — and the marker outlives the claim, so the stranded
+          // state remains long after the row frees. Read once, that is indistinguishable from
+          // a live run, and a preview would
+          // describe a stranded migration awaiting recovery as ordinary traffic — the operator
+          // most needing to act being told to wait.
           //
-          // Contention does not always arrive as a REFUSAL: the catalog is a table list followed by
-          // introspection of that list, and a rename landing in that gap surfaces as the driver's
-          // own missing-table error. Recognised by the same predicate the outer loop uses, so the
-          // two cannot disagree about what is worth re-reading.
-          if (!dryRun || !isRetryablePreviewFailure(error, dialect)) {
-            innerAdjudicated = true;
-            throw error;
-          }
-          const signature = signatureOf(error);
-          if (lastSignature !== undefined && signature !== lastSignature) {
-            movedSinceLastAttempt = true;
-          } else if (lastSignature !== undefined) {
-            movedSinceLastAttempt = false;
-          }
-          lastSignature = signature;
-          // Not the final attempt: let it out so the whole session runs again, marker included.
-          if (!finalAttempt) throw error;
-
-          // 🔴 Out of attempts, and the answer now turns on whether anything MOVED. An identical
-          // failure beside an unchanged lock owner on every attempt is a world standing still, and
-          // the held row behind it is a claim someone left when their process died rather than a
-          // writer at work. Reporting that as contention buries a real storage conflict under the
-          // word traffic — so it is raised, exactly as it would be with no lock row at all.
-          if (!movedSinceLastAttempt) {
-            innerAdjudicated = true;
-            throw error;
-          }
-
-          // Out of attempts. Report the manifest's plan and say plainly that it was never scored
-          // against this database, rather than returning an empty list — which reads as "nothing to
-          // do" and is the silent wrong answer this path exists to remove. Derived from `directed`,
-          // already in hand, so the fallback cannot disagree with the plan that would have executed.
-          const renames = directed.flatMap(tableRenamesOf);
-          lastKnownRenames = renames;
-          const reason = tornReadReason(error);
-          logger.warn?.("field-group migration dry run could not reconcile", {
-            phase: FIELD_GROUP_MIGRATION_PHASE,
-            direction,
-            renames: renames.length,
-            attempts,
-            reason,
-          });
-          return previewOutcome({
-            renames,
-            basis: { kind: "unreconciled", reason },
+          // So it is classified and thrown like any other retryable failure, and the shared
+          // machinery decides: a live run advances its step between attempts and is reported as
+          // contention, while a crashed one presents the identical world every time and is
+          // raised. The recorded step travels in the refusal precisely so that movement is
+          // visible to the comparison.
+          throw NextlyError.serviceUnavailable({
+            logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
+            logContext: {
+              phase: FIELD_GROUP_MIGRATION_PHASE,
+              reason: "a run in the other direction is in flight",
+              [REFUSAL_KIND_KEY]: "torn-read",
+              recorded: state.direction,
+              recordedStep: state.step,
+              requested: direction,
+            },
           });
         }
-
-        // The last point at which nothing has been written. Everything above reads: the marker, the
-        // registry, the catalog, and the reconciliation of the plan against them. Returning here
-        // reports a plan the database has already been scored against rather than one the manifest
-        // merely proposes.
-        if (dryRun) {
-          // Read from reconciliation rather than re-derived here, and that is the whole of it. The
-          // question "which renames remain" is one catalog resolution per physical table, and
-          // reconciliation has just done exactly that; asking it a second time in a second place is
-          // how the two came to disagree.
-          //
-          // What they disagreed about: a localized field group carries its `_locales` companion on
-          // the SAME entry, so an entry is unsatisfied while EITHER table remains. Filtering on that
-          // reported both when a run torn between the two had already moved the base — during a
-          // resume, which is precisely when an operator is judging whether the remaining work is
-          // safe to continue.
-          const renames = reconciled.flatMap(
-            entry => entry.pendingTableRenames
-          );
-          logger.info?.("field-group migration dry run", {
-            phase: FIELD_GROUP_MIGRATION_PHASE,
-            direction,
-            renames: renames.length,
-          });
-          return previewOutcome({ renames, basis: { kind: "reconciled" } });
-        }
-
-        // Written before the first statement, never after. A crash between a
-        // rename and a post-hoc marker write would leave moved objects with no
-        // record that a run had started.
-        if (state.status !== "migrating") {
-          await beginMigration(meta, {
-            direction,
-            migrationId,
-            plan: { registryHash, manifestHash },
-            appliedManifest: entries,
-          });
-        }
-
-        const steps = buildMigrationPlan({
-          direction,
-          entries: reconciled,
-          identifierCase,
-          observer: createStorageObserver(adapter, identifierCase),
-          meta,
-          migrationId,
-          ownedDataTables: owned,
-        });
-
-        // The settlement checks are gates rather than recorded work, so a marker
-        // never points past them and a resume re-enters them on its own.
-        const fromStep = state.status === "migrating" ? state.step + 1 : 1;
-        // 🔴 Invalidated whenever the steps may have RUN, not only when the run
-        // reports success. A rename can commit and `assertStorageComplete` or
-        // `settleMigration` can then throw — at which point the memoized registry
-        // name in this process points at a table that no longer exists, and every
-        // recovery attempt addresses the wrong one. The memo is a schema fact;
-        // the moment storage may have moved, the honest answer is "I no longer
-        // know", and one extra catalog read is the whole cost of saying so.
-        try {
-          await runMigrationSteps({
-            session,
-            meta,
-            migrationId,
-            steps,
-            fromStep,
-          });
-
-          // The structural half of the question the settle steps ask about
-          // vocabulary. Asked of the database rather than inferred from the steps
-          // having run: a step reports its own postcondition, while this asks
-          // whether the storage as a whole is now what the generation claims,
-          // which is the question a settled marker will be believed on afterwards.
-          await assertStorageComplete({
-            adapter,
-            dialect,
-            rows: await readRegistryRows(adapter, dialect, identifierCase),
-            identifierCase,
-            // Every name this run renamed away. A row still addressing one of them
-            // is content the read path would return nothing for, and it is asked
-            // about here rather than per step because the failure worth catching is
-            // a data table no step ever observed.
-            renamedAway: directed
-              .filter(entry => entry.kind === "table")
-              .map(entry => entry.from),
-            owned,
-            generation,
-          });
-
-          await settleMigration(
-            meta,
-            generation === "field-groups-v2"
-              ? { generation, appliedManifest: entries }
-              : { generation }
-          );
-        } finally {
-          forgetFieldGroupStorageNames(adapter);
-        }
-
-        logger.info(
-          `Field group storage migrated ${direction} (${String(steps.length)} steps).`
-        );
-        return { ran: true, direction, steps: steps.length };
       }
+
+      // 🔴 The try opens HERE — before the marker's own consistency checks, not merely before the
+      // catalog read — so every retryable failure in the plan-scoring window leaves by one path.
+      // The recorded-hash comparison and the opposite-direction check are both raised from inside
+      // it: each is a judgement about a world a writer may be moving, and each was previously
+      // thrown past the only place that builds the documented fallback. A torn catalog read surfaces as the driver's
+      // missing-table error rather than as a refusal, and handling that only in the outer loop
+      // meant it was retried but never reported: exhaustion rethrew the database error instead of
+      // the documented unreconciled outcome, so an operator met a raw driver failure in exactly
+      // the contended case this path exists to describe.
+      //
+      // It does NOT open earlier. Before this point the registry rows have not been read, and
+      // without them no manifest exists to name the renames — reporting a plan there would mean
+      // reporting an empty one, which reads as "nothing to do". A preview that cannot read the
+      // registry has nothing honest to say and refuses.
+      ({ tables, columns } = await readCatalog(adapter, dialect));
+
+      // Reconciled in the direction that will execute. A rollback scored
+      // against the canonical plan asks whether the legacy names are present,
+      // finds the migrated ones instead, and refuses the very run that would
+      // restore them. Declared above the try because the fallback names its renames from it.
+      reconciled = reconcilePlan({
+        entries: directed,
+        rows,
+        tables,
+        columns,
+        // Translated out of whole-plan coordinates. The marker counts every
+        // step, and going up the data rewrites hold the first positions, so a
+        // recorded position handed over untranslated would mark that many
+        // renames as already verified.
+        run: renameRunRecord({
+          status: state.status,
+          direction: state.status === "migrating" ? state.direction : direction,
+          step: state.status === "migrating" ? state.step : 0,
+          offset,
+        }),
+        direction,
+        identifierCase,
+      });
+    } catch (error) {
+      // Only a preview re-reads, only for a failure a concurrent writer can manufacture, and
+      // only when a writer is demonstrably there. Everything else — a run that writes, a
+      // refusal about the database's actual shape, a torn-SHAPED refusal on a database nobody
+      // is writing to — leaves by the same door it always did.
+      //
+      // Contention does not always arrive as a REFUSAL: the catalog is a table list followed by
+      // introspection of that list, and a rename landing in that gap surfaces as the driver's
+      // own missing-table error. Recognised by the same predicate the outer loop uses, so the
+      // two cannot disagree about what is worth re-reading.
+      if (!dryRun || !isRetryablePreviewFailure(error, dialect)) {
+        innerAdjudicated = true;
+        throw error;
+      }
+      const signature = signatureOf(error);
+      if (lastSignature !== undefined && signature !== lastSignature) {
+        movedSinceLastAttempt = true;
+      } else if (lastSignature !== undefined) {
+        movedSinceLastAttempt = false;
+      }
+      lastSignature = signature;
+      // Not the final attempt: let it out so the whole session runs again, marker included.
+      if (!finalAttempt) throw error;
+
+      // 🔴 Out of attempts, and the answer now turns on whether anything MOVED. An identical
+      // failure beside an unchanged lock owner on every attempt is a world standing still, and
+      // the held row behind it is a claim someone left when their process died rather than a
+      // writer at work. Reporting that as contention buries a real storage conflict under the
+      // word traffic — so it is raised, exactly as it would be with no lock row at all.
+      if (!movedSinceLastAttempt) {
+        innerAdjudicated = true;
+        throw error;
+      }
+
+      // Out of attempts. Report the manifest's plan and say plainly that it was never scored
+      // against this database, rather than returning an empty list — which reads as "nothing to
+      // do" and is the silent wrong answer this path exists to remove. Derived from `directed`,
+      // already in hand, so the fallback cannot disagree with the plan that would have executed.
+      const renames = directed.flatMap(tableRenamesOf);
+      lastKnownRenames = renames;
+      const reason = tornReadReason(error);
+      logger.warn?.("field-group migration dry run could not reconcile", {
+        phase: FIELD_GROUP_MIGRATION_PHASE,
+        direction,
+        renames: renames.length,
+        attempts,
+        reason,
+      });
+      return previewOutcome({
+        renames,
+        basis: { kind: "unreconciled", reason },
+      });
+    }
+
+    // The last point at which nothing has been written. Everything above reads: the marker, the
+    // registry, the catalog, and the reconciliation of the plan against them. Returning here
+    // reports a plan the database has already been scored against rather than one the manifest
+    // merely proposes.
+    if (dryRun) {
+      // Read from reconciliation rather than re-derived here, and that is the whole of it. The
+      // question "which renames remain" is one catalog resolution per physical table, and
+      // reconciliation has just done exactly that; asking it a second time in a second place is
+      // how the two came to disagree.
+      //
+      // What they disagreed about: a localized field group carries its `_locales` companion on
+      // the SAME entry, so an entry is unsatisfied while EITHER table remains. Filtering on that
+      // reported both when a run torn between the two had already moved the base — during a
+      // resume, which is precisely when an operator is judging whether the remaining work is
+      // safe to continue.
+      const renames = reconciled.flatMap(entry => entry.pendingTableRenames);
+      logger.info?.("field-group migration dry run", {
+        phase: FIELD_GROUP_MIGRATION_PHASE,
+        direction,
+        renames: renames.length,
+      });
+      return previewOutcome({ renames, basis: { kind: "reconciled" } });
+    }
+
+    // Written before the first statement, never after. A crash between a
+    // rename and a post-hoc marker write would leave moved objects with no
+    // record that a run had started.
+    if (state.status !== "migrating") {
+      await beginMigration(meta, {
+        direction,
+        migrationId,
+        plan: { registryHash, manifestHash },
+        appliedManifest: entries,
+      });
+    }
+
+    const steps = buildMigrationPlan({
+      direction,
+      entries: reconciled,
+      identifierCase,
+      observer: createStorageObserver(adapter, identifierCase),
+      meta,
+      migrationId,
+      ownedDataTables: owned,
+    });
+
+    // The settlement checks are gates rather than recorded work, so a marker
+    // never points past them and a resume re-enters them on its own.
+    const fromStep = state.status === "migrating" ? state.step + 1 : 1;
+    // 🔴 Invalidated whenever the steps may have RUN, not only when the run
+    // reports success. A rename can commit and `assertStorageComplete` or
+    // `settleMigration` can then throw — at which point the memoized registry
+    // name in this process points at a table that no longer exists, and every
+    // recovery attempt addresses the wrong one. The memo is a schema fact;
+    // the moment storage may have moved, the honest answer is "I no longer
+    // know", and one extra catalog read is the whole cost of saying so.
+    try {
+      await runMigrationSteps({
+        session,
+        meta,
+        migrationId,
+        steps,
+        fromStep,
+      });
+
+      // The structural half of the question the settle steps ask about
+      // vocabulary. Asked of the database rather than inferred from the steps
+      // having run: a step reports its own postcondition, while this asks
+      // whether the storage as a whole is now what the generation claims,
+      // which is the question a settled marker will be believed on afterwards.
+      await assertStorageComplete({
+        adapter,
+        dialect,
+        rows: await readRegistryRows(adapter, dialect, identifierCase),
+        identifierCase,
+        // Every name this run renamed away. A row still addressing one of them
+        // is content the read path would return nothing for, and it is asked
+        // about here rather than per step because the failure worth catching is
+        // a data table no step ever observed.
+        renamedAway: directed
+          .filter(entry => entry.kind === "table")
+          .map(entry => entry.from),
+        owned,
+        generation,
+      });
+
+      await settleMigration(
+        meta,
+        generation === "field-groups-v2"
+          ? { generation, appliedManifest: entries }
+          : { generation }
+      );
+    } finally {
+      forgetFieldGroupStorageNames(adapter);
+    }
+
+    logger.info(
+      `Field group storage migrated ${direction} (${String(steps.length)} steps).`
     );
+    return { ran: true, direction, steps: steps.length };
+  };
 
   // 🔴 The RETRY IS OF THE WHOLE SESSION, not of the catalog read, and that is the entire
   // correctness argument. The pair that tears is the MARKER against the catalog: the marker is read

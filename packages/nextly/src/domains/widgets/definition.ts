@@ -28,6 +28,7 @@ import type {
 } from "./query";
 import {
   drivesQuery,
+  fieldsSettingQueryProblem,
   isLimitSetting,
   settingsSourceOf,
   validateWidgetSettings,
@@ -59,7 +60,7 @@ export {
  * query result, so it inherits the card anatomy, the loading and empty states,
  * the theme tokens and the accessibility work for free.
  */
-export const WIDGET_ARCHETYPES = [
+const WIDGET_ARCHETYPES = [
   "metric",
   // Several labelled, clickable numbers. Named "stats" rather than the obvious
   // "metrics", and the near-miss is the reason: `metric` and `metrics` differ by
@@ -119,7 +120,7 @@ export const DATA_ARCHETYPES = [
  * using `query`. `stats` is the first, so it gets its own name rather than
  * being filed under whichever existing one is closer.
  */
-export const CELL_ARCHETYPES = ["stats"] as const;
+const CELL_ARCHETYPES = ["stats"] as const;
 
 /** An archetype core draws from several query results. */
 export type CellWidgetArchetype = (typeof CELL_ARCHETYPES)[number];
@@ -354,8 +355,10 @@ export interface WidgetDefinition {
   sketch?: DataWidgetArchetype;
   /**
    * What a declared widget's empty state says and offers in place of the
-   * frame's own: one line, and one action, a path relative to the admin,
-   * offered only to a reader holding its `requiredPermission`.
+   * frame's own: one line, and one action: a path relative to the admin,
+   * offered only to a reader holding its `requiredPermission`, or the card's
+   * own settings (`opens: "settings"`), offered where the reader can change
+   * them.
    *
    * 🔴 Published by core for a declared widget alone (with `serverData`), from
    * a declaration startup already held to the empty state's rules. Whether
@@ -363,7 +366,9 @@ export interface WidgetDefinition {
    */
   empty?: {
     message?: string;
-    action?: { label: string; link: string; requiredPermission?: string };
+    action?:
+      | { label: string; link: string; requiredPermission?: string }
+      | { label: string; opens: "settings" };
   };
   /**
    * The settings the widget's source narrows by rather than being replaced by
@@ -378,8 +383,10 @@ export interface WidgetDefinition {
    */
   sourceFilters?: readonly WidgetSourceFilter[];
   /**
-   * Where this widget sits by default, ascending. Omitted means "after
-   * everything that states one".
+   * Where this widget sits, ascending, among the declared cards the admin
+   * draws while no arrangement could be read. Omitted means "after everything
+   * that states one". It places nothing on the default dashboard, which is only
+   * what its `defaultLayout` names; core's own widgets state none.
    *
    * The DECLARED default, not the reader's own arrangement -- a stored layout
    * carries its own order per placement and wins over this. It exists because
@@ -412,18 +419,10 @@ export interface WidgetDefinition {
   /**
    * Whether a reader may send this card away themselves.
    *
-   * 🔴 Dismissal is HIDING, not deleting, and deliberately so: the placement
-   * stays in the reader's layout marked hidden, which is what lets them put it
-   * back from the same panel every other hidden card is restored from. A
-   * separate "dismissed" store would be a second way to make a card disappear,
-   * and the reader would have two places to look for it.
-   *
-   * Independent of {@link WidgetDefinition.lifecycle}. A CONDITIONAL card stops
-   * being offered when its condition lapses, which is the install's decision; a
-   * DISMISSIBLE one can be sent away while the condition still holds, which is
-   * the reader's. An onboarding checklist wants both -- it goes when the work is
-   * done, and a reader who does not want it now should not have to finish the
-   * work to be rid of it.
+   * @deprecated Has no effect: every card's "…" menu offers Remove, whatever
+   * its widget declares, so a reader may send any card away. Still accepted, so
+   * a declaration that sets it starts as before, and removed with the legacy
+   * definition fields.
    */
   dismissible?: boolean;
   /**
@@ -456,7 +455,7 @@ export interface WidgetDefinition {
    * returns -- that is `execute`'s job, and it is not optional there.
    *
    * A `PermissionSlug` spelling (`read-posts`), the same vocabulary
-   * `WidgetSource.requiredPermission` and `PluginAdminWidget` carry.
+   * `WidgetSource.requiredPermission` carries.
    *
    * 🔴 An ARRAY means ANY-OF, and it exists because a single slug cannot
    * describe the rule the services behind these cards actually apply. Release
@@ -524,6 +523,15 @@ export interface WidgetDefinition {
   serverData?: true;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
+  /**
+   * Who declared a widget drawn by its own component, as faults name an owner (`plugin "name"`),
+   * so its card can say whose component is missing in development.
+   *
+   * 🔴 Published by core for a declared widget alone, as `serverData` is: the public
+   * registration doors refuse it, since a registration naming an owner would claim a plugin's
+   * name for a card that plugin never declared.
+   */
+  owner?: string;
   /** Required for `actions`; forbidden otherwise. */
   actions?: WidgetAction[];
   /**
@@ -923,7 +931,7 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
  * Archetypes core draws with NO query at all, exported for the same reason as
  * `DATA_ARCHETYPES` above.
  */
-export const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
+const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
 
 /** An archetype core draws without asking for data. */
 export type QuerylessWidgetArchetype = (typeof QUERYLESS_ARCHETYPES)[number];
@@ -1000,7 +1008,7 @@ export const MAX_TEXT_CONTENT = 10_000;
  * shared. A `text` widget IS its prose, so blank content describes an empty
  * card; the bound is explained on {@link MAX_TEXT_CONTENT}.
  */
-export function textContentProblem(content: unknown): string | undefined {
+function textContentProblem(content: unknown): string | undefined {
   if (typeof content !== "string" || content.trim() === "") {
     return 'archetype "text" requires non-empty content';
   }
@@ -1038,14 +1046,10 @@ function validateAction(action: WidgetAction | undefined, at: string): void {
 /**
  * What is wrong with one shortcut, or `undefined` when nothing is.
  *
- * A PREDICATE beside the throwing check, because both channels into the grid
- * need this rule and only one of them throws. `assertAdminWidgets` refuses a
- * contributed widget with its own error shape and its own message, so it cannot
- * call `validateAction` -- and restating the rule there is how the two came to
- * disagree: the registry rejected a blank label while a contributed
- * `actions: [{}]` was published and drew a link with an undefined destination.
+ * A PREDICATE beside the throwing check, so a caller can ask the rule without
+ * catching a throw.
  */
-export function actionProblem(action: unknown): string | undefined {
+function actionProblem(action: unknown): string | undefined {
   const candidate = action as Partial<WidgetAction> | null | undefined;
   if (typeof candidate?.label !== "string" || candidate.label.trim() === "") {
     return "requires a non-empty label";
@@ -1072,7 +1076,7 @@ export function actionProblem(action: unknown): string | undefined {
  * `WidgetDefinition` and a decoded JSON object can ask it without either side
  * casting to the other's shape.
  */
-export function querylessQueryProblem(
+function querylessQueryProblem(
   archetype: unknown,
   query: unknown
 ): string | undefined {
@@ -1127,7 +1131,7 @@ export function chromeFieldProblem(widget: object): string | undefined {
  * uses infinity as its "stated nothing" sentinel, so an infinite ORDER would
  * tie with every widget that declared none.
  */
-export function defaultOrderProblem(value: unknown): string | undefined {
+function defaultOrderProblem(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "defaultOrder must be a finite number";
@@ -1237,7 +1241,7 @@ export function statCellProblem(cell: unknown, at: string): string | undefined {
  * published -- the exact values the registry refuses, arriving by the other
  * door and rendering as silent dashes or one answer drawn twice.
  */
-export function cellsProblem(
+function cellsProblem(
   cells: unknown,
   max: number = MAX_STAT_CELLS
 ): string | undefined {
@@ -1326,7 +1330,7 @@ function queryCellProblem(cell: unknown, index: number): string | undefined {
  * registry's and a plugin's contributed widgets, so neither accepts a shape the
  * other refuses.
  */
-export function customAsksTwiceProblem(widget: {
+function customAsksTwiceProblem(widget: {
   archetype?: unknown;
   query?: unknown;
   cells?: unknown;
@@ -1399,7 +1403,7 @@ function validateCells(d: Partial<WidgetDefinition>): void {
  * Answers a reason rather than throwing, like {@link querylessQueryProblem}
  * beside it, so the caller attaches the widget id once for every rule.
  */
-export function archetypeResultProblem(
+function archetypeResultProblem(
   archetype: WidgetArchetype,
   // Sourceless too: the op decides what an archetype can draw, whichever way
   // the source arrives.
@@ -1457,12 +1461,19 @@ function validateEmpty(d: Partial<WidgetDefinition>): void {
 const isText = (value: unknown) =>
   typeof value === "string" && value.trim() !== "";
 
-/** An empty state's action, when stated: a label and a link, each of them text. */
+/**
+ * An empty state's action, when stated: a label, each of them text, and either a link that is
+ * text or `opens: "settings"`.
+ */
 function emptyActionIsText(action: unknown): boolean {
   if (action === undefined) return true;
   if (typeof action !== "object" || action === null) return false;
-  const { label, link } = action as { label?: unknown; link?: unknown };
-  return isText(label) && isText(link);
+  const { label, link, opens } = action as {
+    label?: unknown;
+    link?: unknown;
+    opens?: unknown;
+  };
+  return isText(label) && (opens === "settings" || isText(link));
 }
 
 /**
@@ -1616,24 +1627,35 @@ const OFFERED_MODES = [
 ] as const satisfies readonly NonNullable<WidgetDefinition["offered"]>[];
 
 /**
- * Refuses an `offered` mode outside its closed list, and a widget offered per
- * collection that declares no Collection setting:
- * its add-panel rows each start a card set to a collection, so without one the
- * widget could be added nowhere.
+ * Why an `offered` mode cannot work, or `undefined`: a mode outside its closed
+ * list, or a widget offered per collection that declares no Collection
+ * setting: its add-panel rows each start a card set to a collection, so
+ * without one the widget could be added nowhere.
+ *
+ * Exported so a declared widget is judged at startup by this same rule, before
+ * any widget is kept, rather than refused half way through registering.
  */
-function validateOffered(d: Partial<WidgetDefinition>): void {
+export function offeredProblem(d: {
+  offered?: unknown;
+  settings?: unknown;
+}): string | undefined {
   // An untyped registration with a misspelt mode would otherwise be read as an
   // ordinary widget: placed by default, perhaps with no collection to read.
   const outside = closedValueProblem("offered", d.offered, OFFERED_MODES);
-  if (outside !== undefined) fail(`${d.id}: ${outside}`);
+  if (outside !== undefined) return outside;
   if (
     d.offered === "per-collection" &&
     !declaresCollectionSetting(d.settings)
   ) {
-    fail(
-      `${d.id}: a widget offered per collection needs a Collection setting, which each card starts set to`
-    );
+    return "a widget offered per collection needs a Collection setting, which each card starts set to";
   }
+  return undefined;
+}
+
+/** Refuses a definition whose `offered` mode cannot work (`offeredProblem`). */
+function validateOffered(d: Partial<WidgetDefinition>): void {
+  const problem = offeredProblem(d);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
 /** Throws with a named reason if `def` is not a usable definition. */
@@ -1660,6 +1682,8 @@ export function validateWidgetDefinition(
   validateCells(d);
   const rangedLimit = rangedLimitSettingProblem(d);
   if (rangedLimit !== undefined) fail(`${d.id}: ${rangedLimit}`);
+  const fieldsQuery = fieldsSettingQueryProblem(d);
+  if (fieldsQuery !== undefined) fail(`${d.id}: ${fieldsQuery}`);
   validateOffered(d);
   validateDefaultOrder(d);
   // Judged on what the widget asks, with the filters each source declares: a

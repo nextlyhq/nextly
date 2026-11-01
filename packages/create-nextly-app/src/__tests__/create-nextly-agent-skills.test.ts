@@ -239,7 +239,8 @@ describe("createNextly and the skills for coding agents", () => {
     await writeFile(
       path.join(app, "package.json"),
       JSON.stringify({
-        dependencies: { next: "16.0.0", nextly: SKILLS_VERSION },
+        // A supported Next.js, so the run gets past the framework version check.
+        dependencies: { next: "16.4.2", nextly: SKILLS_VERSION },
       })
     );
 
@@ -283,9 +284,10 @@ describe("createNextly and the skills for coding agents", () => {
   it("adds none to a project on another Nextly release, and says why", async () => {
     const app = path.join(dir, "older");
     await mkdir(path.join(app, "node_modules/nextly"), { recursive: true });
+    // A supported Next.js, so the run gets past the framework version check.
     await writeFile(
       path.join(app, "package.json"),
-      JSON.stringify({ dependencies: { next: "16.0.0", nextly: "latest" } })
+      JSON.stringify({ dependencies: { next: "16.4.2", nextly: "latest" } })
     );
     await writeFile(
       path.join(app, "node_modules/nextly/package.json"),

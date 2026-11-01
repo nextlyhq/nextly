@@ -7,14 +7,20 @@ import path from "path";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
-import { integrationWorkers } from "./src/__tests__/worker-database-guard";
+import { nextlyForTemplates } from "./src/__tests__/template-imports";
+import {
+  integrationProjects,
+  integrationWorkers,
+} from "./src/__tests__/worker-database-guard";
 
 // One worker unless the run asks for more with NEXTLY_INTEGRATION_WORKERS, and
 // refused when more than one would share a database a TEST_*_URL names.
 const workers = integrationWorkers(process.env);
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  // A template's `nextly` imports resolve to this package's source, as in
+  // the unit run, so a test can boot a template's own collections.
+  plugins: [tsconfigPaths(), nextlyForTemplates()],
   resolve: {
     alias: {
       "@nextly/storage": path.resolve(__dirname, "./src/storage/index.ts"),
@@ -24,7 +30,6 @@ export default defineConfig({
     // What each file loaded on its last run, so `--changed` and `related` pick
     // tests from real dependencies rather than a static import graph.
     experimental: { recordDependencies: true },
-    name: "nextly-integration",
     globals: true,
     environment: "node",
     setupFiles: ["./src/__tests__/setup.ts"],
@@ -34,7 +39,6 @@ export default defineConfig({
       "./src/__tests__/transaction-escapes-inventory.ts",
       "./src/__tests__/worker-database-guard.ts",
     ],
-    include: ["src/**/*.integration.test.ts"],
     exclude: ["node_modules", "dist", ".turbo", "**/*.d.ts"],
     // Why longer timeouts: integration tests do real DB I/O, schema setup,
     // and teardown. 30s gives Neon-style cold starts plus per-test schema
@@ -56,9 +60,13 @@ export default defineConfig({
     // per-file table prefix, so two of them sharing a database drop and
     // recreate the same table out from under each other. With more workers
     // each worker process has a database of its own (in-memory SQLite, or the
-    // PostgreSQL database the global setup made for its pool id; MySQL stays
-    // on one worker, which `integrationWorkers` enforces), so files run in
-    // parallel across workers and still one at a time within each.
+    // PostgreSQL or MySQL database the global setup made for its pool id), so
+    // files run in parallel across workers and still one at a time within each.
     fileParallelism: workers > 1,
+    // Every file in a first group, and those that take a server-wide lock in
+    // a second that starts once the first has finished.
+    projects: integrationProjects({
+      include: ["src/**/*.integration.test.ts"],
+    }),
   },
 });

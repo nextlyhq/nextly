@@ -8,13 +8,21 @@
  * transaction that makes it, so a read an owner takes away again stays away,
  * while an entity added later, or a rule changed to `true`, is granted at the
  * first boot that sees it. Rules are asked as a visitor's request is, through
- * the same evaluator, in each configured language and in all at once.
+ * the same evaluator, in each configured language and in all at once. A
+ * permission a plugin declares for Public on one of its own collections
+ * (`contributes.publicGrants`) is granted the same way, once, and lasts only
+ * while an enabled plugin declares it: once none does, the plugin disabled,
+ * removed or no longer declaring it, it is taken back if Public still holds
+ * it, and forgotten, so declaring it again grants it again. One an owner took
+ * away first stays recorded, and declaring it again never grants it back.
  *
  * Then what Public does not hold yet and visitors may be relying on is
- * listed, at every boot while Public lacks it: a read with no rule, which a
- * visitor has by default, a read whose rule answers neither `true` nor
- * `false`, a write whose rule answers `true`, and any rule that failed or
- * gave no answer when asked.
+ * listed, at every boot while Public lacks it: a read whose rule answers
+ * neither `true` nor `false`, a write whose rule answers `true`, and any rule
+ * that failed or gave no answer when asked. A read with no rule is not: a
+ * collection left private that way is ordinary. A site set up before visitors
+ * were judged by the Public role, whose visitors read every collection with no
+ * read rule, is told once instead which reads its visitors lost.
  *
  * @module domains/auth/services/public-read-grant
  */
@@ -25,6 +33,7 @@ import {
   plainRule,
   type AccessTarget,
 } from "../../../auth/access/decide";
+import { mayAnswerFilter, ruleAnswer } from "../../../auth/access/rule-answer";
 import {
   everyLanguage,
   languagesOfContent,
@@ -48,6 +57,16 @@ import type { Logger } from "../../../services/shared";
  * role made again has a new id, so either is granted afresh.
  */
 const PUBLIC_GRANTED_META_KEY = "public-role-granted";
+
+/**
+ * The `nextly_meta` key saying whether this site is told, once, which reads
+ * its visitors lost when they came to be judged by the Public role: `"due"`
+ * until a boot tells it, then `"shown"`, or `"not-due"` for a site not to be
+ * told. See {@link recordPublicReadNotice}.
+ */
+export const PUBLIC_READ_NOTICE_META_KEY = "public-read-upgrade-notice";
+
+type NoticeState = "due" | "not-due" | "shown";
 
 /**
  * How long a rule may take to answer at boot before it is taken as giving
@@ -80,6 +99,18 @@ interface PublicReadGrantSeeding {
   /** The permission slugs the role holds now. */
   publicHolds: (roleId: string) => Promise<Set<string>>;
   /**
+   * The permissions enabled plugins declare for Public, each with the plugin
+   * declaring it, and those refused.
+   */
+  declared: () => {
+    grants: ReadonlyArray<PluginGrant>;
+    refused: ReadonlyArray<{
+      action: string;
+      collection: string;
+      owner: string;
+    }>;
+  };
+  /**
    * Adds to the role the permission ids `pick` chooses, in one transaction
    * that never interleaves with an edit of the role's permissions; `pick` is
    * told the ids the role holds and handed the transaction's executor. The
@@ -90,6 +121,20 @@ interface PublicReadGrantSeeding {
     wanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
     pick: (
       ids: readonly string[],
+      executor: unknown
+    ) => Promise<readonly string[]>
+  ) => Promise<readonly string[]>;
+  /**
+   * Takes off the role the permissions `pick` chooses among `unwanted`, under
+   * the same lock as `addOnce`, leaving one whose permission was edited
+   * meanwhile into another; `pick` is told the ids still as named that the
+   * role holds and handed the transaction's executor. The ids removed.
+   */
+  withdraw: (
+    roleId: string,
+    unwanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
+    pick: (
+      held: readonly string[],
       executor: unknown
     ) => Promise<readonly string[]>
   ) => Promise<readonly string[]>;
@@ -257,23 +302,39 @@ async function ask(
   );
 }
 
-/** The recorded grants: the Public role they were made to, and their ids. */
+/** A permission a plugin declares for Public, and the plugin declaring it. */
+interface PluginGrant {
+  action: string;
+  resource: string;
+  owner: string;
+}
+
+/**
+ * The recorded grants: the Public role they were made to, their ids, and, for
+ * each a plugin declared, the plugin and the permission it names, so one no
+ * enabled plugin declares any longer is known and taken back.
+ */
 interface Recorded {
   role: string;
   granted: string[];
+  // Missing from a record written before plugins could declare grants. No
+  // released version made a plugin grant, so it is read as none recorded.
+  declared?: Record<string, PluginGrant>;
 }
 
 /**
  * Claims `ids` in the recorded grants, on `executor`, the transaction they are
- * made in, keeping only ids of permissions that still exist. Grants recorded
- * for another role, a Public role since removed and made again, count for
- * nothing: the new role is granted afresh. Returns the ids this boot claimed:
- * those no other boot recorded first.
+ * made in, keeping only ids of permissions that still exist, and records the
+ * plugin of each claimed id in `declaring`. Grants recorded for another role,
+ * a Public role since removed and made again, count for nothing: the new role
+ * is granted afresh. Returns the ids this boot claimed: those no other boot
+ * recorded first.
  */
 async function claimGrants(
   meta: PublicReadGrantSeeding["meta"],
   roleId: string,
   ids: readonly string[],
+  declaring: ReadonlyMap<string, PluginGrant>,
   existing: ReadonlySet<string>,
   executor: unknown
 ): Promise<string[]> {
@@ -283,11 +344,12 @@ async function claimGrants(
       executor
     );
     if (recorded === null) {
-      const empty: Recorded = { role: roleId, granted: [] };
+      const empty: Recorded = { role: roleId, granted: [], declared: {} };
       await meta.insertIfAbsent(PUBLIC_GRANTED_META_KEY, empty, executor);
       continue;
     }
-    const granted = recorded.role === roleId ? recorded.granted : [];
+    const ours = recorded.role === roleId;
+    const granted = ours ? recorded.granted : [];
     const claimed = ids.filter(id => !granted.includes(id));
     if (claimed.length === 0) return [];
     const next: Recorded = {
@@ -295,6 +357,15 @@ async function claimGrants(
       granted: Array.from(
         new Set([...granted.filter(id => existing.has(id)), ...claimed])
       ).sort(),
+      declared: Object.fromEntries([
+        ...Object.entries(ours ? (recorded.declared ?? {}) : {}).filter(
+          ([id]) => existing.has(id)
+        ),
+        ...claimed.flatMap(id => {
+          const grant = declaring.get(id);
+          return grant === undefined ? [] : [[id, grant] as const];
+        }),
+      ]),
     };
     if (
       await meta.compareAndSet(
@@ -312,6 +383,92 @@ async function claimGrants(
   });
 }
 
+/**
+ * Drops `held` from the recorded grants, on `executor`, the transaction they
+ * are taken back in, keeping only those recorded for this role as a plugin's.
+ * Returns the ids dropped: a held id no boot recorded was given by an owner,
+ * not by boot seeding, and is not taken back.
+ */
+async function releaseGrants(
+  meta: PublicReadGrantSeeding["meta"],
+  roleId: string,
+  held: readonly string[],
+  executor: unknown
+): Promise<string[]> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const recorded = await meta.get<Recorded>(
+      PUBLIC_GRANTED_META_KEY,
+      executor
+    );
+    if (recorded === null || recorded.role !== roleId) return [];
+    const declared = recorded.declared ?? {};
+    const released = held.filter(
+      id => Object.hasOwn(declared, id) && recorded.granted.includes(id)
+    );
+    if (released.length === 0) return [];
+    const next: Recorded = {
+      role: roleId,
+      granted: recorded.granted.filter(id => !released.includes(id)),
+      declared: Object.fromEntries(
+        Object.entries(declared).filter(([id]) => !released.includes(id))
+      ),
+    };
+    if (
+      await meta.compareAndSet(
+        PUBLIC_GRANTED_META_KEY,
+        recorded,
+        next,
+        executor
+      )
+    ) {
+      return released;
+    }
+  }
+  throw NextlyError.internal({
+    logContext: { reason: "public-grants-not-released" },
+  });
+}
+
+/**
+ * Takes back each recorded plugin grant no enabled plugin declares any longer,
+ * where Public still holds it, and forgets it, so declaring it again grants it
+ * again. One Public no longer holds was taken away by an owner and stays
+ * recorded, so declaring it again never grants it back. One in `kept`, which
+ * this boot grants, is left alone. Each removal is logged, once: it is no
+ * longer recorded, so no later boot takes it back.
+ */
+async function withdrawUndeclared(
+  roleId: string,
+  kept: ReadonlySet<string>,
+  {
+    withdraw,
+    meta,
+    logger,
+  }: Pick<PublicReadGrantSeeding, "withdraw" | "meta" | "logger">
+): Promise<void> {
+  const recorded = await meta.get<Recorded>(PUBLIC_GRANTED_META_KEY);
+  if (recorded === null || recorded.role !== roleId) return;
+  const leftover = new Map(
+    Object.entries(recorded.declared ?? {}).filter(([id]) => !kept.has(id))
+  );
+  if (leftover.size === 0) return;
+  const removed = await withdraw(
+    roleId,
+    [...leftover].map(([id, { action, resource }]) => ({
+      id,
+      action,
+      resource,
+    })),
+    (held, executor) => releaseGrants(meta, roleId, held, executor)
+  );
+  for (const id of removed) {
+    const { action, resource, owner } = leftover.get(id)!;
+    logger.warn(
+      `[Nextly] Removed "${permissionSlug(action, resource)}" from the Public role: the plugin "${owner}" that declared it no longer does, or is disabled or removed.`
+    );
+  }
+}
+
 /** A target, with what its rules said about a visitor. */
 interface Asked {
   target: AccessTarget;
@@ -321,7 +478,6 @@ interface Asked {
 
 /** The groups the startup listing names, each with how it is introduced. */
 const LISTED = {
-  "no-rule": "Read with no read rule, which visitors have by default",
   "not-true": "Read whose rule answers neither true nor false",
   write: "Write whose rule answers true for anyone",
   failed:
@@ -330,8 +486,12 @@ const LISTED = {
 
 type Listed = keyof typeof LISTED;
 
-/** Where a read Public lacks is listed, if at all. */
-function listedRead(read: Answer): Listed | null {
+/**
+ * What a read Public lacks is, if anything visitors may miss: a read with no
+ * rule, which the startup listing leaves to the once-only notice, or a group
+ * the listing names.
+ */
+function listedRead(read: Answer): Listed | "no-rule" | null {
   if (read.kind === "no-rule") return "no-rule";
   if (read.kind === "failed") return "failed";
   return read.value === true || read.value === false ? null : "not-true";
@@ -352,7 +512,8 @@ function listing(asked: readonly Asked[], held: Set<string>): string | null {
     named.set(group, [...(named.get(group) ?? []), permission]);
   };
   for (const { target, read, writes } of asked) {
-    name(listedRead(read), "read", target.slug);
+    const group = listedRead(read);
+    name(group === "no-rule" ? null : group, "read", target.slug);
     for (const { action, answer } of writes) {
       name(listedWrite(answer), action, target.slug);
     }
@@ -362,27 +523,141 @@ function listing(asked: readonly Asked[], held: Set<string>): string | null {
     .filter(group => named.has(group))
     .map(group => `  - ${LISTED[group]}: ${named.get(group)!.join(", ")}.`);
   return [
-    "[Nextly] In an upcoming release, what visitors may do is what the Public role holds, and it does not hold these yet:",
+    "[Nextly] What visitors may do is what the Public role holds, and it does not hold these yet:",
     ...lines,
-    "Grant the Public role each permission visitors should keep, under Roles. This is repeated at each start while the Public role lacks any of them.",
+    "Grant the Public role each permission visitors should have, under Roles. This is repeated at each start while the Public role lacks any of them.",
   ].join("\n");
 }
 
 /**
- * Grants Public each read code opens to anyone, once, then lists what Public
- * still lacks that visitors may be relying on.
+ * How visitors read a target before the Public role judged them, where the
+ * notice names it: every entry where it has no read rule (`"no-rule"`), or
+ * the entries a well-formed filter its read rule answers matches, where the
+ * target may answer one (`"filter"`). `null` for every other read: one its
+ * rule allows outright, which boot grants, and one its rule refuses, with
+ * `false`, `null`, `undefined` or a filter that is not well formed or that a
+ * Single may not answer, which visitors never had. Read through
+ * {@link ruleAnswer}, as a visitor's request reads the answer.
  */
-export async function seedPublicReadGrants({
+function lostRead(
+  target: AccessTarget,
+  read: Answer
+): "no-rule" | "filter" | null {
+  if (read.kind === "no-rule") return "no-rule";
+  if (read.kind !== "answered" || !mayAnswerFilter(target.kind, "read")) {
+    return null;
+  }
+  return ruleAnswer(read.value).kind === "filter" ? "filter" : null;
+}
+
+/**
+ * The once-only notice of the reads visitors had before the Public role judged
+ * them and have no longer, each read Public does not hold that
+ * {@link lostRead} names, with how to give it back: a read with no rule by
+ * declaring that anyone may read or granting Public the read, and a filtered
+ * one by granting Public the read alone, which keeps the filter, since
+ * declaring that anyone may read would open the entries it leaves out.
+ * `null` where there is none.
+ */
+function lostReadsNotice(
+  asked: readonly Asked[],
+  held: Set<string>
+): string | null {
+  const lines = asked.flatMap(({ target, read }) => {
+    const lost = lostRead(target, read);
+    const permission = permissionSlug("read", target.slug);
+    if (lost === null || held.has(permission)) return [];
+    const kind = target.kind === "single" ? "Single" : "collection";
+    return [
+      lost === "no-rule"
+        ? `  - ${kind} "${target.slug}" (no read rule): declare \`access: { read: () => true }\` on it, or grant the Public role \`${permission}\` under Roles.`
+        : `  - ${kind} "${target.slug}" (its read rule answers visitors with a filter): grant the Public role \`${permission}\` under Roles, and the filter still applies to them.`,
+    ];
+  });
+  if (lines.length === 0) return null;
+  return [
+    "[Nextly] Visitors who aren't signed in now read only what the Public role holds. Before this upgrade they could read these, and now can't:",
+    ...lines,
+    "A read declared with `() => true` is granted to the Public role at the next start. Leave one that should stay private as it is. This notice is shown once.",
+  ].join("\n");
+}
+
+/**
+ * Decides, once per site, whether it is told which reads its visitors lost:
+ * due where an earlier boot seeded this database and the Public role is not
+ * made yet, so that boot ran a release from before visitors were judged by
+ * it. A new install's first boot finds nothing seeded, so it is not told.
+ * Neither is a site whose Public role was made before this was recorded, as
+ * what its visitors read then can no longer be told. Recorded at the start of
+ * the first boot's seeding, the one time the two can be told apart, and never
+ * changed after.
+ */
+export async function recordPublicReadNotice({
+  meta,
+  publicRoleMade,
+  seededBefore,
+}: {
+  meta: Pick<PublicReadGrantSeeding["meta"], "get" | "insertIfAbsent">;
+  publicRoleMade: () => Promise<boolean>;
+  /** Whether a boot before this one seeded the database. */
+  seededBefore: () => Promise<boolean>;
+}): Promise<void> {
+  if ((await meta.get<NoticeState>(PUBLIC_READ_NOTICE_META_KEY)) !== null) {
+    return;
+  }
+  const due = !(await publicRoleMade()) && (await seededBefore());
+  const state: NoticeState = due ? "due" : "not-due";
+  await meta.insertIfAbsent(PUBLIC_READ_NOTICE_META_KEY, state);
+}
+
+/**
+ * Tells a site due the notice which reads its visitors lost, once: marked
+ * shown before it is logged, so of two boots at once only one logs it. Marked
+ * shown even where nothing was lost, so a collection added later is not named.
+ */
+async function tellLostReadsOnce(
+  asked: readonly Asked[],
+  held: Set<string>,
+  { meta, logger }: Pick<PublicReadGrantSeeding, "meta" | "logger">
+): Promise<void> {
+  const state = await meta.get<NoticeState>(PUBLIC_READ_NOTICE_META_KEY);
+  if (state !== "due") return;
+  const shown: NoticeState = "shown";
+  if (!(await meta.compareAndSet(PUBLIC_READ_NOTICE_META_KEY, state, shown))) {
+    return;
+  }
+  const notice = lostReadsNotice(asked, held);
+  if (notice !== null) logger.warn(notice);
+}
+
+/** What a boot grants Public and takes back from it, with its rules' answers. */
+interface Decided {
+  roleId: string;
+  ids: Map<string, string>;
+  asked: Asked[];
+  wanted: Array<{ id: string; action: string; resource: string }>;
+  /** Of `wanted`, those an enabled plugin declares, with the plugin. */
+  declaring: Map<string, PluginGrant>;
+}
+
+/**
+ * Asks every rule about a visitor, works out what Public is to be granted,
+ * and takes back each plugin grant no enabled plugin declares any longer,
+ * except one this boot grants for another reason, such as a read whose rule
+ * answers `true`. Taking back needs no permission made, so it is done here,
+ * before anything is granted. `null` where the Public role is not made.
+ */
+async function decide({
   publicRoleId,
   targets,
   permissionIds,
-  publicHolds,
-  addOnce,
+  declared,
+  withdraw,
   meta,
   logger,
-}: PublicReadGrantSeeding): Promise<void> {
+}: PublicReadGrantSeeding): Promise<Decided | null> {
   const roleId = await publicRoleId();
-  if (roleId === null) return;
+  if (roleId === null) return null;
   // Every rule of every target is asked at once, so one deadline bounds them.
   // Started once the targets are known, so the time their lookup takes is
   // not taken from the rules.
@@ -416,15 +691,62 @@ export async function seedPublicReadGrants({
   }
 
   const ids = await permissionIds();
+  const { grants: pluginGrants, refused } = declared();
+  for (const { action, collection, owner } of refused) {
+    logger.error(
+      `[Nextly] The plugin "${owner}" declares that the Public role may ${action} "${collection}", which is not a collection it contributes, or not an action a plugin may grant (read or create). Nothing was granted for it.`
+    );
+  }
   const wanted = [
-    "media",
+    { action: "read", resource: "media" },
     ...asked
       .filter(({ read }) => read.kind === "answered" && read.value === true)
-      .map(({ target }) => target.slug),
-  ].flatMap(resource => {
-    const id = ids.get(permissionSlug("read", resource));
-    return id === undefined ? [] : [{ id, action: "read", resource }];
+      .map(({ target }) => ({ action: "read", resource: target.slug })),
+    ...pluginGrants,
+  ].flatMap(({ action, resource }) => {
+    const id = ids.get(permissionSlug(action, resource));
+    return id === undefined ? [] : [{ id, action, resource }];
   });
+  const declaring = new Map(
+    pluginGrants.flatMap(grant => {
+      const id = ids.get(permissionSlug(grant.action, grant.resource));
+      return id === undefined ? [] : [[id, grant] as const];
+    })
+  );
+  await withdrawUndeclared(roleId, new Set(wanted.map(({ id }) => id)), {
+    withdraw,
+    meta,
+    logger,
+  });
+  return { roleId, ids, asked, wanted, declaring };
+}
+
+/**
+ * Takes back the plugin grants no enabled plugin declares any longer, alone,
+ * for a boot that cannot grant: one where some permission failed to seed. The
+ * rules are asked as a whole boot asks them, so a read one opens is not taken
+ * back.
+ */
+export async function withdrawUndeclaredPluginGrants(
+  deps: PublicReadGrantSeeding
+): Promise<void> {
+  await decide(deps);
+}
+
+/**
+ * Grants Public each read code opens to anyone and each permission plugins
+ * declare for it, once, takes back each plugin grant no enabled plugin
+ * declares any longer, tells a site due it which reads its visitors lost, and
+ * then lists what Public still lacks that visitors may be relying on.
+ */
+export async function seedPublicReadGrants(
+  deps: PublicReadGrantSeeding
+): Promise<void> {
+  const decided = await decide(deps);
+  if (decided === null) return;
+  const { roleId, ids, asked, wanted, declaring } = decided;
+  const { addOnce, publicHolds, meta, logger } = deps;
+
   // Claimed and made in one transaction, under the lock an edit of the
   // role's permissions takes, so a grant is made once: not by two boots at
   // once, not again after an owner has taken it away, and not over an owner's
@@ -432,9 +754,19 @@ export async function seedPublicReadGrants({
   // together. One the role holds already is claimed and left as it is, and
   // one whose permission was edited meanwhile into another is left out.
   await addOnce(roleId, wanted, (asWanted, executor) =>
-    claimGrants(meta, roleId, asWanted, new Set(ids.values()), executor)
+    claimGrants(
+      meta,
+      roleId,
+      asWanted,
+      declaring,
+      new Set(ids.values()),
+      executor
+    )
   );
 
-  const said = listing(asked, await publicHolds(roleId));
+  // Read once the grants are made, so neither names a read just granted.
+  const held = await publicHolds(roleId);
+  await tellLostReadsOnce(asked, held, { meta, logger });
+  const said = listing(asked, held);
   if (said !== null) logger.warn(said);
 }

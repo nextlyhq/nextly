@@ -19,19 +19,18 @@
 import {
   authorizationGroups,
   callerHoldsPermission,
+  callerIsSuperAdmin,
   readableEntities,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 
 import { allWidgets, type CanonicalWidget } from "./canonical";
 import { collectionSettingsToken } from "./collection-cards";
-import {
-  generatedWidgets,
-  refreshCollectionWidgets,
-} from "./collection-widgets";
-import type { WidgetDefinition } from "./definition";
+import { refreshContentSources } from "./content-sources";
+import { SUPER_ADMIN_WIDGET_IDS } from "./core-widgets/ids";
 import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 import { visibilityToken } from "./layout";
+import { keptOffBySite } from "./site-rules";
 import { listSources, sourceTarget } from "./sources";
 
 // Re-exported from its own module rather than moved-and-forgotten: this is
@@ -86,11 +85,8 @@ export async function permissionVerdicts(
  * the query batch: a permission check resolves a session caller through a
  * per-user TTL cache, so firing thirty of them at once makes every one a miss.
  *
- * Judged on the CANONICAL set, so a colliding pair is one card with one gate:
- * a registration that tightened the permission on a contributed id tightens it
- * for both copies, and the workspace payload withholds the contribution's
- * prose along with the registration's rather than shipping the copy that
- * happened to carry no gate of its own.
+ * Judged on the CANONICAL set, the widgets as the admin may receive them, so
+ * the verdict is about the declaration that ships.
  *
  * The verdicts travel out with the cards because {@link widgetAudience} asks
  * about the gates INSIDE them next, and a second pass would be two RBAC reads
@@ -99,20 +95,13 @@ export async function permissionVerdicts(
 async function decide(caller: ReadAccessCaller): Promise<{
   visible: CanonicalWidget[];
   verdicts: Map<string, boolean>;
-  generated: WidgetDefinition[];
   readableCollections: ReadonlySet<string>;
 }> {
-  // The same freshness on every surface that asks. A set derived on some
-  // earlier request would offer a card for a collection deleted since and
-  // refuse it on save, and have no card at all for one created since -- and
-  // in production "the next restart" means the next deploy.
-  await refreshCollectionWidgets();
-  // 🔴 Both read in the same synchronous span, before any await: the
-  // generated set is a global a concurrent request's refresh replaces, and
-  // the decision below awaits permission reads. The definitions the payload
-  // ships are these -- the ones the entity reads were asked about -- never a
-  // re-read that may hold a different definition under the same id.
-  const generated = generatedWidgets();
+  // The same freshness on every surface that asks. Sources read on some
+  // earlier request would offer a collection deleted since to a card's
+  // Collection setting, and none created since -- and in production "the
+  // next restart" means the next deploy.
+  await refreshContentSources();
   const all = allWidgets();
   // The collections a card may be set to: each one with a content source,
   // which a collection kept off the dashboard never has. Taken in the same
@@ -126,44 +115,37 @@ async function decide(caller: ReadAccessCaller): Promise<{
     caller
   );
 
-  // 🔴 A GENERATED card is gated on the entity it reads -- a collection or a
-  // single -- not on a declared permission; it carries none.
-  // `callerHoldsPermission` judges an API key on its stamped grant alone,
-  // while `canReadEntity` also evaluates the entity's code-defined rules, and
-  // the widget query endpoint asks the second. A key those rules reject had
-  // the card offered here and every query for it refused. The same question,
-  // asked once per entity.
-  //
-  // Asked of every offered collection too, not only those with a generated
-  // card: two collections whose slugs spell one id (`a_b`, `a-b`) lose their
-  // generated cards to the collision, and must not lose the reader's verdict
-  // with them -- a card set to either would read as one they may not read.
+  // 🔴 Which collections this reader may read is asked through the entity
+  // read gate (`readableEntities`, which runs `canReadEntity`), not through
+  // `callerHoldsPermission`: the second judges an API key on its stamped
+  // grant alone, while the first also evaluates the collection's code-defined
+  // rules, and the widget query endpoint asks the first. Answered the other
+  // way, a key those rules reject would be offered a collection whose every
+  // query is refused. Asked once per offered collection.
   const readable = await readableEntities(
-    [
-      ...new Set([
-        ...all
-          .map(widget => widget.collection)
-          .filter((slug): slug is string => slug !== undefined),
-        ...offeredCollections,
-      ]),
-    ],
+    [...new Set(offeredCollections)],
     caller
   );
 
-  const visible = all.filter(widget => {
-    if (widget.generated === true) {
-      // A generated card that names no entity cannot be checked against one,
-      // so it is withheld rather than published. Unreachable today -- every
-      // such card is built from a `collection:` or `single:` source -- and
-      // free, since it decides from a value already in hand.
-      return widget.collection !== undefined && readable.has(widget.collection);
-    }
-    return holdsWidgetPermission(widget.requiredPermission, verdicts);
-  });
+  // Every widget is a declared one, gated by the permission it declares; a
+  // card's collection is judged per card, by `unreadableCollectionCard`. What
+  // the site keeps off the dashboard is kept off it for everyone, before any
+  // reader's verdict: hidden, a built-in an alternative replaces, or an
+  // alternative not put anywhere.
+  // A widget only a super-admin is told exists, judged by the one
+  // super-admin decision, and asked only when such a widget is registered.
+  const superAdmin = all.some(widget => SUPER_ADMIN_WIDGET_IDS.has(widget.id))
+    ? await callerIsSuperAdmin(caller)
+    : false;
+  const visible = all.filter(
+    widget =>
+      !keptOffBySite(widget.id) &&
+      holdsWidgetPermission(widget.requiredPermission, verdicts) &&
+      (superAdmin || !SUPER_ADMIN_WIDGET_IDS.has(widget.id))
+  );
   return {
     visible,
     verdicts,
-    generated,
     readableCollections: new Set(
       offeredCollections.filter(slug => readable.has(slug))
     ),
@@ -175,12 +157,10 @@ async function decide(caller: ReadAccessCaller): Promise<{
  * ships for them.
  *
  * ONE decision for the two surfaces that ask. The layout endpoint places and
- * offers `visible`; the admin's workspace payload reads DECLARED widgets from
+ * offers `visible`; the admin's workspace payload reads the declarations from
  * two places -- each plugin's `widgets`, and the registry's own list -- and
- * matches both against `declared` by id. A generated card travels as its full
- * definition instead, because the admin holds no copy of it to match: core
- * derived it on the server, and this is the only route by which it reaches
- * the browser. And a declaration is not all-or-nothing: an `actions` widget's
+ * matches both against `declared` by id. And a declaration is not
+ * all-or-nothing: an `actions` widget's
  * shortcuts each carry a gate of their own, so `holds` answers for those
  * before the declaration ships with them.
  *
@@ -194,10 +174,8 @@ async function decide(caller: ReadAccessCaller): Promise<{
 export interface WidgetAudience {
   /** The cards this reader may see, in canonical order. */
   visible: CanonicalWidget[];
-  /** Ids of the declared widgets -- contributed or registered -- this reader may see. */
+  /** Ids of the declared widgets this reader may see. */
   declared: ReadonlySet<string>;
-  /** The cards core derived that this reader may see. */
-  generated: WidgetDefinition[];
   /**
    * Whether a gate INSIDE a visible declaration holds for this reader.
    *
@@ -234,8 +212,7 @@ export interface WidgetAudience {
    * 🔴 The ONE readable verdict the dashboard asks: which cards set to a
    * collection are withheld, which collections a card's content settings may
    * name, and which Collection defaults the workspace payload ships. Asked of
-   * the collections themselves, not read off the generated cards, which a slug
-   * collision drops.
+   * the collections themselves, the ones a card may be set to.
    */
   readableCollections: ReadonlySet<string>;
 }
@@ -243,16 +220,10 @@ export interface WidgetAudience {
 export async function widgetAudience(
   caller: ReadAccessCaller
 ): Promise<WidgetAudience> {
-  const { visible, verdicts, generated, readableCollections } =
-    await decide(caller);
-  const declared = new Set<string>();
-  const generatedIds = new Set<string>();
-  for (const widget of visible) {
-    // Split on the flag, not on membership of the generated set: a generated
-    // id a plugin also declared survives the canonical merge as the PLUGIN's
-    // card, and core's derived copy must not ship beside it under the same id.
-    (widget.generated === true ? generatedIds : declared).add(widget.id);
-  }
+  const { visible, verdicts, readableCollections } = await decide(caller);
+  // Derived from `visible`, the one answer, so the payload's matching and the
+  // layout's placing read the same set of ids.
+  const declared = new Set(visible.map(widget => widget.id));
   // The gates inside the cards that will ship, resolved beside the cards'
   // own. Only the visible cards': a withheld card ships no actions to gate.
   const inner = await permissionVerdicts(
@@ -266,7 +237,6 @@ export async function widgetAudience(
   return {
     visible,
     declared,
-    generated: generated.filter(widget => generatedIds.has(widget.id)),
     holds: requiredPermission =>
       holdsWidgetPermission(requiredPermission, every),
     heldActionGates,

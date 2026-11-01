@@ -49,11 +49,32 @@ export type TransportablePrimitive = string | number | boolean | null;
  */
 export type Transportable<T> = T extends TransportablePrimitive
   ? T
-  : T extends (...args: never[]) => unknown
-    ? never
-    : T extends object
-      ? TransportableFields<T>
-      : never;
+  : KnownTransportable<T> extends true
+    ? T
+    : T extends (...args: never[]) => unknown
+      ? never
+      : T extends object
+        ? TransportableFields<T>
+        : never;
+
+/**
+ * Whether `T` is exactly one of {@link TransportableValue}'s own object members: transportable by
+ * definition, so judged no further.
+ *
+ * 🔴 Stops the recursion, not only the work: a row a read service handed back is typed
+ * `{ readonly [field: string]: TransportableValue }`, and mapping that member's values maps the
+ * same union again, without end. Answering such rows as a list's items failed to compile as an
+ * instantiation "excessively deep", though nothing in them could fail to travel. Exactly, not
+ * assignably: an object with a symbol-keyed property is assignable to the string-keyed member,
+ * and must still be judged key by key.
+ */
+type KnownTransportable<T> =
+  Same<T, { readonly [key: string]: TransportableValue }> extends true
+    ? true
+    : Same<T, readonly TransportableValue[]>;
+
+/** Whether two types are each assignable to the other, undistributed. */
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 /**
  * An object's properties, each mapped by {@link Transportable}, with a
@@ -190,4 +211,21 @@ export function sentAsJson(value: unknown): TransportableValue {
   // `undefined` alone is what `JSON.stringify` answers with no text: JSON has
   // no value for it, so the browser would receive nothing, which is `null`.
   return text === undefined ? null : (JSON.parse(text) as TransportableValue);
+}
+
+/** One row of fields as JSON carries it: an object of transportable values. */
+export type TransportableRow = { readonly [field: string]: TransportableValue };
+
+/**
+ * The rows among `sent`, a list as {@link sentAsJson} answers it: each entry
+ * that arrived as an object of fields, never a list or a lone value. Nothing
+ * when `sent` is not a list at all.
+ */
+export function sentRows(sent: TransportableValue): TransportableRow[] {
+  if (!Array.isArray(sent)) return [];
+  const entries: readonly TransportableValue[] = sent;
+  return entries.filter(
+    (value): value is TransportableRow =>
+      typeof value === "object" && value !== null && !Array.isArray(value)
+  );
 }

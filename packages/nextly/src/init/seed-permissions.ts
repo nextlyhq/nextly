@@ -13,13 +13,21 @@
  * @module init/seed-permissions
  */
 
+import { inArray } from "drizzle-orm";
+
 import type { AccessTarget } from "../auth/access/decide";
-import { seedRolePresets } from "../database/seeders/role-presets";
+import { getDialectTables } from "../database";
+import {
+  ROLE_PRESETS,
+  seedRolePresets,
+} from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
+  recordPublicReadNotice,
   seedPublicReadGrants,
+  withdrawUndeclaredPluginGrants,
 } from "../domains/auth/services/public-read-grant";
 import {
   PUBLIC_ROLE_SLUG,
@@ -33,10 +41,13 @@ import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import { collectPublicGrants } from "../plugins/public-grants/collect-public-grants";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
 import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
 import { consoleLogger } from "../shared/types";
+
+import { runBoundedDiagnostic } from "./bounded-diagnostic";
 
 /**
  * Seed system, collection, single and plugin-declared permissions, then grant
@@ -214,6 +225,26 @@ export async function awaitBootSeeding(): Promise<void> {
 }
 
 async function seedEverything(): Promise<void> {
+  // Whether this site is told once which reads its visitors lost to the
+  // Public role: decided before anything is seeded, the one time a site an
+  // earlier release ran on can be told from a new install. The Public role
+  // waits for it: made first, it would leave such a site recorded as not due
+  // at the next boot, and never told. Tried again in a while, as a failure to
+  // make the role is.
+  const noticeRecorded = await seedingStep("public read notice", async () => {
+    try {
+      await recordPublicReadNotice({
+        meta: getService("metaService"),
+        publicRoleMade: () => publicRoleMade(getService("metaService")),
+        seededBefore: presetRoleExists,
+      });
+    } catch (error) {
+      if (!isMissingTableOnThisDatabase(error)) {
+        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+      }
+      throw error;
+    }
+  });
   const permissionsSeeded = await seedingStep(
     "permissions",
     seedAllPermissions
@@ -223,49 +254,60 @@ async function seedEverything(): Promise<void> {
   );
   // The role visitors are judged by. Made once and then left to the owner,
   // unlike a preset: only its permissions change after it exists.
-  const publicRoleSeeded = await seedingStep("public role", async () => {
-    const roles = new RoleMutationService(
-      getService("adapter"),
-      getService("logger")
-    );
-    const config = getService("config");
-    // The names roles the app and its plugins declare go by, which the
-    // built-in role leaves to them though they are made after it.
-    const declaredNames = [
-      ...(config.roles ?? []),
-      ...(config.plugins ?? []).flatMap(
-        plugin => plugin.contributes?.roles ?? []
-      ),
-    ].map(role => role.name);
-    try {
-      const seeded = await seedPublicRole({
-        publicSlugHolder: () => roles.publicSlugHolder(),
-        moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
-        ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
-        unlinkPublicRole: async () => {
-          const holder = await roles.publicSlugHolder();
-          if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
-        },
-        meta: getService("metaService"),
-        logger: getService("logger"),
-      });
-      if (!seeded.made) retrySeedingAt(seeded.retryAt);
-    } catch (error) {
-      // Not left unmade until the next start: tried again in a while, as
-      // when another boot holds the claim. A table not created yet is the
-      // migrations' to make, not this retry's.
-      if (!isMissingTableOnThisDatabase(error)) {
-        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+  const publicRoleSeeded =
+    noticeRecorded &&
+    (await seedingStep("public role", async () => {
+      const roles = new RoleMutationService(
+        getService("adapter"),
+        getService("logger")
+      );
+      const config = getService("config");
+      // The names roles the app and its plugins declare go by, which the
+      // built-in role leaves to them though they are made after it.
+      const declaredNames = [
+        ...(config.roles ?? []),
+        ...(config.plugins ?? []).flatMap(
+          plugin => plugin.contributes?.roles ?? []
+        ),
+      ].map(role => role.name);
+      try {
+        const seeded = await seedPublicRole({
+          publicSlugHolder: () => roles.publicSlugHolder(),
+          moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
+          ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
+          unlinkPublicRole: async () => {
+            const holder = await roles.publicSlugHolder();
+            if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
+          },
+          meta: getService("metaService"),
+          logger: getService("logger"),
+        });
+        if (!seeded.made) retrySeedingAt(seeded.retryAt);
+      } catch (error) {
+        // Not left unmade until the next start: tried again in a while, as
+        // when another boot holds the claim. A table not created yet is the
+        // migrations' to make, not this retry's.
+        if (!isMissingTableOnThisDatabase(error)) {
+          retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
-  // Public's read where code lets anyone read, granted once per entity so an
-  // owner's change to it stands, and the startup listing of what it lacks.
-  // Only after every permission seeded: a read whose permission is missing
-  // could be neither granted nor listed, so a later boot does it whole.
+    }));
+  // Public's read where code lets anyone read, and what plugins declare for
+  // it, each granted once so an owner's change to it stands, and the startup
+  // listing of what it lacks. Only after every permission seeded: a grant
+  // whose permission is missing could be neither made nor listed, so a later
+  // boot does it whole.
   if (publicRoleSeeded && permissionsSeeded) {
-    await seedingStep("public role's reads", seedPublicRoleReads);
+    await seedingStep("public role's grants", () =>
+      seedPublicReadGrants(publicGrantSeeding())
+    );
+  } else if (publicRoleSeeded) {
+    // Taking back a plugin grant no enabled plugin declares any longer needs
+    // no permission made, so it is not left for a later boot.
+    await seedingStep("public role's undeclared plugin grants", () =>
+      withdrawUndeclaredPluginGrants(publicGrantSeeding())
+    );
   }
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created
@@ -273,22 +315,79 @@ async function seedEverything(): Promise<void> {
   // step never wrote, for good. So it waits for a boot whose permissions all
   // seeded. A preset is different: it is brought back to its whole set on every
   // boot, so the next one completes it.
-  if (!permissionsSeeded) return;
-  await seedingStep("plugin roles", () => {
-    const config = getService("config");
-    return seedPluginRoles(
-      getService("adapter"),
-      collectRoles(config, config.plugins ?? []),
-      getService("logger")
-    );
-  });
+  if (permissionsSeeded) {
+    await seedingStep("plugin roles", () => {
+      const config = getService("config");
+      return seedPluginRoles(
+        getService("adapter"),
+        collectRoles(config, config.plugins ?? []),
+        getService("logger")
+      );
+    });
+  }
+  // Roles an earlier release gave a retired `manage-` permission, each named
+  // at every start until `nextly upgrade` converts it. Named last: the writers
+  // above store a retired permission as the plain four, so a preset, the
+  // Public role or a plugin role holding one is converted by this seeding, and
+  // naming it before would ask for an upgrade this boot already did.
+  // The scan reads `role_permissions` by a column no dialect indexes, so it is
+  // bounded as the core schema check is: a slow or stalled read lets the boot
+  // go on without the warning rather than wait for the driver's own timeout.
+  await seedingStep("retired manage check", () =>
+    runBoundedDiagnostic({
+      run: async () => {
+        const { formatRetiredManageWarning, rolesHoldingRetiredManage } =
+          await import("../domains/auth/retired-manage");
+        const holding = await rolesHoldingRetiredManage(getService("adapter"));
+        if (holding.length > 0) {
+          getService("logger").warn(formatRetiredManageWarning(holding));
+        }
+      },
+      logger: getService("logger"),
+      timeoutMs: RETIRED_MANAGE_CHECK_TIMEOUT_MS,
+      timedOutMessage:
+        "[nextly] Retired manage permission check timed out; continuing startup.",
+      failedMessagePrefix:
+        "[nextly] Could not check for roles holding a retired manage permission: ",
+    })
+  );
 }
 
-function seedPublicRoleReads(): Promise<void> {
+/**
+ * Whether a boot's seeding has run on this database: a preset role exists,
+ * as every boot's seeding makes them and nothing else does.
+ */
+async function presetRoleExists(): Promise<boolean> {
+  const { roles } = getDialectTables();
+  const db = getService("adapter").getDrizzle<{
+    select(fields: Record<string, unknown>): {
+      from(table: unknown): {
+        where(condition: unknown): { limit(count: number): Promise<unknown[]> };
+      };
+    };
+  }>();
+  const found = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(
+      inArray(
+        roles.slug,
+        ROLE_PRESETS.map(({ slug }) => slug)
+      )
+    )
+    .limit(1);
+  return found.length > 0;
+}
+
+/** How long the retired manage check may hold a boot, as the schema check may. */
+const RETIRED_MANAGE_CHECK_TIMEOUT_MS = 2_000;
+
+/** What the Public role's grant steps need, from the registered services. */
+function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
   const adapter = getService("adapter");
   const logger = getService("logger");
   const grants = new RolePermissionService(adapter, logger);
-  return seedPublicReadGrants({
+  return {
     // Only once the Public role is made and recorded: before that, another
     // boot may still be moving a site's own role off the slug.
     publicRoleId: async () =>
@@ -334,11 +433,14 @@ function seedPublicRoleReads(): Promise<void> {
           permissionSlug(action, resource)
         )
       ),
+    declared: () => collectPublicGrants(getService("config").plugins ?? []),
     addOnce: (roleId, wanted, pick) =>
       grants.addRolePermissionsOnce(roleId, wanted, pick),
+    withdraw: (roleId, unwanted, pick) =>
+      grants.withdrawRolePermissions(roleId, unwanted, pick),
     meta: getService("metaService"),
     logger,
-  });
+  };
 }
 
 /**

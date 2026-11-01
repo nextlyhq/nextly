@@ -390,6 +390,9 @@ importers:
       '@nextlyhq/plugin-sdk':
         specifier: workspace:^
         version: link:../../packages/plugin-sdk
+      '@nextlyhq/plugin-seo':
+        specifier: workspace:^
+        version: link:../../packages/plugin-seo
       '@nextlyhq/ui':
         specifier: workspace:^
         version: link:../../packages/ui
@@ -475,6 +478,9 @@ importers:
       '@nextlyhq/adapter-drizzle':
         specifier: workspace:*
         version: link:../packages/adapter-drizzle
+      '@nextlyhq/adapter-postgres':
+        specifier: workspace:*
+        version: link:../packages/adapter-postgres
       '@nextlyhq/adapter-sqlite':
         specifier: workspace:*
         version: link:../packages/adapter-sqlite
@@ -502,9 +508,30 @@ importers:
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5
+      '@types/pg':
+        specifier: ^8.15.5
+        version: 8.15.5
+      '@types/react':
+        specifier: 19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: 19.3.0
+        version: 19.3.0(@types/react@19.3.0)
+      next:
+        specifier: ^16.4.2
+        version: 16.4.2(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.64.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       nextly:
         specifier: workspace:*
         version: link:../packages/nextly
+      pg:
+        specifier: ^8.16.3
+        version: 8.16.3
+      react:
+        specifier: 19.3.1
+        version: 19.3.1
+      react-dom:
+        specifier: 19.3.1
+        version: 19.3.1(react@19.3.1)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -1235,6 +1262,9 @@ importers:
 
   packages/nextly:
     dependencies:
+      '@babel/parser':
+        specifier: ^7.29.7
+        version: 7.29.7
       '@clack/prompts':
         specifier: ^1.1.0
         version: 1.1.0
@@ -1283,6 +1313,9 @@ importers:
       next:
         specifier: ^16.4.2
         version: 16.4.2(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.64.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      parse5:
+        specifier: ^8.0.0
+        version: 8.0.0
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
@@ -1671,6 +1704,9 @@ importers:
       '@nextlyhq/blocks-engine':
         specifier: workspace:*
         version: link:../blocks-engine
+      '@nextlyhq/ui':
+        specifier: workspace:*
+        version: link:../ui
     devDependencies:
       '@nextlyhq/admin':
         specifier: workspace:*
@@ -1684,6 +1720,9 @@ importers:
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
+      jsdom:
+        specifier: ^27.1.0
+        version: 27.1.0(supports-color@7.2.0)
       nextly:
         specifier: workspace:*
         version: link:../nextly

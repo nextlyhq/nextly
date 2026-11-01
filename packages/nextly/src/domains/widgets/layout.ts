@@ -30,6 +30,12 @@
  * asked on every read rather than frozen here. Whether a size is one the grid
  * can draw at all is the grid's own rule, so it is the one field judged here.
  *
+ * One widget-id question IS answered here, because its answer never changes:
+ * a card in a retired per-collection or per-Single namespace
+ * (`retired-widget-namespaces.ts`) is dropped when the row is read. Any other
+ * id the live registry does not know is kept, so a disabled plugin's cards
+ * return with it.
+ *
  * ## What a placement deliberately does NOT hold
  *
  * 🔴 No `requiredPermission`, and no other copy of anything the definition
@@ -42,9 +48,9 @@
  *
  * A placement is one card with its own identity, so one widget can appear
  * twice with different `config`. The DEFAULT set names each placement after its
- * widget, because that is the one arrangement where the two are one-to-one and
- * a stable id keeps repeated reads identical; a card added later gets a
- * generated id.
+ * widget, a stable id that keeps repeated reads identical, and each further
+ * card of one widget by the id the site config names for it; a card added
+ * later gets a generated id.
  *
  * @module domains/widgets/layout
  */
@@ -52,16 +58,25 @@
 import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { textLength } from "../../shared/text-length";
 
+import { FORMER_CORE_WIDGET_IDS } from "./core-widgets/ids";
 import {
+  clampSize,
   GRID_COLUMNS,
   isGridSize,
   MAX_GRID_ROWS,
   MIN_GRID_ROWS,
   type GridSize,
+  type WidgetSizeBounds,
 } from "./grid-size";
-import { MAX_PLACEMENTS } from "./layout-limits";
+import {
+  isUsableText,
+  MAX_CARD_TITLE_LENGTH,
+  MAX_PLACEMENTS,
+} from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
+import { inRetiredWidgetNamespace } from "./retired-widget-namespaces";
 
 // The payload's version, writer and size check live in the import-free
 // `layout-payload.ts`, so the browser asks the endpoint's own question about
@@ -107,6 +122,19 @@ export interface WidgetPlacement {
   removed: boolean;
   /** Per-placement settings. Opaque to core; the widget's own vocabulary. */
   config?: Record<string, unknown>;
+  /**
+   * The title the reader gave this card, trimmed, at most
+   * `MAX_CARD_TITLE_LENGTH` characters. Absent or empty means the card is
+   * titled automatically from its widget and settings; empty is the reader
+   * having cleared a title, which a title the site's default gives the card
+   * does not undo. A row stored before empty titles were kept has none, and
+   * follows the default's title as it always did.
+   *
+   * On the PLACEMENT, beside `config` rather than in it: `config` is the
+   * widget's own vocabulary, where a setting a plugin happened to name
+   * `title` would collide with it, and a title belongs to every card.
+   */
+  title?: string;
 }
 
 /** The decoded contents of one `nextly_widget_layout.layout` column. */
@@ -135,24 +163,15 @@ export interface StoredLayout {
    * Read it through {@link layoutIsArranged}, never directly.
    */
   unarranged?: true;
-}
-
-/**
- * What placing a widget in the DEFAULT arrangement reads from its declaration.
- *
- * Three fields, and deliberately not `WidgetDefinition`: a widget reaches the
- * dashboard by channels whose shapes differ, and the default needs none of the
- * fields they disagree about.
- */
-export interface PlaceableWidget {
-  id: string;
-  defaultOrder?: number;
-  /** The size a new card starts at: the default of the widget's bounds. */
-  size: GridSize;
-}
-
-function isUsableText(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  /**
+   * The cards of an unarranged row whose size the reader chose, by placement
+   * id: a card resized outside customise mode. Every other card of such a row
+   * is drawn at the size the default gives it, so a later change to that size
+   * still reaches the reader. Absent on a row that predates it, which reads as
+   * a reader who resized nothing, and on an arranged row, whose sizes are all
+   * the reader's.
+   */
+  sized?: readonly string[];
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -192,7 +211,34 @@ const PLACEMENT_RULES: readonly PlacementRule[] = [
     p.config !== undefined && exceedsDepth(p.config, MAX_CONFIG_DEPTH)
       ? `"config" may nest at most ${MAX_CONFIG_DEPTH} levels`
       : undefined,
+  p => titleProblem(p.title),
 ];
+
+/**
+ * Why a placement's `title` cannot be stored, or `undefined`. Judged after
+ * trimming, as it is stored (`ownTitleOf`), so surrounding spaces never count
+ * against the bound, and in code points, as every bound a person is told in
+ * characters is.
+ */
+function titleProblem(title: unknown): string | undefined {
+  if (title === undefined) return undefined;
+  if (typeof title !== "string") return '"title", when given, must be text';
+  return textLength(title.trim()) > MAX_CARD_TITLE_LENGTH
+    ? `"title" may hold at most ${MAX_CARD_TITLE_LENGTH} characters`
+    : undefined;
+}
+
+/**
+ * A placement's own title as stored: trimmed, and kept even when nothing is
+ * left. An empty title is the reader's clearing, which titles the card
+ * automatically as no title does, and which a live default's own title must
+ * not come back over (`dismissalsApplied`); dropped, the merge could not tell
+ * a cleared title from one never given.
+ */
+function ownTitleOf(title: unknown): { title?: string } {
+  if (typeof title !== "string") return {};
+  return { title: title.trim() };
+}
 
 /**
  * Whether a value nests deeper than `limit`.
@@ -324,6 +370,7 @@ function toPlacement(value: Record<string, unknown>): WidgetPlacement {
     ...(value.config === undefined
       ? {}
       : { config: value.config as Record<string, unknown> }),
+    ...ownTitleOf(value.title),
   };
 }
 
@@ -397,7 +444,19 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
     });
   }
 
-  const placements = readPlacements(decoded.placements);
+  // 🔴 A card core once minted per collection or per Single is DROPPED here,
+  // by namespace: no widget can answer to one again (the namespaces are
+  // reserved, so no plugin or site may declare one), and a card about one
+  // collection is now a core widget set to it. Dropped rather than carried
+  // like a disabled plugin's card, which may come back. The read still
+  // writes nothing; a write merges over these placements, so the reader's
+  // next save of any kind stores the row without them. Before the repeat
+  // check below, so a dropped card claims no placement id.
+  const { placements, renamedIds } = underCurrentIds(
+    readPlacements(decoded.placements).filter(
+      placement => !inRetiredWidgetNamespace(placement.widgetId)
+    )
+  );
   // 🔴 REPORTS a repeat rather than resolving one. Resolving across the whole
   // row would let a card this caller may not know exists claim an id and push a
   // card they CAN see onto a different one, so the id they are handed would
@@ -409,8 +468,66 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
     // `=== true` rather than truthiness: anything else this core did not
     // write is the ordinary, arranged row.
     ...(decoded.unarranged === true ? { unarranged: true as const } : {}),
+    ...sizedOf(decoded, renamedIds),
     ...(rekeyed.length === 0 ? {} : { duplicatePlacementIds: rekeyed }),
   };
+}
+
+/**
+ * A row's cards with each card of a widget core renamed read as the current widget's, in its
+ * place (`FORMER_CORE_WIDGET_IDS`). Its id follows the widget's where it was the widget's own, the
+ * default a card is given, and is kept where it was not; its size and whether it is removed are
+ * kept, and its settings, the former widget's own vocabulary, are not. A row that already holds a
+ * card of the current widget keeps that one alone. The read still writes nothing: a write merges
+ * over these placements, so the reader's next save stores the current id. Before the repeat check,
+ * so a renamed card's id is resolved like any other.
+ */
+function underCurrentIds(placements: WidgetPlacement[]): {
+  placements: WidgetPlacement[];
+  /**
+   * The card ids the rename changed, each to its new id: only cards it renamed, never a dropped
+   * one, so the sizes a reader chose follow exactly those (`sizedOf`).
+   */
+  renamedIds: ReadonlyMap<string, string>;
+} {
+  const held = new Set(placements.map(placement => placement.widgetId));
+  const renamedIds = new Map<string, string>();
+  const current = placements.flatMap(placement => {
+    const widgetId = FORMER_CORE_WIDGET_IDS.get(placement.widgetId);
+    if (widgetId === undefined) return [placement];
+    if (held.has(widgetId)) return [];
+    held.add(widgetId);
+    const id = placement.id === placement.widgetId ? widgetId : placement.id;
+    if (id !== placement.id) renamedIds.set(placement.id, id);
+    return [
+      {
+        id,
+        widgetId,
+        w: placement.w,
+        h: placement.h,
+        removed: placement.removed,
+      },
+    ];
+  });
+  return { placements: current, renamedIds };
+}
+
+/**
+ * A stored row's chosen sizes (`StoredLayout.sized`): read only from an unarranged row, and only
+ * as a list of ids. Anything else this core did not write is a reader who chose no size.
+ */
+function sizedOf(
+  decoded: Record<string, unknown>,
+  renamedIds: ReadonlyMap<string, string>
+): Pick<StoredLayout, "sized"> {
+  const { sized } = decoded;
+  if (decoded.unarranged !== true || !Array.isArray(sized)) return {};
+  // A size chosen for a card the rename gave a new id follows that card (`underCurrentIds`); any
+  // other id, a card of the current widget's among them, keeps its own.
+  const ids = sized
+    .filter((id): id is string => typeof id === "string")
+    .map(id => renamedIds.get(id) ?? id);
+  return ids.length === 0 ? {} : { sized: ids };
 }
 
 /**
@@ -423,9 +540,9 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
  *
  * 🔴 The invariant that keeps this safe: ANY write that can drop a placement
  * from the array must be an arranged one. An unarranged row is then only ever
- * the default plus the reader's choices about its cards (removed flags and
- * per-card settings), so following the default cannot bring back a card the
- * reader deliberately took away.
+ * the default plus the reader's choices about its cards (removed flags,
+ * per-card settings and the sizes they chose), so following the default cannot
+ * bring back a card the reader deliberately took away.
  */
 export function layoutIsArranged(stored: StoredLayout): boolean {
   return stored.unarranged !== true;
@@ -434,83 +551,141 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
 /**
  * The default arrangement with a reader's choices about its cards applied.
  *
- * For a row that still follows the default: positions, sizes and the set of
- * cards all come from `defaults`, and the stored row contributes only what its
- * reader chose about each card -- that they removed it, and the settings they
- * gave it. A setting changed outside customise mode is written to such a row,
- * and reading only the removals back dropped it on every read. The default
- * carries no settings of its own, so a stored one is always the reader's.
+ * For a row that still follows the default: the order and the set of cards
+ * come from `defaults`, so a card the default gains later still reaches the
+ * reader, and the stored row contributes only what its reader chose about each
+ * card -- that they removed it, the settings they gave it, and the size they
+ * gave it, where they gave it one (`StoredLayout.sized`). A setting or a size
+ * changed outside customise mode is written to such a row, and reading only the
+ * removals back dropped it on every read. A setting the default's own entry
+ * starts a card with gives way to one stored for it. A card the reader did not
+ * resize keeps the default's size, whatever the row stored for it.
  *
- * Keyed by WIDGET, across the whole stored row and whatever its visibility, so
+ * A chosen size is held to the widget's bounds as `boundsOf` gives them, as
+ * every stored size is drawn; with no bounds to judge it by, the default's
+ * size stands.
+ *
+ * Keyed by CARD, across the whole stored row and whatever its visibility, so
  * a removal or a setting on a card the reader has since lost access to is
  * still honoured the day access returns, and a removed card keeps its settings
  * for when it is put back. `undefined` is a reader with no row.
+ *
+ * 🔴 By placement id and widget together, so two cards of one widget the
+ * default places keep a choice each (keyed by widget, the last card's choice
+ * was every card's), and an id reused for another widget starts afresh. A
+ * widget the default and the row each hold ONE card of is matched by widget
+ * too, so a row whose card was stored under another id keeps its choice.
  */
 export function dismissalsApplied(
   defaults: readonly WidgetPlacement[],
-  stored: StoredLayout | undefined
+  stored: StoredLayout | undefined,
+  boundsOf: (widgetId: string) => WidgetSizeBounds | undefined = () => undefined
 ): WidgetPlacement[] {
-  const chosen = new Map<
-    string,
-    { removed: boolean; config?: Record<string, unknown> }
-  >();
-  for (const placement of stored?.placements ?? []) {
-    chosen.set(placement.widgetId, {
-      removed: placement.removed,
-      ...(placement.config === undefined ? {} : { config: placement.config }),
-    });
-  }
+  const sized = new Set(stored?.sized ?? []);
+  return defaultCardsWithChoices(defaults, stored?.placements ?? []).map(
+    ([placement, choice]) => {
+      if (choice === undefined) return placement;
+      return {
+        ...placement,
+        ...(sized.has(choice.id)
+          ? chosenSize(choice, boundsOf(placement.widgetId))
+          : {}),
+        removed: choice.removed,
+        ...(choice.config === undefined ? {} : { config: choice.config }),
+        // The reader's own title, like their settings, is their choice about
+        // this card, so it follows the card the same way.
+        ...(choice.title === undefined ? {} : { title: choice.title }),
+      };
+    }
+  );
+}
+
+/**
+ * Each card of the default, with the card of `placements` that holds a reader's choices about
+ * it, or `undefined` when none does. The one matching both the read
+ * ({@link dismissalsApplied}) and a write's chosen sizes ({@link chosenSizeIds}) go by.
+ *
+ * The card stored under the default card's id, only while it is still a card of the same widget:
+ * an id a config gives another widget is a new card, whose settings would read another widget's
+ * vocabulary. Else, for a widget the default and `placements` each hold one card of, that card.
+ */
+function defaultCardsWithChoices(
+  defaults: readonly WidgetPlacement[],
+  placements: readonly WidgetPlacement[]
+): Array<[WidgetPlacement, WidgetPlacement | undefined]> {
+  const byId = new Map(placements.map(placement => [placement.id, placement]));
+  const soleCardOf = soleCardsByWidget(placements);
+  const soleInDefault = soleCardsByWidget(defaults);
   return defaults.map(placement => {
-    const choice = chosen.get(placement.widgetId);
-    if (choice === undefined) return placement;
-    return {
-      ...placement,
-      removed: choice.removed,
-      ...(choice.config === undefined ? {} : { config: choice.config }),
-    };
+    const sameCard = byId.get(placement.id);
+    const choice =
+      (sameCard?.widgetId === placement.widgetId ? sameCard : undefined) ??
+      (soleInDefault.has(placement.widgetId)
+        ? soleCardOf.get(placement.widgetId)
+        : undefined);
+    return [placement, choice];
   });
 }
 
 /**
- * The declared order: a widget with no `defaultOrder` sits after every widget
- * that states one.
+ * The cards of an unarranged write whose size the reader chose: those whose size differs from the
+ * size the default gives the card they stand for, and those `stored` already names as chosen
+ * (`StoredLayout.sized`) that the write leaves at the size stored for them. A card at the
+ * default's size is otherwise not one, so it goes on following that size; a card the default does
+ * not hold is not one either, as it is drawn from the default or not at all.
  *
- * 🔴 Equal orders compare EQUAL, so the declaration order then stands (the
- * sort is stable). Any tie-break here would rearrange every default dashboard
- * holding widgets that state no order.
+ * The stored choice is kept while the size is unchanged because a default can come to give the
+ * size a reader chose: the card then matches the default, but the size is still theirs, and the
+ * next change to the default must not move it. Resizing the card, to the default's size or any
+ * other, is what gives that choice up or makes a new one.
  */
-function byDeclaredOrder(a: PlaceableWidget, b: PlaceableWidget): number {
-  const aOrder = a.defaultOrder ?? Number.POSITIVE_INFINITY;
-  const bOrder = b.defaultOrder ?? Number.POSITIVE_INFINITY;
-  if (aOrder === bOrder) return 0;
-  return aOrder < bOrder ? -1 : 1;
+export function chosenSizeIds(
+  defaults: readonly WidgetPlacement[],
+  placements: readonly WidgetPlacement[],
+  stored?: StoredLayout
+): string[] {
+  // The stored card each default card stands for, by the same matching as the write's, so a
+  // card the row holds under an id an earlier default gave it is still the reader's.
+  const before = defaultCardsWithChoices(defaults, stored?.placements ?? []);
+  const sized = new Set(stored?.sized ?? []);
+  return defaultCardsWithChoices(defaults, placements).flatMap(
+    ([placement, choice], index) => {
+      if (choice === undefined) return [];
+      const departs = choice.w !== placement.w || choice.h !== placement.h;
+      const was = before[index]?.[1];
+      const unchanged =
+        was !== undefined &&
+        sized.has(was.id) &&
+        was.w === choice.w &&
+        was.h === choice.h;
+      return departs || unchanged ? [choice.id] : [];
+    }
+  );
 }
 
-/**
- * The one default dashboard: what a reader who has never arranged anything
- * sees. Computed on every read and never stored, so a later change to it
- * reaches everyone still following it.
- *
- * The placement id is the widget id here, and only here, so repeated reads of
- * an unsaved dashboard return identical ids.
- *
- * 🔴 NOT capped here. The submission limit belongs to what a CALLER may send,
- * and this materialization is caller-independent; capping it let widgets a
- * caller cannot see consume the allowance. The cap is applied to the visible
- * partition instead.
- */
-export function defaultPlacements(
-  widgets: readonly PlaceableWidget[]
-): WidgetPlacement[] {
-  return [...widgets].sort(byDeclaredOrder).map(widget => ({
-    id: widget.id,
-    widgetId: widget.id,
-    // The size travels WITH the placement: the first save stores it, so a
-    // later change to the widget's default does not resize a saved card.
-    w: widget.size.w,
-    h: widget.size.h,
-    removed: false,
-  }));
+/** The size a reader gave a card, held to its widget's bounds, or nothing to judge it by. */
+function chosenSize(
+  choice: WidgetPlacement,
+  bounds: WidgetSizeBounds | undefined
+): GridSize | Record<string, never> {
+  const size = { w: choice.w, h: choice.h };
+  return bounds !== undefined && isGridSize(size)
+    ? clampSize(size, bounds)
+    : {};
+}
+
+/** Each widget that `placements` holds exactly one card of, with that card. */
+function soleCardsByWidget(
+  placements: readonly WidgetPlacement[]
+): ReadonlyMap<string, WidgetPlacement> {
+  const sole = new Map<string, WidgetPlacement>();
+  const repeated = new Set<string>();
+  for (const placement of placements) {
+    if (sole.has(placement.widgetId)) repeated.add(placement.widgetId);
+    else sole.set(placement.widgetId, placement);
+  }
+  for (const widgetId of repeated) sole.delete(widgetId);
+  return sole;
 }
 
 /**
@@ -640,7 +815,7 @@ const ORPHANED = "\u0000orphaned";
  * the byte limit it shares a reason with; it is declared in the import-free
  * `layout-limits.ts` because the browser reads it too.
  */
-export { MAX_PLACEMENTS } from "./layout-limits";
+export { MAX_CARD_TITLE_LENGTH, MAX_PLACEMENTS } from "./layout-limits";
 
 /**
  * The ceiling on the row as STORED, carried placements included: twice a full
@@ -684,7 +859,11 @@ export function visibilityToken(
   readableCollections: Iterable<string> = [],
   // Each Collection setting, as `id=declaration`: a plugin changing one, its
   // name or its default, moves a stored card between withheld and shown.
-  collectionSettings: Iterable<string> = []
+  collectionSettings: Iterable<string> = [],
+  // The default's cards a reader following it was not handed because their
+  // widgets' own rules would not show them: a verdict that changes between a
+  // read and the first save moves a card between carried and dropped.
+  notShown: Iterable<string> = []
 ): string {
   return (
     createHash("sha256")
@@ -696,6 +875,10 @@ export function visibilityToken(
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
           ...[...readableCollections].sort().map(slug => `reads:${slug}`),
           ...[...collectionSettings].sort().map(entry => `settings:${entry}`),
+          // As JSON, which escapes a line break: a card's id is the site
+          // config's to choose, so one holding the separator could otherwise
+          // read as two, and two different sets hash alike.
+          ...[...notShown].sort().map(id => `hides:${JSON.stringify(id)}`),
         ].join("\n")
       )
       .digest("base64url")

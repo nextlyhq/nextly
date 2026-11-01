@@ -7,7 +7,7 @@
  * @module domains/schema/migrate/drift-error
  * @since v0.0.3-alpha (Plan C2)
  */
-import { dirname, join } from "node:path";
+import { posix, sep, win32 } from "node:path";
 
 import { NextlyError } from "../../../errors";
 
@@ -40,21 +40,40 @@ export interface MigrationDriftArgs {
 }
 
 /**
+ * The path functions that split and join `file` in the separator it is
+ * written with.
+ *
+ * `migrate` resolves the migration to an absolute path, which on Windows is
+ * separated by backslashes, so there the platform's own functions split it:
+ * splitting on the forward slash alone would find no directory and name a
+ * `meta/` beside the working directory instead of beside the migration,
+ * leaving the real snapshot in place and `migrate:baseline` still refusing
+ * the project. A path written with forward slashes, which Windows reads too,
+ * keeps them: joined by the platform's functions, its `mv` line would keep
+ * `/` while the `rm` line beside it turned every separator into `\`.
+ */
+function pathsFor(file: string): typeof posix {
+  return sep === "\\" && file.includes("\\") ? win32 : posix;
+}
+
+/**
  * Where the snapshot paired with a migration lives.
  *
  * Derived from the `.sql` path rather than passed in, so the two can never
  * name different migrations. `snapshot-io` writes them as
  * `<dir>/<name>.sql` and `<dir>/meta/<name>.snapshot.json`.
- *
- * Split with `node:path` rather than on `/`: `migrate` resolves this to an
- * absolute path, which on Windows is separated by backslashes. Splitting on
- * the forward slash alone would find no directory there and name a `meta/`
- * beside the working directory instead of beside the migration, leaving the
- * real snapshot in place — and `migrate:baseline` still refusing the project.
  */
 function snapshotPathFor(file: string, migration: string): string {
-  const dir = dirname(file);
-  return join(dir, "meta", `${migration}.snapshot.json`);
+  return pathsFor(file).join(
+    directoryOf(file),
+    "meta",
+    `${migration}.snapshot.json`
+  );
+}
+
+/** The folder a migration is in, in the separator its path is written with. */
+function directoryOf(file: string): string {
+  return pathsFor(file).dirname(file);
 }
 
 /**
@@ -70,7 +89,7 @@ function variantGlobFor(file: string, migration: string): string {
   // The literal part is quoted and the `*` left outside it, so a path with
   // spaces stays one argument AND the glob still expands. Quoting the whole
   // thing would pass `*.sql` to `rm` verbatim.
-  return `${shellQuote(join(dirname(file), migration))}*.sql`;
+  return `${shellQuote(pathsFor(file).join(directoryOf(file), migration))}*.sql`;
 }
 
 /**
@@ -161,7 +180,7 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
           "  to go first. `migrate:baseline` refuses a project that has ANY",
           "  migration or snapshot, and every file here was generated against a",
           "  schema that already exists. Move the directory aside:",
-          `          mv ${shellQuote(dirname(args.file))} ${shellQuote(`${dirname(args.file)}.pre-baseline`)}`,
+          `          mv ${shellQuote(directoryOf(args.file))} ${shellQuote(`${directoryOf(args.file)}.pre-baseline`)}`,
           "",
           "  Or, if this is the only migration, remove just it and its snapshot",
           "  (the glob covers per-dialect variants, which are one migration):",

@@ -15,7 +15,7 @@
  * - handleError / ServiceError translation
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 
 import {
   callerLookupFails,
@@ -26,6 +26,7 @@ import {
   resetCallerAccess,
 } from "../../../auth/access/__tests__/fake-caller";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors";
 import { SingleEntryService } from "../services/single-entry-service";
 
@@ -52,9 +53,17 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   return {
     ...(await importOriginal<object>()),
     actorForUser: fake.fakeActorForUser,
+    actorForVisitor: fake.fakeActorForVisitor,
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };
+});
+
+// A visitor's read with no access-control service reads the Public role on
+// the service's own database, with its dialect's tables: the postgresql ones
+// the mock adapter names, which the unit setup loads only for its own dialect.
+beforeAll(async () => {
+  await loadDialectTables("postgresql");
 });
 
 beforeEach(() => {
@@ -86,7 +95,7 @@ function createCtx(
   const registry = createMockSingleRegistry();
   const hookRegistry = createMockHookRegistry();
   const fieldGroupDataService = createMockComponentDataService();
-  const rbac = createMockRBACService(true);
+  const rbac = createMockRBACService();
   const logger = createSilentLogger();
 
   const service = new SingleEntryService(
@@ -1229,11 +1238,13 @@ describe("SingleEntryService", () => {
       expect(rowInserts).toHaveLength(1);
       // No delete of the DOCUMENT. A successful save does delete the saving
       // author's recovery point, which is the supersede that keeps a saved
-      // document from offering its own saved work back, so "no deletes at all"
-      // is now too broad a statement of what this test is about.
+      // document from offering its own saved work back, and rewrites the
+      // record of the media the Single uses, so "no deletes at all" is now
+      // too broad a statement of what this test is about.
       expect(
         ctx.adapter.delete.mock.calls.filter(
-          ([table]: [string]) => table !== "nextly_versions"
+          ([table]: [string]) =>
+            table !== "nextly_versions" && table !== "nextly_media_usage"
         )
       ).toHaveLength(0);
     });

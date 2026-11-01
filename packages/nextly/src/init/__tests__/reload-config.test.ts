@@ -24,6 +24,8 @@ import {
 } from "../../domains/field-groups/migration/manifest";
 import { MIGRATION_MARKER_VERSION } from "../../domains/field-groups/migration/state";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { judgeAddress } from "../../shared/address-rule";
+import { ADDRESS_CASES } from "../../shared/__tests__/helpers/address-cases";
 
 /** The registry rename every run performs, spelled from the catalog so it stays a valid plan. */
 const IN_FLIGHT_PLAN: ManifestEntry[] = [
@@ -50,6 +52,7 @@ import {
 } from "../../domains/collections/services/collection-id";
 import {
   adminComponentPlugins,
+  adminSiteDashboard,
   setAdminComponentPlugins,
 } from "../../domains/widgets/declaration/component-map-store";
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
@@ -359,6 +362,73 @@ describe("reloadNextlyConfig", () => {
       })),
     };
   }
+
+  /**
+   * A configuration reload is a road that creates addresses, as a start is: a collection added to
+   * `nextly.config.ts` while `next dev` runs arrives here. It gives each new address the rule's
+   * verdict and reason (the same list every other road is given, `address-rule-roads.test.ts`),
+   * and a refused reload keeps the previous configuration and runs no DDL.
+   */
+  describe("the addresses a reload adds", () => {
+    it.each(ADDRESS_CASES)(
+      "gives a new collection '%s' the rule's verdict",
+      async address => {
+        loadConfigSpy.mockResolvedValue({
+          config: { collections: [{ slug: address, fields: [] }] },
+        });
+        introspectSpy.mockResolvedValue(buildSnapshot([]));
+        const resolver = buildResolver();
+        // The collection is new: no table of its own exists yet. Only the lock's does, which the
+        // reload's exclusion reads.
+        Object.assign(resolver("adapter") as object, {
+          tableExists: async (name: string) =>
+            name === "nextly_field_group_lock",
+        });
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver });
+
+        const refusal = judgeAddress("collection", address);
+        const logged = errorSpy.mock.calls.map(([line]) => String(line));
+        if (refusal === null) {
+          expect(logged.filter(line => line.includes("address"))).toEqual([]);
+          return;
+        }
+        expect(logged).toEqual([expect.stringContaining(refusal.message)]);
+        expect(pipelineApplySpy).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it("keeps the previous config when the address check cannot read the database", async () => {
+    // `cascade` is refused for a new address, so the check asks whether its table exists, and that
+    // read fails after something was published mid-reload. The reload must give up the way every
+    // other refused reload does: the undo puts the previous options back.
+    publishCollectionDbOptions([
+      { slug: "posts", db: { allowIdOnCreate: true } },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: { collections: [{ slug: "cascade", fields: [] }] },
+    });
+    const resolver = buildResolver();
+    const adapter = resolver("adapter") as {
+      tableExists: (name: string) => Promise<boolean>;
+    };
+    const lockTableExists = adapter.tableExists.bind(adapter);
+    // Only the address check's own probe fails; the lock's reads answer as before.
+    adapter.tableExists = async (name: string) => {
+      if (name !== "dc_cascade") return lockTableExists(name);
+      publishCollectionDbOptions([{ slug: "posts", db: { idType: "uuidv7" } }]);
+      throw new Error("connection lost");
+    };
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(collectionDbOptions("posts")).toEqual({ allowIdOnCreate: true });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("connection lost")
+    );
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+  });
 
   it("re-reads the config from disk on every call (clears the loader cache first)", async () => {
     loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
@@ -1843,10 +1913,16 @@ describe("reloadNextlyConfig", () => {
         setAdminComponentPlugins([]);
       });
 
-      it("are republished when the reload lands", async () => {
+      it("are republished when the reload lands, with the site dashboard the loader carries", async () => {
         const plugins = [...withPluginTable.plugins, added];
+        // As the loader hands it over after every plugin's setup().
+        const dashboard = {
+          widgets: [
+            { id: "site/notes", view: { component: "./dashboard/notes" } },
+          ],
+        };
         loadConfigSpy.mockResolvedValue({
-          config: { ...withPluginTable, plugins },
+          config: { ...withPluginTable, plugins, admin: { dashboard } },
         });
         unchangedPosts();
 
@@ -1854,6 +1930,7 @@ describe("reloadNextlyConfig", () => {
         await reloadNextlyConfig({ resolver: buildResolver() });
 
         expect(adminComponentPlugins()).toEqual(plugins);
+        expect(adminSiteDashboard()).toEqual(dashboard);
       });
 
       it("are left as they were when the reload does not land", async () => {

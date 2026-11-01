@@ -10,13 +10,12 @@
  *
  * They go through `registerWidget`, the same door a plugin uses, rather than an
  * admin-side list the server cannot see. That is what lets a plugin
- * `extendWidget("core/team", ...)` to tighten a permission or relabel a card --
- * and it is why `defaultOrder` exists: registrations resolve after
- * contributions, so without a declared position core's cards would sit BELOW
- * every plugin's, which is not the dashboard anyone has today.
+ * `extendWidget("core/team", ...)` to tighten a permission or relabel a card.
+ * Which of them the default dashboard holds, and in what order, is
+ * `CORE_DEFAULT_LAYOUT` in `./ids`, written as a site writes its own `defaultLayout`.
  *
- * Collections, Singles and Team draw inside the shared frame like every other
- * card, so they read as one product. The other `custom` ones still carry
+ * Content, Team and the per-collection cards draw inside the shared frame like
+ * every other card, so they read as one product. The other `custom` ones still carry
  * `chrome: "none"` until each moves into the frame: each draws a titled section
  * with its own rules, loading skeleton and error state. `title` is still required and
  * still meaningful -- it is what names the card in the layout editor, where a
@@ -48,12 +47,13 @@
  * - `core/upcoming-releases` is gated. `ReleasesService.find` authorizes by
  *   THROWING, so an ungranted reader gets a card stuck in its error state
  *   rather than an empty one -- see its own note.
- * - `core/recent-activity` is not. Its feed takes the caller's readable
+ * - `core/team-activity` is not. Its feed takes the caller's readable
  *   collections as a scope and defaults that scope to NOTHING, so a reader
- *   entitled to none of it is shown an empty feed. That is a card correctly
- *   saying there is nothing to report, which needs no gate; a gate would
+ *   entitled to none of it would see an empty feed; a permission gate would
  *   instead hide the feed from anyone whose permissions happened to be narrow
- *   today.
+ *   today. It is CONDITIONAL instead, like Continue where you left off: offered
+ *   while the reader may read a collection or a Single (`content:present`),
+ *   which is exactly when the feed has something it may draw.
  *
  * @module domains/widgets/core-widgets
  */
@@ -61,66 +61,45 @@
 import type { WidgetDefinition } from "../definition";
 
 import { breakdownWidget } from "./breakdown";
-import { contentWidget } from "./content";
+import { contentTableWidget } from "./content-table";
+import { continueWidget } from "./continue";
 import { countWidget } from "./count";
-import { getStartedWidget } from "./get-started";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
 import { quickCreateWidget } from "./quick-create";
-import { recentActivityWidget } from "./recent-activity";
 import { recentEntriesWidget } from "./recent-entries";
-import { recentlyEditedWidget } from "./recently-edited";
+import { setupWidget } from "./setup";
+import { systemHealthWidget } from "./system-health";
 import { teamWidget } from "./team";
+import { teamActivityWidget } from "./team-activity";
 import { upcomingReleasesWidget } from "./upcoming-releases";
 
 /**
- * The agreed default dashboard, in `defaultOrder`: Needs attention, Create,
- * Recently edited, Recent activity, Content, Upcoming releases and Team, each
- * at its agreed size, after the onboarding cards. The cards that share a row
- * share a height, so the default dashboard tiles: Needs attention and Create
- * at 3 rows, the two activity lists at 4, Upcoming releases and Team at 4.
- *
- * Spaced by ten rather than numbered one-by-one, so a card can be placed
- * between two of these later without renumbering the rest -- the reason
- * `defaultOrder` is a number and not an index.
+ * Core's widgets declared with `defineWidget`, as a plugin declares its own,
+ * in core's order. Registered through the same call as everyone's
+ * declarations, under core; each card's data is answered on the server by its
+ * declaration's `load`.
  */
-const CORE_ORDER = [
-  getStartedWidget,
-  contentWidget,
-  quickCreateWidget,
-  teamWidget,
-  needsAttentionWidget,
-  recentlyEditedWidget,
-  upcomingReleasesWidget,
-  recentActivityWidget,
+export const CORE_DECLARATIONS = [
+  setupWidget,
   countWidget,
   breakdownWidget,
+  needsAttentionWidget,
   noteWidget,
   recentEntriesWidget,
   overTimeWidget,
+  systemHealthWidget,
 ] as const;
-
-/**
- * Core's widgets declared with `defineWidget`, as a plugin declares its own.
- * Registered through the same call as everyone's declarations, under core.
- */
-export const CORE_DECLARATIONS = [noteWidget] as const;
 
 /** Core's widgets still written as definitions: every one not declared. */
 const CORE_WIDGET_LITERALS = [
-  getStartedWidget,
-  contentWidget,
+  contentTableWidget,
   quickCreateWidget,
   teamWidget,
-  needsAttentionWidget,
-  recentlyEditedWidget,
+  continueWidget,
   upcomingReleasesWidget,
-  recentActivityWidget,
-  countWidget,
-  breakdownWidget,
-  recentEntriesWidget,
-  overTimeWidget,
+  teamActivityWidget,
 ] as const satisfies readonly WidgetDefinition[];
 
 /**
@@ -134,21 +113,6 @@ const CORE_WIDGET_LITERALS = [
  */
 export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
 
-/**
- * The id of one of core's widgets.
- *
- * Read from the list itself, kept literal by `as const` above, so a widget
- * added, renamed or removed there changes this with no second edit: a plugin
- * offering an alternative to a built-in is checked against the widgets core
- * actually has.
- */
-export type CoreWidgetId = (typeof CORE_ORDER)[number]["id"];
-
-/**
- * Every one of core's widget ids, definitions and declarations alike, in
- * core's order: the one list of what is core's, for every reader asking
- * whether an id is a built-in and where it sorts.
- */
-export const CORE_WIDGET_IDS: readonly CoreWidgetId[] = CORE_ORDER.map(
-  widget => widget.id
-);
+// Core's widget ids, and their order, live in `./ids`, which imports nothing:
+// re-exported for the readers that load the widgets anyway.
+export { CORE_WIDGET_IDS } from "./ids";

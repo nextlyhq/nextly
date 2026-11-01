@@ -16,7 +16,7 @@ import { users as sqliteUsers } from "../../../../schemas/users/sqlite";
 import { EXTENDABLE_CORE_TABLES } from "../../extension/extension-columns";
 import {
   coreTableWithLiveContributions,
-  EXTENDABLE_CORE_TABLE_FACTORIES,
+  extendableCoreTableFactories,
 } from "../core-table-contributions";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 
@@ -90,9 +90,9 @@ function describeTable(table: unknown, dialect: SupportedDialect) {
 describe("the extendable core table factories", () => {
   it("cover exactly the extendable core tables, on every dialect", () => {
     for (const dialect of DIALECTS) {
-      expect(
-        Object.keys(EXTENDABLE_CORE_TABLE_FACTORIES[dialect]).sort()
-      ).toEqual([...EXTENDABLE_CORE_TABLES].sort());
+      expect(Object.keys(extendableCoreTableFactories(dialect)).sort()).toEqual(
+        [...EXTENDABLE_CORE_TABLES].sort()
+      );
     }
   });
 

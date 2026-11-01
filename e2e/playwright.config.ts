@@ -51,16 +51,25 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `setup-*`: first-run setup's origin rules for loopback names hold in
  *   development only, and `next dev` is what serves those names a page.
  * - `component-map-dev`: a development server refusing a stale component map.
- * - The Schema Builder specs: a production build turns the builder off unless
- *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
+ * - The Schema Builder specs (`schema-builder*`, so a new one joins them): a
+ *   production build turns the builder off unless the app opts in, and
+ *   refuses its writes with `BUILDER_DISABLED`. The production refusal itself
+ *   is `tests/production/builder-guard.spec.ts`, which runs there.
+ * - `widget-preview`: the widget preview page exists only while the server
+ *   runs in development; a production build answers its address as not found
+ *   (`tests/production/widget-preview.spec.ts`).
+ * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
+ *   Builder's, which a production build turns off.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
   "**/component-map-dev.spec.ts",
-  "**/schema-builder.spec.ts",
+  "**/widget-preview.spec.ts",
+  "**/schema-builder*.spec.ts",
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
+  "**/removed-from-code-singles-list.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
@@ -227,6 +236,15 @@ export default defineConfig({
       // double does not appear in a contributor's plugins list or inject a
       // showcase section into the Posts collection.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
+      // Leaves the query devtools out of the dev server's admin: their floating icon sits over
+      // the bottom-right corner, where a toast's Undo is drawn, and takes the click a phone-width
+      // spec makes there. A production build never draws them.
+      NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS: "off",
+      // The first-party plugins the playground registers only when named
+      // (`apps/playground/nextly.config.ts`): the SEO plugin, as it ships, for
+      // dashboard-seo-issues.spec.ts. It extends a collection of its own there,
+      // so no other spec meets its fields.
+      NEXTLY_PLAYGROUND_PLUGINS: "seo",
       // Registers the slow-card fixture, which dashboard-slow-card.spec.ts
       // delays. Its card answers at once until that spec asks otherwise, so the
       // other dashboard specs see an ordinary card.
@@ -239,6 +257,13 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
+      // The render-retry harness route, gated the same way: its render fails on
+      // an id's first load, for the test of an error boundary's retry().
+      NEXTLY_E2E_RETRY_HARNESS: "1",
+      // The site page that links to the admin, gated the same way: it stands
+      // in for a site's own header link, for the test of what a hidden admin
+      // leaves behind.
+      NEXTLY_E2E_SITE_HARNESS: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout

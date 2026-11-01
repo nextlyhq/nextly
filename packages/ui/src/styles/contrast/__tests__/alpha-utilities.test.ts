@@ -116,7 +116,6 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // card that is already identified by its fill and text, not a focus indicator
   // (all focus rings are full-strength) nor a sole state cue.
   "ring-primary/20",
-  "ring-foreground/40",
   // Colour-picker handle, over a surface whose colour the USER chose. No
   // semantic token can guarantee contrast against an arbitrary background, and
   // this is the outer half of the standard two-tone handle: a light border
@@ -127,12 +126,6 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "ring-muted/5",
   "ring-success-500/20",
   "ring-destructive-500/20",
-  // Faint hairline / dashed decorative borders, like border-subtle.
-  "border-primary/[0.08]",
-  "border-primary/[0.18]",
-  // The faint track of a CSS spinner on a primary button; border-t is the solid
-  // moving indicator and the spinner is a transient loading affordance.
-  "border-primary-foreground/30",
   // Supplementary hover outline; the hover state is conveyed by bg-accent and
   // its text, so the thin border is decorative.
   "border-accent-foreground/20",
@@ -236,7 +229,7 @@ function surfaceFor(name: string): string {
 /**
  * Every distinct color utility with an opacity used in the scanned source,
  * including multi-segment names (`text-muted-foreground`) and bracket
- * opacities (`border-primary/[0.08]`). Rings are included because a focus
+ * opacities (`border-primary/[0.5]`). Rings are included because a focus
  * indicator is a UI boundary held to 3:1.
  */
 /**

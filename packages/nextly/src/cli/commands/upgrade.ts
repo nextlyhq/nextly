@@ -16,15 +16,18 @@
 
 import { createInterface } from "node:readline";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { NextlyError, describeError } from "../../errors";
+import { NextlyError } from "../../errors";
+import { exitWithError, failWithError } from "../errors";
 import { createContext } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { createCliAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 
 import { maybeForceUnlock } from "./migrate";
 import type {
@@ -51,6 +54,8 @@ export interface RunUpgradeDeps {
   promptConfirm?: () => Promise<boolean>;
   /** The steps to run, in order: every upgrade step unless a test narrows it. */
   steps?: readonly UpgradeStep[];
+  /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
+  lockWaitMs?: number;
 }
 
 async function confirmBackup(
@@ -64,6 +69,8 @@ async function confirmBackup(
     throw new NextlyError({
       code: "NEXTLY_UPGRADE_IN_PROGRESS",
       publicMessage: "Upgrade cancelled by operator.",
+      // The two refusals share a code; the reason tells the CLI's error apart.
+      logContext: { reason: "cancelled" },
     });
   }
   throw new NextlyError({
@@ -71,6 +78,7 @@ async function confirmBackup(
     publicMessage:
       "Refusing to upgrade without a confirmed backup. Re-run with " +
       "`--confirm-backed-up` (CI/non-TTY) after backing up your database.",
+    logContext: { reason: "backup-not-confirmed" },
   });
 }
 
@@ -95,38 +103,43 @@ export async function runUpgrade(
   };
   const steps = deps.steps ?? UPGRADE_STEPS;
 
-  await withMigrateLock(db, dialect, async () => {
-    // Each step is brought up to date before the next is asked, so a step
-    // reads what the steps before it have repaired. The backup is confirmed
-    // once, before the first step that has work.
-    const idle: string[] = [];
-    let confirmed = false;
-    for (const step of steps) {
-      const pending = await step.pending(context);
-      if (pending === 0) {
-        idle.push(step.title);
-        continue;
+  await withMigrateLock(
+    adapter as unknown as DrizzleAdapter,
+    dialect,
+    async () => {
+      // Each step is brought up to date before the next is asked, so a step
+      // reads what the steps before it have repaired. The backup is confirmed
+      // once, before the first step that has work.
+      const idle: string[] = [];
+      let confirmed = false;
+      for (const step of steps) {
+        const pending = await step.pending(context);
+        if (pending === 0) {
+          idle.push(step.title);
+          continue;
+        }
+        if (!confirmed) {
+          await confirmBackup(options, deps);
+          confirmed = true;
+        }
+        for (const title of idle.splice(0)) {
+          context.log(`${title}: nothing to do`);
+        }
+        const changed = await step.run(context);
+        context.log(`${step.title}: ${String(changed)}`);
       }
       if (!confirmed) {
-        await confirmBackup(options, deps);
-        confirmed = true;
+        context.log("Already upgraded. Nothing to do.");
+        return;
       }
-      for (const title of idle.splice(0)) {
-        context.log(`${title}: nothing to do`);
-      }
-      const changed = await step.run(context);
-      context.log(`${step.title}: ${String(changed)}`);
-    }
-    if (!confirmed) {
-      context.log("Already upgraded. Nothing to do.");
-      return;
-    }
-    for (const title of idle) context.log(`${title}: nothing to do`);
+      for (const title of idle) context.log(`${title}: nothing to do`);
 
-    context.log(
-      "Done. You can now run `pnpm run dev` or `pnpm nextly migrate`."
-    );
-  });
+      context.log(
+        "Done. You can now run `pnpm run dev` or `pnpm nextly migrate`."
+      );
+    },
+    { command: "nextly upgrade", mode: "wait", waitMs: deps.lockWaitMs }
+  );
 }
 
 export interface RunReconcileCoreDeps {
@@ -157,27 +170,32 @@ export async function runReconcileCore(
 
   await assertNoLegacyBookkeeping(adapter);
 
-  await withMigrateLock(db, dialect, async () => {
-    await reconcile({
-      db,
-      dialect,
-      // Same reason as `nextly migrate`: the desired core shape must name the
-      // registry this database actually holds, or the reconcile creates the
-      // other one empty.
-      fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+  await withMigrateLock(
+    adapter as unknown as DrizzleAdapter,
+    dialect,
+    async () => {
+      await reconcile({
+        db,
         dialect,
-        getDrizzle: <T>() => db as T,
-      }),
-      mode: "dev-loose",
-      // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
-      // The retired-table cleanup is gated on the latter and therefore never
-      // runs from here, which is deliberate: dropping `accounts`/`sessions` is
-      // the documented `nextly migrate` + NEXTLY_ALLOW_CORE_DESTRUCTIVE flow,
-      // and an upgrade that only confirmed a backup has not asked for it.
-      confirmDestructive: deps.confirmDestructive,
-      logger: deps.logger,
-    });
-  });
+        // Same reason as `nextly migrate`: the desired core shape must name the
+        // registry this database actually holds, or the reconcile creates the
+        // other one empty.
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db as T,
+        }),
+        mode: "dev-loose",
+        // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
+        // The retired-table cleanup is gated on the latter and therefore never
+        // runs from here, which is deliberate: dropping `accounts`/`sessions` is
+        // the documented `nextly migrate` + NEXTLY_ALLOW_CORE_DESTRUCTIVE flow,
+        // and an upgrade that only confirmed a backup has not asked for it.
+        confirmDestructive: deps.confirmDestructive,
+        logger: deps.logger,
+      });
+    },
+    { command: "nextly upgrade --reconcile-core", mode: "wait" }
+  );
   deps.logger?.info?.("Core schema reconciliation complete.");
 }
 
@@ -241,11 +259,7 @@ export function registerUpgradeCommand(program: Command): void {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
 
-      const dbValidation = validateDatabaseEnv();
-      if (!dbValidation.valid || !dbValidation.dialect) {
-        for (const err of dbValidation.errors ?? []) context.logger.error(err);
-        process.exit(1);
-      }
+      const dbValidation = requireDatabaseEnv(context.logger);
 
       let adapter: { disconnect?: () => Promise<void> } & UpgradeAdapter;
       try {
@@ -255,10 +269,7 @@ export function registerUpgradeCommand(program: Command): void {
           logger: globalOpts.verbose ? context.logger : undefined,
         })) as unknown as { disconnect?: () => Promise<void> } & UpgradeAdapter;
       } catch (error) {
-        context.logger.error(
-          `Failed to connect to database: ${describeError(error)}`
-        );
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
 
       try {
@@ -303,8 +314,8 @@ export function registerUpgradeCommand(program: Command): void {
           );
         }
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exitCode = 1;
+        // Set rather than exited, so the disconnect below still runs.
+        failWithError(context.logger, error);
       } finally {
         await adapter.disconnect?.();
       }

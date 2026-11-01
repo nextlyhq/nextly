@@ -22,7 +22,11 @@ import {
   sqliteCoreStatementsFor,
 } from "../../database/sqlite-core-tables";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import {
+  declaredSlugsOf,
+  withoutRemovedFromCode,
+} from "../../domains/dynamic-collections/services/removed-from-code";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -82,6 +86,13 @@ import {
   SingleRegistryService,
   type SyncSingleResult,
 } from "../../services/singles/single-registry-service";
+import { exitWithError } from "../errors";
+import {
+  coreTablesNotCreated,
+  coreTablesNotReconciled,
+  databaseCatalogUnreadable,
+  schemaSyncInProduction,
+} from "../errors/areas/commands";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -278,6 +289,9 @@ export async function ensureCoreTables(
           adapter: drizzleAdapter,
           logger,
           label: "core table reconcile",
+          // A command-line run: a held schema lock is waited for, about a minute, and then
+          // the run stops naming its holder.
+          whenHeld: "wait",
           mayCreateLock: mayChangeSchema,
           // Idempotent table creation, and the documented way to stop a sync
           // is Ctrl+C — a claim stuck behind a dead process is the worse
@@ -295,11 +309,7 @@ export async function ensureCoreTables(
       forgetFieldGroupStorageNames(drizzleAdapter);
 
       if (!repaired) {
-        logger.error(
-          "Core tables could not be reconciled. Run `nextly migrate` to " +
-            "repair the schema before syncing."
-        );
-        process.exit(1);
+        exitWithError(logger, coreTablesNotReconciled());
       }
       logger.debug("Core tables reconciled");
     } else {
@@ -315,12 +325,7 @@ export async function ensureCoreTables(
   // nothing to repair, and the catalog read that failed can be fixed and the
   // command re-run.
   if (registryTable === null) {
-    logger.error(
-      "Could not read the database catalog to determine which field-group " +
-        "registry this database uses, so core tables were not created. " +
-        "Re-run once the database is reachable."
-    );
-    process.exit(1);
+    exitWithError(logger, databaseCatalogUnreadable());
   }
 
   logger.newline();
@@ -333,12 +338,20 @@ export async function ensureCoreTables(
   // recreate the spelling it had just moved away from. The exclusion in
   // `db-sync.ts` is acquired only after this function returns, so it is too
   // late to help.
-  let pushFailed = false;
+  // Why the bootstrap failed, when it did: the catalog read inside the exclusion, or the push.
+  // Typed by assertion: it is set inside the exclusion's callback, which narrowing cannot see.
+  let pushFailure = undefined as
+    | { catalog: true }
+    | { push: unknown }
+    | undefined;
   await withMigrationExcluded(
     {
       adapter: drizzleAdapter,
       logger,
       label: "core table bootstrap",
+      // A command-line run: a held schema lock is waited for, about a minute, and then
+      // the run stops naming its holder.
+      whenHeld: "wait",
       mayCreateLock: options.autoSync !== false,
       releaseOnInterrupt: true,
     },
@@ -350,7 +363,7 @@ export async function ensureCoreTables(
       // costs one catalog query and is the only value the push may trust.
       const pushRegistry = await resolveRegistryTable(drizzleAdapter, logger);
       if (pushRegistry === null) {
-        pushFailed = true;
+        pushFailure = { catalog: true };
         return;
       }
       // F8 PR 2: use the freshPushSchema helper for the static-tables push.
@@ -405,7 +418,7 @@ export async function ensureCoreTables(
           // stays live until the 120-second lease expires — refusing the very
           // `nextly migrate` this message tells the operator to run. The exit
           // happens after the exclusion has unwound.
-          pushFailed = true;
+          pushFailure = { push: pushError };
         }
       }
     }
@@ -418,11 +431,13 @@ export async function ensureCoreTables(
   // window would leave the sync querying a table that has since been renamed.
   forgetFieldGroupStorageNames(drizzleAdapter);
 
-  if (pushFailed) {
-    logger.error(
-      "Core tables not found. Please run `nextly migrate` first to create the database schema."
+  if (pushFailure !== undefined) {
+    exitWithError(
+      logger,
+      "push" in pushFailure
+        ? coreTablesNotCreated(pushFailure.push)
+        : databaseCatalogUnreadable()
     );
-    process.exit(1);
   }
 }
 
@@ -471,12 +486,7 @@ export async function performAutoSync(
     ];
 
     if (pendingCollections.length > 0) {
-      logger.newline();
-      logger.error("Cannot auto-sync schema in production mode.");
-      logger.info(
-        'Run `nextly migrate:create --name="<migration-name>"` to create migrations, then `nextly migrate` to apply.'
-      );
-      process.exit(1);
+      exitWithError(logger, schemaSyncInProduction(pendingCollections));
     }
     return;
   }
@@ -605,15 +615,30 @@ export async function performAutoSync(
     registryLogger
   );
 
+  // A collection or Single removed from code is left out of the push
+  // altogether. Merged in, its stored fields became desired schema: a dropped
+  // table was created again, and a table that had drifted from its row was
+  // altered to match it. Left out, the push never names it, and the drop
+  // guard keeps drizzle-kit from dropping a table outside the desired schema.
+  const declaredCollections = declaredSlugsOf(config.collections);
+  const declaredSingles = declaredSlugsOf(config.singles);
   const desired: DesiredSchema = {
     collections: await mergeRegisteredCollectionsSafely(
       desiredCollections,
-      () => registry.getAllCollections(),
+      async () =>
+        withoutRemovedFromCode(
+          await registry.getAllCollections(),
+          declaredCollections
+        ),
       logger
     ),
     singles: await mergeRegisteredSafely(
       desiredSingles,
-      () => singleRegistry.getAllSingles(),
+      async () =>
+        withoutRemovedFromCode(
+          await singleRegistry.getAllSingles(),
+          declaredSingles
+        ),
       (row, base) => ({ ...base, status: row.status === true }),
       logger
     ),
@@ -745,7 +770,7 @@ export async function performAutoSync(
           { and: [{ column: "slug", op: "=", value: collection.slug }] }
         );
         // Written past the registry services: the cached rows are cleared.
-        clearCollectionRowCache();
+        clearRegistryRowCache();
       }
     } catch {
       // Ignore errors updating migration status — non-critical metadata.
@@ -1033,7 +1058,13 @@ export async function performSinglesReconcile(
   const reconciledSlugs: string[] = [];
 
   await reconcileSingleTables({
-    ...singleTableSources(singleRegistry, () => drizzleAdapter.listTables()),
+    // A code-first Single the configuration no longer declares is left out,
+    // so `db:sync` does not build its dropped table again either.
+    ...singleTableSources(
+      singleRegistry,
+      () => drizzleAdapter.listTables(),
+      declaredSlugsOf(config.singles)
+    ),
     createTable: async single => {
       // Prefer code-first config (source of truth) but fall back to the
       // registry's stored fields for UI-created singles.

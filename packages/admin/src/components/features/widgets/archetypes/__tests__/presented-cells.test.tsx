@@ -23,6 +23,7 @@ import {
 
 import { asPresentedText } from "../cell-text";
 import { listBody } from "../list";
+import { presentedCell } from "../presented-cell";
 
 const ISO = "2026-09-01T07:00:00.000Z";
 
@@ -131,6 +132,78 @@ describe("a date cell reads the admin's configured timezone", () => {
 
     expect(karachi).toBeDefined();
     expect(kiritimati).not.toBe(karachi);
+  });
+});
+
+/**
+ * A date cell reads short enough for a meta line, with the full date kept for
+ * its tooltip: "Oct 24, 2026 09:40 PM" in a row of three fields crowded the
+ * row, and repeated a year every date on the card shares.
+ */
+describe("a date cell reads short, with the full date on hover", () => {
+  const original = getGlobalDateTimeConfig();
+  afterEach(() => setGlobalDateTimeConfig(original));
+  const NOW = Date.parse("2026-10-27T15:00:00.000Z");
+  // ICU may put a narrow no-break space before AM/PM: compared as plain spaces.
+  const plain = (text: string | undefined) => text?.replace(/\s/g, " ");
+
+  it.each([
+    ["2026-10-27T09:40:00.000Z", "Today, 9:40 AM"],
+    ["2026-10-26T21:40:00.000Z", "Yesterday, 9:40 PM"],
+    ["2026-10-24T21:40:00.000Z", "Oct 24, 9:40 PM"],
+    ["2025-10-24T21:40:00.000Z", "Oct 24, 2025, 9:40 PM"],
+  ])("reads %s as %s", (iso, short) => {
+    setGlobalDateTimeConfig({
+      timezone: "UTC",
+      locale: "en-US",
+      timeFormat: "12h",
+    });
+    expect(plain(asPresentedText(iso, { type: "date" }, NOW))).toBe(short);
+  });
+
+  it("names the day in the admin's zone, not in UTC", () => {
+    // 20:00Z on the 26th is 01:00 on the 27th in Asia/Karachi (UTC+5): today
+    // there, while still yesterday in UTC.
+    const iso = "2026-10-26T20:00:00.000Z";
+    setGlobalDateTimeConfig({
+      timezone: "UTC",
+      locale: "en-US",
+      timeFormat: "12h",
+    });
+    expect(plain(asPresentedText(iso, { type: "date" }, NOW))).toBe(
+      "Yesterday, 8:00 PM"
+    );
+    setGlobalDateTimeConfig({
+      timezone: "Asia/Karachi",
+      locale: "en-US",
+      timeFormat: "12h",
+    });
+    expect(plain(asPresentedText(iso, { type: "date" }, NOW))).toBe(
+      "Today, 1:00 AM"
+    );
+  });
+
+  it("keeps the full date, year included, in the cell's tooltip", () => {
+    setGlobalDateTimeConfig({
+      timezone: "UTC",
+      locale: "en-US",
+      timeFormat: "12h",
+    });
+    const iso = "2026-10-24T21:40:00.000Z";
+    render(<>{presentedCell(iso, { type: "date" }, NOW)}</>);
+    const cell = screen.getByText(
+      (_, node) =>
+        node?.tagName === "TIME" &&
+        plain(node.textContent) === "Oct 24, 9:40 PM"
+    );
+    expect(cell).toHaveAttribute("dateTime", iso);
+    expect(cell.getAttribute("title")).toContain("2026");
+  });
+
+  it("leaves any other cell as its text", () => {
+    expect(presentedCell("Autumn launch", { type: "string" }, NOW)).toBe(
+      "Autumn launch"
+    );
   });
 });
 

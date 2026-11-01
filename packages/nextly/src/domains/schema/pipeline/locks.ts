@@ -1,379 +1,135 @@
 /**
- * Cross-process schema lock (spec §4.6.2). Shared by `migrate`, `upgrade`,
- * and `migrate:resolve`.
+ * The schema lock, as the migration commands take it: `migrate` and the boot migrate step,
+ * `migrate:down`, `migrate:baseline`, `migrate:resolve`, `upgrade`, and plugin install and
+ * uninstall.
  *
- * PostgreSQL: a TTL lock ROW (`nextly_migrate_lock`) instead of a session
- * advisory lock — session advisory locks leak through transaction-mode poolers
- * (Neon/Supabase PgBouncer): the unlock can land on a different backend than the
- * one holding it, leaving a dangling lock that wedges the next run. The row lock
- * is pooler-agnostic. Acquire is an atomic upsert that succeeds only when the
- * lock is free or its TTL has expired; release deletes only our own row.
- *
- * MySQL: GET_LOCK, named for the connection's database. A named lock belongs
- * to the whole server, so a fixed name made every Nextly database on a server
- * share one migrate lock: two apps (or two test workers) on one server refused
- * or waited on each other's migrations. SQLite: single-writer no-op.
+ * One lock per database now covers every schema change (`./schema-lock`). This module keeps the
+ * shape those commands were written against, so each states only what is particular to it: the
+ * command that holds the lock, and whether it waits for a held one. It also keeps
+ * `--force-unlock`, which clears the lock and both earlier locks.
  *
  * @module domains/schema/pipeline/locks
- * @since v0.0.3-alpha (Plan C2; pooler-safe rewrite 2026-06)
  */
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
-
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
-import type {
-  Connection as CallbackConnection,
-  Pool as CallbackPool,
-} from "mysql2";
+import { sql, type SQL } from "drizzle-orm";
 
-import { NextlyError } from "../../../errors";
+import { isMissingTable } from "../../field-groups/migration/session";
 
-/**
- * The MySQL migrate lock's name, as SQL evaluated on the connection that takes
- * it: one name per database, so only a migration of the same database waits.
- * The database name is hashed because MySQL caps a lock name at 64 characters
- * and a database name may itself be 64: this is 15 + 40 = 55. A connection
- * with no database selected gets the hash of the empty string, one shared name,
- * as before.
- */
-export const MYSQL_MIGRATE_LOCK_NAME = sql`CONCAT('nextly:migrate:', SHA1(COALESCE(DATABASE(), '')))`;
-const MYSQL_LOCK_NAME = MYSQL_MIGRATE_LOCK_NAME;
+import {
+  EARLIER_MIGRATE_LOCK_TABLE,
+  SCHEMA_LOCK_TABLE,
+  withSchemaLock,
+  type SchemaLockOutcome,
+} from "./schema-lock";
 
-/**
- * The name every Nextly before the per-database lock took, on any database.
- * While an older version may still be running against this one (a rolling or
- * serverless deploy with `db.runMigrationsOnBoot`), a holder of this name may
- * be migrating it, so it is treated as busy too. Remove once no supported
- * version takes it.
- */
-const MYSQL_LEGACY_LOCK_NAME = "nextly:migrate";
-
-/**
- * Whether the legacy name is free, waiting for it until `deadline` (epoch ms).
- * It is checked after this database's own lock is taken, so a new process
- * never holds neither, and it shares that lock's deadline: the caller's wait
- * covers both names, not each in turn.
- */
-async function legacyLockFree(db: PgLike, deadline: number): Promise<boolean> {
-  for (;;) {
-    const [row] = toRows(
-      await db.execute(
-        sql`SELECT IS_USED_LOCK(${MYSQL_LEGACY_LOCK_NAME}) AS holder`
-      )
-    );
-    if (row?.holder === null || row?.holder === undefined) return true;
-    if (Date.now() >= deadline) return false;
-    await new Promise(resolve => setTimeout(resolve, POLL_MS));
-  }
-}
-const DEFAULT_TTL_SECONDS = 900;
-const POLL_MS = 1000;
-
-/** Identifies this process as a lock holder (host:pid:uuid). */
-const OWNER = `${hostname()}:${process.pid}:${randomUUID()}`;
-
-type PgLike = { execute: (q: unknown) => Promise<unknown> };
+export {
+  getEarlierMigrateLockDdl as getMigrateLockDdl,
+  MYSQL_MIGRATE_LOCK_NAME,
+} from "./schema-lock";
 
 export interface MigrateLockOptions {
-  /** "fail-fast" (default): busy → throw. "wait": poll until acquired or settled. */
+  /** What holds the lock, as an operator would name it. Stored with the claim. */
+  command: string;
+  /**
+   * `wait` (the default): a held lock is waited for, about a minute, and then the run stops with a
+   * message naming the holder. `fail-fast`: it stops at once.
+   */
   mode?: "fail-fast" | "wait";
-  /** Lock lifetime in seconds before another process may take it over. */
+  /** How long `wait` waits, in milliseconds. */
+  waitMs?: number;
+  /** The lease, in seconds: how long the lock outlives a holder that stopped. */
   ttlSeconds?: number;
-  /** wait mode: max total time to wait (ms). Default = ttlSeconds * 1000. */
-  maxWaitMs?: number;
   /** wait mode: poll interval (ms). */
   pollMs?: number;
   /** wait mode: return early (without running fn) once this resolves true. */
   isSettled?: () => Promise<boolean>;
+  /**
+   * Release the lock when the process is interrupted. True for a command, whose interrupt ends it;
+   * false for the boot migrate step, inside a server whose shutdown may let the work run on.
+   */
+  releaseOnInterrupt?: boolean;
   logger?: { warn?: (m: string) => void; info?: (m: string) => void };
-}
-
-/** Idempotent DDL for the lock table (per dialect). PG only. */
-export function getMigrateLockDdl(dialect: SupportedDialect): string[] {
-  if (dialect === "postgresql") {
-    return [
-      `CREATE TABLE IF NOT EXISTS nextly_migrate_lock (
-        id integer PRIMARY KEY,
-        owner text NOT NULL,
-        acquired_at timestamptz NOT NULL,
-        expires_at timestamptz NOT NULL
-      )`,
-    ];
-  }
-  return [];
-}
-
-/** Normalize a driver result to a rows array (pg `{ rows }` vs array). */
-function toRows(res: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(res)) {
-    return (Array.isArray(res[0]) ? res[0] : res) as Array<
-      Record<string, unknown>
-    >;
-  }
-  return (res as { rows?: Array<Record<string, unknown>> }).rows ?? [];
-}
-
-/**
- * The busy-lock error, told per dialect. PostgreSQL's lock is a row that a
- * stopped process can leave behind, so `--force-unlock` clears it. MySQL's is
- * a named lock that goes when the connection holding it ends, so it is never
- * stale and `--force-unlock` has nothing to clear: the remedy there is to let
- * the other process finish, or stop it.
- */
-/** Which MySQL lock a busy outcome met: this database's, or the old server-wide name. */
-type MysqlBusyLock = "database" | "legacy";
-
-function lockBusy(
-  dialect: SupportedDialect,
-  mysqlLock: MysqlBusyLock = "database"
-): never {
-  throw new NextlyError({
-    code: "NEXTLY_MIGRATE_LOCK_BUSY",
-    publicMessage:
-      dialect === "mysql" && mysqlLock === "legacy"
-        ? "An older Nextly process holds the server-wide migrate lock " +
-          "(`nextly:migrate`), which it takes for any database on this MySQL " +
-          "server, so it may be migrating another database. Wait for it to " +
-          "finish and retry: MySQL releases the lock when that process's " +
-          "connection ends. Upgrading every Nextly app on the server ends this."
-        : dialect === "mysql"
-          ? "Another schema operation holds the migrate lock on this database. " +
-            "Wait for it to finish (a running dev server also holds it) and retry. " +
-            "MySQL releases the lock when that process's connection ends, so " +
-            "stopping it frees the lock; `--force-unlock` has nothing to clear here."
-          : "Another schema operation holds the migrate lock. Wait for it to finish " +
-            "(a running dev server also holds it) and retry, or run with " +
-            "`--force-unlock` to clear a stale lock.",
-  });
-}
-
-async function ensureLockTable(pg: PgLike): Promise<void> {
-  for (const stmt of getMigrateLockDdl("postgresql")) {
-    await pg.execute(sql.raw(stmt));
-  }
-}
-
-/** Atomic acquire: inserts the lock, or takes over an expired one. */
-async function tryAcquirePg(pg: PgLike, ttlSeconds: number): Promise<boolean> {
-  const rows = toRows(
-    await pg.execute(sql`
-      INSERT INTO nextly_migrate_lock (id, owner, acquired_at, expires_at)
-      VALUES (1, ${OWNER}, now(), now() + make_interval(secs => ${ttlSeconds}))
-      ON CONFLICT (id) DO UPDATE
-        SET owner = EXCLUDED.owner,
-            acquired_at = EXCLUDED.acquired_at,
-            expires_at = EXCLUDED.expires_at
-        WHERE nextly_migrate_lock.expires_at < now()
-      RETURNING id
-    `)
-  );
-  return rows.length === 1;
-}
-
-async function releasePg(pg: PgLike): Promise<void> {
-  await pg.execute(
-    sql`DELETE FROM nextly_migrate_lock WHERE id = 1 AND owner = ${OWNER}`
-  );
-}
-
-/** Unconditionally clear the lock (the `--force-unlock` escape hatch). PG only. */
-export async function forceUnlock(
-  db: unknown,
-  dialect: SupportedDialect
-): Promise<void> {
-  if (dialect !== "postgresql") return;
-  const pg = db as PgLike;
-  await ensureLockTable(pg);
-  await pg.execute(sql`DELETE FROM nextly_migrate_lock WHERE id = 1`);
-}
-
-/**
- * Acquire the migrate lock, run `fn`, release on exit. Returns `fn`'s result, or
- * `undefined` if wait mode settled without running `fn` (another process applied
- * the migrations while we waited).
- */
-/** A MySQL connection the lock is held on, and how it is given back. */
-interface PinnedMysql {
-  db: PgLike;
-  release: () => void;
-  destroy: () => void;
-}
-
-/** mysql2's default `connectionLimit`, used when a pool does not state one. */
-const MYSQL_DEFAULT_CONNECTION_LIMIT = 10;
-
-/**
- * Takes the connection a MySQL named lock is held on. `GET_LOCK` belongs to the
- * connection that runs it, and the pool hands out any idle connection, so the
- * lock and its release must share one connection of their own.
- *
- * Not taken from a pool of one connection: the work would then wait for that
- * connection, which the lock holds. With one connection, the lock and its
- * release share it already. A handle with no pool behind it (a transaction's
- * connection, or a test double) is also used as it is.
- */
-async function pinMysqlConnection(db: unknown): Promise<PinnedMysql> {
-  const client = (db as { $client?: Partial<CallbackPool> }).$client;
-  const limit =
-    client?.config?.connectionLimit ?? MYSQL_DEFAULT_CONNECTION_LIMIT;
-  if (
-    typeof client?.getConnection !== "function" ||
-    typeof client.promise !== "function" ||
-    limit < 2
-  ) {
-    return { db: db as PgLike, release: () => {}, destroy: () => {} };
-  }
-  // Loaded here rather than at the top of the module: the MySQL driver is a
-  // dependency only of the MySQL adapter, so a PostgreSQL or SQLite install
-  // must not need it to start the CLI.
-  const { drizzle } = await import("drizzle-orm/mysql2");
-  const connection = await client.promise().getConnection();
-  const callback = (connection as unknown as { connection: CallbackConnection })
-    .connection;
-  return {
-    db: drizzle({ client: callback }) as unknown as PgLike,
-    release: () => connection.release(),
-    destroy: () => connection.destroy(),
-  };
-}
-
-/**
- * Runs `fn` while holding the MySQL named lock, on one connection for the
- * whole of it. A connection that errs is destroyed rather than released: the
- * server frees the lock when it sees the connection close, and a pooled
- * connection that gave the lock back would otherwise keep it.
- */
-async function withMysqlLock<T>(
-  db: unknown,
-  waitSeconds: number,
-  fn: () => Promise<T>
-): Promise<
-  { acquired: true; value: T } | { acquired: false; lock: MysqlBusyLock }
-> {
-  // One deadline for both names, taken before the first wait starts.
-  const deadline = Date.now() + waitSeconds * 1000;
-  const pinned = await pinMysqlConnection(db);
-  try {
-    const acquired = toRows(
-      await pinned.db.execute(
-        sql`SELECT GET_LOCK(${MYSQL_LOCK_NAME}, ${waitSeconds}) AS locked`
-      )
-    );
-    const v = acquired[0]?.locked;
-    if (!(v === 1 || v === true)) {
-      pinned.release();
-      return { acquired: false, lock: "database" };
-    }
-    if (!(await legacyLockFree(pinned.db, deadline))) {
-      await pinned.db.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
-      pinned.release();
-      return { acquired: false, lock: "legacy" };
-    }
-    const value = await fn();
-    await pinned.db.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
-    pinned.release();
-    return { acquired: true, value };
-  } catch (error) {
-    // Released first, so a handle that is not ours to close does not keep the
-    // lock; a pooled connection is then destroyed, which is what frees it.
-    await pinned.db
-      .execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`)
-      .catch(() => undefined);
-    pinned.destroy();
-    throw error;
-  }
 }
 
 /**
  * Whether the guarded body RAN, and its value if it did.
  *
- * A discriminated result rather than `T | undefined`, because `undefined` was
- * doing double duty: "your function returned undefined" and "your function
- * never ran". Only one caller ever distinguished them, by convention, and the
- * one that did not was production boot — which logged
- * `Boot migrations complete (0 applied)` for migrations that never started.
- * The compiler now makes every call site decide.
+ * A discriminated result rather than `T | undefined`, because `undefined` would do double duty:
+ * "your function returned undefined" and "your function never ran". A held lock is not an
+ * outcome — it throws `NEXTLY_MIGRATE_LOCK_BUSY` naming the holder — so `ran: false` means only
+ * that a waiting run stopped because `isSettled` found the work done.
  */
-export type MigrateLockOutcome<T> =
-  | { ran: true; value: T }
-  | { ran: false; reason: "lock-held" };
+export type MigrateLockOutcome<T> = SchemaLockOutcome<T>;
 
+/** Hold the schema lock for the whole of `fn`, on behalf of a migration command. */
 export async function withMigrateLock<T>(
+  adapter: DrizzleAdapter,
+  _dialect: SupportedDialect,
+  fn: () => Promise<T>,
+  opts: MigrateLockOptions
+): Promise<MigrateLockOutcome<T>> {
+  return withSchemaLock(
+    {
+      adapter,
+      command: opts.command,
+      whenHeld: opts.mode === "fail-fast" ? "refuse" : "wait",
+      waitMs: opts.waitMs,
+      pollMs: opts.pollMs,
+      leaseSeconds: opts.ttlSeconds,
+      isSettled: opts.isSettled,
+      releaseOnInterrupt: opts.releaseOnInterrupt ?? true,
+      logger: opts.logger,
+    },
+    () => fn()
+  );
+}
+
+/** A Drizzle handle's one-statement call, per dialect: better-sqlite3 has no `execute`. */
+async function runOn(
   db: unknown,
   dialect: SupportedDialect,
-  fn: () => Promise<T>,
-  opts?: MigrateLockOptions
-): Promise<MigrateLockOutcome<T>> {
-  switch (dialect) {
-    case "postgresql": {
-      const pg = db as PgLike;
-      const ttl = opts?.ttlSeconds ?? DEFAULT_TTL_SECONDS;
-      await ensureLockTable(pg);
+  statement: SQL
+): Promise<void> {
+  if (dialect === "sqlite") {
+    await (db as { run: (q: SQL) => unknown }).run(statement);
+    return;
+  }
+  await (db as { execute: (q: SQL) => Promise<unknown> }).execute(statement);
+}
 
-      let acquired = await tryAcquirePg(pg, ttl);
-
-      if (!acquired && opts?.mode === "wait") {
-        const deadline = Date.now() + (opts.maxWaitMs ?? ttl * 1000);
-        const pollMs = opts.pollMs ?? POLL_MS;
-        while (!acquired && Date.now() < deadline) {
-          if (opts.isSettled && (await opts.isSettled()))
-            return { ran: false, reason: "lock-held" };
-          await new Promise(r => setTimeout(r, pollMs));
-          acquired = await tryAcquirePg(pg, ttl);
-        }
-        if (!acquired) {
-          // Says SKIPPED, because that is what happens. The previous wording,
-          // "proceeding without it", described running the migrations anyway —
-          // the opposite of the `return` beneath it — and a caller reading the
-          // log had no way to tell the difference from "already up to date".
-          opts.logger?.warn?.(
-            "[Nextly] migrate lock still held after waiting; migrations SKIPPED."
-          );
-          return { ran: false, reason: "lock-held" };
-        }
-      }
-
-      if (!acquired) lockBusy("postgresql");
-      try {
-        return { ran: true, value: await fn() };
-      } finally {
-        await releasePg(pg);
-      }
-    }
-    case "mysql": {
-      // `GET_LOCK`'s second argument IS the wait: 0 returns immediately, a
-      // positive number blocks for that many seconds. Passing 0 unconditionally
-      // meant `mode: "wait"` was silently fail-fast on MySQL — it threw
-      // `NEXTLY_MIGRATE_LOCK_BUSY` where Postgres reports `ran: false`, so the
-      // two dialects disagreed about what a busy lock even IS, and a caller
-      // handling one outcome was unprotected on the other.
-      const waitSeconds =
-        opts?.mode === "wait"
-          ? Math.ceil(
-              (opts.maxWaitMs ??
-                (opts.ttlSeconds ?? DEFAULT_TTL_SECONDS) * 1000) / 1000
-            )
-          : 0;
-      const held = await withMysqlLock(db, waitSeconds, fn);
-      if (!held.acquired) {
-        // Same split as Postgres: waiting and still not getting it is an
-        // OUTCOME the caller decides on; fail-fast is an error.
-        if (opts?.mode === "wait") {
-          opts.logger?.warn?.(
-            "[Nextly] migrate lock still held after waiting; migrations SKIPPED."
-          );
-          return { ran: false, reason: "lock-held" };
-        }
-        lockBusy("mysql", held.lock);
-      }
-      return { ran: true, value: held.value };
-    }
-    case "sqlite":
-      return { ran: true, value: await fn() };
-    default: {
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
+/**
+ * Clear the schema lock and both earlier locks, whoever holds them (`--force-unlock`).
+ *
+ * For a lock an operator knows is stale and will not wait out. A holder that stopped lets its
+ * claim lapse within one lease, so this is rarely needed — and it frees a LIVE holder's lock too,
+ * which is why it is only ever an operator's explicit choice. MySQL's named lock has nothing to
+ * clear: it goes when the connection holding it ends. A table that is not there is skipped.
+ */
+export async function forceUnlock(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<void> {
+  const id = (name: string) => sql.identifier(name);
+  const clears: SQL[] = [];
+  if (dialect === "postgresql") {
+    clears.push(
+      sql`DELETE FROM ${id(EARLIER_MIGRATE_LOCK_TABLE)} WHERE ${id("id")} = 1`
+    );
+  }
+  clears.push(
+    sql`UPDATE ${id(SCHEMA_LOCK_TABLE)}
+        SET ${id("owner")} = NULL, ${id("command")} = NULL,
+            ${id("acquired_at")} = NULL, ${id("expires_at")} = NULL
+        WHERE ${id("id")} = 1`,
+    sql`UPDATE ${id("nextly_field_group_lock")} SET ${id("owner")} = NULL
+        WHERE ${id("id")} = 1`
+  );
+  for (const clear of clears) {
+    try {
+      await runOn(db, dialect, clear);
+    } catch (error) {
+      if (!isMissingTable(error, dialect)) throw error;
     }
   }
 }

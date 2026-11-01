@@ -19,6 +19,7 @@
  * @module domains/widgets/execute
  */
 
+import type { InternalTimeseriesArgs } from "../../direct-api/namespaces/collections";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import { NextlyError } from "../../errors/nextly-error";
@@ -33,6 +34,7 @@ import {
 import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
 import {
+  openWindowEnd,
   rangeWindow,
   relativeSpanStart,
   type TimeseriesRange,
@@ -137,11 +139,13 @@ function windowedQuery(
   now: Date
 ): WidgetQuery {
   if (query.since === undefined) return query;
+  // A window left open at the batch's instant keeps that instant's whole
+  // second (`openWindowEnd`); a stated `until` is a boundary in the past.
   return boundedBy(
     query,
     field,
     relativeSpanStart(query.since, now),
-    windowEnd(query, now)
+    query.until === undefined ? openWindowEnd(now) : windowEnd(query, now)
   );
 }
 
@@ -295,14 +299,25 @@ async function runRangedTimeseries(
 ): Promise<WidgetResult> {
   const dateField = query.dateField ?? "";
   const window = rangeWindow(range, now);
-  const result = await requireNextly().timeseries({
+  // The rows end at the batch's instant's whole second (`openWindowEnd`); the
+  // intervals are still placed by the instant itself, and a row stored rounded
+  // across the last interval's end, before that second ends, counts in the
+  // last interval, as the row filter below keeps it. Named through the Direct
+  // API's internal arguments (`InternalTimeseriesArgs`), which the published
+  // `TimeseriesArgs` leaves out.
+  const args: InternalTimeseriesArgs = {
     collection,
     dateField,
     interval: window.interval,
     intervals: window.intervals,
     now: window.anchor,
-    ...sharedReadArgs(boundedBy(query, dateField, window.start, now), caller),
-  });
+    rowsEnd: openWindowEnd(now),
+    ...sharedReadArgs(
+      boundedBy(query, dateField, window.start, openWindowEnd(now)),
+      caller
+    ),
+  };
+  const result = await requireNextly().timeseries(args);
   return { op: "timeseries", points: result.points, interval: result.interval };
 }
 
@@ -369,12 +384,15 @@ async function runList(
   collection: string,
   query: WidgetQuery,
   caller: ReadCaller,
-  source: WidgetSource
+  source: WidgetSource,
+  depth: 0 | undefined
 ): Promise<WidgetResult> {
   const select = toSelect(query.select);
   const result = await requireNextly().find({
     collection,
     limit: query.limit,
+    // Passed only when asked for, so every other read keeps core's default.
+    ...(depth === 0 ? { depth } : {}),
     ...(query.sort ? { sort: query.sort } : {}),
     ...(select ? { select } : {}),
     ...sharedReadArgs(query, caller),
@@ -573,6 +591,14 @@ async function hasReleaseToRead(caller: ReadCaller): Promise<boolean> {
  */
 export interface CoreQueryOptions extends ResolverOptions {
   callerScope?: WidgetScope;
+  /**
+   * `0` for a collection `list` that answers each link (a relationship or an
+   * upload) as the id it stores, unexpanded: core's own `find` with
+   * `depth: 0`. Absent, the read expands links as core's `find` does by
+   * default. Handed only by a declared widget's data read, never named in a
+   * query, so a card's own query cannot ask for it.
+   */
+  depth?: 0;
 }
 
 export async function executeWidgetQuery(
@@ -633,7 +659,9 @@ export async function executeWidgetQuery(
   // the same moment.
   const now = opts?.now ?? new Date();
   if (query.op === "count") return runCount(collection, query, caller, now);
-  if (query.op === "list") return runList(collection, query, caller, source);
+  if (query.op === "list") {
+    return runList(collection, query, caller, source, opts?.depth);
+  }
   if (query.op === "groupBy") {
     return runGroupBy(collection, query, caller, source);
   }

@@ -15,9 +15,10 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -31,29 +32,12 @@ const DASHBOARD_PATH = /\/admin\/?$/;
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 /**
- * The host app's `<title>`, which the playground's client root layout cannot
- * declare. The reason is given in full in `builder-a11y.spec.ts`.
- */
-const HOST_OWNED_RULES = ["document-title"];
-
-/**
  * One known defect outside the dashboard, set aside by rule AND place, as in
  * `dashboard-heading.spec.ts`: `link-name` on the sidebar rail's icon-only
  * links. Every other rule still runs on the rail, and `link-name` still fails
  * anywhere else.
  */
 const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
-
-/** Back to the default dashboard, through the guarded reset a reader uses. */
-async function resetToDefault(page: Page): Promise<void> {
-  const read = await page.request.get("/admin/api/dashboard/layout");
-  const body = (await read.json()) as { version: number; scope: string };
-  if (body.version === 0) return;
-  const reset = await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-  expect(reset.status()).toBe(200);
-}
 
 function bar(page: Page) {
   return page.getByRole("group", { name: "Customize your dashboard" });
@@ -100,10 +84,7 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
           animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY
       )
   );
-  const results = await new AxeBuilder({ page })
-    .withTags(AA_TAGS)
-    .disableRules(HOST_OWNED_RULES)
-    .analyze();
+  const results = await new AxeBuilder({ page }).withTags(AA_TAGS).analyze();
   // A scan of nothing reports no violations too; enough passing rules shows
   // it looked at a drawn page.
   expect(
@@ -147,7 +128,9 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   // The positive control: at rest the cards DO hold links of their own, so a
   // Tab walk that meets none in customise mode has measured a fence rather
   // than an empty dashboard.
@@ -243,7 +226,9 @@ test("going Back with unsaved changes asks, and Keep Editing stays", async ({
   await expect(page).not.toHaveURL(DASHBOARD_PATH);
   await page.evaluate(() => window.history.pushState(null, "", "/admin"));
   await expect(page).toHaveURL(DASHBOARD_PATH);
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
 
   await customize(page);
   await moveFirstCardLater(page);
@@ -292,7 +277,9 @@ test("reloading with unsaved changes gets the browser's own prompt", async ({
 for (const theme of ["light", "dark"] as Theme[]) {
   test(`customise mode passes axe at 1440 (${theme})`, async ({ page }) => {
     await gotoAdmin(page, "/", theme);
-    await expect(page.locator(CELLS).first()).toBeVisible();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).first()
+    ).toBeVisible();
     await customize(page);
     // With a change made, so the unsaved-changes marker is scanned too.
     await moveFirstCardLater(page);
@@ -306,29 +293,27 @@ async function openAddPanel(page: Page) {
   await bar(page).getByRole("button", { name: "Add widget" }).click();
   const panel = page.getByRole("dialog", { name: "Add widget" });
   await expect(
-    panel.getByRole("searchbox", { name: "Search widgets" })
+    panel.getByRole("searchbox", { name: "Search widgets or collections" })
   ).toBeFocused();
   return panel;
 }
 
 /**
- * The next control in the panel that puts a card on the dashboard: a new card (Add, Add
- * another) where one is offered, else a removed card back. Whichever widgets the site offers,
- * so the visit does not depend on them.
+ * The next control in the panel that puts a card on the dashboard at once: a removed card back,
+ * which the gallery lists first. Whichever widgets the site offers, so the visit does not depend
+ * on them; adding new cards, some through their add step, is `dashboard-gallery.spec.ts`'s.
  */
 function nextAdd(panel: Locator): Locator {
-  const fresh = panel.locator(
-    '[data-testid^="add-panel-add-"]:not([data-testid^="add-panel-add-back-"]):enabled'
-  );
-  const back = panel.locator('[data-testid^="add-panel-add-back-"]');
-  return fresh.or(back).first();
+  return panel.locator('[data-testid^="add-panel-add-back-"]').first();
 }
 
 test("the add panel adds three cards in one visit, each said and ringed, and closing lands on the last", async ({
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   await customize(page);
   // Three cards out of the draft first, so there is something to put back on any site.
   for (let i = 0; i < 3; i += 1) {
@@ -345,7 +330,7 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
     await nextAdd(panel).click();
     await expect(page.locator(CELLS)).toHaveCount(before + added);
     await expect(panel.getByTestId("add-panel-live")).toHaveText(
-      new RegExp(`^Added (back )?.+ at position \\d+ of ${before + added}\\.$`)
+      /^Added back .+\.$/
     );
     // Still open, and focus still inside it.
     await expect(panel).toBeVisible();
@@ -375,7 +360,9 @@ for (const theme of ["light", "dark"] as Theme[]) {
       // Customise mode is offered at every width, so it is entered at the one measured.
       await page.setViewportSize(viewport);
       await gotoAdmin(page, "/", theme);
-      await expect(page.locator(CELLS).first()).toBeVisible();
+      await expect(
+        page.locator(CELLS).filter({ visible: true }).first()
+      ).toBeVisible();
       await customize(page);
       // One card removed, so the Removed group and its Add back are scanned too.
       await page
@@ -391,11 +378,13 @@ for (const theme of ["light", "dark"] as Theme[]) {
 
       await expectNoAxeViolations(page);
 
-      // WCAG 2.5.8's minimum, measured on every control the panel draws.
+      // WCAG 2.5.8's minimum, measured on every control the panel draws that a reader can use:
+      // a tile's preview is an inert picture of its card, whose controls nobody can reach.
       const small = await panel
         .locator("button:visible, input:visible")
         .evaluateAll(controls =>
           controls.flatMap(control => {
+            if (control.closest("[inert]")) return [];
             const box = control.getBoundingClientRect();
             return box.width < 24 || box.height < 24
               ? [
@@ -454,7 +443,9 @@ test("a pointer drag shows a line, moves nothing else, and puts the card down af
   // stopped rather than after the one aimed at.
   await page.setViewportSize({ width: 1440, height: 2400 });
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).nth(2)).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).nth(2)
+  ).toBeVisible();
   await customize(page);
   // Mixed widths: the first card that may change width put at the narrowest its bounds allow
   // (the menu lists them narrowest first), so rows hold cards of different spans whatever that
@@ -510,7 +501,9 @@ test("a pointer drag shows a line, moves nothing else, and puts the card down af
       `moved from 1 to ${after.indexOf(held) + 1} of ${after.length}\\.`
     )
   );
-  await expect(page.getByTestId("widget-drop-line")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("widget-drop-line")
+  ).toHaveCount(0);
   await expect(
     page.locator(`${CELLS}[data-placement-id="${held}"]`)
   ).toHaveAttribute("data-highlighted", "true");
@@ -520,7 +513,9 @@ test("a keyboard drag moves the card, and its handle keeps focus in view below t
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).nth(2)).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).nth(2)
+  ).toBeVisible();
   await customize(page);
   const before = await cardOrder(page);
   const held = before[0];
@@ -560,10 +555,14 @@ test.describe("on a phone, with touch", () => {
     page,
   }) => {
     await gotoAdmin(page, "/");
-    await expect(page.locator(CELLS).nth(1)).toBeVisible();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).nth(1)
+    ).toBeVisible();
     await page.getByTestId("dashboard-edit-begin").tap();
     await expect(bar(page)).toBeVisible();
-    await expect(page.getByTestId("widget-drag-handle")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("widget-drag-handle")
+    ).toHaveCount(0);
 
     const menu = (n: number) =>
       page.getByRole("button", { name: /^Card actions for / }).nth(n);
@@ -578,8 +577,12 @@ test.describe("on a phone, with touch", () => {
 
     // Resize: the sizes are listed in place in the card menu, which fits the screen.
     await menu(0).tap();
-    await expect(page.getByTestId("card-width-menu")).toHaveCount(0);
-    await expect(page.getByTestId("card-height-menu")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("card-width-menu")
+    ).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("card-height-menu")
+    ).toHaveCount(0);
     const choice = page.getByRole("menuitemradio").first();
     await expect(choice).toBeInViewport({ ratio: 1 });
     await choice.tap();
@@ -614,7 +617,9 @@ test.describe("on a phone, with touch", () => {
       page,
     }) => {
       await gotoAdmin(page, "/", theme);
-      await expect(page.locator(CELLS).first()).toBeVisible();
+      await expect(
+        page.locator(CELLS).filter({ visible: true }).first()
+      ).toBeVisible();
       await customize(page);
       await moveFirstCardLater(page);
       // Cancel leading, Save trailing, Add widget below them.

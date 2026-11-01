@@ -9,12 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
 import * as loggerModule from "../../../observability/logger";
-import { declaredWidgets, placedByDefault, sizeFacts } from "../canonical";
+import { allWidgets, sizeFacts } from "../canonical";
 import {
   CORE_DECLARATIONS,
   CORE_WIDGET_IDS,
   CORE_WIDGETS,
 } from "../core-widgets";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import { noteWidget } from "../core-widgets/note";
 import { declaredWidget } from "../declaration/declared-widgets";
 import { widgetDeclarationFaults } from "../declaration/validate";
@@ -71,7 +72,7 @@ describe("core's Note, declared", () => {
   });
 
   it("is one of core's ids, in core's order, and no longer one of its definitions", () => {
-    expect(CORE_DECLARATIONS.map(widget => widget.id)).toEqual(["core/note"]);
+    expect(CORE_DECLARATIONS.map(widget => widget.id)).toContain("core/note");
     expect(CORE_WIDGET_IDS).toContain("core/note");
     // Where it always sorted: after Breakdown, before Recent entries.
     const at = CORE_WIDGET_IDS.indexOf("core/note");
@@ -80,7 +81,10 @@ describe("core's Note, declared", () => {
     expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain("core/note");
     // Every core widget is in exactly one of the two lists.
     expect(
-      [...CORE_WIDGETS.map(widget => widget.id), "core/note"].sort()
+      [
+        ...CORE_WIDGETS.map(widget => widget.id),
+        ...CORE_DECLARATIONS.map(widget => widget.id),
+      ].sort()
     ).toEqual([...CORE_WIDGET_IDS].sort());
   });
 
@@ -95,7 +99,8 @@ describe("core's Note, declared", () => {
       serverData: true,
       allowsSeveral: true,
       empty: {
-        message: "Nothing written yet. Write it in the card's settings.",
+        message: "Nothing written yet.",
+        action: { label: "Write a note", opens: "settings" },
       },
       settings: [
         expect.objectContaining({
@@ -110,12 +115,12 @@ describe("core's Note, declared", () => {
     expect(published?.category).toBeUndefined();
     // Asked for from the add panel, as when it was offered on request: never
     // on the default dashboard, and as many cards as its reader wants.
-    const canonical = declaredWidgets().find(
-      widget => widget.id === "core/note"
-    );
+    const canonical = allWidgets().find(widget => widget.id === "core/note");
     expect(canonical).toBeDefined();
     if (canonical === undefined) return;
-    expect(placedByDefault(canonical)).toBe(false);
+    expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
+      "core/note"
+    );
     expect(sizeFacts(canonical).allowsSeveral).toBe(true);
   });
 });

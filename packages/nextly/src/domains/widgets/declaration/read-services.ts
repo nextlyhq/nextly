@@ -16,22 +16,28 @@
  *
  * @module domains/widgets/declaration/read-services
  */
+import { humanizeFieldName } from "../../../collections/fields/field-label";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import { intervalWindow } from "../../collections/query/timeseries-interval";
 import { answerAsAsked } from "../answer-as-asked";
 import { executeWidgetQuery } from "../execute";
-import type { WidgetQuery } from "../query";
+import { processHeld } from "../process-held";
+import { publishableContentSources } from "../publish";
+import {
+  isRangeInterval,
+  isTimeseriesRange,
+  openWindowEnd,
+  rangeWindow,
+  type TimeseriesRange,
+  type WidgetQuery,
+} from "../query";
+import type { WidgetResult } from "../result";
+import { naturalGroupBy } from "../settings";
 
-import { renamedCollection } from "./card-query";
+import { renamedCollection } from "./card-settings";
 import type { WidgetReadServices } from "./define-widget";
-import { sentAsJson, type TransportableValue } from "./transportable";
-
-/** One row as a data function receives it. */
-type Row = { readonly [field: string]: TransportableValue };
-
-/** Whether a value arrived as a row: an object of fields, not a list. */
-const isRow = (value: TransportableValue): value is Row =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+import { sentAsJson, sentRows } from "./transportable";
 
 /** What the services are bound to, for one card. */
 export interface ReadServiceBinding {
@@ -50,6 +56,43 @@ export interface ReadServiceBinding {
   now: Date;
   /** The owner's collections the site renamed: declared slug to the site's. */
   collections?: Readonly<Record<string, string>>;
+  /**
+   * 🔴 A collection, by the site's slug, that this binding answers "nothing
+   * there" for. A read of it is checked exactly as any other, so a malformed
+   * one is refused for every reader alike, and is then answered as an empty
+   * collection answers, without running. A plugin's attention item uses it for
+   * a declared collection its reader may not read: their count of the others
+   * stands, the item is not failed for a permission gap, and nothing about
+   * that collection is disclosed.
+   */
+  answersNothing?: (slug: string) => boolean;
+  /**
+   * The dashboard load this card is answered for, and on which side of it.
+   * The layout read answers a card that hides while empty before the
+   * dashboard is drawn (`"ahead"`); the dashboard drawn from that read asks
+   * the same card again in its batch (`"batch"`), and a core widget may hand
+   * that batch the answer read ahead for the same load rather than reading
+   * twice (Needs attention's digest). Absent for any other ask.
+   */
+  readAhead?: ReadAheadSide;
+}
+
+/**
+ * One side of one dashboard load's read-ahead: `token` names the load, minted
+ * by its layout read and sent back by the batch that load asks, so an answer
+ * read ahead for one load is never handed to another, a second tab of the
+ * same reader's included.
+ */
+export interface ReadAheadSide {
+  side: "ahead" | "batch";
+  token: string;
+  /**
+   * The credential the side's request was authenticated by, as the batch
+   * names it: an answer read ahead is handed only to a batch on the same one.
+   * Absent where it could not be named, and then nothing read ahead is
+   * reused, on either side.
+   */
+  credential?: string;
 }
 
 /** A call's own options, of which only the ones a read may carry are kept. */
@@ -58,17 +101,30 @@ interface ReadOptions {
   sort?: unknown;
   limit?: unknown;
   select?: unknown;
+  field?: unknown;
+  range?: unknown;
+  dateField?: unknown;
+  status?: unknown;
+  /** A count's window of time. */
+  window?: unknown;
+  /** Whether a list asks how many it matched in all. */
+  total?: unknown;
+  /** Whether a list answers its links as stored ids. */
+  depth?: unknown;
   signal?: unknown;
 }
 
+/** The options a call names that its query carries as they are. */
+type CarriedOption = "where" | "sort" | "limit" | "select" | "range";
+
 /**
- * The options a read carries into its query: `where`, `sort`, `limit` and
- * `select`, when the call states them, and nothing else. Read from an object
- * the call handed over, so anything else on it is never looked at.
+ * The options a read carries into its query, when the call states them, and
+ * nothing else. Read from an object the call handed over, so anything else on
+ * it is never looked at.
  */
 function readOptionsOf(
   options: unknown,
-  keys: readonly ("where" | "sort" | "limit" | "select")[]
+  keys: readonly CarriedOption[]
 ): Record<string, unknown> {
   if (typeof options !== "object" || options === null) return {};
   const given = options as ReadOptions;
@@ -79,13 +135,56 @@ function readOptionsOf(
   return kept;
 }
 
+/** One option the call names, read once, or `undefined` when it names none. */
+function optionOf(options: unknown, key: keyof ReadOptions): unknown {
+  return typeof options === "object" && options !== null
+    ? (options as ReadOptions)[key]
+    : undefined;
+}
+
+/**
+ * The entries a read counts, as its query names them.
+ *
+ * 🔴 `"published"` and no status at all are one question, so they are sent as
+ * one: the query names no status, and core reads a person's query with none as
+ * the published entries (`resolveStatusFilter`), exactly as a status of
+ * `"published"` would, and as every row of a collection with no lifecycle,
+ * which an explicit `"published"` would be refused for. So a read that says
+ * `"published"` asks what the same read saying nothing asks, on every
+ * collection. `"all"` is the query's own `all`: drafts too.
+ *
+ * Anything else is refused before the read is checked: it is no statement
+ * about any collection, so the refusal says nothing about one either.
+ */
+function statusOf(options: unknown): { status?: "all" } {
+  const status = optionOf(options, "status");
+  if (status === undefined || status === "published") return {};
+  if (status === "all") return { status: "all" };
+  throw NextlyError.invalidInput({
+    message:
+      'A widget\'s data read names a status other than "published" or "all".',
+  });
+}
+
 /** The call's own signal, when it passed one, beside the card's. */
 function signalOf(options: unknown, card: AbortSignal): AbortSignal {
-  const own =
-    typeof options === "object" && options !== null
-      ? (options as ReadOptions).signal
-      : undefined;
+  const own = optionOf(options, "signal");
   return own instanceof AbortSignal ? AbortSignal.any([card, own]) : card;
+}
+
+/**
+ * The field a collection's entries divide by when a read names none: core's
+ * one rule for it (`naturalGroupBy`), read from the collection as a card's
+ * settings see it, the rule a card's Group by setting falls back to. So a
+ * read and a card left to the collection group by the same field.
+ *
+ * `undefined` for a collection with no such field, or none at this slug: the
+ * query then names no field and is refused by the check every read passes,
+ * after the person's own check, as any read of that collection would be.
+ */
+function defaultGroupField(slug: string): string | undefined {
+  const [published] = publishableContentSources([slug]);
+  return published === undefined ? undefined : naturalGroupBy(published);
 }
 
 /**
@@ -101,17 +200,282 @@ function cardGaveUp(): NextlyError {
   });
 }
 
+/**
+ * The fault a read whose answer is not the one it asked for gets: of another
+ * kind, which `answerAsAsked` refuses before this is reached, so this says so
+ * to the compiler; or a series counted in an interval no range is drawn in.
+ */
+function answeredOtherwise(asked: string): NextlyError {
+  return NextlyError.internal({
+    logContext: { reason: "widget-read-answered-another-op", asked },
+  });
+}
+
+/** A read the binding's check passed: its query, its signal and the site's slug it reads. */
+type CheckedRead = WidgetQuery & { signal: AbortSignal; slug: string };
+
+/**
+ * What an empty collection answers a checked read of each kind: no entries, no
+ * rows, no groups, and a series at zero in every interval of its range, built
+ * through the window the read itself takes (`rangeWindow`, then
+ * `intervalWindow`), as a read of no rows answers it.
+ */
+function nothingThere(query: WidgetQuery, now: Date): WidgetResult {
+  switch (query.op) {
+    case "count":
+      return { op: "count", total: 0 };
+    case "list":
+      // An empty collection's list matches nothing, so it counts nothing too.
+      return { op: "list", items: [], total: 0 };
+    case "groupBy":
+      return { op: "groupBy", buckets: [] };
+    case "timeseries": {
+      if (!isTimeseriesRange(query.range)) {
+        throw answeredOtherwise("timeseries");
+      }
+      const window = rangeWindow(query.range, now);
+      return {
+        op: "timeseries",
+        points: intervalWindow(
+          window.anchor,
+          window.interval,
+          window.intervals
+        ).map(start => ({ start: start.toISOString(), count: 0 })),
+        interval: window.interval,
+      };
+    }
+    default:
+      throw answeredOtherwise(query.op);
+  }
+}
+
+/** A read's option that may only be `true`, read once, or `false` when the call states none. */
+function onlyTrue(options: unknown, key: "total"): boolean {
+  const value = optionOf(options, key);
+  if (value === undefined) return false;
+  if (value === true) return true;
+  throw NextlyError.invalidInput({
+    message: `A widget's data read names a "${key}" other than true.`,
+  });
+}
+
+/**
+ * The depth a list is read at: `0`, each link answered as the id it stores, or
+ * `undefined`, core's own default. Refused, before anything is checked, when it
+ * is anything else, as `total` is.
+ */
+function depthOf(options: unknown): 0 | undefined {
+  const value = optionOf(options, "depth");
+  if (value === undefined || value === 0) return value;
+  throw NextlyError.invalidInput({
+    message: 'A widget\'s data read names a "depth" other than 0.',
+  });
+}
+
+/** A count's window, as the call states it, once its shape is known to be one. */
+interface CountWindow {
+  range: TimeseriesRange;
+  dateField: string;
+  previous: boolean;
+}
+
+/**
+ * The window a count reads over, or `undefined` when the call states none.
+ * Refused, before anything is checked, when it is not one: a range a series is
+ * drawn over, a field's name, and `previous` only ever `true`.
+ */
+function windowOf(options: unknown): CountWindow | undefined {
+  const window = optionOf(options, "window");
+  if (window === undefined) return undefined;
+  const given =
+    typeof window === "object" && window !== null
+      ? (window as { range?: unknown; dateField?: unknown; previous?: unknown })
+      : undefined;
+  const { range, dateField, previous } = given ?? {};
+  if (
+    given === undefined ||
+    !isTimeseriesRange(range) ||
+    (dateField !== undefined && typeof dateField !== "string") ||
+    (previous !== undefined && previous !== true)
+  ) {
+    throw NextlyError.invalidInput({
+      message:
+        "A widget's count names a window that is not a range with an optional dateField and previous: true.",
+    });
+  }
+  return {
+    range,
+    // Placed by when each entry was made, unless the call says.
+    dateField: dateField ?? "createdAt",
+    previous: previous === true,
+  };
+}
+
+/**
+ * The instants a count's window spans, `[from, to)`: the window a series over
+ * the same range is drawn across (`rangeWindow`), from the instant the range
+ * reaches back to the batch's; or, for `previous`, the window as long that ends
+ * where that one starts.
+ */
+function windowSpan(window: CountWindow, now: Date): { from: Date; to: Date } {
+  const { start } = rangeWindow(window.range, now);
+  // The current window keeps the batch's instant's whole second, as a series
+  // over the range does (`openWindowEnd`); the previous one ends at `start`.
+  if (!window.previous) return { from: start, to: openWindowEnd(now) };
+  return {
+    from: new Date(start.getTime() - (now.getTime() - start.getTime())),
+    to: start,
+  };
+}
+
+/**
+ * A checked `where` narrowed to the entries whose `field` falls in `[from, to)`, joined
+ * under `and` so a condition the call places on the same field still applies,
+ * and a top-level key the collection reads stays where it is read.
+ */
+function withinSpan(
+  where: Readonly<Record<string, unknown>> | undefined,
+  field: string,
+  { from, to }: { from: Date; to: Date }
+): Record<string, unknown> {
+  const span = {
+    [field]: {
+      greater_than_equal: from.toISOString(),
+      less_than: to.toISOString(),
+    },
+  };
+  if (where === undefined) return { and: [span] };
+  // A checked filter's `and`, when it has one, is a list (the check refuses
+  // any other); read defensively all the same, as a guard over values in hand.
+  const joined = Array.isArray(where.and) ? where.and : [];
+  return { ...where, and: [...joined, span] };
+}
+
+/**
+ * Refuses a read that places entries by a field that is not a date field of
+ * the collection readable by everyone the collection is read by: judged from
+ * the collection as its content settings see it (`publishableContentSources`),
+ * which leaves out every field a read rule could refuse. The same answer for
+ * every reader, so it is given before a binding answers "nothing there", and
+ * says nothing about any one person's access.
+ */
+function refuseUnreadableDate(slug: string, dateField: string): void {
+  const [published] = publishableContentSources([slug]);
+  const field = published?.fields.find(each => each.name === dateField);
+  if (field?.type === "date") return;
+  throw NextlyError.invalidInput({
+    message: `A widget's data read places entries by "${dateField}", which is not a date field of this collection that every reader may read.`,
+  });
+}
+
+/**
+ * The caller each card's services were bound for, and the side of a dashboard
+ * load's read-ahead they were bound on (`ReadServiceBinding.readAhead`), kept
+ * beside them rather than on them: the services a data function is handed
+ * carry no person, and a plugin's function must never be able to read one off
+ * them, nor another load's token.
+ *
+ * Held for the process (`processHeld`), since Next.js and Turbopack can
+ * evaluate this module in more than one server graph, and the request route
+ * that binds a card's services and the widget registered at boot, whose
+ * `load` asks for their caller, can each hold a different copy. Reachable only
+ * through `bindReadServices`, `boundCaller` and `boundReadAhead`.
+ */
+const bindings = processHeld(
+  "nextly.dashboard.readCallers",
+  () => new WeakMap<WidgetReadServices, BoundRead>(),
+  (held): held is WeakMap<WidgetReadServices, BoundRead> =>
+    held instanceof WeakMap
+);
+
+/** What core keeps of a card's binding, beside its services. */
+interface BoundRead {
+  caller: ReadCaller;
+  readAhead: ReadAheadSide | undefined;
+}
+
+/** What `services` were bound with; services core did not bind are refused. */
+function boundRead(services: WidgetReadServices): BoundRead {
+  const bound = bindings.get(services);
+  if (bound === undefined) {
+    // Only services this module bound have a caller; anything else would be
+    // read as nobody, which must refuse rather than read as the system.
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "This widget could not be answered",
+      logMessage: "a widget's read services were not bound by core",
+      logContext: { reason: "widget-services-unbound" },
+    });
+  }
+  return bound;
+}
+
+/**
+ * The caller `services` were bound for, for core's own widgets whose data is
+ * a core source asked as that caller (Needs attention's digest), so an API
+ * key is still judged by its own grant rather than by the person who made it.
+ * Internal to core: no public entry point exports it.
+ */
+export function boundCaller(services: WidgetReadServices): ReadCaller {
+  return boundRead(services).caller;
+}
+
+/**
+ * The dashboard load `services` were bound for, and on which side of its
+ * read-ahead (`ReadServiceBinding.readAhead`); `undefined` for any other ask.
+ * Internal to core, as `boundCaller` is.
+ */
+export function boundReadAhead(
+  services: WidgetReadServices
+): ReadAheadSide | undefined {
+  return boundRead(services).readAhead;
+}
+
 /** The read services for one card, bound to `binding`. */
 export function bindReadServices(
   binding: ReadServiceBinding
 ): WidgetReadServices {
-  const { caller, prepare, signal: card, now, collections } = binding;
+  const services = readServices(binding);
+  const { readAhead } = binding;
+  bindings.set(services, {
+    caller: binding.caller,
+    // Core's own copy, so a binding changed after the services were made
+    // leaves the load they answer for as it was.
+    readAhead:
+      readAhead === undefined
+        ? undefined
+        : {
+            side: readAhead.side,
+            token: readAhead.token,
+            ...(readAhead.credential === undefined
+              ? {}
+              : { credential: readAhead.credential }),
+          },
+  });
+  return services;
+}
 
+/** The reads themselves, bound to `binding`'s caller, check and signal. */
+function readServices(binding: ReadServiceBinding): WidgetReadServices {
+  const {
+    caller,
+    prepare,
+    signal: card,
+    now,
+    collections,
+    answersNothing,
+  } = binding;
+
+  /**
+   * The one path every read takes: the card is still waiting, the call names
+   * a collection, and the query, shaped for the site's slug, is checked as a
+   * card's own is before anything runs.
+   */
   async function read(
     collection: unknown,
-    shape: Record<string, unknown>,
+    shape: (slug: string) => Record<string, unknown>,
     options: unknown
-  ): Promise<WidgetQuery & { signal: AbortSignal }> {
+  ): Promise<CheckedRead> {
     const signal = signalOf(options, card);
     if (signal.aborted) throw cardGaveUp();
     if (typeof collection !== "string" || collection.trim() === "") {
@@ -119,48 +483,204 @@ export function bindReadServices(
         message: "A widget's data read names no collection.",
       });
     }
+    const slug = renamedCollection(collection, collections);
     const query = await prepare({
-      ...shape,
-      source: `collection:${renamedCollection(collection, collections)}`,
+      ...shape(slug),
+      source: `collection:${slug}`,
     });
     // Checked again after the check, which awaited: a card that gave up
     // meanwhile has no one to answer.
     if (signal.aborted) throw cardGaveUp();
-    return { ...query, signal };
+    return { ...query, signal, slug };
   }
 
-  return {
+  /**
+   * Runs a checked query as the person bound, its answer judged against what
+   * was asked, as a source's answer is, so a read that answered anything else
+   * is a fault, never a quiet empty answer.
+   */
+  async function run(
+    { signal, slug, ...query }: CheckedRead,
+    depth?: 0
+  ): Promise<WidgetResult> {
+    // After the check, never instead of it: see `answersNothing`.
+    if (answersNothing?.(slug) === true) {
+      return answerAsAsked(query, nothingThere(query, now));
+    }
+    return answerAsAsked(
+      query,
+      await executeWidgetQuery(query, caller, {
+        signal,
+        now: new Date(now),
+        // A list's depth, handed to the executor as core's own `find` takes
+        // it, and only when the call names one.
+        ...(depth === 0 ? { depth } : {}),
+      })
+    );
+  }
+
+  const services: WidgetReadServices = {
     async count(collection, options) {
-      const { signal, ...query } = await read(
+      const window = windowOf(options);
+      const counting = (where: unknown) => ({
+        op: "count",
+        ...(where === undefined ? {} : { where }),
+        ...statusOf(options),
+      });
+      // 🔴 The call's own `where` is checked as it was written, window or
+      // not: joined to a window first, a malformed one (`{ and: "bad" }`, a
+      // primitive, null) was wrapped or replaced, the check never saw it, and
+      // the count ran over more entries than the call could have meant.
+      const checked = await read(
         collection,
-        { op: "count", ...readOptionsOf(options, ["where"]) },
+        () => counting(readOptionsOf(options, ["where"]).where),
         options
       );
-      // Judged against what was asked, as a source's answer is, so a count
-      // that answered anything else is a fault, never a quiet zero.
-      const answer = answerAsAsked(
-        query,
-        await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
+      if (window === undefined) {
+        const answer = await run(checked);
+        return answer.op === "count" ? answer.total : 0;
+      }
+      refuseUnreadableDate(checked.slug, window.dateField);
+      // Only a filter the check accepted is narrowed to the window, and the
+      // narrowed read is checked again, as every read is, before it runs.
+      const windowed = await read(
+        collection,
+        () =>
+          counting(
+            withinSpan(checked.where, window.dateField, windowSpan(window, now))
+          ),
+        options
       );
+      const answer = await run(windowed);
       return answer.op === "count" ? answer.total : 0;
     },
     async find(collection, options) {
-      const { signal, ...query } = await read(
+      const counted = onlyTrue(options, "total");
+      const depth = depthOf(options);
+      // 🔴 A limit of 0 asks for no rows: what `rowsThatFit` answers for a
+      // card whose body holds none, and what that card's frame draws. A query
+      // runs at one row at the least, so the read is asked at one, checked as
+      // any read is, and answered with none. Nothing is run when the call asks
+      // no total either.
+      const none = optionOf(options, "limit") === 0;
+      const checked = await read(
         collection,
-        {
+        () => ({
           op: "list",
           ...readOptionsOf(options, ["where", "sort", "limit", "select"]),
-        },
+          ...(none ? { limit: 1 } : {}),
+          ...statusOf(options),
+        }),
         options
       );
-      const answer = answerAsAsked(
-        query,
-        await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
-      );
+      if (none && !counted) return { items: [] };
+      const answer = await run(checked, depth);
       // As the browser would receive them, so the function may answer them
       // as they are and the card's transport check passes.
-      const sent = sentAsJson(answer.op === "list" ? answer.items : []);
-      return { items: Array.isArray(sent) ? sent.filter(isRow) : [] };
+      const sent = sentAsJson(
+        answer.op === "list" && !none ? answer.items : []
+      );
+      // How many the same read matched, only where the call asked for it.
+      const total = counted && answer.op === "list" ? answer.total : undefined;
+      return {
+        items: sentRows(sent),
+        ...(total === undefined ? {} : { total }),
+        ...(total !== undefined &&
+        answer.op === "list" &&
+        answer.atLeast === true
+          ? { atLeast: true }
+          : {}),
+      };
+    },
+    async groupBy(collection, options) {
+      const answer = await run(
+        await read(
+          collection,
+          slug => {
+            // The call's own field, or the collection's own grouping.
+            const named = optionOf(options, "field");
+            const field = named === undefined ? defaultGroupField(slug) : named;
+            return {
+              op: "groupBy",
+              ...(field === undefined ? {} : { groupBy: field }),
+              ...readOptionsOf(options, ["where", "limit"]),
+              ...statusOf(options),
+            };
+          },
+          options
+        )
+      );
+      if (answer.op !== "groupBy") throw answeredOtherwise("groupBy");
+      // Each bucket as the `bars` view draws it: its value and its count; and
+      // whether groups were left out, or the counts are floors, as the read
+      // reports them, only when it does.
+      return {
+        buckets: answer.buckets.map(({ value, count }) => ({ value, count })),
+        ...(answer.truncated === true ? { truncated: true } : {}),
+        ...(answer.atLeast === true ? { atLeast: true } : {}),
+      };
+    },
+    async timeseries(collection, options) {
+      const named = optionOf(options, "dateField");
+      // Placed by when each entry was made, unless the call says.
+      const dateField = named === undefined ? "createdAt" : named;
+      const checked = await read(
+        collection,
+        () => ({
+          op: "timeseries",
+          dateField,
+          ...readOptionsOf(options, ["range", "where"]),
+          ...statusOf(options),
+        }),
+        options
+      );
+      // The check above refuses a field that is not a date; a date some
+      // reader could be refused is refused here, the same for everyone.
+      if (typeof dateField === "string") {
+        refuseUnreadableDate(checked.slug, dateField);
+      }
+      const answer = await run(checked);
+      // A series over a range is counted in the interval its range sets, so
+      // any other is a fault, said rather than passed on as a range's.
+      if (answer.op !== "timeseries" || !isRangeInterval(answer.interval)) {
+        throw answeredOtherwise("timeseries");
+      }
+      // The interval the points were counted in, as the run reports it: the
+      // one its range set (`rangeWindow`), never worked out a second time.
+      return {
+        points: answer.points.map(({ start, count }) => ({ start, count })),
+        interval: answer.interval,
+      };
+    },
+    async describe(collection) {
+      // Checked as a read of the collection is, so a collection the person
+      // may not read is refused as any read of it would be.
+      const { slug } = await read(collection, () => ({ op: "count" }), {});
+      // After the check, never instead of it: see `answersNothing`.
+      if (answersNothing?.(slug) === true) return undefined;
+      // As a card's content settings see the collection: every field a read
+      // rule could refuse is left out, and the title only where it is not.
+      const [published] = publishableContentSources([slug]);
+      if (published === undefined) return undefined;
+      return {
+        ...(published.titleField === undefined
+          ? {}
+          : { title: published.titleField }),
+        status: published.lifecycle,
+        fields: published.fields.map(
+          ({ name, label, type, choices, groupable, presentable }) => ({
+            name,
+            type,
+            // The collection's own label, else the field's name as the admin
+            // names it on screen, by the one humaniser both read.
+            label: label ?? humanizeFieldName(name),
+            ...(choices === undefined ? {} : { choices }),
+            ...(groupable === false ? { groupable: false as const } : {}),
+            ...(presentable === false ? { presentable: false as const } : {}),
+          })
+        ),
+      };
     },
   };
+  return services;
 }

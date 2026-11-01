@@ -13,6 +13,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
+  Activity,
   useEffect,
   type ComponentProps,
   type ReactElement,
@@ -28,6 +29,8 @@ import {
   screen,
   waitFor,
 } from "@admin/__tests__/utils";
+import { RoutedPathnameContext } from "@admin/context/RoutedPathnameContext";
+import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   clearRegistry,
   registerComponent,
@@ -38,9 +41,14 @@ import {
   registerDocumentViews,
 } from "@admin/lib/plugins/document-view-registry";
 
-const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
+const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
   update: vi.fn(),
+  // What the editor hands its update mutation, a refused publish's way out
+  // among it.
+  updateOptions: {
+    current: undefined as { refusedForm?: RefusedForm } | undefined,
+  },
   recovery: {
     current: {
       offer: null as { savedAt: Date; snapshot: unknown } | null,
@@ -54,7 +62,10 @@ const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 // The save is observed where it leaves the editor: the update mutation.
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
-  useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
+  useUpdateEntry: (options: { refusedForm?: RefusedForm }) => {
+    updateOptions.current = options;
+    return { mutateAsync: update, isPending: false };
+  },
 }));
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   useAutosaveRecovery: () => recovery.current,
@@ -78,6 +89,10 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 import { useHostedDocumentActions } from "../DocumentActionsContext";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
+import {
+  useBeforeDocumentAction,
+  useTrackedWrite,
+} from "../useDocumentActionHooks";
 
 const VIEW = "@acme/pb/admin#Builder";
 const collection = {
@@ -86,6 +101,19 @@ const collection = {
   fields: [{ name: "title", type: "text", label: "Title" }],
 } as never;
 const entry = { id: "e1", title: "Hello" } as never;
+/**
+ * The same document with a lifecycle that keeps a published entry's change
+ * pending: where a refused publish happens, and its recovery's Save stays
+ * unpublished.
+ */
+const withDrafts = {
+  collection: {
+    ...(collection as object),
+    status: true,
+    draftsEnabled: true,
+  } as never,
+  entry: { id: "e1", title: "Hello", status: "published" } as never,
+};
 const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 const received = vi.fn();
@@ -137,6 +165,12 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
 }
 
 const onExit = vi.fn();
+
+/** A page collection with one field a blocks view could edit. */
+const onePageField = {
+  name: "pages",
+  fields: [{ name: "layout", type: "blocks" }],
+} as never;
 
 const onCancel = vi.fn();
 
@@ -262,6 +296,191 @@ describe("EntryForm with a document view", () => {
       expect.objectContaining({ readOnly: true })
     );
   });
+
+  it("holds the view read-only, and marks it busy, while a recovery takes the live values", async () => {
+    renderView(withDrafts);
+    const busyAround = () =>
+      screen.getByTestId("builder-view").closest("[aria-busy='true']");
+    expect(busyAround()).toBeNull();
+
+    // Made before the recovery starts, which runs its work a task later.
+    let done: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      done = resolve;
+    });
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = updateOptions.current?.refusedForm?.recover(() => held);
+    });
+    expect(busyAround()).not.toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true })
+    );
+
+    await act(async () => {
+      done();
+      await running;
+    });
+    expect(busyAround()).toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: false })
+    );
+  });
+
+  it.each([
+    ["the recovery's Save", true, 0],
+    ["the view's own Save", true, 0],
+    // The control: with no move, the same Save writes.
+    ["the view's own Save", false, 1],
+  ] as const)(
+    "writes nothing into the language %s started in once the editor moved while it waited on the view (moved: %s)",
+    async (which, moves, writes) => {
+      let commit: () => void = () => {};
+      const saved: unknown[] = [];
+      /** A view whose open edit commits when the test says. */
+      function SlowView(): ReactElement {
+        const { run } = useHostedDocumentActions();
+        const { register } = useFormContext();
+        useBeforeDocumentAction(
+          () =>
+            new Promise<void>(resolve => {
+              commit = resolve;
+            })
+        );
+        return (
+          <div>
+            <input aria-label="Title in the view" {...register("title")} />
+            <button
+              type="button"
+              onClick={() => {
+                void run("save").then(outcome => saved.push(outcome));
+              }}
+            >
+              Save from the view
+            </button>
+          </div>
+        );
+      }
+      registerComponent(VIEW, SlowView);
+      const element = (locale?: string) => (
+        <EntryForm
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit }}
+          {...withDrafts}
+          {...(locale === undefined ? {} : { locale })}
+        />
+      );
+      const { rerender } = render(element(), { wrapper: Providers });
+      // An edit, so a published entry has a Save to offer.
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Title in the view" }),
+        {
+          target: { value: "Edited in the view" },
+        }
+      );
+      const take = vi.fn(async () => undefined);
+
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running =
+          which === "the recovery's Save"
+            ? updateOptions.current?.refusedForm
+                ?.recover(take)
+                .catch((error: unknown) => error)
+            : undefined;
+      });
+      if (which === "the view's own Save") {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Save from the view" })
+        );
+      }
+      // A switch to a language already cached, while the view's edit is still
+      // committing: the form starts afresh from that language's values.
+      if (moves) rerender(element("de"));
+      await act(async () => {
+        commit();
+        await running;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      });
+
+      // Nothing is written into the language the store started in.
+      expect(update).toHaveBeenCalledTimes(writes);
+      if (moves) expect(take).not.toHaveBeenCalled();
+    }
+  );
+
+  it("waits for a view's before-action handler, and its Save stores what the view commits", async () => {
+    /** A view holding work outside the form, committed when asked. */
+    function HoldingView(): ReactElement {
+      const { setValue } = useFormContext();
+      useBeforeDocumentAction(async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        setValue("title", "Committed by the view", { shouldDirty: true });
+      });
+      return <div data-testid="holding-view" />;
+    }
+    registerComponent(VIEW, HoldingView);
+    renderView(withDrafts);
+    const take = vi.fn(async () => undefined);
+
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.recover(take);
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0]?.[0]).toMatchObject({
+      title: "Committed by the view",
+    });
+    expect(take).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["succeeds", true],
+    ["fails", false],
+  ] as const)(
+    "waits for a write the view tracks, and stores and takes only when it %s",
+    async (_outcome, ok) => {
+      let settle: () => void = () => {};
+      /** A view whose dependent write is still in flight. */
+      function TrackingView(): ReactElement {
+        const track = useTrackedWrite();
+        useEffect(() => {
+          track(
+            "Site colours",
+            new Promise((resolve, reject) => {
+              settle = () =>
+                ok ? resolve(undefined) : reject(new Error("offline"));
+            })
+          );
+        }, [track]);
+        return <div data-testid="tracking-view" />;
+      }
+      registerComponent(VIEW, TrackingView);
+      renderView(withDrafts);
+      const take = vi.fn(async () => undefined);
+
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running = updateOptions.current?.refusedForm
+          ?.recover(take)
+          .catch(() => undefined);
+      });
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      // Nothing stored while the write it depends on is in flight.
+      expect(update).not.toHaveBeenCalled();
+
+      await act(async () => {
+        settle();
+        await running;
+      });
+
+      expect(update).toHaveBeenCalledTimes(ok ? 1 : 0);
+      expect(take).toHaveBeenCalledTimes(ok ? 1 : 0);
+    }
+  );
 
   it("offers recovered work above the view", () => {
     recovery.current = {
@@ -573,6 +792,78 @@ describe("a field-type view on a document with two fields of its type", () => {
       expect(window.history.length).toBe(depth);
     }
   );
+
+  it("leaves an address that is no longer the view's alone when the view is shown again", () => {
+    // Next keeps a visited page mounted but hidden under Cache Components
+    // (React's Activity), and shows it again on Back with the effects it had,
+    // before the admin's router has drawn the page Back went to. The view's
+    // correction then sees the document's own address, with no field named,
+    // while the router still holds the view it drew.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    const view = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <RoutedPathnameContext.Provider value="/admin/collections/pages/e1/builder">
+          <EntryForm
+            collection={onePageField}
+            entry={entry}
+            mode="edit"
+            onCancel={onCancel}
+            documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
+          />
+        </RoutedPathnameContext.Provider>
+      </Activity>
+    );
+    const { rerender } = render(view("visible"), { wrapper: Providers });
+    rerender(view("hidden"));
+    // Back, to the document's form.
+    window.history.pushState(null, "", "/admin/collections/pages/e1");
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    rerender(view("visible"));
+    expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+    expect(window.location.search).toBe("");
+  });
+
+  it("corrects the address of the view the router moves to, the same view body kept", () => {
+    // One view of the document giving way to another, as a plugin's
+    // `navigateTo` does: the page, and this body with it, stays mounted.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    const view = (routed: string) => (
+      <RoutedPathnameContext.Provider value={routed}>
+        <EntryForm
+          collection={onePageField}
+          entry={entry}
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
+        />
+      </RoutedPathnameContext.Provider>
+    );
+    const { rerender } = render(view("/admin/collections/pages/e1/builder"), {
+      wrapper: Providers,
+    });
+    // The other view, its address naming no field.
+    window.history.pushState(null, "", "/admin/collections/pages/e1/outline");
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    rerender(view("/admin/collections/pages/e1/outline"));
+    expect(window.location.pathname).toBe(
+      "/admin/collections/pages/e1/outline"
+    );
+    expect(new URLSearchParams(window.location.search).get("field")).toBe(
+      "layout"
+    );
+  });
 
   it("opens the only field of its type without asking", () => {
     window.history.pushState(null, "", "/admin/collections/pages/e1/builder");

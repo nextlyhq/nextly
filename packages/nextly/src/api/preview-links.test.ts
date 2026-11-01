@@ -11,7 +11,7 @@ import { NextlyError } from "../errors/nextly-error";
 
 vi.mock("./route-auth", () => ({
   requireRouteCollectionAccess: vi.fn(),
-  requireRoutePermission: vi.fn(),
+  requireRouteAnyPermission: vi.fn(),
 }));
 
 const {
@@ -140,7 +140,7 @@ import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
 
 import {
   requireRouteCollectionAccess,
-  requireRoutePermission,
+  requireRouteAnyPermission,
 } from "./route-auth";
 
 import { mintPreviewLink, revokePreviewLinks } from "./preview-links";
@@ -195,7 +195,7 @@ beforeEach(() => {
     // question than the caller's own read would.
     claims: { tenant: "acme", tier: "restricted" },
   });
-  (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+  (requireRouteAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValue({
     userId: "admin-1",
     permissions: [],
     roles: [],
@@ -1397,25 +1397,23 @@ describe("mintPreviewLink", () => {
 });
 
 describe("revokePreviewLinks", () => {
-  it("gates on manage settings, not on a collection", async () => {
+  it("gates on updating settings, not on a collection", async () => {
     // The generation is site-wide, so one editor revoking would otherwise end
     // every other editor's outstanding links.
     await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
     );
 
-    expect(requireRoutePermission).toHaveBeenCalledWith(
-      expect.anything(),
-      "manage",
-      "settings"
-    );
+    expect(requireRouteAnyPermission).toHaveBeenCalledWith(expect.anything(), [
+      { action: "update", resource: "settings" },
+    ]);
     expect(requireRouteCollectionAccess).not.toHaveBeenCalled();
   });
 
   it("does not revoke when the gate refuses", async () => {
-    (requireRoutePermission as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      NextlyError.forbidden()
-    );
+    (
+      requireRouteAnyPermission as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(NextlyError.forbidden());
 
     const response = await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
@@ -1442,7 +1440,7 @@ describe("revokePreviewLinks", () => {
     expect(response.status).toBe(400);
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
-    expect(requireRoutePermission).not.toHaveBeenCalled();
+    expect(requireRouteAnyPermission).not.toHaveBeenCalled();
   });
 
   it("judges revoking a document's links in every language, whatever language the request names", async () => {
@@ -1462,7 +1460,7 @@ describe("revokePreviewLinks", () => {
     );
   });
 
-  it("revokes one document's links behind the sharer's rule, not manage settings", async () => {
+  it("revokes one document's links behind the sharer's rule, not a settings grant", async () => {
     const response = await revokePreviewLinks(
       post(
         { collection: "pages", entryId: "7" },
@@ -1475,7 +1473,7 @@ describe("revokePreviewLinks", () => {
       "update",
       "pages"
     );
-    expect(requireRoutePermission).not.toHaveBeenCalled();
+    expect(requireRouteAnyPermission).not.toHaveBeenCalled();
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).toHaveBeenCalledWith(
       { kind: "entry", collection: "pages", entryId: "7" },
@@ -1643,7 +1641,7 @@ describe("the audit trail a preview link leaves", () => {
    * where the key is what is under suspicion.
    */
   it("names the KEY when an api key revokes, not just its owner", async () => {
-    (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (requireRouteAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValue({
       userId: "owner-1",
       permissions: [],
       roles: [],

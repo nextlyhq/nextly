@@ -4,6 +4,7 @@ import { resolveRoute } from "@admin/lib/routing";
 
 import {
   clearPluginPages,
+  isPluginPageAddress,
   matchPluginPage,
   pluginPagePath,
   registerPluginPage,
@@ -20,6 +21,16 @@ describe("plugin route registry", () => {
     expect(pluginPagePath("acme-p", "/reports")).toBe(
       "/admin/plugins/acme-p/reports"
     );
+  });
+
+  it("tells a plugin page's address from a plugin's own and from others", () => {
+    expect(isPluginPageAddress("/admin/plugins/acme-p/reports")).toBe(true);
+    expect(isPluginPageAddress("/admin/plugins/acme-p/reports/q3")).toBe(true);
+    // A plugin's detail address is a core route, never a plugin page.
+    expect(isPluginPageAddress("/admin/plugins/acme-p")).toBe(false);
+    expect(isPluginPageAddress("/admin/plugins/acme-p/")).toBe(false);
+    expect(isPluginPageAddress("/admin/plugins")).toBe(false);
+    expect(isPluginPageAddress("/admin/collections/posts")).toBe(false);
   });
 
   it("matches a registered plugin page exactly", () => {

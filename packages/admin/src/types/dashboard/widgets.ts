@@ -2,7 +2,7 @@
  * What the admin knows about a dashboard widget and about the data one asked
  * for.
  *
- * The shared vocabulary (`WidgetSizeBounds`, `WidgetArchetype`, `WidgetQuery`) is
+ * The shared vocabulary (`WidgetSizeBounds`, the archetype, `WidgetQuery`) is
  * IMPORTED from core rather than restated, through `nextly/config`: this
  * package's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
  * importing from `"nextly"` shadows the package exports and drags core's whole
@@ -23,9 +23,7 @@
 
 import type {
   AnyWidgetSetting,
-  GetStartedAnswer,
   WidgetAction,
-  WidgetArchetype,
   SourcelessWidgetQuery,
   WidgetQuery,
   WidgetQueryCell,
@@ -59,10 +57,10 @@ export type {
  * A widget as the grid renders it: every field the card and the archetype need,
  * with nothing optional that the renderer would have to invent a default for.
  *
- * Plugin contributions arrive as `PluginWidgetMeta`, whose declarative half is
- * all optional (a widget may still be nothing but a `component`). `resolve`
- * in `resolve-widgets.ts` is the one place that gap is closed, so the renderer
- * below it never has to ask whether a title exists.
+ * Widgets arrive over the wire as the registry publishes them.
+ * `resolveDashboardWidgets` in `resolve-widgets.ts` is the one place one
+ * becomes this, so the renderer below it never has to ask whether a title
+ * exists.
  */
 export interface DashboardWidget {
   id: string;
@@ -70,7 +68,7 @@ export interface DashboardWidget {
   description?: string;
   /** Lucide icon name, resolved to a component by the card. */
   icon?: string;
-  archetype: WidgetArchetype;
+  archetype: WidgetDefinition["archetype"];
   /**
    * The sizes this widget's cards may take, in grid units, with every end
    * filled in: the size a new card starts at, and the smallest and largest it
@@ -93,11 +91,23 @@ export interface DashboardWidget {
    */
   serverData?: true;
   /**
-   * What a declared widget's empty state says and offers in place of the
-   * frame's own, its action already an href and already one this reader may
-   * take (the server withholds one they may not).
+   * The display its loading state, and its row in the add panel, are drawn as
+   * when that is not its archetype's: a declared widget drawn by its own
+   * component says what it most looks like (its declaration's `skeleton`).
    */
-  declaredEmpty?: { title?: string; action?: { label: string; href: string } };
+  sketch?: string;
+  /**
+   * What a declared widget's empty state says and offers in place of the
+   * frame's own: its action a link already made an href and already one this
+   * reader may take (the server withholds one they may not), or the card's own
+   * settings, which the card offers only where its reader can change them.
+   */
+  declaredEmpty?: {
+    title?: string;
+    action?:
+      | { label: string; href: string }
+      | { label: string; opensSettings: true };
+  };
   /**
    * What a reader may change about this card, as the widget declared it.
    *
@@ -116,6 +126,11 @@ export interface DashboardWidget {
   cells?: WidgetStatCell[] | WidgetQueryCell[];
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
+  /**
+   * Who declared a widget drawn by its own component (`plugin "name"`), as core publishes it,
+   * so a card whose component is missing can say whose it is. Absent for any other widget.
+   */
+  owner?: string;
   /**
    * Present for `actions`, already filtered to the shortcuts this reader may
    * use — `resolve-widgets` drops the rest, so the renderer never sees one it
@@ -231,6 +246,11 @@ export interface WidgetPlacement {
    */
   removed: boolean;
   config?: Record<string, unknown>;
+  /**
+   * The title the reader gave this card, as stored: trimmed, and absent when
+   * the card is titled automatically from its widget and settings.
+   */
+  title?: string;
 }
 
 /** Which arrangement a read handed the reader. */
@@ -268,6 +288,19 @@ export interface DashboardLayoutResponse {
    */
   source: DashboardLayoutSource;
   /**
+   * Whether the reader has arranged this dashboard. `false` for a reader with no row, and for
+   * one whose row holds only what they chose about the default's cards (a dismissal, a setting):
+   * `source` says `"own"` for both of those rows, so it cannot tell them apart.
+   */
+  arranged: boolean;
+  /**
+   * Whether the default as configured gives Needs attention and Upcoming releases a row of their
+   * own, side by side: judged by the server before this reader's cards are left out, so it is
+   * the same for a reader who may not see one of the two. Absent from a server that predates
+   * it, which reads as no.
+   */
+  pairedRow?: boolean;
+  /**
    * An opaque token for the set of widgets this reader could see when the
    * arrangement was read. Echoed back on write; a mismatch is a 409.
    */
@@ -281,23 +314,43 @@ export interface DashboardLayoutResponse {
    */
   audience: string;
   /**
-   * The Get started card's steps, from the computation that decided whether
-   * the card is drawn, so the card and its steps cannot disagree. Absent from a
-   * server that predates the card.
-   *
-   * @experimental
+   * The placement ids of the cards that hide while empty and were empty for
+   * this reader when the layout was read, at the tier each is drawn at on a
+   * dashboard as wide as the one the read was sent. The dashboard is drawn
+   * without them from its first paint, and every other card that hides while
+   * empty is placed and stays: neither leaves nor joins the page mid-view.
+   * Absent when the read judged no card (it was sent no dashboard width) and
+   * from a server that predates it: no verdict, which hides nothing and
+   * reveals nothing.
    */
-  getStarted?: GetStartedLayoutView;
+  hiddenWhileEmpty?: string[];
+  /**
+   * The widget ids whose cards leave the dashboard while their own answer is
+   * empty, as drawn: widgets that hide while empty and that the layout read
+   * cannot answer ahead (the `registerWidget` and `contributes.admin.widgets`
+   * channels). Absent from a server that predates it, which reads as none.
+   */
+  hiddenWhenAnswerEmpty?: string[];
+  /**
+   * An opaque token for this one read of the layout: the cards in
+   * `hiddenWhileEmpty` were answered ahead under it, and the dashboard's batch
+   * sends it back so a card is handed the answer read for this load and no
+   * other tab's. New on every read, and part of the batch's query key, so a
+   * new layout answer asks the cards again, once, under its token. Absent from
+   * a server that predates it, and the batch then sends none.
+   */
+  readAheadToken?: string;
 }
 
-/** What the layout read says of the Get started card. */
-export interface GetStartedLayoutView {
-  /** Whether the reader's card is drawn. */
-  drawn: boolean;
+/**
+ * A layout answer as the admin holds it: the server's answer, with the dashboard width its read
+ * was sent. Set by the admin's own read (`fetchDashboardLayout`), never by the server.
+ */
+export interface DashboardLayoutRead extends DashboardLayoutResponse {
   /**
-   * The steps with the reader's skips applied, or `null` when the server
-   * worked none out: the card is removed (and its answer not asked for), or
-   * not in this reader's dashboard.
+   * The dashboard width the read was sent, which its `hiddenWhileEmpty` was judged at; absent
+   * when it was sent none. The verdict holds only on a dashboard whose width draws every card at
+   * the tier this one does (`tierBandAt`), so an answer held from another width judges no card.
    */
-  answer: GetStartedAnswer | null;
+  askedAtWidth?: number;
 }

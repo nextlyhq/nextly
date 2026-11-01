@@ -13,6 +13,7 @@ import type {
   EmailProviderDescriptor,
   EmailProviderRecord,
 } from "@admin/services/emailProviderApi";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
 import { EmailProviderTable } from "../index";
 
@@ -64,7 +65,8 @@ const RESEND: EmailProviderDescriptor = {
 
 function holding(slugs: string[]) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    hasPermission: (slug: string) => slugs.includes(slug),
+    // Asked as the product asks it.
+    hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: false,
     hasAnswer: true,
     error: null,
@@ -101,7 +103,12 @@ describe("the providers table, by grant", () => {
   });
 
   it("offers a manager every action", async () => {
-    holding(["manage-email-providers"]);
+    holding([
+      "read-email-providers",
+      "create-email-providers",
+      "update-email-providers",
+      "delete-email-providers",
+    ]);
     render(<EmailProviderTable />);
     expect(await rowActions()).toEqual([
       "Edit",

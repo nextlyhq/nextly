@@ -63,8 +63,12 @@ export interface EntityRowProps {
   trailing?: ReactNode;
   /** Where the row leads; a row without one is plain text, never a link that goes nowhere. */
   href?: string;
-  /** The one visible action a widget may declare, drawn in the trailing slot. */
-  action?: { label: string; href: string };
+  /**
+   * The one visible action a widget may declare, drawn in the trailing slot. `spoken` names it
+   * for assistive technology where its short label would be one of several alike ("Review
+   * overdue releases" for "Review").
+   */
+  action?: { label: string; href: string; spoken?: string };
   /** The row's "…" menu; no menu is drawn when there is nothing in it. */
   menu?: readonly EntityRowMenuItem[];
   density: ListDensity;
@@ -212,7 +216,9 @@ export function EntityRowActions({
     <>
       {action !== undefined && (
         <Button asChild size="sm" variant="outline" className="h-7 shrink-0">
-          <Link href={action.href}>{action.label}</Link>
+          <Link href={action.href} aria-label={action.spoken}>
+            {action.label}
+          </Link>
         </Button>
       )}
       {menu.length > 0 && <RowMenu title={title} items={menu} />}

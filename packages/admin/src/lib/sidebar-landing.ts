@@ -99,15 +99,44 @@ function makeSidebarComparator<T>(opts: {
   };
 }
 
-function collectionDisplayName(c: ApiCollection): string {
+/** The name the sidebar shows for a collection, and searches by. */
+export function collectionDisplayName(c: ApiCollection): string {
   return c.labels?.plural || c.label || c.name;
 }
 
-function singleDisplayName(s: ApiSingle): string {
-  // Capitalise the first letter to match `DynamicSingleNav.getDisplayName`.
+/** The name the sidebar shows for a Single, and searches by. */
+export function singleDisplayName(s: ApiSingle): string {
   const baseLabel = s.label || s.slug;
   if (!baseLabel) return baseLabel;
   return baseLabel.charAt(0).toUpperCase() + baseLabel.slice(1);
+}
+
+/**
+ * The collections the sidebar lists for a search: those whose shown name
+ * contains it, ignoring case. The list draws from this and the Content panel
+ * counts matches with it, so a count never disagrees with the list.
+ */
+export function searchSidebarCollections(
+  collections: ApiCollection[],
+  search: string
+): ApiCollection[] {
+  if (!search) return collections;
+  const needle = search.toLowerCase();
+  return collections.filter(c =>
+    collectionDisplayName(c).toLowerCase().includes(needle)
+  );
+}
+
+/** The Singles the sidebar lists for a search, as for collections. */
+export function searchSidebarSingles(
+  singles: ApiSingle[],
+  search: string
+): ApiSingle[] {
+  if (!search) return singles;
+  const needle = search.toLowerCase();
+  return singles.filter(s =>
+    singleDisplayName(s).toLowerCase().includes(needle)
+  );
 }
 
 /**

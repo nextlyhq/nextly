@@ -46,6 +46,24 @@
       "nextly/attention-keys": [
         "../nextly/src/domains/widgets/attention-keys.ts"
       ],
+      // Same reason: a card's body height and the rows it holds, the one
+      // formula the frame draws by and a widget's load counts by.
+      "nextly/card-geometry": [
+        "../nextly/src/domains/widgets/card-geometry.ts"
+      ],
+      // Same reason: the one humaniser of a field's key, which the server's
+      // `describe` read names fields by too. Internal to core and the admin.
+      "nextly/field-label": ["../nextly/src/collections/fields/field-label.ts"],
+      // Same reason: which kind of file a MIME type is, which the server's
+      // library query narrows by too. Internal to core and the admin.
+      "nextly/media-categories": [
+        "../nextly/src/domains/media/media-categories.ts"
+      ],
+      // Same reason: the data each of core's declared cards answers, typed at
+      // both ends. Internal to core and the admin.
+      "nextly/core-widget-data": [
+        "../nextly/src/domains/widgets/core-widgets/data.ts"
+      ],
       "@admin/*": ["./src/*"]
     }
   },

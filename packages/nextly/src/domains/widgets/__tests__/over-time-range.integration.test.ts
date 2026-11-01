@@ -1,5 +1,5 @@
 /**
- * Over time's reads against a real database: its declared query set to a
+ * Over time's reads against a real database: its declaration's `load` set to a
  * collection, asked over each range with one frozen instant.
  *
  * What only a database can settle, on every dialect:
@@ -30,10 +30,11 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshContentSources } from "../collection-widgets";
-import { CORE_WIDGETS } from "../core-widgets";
-import { executeWidgetQuery } from "../execute";
-import { validateWidgetQuery, type TimeseriesRange } from "../query";
+import { refreshContentSources } from "../content-sources";
+import { overTimeWidget } from "../core-widgets/over-time";
+import type { TimeseriesRange } from "../query";
+
+import { loadCard } from "./core-card-load";
 
 let current: TestNextly | undefined;
 
@@ -73,27 +74,18 @@ const ROWS: Record<string, string> = {
   later: "2026-06-15T11:00:00.000Z",
 };
 
-const OVER_TIME = CORE_WIDGETS.find(widget => widget.id === "core/over-time");
-
-/** Over time's query as core declares it, set to the collection and `range`. */
+/** What an Over time card set to the collection and `range` answers. */
 async function overRange(range: TimeseriesRange) {
-  const declared = OVER_TIME?.query;
-  if (declared === undefined) throw new Error("core/over-time has no query");
-  const result = await executeWidgetQuery(
-    validateWidgetQuery({
-      ...declared,
-      source: `collection:${ENTRIES}`,
-      range,
-    }),
+  const { points } = await loadCard(
+    overTimeWidget,
+    { collection: ENTRIES, dateRange: range },
     admin,
     { now: NOW }
   );
-  if (result.op !== "timeseries") throw new Error(result.op);
   return {
-    points: result.points,
-    at: (start: string) =>
-      result.points.find(point => point.start === start)?.count,
-    total: result.points.reduce((sum, point) => sum + point.count, 0),
+    points,
+    at: (start: string) => points.find(point => point.start === start)?.count,
+    total: points.reduce((sum, point) => sum + point.count, 0),
   };
 }
 

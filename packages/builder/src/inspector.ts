@@ -16,15 +16,20 @@
  */
 
 import {
+  contentPropsOf,
   getBlock,
   findNode,
+  nodeLocks,
+  registryBlockSource,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
+  type ComponentPath,
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
 import { blockLabel } from "./inserter";
+import { isLocked } from "./locking";
 import type { BuilderOp, NodePatch } from "./ops";
 
 /**
@@ -130,6 +135,14 @@ export interface BlockInspection {
    * alphabetical order rearranges a form somebody designed.
    */
   readonly props: readonly EditableProp[];
+  /**
+   * The block's own inspector component (`editor.component`), when it names
+   * one, drawn in place of the controls generated from {@link props}.
+   *
+   * Read here with everything else the panel shows, so the panel never goes
+   * back to the registry for a second reading of the same definition.
+   */
+  readonly inspector: ComponentPath | undefined;
 }
 
 /** The selected node together with the definition that describes it. */
@@ -314,7 +327,58 @@ export function inspectSelection(
     // was "Collection loop" in the palette and `acme/collection-loop` here.
     label: blockLabel(node.type),
     props,
+    inspector: inspectorOf(definition),
   };
+}
+
+/**
+ * The custom inspector a definition names, or `undefined`.
+ *
+ * Narrowed rather than trusted: a definition registered from JavaScript never
+ * had its type checked, and an empty or non-string path names nothing a host
+ * could resolve.
+ */
+function inspectorOf(
+  definition: AnyBlockDefinition
+): ComponentPath | undefined {
+  const component: unknown = definition.editor?.component;
+  return typeof component === "string" && component.trim() !== ""
+    ? component
+    : undefined;
+}
+
+/**
+ * Whether the block may not be changed from the inspector at all: locked in
+ * Layers, or no longer in the document.
+ *
+ * Asked of the LIVE document at the moment a change is attempted, not of the
+ * one a panel rendered with: a lock set in Layers after the panel drew must
+ * still stop the next write.
+ */
+export function blockIsReadOnly(document: BlockDocument, id: string): boolean {
+  const node = findNode(document.nodes, id);
+  return node === undefined || isLocked(node);
+}
+
+/**
+ * Whether one prop of the block may be set from the inspector.
+ *
+ * Nothing may change on a read-only block. Inside an area locked
+ * `"contentOnly"`, only the props its definition declares `role: "content"`
+ * may: the lock fixes the block's design and leaves what it says editable,
+ * which is the rule validation applies on save. The area and the content
+ * props are read through the engine's own `nodeLocks` and `contentPropsOf`,
+ * so the inspector and a save cannot disagree about either.
+ */
+export function propIsWritable(
+  document: BlockDocument,
+  id: string,
+  name: string
+): boolean {
+  if (blockIsReadOnly(document, id)) return false;
+  const area = nodeLocks(document.nodes, registryBlockSource()).get(id);
+  if (area?.lock !== "contentOnly") return true;
+  return contentPropsOf(getBlock(area.type)?.props).has(name);
 }
 
 /**

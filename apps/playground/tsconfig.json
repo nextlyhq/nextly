@@ -28,6 +28,14 @@
       // serverExternalPackages flip), but tsc's source view is correct
       // either way because the source IS what gets shipped to dist anyway.
       "nextly": ["../../packages/nextly/src/index.ts"],
+      // A subpath whose source is not at its own name: the seed loads
+      // nextly.config.ts through tsx as CommonJS, and the plugin SDK's
+      // routing entry (reached through the SEO plugin) asks for it, which
+      // nextly exports for `import` only. Mapped to its source here, as
+      // the wildcard below maps the rest.
+      "nextly/route-path": [
+        "../../packages/nextly/src/runtime/routing/slug-param.ts"
+      ],
       "nextly/*": ["../../packages/nextly/src/*"],
       "@nextlyhq/adapter-drizzle": [
         "../../packages/adapter-drizzle/src/index.ts"

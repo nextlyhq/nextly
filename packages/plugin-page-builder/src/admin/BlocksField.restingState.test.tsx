@@ -10,7 +10,7 @@
  *
  * Two of the cases below cover failures that pass a careless test.
  *
- * The COLD REGISTRY. `ensureCoreBlocksRegistered()` runs inside `BlocksEditor`
+ * The COLD REGISTRY. `ensureEditorBlocksRegistered()` runs inside `BlocksEditor`
  * and nowhere else, deliberately, so nothing is registered while the form is at
  * rest. Registration is global module state that is never torn down, so a test
  * that opened the editor first would leave every later render able to resolve

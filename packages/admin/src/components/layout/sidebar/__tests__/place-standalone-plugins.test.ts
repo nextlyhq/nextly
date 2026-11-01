@@ -13,7 +13,7 @@ const rail = (...ids: string[]): MainMenuItem[] =>
     id => ({ id, label: id, icon: Database, href: `/${id}` }) as MainMenuItem
   );
 
-const BASE = rail("dashboard", "collections", "media", "plugins", "settings");
+const BASE = rail("dashboard", "content", "media", "plugins", "settings");
 
 const deps = {
   slugOf: (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
@@ -32,7 +32,7 @@ describe("placeStandalonePlugins", () => {
     const plugins: StandaloneMenuPlugin[] = [{ name: "Forms", after: "media" }];
     expect(idsOf(placeStandalonePlugins(BASE, plugins, deps))).toEqual([
       "dashboard",
-      "collections",
+      "content",
       "media",
       "standalone-forms",
       "plugins",
@@ -44,7 +44,7 @@ describe("placeStandalonePlugins", () => {
     const plugins: StandaloneMenuPlugin[] = [{ name: "Forms" }];
     expect(idsOf(placeStandalonePlugins(BASE, plugins, deps))).toEqual([
       "dashboard",
-      "collections",
+      "content",
       "media",
       "plugins",
       "standalone-forms",
@@ -61,13 +61,32 @@ describe("placeStandalonePlugins", () => {
     const plugins: StandaloneMenuPlugin[] = [{ name: "Audit", after: "users" }];
     expect(idsOf(placeStandalonePlugins(BASE, plugins, deps))).toEqual([
       "dashboard",
-      "collections",
+      "content",
       "media",
       "plugins",
       "settings",
       "standalone-audit",
     ]);
   });
+
+  /**
+   * The rail folds Collections and Singles into one Content item, so a plugin
+   * still declaring either sits beside Content rather than being appended.
+   */
+  it.each(["collections", "singles", "content"])(
+    "anchors a plugin asking for %s next to Content",
+    after => {
+      const plugins: StandaloneMenuPlugin[] = [{ name: "Forms", after }];
+      expect(idsOf(placeStandalonePlugins(BASE, plugins, deps))).toEqual([
+        "dashboard",
+        "content",
+        "standalone-forms",
+        "media",
+        "plugins",
+        "settings",
+      ]);
+    }
+  );
 
   it("orders plugins sharing an anchor by their declared order", () => {
     const plugins: StandaloneMenuPlugin[] = [
@@ -76,7 +95,7 @@ describe("placeStandalonePlugins", () => {
     ];
     expect(idsOf(placeStandalonePlugins(BASE, plugins, deps))).toEqual([
       "dashboard",
-      "collections",
+      "content",
       "media",
       "standalone-first",
       "standalone-second",

@@ -276,11 +276,10 @@ export interface PageContext {
  *
  * `ReactNode` rather than `ReactNode | Promise<ReactNode>`, which is what
  * `render` may RETURN, and the asymmetry is deliberate. This value is one a
- * block places into its own JSX, and that union is not a legal child under
- * either supported peer: React 18 admits no promise at all, and React 19 admits
- * only `Promise<AwaitedReactNode>` — a promise of a settled node — so a promise
- * that may itself yield a promise is refused there too. Widening here would
- * move the error onto every block that draws a slot.
+ * block places into its own JSX, and that union is not a legal child: React
+ * admits only `Promise<AwaitedReactNode>` — a promise of a settled node — so a
+ * promise that may itself yield a promise is refused. Widening here would move
+ * the error onto every block that draws a slot.
  */
 export interface BlockRenderArgs<P>
   extends Omit<EngineBlockRenderArgs<P, PageContext>, "renderSlot"> {

@@ -13,6 +13,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.mjs",
+      "default": "./dist/testing.mjs"
+    },
     "./lib/component-registry": {
       "types": "./dist/lib/plugins/component-registry.d.ts",
       "import": "./dist/lib/plugins/component-registry.mjs",
@@ -36,6 +41,8 @@
     "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "check:published-build": "node scripts/check-published-build.mjs",
     "report:bundle": "node scripts/bundle-report.mjs",
+    "check:budgets": "node scripts/check-bundle-budgets.mjs",
+    "check:consumer-bundle": "node scripts/check-consumer-bundle.mjs",
     "test": "node scripts/ensure-dist.mjs && vitest run",
     "test:watch": "node scripts/ensure-dist.mjs && vitest",
     "test:ui": "node scripts/ensure-dist.mjs && vitest --ui",
@@ -48,10 +55,10 @@
   },
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
-    "next": "^15.5.28 || ^16.4.1",
+    "next": "^16.4.1",
     "nextly": "0.0.2-alpha.72",
-    "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@nextlyhq/admin-css": "workspace:*",

@@ -21,7 +21,7 @@
  *
  * Re-exported from core rather than defined here. The server resolves the same
  * question -- the activity feed labels a row with it, and the dashboard's
- * generated list widgets pick a row label with it before the query is made --
+ * list widgets pick a row label with it before the query is made --
  * so the rule lives beside the collection domain and both sides ask it. Kept
  * exported from this module because this is where the admin's entry-title
  * questions are answered from.

@@ -9,7 +9,11 @@
  * allows. A hook still reading the slugs passes every case where the two
  * agree.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,6 +40,7 @@ const server = vi.hoisted(() => ({
 /** The content language the screen's `?locale=` names, if any. */
 const onScreen = vi.hoisted(() => ({
   locale: undefined as string | undefined,
+  pathname: "/admin",
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
@@ -71,7 +76,10 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
 }));
 
 vi.mock("../useRouter", () => ({
-  useRouter: () => ({ route: { routeType: "private" } }),
+  useRouter: () => ({
+    route: { routeType: "private" },
+    pathname: onScreen.pathname,
+  }),
 }));
 
 vi.mock("../useLocaleParam", () => ({
@@ -146,6 +154,7 @@ beforeEach(() => {
   server.capabilitiesGate = null;
   server.permissionsGate = null;
   onScreen.locale = undefined;
+  onScreen.pathname = "/admin";
 });
 
 afterEach(() => {
@@ -1456,5 +1465,121 @@ describe("the end the permission list names", () => {
     expect(
       namedEndsAfter([], [{ validUntil: 9_000, answeredAt: 300 }], now)
     ).toEqual([{ end: 9_000, namedAt: 300 }]);
+  });
+});
+
+describe("one screen's callers", () => {
+  /** How many times the permission list was asked for. */
+  const permissionAsks = (): number =>
+    server.asked.filter(p => p === "/me/permissions").length;
+
+  it("share one answer however late they mount, and the next screen asks once", async () => {
+    // 🔴 A screen's callers mount over more than one commit: the dashboard's
+    // cards mount once its layout has answered, after the shell has asked, and
+    // a slow layout answers seconds later. Each mount asking again read the
+    // list twice on every dashboard load; a time window still did whenever the
+    // layout outlasted it.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+
+    // A card mounts ten seconds later on the same screen: it reads the answer.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    const card = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    expect(card.result.current.hasPermission("read-posts")).toBe(true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(permissionAsks()).toBe(asked);
+
+    // The control: the next screen asks again, so a changed role is seen
+    // there, and asks ONCE, however many of its callers see the new pathname.
+    onScreen.pathname = "/admin/collections/posts";
+    shell.rerender();
+    card.rerender();
+    renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(permissionAsks()).toBe(asked + 1);
+  });
+
+  it("keep the answer they hold while the next screen asks again, so nothing it allowed leaves for the re-ask", async () => {
+    // 🔴 The next screen's re-ask is not news that the answer is wrong. Taken as
+    // such (the answer invalidated), every caller read no permission at all
+    // until it arrived: a return to the dashboard drew its first frame without
+    // the card that needs one (Upcoming releases) and put it back a moment
+    // later, moving every card under it.
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+
+    let release = () => {};
+    server.permissionsGate = new Promise<void>(done => {
+      release = done;
+    });
+    // What the next screen's answer will say, held back until released.
+    server.permissions = { ...EDITOR, permissions: ["read-posts"] };
+    onScreen.pathname = "/admin/collections/posts";
+    shell.rerender();
+    // The re-ask is on its way, held: the answer kept still counts, for the
+    // callers already drawn and for one that mounts meanwhile, as the screen
+    // returned to mounts its own (the dashboard's cards).
+    await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    shell.rerender();
+    const card = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    for (const caller of [shell, card]) {
+      expect(caller.result.current.hasAnswer).toBe(true);
+      expect(caller.result.current.isLoading).toBe(false);
+      expect(caller.result.current.hasPermission("read-posts")).toBe(true);
+      expect(caller.result.current.hasPermission("update-posts")).toBe(true);
+    }
+
+    // The new answer replaces it once it arrives.
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(shell.result.current.hasPermission("update-posts")).toBe(false)
+    );
+    expect(shell.result.current.hasPermission("read-posts")).toBe(true);
+  });
+
+  it("ask again when the admin regains focus, on the same screen", async () => {
+    // An answer kept for the screen is never stale, so a focus refetch that
+    // waits for staleness would keep a role granted or revoked elsewhere until
+    // the next screen.
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+    try {
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    } finally {
+      focusManager.setFocused(undefined);
+    }
   });
 });

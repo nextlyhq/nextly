@@ -5,14 +5,11 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-editor-mount
  */
-import {
-  hasBlock,
-  registerBlocks,
-  type BlockDocument,
-  type DocumentKind,
-  type DocumentLimits,
+import type {
+  BlockDocument,
+  DocumentKind,
+  DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
   type NoticeQueue,
   type EditorState,
@@ -37,35 +34,12 @@ import {
   useComponentLibrary,
   type ComponentLibraryRead,
 } from "../component-library-client";
+import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
-
-/**
- * Put the core blocks in the BROWSER's registry.
- *
- * The plugin registers them during its own setup, which runs in the server
- * process. The engine's registry is module state, so the copy loaded into the
- * admin's client bundle is a different one and starts empty — and everything
- * the editor asks flows through it: `allBlocks` fills the inserter,
- * `registryNestingSource` decides what a position accepts, and the renderer
- * resolves a node's type to something it can draw.
- *
- * Registering once, here, rather than handing each of those its own list is
- * what keeps them agreeing. Given separate lists, the palette could offer a
- * block the renderer cannot draw and the nesting rule has never heard of — and
- * an empty registry fails SILENTLY in the permissive direction, because a block
- * nobody has heard of declares no parent and is therefore allowed everywhere.
- *
- * Filtered by `hasBlock` because registration refuses a redefinition, and this
- * runs again on every hot reload and every remount of the editor.
- */
-function ensureCoreBlocksRegistered(): void {
-  const missing = coreBlocks.filter(block => !hasBlock(block.name));
-  if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
-}
 
 /**
  * What to tell the author when an inline edit did not save, or `null` when
@@ -186,11 +160,12 @@ export function useEditorMount(
   /** The kinds the field accepts, so a seeded document is one it will take. */
   kinds: readonly DocumentKind[] | undefined
 ): EditorMount {
-  // Before anything reads the registry. Inside the component that mounts the
-  // editor rather than at module scope: this file is imported by the field
-  // control, which every entry form holding a blocks field renders whether or
-  // not the editor is ever opened.
-  ensureCoreBlocksRegistered();
+  // The core blocks and every block a plugin contributed, before anything
+  // reads the registry. Inside the component that mounts the editor rather
+  // than at module scope: this file is imported by the field control, which
+  // every entry form holding a blocks field renders whether or not the editor
+  // is ever opened.
+  ensureEditorBlocksRegistered();
 
   const initialDocument = useMemo(
     () => documentFrom(initialValue, kinds),

@@ -37,6 +37,24 @@
 export type ActionPlacement = "primary" | "toolbar" | "menu";
 
 /**
+ * Where the editor's own header draws an action: the public placements, and
+ * `publish-menu`.
+ *
+ * `publish-menu` is the menu on the primary action's own arrow: the other
+ * ways of putting this document live, such as at a time or with a release.
+ * They sit beside the act they vary rather than in More, where nobody
+ * deciding WHEN to publish would look. With no primary action drawn, they
+ * join More's document rows instead, so a person who may not publish still
+ * finds them and reads why they are held.
+ *
+ * Kept off the published {@link ActionPlacement}, which a plugin's document
+ * view reads through `useDocumentActions()` and may handle exhaustively. That
+ * hook hands such an action over as a `menu` one: the place the editor itself
+ * draws it whenever it has no arrow to put it on.
+ */
+export type EditorActionPlacement = ActionPlacement | "publish-menu";
+
+/**
  * Which part of the menu an action belongs to.
  *
  * `danger` is separated because the menu currently mixes Duplicate with Delete
@@ -73,6 +91,16 @@ export interface DocumentAction {
 }
 
 /**
+ * An action as the editor's own header holds it: a {@link DocumentAction}
+ * that may also sit on the primary action's arrow. Internal to the admin;
+ * `useDocumentActions()` turns it into the published shape.
+ */
+export interface EditorDocumentAction
+  extends Omit<DocumentAction, "placement"> {
+  placement: EditorActionPlacement;
+}
+
+/**
  * Everything the answer depends on.
  *
  * Facts only. Whether a control is drawn is this module's decision, and a
@@ -104,6 +132,12 @@ export interface DocumentActionState {
   isDirty: boolean;
   /** Whether the document can be duplicated — an edit-mode affordance. */
   canDuplicate: boolean;
+  /**
+   * Whether the server refuses every write to this document whoever asks: its
+   * collection or Single was removed from code. Then only what reads is
+   * offered, with no permission bringing a write back. Absent means false.
+   */
+  writesRefused?: boolean;
 }
 
 /** The reason every action is unavailable while a past version is on screen. */
@@ -187,6 +221,24 @@ const PRIMARY_RULES: readonly {
 const PRIMARY_FALLBACK = { id: "publish", label: "Publish" };
 
 /**
+ * The leading action of a user who may read the document but not change it.
+ * Publishing changes only the status, which the publish permission judges
+ * alone, so where they hold it they publish a draft, or the changes held for
+ * a published document; any other state leaves them nothing to lead with.
+ */
+function readerPrimary(
+  state: DocumentActionState
+): { id: string; label: string } | undefined {
+  if (!state.canPublish || !state.hasStatus || state.mode !== "edit") {
+    return undefined;
+  }
+  if (state.status === "draft") return PRIMARY_FALLBACK;
+  return isPublishedEdit(state) && state.hasWorkingDraft
+    ? { id: "publish", label: "Publish changes" }
+    : undefined;
+}
+
+/**
  * The one action an author is most likely reaching for, given the state.
  *
  * Derived rather than chosen at each call site, which is what stops two
@@ -197,12 +249,21 @@ const PRIMARY_FALLBACK = { id: "publish", label: "Publish" };
  *
  * FIRST MATCH WINS, so the rows read as "the most specific situation first".
  */
-function primaryAction(state: DocumentActionState): DocumentAction | undefined {
-  // Every leading action stores the form, which a user who may not change
-  // the document cannot do, so a page they may only read leads with nothing.
-  if (!state.canEdit) return undefined;
-  const matched = PRIMARY_RULES.find(rule => rule.applies(state));
-  const { id, label } = matched?.build(state) ?? PRIMARY_FALLBACK;
+function primaryAction(
+  state: DocumentActionState
+): EditorDocumentAction | undefined {
+  // Nothing leads where every write is refused, not even a publish a
+  // reader's own permission would offer.
+  if (state.writesRefused === true) return undefined;
+  // Every leading action but a publish stores the form, which a user who may
+  // not change the document cannot do: a page they may only read leads with a
+  // publish or with nothing.
+  const chosen = state.canEdit
+    ? (PRIMARY_RULES.find(rule => rule.applies(state))?.build(state) ??
+      PRIMARY_FALLBACK)
+    : readerPrimary(state);
+  if (chosen === undefined) return undefined;
+  const { id, label } = chosen;
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   return withReason(
     { id, label, placement: "primary" },
@@ -216,9 +277,9 @@ function primaryAction(state: DocumentActionState): DocumentAction | undefined {
 }
 
 function withReason(
-  action: DocumentAction,
+  action: EditorDocumentAction,
   reason: string | undefined
-): DocumentAction {
+): EditorDocumentAction {
   return reason === undefined ? action : { ...action, disabledReason: reason };
 }
 
@@ -242,7 +303,7 @@ interface ActionRule {
   applies: (state: DocumentActionState) => boolean;
   /** What it says, which for several actions depends on the state. */
   label: (state: DocumentActionState) => string;
-  placement: Exclude<ActionPlacement, "primary">;
+  placement: Exclude<EditorActionPlacement, "primary">;
   group?: ActionGroup;
   destructive?: boolean;
   /**
@@ -420,10 +481,17 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
  * were one slip apart, styled almost alike. It is rare, it changes what the
  * public sees, and it belongs with the other destructive verbs.
  */
-export function documentActions(state: DocumentActionState): DocumentAction[] {
+export function documentActions(
+  state: DocumentActionState
+): EditorDocumentAction[] {
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   const built = BUILT_IN_ACTIONS.filter(
-    rule => rule.applies(state) && (state.canEdit || !rule.edits)
+    rule =>
+      rule.applies(state) &&
+      (state.canEdit || !rule.edits) &&
+      // Nothing that writes, where every write is refused: not even the
+      // verbs that follow a permission of their own.
+      (state.writesRefused !== true || !rule.mutates)
   ).map(rule =>
     withReason(
       {
@@ -463,9 +531,9 @@ export function documentActions(state: DocumentActionState): DocumentAction[] {
  * cannot push its own action above Publish by contributing early.
  */
 export function withContributedActions(
-  built: readonly DocumentAction[],
-  contributed: readonly DocumentAction[]
-): DocumentAction[] {
+  built: readonly EditorDocumentAction[],
+  contributed: readonly EditorDocumentAction[]
+): EditorDocumentAction[] {
   /*
    * `taken` GROWS as contributions are admitted, so the first of two
    * contributions sharing an id wins and the second is dropped.
@@ -478,7 +546,7 @@ export function withContributedActions(
    * be handed duplicate keys for them.
    */
   const taken = new Set(built.map(action => action.id));
-  const accepted: DocumentAction[] = [...built];
+  const accepted: EditorDocumentAction[] = [...built];
   for (const action of contributed) {
     if (taken.has(action.id)) continue;
     taken.add(action.id);
@@ -496,9 +564,9 @@ export function withContributedActions(
  * surfaces being edited.
  */
 export function actionsAt(
-  actions: readonly DocumentAction[],
-  placement: ActionPlacement
-): DocumentAction[] {
+  actions: readonly EditorDocumentAction[],
+  placement: EditorActionPlacement
+): EditorDocumentAction[] {
   return actions.filter(action => action.placement === placement);
 }
 
@@ -509,9 +577,9 @@ export function actionsAt(
  * draws a separator between them and a caller reading a flag would have to
  * rediscover where the boundary falls.
  */
-export function menuGroups(actions: readonly DocumentAction[]): {
-  document: DocumentAction[];
-  danger: DocumentAction[];
+export function menuGroups(actions: readonly EditorDocumentAction[]): {
+  document: EditorDocumentAction[];
+  danger: EditorDocumentAction[];
 } {
   const menu = actionsAt(actions, "menu");
   return {

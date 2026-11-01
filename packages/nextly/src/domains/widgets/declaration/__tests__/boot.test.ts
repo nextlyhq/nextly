@@ -14,12 +14,7 @@ import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
 import { getWidget, widgetSource } from "../../registry";
-import {
-  cardQueryFor,
-  clearDeclaredWidgets,
-  declaredWidget,
-  resetLegacyIdWarnings,
-} from "../declared-widgets";
+import { clearDeclaredWidgets, declaredWidget } from "../declared-widgets";
 import { dashboard, revenue } from "./plugin/widgets";
 
 function plugin(
@@ -55,7 +50,6 @@ function refusal(run: () => void): string {
 }
 
 beforeEach(() => {
-  resetLegacyIdWarnings();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn: vi.fn(),
     info: vi.fn(),
@@ -79,7 +73,7 @@ describe("startup with plugins that declare widgets", () => {
     expect(published).not.toHaveProperty("query");
     expect(published).not.toHaveProperty("data");
     expect(widgetSource("acme/orders-by-state")).toBe('plugin "@acme/shop"');
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    expect(getWidget("core/continue")).toBeDefined();
   });
 
   it("withdraws what a declaration published when the declarations are cleared, and nothing else", () => {
@@ -88,14 +82,14 @@ describe("startup with plugins that declare widgets", () => {
     clearDeclaredWidgets();
     expect(getWidget("acme/orders-by-state")).toBeUndefined();
     // Core's own cards were never a declaration's, so they stay.
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    expect(getWidget("core/continue")).toBeDefined();
     // And the same declarations can be made again.
     expect(() =>
       resetWidgetRegistries([plugin("@acme/shop", { dashboard })])
     ).not.toThrow();
   });
 
-  it("builds a card's query under the slug a site renamed the plugin's collection to", () => {
+  it("keeps the slugs a site renamed the plugin's collections to, for its widgets' reads", () => {
     const shop = definePlugin({
       name: "@acme/shop",
       version: "1.0.0",
@@ -106,9 +100,10 @@ describe("startup with plugins that declare widgets", () => {
       },
     });
     resetWidgetRegistries([shop.rename!({ orders: "sales" })]);
-    expect(
-      cardQueryFor("acme/recent-orders", { collection: "orders" })
-    ).toMatchObject({ source: "collection:sales" });
+    // Kept with the widget, so its load function's reads name the slug the site uses.
+    expect(declaredWidget("acme/recent-orders")?.collections).toEqual({
+      orders: "sales",
+    });
   });
 
   it("registers nothing from a disabled plugin", () => {
@@ -165,52 +160,5 @@ describe("startup with plugins that declare widgets", () => {
     expect(message).toContain(
       'plugin "@acme/shop", widget "(none)": its dashboard widgets must be a list'
     );
-  });
-
-  it("stops when a declared widget takes an id another plugin uses in today's shape", () => {
-    const message = refusal(() =>
-      resetWidgetRegistries([
-        plugin("@old/stats", {
-          admin: {
-            widgets: [
-              {
-                id: "acme/revenue",
-                title: "Revenue",
-                component: "@old/stats/admin#Revenue",
-              },
-            ],
-          },
-        }),
-        plugin("@acme/shop", { dashboard: { widgets: [revenue] } }),
-      ])
-    );
-    expect(message).toContain(
-      'id "acme/revenue" is already used by plugin "@old/stats", which declares it in the old shape'
-    );
-  });
-
-  it("stops when a plugin uses one of core's declared ids in today's shape, saying it is core's and what to do", () => {
-    // 🔴 One id has one owner: core declares core/note, so the plugin using it
-    // in the old shape is told to remove it or contribute an id of its own.
-    const message = refusal(() =>
-      resetWidgetRegistries([
-        plugin("@old/notes", {
-          admin: {
-            widgets: [
-              {
-                id: "core/note",
-                title: "Note",
-                component: "@old/notes/admin#Note",
-              },
-            ],
-          },
-        }),
-      ])
-    );
-    expect(message).toContain(
-      'plugin "@old/notes" contributes core/note through contributes.admin.widgets; core owns that id. Remove it, or contribute your own id through contributes.dashboard.'
-    );
-    // Filed under the plugin that has to change, not under core.
-    expect(message).toContain('plugin "@old/notes", widget "core/note"');
   });
 });

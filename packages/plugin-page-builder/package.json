@@ -58,10 +58,10 @@
     "@nextlyhq/ui": "workspace:^",
     "@tanstack/react-query": ">=5.0.0",
     "lucide-react": ">=0.400.0",
-    "next": "^15.5.28 || ^16.4.1",
+    "next": "^16.4.1",
     "nextly": "workspace:*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-hook-form": ">=7.0.0"
   },
   "devDependencies": {

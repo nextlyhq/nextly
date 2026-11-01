@@ -1,5 +1,8 @@
 import { expect, type Page } from "@playwright/test";
 
+// Where the chosen theme is stored, shared with the visual check.
+import { THEME_STORAGE_KEY } from "./theme.mjs";
+
 /**
  * The playground's `admin.devAutoLogin` issues a real session for this user on
  * the first `/admin` visit, so the suite never signs in. That is a deliberate
@@ -27,7 +30,7 @@ export async function gotoAdmin(
 ): Promise<void> {
   await page.addInitScript(
     ([key, value]) => window.localStorage.setItem(key, value),
-    ["nextly-theme", theme] as const
+    [THEME_STORAGE_KEY, theme] as const
   );
 
   await page.goto(`${ADMIN}${path}`);

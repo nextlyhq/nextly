@@ -8,26 +8,31 @@
 import type { WidgetDefinition } from "../definition";
 import { RELEASES_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { LIST_DENSITY } from "./shared";
 
 export const upcomingReleasesWidget = {
-  id: "core/upcoming-releases",
+  id: CORE_WIDGET_ID.upcomingReleases,
   title: "Upcoming releases",
   description: "Scheduled releases that have not shipped yet, soonest first.",
   // Its own component, so the line naming releases that need attention can sit above the
   // rows; the rows themselves are drawn as core's list cards draw them.
   archetype: "custom",
   component: "core#UpcomingReleases",
-  // From a third, where its rows still read, to two thirds: a short list needs no more. Four
-  // rows tall by default (h 4), the height of Team, whose row of the default dashboard it
-  // shares, and up to ten (h 8). Its list's "View all (N)" leads to Releases, so the card has
-  // no link of its own.
+  // From a third, where its rows still read, to the full row: the dashboard widens it to 12
+  // when it is the only card of its row that shows, which stays within its bounds. Four rows
+  // tall by default (h 4), the height of Team, whose row of the default dashboard it shares,
+  // and up to ten (h 8). Its list's "View all (N)" leads to Releases, so the card has no link
+  // of its own.
   size: {
     default: { w: 4, h: 4 },
     min: { w: 4, h: 4 },
-    max: { w: 8, h: 8 },
+    max: { w: 12, h: 8 },
   },
-  defaultOrder: 60,
+  // Taken off the dashboard while nothing is scheduled, stopped or overdue: the answer is then
+  // empty, since the source sends a row for each upcoming release and one per reason releases
+  // need attention, and an empty card would only say there is nothing to say.
+  hidesWhenEmpty: true,
   // Beside its gate: offered once a release exists that the reader may
   // read, not as an empty card on a site that has never made one.
   lifecycle: "conditional",
@@ -81,9 +86,19 @@ export const upcomingReleasesWidget = {
   query: {
     source: RELEASES_SOURCE_ID,
     op: "list",
-    // Selecting `reason` is what asks the source for the attention rows; see `system:releases`.
-    // `id` is what each release row links to.
-    select: ["kind", "id", "title", "scheduledAt", "reason", "count"],
+    // Selecting `reason` is what asks the source for the attention rows, and `entries` and
+    // `issues` what ask it for each release's documents and the problems its checks report;
+    // see `system:releases`. `id` is what each release row links to.
+    select: [
+      "kind",
+      "id",
+      "title",
+      "scheduledAt",
+      "entries",
+      "issues",
+      "reason",
+      "count",
+    ],
     limit: 5,
   },
   // Asked like core's lists: the rows its size draws and one more, for "more exist".

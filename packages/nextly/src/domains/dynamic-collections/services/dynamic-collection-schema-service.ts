@@ -20,6 +20,8 @@
  * ```
  */
 
+import { createHash } from "node:crypto";
+
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -31,6 +33,7 @@ import {
 import { env } from "../../../shared/lib/env";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { consoleLogger } from "../../../shared/types";
+import { getTableName } from "../../collections/services/collection-utils";
 import {
   fieldGroupSlugList,
   isFieldGroupFieldType,
@@ -49,6 +52,9 @@ import {
 } from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
+  junctionTableNameBetween,
+  junctionTableNameFor,
+  junctionTablesOf,
   usesJunctionTable,
   getColumnDescriptor,
   getSystemColumnDescriptors,
@@ -66,6 +72,21 @@ import { backfillDefaultForType } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+
+/**
+ * What a drop file's name says it drops: the collection, or for several, how
+ * many and a digest of which. A name listing every slug grows with the
+ * selection, and past the filesystem's limit on one name the file cannot be
+ * written at all.
+ */
+function dropFileLabel(names: readonly string[]): string {
+  if (names.length === 1) return names[0];
+  const digest = createHash("sha256")
+    .update(names.join(","))
+    .digest("hex")
+    .slice(0, 12);
+  return `${String(names.length)}_collections_${digest}`;
+}
 
 /**
  * Field types this service stores in a JSON array column (see its column-type
@@ -739,7 +760,8 @@ export class DynamicCollectionSchemaService {
     return {
       name: this.relationshipKeyName(tableName, column),
       columns: [column],
-      referencesTable: `dc_${field.options.target}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      referencesTable: getTableName(field.options.target),
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
@@ -1033,16 +1055,17 @@ export class DynamicCollectionSchemaService {
             ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
-        // Add CHECK constraints for validation
+        // Add CHECK constraints for validation, on the field's column: a name
+        // kept in camelCase is stored in its snake_case column.
         if (f.validation) {
           if (f.validation.min !== undefined) {
             checks.push(
-              `${this.quoteIdentifier(f.name)} >= ${f.validation.min}`
+              `${this.quoteIdentifier(toSnakeCase(f.name))} >= ${f.validation.min}`
             );
           }
           if (f.validation.max !== undefined) {
             checks.push(
-              `${this.quoteIdentifier(f.name)} <= ${f.validation.max}`
+              `${this.quoteIdentifier(toSnakeCase(f.name))} <= ${f.validation.max}`
             );
           }
           if (
@@ -1054,7 +1077,7 @@ export class DynamicCollectionSchemaService {
               f.type === "code")
           ) {
             checks.push(
-              `LENGTH(${this.quoteIdentifier(f.name)}) >= ${f.validation.minLength}`
+              `LENGTH(${this.quoteIdentifier(toSnakeCase(f.name))}) >= ${f.validation.minLength}`
             );
           }
           if (f.validation.regex && this.dialect !== "sqlite") {
@@ -1656,7 +1679,8 @@ ${allColumnDefs.join(",\n")}
         if (this.dialect !== "sqlite") {
           // Add foreign key for non-manyToMany relations
           if (field.type === "relationship" && field.options?.target) {
-            const targetTable = `dc_${field.options.target}`;
+            // The table the target was created under: a hyphen in its address is an underscore in the table.
+            const targetTable = getTableName(field.options.target);
             const onDelete = this.relationOnDelete(field);
             const onUpdate = this.relationOnUpdate(field);
             statements.push(
@@ -2232,7 +2256,8 @@ ${allColumnDefs.join(",\n")}
       tableName,
       constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
-      referencesTable: `dc_${target}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      referencesTable: getTableName(target),
       referencesColumn: "id",
       fromOnDelete: from.onDelete,
       fromOnUpdate: from.onUpdate,
@@ -2703,39 +2728,70 @@ ${allColumnDefs.join(",\n")}
     migrationSQL: string;
     migrationFileName: string;
   } {
-    // SQLite doesn't support CASCADE on DROP TABLE
-    const dropStatement =
+    return this.generateDropTablesMigration([
+      { collectionName, tableName, fields },
+    ]);
+  }
+
+  /**
+   * One migration dropping every table of the collections deleted in one
+   * operation, in the order given: the order their own keys allow.
+   *
+   * Every member's many-to-many junctions come first. A junction holds keys
+   * to both of its tables, so while one stands MySQL drops neither, and
+   * SQLite neither while it holds a link; with all of them gone, only the
+   * members' own keys tie one table to another, and the order given respects
+   * those. One file rather than one per collection, so the sequence a
+   * database receives when the file is applied is the sequence development
+   * ran, whatever order files are read in.
+   */
+  generateDropTablesMigration(
+    collections: ReadonlyArray<{
+      collectionName: string;
+      tableName: string;
+      fields?: readonly FieldDefinition[];
+    }>
+  ): {
+    migrationSQL: string;
+    migrationFileName: string;
+  } {
+    // The collections' own many-to-many junctions. Only their own fields are
+    // known here; a junction another collection's field points at one of
+    // these tables through is that collection's, and stays until its field
+    // goes. Named by `junctionTablesOf`, the list the check before a delete
+    // reads, so both name the same tables.
+    const junctions = collections.flatMap(collection =>
+      junctionTablesOf(collection.tableName, collection.fields ?? []).map(
+        junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
+      )
+    );
+
+    const tables = collections.flatMap(({ tableName }) => [
+      // The localized companion is excluded from the schema pipeline, so
+      // nothing else in a replayed migration would remove it. It carries an
+      // FK to `<main>.id` and therefore has to be dropped BEFORE the main
+      // table. IF EXISTS keeps this a no-op for collections that were never
+      // localized, and for the API delete path that already tore it down
+      // in-process.
+      `DROP TABLE IF EXISTS ${this.quoteIdentifier(`${tableName}_locales`)};`,
+      // SQLite doesn't support CASCADE on DROP TABLE
       this.dialect === "sqlite"
         ? `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)};`
-        : `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)} CASCADE;`;
+        : `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)} CASCADE;`,
+    ]);
 
-    // The localized companion is excluded from the schema pipeline, so nothing else in a
-    // replayed migration would remove it. It carries an FK to `<main>.id` and therefore has
-    // to be dropped BEFORE the main table. IF EXISTS keeps this a no-op for collections that
-    // were never localized, and for the API delete path that already tore it down in-process.
-    const dropCompanionStatement = `DROP TABLE IF EXISTS ${this.quoteIdentifier(`${tableName}_locales`)};`;
-
-    // The collection's own many-to-many junctions, for the same reason and in the same
-    // position: each holds an FK to `<main>.id`, and nothing else names them. Only this
-    // collection's fields are known here; a junction another collection's field points at
-    // this table through is that collection's, and stays until its field goes.
-    const dropJunctionStatements = fields
-      .filter(usesJunctionTable)
-      .map(
-        field =>
-          `DROP TABLE IF EXISTS ${this.quoteIdentifier(this.junctionTableNameFor(tableName, field))};`
-      );
-
-    const migrationSQL = [
-      `-- Drop dynamic collection: ${collectionName}`,
-      ...dropJunctionStatements,
-      dropCompanionStatement,
-      dropStatement,
-    ].join("\n");
+    const names = collections.map(collection => collection.collectionName);
+    // One statement per breakpoint, as every other file this service writes:
+    // the runner splits on the breakpoint line, and MySQL refuses several
+    // statements sent as one.
+    const migrationSQL = `-- Drop dynamic collection${names.length === 1 ? "" : "s"}: ${names.join(", ")}\n${[
+      ...junctions,
+      ...tables,
+    ].join("\n--> statement-breakpoint\n")}`;
 
     return {
       migrationSQL,
-      migrationFileName: `${Date.now()}_drop_${collectionName}.sql`,
+      migrationFileName: `${Date.now()}_drop_${dropFileLabel(names)}.sql`,
     };
   }
 
@@ -2805,7 +2861,8 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
       sourceCollection,
       targetCollection,
       sourceTable: sourceTableName,
-      targetTable: `dc_${targetCollection}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      targetTable: getTableName(targetCollection),
       sourceColumn: `${sourceCollection}_id`,
       targetColumn: `${targetCollection}_id`,
       fkSource: `fk_${table}_${sourceCollection}`,
@@ -3365,33 +3422,33 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
    * The junction table a many-to-many field's links live in: the author's own
    * name when the field sets one, else the generated one. Asked here by the
    * CREATE, the DROP and the RENAME alike, so the three cannot name different
-   * tables for one field.
+   * tables for one field. The rule itself is in `field-column-descriptor`, which the
+   * check before a delete asks too.
    */
   junctionTableNameFor(
     sourceTableName: string,
     field: FieldDefinition
   ): string {
-    return (
-      field.options?.junctionTable ||
-      this.generateJunctionTableName(
-        sourceTableName,
-        `dc_${field.options?.target ?? ""}`,
-        field.name
-      )
+    // Generated names through `generateJunctionTableName`, as this method
+    // always derived them.
+    return junctionTableNameFor(
+      sourceTableName,
+      field,
+      (source, target, name) =>
+        this.generateJunctionTableName(source, target, name)
     );
   }
 
   /**
-   * Generate junction table name following naming convention
+   * The generated name of the junction table between two tables for one
+   * field, by the rule `junctionTableNameFor` applies (`field-column-descriptor`).
    */
   generateJunctionTableName(
     sourceTable: string,
     targetTable: string,
     fieldName: string
   ): string {
-    // Sort table names alphabetically for consistency
-    const tables = [sourceTable, targetTable].sort();
-    return `${tables[0]}_${tables[1]}_${fieldName}`;
+    return junctionTableNameBetween(sourceTable, targetTable, fieldName);
   }
 
   // ==================== TYPE MAPPING METHODS ====================

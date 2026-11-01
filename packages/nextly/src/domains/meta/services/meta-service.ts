@@ -2,10 +2,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, sql, type Column, type SQL } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors/nextly-error";
-import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
-import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
-import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import { affectedRowCount } from "../../auth/services/auth-service";
@@ -63,9 +61,9 @@ export class MetaService extends BaseService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get table(): any {
     const d = this.dialect;
-    if (d === "postgresql") return nextlyMetaPg;
-    if (d === "mysql") return nextlyMetaMysql;
-    return nextlyMetaSqlite;
+    // The loaded dialect's own table, so only that dialect's file is
+    // imported; `createAdapter` loads it.
+    return loadedDialect(d).tables.nextlyMeta;
   }
 
   // Drizzle handle. BaseService already exposes `this.db` via its

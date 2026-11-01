@@ -24,7 +24,6 @@ const allow = () => true;
 
 function registered(fields: Record<string, unknown>): DashboardWidget {
   const [widget] = resolveDashboardWidgets(
-    undefined,
     [
       {
         id: "acme/orders",
@@ -93,6 +92,20 @@ describe("what the admin carries from a declaration core answers", () => {
       },
     });
     expect(widget.declaredEmpty).toEqual({ title: "No open orders" });
+  });
+
+  it("carries an action that opens the card's settings as one, with no link to make", () => {
+    const widget = registered({
+      serverData: true,
+      empty: {
+        message: "Nothing written yet.",
+        action: { label: "Write a note", opens: "settings" },
+      },
+    });
+    expect(widget.declaredEmpty).toEqual({
+      title: "Nothing written yet.",
+      action: { label: "Write a note", opensSettings: true },
+    });
   });
 
   it("carries neither for a widget that declares neither", () => {

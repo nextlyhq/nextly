@@ -108,6 +108,11 @@ export interface VersionHistorySheetProps {
    */
   canRestore?: boolean;
   /**
+   * The document's writes are refused: its collection or Single was removed
+   * from code. Its versions are still shown, but none is marked seen.
+   */
+  writesRefused?: boolean;
+  /**
    * Status of the LIVE document, which is what a restore is about to change.
    * The selected version's own status describes the past and says nothing
    * about whether this change is publicly visible.
@@ -128,7 +133,7 @@ export interface VersionHistorySheetProps {
   liveDirty?: boolean;
   /**
    * A transient reason the confirm action must refuse: the document
-   * becoming read-only while the confirmation is open. The Restore… trigger
+   * becoming read-only while the confirmation is open. The restore trigger
    * removes itself on the same signal, but an already-open dialog outlives
    * it, so the refusal has to be carried into the confirmation as well.
    */
@@ -166,6 +171,7 @@ export function VersionHistorySheet({
   onOpenChange,
   scope,
   canRestore = false,
+  writesRefused = false,
   liveStatus = null,
   entityLocalized,
   liveDirty = false,
@@ -255,7 +261,8 @@ export function VersionHistorySheet({
       !viewedLoading &&
       viewedError === null
       ? selected
-      : null
+      : null,
+    { writesRefused }
   );
 
   // Returning to the live document from Back to current clears the selection here
@@ -501,8 +508,8 @@ export function VersionHistorySheet({
               : {}),
           }),
     });
-    // Withdrawn on unmount as well as on close: a Restore… left holding a
-    // trigger into an unmounted panel would open a dialog nothing renders.
+    // Withdrawn on unmount as well as on close: a restore button left holding
+    // a trigger into an unmounted panel would open a dialog nothing renders.
     return () => setRestore(null);
   }, [
     open,
@@ -869,7 +876,7 @@ export function VersionHistorySheet({
             hasWithheldFields={viewedWithheld.length > 0}
             confirmDisabled={restoreRefused}
             isRestoring={restore.isPending}
-            // Re-checked at confirm time: the Restore… trigger can vanish while
+            // Re-checked at confirm time: the restore trigger can vanish while
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.
             onConfirm={() => {

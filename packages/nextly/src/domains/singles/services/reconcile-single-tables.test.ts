@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import {
   reconcileSingleTables,
+  singleTableSources,
   type RegisteredSingle,
   type SingleTableReconciler,
 } from "./reconcile-single-tables";
@@ -113,5 +114,50 @@ describe("reconcileSingleTables", () => {
       slug: "b",
       tableName: "single_b",
     });
+  });
+});
+
+/**
+ * The registry read every reconcile goes through, at boot and in `db:sync`.
+ *
+ * A Single removed from code (a code row whose slug the configuration no
+ * longer declares) is not offered to the reconcile, so its dropped table is
+ * not created again. A Builder Single is never in the configuration and is
+ * still offered, as is a code Single the configuration declares.
+ */
+describe("singleTableSources", () => {
+  const registry = {
+    getAllSingles: async () => [
+      { slug: "banner", tableName: "single_banner", source: "code" },
+      { slug: "homepage", tableName: "single_homepage", source: "code" },
+      { slug: "notice", tableName: "single_notice", source: "ui" },
+      { slug: "seo", tableName: "single_seo", source: "plugin:acme-seo" },
+    ],
+  };
+
+  it("offers every Single except one removed from code", async () => {
+    const sources = singleTableSources(
+      registry,
+      async () => [],
+      new Set(["homepage"])
+    );
+    expect(await sources.registeredSingles()).toEqual([
+      { slug: "homepage", tableName: "single_homepage" },
+      { slug: "notice", tableName: "single_notice" },
+      { slug: "seo", tableName: "single_seo" },
+    ]);
+  });
+
+  it("creates no table for a removed Single whose table is gone", async () => {
+    const create = vi.fn(async (_single: RegisteredSingle) => {});
+    await reconcileSingleTables({
+      ...singleTableSources(registry, async () => [], new Set(["homepage"])),
+      createTable: create,
+    });
+    expect(create.mock.calls.map(([single]) => single.slug)).toEqual([
+      "homepage",
+      "notice",
+      "seo",
+    ]);
   });
 });

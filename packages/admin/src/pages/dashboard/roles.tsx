@@ -9,6 +9,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 
 import RoleTable from "./roles/components/RoleTable";
 
@@ -37,10 +38,10 @@ import RoleTable from "./roles/components/RoleTable";
  */
 const RolesPage: React.FC = () => {
   // Roles live under Settings (User Management) now. A roles-only user can't
-  // open the manage-settings-guarded General page, so the Settings crumb points
+  // open the read-settings-guarded General page, so the Settings crumb points
   // at the first reachable Settings subpage (Roles) — same logic as RoleBreadcrumbs.
   const { hasPermission } = useCurrentUserPermissions();
-  const settingsHref = hasPermission("manage-settings")
+  const settingsHref = hasPermission(READ_SETTINGS)
     ? ROUTES.SETTINGS
     : ROUTES.SECURITY_ROLES;
 

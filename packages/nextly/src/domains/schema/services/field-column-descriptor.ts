@@ -313,6 +313,12 @@ export function componentRelationshipStoresJson(field: {
  * that is one `{ relationTo, value }` object, JSON but not a list. Asked when an older scalar column
  * is converted, because the conversion reads every stored value as a list, and reading an object as
  * one would change what it stores.
+ *
+ * Also the rule for which component relation takes no plain index, by the creating SQL and the
+ * desired schema alike, even when the field asks for one: no lookup reads a whole list, MySQL
+ * refuses a plain index on its JSON column, and on PostgreSQL a btree entry over a long list
+ * exceeds the row size and refuses the save. A single polymorphic reference is one object, so an
+ * index it asks for is kept where the dialect can build one.
  */
 export function componentRelationshipHoldsReferenceList(field: {
   type?: unknown;
@@ -321,6 +327,31 @@ export function componentRelationshipHoldsReferenceList(field: {
 }): boolean {
   const isRelation = field.type === "relationship" || field.type === "upload";
   return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
+}
+
+/**
+ * Whether a relationship or upload on a component row references ONE entry, in a scalar column:
+ * it names one collection and does not hold a list of references
+ * (`componentRelationshipHoldsReferenceList`).
+ *
+ * Such a column gets a plain index; a list does not, for the reasons that rule gives. A
+ * many-to-many naming its target in `relationTo` names one collection and is still a list, which
+ * is why this derives from the list rule rather than reading `hasMany` and `relationTo` alone.
+ *
+ * Asked by the creating SQL and by the desired schema the diff compares a component table
+ * against, so the two declare the same indexes.
+ */
+export function componentRelationIsSingleReference(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  relationTo?: unknown;
+  options?: unknown;
+}): boolean {
+  if (field.type !== "relationship" && field.type !== "upload") return false;
+  return (
+    typeof field.relationTo === "string" &&
+    !componentRelationshipHoldsReferenceList(field)
+  );
 }
 
 /**
@@ -1074,4 +1105,100 @@ export function renderSystemColumnSql(
   if (!column.nullable) clauses.push("NOT NULL");
 
   return clauses.join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// The tables a collection owns
+// ---------------------------------------------------------------------------
+//
+// Beside `usesJunctionTable`, the rule they rest on: the drop file a delete
+// writes and the check that runs before it must name the same tables, and a
+// check that missed a junction would let the drop take another owner's
+// column with it.
+
+/**
+ * The parts of a stored field that name its junction table. Structural, since
+ * both a Builder field definition and a code-first field config reach here.
+ */
+interface JunctionField {
+  name?: string;
+  type?: unknown;
+  options?: unknown;
+}
+
+/** A field's relationship options, read without trusting their shape. */
+function junctionOptionsOf(field: JunctionField): {
+  junctionTable?: unknown;
+  target?: unknown;
+} {
+  return typeof field.options === "object" && field.options !== null
+    ? field.options
+    : {};
+}
+
+/**
+ * The junction table a many-to-many field's links live in: the author's own
+ * name when the field sets one, else one derived from both tables, sorted so
+ * either side derives the same name, and the field.
+ */
+export function junctionTableNameFor(
+  sourceTableName: string,
+  field: JunctionField,
+  // How a generated name is derived: `junctionTableNameBetween`, unless the
+  // schema service derives it through its own published method of that name.
+  nameBetween: (
+    sourceTable: string,
+    targetTable: string,
+    fieldName: string
+  ) => string = junctionTableNameBetween
+): string {
+  const options = junctionOptionsOf(field);
+  if (typeof options.junctionTable === "string" && options.junctionTable) {
+    return options.junctionTable;
+  }
+  return nameBetween(
+    sourceTableName,
+    `dc_${typeof options.target === "string" ? options.target : ""}`,
+    field.name ?? ""
+  );
+}
+
+/**
+ * The generated name of the junction table between two tables for one
+ * field: both tables sorted, so either side derives the same name, then the
+ * field.
+ */
+export function junctionTableNameBetween(
+  sourceTable: string,
+  targetTable: string,
+  fieldName: string
+): string {
+  const [first, second] = [sourceTable, targetTable].sort();
+  return `${first}_${second}_${fieldName}`;
+}
+
+/** The junction tables of a collection's own many-to-many fields. */
+export function junctionTablesOf(
+  tableName: string,
+  fields: readonly JunctionField[]
+): string[] {
+  return fields
+    .filter(usesJunctionTable)
+    .map(field => junctionTableNameFor(tableName, field));
+}
+
+/**
+ * Every table a collection owns: its own first, then its translation table
+ * (named whether or not it exists, since a delete drops it if it does), then
+ * its junction tables.
+ */
+export function collectionOwnTables(
+  tableName: string,
+  fields: readonly JunctionField[]
+): string[] {
+  return [
+    tableName,
+    `${tableName}_locales`,
+    ...junctionTablesOf(tableName, fields),
+  ];
 }

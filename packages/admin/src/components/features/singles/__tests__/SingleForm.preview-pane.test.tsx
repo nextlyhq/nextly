@@ -27,15 +27,12 @@ const { headerProps, paneProps, revisionArgs, localization } = vi.hoisted(
   })
 );
 
-vi.mock(
-  "@admin/components/features/entries/EntryForm/EntrySystemHeader",
-  () => ({
-    EntrySystemHeader: (props: Record<string, unknown>) => {
-      headerProps(props);
-      return null;
-    },
-  })
-);
+vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
+  DocumentBar: (props: Record<string, unknown>) => {
+    headerProps(props);
+    return null;
+  },
+}));
 
 /*
  * The pane is replaced by a recorder that still renders its children, because

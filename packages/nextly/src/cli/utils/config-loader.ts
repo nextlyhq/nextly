@@ -105,7 +105,10 @@ export function orderConfigPlugins(
   });
 }
 
-/** Merge the folded collections/singles/components + transformed plugins/storage onto base. Pure. */
+/**
+ * Merge the folded collections/singles/components + transformed plugins/storage/admin onto base.
+ * Pure.
+ */
 function applyFoldedToBase(
   base: SanitizedNextlyConfig,
   folded: NextlyServiceConfig,
@@ -118,6 +121,11 @@ function applyFoldedToBase(
     fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
+    // The admin block as the boot registers it: a plugin's setup() may add or
+    // replace the site's dashboard widgets, and `generate:types` and its
+    // `--check` list their components from this config. Left at the base, the
+    // map lacked a widget the running server offers.
+    admin: transformed.admin ?? base.admin,
     // Carry a plugin setup transformer's audit decision through, so an audit
     // plugin that forces recording is not dropped back to the base value on a
     // reload. Always a resolved boolean on a sanitized config.
@@ -208,6 +216,13 @@ export interface LoadConfigResult {
    * Undefined if using default config (no file found).
    */
   configPath?: string;
+
+  /**
+   * The project the config was looked for in, as an absolute path: `cwd`
+   * when one was given, otherwise the process's own directory. The app whose
+   * installed packages a boot from this config judges.
+   */
+  projectRoot: string;
 
   /**
    * List of files that the config depends on.
@@ -466,10 +481,27 @@ function stopWatching(): void {
   watcherGeneration += 1;
 }
 
+/**
+ * The thrown value as the error's cause. An error raised in another realm, as Node's module
+ * loader raises a missing package, fails `instanceof Error` while being one, and dropping it
+ * would lose the code that says what failed.
+ */
+function asCause(error: unknown): Error | undefined {
+  if (error instanceof Error) return error;
+  return typeof error === "object" &&
+    error !== null &&
+    typeof (error as { message?: unknown }).message === "string"
+    ? (error as Error)
+    : undefined;
+}
+
 async function loadConfigInternal(
   options: LoadConfigOptions
 ): Promise<LoadConfigResult> {
-  const cwd = options.cwd ?? process.cwd();
+  // Resolved once, before the config's code runs: a config or a `setup`
+  // transformer that changes the process's directory must not move the
+  // project the config was found in.
+  const cwd = resolve(options.cwd ?? process.cwd());
 
   const configPath = options.configPath
     ? resolve(cwd, options.configPath)
@@ -487,6 +519,7 @@ async function loadConfigInternal(
       config: appConfig,
       appConfig,
       configPath: undefined,
+      projectRoot: cwd,
       dependencies: [],
       pluginConsent: NO_PLUGIN_CONSENT,
       // Empty, matching the clear above: work pinned to this result must not
@@ -501,7 +534,12 @@ async function loadConfigInternal(
       publicMessage: "Failed to load Nextly configuration.",
       statusCode: 400,
       logMessage: "Config loader error",
-      logContext: { configPath, reason: "config-not-found" },
+      // `requested` is the path as given to `-c`, so the error can name it as the user typed it.
+      logContext: {
+        configPath,
+        requested: options.configPath,
+        reason: "config-not-found",
+      },
     });
   }
 
@@ -607,7 +645,7 @@ async function loadConfigInternal(
                 pluginName: plugin.name,
                 cause: describeError(error),
               },
-              cause: error instanceof Error ? error : undefined,
+              cause: asCause(error),
             });
           }
         }
@@ -715,6 +753,7 @@ async function loadConfigInternal(
       config,
       appConfig,
       configPath,
+      projectRoot: cwd,
       dependencies,
       deferredExtends,
       pluginConsent,
@@ -741,7 +780,7 @@ async function loadConfigInternal(
         reason: "load-error",
         cause: describeError(error),
       },
-      cause: error instanceof Error ? error : undefined,
+      cause: asCause(error),
     });
   }
 }

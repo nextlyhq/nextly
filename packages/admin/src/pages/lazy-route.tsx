@@ -11,32 +11,50 @@
  * route whose chunk already arrived starts at the page, not the spinner.
  * The shell and navigation live outside the page, so all three states leave
  * them untouched.
+ *
+ * A route can also be fetched ahead with `preload()`, which a link calls on
+ * hover or focus: the visit then joins that fetch rather than starting its
+ * own, so the click doesn't wait for the download.
  */
 
 import { Button } from "@nextlyhq/ui";
-import { type ComponentType, useCallback, useEffect, useState } from "react";
+import { type ComponentType, useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
+import { useRetryableModule } from "@admin/hooks/useRetryableModule";
+import { retryableModule } from "@admin/lib/retryable-module";
 import type { PageProps } from "@admin/lib/routing";
 
 export type RouteModule = { default: ComponentType<PageProps> };
 
-type RouteLoadState =
-  | { status: "loading" }
-  | { status: "error" }
-  | { status: "ok"; Page: ComponentType<PageProps> };
+/** How long a fetch runs before its spinner is drawn. */
+const SPINNER_DELAY_MS = 200;
 
+/**
+ * The loading state: announced at once, drawn only once the fetch has taken
+ * 200 ms, so a chunk that arrives quickly (from cache, or fetched ahead)
+ * shows no flash of a spinner. The space is held from the start, so the
+ * page doesn't move when the spinner appears.
+ */
 function RouteLoading() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), SPINNER_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <div
       role="status"
       className="flex h-full min-h-64 w-full items-center justify-center"
       data-testid="route-loading"
     >
-      <Loader2
-        className="h-6 w-6 animate-spin text-muted-foreground"
-        aria-hidden="true"
-      />
+      {slow ? (
+        <Loader2
+          className="h-6 w-6 animate-spin text-muted-foreground"
+          aria-hidden="true"
+          data-testid="route-spinner"
+        />
+      ) : null}
       <span className="sr-only">Loading</span>
     </div>
   );
@@ -73,64 +91,37 @@ function RouteLoadError({
   );
 }
 
+/** A lazily fetched route, and the way to fetch it ahead of a visit. */
+export type LazyRouteComponent = ComponentType<PageProps> & {
+  /** Starts fetching the page's code if nothing has yet; never throws. */
+  preload: () => void;
+};
+
 export function lazyRoute(
   load: () => Promise<RouteModule>
-): ComponentType<PageProps> {
-  // The browser keeps every fetched module until a full reload, so the
-  // resolved page component is remembered here and this route's next mount
-  // starts at `ok` — returning to a visited page shows the page, not the
-  // spinner again. This holds the component function, never a mounted page.
-  let loaded: ComponentType<PageProps> | null = null;
+): LazyRouteComponent {
+  // One fetch shared by a preload and a visit, the page it delivered kept for
+  // a later visit, and a failure forgotten so a retry fetches afresh: the
+  // fetch, held apart from React.lazy (see `retryableModule`).
+  const page = retryableModule(() => load().then(module => module.default));
 
   function LazyRoute(props: PageProps) {
-    const [attempt, setAttempt] = useState(0);
-    const [state, setState] = useState<RouteLoadState>(() =>
-      loaded ? { status: "ok", Page: loaded } : { status: "loading" }
+    const { state, attempt, retry } = useRetryableModule(
+      page,
+      "This page's code"
     );
 
-    useEffect(() => {
-      if (loaded) {
-        // The previous mount's import resolved while this one was rendering:
-        // its promise set `loaded` in the gap between this mount's first
-        // render and this effect, so there is no fetch to start — adopt the
-        // page it delivered.
-        setState({ status: "ok", Page: loaded });
-        return;
-      }
-      let live = true;
-      setState({ status: "loading" });
-      load()
-        .then(module => {
-          loaded = module.default;
-          if (live) setState({ status: "ok", Page: module.default });
-        })
-        .catch(() => {
-          if (live) setState({ status: "error" });
-        });
-      return () => {
-        live = false;
-      };
-      // A fresh fetch per attempt: the retry bumps the counter, and `load`
-      // is the module-scope closure the registry declared — it never changes
-      // for this component.
-    }, [attempt]);
-
-    const retry = useCallback(() => setAttempt(attempt => attempt + 1), []);
-
     if (state.status === "loading") return <RouteLoading />;
-    // One retry covers a blipped fetch. Past it, a plain re-import may keep
-    // failing — some browsers cache a failed module load, and a chunk that
-    // fails while EVALUATING stays failed everywhere — so the recovery
-    // becomes a reload, which refetches from scratch and lets a real defect
-    // surface as one instead of posing as a connection problem.
+    // One retry covers a blipped fetch. Past it, the recovery becomes a reload
+    // (`useRetryableModule` says why).
     if (state.status === "error")
       return <RouteLoadError exhausted={attempt > 0} onRetry={retry} />;
 
-    const { Page } = state;
+    const Page = state.value;
     return <Page {...props} />;
   }
 
   // The route table's entries are ComponentType<PageProps>; the wrapper takes
   // the same props and renders nothing but the page once loaded.
-  return LazyRoute;
+  return Object.assign(LazyRoute, { preload: page.preload });
 }

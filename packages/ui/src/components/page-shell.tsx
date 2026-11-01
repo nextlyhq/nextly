@@ -162,11 +162,9 @@ export const PageShell: ForwardRefExoticComponent<
     const attachRef = useCallback(
       (node: HTMLDivElement | null) => {
         shellRef.current = node;
-        // A callback ref's RETURN is the caller's cleanup under React 19, and
-        // React runs it instead of calling the ref again with null. Discarding
-        // it here would silently drop, say, an observer's disconnect. Passing it
-        // straight through is also correct under the React 18 half of this
-        // package's peer range, where such a ref returns nothing.
+        // A callback ref's RETURN is the caller's cleanup, and React runs it
+        // instead of calling the ref again with null. Discarding it here would
+        // silently drop, say, an observer's disconnect.
         if (typeof ref === "function") return ref(node);
         if (ref) ref.current = node;
       },

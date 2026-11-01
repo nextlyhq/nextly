@@ -1,78 +1,100 @@
 /**
- * The Recent entries card at each width: titles alone when small, when each was updated and its
- * status when medium, a table when large; every row a link to its entry at every width, and,
- * when the collection holds more than the card draws, "View all (N)" to the collection's list
- * under the card's Filter and Sort.
+ * The Recent entries card at each width, drawn from the data its `load` answers: titles alone
+ * when small, when each was updated and its status when medium, a table when large; every row a
+ * link to its entry at every width, and, when the collection holds more than the card draws,
+ * "View all (N)" to the collection's list under the card's Filter and Sort. A collection with no
+ * title to name its rows by is "not available".
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { WidgetSlot } from "nextly/widget-result";
-import { describe, expect, it } from "vitest";
+import { MAX_CHOSEN_FIELDS } from "nextly/config";
+import type { RecentEntriesWidgetData } from "nextly/core-widget-data";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
 
+import { MAX_META_FIELDS } from "../widgets/frame/entity-row";
 import { CardTierContext } from "../widgets/frame/tier";
 
 import { RecentEntriesCard } from "./RecentEntriesCard";
 
-const FILTER = { headline: { contains: "news" } };
-
-const QUERY = {
-  source: "collection:posts",
-  op: "list" as const,
-  status: "all" as const,
-  select: ["headline", "status", "updatedAt"],
-  sort: "-updatedAt",
-  where: FILTER,
-  limit: 6,
+/** Posts as the workspace payload publishes them: a collection with a lifecycle. */
+const PUBLISHED = {
+  widgetSources: [
+    { collection: "posts", label: "Posts", lifecycle: true, fields: [] },
+  ],
 };
+/** The collections the workspace payload publishes to the reader, as a test sets them. */
+let mockBranding: { widgetSources?: unknown[] } = PUBLISHED;
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useBranding: () => mockBranding,
+}));
+afterEach(() => {
+  mockBranding = PUBLISHED;
+});
+
+const FILTER = { headline: { contains: "news" } };
 
 /** Three hours before the test runs, which the card reads as "3h ago". */
 const UPDATED = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
 
-/** The card's answer: four entries, and the read's own count of them when it gave one. */
-function answered(total?: number): WidgetSlot {
+/** The columns the card asked, title first, as the read described them. */
+const COLUMNS: RecentEntriesWidgetData["columns"] = [
+  { name: "headline", label: "Headline", type: "string" },
+  {
+    name: "status",
+    label: "Status",
+    type: "string",
+    choices: [{ value: "published", label: "Published" }],
+  },
+  { name: "updatedAt", label: "Updated", type: "date" },
+];
+
+/** The card's data: four entries, and the read's own count of them when it gave one. */
+function answered(total?: number): RecentEntriesWidgetData {
   return {
-    ok: true,
-    result: {
-      op: "list",
-      items: [1, 2, 3, 4].map(n => ({
-        id: `e${n}`,
-        headline: `Story ${n}`,
-        status: "published",
-        updatedAt: UPDATED,
-      })),
-      fields: [
-        { name: "headline", label: "Headline", type: "string" },
-        {
-          name: "status",
-          label: "Status",
-          type: "string",
-          choices: [{ value: "published", label: "Published" }],
-        },
-        { name: "updatedAt", label: "Updated", type: "date" },
-      ],
-      ...(total !== undefined && { total }),
-    },
+    title: "headline",
+    rows: [1, 2, 3, 4].map(n => ({
+      id: `e${n}`,
+      headline: `Story ${n}`,
+      status: "published",
+      updatedAt: UPDATED,
+    })),
+    columns: COLUMNS,
+    ...(total !== undefined && { total }),
   };
 }
 
-const SLOT = answered();
+const DATA = answered();
 
-/** The same answer, from a read that counted 42 entries in all. */
+/** The same data, from a read that counted 42 entries in all. */
 const COUNTED = answered(42);
 
-function drawAt(tier: SizeTier, slot: WidgetSlot = SLOT) {
+/** Data of these rows and columns, titled by the headline. */
+function listed(
+  rows: RecentEntriesWidgetData["rows"],
+  columns: RecentEntriesWidgetData["columns"]
+): RecentEntriesWidgetData {
+  return { title: "headline", rows, columns };
+}
+
+function drawAt(tier: SizeTier, data: RecentEntriesWidgetData = DATA) {
   render(
     <CardTierContext.Provider value={tier}>
       {inFrame(
         <RecentEntriesCard
           widgetId="core/recent-entries"
           placementId="p1"
-          settings={{ collection: "posts", filter: FILTER }}
-          slot={slot}
-          query={QUERY}
-          isFetching={false}
+          settings={{
+            collection: "posts",
+            filter: FILTER,
+            sort: "-updatedAt",
+          }}
+          size={{ w: 6, h: 4, tier }}
+          data={data}
+          refreshing={false}
+          retry={() => undefined}
         />
       )}
     </CardTierContext.Provider>
@@ -161,6 +183,142 @@ describe("the Recent entries card", () => {
     const headings = screen
       .getAllByRole("columnheader")
       .map(heading => heading.textContent);
-    expect(headings).toEqual(["Headline", "Updated", "Status"]);
+    // In the order the server answered the columns, as the card asked them.
+    expect(headings).toEqual(["Headline", "Status", "Updated"]);
+  });
+
+  it("leads each row with the initial of its collection's label, not its slug", () => {
+    // 🔴 Posts are published to this reader as "Articles": a chip read off the slug says "P".
+    mockBranding = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Articles",
+          lifecycle: false,
+          fields: [],
+        },
+      ],
+    };
+    drawAt("medium");
+    const leading = screen
+      .getAllByTestId("entity-row")
+      .map(each => within(each).getByTestId("entity-row-leading").textContent);
+    expect(leading.length).toBeGreaterThan(0);
+    expect(new Set(leading)).toEqual(new Set(["A"]));
+  });
+
+  it("draws its status as a pill, in the tone of done for a published entry", () => {
+    drawAt(
+      "medium",
+      listed(
+        [
+          { id: "e1", headline: "Story 1", status: "published" },
+          { id: "e2", headline: "Story 2", status: "draft" },
+        ],
+        [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "status",
+            label: "Status",
+            type: "string",
+            choices: [
+              { value: "published", label: "Published" },
+              { value: "draft", label: "Draft" },
+            ],
+          },
+        ]
+      )
+    );
+    // 🔴 One tone for both says nothing about which is live.
+    const pills = screen
+      .getAllByTestId("status-pill")
+      .map(pill => [pill.textContent, pill.dataset.tone]);
+    expect(pills).toEqual([
+      ["Published", "good"],
+      ["Draft", "neutral"],
+    ]);
+  });
+
+  it("shows the fields its reader chose, each on the meta line or at the row's end", () => {
+    // Chosen in the card's Fields: a topic, which has no choices, joins the meta line.
+    const chosen = listed(
+      [{ id: "e1", headline: "Story 1", topic: "Plans" }],
+      [
+        { name: "headline", label: "Headline", type: "string" },
+        { name: "topic", label: "Topic", type: "string" },
+      ]
+    );
+    drawAt("medium", chosen);
+    const [row] = screen.getAllByTestId("entity-row");
+    expect(within(row!).getByTestId("entity-row-meta")).toHaveTextContent(
+      "Plans"
+    );
+    expect(within(row!).queryByTestId("entity-row-trailing")).toBeNull();
+  });
+
+  it("keeps the order the reader chose in the table, a field of choices included", () => {
+    // 🔴 Sorted by role, the stage (a field of choices) moved behind the topic.
+    drawAt(
+      "large",
+      listed(
+        [{ id: "e1", headline: "Story 1", stage: "open", topic: "Plans" }],
+        [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "stage",
+            label: "Stage",
+            type: "string",
+            choices: [{ value: "open", label: "Open" }],
+          },
+          { name: "topic", label: "Topic", type: "string" },
+        ]
+      )
+    );
+    expect(
+      screen.getAllByRole("columnheader").map(heading => heading.textContent)
+    ).toEqual(["Headline", "Stage", "Topic"]);
+  });
+
+  it("reads a field named status as any other on a collection without a lifecycle", () => {
+    // 🔴 Judged by the field's name, an author's own `status` choice field was
+    // drawn as the lifecycle's pill, "published" in the tone of done.
+    mockBranding = {
+      widgetSources: [
+        { collection: "posts", label: "Posts", lifecycle: false, fields: [] },
+      ],
+    };
+    drawAt(
+      "medium",
+      listed(
+        [{ id: "e1", headline: "Story 1", status: "published" }],
+        [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "status",
+            label: "Status",
+            type: "string",
+            choices: [{ value: "published", label: "Published" }],
+          },
+        ]
+      )
+    );
+    const [row] = screen.getAllByTestId("entity-row");
+    expect(within(row!).getByText("Published")).toBeInTheDocument();
+    expect(within(row!).queryByTestId("status-pill")).toBeNull();
+  });
+
+  it("says it is not available for a collection that names no title", () => {
+    drawAt("medium", { title: null, rows: [], columns: [] });
+    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
+  });
+
+  it("says it has no entries yet when the read found none", () => {
+    drawAt("medium", listed([], COLUMNS));
+    expect(screen.getByText("No entries yet")).toBeInTheDocument();
+  });
+
+  it("never lets a reader choose more fields than a row's meta line shows", () => {
+    // Every chosen field shows at every size only while the cap fits the meta line.
+    expect(MAX_CHOSEN_FIELDS).toBeLessThanOrEqual(MAX_META_FIELDS);
   });
 });

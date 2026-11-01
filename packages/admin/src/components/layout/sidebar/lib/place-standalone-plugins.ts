@@ -1,5 +1,7 @@
 import type { MainMenuCategory, MainMenuItem } from "../sidebar-types";
 
+import { CONTENT_RAIL_ID, railItemOf } from "./content-rail";
+
 /** What placing a plugin in the rail needs of it, and nothing more. */
 export interface StandaloneMenuPlugin {
   name: string;
@@ -29,17 +31,25 @@ interface PlacementDeps<P> {
  * `users` is remapped rather than dropped: the top-level Users icon is gone and
  * User Management lives under Settings, so a plugin still declaring
  * `after: "users"` is anchored next to Settings instead of falling through to
- * the end of the rail.
+ * the end of the rail. `collections` and `singles` are remapped the same way:
+ * the rail shows both under one Content item, so a plugin naming either sits
+ * beside Content.
  */
 const ANCHORS: Record<string, string> = {
   dashboard: "dashboard",
-  collections: "collections",
-  singles: "singles",
+  content: CONTENT_RAIL_ID,
+  collections: railItemOf("collections"),
+  singles: railItemOf("singles"),
   media: "media",
   plugins: "plugins",
   settings: "settings",
   users: "settings",
 };
+
+/** The rail id of a standalone plugin's entry, by the plugin's slug. */
+export function standaloneEntryId(slug: string): MainMenuCategory {
+  return `standalone-${slug}`;
+}
 
 /**
  * The primary rail's items, with standalone plugins placed among them.
@@ -64,7 +74,7 @@ export function placeStandalonePlugins<P extends StandaloneMenuPlugin>(
     const anchor = ANCHORS[plugin.after ?? "plugins"] ?? "plugins";
     const entry = {
       item: {
-        id: `standalone-${deps.slugOf(plugin.name)}` as MainMenuCategory,
+        id: standaloneEntryId(deps.slugOf(plugin.name)),
         label: plugin.appearance?.label || plugin.name,
         icon: deps.iconFor(plugin),
         href: "#",
