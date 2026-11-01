@@ -659,6 +659,45 @@ describe("a size whose key differs from another item's original only in spelling
     expect(store.cleared).toEqual(["spelled"]);
   });
 
+  // A custom adapter promises nothing about spellings. This one reads both
+  // as one file, the other item's original, as a filesystem-backed adapter
+  // would. That file stays.
+  it("is kept on a custom adapter, which may read both spellings as one file", async () => {
+    const bucket = new Bucket("s3");
+    const one = (filePath: string) => filePath.replace(/\/{2,}/g, "/");
+    const adapter: IStorageAdapter = {
+      upload: bucket.upload.bind(bucket),
+      delete: filePath => bucket.delete(one(filePath)),
+      exists: filePath => bucket.exists(one(filePath)),
+      getPublicUrl: bucket.getPublicUrl.bind(bucket),
+      getType: () => "acme-storage",
+    };
+    bucket.files.set("media/x.webp", Buffer.from("original"));
+    const store = new MemoryStore([
+      {
+        id: "other",
+        filename: "media/x.webp",
+        url: adapter.getPublicUrl("media/x.webp"),
+        thumbnailUrl: null,
+        sizes: null,
+      },
+      await itemWithSize(adapter, "media//x.webp"),
+    ]);
+
+    const { code } = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store, adapter),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect([...bucket.files.keys()]).toContain("media/x.webp");
+    expect(store.cleared).toEqual(["spelled"]);
+  });
+
   // On local disk both spellings are one file, the other item's original:
   // it stays, and the item is cleared.
   it("is kept on local disk, where both spellings are one file (the control)", async () => {

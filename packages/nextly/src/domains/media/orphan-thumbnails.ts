@@ -44,15 +44,15 @@ export function canonicalStoredPath(path: string): string {
 }
 
 /**
- * Whether a storage keeps each key exactly as written, so that
- * `media//x.webp` and `media/x.webp` are two objects there. Local disk reads
- * every spelling of a path as one file, and Vercel Blob writes a prefix's
- * trailing slash once (`media/` stores `media/...`); any other storage, a
- * custom one among them, may keep keys as written.
+ * The storages known to keep each key exactly as written, so that
+ * `media//x.webp` and `media/x.webp` are two objects there: S3, whose object
+ * keys are byte strings compared as such, and UploadThing, whose file keys
+ * it assigns itself and looks up exactly (`deleteFiles`, `getFileUrls` by
+ * key), with nothing of Nextly's spelling in them. Local disk and Vercel
+ * Blob read every spelling as one file, and a custom adapter promises
+ * neither, so for every other type two spellings may be one file.
  */
-function keepsKeysAsWritten(storageType: string): boolean {
-  return storageType !== "local" && storageType !== "vercel-blob";
-}
+const EXACT_KEY_STORAGES: ReadonlySet<string> = new Set(["s3", "uploadthing"]);
 
 /** How stored paths and URLs are compared on one storage (`storedKeysOn`). */
 export interface StoredKeys {
@@ -64,15 +64,16 @@ export interface StoredKeys {
 
 /**
  * The one decision of whether two records name the same stored file on a
- * storage of `storageType`: their keys compared exactly where the storage
- * keeps keys as written (`keepsKeysAsWritten`), where two spellings are two
+ * storage of `storageType`: their keys compared exactly on a storage known
+ * to keep keys as written (`EXACT_KEY_STORAGES`), where two spellings are two
  * objects and taking one for the other keeps a file nothing names; and in
- * their canonical form (`canonicalStoredPath`) where every spelling is one
- * file.
+ * their canonical form (`canonicalStoredPath`) on every other, where two
+ * spellings may be one file and taking them for two would remove one an item
+ * still uses.
  */
 export function storedKeysOn(storageType: string): StoredKeys {
   const withoutQuery = (url: string) => url.replace(/[?#].*$/, "");
-  if (keepsKeysAsWritten(storageType)) {
+  if (EXACT_KEY_STORAGES.has(storageType)) {
     return { path: path => path, url: withoutQuery };
   }
   return {
@@ -239,7 +240,13 @@ export async function findOrphanThumbnails(
   const orphans: string[] = [];
   const unconfirmed: Array<{ path: string; name?: string }> = [];
   let tooRecent = 0;
-  const keysAsWritten = keepsKeysAsWritten(adapter.getType());
+  // Which files can be media's thumbnails at all. Here the safe reading of
+  // a storage of unknown kind is that it keeps keys as written: a key spelled
+  // otherwise than media's prefix makes it is then not taken for one, and
+  // stays. Local disk reads every spelling of a path as one, and Vercel Blob
+  // writes a prefix's trailing slash once (`media/` stores `media/...`).
+  const type = adapter.getType();
+  const keysAsWritten = type !== "local" && type !== "vercel-blob";
   for await (const entry of adapter.list()) {
     if (!isMediaThumbnail(entry, options.prefix, keysAsWritten)) continue;
     // Canonical on every storage: here a match only keeps a file, which no
