@@ -301,6 +301,48 @@ async function expectDrawnIndicator(
     .toBeGreaterThanOrEqual(3);
 }
 
+/** Where a row's `::after` frame is drawn, read in the page: its position, insets and box. */
+function frameGeometry(row: Element) {
+  const after = getComputedStyle(row, "::after");
+  const px = (value: string) => Number.parseFloat(value);
+  const box = row.getBoundingClientRect();
+  // The padding box the frame is placed in when the row is its containing block.
+  const left = box.left + row.clientLeft + px(after.left);
+  const top = box.top + row.clientTop + px(after.top);
+  const icon = row.querySelector("svg")?.getBoundingClientRect();
+  const input = row.querySelector("input")?.getBoundingClientRect();
+  return {
+    position: after.position,
+    insets: [after.top, after.right, after.bottom, after.left].map(px),
+    // The frame's own box (border-box sizing), and the row's padding box less the insets.
+    frame: { left, top, width: px(after.width), height: px(after.height) },
+    room: {
+      width: row.clientWidth - px(after.left) - px(after.right),
+      height: row.clientHeight - px(after.top) - px(after.bottom),
+    },
+    iconLeft: icon?.left ?? Number.NaN,
+    inputRight: input?.right ?? Number.NaN,
+  };
+}
+
+/**
+ * The search row's frame is drawn around the row, not merely somewhere in it: an absolutely
+ * placed `::after` box, inset 4px on every side (so it never meets the menu's edges), filling
+ * the row's own padding box (so the row, not an ancestor, is what it is placed in), from before
+ * the magnifier to past the search field. Judged apart from its colour, so a failure says which.
+ */
+async function expectFramedRow(row: Locator): Promise<void> {
+  const at = await row.evaluate(frameGeometry);
+  expect(at.position, "the frame is an absolutely placed box").toBe("absolute");
+  for (const inset of at.insets) expect(inset).toBeCloseTo(4, 0);
+  expect(Math.abs(at.frame.width - at.room.width)).toBeLessThanOrEqual(2);
+  expect(Math.abs(at.frame.height - at.room.height)).toBeLessThanOrEqual(2);
+  expect(at.frame.left).toBeLessThanOrEqual(at.iconLeft + 2);
+  expect(at.frame.left + at.frame.width).toBeGreaterThanOrEqual(
+    at.inputRight - 2
+  );
+}
+
 /** Whether focus is anywhere inside `within`. */
 async function focusIsIn(within: Locator): Promise<boolean> {
   return within.evaluate(node => node.contains(document.activeElement));
@@ -665,6 +707,7 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
     "the playground's types fit in ten, so the menu offers no search"
   ).toBeFocused();
   // Focus in the search is drawn, not only a caret: on the whole search row, magnifier included.
+  await expectFramedRow(searchRow(menu));
   await expectDrawnIndicator(searchRow(menu));
   await page.keyboard.type("p");
   const options = menu.getByRole("option");
@@ -716,6 +759,7 @@ for (const [theme, primary] of [
       name: "Search types to create",
     });
     await expect(search).toBeFocused();
+    await expectFramedRow(searchRow(menu));
     await expectDrawnIndicator(searchRow(menu));
     await page.keyboard.type("p");
     await page.keyboard.press("ArrowDown");
