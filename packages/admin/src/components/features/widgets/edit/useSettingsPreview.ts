@@ -32,6 +32,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import type { AnswerSize } from "../frame/tier";
 import { questionOf, settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 /** How long the values must stay still before a changed question is asked. */
@@ -42,6 +43,11 @@ export interface ShownAnswer {
   slot: WidgetSlot | undefined;
   updatedAt: Date | null;
   isFetching: boolean;
+  /**
+   * The size that answer was fetched at, where the card knows it: a card that grew keeps its old
+   * answer until its new size's arrives, and that answer is drawn by the rows it was asked for.
+   */
+  answerSize?: AnswerSize | undefined;
 }
 
 export interface SettingsPreview {
@@ -54,6 +60,11 @@ export interface SettingsPreview {
   slot: WidgetSlot | undefined;
   /** The preview is waiting for an answer to the question its values ask. */
   isFetching: boolean;
+  /**
+   * The size the answer drawn was fetched at, for the card's own answer drawn while the question
+   * is unchanged; the preview's own answer is asked at the size it is drawn at, and needs none.
+   */
+  answerSize?: AnswerSize;
 }
 
 /**
@@ -202,5 +213,8 @@ function shownPreview(
     placement,
     slot: shown.slot,
     isFetching: shown.isFetching,
+    // Drawn by the size it was fetched at, as the card draws it: held while the card grew, the
+    // answer's one row past its rows, the sign that more exist, would otherwise read as a row.
+    ...(shown.answerSize === undefined ? {} : { answerSize: shown.answerSize }),
   };
 }

@@ -134,6 +134,10 @@ function PreviewCard({
         slot={preview.slot}
         subtitle={preview.subtitle}
         isFetching={preview.isFetching}
+        // The size the answer drawn was fetched at, so it draws no more rows than it holds.
+        {...(preview.answerSize === undefined
+          ? {}
+          : { answerSize: preview.answerSize })}
         {...(tier === undefined ? {} : { tier })}
       />
     </div>
