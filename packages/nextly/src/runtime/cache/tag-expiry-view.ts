@@ -38,41 +38,113 @@ export const LEDGER_CALL_TIMEOUT_MS = 5_000;
 /** What {@link withinLedgerBound} gives for a call that did not answer in time. */
 const NO_ANSWER = Symbol("no ledger answer");
 
-/** The two kinds of ledger call, each kept to one stuck call at a time. */
+/** The two kinds of ledger call, each bounded on its own. */
 type LedgerCall = "record" | "lookup";
 
 /**
+ * How many ledger calls of one kind run at once. A call given up on is not
+ * cancelled and keeps its connection until the database answers, so this is
+ * also the most connections a database that never answers can hold through
+ * the ledger, per kind and process: the rest wait for a slot, within the same
+ * bound, or are turned away.
+ */
+export const MAX_LEDGER_CALLS_IN_FLIGHT = 4;
+
+/** What {@link withinLedgerBound} gives for a call it did not start. */
+const TURNED_AWAY = Symbol("ledger call not started");
+
+/**
+ * The calls one published ledger has under way, by kind: those running,
+ * those given up on and still running, and those waiting for a slot. Kept per
+ * ledger, so a call of a withdrawn one, stuck for good, cannot hold back the
+ * ledger installed after it.
+ */
+interface LedgerCalls {
+  running: Record<LedgerCall, number>;
+  stuck: Record<LedgerCall, number>;
+  waiting: Record<LedgerCall, (() => void)[]>;
+}
+
+function noLedgerCalls(): LedgerCalls {
+  return {
+    running: { record: 0, lookup: 0 },
+    stuck: { record: 0, lookup: 0 },
+    waiting: { record: [], lookup: [] },
+  };
+}
+
+/**
  * The answer of the call `start` makes, or {@link NO_ANSWER} once
- * {@link LEDGER_CALL_TIMEOUT_MS} passes without one. The wait is bounded, but
- * the query is not cancelled, and goes on holding its connection: so while one
- * of this kind is given up on and still running, none is started, and the
- * answer is {@link NO_ANSWER} at once.
+ * {@link LEDGER_CALL_TIMEOUT_MS} passes without one, or {@link TURNED_AWAY}
+ * when it is not started. The wait is bounded, the query is not: it goes on
+ * holding its connection. So at most {@link MAX_LEDGER_CALLS_IN_FLIGHT} of a
+ * kind run at once, counted from their start, and a call waits for a slot
+ * within the same bound; and while one given up on is still running, none of
+ * its kind is started at all.
  */
 async function withinLedgerBound<T>(
   view: ViewState,
   kind: LedgerCall,
   start: () => Promise<T>
-): Promise<T | typeof NO_ANSWER> {
-  if (view.stuck[kind] > 0) return NO_ANSWER;
-  const call = start();
+): Promise<T | typeof NO_ANSWER | typeof TURNED_AWAY> {
+  const calls = view.calls;
+  if (calls.stuck[kind] > 0) return TURNED_AWAY;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let expired = false;
   const timedOut = new Promise<typeof NO_ANSWER>(resolve => {
-    timer = setTimeout(() => resolve(NO_ANSWER), LEDGER_CALL_TIMEOUT_MS);
+    timer = setTimeout(() => {
+      expired = true;
+      resolve(NO_ANSWER);
+    }, LEDGER_CALL_TIMEOUT_MS);
     timer.unref?.();
   });
   try {
+    if (calls.running[kind] >= MAX_LEDGER_CALLS_IN_FLIGHT) {
+      let woken: (() => void) | undefined;
+      const slot = new Promise<void>(resolve => {
+        woken = resolve;
+      });
+      const wake = () => woken?.();
+      calls.waiting[kind].push(wake);
+      const turn = await Promise.race([slot, timedOut]);
+      if (expired || turn === NO_ANSWER) {
+        const at = calls.waiting[kind].indexOf(wake);
+        if (at >= 0) calls.waiting[kind].splice(at, 1);
+        // Woken just as the wait ran out: the slot passes on.
+        else wakeNext(calls, kind);
+        return TURNED_AWAY;
+      }
+      // The slot was handed over with the running count kept.
+    } else {
+      calls.running[kind] += 1;
+    }
+    const call = start();
+    let stuck = false;
+    const settled = () => {
+      if (stuck) calls.stuck[kind] -= 1;
+      wakeNext(calls, kind);
+    };
+    void call.then(settled, settled);
     const answer = await Promise.race([call, timedOut]);
     if (answer === NO_ANSWER) {
-      view.stuck[kind] += 1;
-      const settled = () => {
-        view.stuck[kind] -= 1;
-      };
-      void call.then(settled, settled);
+      stuck = true;
+      calls.stuck[kind] += 1;
     }
     return answer;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Hands a finished call's slot to the call waiting longest, or frees it. The
+ * running count is kept through a hand-over, so no new call can slip in
+ * between.
+ */
+function wakeNext(calls: LedgerCalls, kind: LedgerCall): void {
+  const next = calls.waiting[kind].shift();
+  if (next) next();
+  else calls.running[kind] -= 1;
 }
 
 interface TagLookup {
@@ -114,12 +186,8 @@ interface ViewState {
    * every refused attempt begun no later than it.
    */
   landedSeq: Map<string, number>;
-  /**
-   * Ledger calls given up on and still running, by kind. While one is, no
-   * other of its kind starts: a database that does not answer would otherwise
-   * gather one more waiting query, and connection, at every retry and lookup.
-   */
-  stuck: Record<LedgerCall, number>;
+  /** The calls the published ledger has under way, replaced with it. */
+  calls: LedgerCalls;
   /**
    * The database's clock less this process's, at least, as the latest read
    * that found a row told it; undefined until this copy of the module has
@@ -159,7 +227,7 @@ function state(): ViewState {
     recordSeq: 0,
     refusals: new Map(),
     landedSeq: new Map(),
-    stuck: { record: 0, lookup: 0 },
+    calls: noLedgerCalls(),
     sweptAt: 0,
     lastLocal: 0,
     warned: false,
@@ -172,7 +240,7 @@ function state(): ViewState {
     recordSeq: view.recordSeq ?? 0,
     refusals: view.refusals ?? new Map<string, { seq: number; at: number }>(),
     landedSeq: view.landedSeq ?? new Map<string, number>(),
-    stuck: view.stuck ?? { record: 0, lookup: 0 },
+    calls: view.calls ?? noLedgerCalls(),
   });
 }
 
@@ -184,6 +252,9 @@ export function publishTagExpiryLedger(ledger: TagExpiryLedger | null): void {
   // is learned afresh.
   view.lookups.clear();
   view.lowerOffsetMs = undefined;
+  // Its calls are its own: one of the withdrawn ledger's, stuck, ends against
+  // that ledger's count, and holds nothing of this one's back.
+  view.calls = noLedgerCalls();
 }
 
 /**
@@ -288,10 +359,12 @@ export async function refreshTagExpiries(
         const answer = await withinLedgerBound(view, "lookup", () =>
           ledger.expiriesOf(stale)
         );
-        if (answer === NO_ANSWER) {
+        if (answer === NO_ANSWER || answer === TURNED_AWAY) {
           warnOnce(
             "the cache tag expiry ledger could not be read",
-            `no answer within ${LEDGER_CALL_TIMEOUT_MS} ms`
+            answer === NO_ANSWER
+              ? `no answer within ${LEDGER_CALL_TIMEOUT_MS} ms`
+              : "an earlier lookup has not answered"
           );
           // Unlike a read that failed, which says the ledger is down, one that
           // never answered may have been about to say these tags expired. So
@@ -449,21 +522,52 @@ async function record(
 ): Promise<ExpiryRecord> {
   const ledger = view.ledger;
   if (ledger === undefined) return "no-ledger";
-  view.recordSeq += 1;
-  const seq = view.recordSeq;
+  // Numbered as it starts, so a refusal is ordered with the records that
+  // land; see TURNED_AWAY below for one that never starts.
+  let seq = 0;
+  const begin = () => {
+    view.recordSeq += 1;
+    seq = view.recordSeq;
+    return seq;
+  };
   try {
     // What a record that lands stores, even one given up on: a late one is
     // the expiry this process judges by, and a retry need not make it again.
-    const answer = await withinLedgerBound(view, "record", () =>
-      ledger.record(tags).then(stored => {
+    const answer = await withinLedgerBound(view, "record", () => {
+      const attempt = begin();
+      return ledger.record(tags).then(stored => {
         if (stored === false) return stored;
         for (const [tag, at] of stored) {
           view.mine.set(tag, at);
-          view.landedSeq.set(tag, Math.max(view.landedSeq.get(tag) ?? 0, seq));
+          view.landedSeq.set(
+            tag,
+            Math.max(view.landedSeq.get(tag) ?? 0, attempt)
+          );
         }
         return stored;
-      })
-    );
+      });
+    });
+    if (answer === TURNED_AWAY) {
+      // A retry that never started leaves the refusals as they were: the
+      // stuck call it waited behind may still land and cover them. A write's
+      // own record that never started is a refusal of its own, later than any
+      // call under way, which an earlier one landing cannot cover.
+      if (again) {
+        warnOnce(
+          "the cache tag expiry ledger could not record an expiry",
+          "an earlier record has not answered"
+        );
+      } else {
+        refused(
+          view,
+          tags,
+          begin(),
+          again,
+          "an earlier record has not answered"
+        );
+      }
+      return "failed";
+    }
     if (answer === NO_ANSWER) {
       refused(
         view,
