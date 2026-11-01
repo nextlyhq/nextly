@@ -409,6 +409,8 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(first.json).toMatchObject({ marked: [files[0]] });
       expect(second.json).toMatchObject({ ids: files, marked: [files[1]] });
+      // And when those go, apart from any an earlier delete marked.
+      expect(typeof second.json.markedDeleteAfter).toBe("string");
       await api(editor, "POST", ["deletions", "undo"], {
         body: { ids: files },
       });
@@ -434,6 +436,71 @@ describe.each(getConfiguredTestDialects())(
       expect(marked.deleteAfter).toBe(deadline);
       expect(again.deleteAfter).toBe(deadline);
       await at(first).undo([file]);
+    });
+
+    it("answers when this delete's own items go, apart from an item an earlier delete marked", async () => {
+      const [standing, fresh] = [await unusedFile(), await unusedFile()];
+      // Whole seconds, which every dialect stores a mark's time in.
+      const first = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const later = new Date(first.getTime() + 5_000);
+      const at = (time: Date) =>
+        new PendingMediaDeletes({
+          db: t.adapter,
+          deleteItem: async () => undefined,
+          now: () => time,
+        });
+      const after = (time: Date) =>
+        new Date(time.getTime() + PENDING_DELETE_WINDOW_MS).toISOString();
+
+      await at(first).mark([standing]);
+      const both = await at(later).mark([standing, fresh]);
+      const neither = await at(later).mark([standing, fresh]);
+
+      expect(both.marked).toEqual([fresh]);
+      // The whole request's earliest deadline is the standing mark's...
+      expect(both.deleteAfter).toBe(after(first));
+      // ...and this delete's own item goes a full window after it.
+      expect(both.markedDeleteAfter).toBe(after(later));
+      // A delete that marked nothing itself has no deadline of its own.
+      expect(neither).toMatchObject({ marked: [], markedDeleteAfter: null });
+      await at(later).undo([standing, fresh]);
+    });
+
+    it("undoes each item still inside its own window and says which had gone, when a batch's deadlines differ", async () => {
+      const [early, late] = [await unusedFile(), await unusedFile()];
+      const first = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const later = new Date(first.getTime() + 5_000);
+      const at = (time: Date) =>
+        new PendingMediaDeletes({
+          db: t.adapter,
+          deleteItem: async () => undefined,
+          now: () => time,
+        });
+      await at(first).mark([early]);
+      await at(later).mark([late]);
+
+      // One Undo, after the first window and inside the second.
+      const undone = await at(
+        new Date(first.getTime() + PENDING_DELETE_WINDOW_MS + 1_000)
+      ).undo([early, late]);
+
+      // Not all or none: the one still inside its window comes back.
+      expect(undone).toEqual({ restored: [late], gone: [early] });
+      const marks = await t.adapter.select<Doc>("nextly_meta", {
+        where: {
+          and: [
+            {
+              column: "key",
+              op: "IN",
+              value: [early, late].map(pendingDeleteKey),
+            },
+          ],
+        },
+      });
+      expect(marks.map(mark => mark.key)).toEqual([pendingDeleteKey(early)]);
+      // The first item's mark stays for the finaliser; taken back here so no
+      // later case finds it due.
+      await at(first).undo([early]);
     });
 
     it("undoes none of a batch when taking any one of its marks fails", async () => {

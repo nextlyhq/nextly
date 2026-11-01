@@ -106,6 +106,7 @@ beforeEach(() => {
         ids: sent,
         marked: sent,
         deleteAfter: new Date(Date.now() + 10_000).toISOString(),
+        markedDeleteAfter: new Date(Date.now() + 10_000).toISOString(),
       });
     }
     if (url === "/admin/api/media/deletions/undo") {

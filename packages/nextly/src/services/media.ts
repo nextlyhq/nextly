@@ -332,33 +332,57 @@ export class MediaService extends BaseService {
       const { mediaQueryCondition } = await import(
         "../domains/media/media-library-query"
       );
-      const whereClause = mediaQueryCondition(
-        media,
-        view === "unused" ? await this.unusedSources() : null,
-        { folderId, search, type, view }
-      );
+      const unused = view === "unused" ? await this.unusedSources() : null;
+      const whereClause = mediaQueryCondition(media, unused, {
+        folderId,
+        search,
+        type,
+        view,
+      });
 
       const orderFn = sortOrder === "asc" ? asc : desc;
       const orderByClause = orderFn(media[sortBy]);
 
       const offset = (page - 1) * limit;
 
-      const countResult = await this.db
-        .select({ value: count() })
-        .from(media)
-        .where(whereClause);
-      const total = Number(countResult[0]?.value ?? 0);
+      const readPage = async () => {
+        const countResult = await this.db
+          .select({ value: count() })
+          .from(media)
+          .where(whereClause);
+        let query = this.db.select().from(media);
+        if (whereClause) {
+          query = query.where(whereClause);
+        }
+        const rows = await query
+          .orderBy(orderByClause)
+          .limit(limit)
+          .offset(offset);
+        return { total: Number(countResult[0]?.value ?? 0), rows };
+      };
 
-      let query = this.db.select().from(media);
-
-      if (whereClause) {
-        query = query.where(whereClause);
+      // Unused answers for the usage record it read itself: its page and
+      // total are read within one build of the record (`readWithinOneBuild`),
+      // so a rebuild that starts or finishes meanwhile reads as unbuilt, and
+      // the admin lists the view on this answer's own word rather than on the
+      // counts', which another request read at another moment. No other list
+      // reads the record, so none says anything of it.
+      let usageRecorded: boolean | undefined;
+      let listed: Awaited<ReturnType<typeof readPage>>;
+      if (view !== "unused") {
+        listed = await readPage();
+      } else if (unused === null) {
+        listed = await readPage();
+        usageRecorded = false;
+      } else {
+        const { readWithinOneBuild } = await import(
+          "../domains/media/usage/media-usage-store"
+        );
+        const read = await readWithinOneBuild(this.adapter, readPage);
+        listed = read.value;
+        usageRecorded = read.recorded;
       }
-
-      const results = await query
-        .orderBy(orderByClause)
-        .limit(limit)
-        .offset(offset);
+      const { total, rows: results } = listed;
 
       const totalPages = Math.ceil(total / limit);
 
@@ -372,6 +396,7 @@ export class MediaService extends BaseService {
           page,
           limit,
           totalPages,
+          ...(usageRecorded === undefined ? {} : { usageRecorded }),
         },
       };
     } catch (error) {

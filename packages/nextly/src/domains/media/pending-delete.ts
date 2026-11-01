@@ -81,8 +81,17 @@ export interface MarkedDeletion {
    * back.
    */
   marked: string[];
-  /** When the window ends, as an ISO instant. */
+  /**
+   * When the window ends for the first of `ids` to go, as an ISO instant: an
+   * item an earlier delete marked goes at that delete's deadline.
+   */
   deleteAfter: string;
+  /**
+   * When the window ends for the items this delete marked itself (`marked`),
+   * all written at one instant: what an Undo of only this delete has until.
+   * `null` when it marked none.
+   */
+  markedDeleteAfter: string | null;
 }
 
 /** What an Undo answers: what came back, and what had already gone. */
@@ -241,6 +250,12 @@ export class PendingMediaDeletes {
       ids: wanted,
       marked: fresh,
       deleteAfter: new Date(earliest.getTime() + this.windowMs).toISOString(),
+      // Every fresh mark was written at `now`, so they share one deadline,
+      // never shortened by an earlier delete's standing mark.
+      markedDeleteAfter:
+        fresh.length > 0
+          ? new Date(now.getTime() + this.windowMs).toISOString()
+          : null,
     };
   }
 
@@ -252,9 +267,12 @@ export class PendingMediaDeletes {
    * deadline is refused even before any finaliser has run: the mark stays
    * for the finaliser, which owns the item from then on.
    *
-   * Every mark is taken on one transaction, so a batch is undone whole or not
-   * at all: a statement that fails part way puts back the marks taken before
-   * it, rather than leaving some items restored and the rest still going.
+   * Each item is judged against its own deadline, so a batch whose marks
+   * have different deadlines comes back in part: every item still inside its
+   * window is restored and the rest are answered as `gone`. Every mark is
+   * taken on one transaction, so only a statement that fails part way undoes
+   * the whole Undo: it puts back the marks taken before it, rather than
+   * leaving some items restored and the rest still going.
    */
   async undo(ids: readonly string[]): Promise<UndoneDeletion> {
     const due = this.cutoff();

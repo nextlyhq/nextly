@@ -69,7 +69,6 @@ import { FolderBreadcrumbs } from "./FolderBreadcrumbs";
 import { FolderCardsRow } from "./FolderCardsRow";
 import {
   useDeleteMediaLater,
-  useMediaLibraryCounts,
   useReplaceMediaFile,
   useUndoMediaDelete,
 } from "./media-library-queries";
@@ -174,19 +173,20 @@ function emptyLibraryMessage({
 }
 
 /**
- * What the Unused view says in place of its list until the counts say the
- * usage record is built: that they are still loading, that they could not be
- * read, or that older content is still being recorded.
+ * What the Unused view says in place of its list until the list itself says
+ * the usage record it read was built: that it is still loading, that it
+ * could not be read, or that older content is still being recorded (or was
+ * being rebuilt as it was read).
  */
-function unusedPendingMessage(counts: {
+function unusedPendingMessage(list: {
   isError: boolean;
   isFetching: boolean;
-  data?: { usageRecorded: boolean };
+  hasAnswer: boolean;
 }): string {
-  if (counts.isError) {
+  if (list.isError) {
     return "Couldn't check where items are used, so the Unused view can't list them. Reload the page to try again.";
   }
-  if (counts.isFetching || counts.data === undefined) {
+  if (list.isFetching || !list.hasAnswer) {
     return "Still counting where items are used, so the Unused view can't list them yet.";
   }
   return "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it.";
@@ -295,20 +295,6 @@ export function MediaLibrary({
     resetPage();
   }, [activeFolderId, view, resetPage]);
 
-  // Whether the usage record covers older content, asked only for the Unused
-  // view, which cannot be trusted until it does. Only a current answer saying
-  // it does opens the view: while the counts load or are asked again, and
-  // after they fail, it lists nothing, since the items it would list may
-  // still be used by older content and an earlier answer may no longer hold.
-  const usageCounts = useMediaLibraryCounts(view === "unused");
-  const unusedPending =
-    view === "unused" &&
-    !(
-      usageCounts.isSuccess &&
-      !usageCounts.isFetching &&
-      usageCounts.data.usageRecorded === true
-    );
-
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     React.useState(false);
   const [createFolderParentId, setCreateFolderParentId] = React.useState<
@@ -385,8 +371,27 @@ export function MediaLibrary({
   };
 
   // TanStack Query: Fetch media
-  const { data, isLoading, isFetching, isPlaceholderData, error, refetch } =
-    useMedia(queryParams);
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isPlaceholderData,
+    isSuccess,
+    isError,
+    error,
+    refetch,
+  } = useMedia(queryParams);
+
+  // The Unused view lists its items only on its own list's word that the
+  // usage record it read was complete, one build standing throughout the
+  // read: never on the counts', another request read at another moment,
+  // which a rebuild between the two would leave saying built over a list
+  // read mid-rebuild. While the list loads, is asked again or stands in for
+  // another page, and after it fails, it lists nothing, since an earlier
+  // answer may no longer hold.
+  const unusedPending =
+    view === "unused" &&
+    !(isSuccess && !isFetching && data.meta.usageRecorded === true);
 
   // A delete that can be undone, for one item or the selection.
   const { mutateAsync: deleteLater, isPending: isDeleting } =
@@ -481,8 +486,13 @@ export function MediaLibrary({
       });
       // Undo takes back only what this delete marked: an item an earlier
       // delete marked stays as that delete left it, with its own Undo.
+      // Offered until those items' own deadline, never the request's
+      // earliest, which an item already waiting can make shorter or past.
       const own = pending.marked;
-      const left = Date.parse(pending.deleteAfter) - Date.now();
+      const left =
+        pending.markedDeleteAfter === null
+          ? 0
+          : Date.parse(pending.markedDeleteAfter) - Date.now();
       if (!(left > 0) || own.length === 0) {
         setAnnouncement(`${label} deleted.`);
         toast(`${label} deleted`);
@@ -757,7 +767,11 @@ export function MediaLibrary({
       : undefined;
 
   const emptyStateMessage = unusedPending
-    ? unusedPendingMessage(usageCounts)
+    ? unusedPendingMessage({
+        isError,
+        isFetching,
+        hasAnswer: data !== undefined && !isPlaceholderData,
+      })
     : emptyLibraryMessage({
         filtered: Boolean(debouncedSearch) || typeFilter !== "all",
         canUpload,

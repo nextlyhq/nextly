@@ -196,6 +196,11 @@ export interface MediaListResponse {
     page: number;
     limit: number;
     totalPages: number;
+    /**
+     * The Unused view's list alone: whether the usage record it was read
+     * from was complete. The view lists its items only when this says so.
+     */
+    usageRecorded?: boolean;
   };
 }
 

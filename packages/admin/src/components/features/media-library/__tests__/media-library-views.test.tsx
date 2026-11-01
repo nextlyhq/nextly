@@ -217,6 +217,7 @@ beforeEach(() => {
       ids,
       marked: ids,
       deleteAfter: new Date(Date.now() + 10_000).toISOString(),
+      markedDeleteAfter: new Date(Date.now() + 10_000).toISOString(),
     })
   );
   library.undoMediaDelete.mockImplementation((ids: string[]) =>
@@ -286,28 +287,29 @@ describe("a view beside the folders", () => {
     ).toBeNull();
   });
 
-  it("says Unused is still being built, rather than listing items content may use", async () => {
-    library.fetchMediaLibraryCounts.mockResolvedValue({
-      all: 3,
-      missingAltText: 0,
-      unused: 3,
-      usageRecorded: false,
-      root: 3,
-      folders: {},
-    });
-    act(() => setMediaLibraryView("unused"));
-    renderLibrary();
+  /** The list's answer, saying `usageRecorded` when given. */
+  function listAnswer(usageRecorded?: boolean) {
+    return {
+      data: [item(1), item(2), item(3)],
+      meta: {
+        total: 3,
+        page: 1,
+        limit: 24,
+        totalPages: 1,
+        ...(usageRecorded === undefined ? {} : { usageRecorded }),
+      },
+    };
+  }
 
-    expect(await screen.findByText(/still being recorded/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^photo-1\.jpg/ })).toBeNull();
-  });
-
-  /** Unused picked, with the list answered and the counts as `counts` says. */
-  async function unusedWhileCounts(counts: Promise<unknown>) {
-    library.fetchMediaLibraryCounts.mockReturnValue(counts);
+  /** Unused picked, with its list answered by `list`. */
+  async function unusedListing(list: () => Promise<unknown>) {
+    api.fetchMedia.mockImplementation(list);
     act(() => setMediaLibraryView("unused"));
-    renderLibrary();
-    // The list itself has answered: only the counts are outstanding.
+    renderWithProviders(
+      <MediaProvider>
+        <MediaLibrary />
+      </MediaProvider>
+    );
     await waitFor(() =>
       expect(api.fetchMedia).toHaveBeenCalledWith(
         expect.objectContaining({ view: "unused" })
@@ -323,60 +325,49 @@ describe("a view beside the folders", () => {
     ).toBeNull();
   }
 
-  it("lists nothing in Unused while the counts are still loading", async () => {
-    await unusedWhileCounts(new Promise(() => undefined));
+  it("says Unused is still being built, rather than listing items content may use", async () => {
+    await unusedListing(() => Promise.resolve(listAnswer(false)));
 
-    expect(
-      await screen.findByText(/still counting where items are used/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/still being recorded/)).toBeInTheDocument();
     noUnusedItemsShown();
   });
 
-  it("lists nothing in Unused when the counts could not be read", async () => {
-    await unusedWhileCounts(Promise.reject(new Error("counts failed")));
+  // The list answers for the build it read itself. The counts are another
+  // request, read at another moment: a rebuild between the two would let
+  // their word open a list read while the record was being rebuilt.
+  it("lists nothing in Unused when its own list says the record was being rebuilt, whatever the counts say", async () => {
+    // The counts say built (the default); the list itself does not.
+    await unusedListing(() => Promise.resolve(listAnswer(false)));
 
-    expect(
-      await screen.findByText(/couldn't check where items are used/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/still being recorded/)).toBeInTheDocument();
     noUnusedItemsShown();
   });
 
-  it("lists Unused once the counts say the usage record is built", async () => {
-    // POSITIVE CONTROL for the two above: the same view, counts answered.
-    await unusedWhileCounts(
-      Promise.resolve({
-        all: 3,
-        missingAltText: 0,
-        unused: 3,
-        usageRecorded: true,
-        root: 3,
-        folders: {},
-      })
+  it("lists nothing in Unused when its list says nothing of the record", async () => {
+    await unusedListing(() => Promise.resolve(listAnswer()));
+
+    expect(await screen.findByText(/still being recorded/)).toBeInTheDocument();
+    noUnusedItemsShown();
+  });
+
+  it("lists Unused once its own list says the usage record is built, though the counts never answer", async () => {
+    // POSITIVE CONTROL for the cases above: the list's word alone opens it.
+    library.fetchMediaLibraryCounts.mockReturnValue(
+      new Promise(() => undefined)
     );
+    await unusedListing(() => Promise.resolve(listAnswer(true)));
 
     expect(await waitFor(() => tile(1))).toBeInTheDocument();
   });
-  describe("once the counts have said the record is built", () => {
-    const built = {
-      all: 3,
-      missingAltText: 0,
-      unused: 3,
-      usageRecorded: true,
-      root: 3,
-      folders: {},
-    };
 
+  describe("once its list has said the record is built", () => {
     /**
-     * Unused open on a built answer, then the counts asked again, answered
-     * by `next` (made when asked, so a refusal is never left unhandled).
+     * Unused open on a built answer, then its list asked again, answered by
+     * `next` (made when asked, so a refusal is never left unhandled).
      */
     async function askedAgain(next: () => Promise<unknown>) {
       const queryClient = createTestQueryClient();
-      library.fetchMediaLibraryCounts.mockResolvedValue(built);
-      api.fetchMedia.mockResolvedValue({
-        data: [item(1), item(2), item(3)],
-        meta: { total: 3, page: 1, limit: 24, totalPages: 1 },
-      });
+      api.fetchMedia.mockResolvedValue(listAnswer(true));
       act(() => setMediaLibraryView("unused"));
       renderWithProviders(
         <MediaProvider>
@@ -386,15 +377,15 @@ describe("a view beside the folders", () => {
       );
       // POSITIVE CONTROL: the built answer opens the view.
       expect(await waitFor(() => tile(1))).toBeInTheDocument();
-      library.fetchMediaLibraryCounts.mockImplementation(next);
+      api.fetchMedia.mockImplementation(next);
       act(() => {
         void queryClient
-          .refetchQueries({ queryKey: ["media", "library-counts"] })
+          .refetchQueries({ queryKey: ["media"] })
           .catch(() => undefined);
       });
     }
 
-    it("lists nothing while the counts are asked again", async () => {
+    it("lists nothing while its list is asked again", async () => {
       await askedAgain(() => new Promise(() => undefined));
 
       expect(
@@ -403,12 +394,20 @@ describe("a view beside the folders", () => {
       noUnusedItemsShown();
     });
 
-    it("lists nothing when asking the counts again fails", async () => {
-      await askedAgain(() => Promise.reject(new Error("counts failed")));
+    it("lists nothing when its list asked again says the record is being rebuilt", async () => {
+      await askedAgain(() => Promise.resolve(listAnswer(false)));
 
       expect(
-        await screen.findByText(/couldn't check where items are used/i)
+        await screen.findByText(/still being recorded/)
       ).toBeInTheDocument();
+      noUnusedItemsShown();
+    });
+
+    it("lists nothing when asking its list again fails", async () => {
+      await askedAgain(() => Promise.reject(new Error("list failed")));
+
+      // The page shows the failure in place of the list.
+      expect(await screen.findByText("list failed")).toBeInTheDocument();
       noUnusedItemsShown();
     });
   });
@@ -531,7 +530,12 @@ describe("delete with Undo", () => {
       const deleteAfter = new Date(Date.now() + 10_000).toISOString();
       // The answer reaches the page `lateBy` after the server marked it.
       vi.setSystemTime(Date.now() + lateBy);
-      return Promise.resolve({ ids, marked: ids, deleteAfter });
+      return Promise.resolve({
+        ids,
+        marked: ids,
+        deleteAfter,
+        markedDeleteAfter: deleteAfter,
+      });
     });
     renderLibrary();
     const panel = await openItem(1);
@@ -630,6 +634,47 @@ describe("delete with Undo", () => {
     pressUndo();
     await waitFor(() =>
       expect(library.undoMediaDelete).toHaveBeenCalledWith(["m1", "m2"])
+    );
+  });
+
+  // An item an earlier delete marked goes at that delete's deadline, which
+  // is what `deleteAfter` answers for the whole request. Undo here takes back
+  // only this delete's own items, whose window began with this delete.
+  it("offers Undo for this delete's own items until their own deadline, though an item already waiting goes sooner", async () => {
+    library.deleteMediaLater.mockImplementation((ids: string[]) =>
+      Promise.resolve({
+        ids,
+        // m1 was marked by an earlier delete whose window has just ended.
+        marked: ids.filter(id => id !== "m1"),
+        deleteAfter: new Date(Date.now() - 1_000).toISOString(),
+        markedDeleteAfter: new Date(Date.now() + 10_000).toISOString(),
+      })
+    );
+    renderLibrary();
+    await waitFor(() => tile(1));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select photo-1.jpg" })
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select photo-2.jpg" })
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete 2 selected items" })
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(toasts.toast).toHaveBeenCalled());
+
+    expect(toasts.toast).toHaveBeenCalledWith(
+      "2 files deleted",
+      expect.objectContaining({
+        duration: expect.closeTo(10_000, -3),
+        action: expect.objectContaining({ label: "Undo" }),
+      })
+    );
+    pressUndo();
+    await waitFor(() =>
+      expect(library.undoMediaDelete).toHaveBeenCalledWith(["m2"])
     );
   });
 });

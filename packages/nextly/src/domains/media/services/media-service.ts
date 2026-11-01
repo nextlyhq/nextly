@@ -235,6 +235,15 @@ function parseFocalPoint(input: UpdateMediaInput): {
 }
 
 /**
+ * A page of media items. Unused's alone also says whether the usage record
+ * it was read from was complete (`usageRecorded`), which the admin lists that
+ * view on; every other list leaves it out.
+ */
+export type MediaListPage = PaginatedResult<MediaFile> & {
+  usageRecorded?: boolean;
+};
+
+/**
  * MediaService - Unified service for media files and folders
  *
  * Provides complete media management with:
@@ -626,7 +635,7 @@ export class MediaService {
   async listMedia(
     options: ListMediaOptions = {},
     _context: RequestContext
-  ): Promise<PaginatedResult<MediaFile>> {
+  ): Promise<MediaListPage> {
     // Not the options themselves: they carry the request, whose headers hold
     // the caller's credentials.
     this.logger.debug("Listing media files");
@@ -655,6 +664,7 @@ export class MediaService {
     const total = result.meta?.total ?? files.length;
     const offset = (page - 1) * limit;
 
+    const usageRecorded = result.meta?.usageRecorded;
     return {
       data: files,
       pagination: {
@@ -663,6 +673,7 @@ export class MediaService {
         offset,
         hasMore: offset + files.length < total,
       },
+      ...(usageRecorded === undefined ? {} : { usageRecorded }),
     };
   }
 

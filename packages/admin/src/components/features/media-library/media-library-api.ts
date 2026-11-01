@@ -79,8 +79,16 @@ export interface PendingMediaDelete {
    * back.
    */
   marked: string[];
-  /** When the item is deleted for good, as an ISO instant. */
+  /**
+   * When the first of `ids` is deleted for good, as an ISO instant: an item
+   * an earlier delete marked goes at that delete's deadline.
+   */
   deleteAfter: string;
+  /**
+   * When the items this delete marked itself (`marked`) are deleted for
+   * good: what its Undo is offered until. `null` when it marked none.
+   */
+  markedDeleteAfter: string | null;
 }
 
 /** What an Undo brought back, and what had already gone. */
@@ -151,8 +159,9 @@ export function deleteMediaLater(
 }
 
 /**
- * Bring back items deleted inside the window: one request, which the server
- * brings back whole or not at all.
+ * Bring back items deleted inside the window: one request. The server judges
+ * each item against its own deadline, so it brings back every one still
+ * inside its window and names the rest as already gone.
  */
 export function undoMediaDelete(
   ids: readonly string[]

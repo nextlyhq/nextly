@@ -155,6 +155,12 @@ export interface MediaListResponse {
     page: number;
     limit: number;
     totalPages: number;
+    /**
+     * Unused's list alone: whether the usage record it was read from was
+     * complete, one build standing throughout the read. Absent from every
+     * other list.
+     */
+    usageRecorded?: boolean;
   };
 }
 

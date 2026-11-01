@@ -104,6 +104,7 @@ beforeEach(() => {
         // `m5` was already waiting to be deleted, from an earlier delete.
         marked: sent.filter(id => id !== EARLIER),
         deleteAfter: new Date(Date.now() + 10_000).toISOString(),
+        markedDeleteAfter: new Date(Date.now() + 10_000).toISOString(),
       });
     }
     if (url === "/admin/api/media/deletions/undo") {

@@ -486,6 +486,11 @@ async function handleListMedia(request: Request): Promise<Response> {
     totalPages,
     hasNext: page < totalPages,
     hasPrev: page > 1,
+    // Unused's alone: whether the usage record its page was read from was
+    // complete, which is what the admin lists that view on.
+    ...(result.usageRecorded === undefined
+      ? {}
+      : { usageRecorded: result.usageRecorded }),
   });
 }
 
@@ -941,6 +946,7 @@ async function handleDeleteMediaLater(
     ids: marked.ids,
     marked: marked.marked,
     deleteAfter: marked.deleteAfter,
+    markedDeleteAfter: marked.markedDeleteAfter,
   });
 }
 
