@@ -848,6 +848,13 @@ export class MediaService extends BaseService {
       const retiredSizes = await storedSizesOf(this.db, this.dialect, [
         mediaId,
       ]);
+      // The row as its files are removed from: with those sizes, which the
+      // row as read no longer carries. One record for both ways the files go,
+      // here after the commit or by a claimer from what it records.
+      const withRetiredSizes = (row: StoredMediaRow): StoredMediaRow => ({
+        ...row,
+        sizes: retiredSizes.get(mediaId) ?? null,
+      });
 
       // Remove the row and record the outbox event in one transaction FIRST,
       // before touching physical storage. The database is the source of truth,
@@ -871,8 +878,9 @@ export class MediaService extends BaseService {
             return null;
           }
           // Asked under the row's lock, so it commits with the row's removal
-          // or not at all.
-          if (claim && !(await claim(tx, current))) {
+          // or not at all. Handed the retired sizes too: the claimer records
+          // the files left to remove from this row.
+          if (claim && !(await claim(tx, withRetiredSizes(current)))) {
             refused = true;
             return null;
           }
@@ -915,10 +923,7 @@ export class MediaService extends BaseService {
           message: "Media not found",
         };
       }
-      const mediaData: StoredMediaRow = {
-        ...deletedRow,
-        sizes: retiredSizes.get(mediaId) ?? null,
-      };
+      const mediaData = withRetiredSizes(deletedRow);
 
       // Invalidated here, not after the cleanup below. The row is already gone,
       // so a cached page is already wrong; deferring past storage deletes and
