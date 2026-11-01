@@ -735,7 +735,9 @@ function SectionHeading({
         type="button"
         variant="link"
         size="sm"
-        className="h-auto p-0"
+        // In the text's own colour, underlined: the link variant's primary colour falls under
+        // 4.5:1 on the panel when a brand colour replaces the default primary.
+        className="h-auto p-0 text-foreground underline"
         disabled={saving}
         aria-label={`Reset ${label} to defaults`}
         onClick={onReset}

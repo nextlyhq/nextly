@@ -105,10 +105,12 @@ const SEARCH_LABEL = "Search types to create";
 /**
  * Where the keys are in the list, drawn so it can be seen: the option the arrow keys have reached
  * is outlined in the ring colour, which holds 3:1 against the popover in both schemes. The
- * shared item's own mark for it (a 5% tint) is all but invisible on its own.
+ * shared item's own mark for it (a 5% tint) is all but invisible on its own. Its text stays in
+ * the foreground colour: the shared item's primary falls under 4.5:1 on the popover when a brand
+ * colour replaces the default primary.
  */
 const SELECTED_OPTION_CLASS =
-  "data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-ring";
+  "data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-ring aria-selected:text-foreground data-[selected=true]:text-foreground";
 
 /**
  * What the button says when its main part starts creating another type while it is drawn, as
