@@ -78,6 +78,13 @@ export interface MediaUses {
 export interface MediaUseHeading {
   title: string;
   owner: string;
+  /**
+   * The fields among the read's `paths` the reader may read in it, as the
+   * ordinary read of the document as them leaves them: a field a read rule
+   * withholds from them is absent, and is never told, by name or by its use
+   * of the item.
+   */
+  paths: ReadonlySet<string>;
 }
 
 /** A document named by the record: its kind, slug and id. */
@@ -90,10 +97,13 @@ export interface MediaUseDocument {
 /**
  * One document read in one language: `locale`, or its default language when
  * `null`. A localized document has a lifecycle and access per language, so
- * whether the reader may read it is asked per language.
+ * whether the reader may read it is asked per language, and so is which of
+ * its fields that use the item (`paths`) they may read.
  */
 export interface MediaUseRead extends MediaUseDocument {
   locale: string | null;
+  /** The fields of the document that use the item, as the record names them. */
+  paths: readonly string[];
 }
 
 /** What answering needs: the record, and the reader's view of documents. */
@@ -121,7 +131,7 @@ export interface MediaUsesSource {
 }
 
 /** The key a read of a document is filed under, in its heading. */
-export function mediaUseReadKey(read: MediaUseRead): string {
+export function mediaUseReadKey(read: Omit<MediaUseRead, "paths">): string {
   return JSON.stringify([read.kind, read.slug, read.documentId, read.locale]);
 }
 
@@ -209,8 +219,9 @@ function readsOf(
   languages: readonly string[]
 ): MediaUseRead[] {
   const { kind, slug, documentId } = document;
+  const paths = [...document.fields.keys()];
   if (kind === "email-template") {
-    return [{ kind, slug, documentId, locale: null }];
+    return [{ kind, slug, documentId, locale: null, paths }];
   }
   const { named, shared } = languagesOf(document);
   const site = new Set(languages);
@@ -218,15 +229,23 @@ function readsOf(
     ...(shared ? [null, ...languages] : []),
     ...named.filter(locale => site.has(locale)),
   ]);
-  return [...locales].map(locale => ({ kind, slug, documentId, locale }));
+  return [...locales].map(locale => ({
+    kind,
+    slug,
+    documentId,
+    locale,
+    paths,
+  }));
 }
 
 /**
  * What the reader is told of one document, or `null` when nothing: each
- * field's languages cut to those the reader may read the document in; a
- * shared value, which every language reads, told when they may read it in
- * any. How a field names the item is taken from the told languages' values
- * alone. The title is the default language's, else the first readable one's.
+ * field's languages cut to those the reader may read the document, and that
+ * field, in; a shared value, which every language reads, told when they may
+ * read the field in any. A field a read rule withholds from them is told in
+ * no language. How a field names the item is taken from the told languages'
+ * values alone. The title is the default language's, else the first
+ * readable one's.
  */
 function toldOf(
   document: GatheredDocument,
@@ -236,14 +255,18 @@ function toldOf(
   const reads = readsOf(document, languages);
   const headingIn = (locale: string | null) =>
     headings.get(mediaUseReadKey({ ...document, locale }));
-  const readable = reads.filter(read => headingIn(read.locale) !== undefined);
+  const readable = reads
+    .map(read => headingIn(read.locale))
+    .filter((heading): heading is MediaUseHeading => heading !== undefined);
   if (readable.length === 0) return null;
-  // A shared value is told wherever the document is readable at all.
-  const told = (locale: string) =>
-    locale === "" || headingIn(locale) !== undefined;
+  // A shared value is told wherever the reader may read the field at all.
+  const told = (locale: string, path: string) =>
+    locale === ""
+      ? readable.some(heading => heading.paths.has(path))
+      : headingIn(locale)?.paths.has(path) === true;
   const fields: MediaUseField[] = [];
   for (const [path, field] of document.fields) {
-    const uses = [...field.locales].filter(([locale]) => told(locale));
+    const uses = [...field.locales].filter(([locale]) => told(locale, path));
     // A field used only in languages the reader may not read is not told.
     if (uses.length === 0) continue;
     const shared = field.locales.has("");
@@ -255,8 +278,7 @@ function toldOf(
     });
   }
   if (fields.length === 0) return null;
-  const heading = headingIn(null) ?? headingIn(readable[0].locale);
-  if (heading === undefined) return null;
+  const heading = headingIn(null) ?? readable[0];
   return {
     kind: document.kind,
     slug: document.slug,

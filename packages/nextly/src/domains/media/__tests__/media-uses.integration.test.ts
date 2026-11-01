@@ -187,6 +187,23 @@ describe.each(getConfiguredTestDialects())(
               upload({ name: "image", relationTo: "media" }),
             ],
           }),
+          // One field read only with a grant no reader in this file holds.
+          defineCollection({
+            slug: "usesprivate",
+            labels: { singular: "Profile", plural: "Profiles" },
+            fields: [
+              text({ name: "title" }),
+              upload({ name: "image", relationTo: "media" }),
+              upload({
+                name: "privateImage",
+                relationTo: "media",
+                access: {
+                  read: ({ permissions }) =>
+                    permissions.includes("read-private-images"),
+                },
+              }),
+            ],
+          }),
         ],
       });
       await t.adapter.insert("media", {
@@ -310,6 +327,67 @@ describe.each(getConfiguredTestDialects())(
         },
       ]);
       expect(body.meta).not.toHaveProperty("hidden");
+    });
+
+    // A reader may read a document and still not one of its fields: Used in
+    // tells them neither that field's name nor that it uses the item, as a
+    // read of the document withholds its value.
+    it("tells only the fields a field read rule lets the reader read", async () => {
+      const handler = t.getService("collectionsHandler");
+      const both = await handler.createEntry(
+        { collectionName: "usesprivate", overrideAccess: true },
+        { title: "Both", image: ITEM.id, privateImage: ITEM.id }
+      );
+      const bothId = String((both.data as { id?: unknown }).id);
+      const only = await handler.createEntry(
+        { collectionName: "usesprivate", overrideAccess: true },
+        { title: "Only private", privateImage: ITEM.id }
+      );
+      const onlyId = String((only.data as { id?: unknown }).id);
+      const key = await keyWith(t, ["read-media", "read-usesprivate"]);
+      try {
+        // As an ordinary read of the documents shows them to this reader.
+        const read = await createMediaHandlers({ requireAuth: true }).GET(
+          new Request(`http://localhost/admin/api/media/${ITEM.id}/usage`, {
+            headers: { authorization: `Bearer ${key}` },
+          }),
+          { params: Promise.resolve({ path: [ITEM.id, "usage"] }) }
+        );
+        const body = (await read.json()) as Doc;
+
+        const items = (body.items as Doc[]).filter(
+          item => item.slug === "usesprivate"
+        );
+        expect(items).toEqual([
+          expect.objectContaining({
+            documentId: bothId,
+            fields: [
+              {
+                path: "image",
+                locales: [],
+                byAddress: false,
+                showsPreviousFile: false,
+              },
+            ],
+          }),
+        ]);
+        expect(JSON.stringify(body)).not.toContain("privateImage");
+        expect(JSON.stringify(body)).not.toContain(onlyId);
+        // The document using it only there is counted, never named.
+        expect(
+          (body.meta as { hidden?: Doc[] }).hidden?.find(
+            scope => scope.scopeSlug === "usesprivate"
+          )
+        ).toMatchObject({ count: 1 });
+      } finally {
+        for (const entryId of [bothId, onlyId]) {
+          await handler.deleteEntry({
+            collectionName: "usesprivate",
+            entryId,
+            overrideAccess: true,
+          });
+        }
+      }
     });
 
     it("counts the documents a reader may not read, naming none of them", async () => {
