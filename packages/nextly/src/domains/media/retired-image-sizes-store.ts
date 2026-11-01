@@ -610,26 +610,47 @@ function retiredUseOf(
   object: SchemaObjectSql,
   objects: RetiredObjects
 ): string | null {
-  const text = object.body ?? "";
-  const uses: string[] = [];
-  if (
-    objects.tableRows !== null &&
-    object.on !== RETIRED_IMAGE_SIZES_TABLE &&
-    namesIdentifier(text, RETIRED_IMAGE_SIZES_TABLE)
-  ) {
-    uses.push(`the \`${RETIRED_IMAGE_SIZES_TABLE}\` table`);
-  }
-  const onMedia = object.on === "media" || namesIdentifier(text, "media");
-  if (
-    objects.column &&
-    onMedia &&
-    namesIdentifier(text, RETIRED_SIZES_COLUMN)
-  ) {
-    uses.push(`the \`media.${RETIRED_SIZES_COLUMN}\` column`);
-  }
+  const uses = [
+    ...(usesRetiredTable(object, objects)
+      ? [`the \`${RETIRED_IMAGE_SIZES_TABLE}\` table`]
+      : []),
+    ...(usesRetiredColumn(object, objects)
+      ? [`the \`media.${RETIRED_SIZES_COLUMN}\` column`]
+      : []),
+  ];
   if (uses.length === 0) return null;
   const where = object.on === null ? "" : ` on \`${object.on}\``;
   return `${object.kind} \`${object.name}\`${where} uses ${uses.join(" and ")}`;
+}
+
+/**
+ * Whether a view or trigger uses the `image_sizes` table the drop removes:
+ * named in its SQL, unless it is a trigger on that table, which goes with it.
+ */
+function usesRetiredTable(
+  object: SchemaObjectSql,
+  objects: RetiredObjects
+): boolean {
+  return (
+    objects.tableRows !== null &&
+    object.on !== RETIRED_IMAGE_SIZES_TABLE &&
+    namesIdentifier(object.body ?? "", RETIRED_IMAGE_SIZES_TABLE)
+  );
+}
+
+/**
+ * Whether a view or trigger uses the media table's `sizes` column the drop
+ * removes: named in SQL that names the media table too, or in a trigger on it.
+ */
+function usesRetiredColumn(
+  object: SchemaObjectSql,
+  objects: RetiredObjects
+): boolean {
+  const text = object.body ?? "";
+  const onMedia = object.on === "media" || namesIdentifier(text, "media");
+  return (
+    objects.column && onMedia && namesIdentifier(text, RETIRED_SIZES_COLUMN)
+  );
 }
 
 /**

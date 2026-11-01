@@ -39,6 +39,7 @@ import {
   RETIRED_IMAGE_SIZES_TABLE,
   RETIRED_SIZES_COLUMN,
 } from "./retired-image-sizes-constants";
+import { pathOfSize, servedHere, type SizeLocator } from "./size-location";
 
 /** One size as the column holds it, as far as finding its file goes. */
 interface StoredSize {
@@ -144,11 +145,8 @@ export interface RetiredSizesStore {
  * `exists` is not part of it: two adapters answer `false` for any failure to
  * ask, which cannot tell a removed file from an unreachable one.
  */
-export interface SizeFileStorage {
+export interface SizeFileStorage extends SizeLocator {
   delete(filePath: string): Promise<void>;
-  /** Where this storage serves a stored path, to tell its files from another's. */
-  getPublicUrl(filePath: string): string;
-  getType(): string;
 }
 
 /** A size whose file stays, and why. */
@@ -225,21 +223,14 @@ function addInUse(inUse: InUse, row: MediaSizesRow): void {
   else inUse.names.add(lastSegment(row.thumbnailUrl));
 }
 
-/** The stored path of a size: its own, or one worked out from its URL. */
-function pathOfSize(size: StoredSize, row: MediaSizesRow): string | undefined {
-  if (size.path) return size.path;
-  if (!size.url) return undefined;
-  return siblingStoredPath({ path: row.filename, url: row.url }, size.url);
-}
-
 /** Whether a size is the item's own thumbnail. */
 function isOwnThumbnail(
-  size: StoredSize,
+  url: string,
   path: string,
   row: MediaSizesRow
 ): boolean {
   if (!row.thumbnailUrl) return false;
-  if (size.url && urlKey(size.url) === urlKey(row.thumbnailUrl)) return true;
+  if (urlKey(url) === urlKey(row.thumbnailUrl)) return true;
   const thumbnail = siblingStoredPath(
     { path: row.filename, url: row.url },
     row.thumbnailUrl
@@ -251,47 +242,13 @@ function isOwnThumbnail(
 }
 
 /** Whether any media item uses a size's file as an original or a thumbnail. */
-function isInUse(inUse: InUse, size: StoredSize, path: string): boolean {
+function isInUse(inUse: InUse, url: string, path: string): boolean {
   return (
     inUse.paths.has(canonicalStoredPath(path)) ||
-    (size.url !== undefined && inUse.urls.has(urlKey(size.url))) ||
+    inUse.urls.has(urlKey(url)) ||
     inUse.urls.has(urlKey(path)) ||
     inUse.names.has(lastSegment(path))
   );
-}
-
-/**
- * Where a URL serves its file: its origin, or none for a URL relative to the
- * site, and its path, percent-encoded alike either way.
- */
-function servedAt(url: string): { origin: string | null; path: string } {
-  const key = urlKey(url);
-  if (/^https?:\/\//i.test(key)) {
-    const parsed = new URL(key);
-    return { origin: parsed.origin, path: parsed.pathname };
-  }
-  return { origin: null, path: new URL(key, "http://site.invalid").pathname };
-}
-
-/**
- * Whether a URL a record holds is where the storage configured now serves
- * `path`: the same path, and the same origin, or both relative to the site.
- * One relative and one absolute match only on local disk, which is served
- * from the site under either spelling. On any other storage a URL relative to
- * the site is a file local disk wrote, and the same path under the storage's
- * own host is another file, so it is not this storage's.
- */
-function servedHere(
-  url: string,
-  path: string,
-  storage: SizeFileStorage
-): boolean {
-  const recorded = servedAt(url);
-  const here = servedAt(storage.getPublicUrl(path));
-  if (recorded.path !== here.path) return false;
-  if (recorded.origin === here.origin) return true;
-  const oneRelative = recorded.origin === null || here.origin === null;
-  return oneRelative && storage.getType() === "local";
 }
 
 /** One item's plan, judged against everything every item uses. */
@@ -332,50 +289,71 @@ interface SizeContext {
 
 /** Puts one size into its item's plan: removed, kept, or holding the item. */
 function planSize(plan: ItemPlan, size: StoredSize, at: SizeContext): void {
-  const { row } = at;
-  // Only a size's own URL shows which storage its file is on (`servedHere`).
-  // One recorded by path alone holds the item before anything else is
-  // judged of it: kept or removed on a guess, its record would be cleared.
+  const located = locatedSize(plan, size, at.row);
+  if (located === undefined) return;
+  const verdict = sizeVerdict(located, at);
+  if (verdict === "elsewhere") {
+    plan.elsewhere.push({ name: size.name, url: located.url });
+  } else if (verdict !== "remove") {
+    plan.keep.push({ name: size.name, path: located.path, reason: verdict });
+  } else if (!at.planned.has(located.path)) {
+    // By the key exactly as stored: an object storage keeps `media//x.webp`
+    // and `media/x.webp` as two objects, and one taken for the other would
+    // stay with nothing recording it once the item is cleared.
+    at.planned.add(located.path);
+    plan.remove.push({ name: size.name, path: located.path });
+  }
+}
+
+/**
+ * A size's URL and stored path, or undefined, with the item held for it,
+ * when the record does not show both. Only a size's own URL shows which
+ * storage its file is on (`servedHere`), so one recorded by path alone holds
+ * the item before anything else is judged of it: kept or removed on a guess,
+ * its record would be cleared. Every size record names its file
+ * (`sizeEntry`), so one named by a URL whose stored path cannot be worked out
+ * holds the item too.
+ */
+function locatedSize(
+  plan: ItemPlan,
+  size: StoredSize,
+  row: MediaSizesRow
+): { url: string; path: string } | undefined {
   if (size.url === undefined) {
     if (size.path) plan.pathOnly.push({ name: size.name, path: size.path });
     else plan.unlocated.push(size.name);
-    return;
+    return undefined;
   }
   const path = pathOfSize(size, row);
   if (path === undefined) {
-    // Every size record names its file (`sizeEntry`); one named by a URL
-    // whose stored path cannot be worked out holds the item.
     plan.unlocated.push(size.name);
-    return;
+    return undefined;
   }
-  // A size whose very URL an item uses is that item's file, wherever it is
-  // served from: kept for it. Anything judged by path comes only after the
-  // size is shown to be on this storage, since another storage's file can
-  // share a key with this one's, and kept on that likeness the size's own
-  // file would lose its record.
-  const urlUsed = at.inUse.urls.has(urlKey(size.url));
-  if (urlUsed) {
+  return { url: size.url, path };
+}
+
+/**
+ * What becomes of a located size's file: kept, and why; on another storage;
+ * or removed. A size whose very URL an item uses is that item's file,
+ * wherever it is served from: kept for it. Anything judged by path comes only
+ * after the size is shown to be on this storage, since another storage's file
+ * can share a key with this one's, and kept on that likeness the size's own
+ * file would lose its record.
+ */
+function sizeVerdict(
+  { url, path }: { url: string; path: string },
+  at: SizeContext
+): KeptSize["reason"] | "elsewhere" | "remove" {
+  const { row, inUse } = at;
+  if (inUse.urls.has(urlKey(url))) {
     const own =
-      row.thumbnailUrl != null && urlKey(size.url) === urlKey(row.thumbnailUrl);
-    plan.keep.push({
-      name: size.name,
-      path,
-      reason: own ? "thumbnail" : "in-use",
-    });
-  } else if (!servedHere(size.url, path, at.storage)) {
-    plan.elsewhere.push({ name: size.name, url: size.url });
-  } else if (isOwnThumbnail(size, path, row)) {
-    plan.keep.push({ name: size.name, path, reason: "thumbnail" });
-  } else if (isInUse(at.inUse, size, path)) {
-    plan.keep.push({ name: size.name, path, reason: "in-use" });
-  } else if (!at.planned.has(path)) {
-    // By the key exactly as stored: an object storage keeps `media//x.webp`
-    // and `media/x.webp` as two objects, and one taken for the other would
-    // stay with nothing recording it once the item is cleared. The checks
-    // above compare canonically, which can only keep more.
-    at.planned.add(path);
-    plan.remove.push({ name: size.name, path });
+      row.thumbnailUrl != null && urlKey(url) === urlKey(row.thumbnailUrl);
+    return own ? "thumbnail" : "in-use";
   }
+  if (!servedHere(url, path, at.storage)) return "elsewhere";
+  if (isOwnThumbnail(url, path, row)) return "thumbnail";
+  if (isInUse(inUse, url, path)) return "in-use";
+  return "remove";
 }
 
 /**
