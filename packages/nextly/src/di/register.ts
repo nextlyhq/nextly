@@ -2845,19 +2845,18 @@ async function initializeSchemaRegistry(
     // which doesn't exist on a brand-new DB. Failure-safe (logs but
     // doesn't throw); see init/first-run.ts.
     try {
-      const { ensureFirstRunSetup } = await import("../init/first-run");
+      const { ensureFirstRunSetup, firstStartSchemaLock } = await import(
+        "../init/first-run"
+      );
       // initializeSchemaRegistry doesn't have resolvedLogger in scope;
       // console is the right fallback because first-run is a one-time
       // user-visible event and the boot logger wiring isn't done yet.
       await ensureFirstRunSetup({
         adapter,
         extensionSchema,
-        logger: {
-          debug: msg => consoleLogger.debug(msg),
-          info: msg => consoleLogger.info(msg),
-          warn: msg => consoleLogger.warn(msg),
-          error: msg => consoleLogger.error(msg),
-        },
+        logger: consoleLogger,
+        // Several processes may start on the same new database at once.
+        holdSchemaLock: firstStartSchemaLock(adapter, consoleLogger),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

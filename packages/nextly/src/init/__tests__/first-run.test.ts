@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { ensureFirstRunSetup } from "../first-run";
+import { ensureFirstRunSetup, type HoldSchemaLock } from "../first-run";
 
 interface FakeAdapter {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -46,6 +46,9 @@ const fakeLogger = {
 
 const fakeStaticTables = { users: {}, roles: {} };
 
+/** A stand-in adapter cannot hold the real schema lock, so these cases run the work directly. */
+const passThrough: HoldSchemaLock = work => work();
+
 describe("ensureFirstRunSetup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -61,6 +64,7 @@ describe("ensureFirstRunSetup", () => {
     const result = await ensureFirstRunSetup({
       adapter,
       logger: fakeLogger,
+      holdSchemaLock: passThrough,
       deps: {
         freshPushSchema,
         getDialectTables: () => fakeStaticTables,
@@ -89,6 +93,7 @@ describe("ensureFirstRunSetup", () => {
     const result = await ensureFirstRunSetup({
       adapter,
       logger: fakeLogger,
+      holdSchemaLock: passThrough,
       deps: {
         freshPushSchema,
         getDialectTables: () => fakeStaticTables,
@@ -110,6 +115,7 @@ describe("ensureFirstRunSetup", () => {
     const result = await ensureFirstRunSetup({
       adapter,
       logger: fakeLogger,
+      holdSchemaLock: passThrough,
       deps: {
         freshPushSchema,
         getDialectTables: () => fakeStaticTables,
@@ -130,6 +136,7 @@ describe("ensureFirstRunSetup", () => {
     const result = await ensureFirstRunSetup({
       adapter,
       logger: fakeLogger,
+      holdSchemaLock: passThrough,
       deps: {
         freshPushSchema,
         getDialectTables: () => fakeStaticTables,
@@ -153,6 +160,7 @@ describe("ensureFirstRunSetup", () => {
     await ensureFirstRunSetup({
       adapter,
       logger: fakeLogger,
+      holdSchemaLock: passThrough,
       deps: {
         freshPushSchema: vi.fn().mockResolvedValue({
           statementsExecuted: [],
@@ -178,6 +186,7 @@ describe("ensureFirstRunSetup", () => {
     const result = await ensureFirstRunSetup({
       adapter,
       logger: fakeLogger,
+      holdSchemaLock: passThrough,
       deps: {
         freshPushSchema: vi
           .fn()
@@ -198,7 +207,8 @@ describe("ensureFirstRunSetup", () => {
     // getDialectTables, so freshPushSchema creates it (+ its indexes). Re-running
     // getSchemaEventsDdl would then `CREATE INDEX` again — and MySQL's raw DDL has
     // no IF NOT EXISTS, so it throws. The bootstrap must be skipped once the ledger
-    // exists. Stateful probe: missing at the top (setup runs), present afterwards.
+    // exists. Stateful probe: missing at the top and again once the schema lock is
+    // held (setup runs), present afterwards.
     let probeCount = 0;
     const adapter: FakeAdapter = {
       dialect: "mysql",
@@ -207,13 +217,14 @@ describe("ensureFirstRunSetup", () => {
       tableExists: vi.fn(async (name: string) => {
         if (name !== "nextly_schema_events") return false;
         probeCount += 1;
-        return probeCount > 1; // false on the top probe, true after freshPushSchema
+        return probeCount > 2; // false on both probes before setup, true after freshPushSchema
       }),
     };
 
     const result = await ensureFirstRunSetup({
       adapter,
       logger: fakeLogger,
+      holdSchemaLock: passThrough,
       deps: {
         freshPushSchema: vi
           .fn()
@@ -225,5 +236,72 @@ describe("ensureFirstRunSetup", () => {
 
     expect(result.ranSetup).toBe(true);
     expect(adapter.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it("creates the schema only while holding the schema lock", async () => {
+    const adapter = makeAdapter({ journalExists: false });
+    let held = false;
+    const pushedWhileHeld: boolean[] = [];
+    const holdSchemaLock: HoldSchemaLock = async work => {
+      held = true;
+      try {
+        return await work();
+      } finally {
+        held = false;
+      }
+    };
+
+    const result = await ensureFirstRunSetup({
+      adapter,
+      logger: fakeLogger,
+      holdSchemaLock,
+      deps: {
+        freshPushSchema: vi.fn(async () => {
+          pushedWhileHeld.push(held);
+          return { statementsExecuted: [] };
+        }),
+        getDialectTables: () => fakeStaticTables,
+        getSchemaEventsDdl: () => [],
+      },
+    });
+
+    expect(result.ranSetup).toBe(true);
+    expect(pushedWhileHeld).toEqual([true]);
+  });
+
+  it("sets up nothing when another process set the database up while this one waited for the lock", async () => {
+    // Missing when this process starts, present once it holds the lock: the
+    // process it waited for created the schema.
+    let held = false;
+    const adapter: FakeAdapter = {
+      dialect: "postgresql",
+      getDrizzle: () => ({}),
+      executeQuery: vi.fn(async () => undefined),
+      tableExists: vi.fn(async () => held),
+    };
+    const freshPushSchema = vi.fn();
+    const holdSchemaLock: HoldSchemaLock = async work => {
+      held = true;
+      return work();
+    };
+
+    const result = await ensureFirstRunSetup({
+      adapter,
+      logger: fakeLogger,
+      holdSchemaLock,
+      deps: {
+        freshPushSchema,
+        getDialectTables: () => fakeStaticTables,
+        getSchemaEventsDdl: () => fakeLedgerDdl,
+      },
+    });
+
+    expect(result).toEqual({
+      ranSetup: false,
+      reason: "already_initialized",
+    });
+    expect(freshPushSchema).not.toHaveBeenCalled();
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
+    expect(fakeLogger.error).not.toHaveBeenCalled();
   });
 });

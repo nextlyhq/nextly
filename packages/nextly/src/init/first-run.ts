@@ -19,6 +19,8 @@
 // first query will surface real DB errors loudly, and `nextly db:sync`
 // remains the canonical recovery path.
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import {
   type ExtensionSchema,
   getActiveExtensionSchema,
@@ -70,10 +72,22 @@ export interface EnsureFirstRunSetupDeps {
   getSchemaEventsDdl: (dialect: "postgresql" | "mysql" | "sqlite") => string[];
 }
 
+/** Run `work` holding the schema lock for the whole of it, and return what it returns. */
+export type HoldSchemaLock = <T>(work: () => Promise<T>) => Promise<T>;
+
 export interface EnsureFirstRunSetupArgs {
   adapter: AdapterLike;
   logger: LoggerLike;
   deps?: Partial<EnsureFirstRunSetupDeps>;
+  /**
+   * How a new database's setup is kept to one process at a time: {@link firstStartSchemaLock}
+   * for the adapter, or, for a test whose adapter is a stand-in, a pass-through.
+   *
+   * Required rather than defaulted, because the default would have to take the lock through an
+   * adapter this module only knows as {@link AdapterLike}; a caller that omitted it would get a
+   * setup that races every other process starting on the same new database.
+   */
+  holdSchemaLock: HoldSchemaLock;
   /**
    * The extension schema the caller just published, passed rather than read.
    *
@@ -96,6 +110,42 @@ export type EnsureFirstRunSetupResult =
   | { ranSetup: false; reason: "already_initialized" | "probe_failed" };
 
 const PROBE_TABLE = "nextly_schema_events";
+
+/**
+ * The schema lock as a first start takes it: the one lock `migrate` and every schema change hold,
+ * waited for when another process holds it (about a minute, then the start reports the holder),
+ * and created when the database has no lock tables yet, which a new database never does.
+ *
+ * Not released on an interrupt: this runs inside a server, whose shutdown may let the work run on,
+ * and a lock left behind lapses within one lease.
+ */
+export function firstStartSchemaLock(
+  adapter: DrizzleAdapter,
+  logger: LoggerLike
+): HoldSchemaLock {
+  return async work => {
+    const { withSchemaLock } = await import(
+      "../domains/schema/pipeline/schema-lock"
+    );
+    const outcome = await withSchemaLock(
+      {
+        adapter,
+        command: "first start: core schema setup",
+        whenHeld: "wait",
+        releaseOnInterrupt: false,
+        logger: { warn: m => logger.warn(m), info: m => logger.info(m) },
+      },
+      () => work()
+    );
+    // `ran: false` is only ever a wait that `isSettled` ended, and none is passed here.
+    if (!outcome.ran) {
+      throw NextlyError.internal({
+        logContext: { reason: "first-start schema lock settled without work" },
+      });
+    }
+    return outcome.value;
+  };
+}
 
 /**
  * How long a startup diagnostic may take before boot proceeds without it.
@@ -581,103 +631,19 @@ export async function ensureFirstRunSetup(
     return { ranSetup: false, reason: "already_initialized" };
   }
 
-  const start = Date.now();
-  logger.info("[nextly] Setting up database schema...");
-
+  // Under the schema lock, and asked again once it is held. Every process that starts on a new
+  // database finds the ledger missing — two instances deployed together, or an app starting beside
+  // `nextly migrate` — and the push `setUpNewDatabase` runs creates its tables with a plain `CREATE TABLE`. Without
+  // the lock the second process to reach a table fails on it, and two processes that each reached
+  // a different table first both stop part way, leaving the tables after that point to nobody. The
+  // lock is the one `migrate` holds, so a first start and a migrate run never build the core schema
+  // at the same time either; whichever waits finds it built.
   try {
-    const dialect = adapter.dialect;
-    // Extension tables join the FIRST-RUN push as well as the incremental one.
-    //
-    // This path does not go through `PushSchemaPipeline.apply`, which is where
-    // the extension merge otherwise happens — so on a fresh database a
-    // plugin's tables were compiled, validated, owned, and never created. The
-    // failure was `no such table` on the first query, with nothing between
-    // boot and that query reporting a problem.
-    //
-    // Merged here rather than taught to `getDialectTables`: that function
-    // answers "what are Nextly's own tables", which is a different question
-    // with a stable answer, and widening it would make every caller of it
-    // depend on plugin config.
-    const extensionSchema =
-      args.extensionSchema ?? getActiveExtensionSchema(dialect);
-    const staticTables = {
-      ...deps.getDialectTables(dialect),
-      ...(extensionSchema?.drizzle ?? {}),
-    };
-    const result = await deps.freshPushSchema(
-      dialect,
-      adapter.getDrizzle(),
-      staticTables
-    );
-
-    // Extension INDEXES, replayed from the spec.
-    //
-    // They cannot ride the push above: A3 keeps indexes off the Drizzle tables
-    // deliberately, because drizzle-kit would otherwise emit its own CREATE
-    // INDEX beside the replayed one and MySQL has no IF NOT EXISTS. That is
-    // right for the incremental path, where `add_index` is replayed
-    // separately — and it means a FRESH database got the tables and none of
-    // their indexes, so a declared unique index enforced nothing.
-    //
-    // Emitted through the pipeline's own emitter rather than by composing SQL
-    // here: the two would then disagree about quoting and about which indexes
-    // a dialect can build at all.
-    await createExtensionIndexes(
-      adapter,
-      dialect,
-      logger,
-      extensionSchema?.specs ?? []
-    );
-
-    // Extension CONSTRAINTS, replayed for the same reason as the indexes.
-    //
-    // `toDrizzleTable` leaves checks and foreign keys off on PostgreSQL and
-    // MySQL exactly as it leaves indexes off, so the push above created the
-    // tables and none of their integrity constraints — a declared check, a
-    // declared foreign key and the check that enforces `col.enum()` all
-    // enforced nothing on a fresh database. An installation that never runs
-    // dev push afterwards keeps that unconstrained schema forever.
-    //
-    // Not the keys to code-first tables: see `withoutKeysToCodeFirstTables`.
-    await createExtensionConstraints(
-      adapter,
-      dialect,
-      logger,
-      withoutKeysToCodeFirstTables(
-        extensionSchema?.specs ?? [],
-        extensionSchema?.codeFirstTables ?? new Set()
-      )
-    );
-
-    // `freshPushSchema` above already creates the ledger (it is in
-    // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
-    // somehow still missing — re-running the raw DDL when it already exists
-    // would fail on MySQL, whose `CREATE INDEX` has no IF NOT EXISTS. Mirrors
-    // `migrate.ts`'s `ensureLedger` guard.
-    if (!(await adapter.tableExists(PROBE_TABLE))) {
-      for (const stmt of deps.getSchemaEventsDdl(dialect)) {
-        await adapter.executeQuery(stmt);
-      }
-    }
-
-    // A new database holds no content, so the record of where each media
-    // item is used is complete from the start; an existing site's becomes so
-    // once `nextly media reindex-usage` has read its content.
-    await markMediaUsageRecordedOnNewSite(
-      adapter,
-      staticTables.nextlyMeta,
-      logger
-    );
-
-    const durationMs = Date.now() - start;
-    logger.info(
-      `[nextly] Setup done in ${durationMs}ms (${result.statementsExecuted.length} statement(s)).`
-    );
-    return {
-      ranSetup: true,
-      statementsExecuted: result.statementsExecuted.length,
-      durationMs,
-    };
+    const setUp = await args.holdSchemaLock(async () => {
+      if (await adapter.tableExists(PROBE_TABLE)) return undefined;
+      return setUpNewDatabase(args, deps);
+    });
+    return setUp ?? { ranSetup: false, reason: "already_initialized" };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(
@@ -685,6 +651,113 @@ export async function ensureFirstRunSetup(
     );
     return { ranSetup: false, reason: "probe_failed" };
   }
+}
+
+/**
+ * Create the core schema, and the extension tables beside it, on a database that has none. Run
+ * only while the schema lock is held; a failure is reported by the caller.
+ */
+async function setUpNewDatabase(
+  args: EnsureFirstRunSetupArgs,
+  deps: EnsureFirstRunSetupDeps
+): Promise<EnsureFirstRunSetupResult & { ranSetup: true }> {
+  const { adapter, logger } = args;
+  const start = Date.now();
+  logger.info("[nextly] Setting up database schema...");
+
+  const dialect = adapter.dialect;
+  // Extension tables join the FIRST-RUN push as well as the incremental one.
+  //
+  // This path does not go through `PushSchemaPipeline.apply`, which is where
+  // the extension merge otherwise happens — so on a fresh database a
+  // plugin's tables were compiled, validated, owned, and never created. The
+  // failure was `no such table` on the first query, with nothing between
+  // boot and that query reporting a problem.
+  //
+  // Merged here rather than taught to `getDialectTables`: that function
+  // answers "what are Nextly's own tables", which is a different question
+  // with a stable answer, and widening it would make every caller of it
+  // depend on plugin config.
+  const extensionSchema =
+    args.extensionSchema ?? getActiveExtensionSchema(dialect);
+  const staticTables = {
+    ...deps.getDialectTables(dialect),
+    ...(extensionSchema?.drizzle ?? {}),
+  };
+  const result = await deps.freshPushSchema(
+    dialect,
+    adapter.getDrizzle(),
+    staticTables
+  );
+
+  // Extension INDEXES, replayed from the spec.
+  //
+  // They cannot ride the push above: A3 keeps indexes off the Drizzle tables
+  // deliberately, because drizzle-kit would otherwise emit its own CREATE
+  // INDEX beside the replayed one and MySQL has no IF NOT EXISTS. That is
+  // right for the incremental path, where `add_index` is replayed
+  // separately — and it means a FRESH database got the tables and none of
+  // their indexes, so a declared unique index enforced nothing.
+  //
+  // Emitted through the pipeline's own emitter rather than by composing SQL
+  // here: the two would then disagree about quoting and about which indexes
+  // a dialect can build at all.
+  await createExtensionIndexes(
+    adapter,
+    dialect,
+    logger,
+    extensionSchema?.specs ?? []
+  );
+
+  // Extension CONSTRAINTS, replayed for the same reason as the indexes.
+  //
+  // `toDrizzleTable` leaves checks and foreign keys off on PostgreSQL and
+  // MySQL exactly as it leaves indexes off, so the push above created the
+  // tables and none of their integrity constraints — a declared check, a
+  // declared foreign key and the check that enforces `col.enum()` all
+  // enforced nothing on a fresh database. An installation that never runs
+  // dev push afterwards keeps that unconstrained schema forever.
+  //
+  // Not the keys to code-first tables: see `withoutKeysToCodeFirstTables`.
+  await createExtensionConstraints(
+    adapter,
+    dialect,
+    logger,
+    withoutKeysToCodeFirstTables(
+      extensionSchema?.specs ?? [],
+      extensionSchema?.codeFirstTables ?? new Set()
+    )
+  );
+
+  // `freshPushSchema` above already creates the ledger (it is in
+  // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
+  // somehow still missing — re-running the raw DDL when it already exists
+  // would fail on MySQL, whose `CREATE INDEX` has no IF NOT EXISTS. Mirrors
+  // `migrate.ts`'s `ensureLedger` guard.
+  if (!(await adapter.tableExists(PROBE_TABLE))) {
+    for (const stmt of deps.getSchemaEventsDdl(dialect)) {
+      await adapter.executeQuery(stmt);
+    }
+  }
+
+  // A new database holds no content, so the record of where each media
+  // item is used is complete from the start; an existing site's becomes so
+  // once `nextly media reindex-usage` has read its content.
+  await markMediaUsageRecordedOnNewSite(
+    adapter,
+    staticTables.nextlyMeta,
+    logger
+  );
+
+  const durationMs = Date.now() - start;
+  logger.info(
+    `[nextly] Setup done in ${durationMs}ms (${result.statementsExecuted.length} statement(s)).`
+  );
+  return {
+    ranSetup: true,
+    statementsExecuted: result.statementsExecuted.length,
+    durationMs,
+  };
 }
 
 /**
