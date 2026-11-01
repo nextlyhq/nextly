@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  rangedLimitSettingProblem,
   validateWidgetDefinition,
   widgetValueProblem,
   MAX_TEXT_CONTENT,
@@ -426,17 +425,6 @@ describe("every widget is framed", () => {
   it("accepts a widget that says nothing about its frame", () => {
     expect(() => validateWidgetDefinition(custom)).not.toThrow();
   });
-
-  it("refuses a widget that names chrome, whatever its value", () => {
-    // The frame draws every card's header and every state, so no widget may
-    // decline it; a plain-JavaScript declaration that still names the field
-    // learns so at startup. Cast, because the field is no longer typed.
-    for (const chrome of ["none", "card", 42]) {
-      expect(() =>
-        validateWidgetDefinition({ ...custom, chrome } as never)
-      ).toThrow(/chrome is not a widget field/);
-    }
-  });
 });
 
 describe("hidesWhenEmpty", () => {
@@ -492,30 +480,31 @@ describe("a declared permission", () => {
     expect(widgetValueProblem({})).toBeUndefined();
   });
 
-  it("accepts an any-of list", () => {
+  it("accepts an anyOf gate", () => {
     expect(
       widgetValueProblem({
-        requiredPermission: [
-          "read-content-releases",
-          "create-content-releases",
-        ],
+        requiredPermission: {
+          anyOf: ["read-content-releases", "create-content-releases"],
+        },
       })
     ).toBeUndefined();
   });
 
   /*
-   * 🔴 The forms the array introduced, each refused for the same reason the
-   * object above is: they are PRESENT and unusable, and the gate reads an
-   * unusable declaration as a refusal. Admitting them here while the gate
-   * refuses them would hide a card with no error anywhere -- and admitting an
-   * empty array is worse than that, because "any of nothing" is satisfied by
-   * nobody, so `requiredPermission: []` would silently mean the opposite of
-   * what its author plainly wrote.
+   * 🔴 The forms an any-of group allows to go wrong, each refused for the same
+   * reason the object above is: they are PRESENT and unusable, and the gate
+   * reads an unusable declaration as a refusal. Admitting them here while the
+   * gate refuses them would hide a card with no error anywhere -- and admitting
+   * an empty `anyOf` is worse than that, because "any of nothing" is satisfied
+   * by nobody, so it would silently mean the opposite of what its author
+   * plainly wrote. A bare list is no gate at all: it reads as "any" to one
+   * author and "all" to the next.
    */
   it.each([
-    ["an empty array", []],
-    ["an array with an empty member", ["read-posts", ""]],
-    ["an array with a non-slug member", ["read-posts", 7]],
+    ["an empty anyOf", { anyOf: [] }],
+    ["an anyOf with an empty member", { anyOf: ["read-posts", ""] }],
+    ["an anyOf with a non-slug member", { anyOf: ["read-posts", 7] }],
+    ["a bare list", ["read-posts", "create-posts"]],
     ["an empty string", ""],
   ])("refuses %s", (_label, requiredPermission) => {
     expect(widgetValueProblem({ requiredPermission })).toMatch(
@@ -968,31 +957,10 @@ describe("a custom card's cells", () => {
 });
 
 describe("a limit setting beside a ranged query", () => {
-  // The rule refuses exactly the setting the limit knob would apply: one test
-  // of what a limit setting is, read by both, so the two cannot part.
-  it.each([
-    [{ name: "limit", type: "number" as const, label: "Limit" }, 3],
-    [{ name: "limit", type: "text" as const, label: "Limit" }, "3"],
-    [{ name: "items", type: "number" as const, label: "Items" }, 3],
-  ])("refuses %o exactly when the limit knob applies it", (setting, value) => {
-    const applied = applyWidgetSettings(
-      { source: "collection:posts", op: "list" as const },
-      [setting],
-      { [setting.name]: value }
-    );
-    const refused = rangedLimitSettingProblem({
-      query: {
-        source: "collection:posts",
-        op: "timeseries",
-        dateField: "createdAt",
-        range: "30d",
-      },
-      settings: [setting],
-    });
-    expect(refused !== undefined).toBe("limit" in applied);
-  });
-
-  it("is refused at registration, naming the widget", () => {
+  it("is admitted, since no setting drives a query because of its name", () => {
+    // A number setting named `limit` reaches a declared widget's `load` like
+    // any other, and sets nothing a definition's query asks, so it cannot
+    // fail a ranged query's requests and is not refused beside one.
     expect(() =>
       validateWidgetDefinition({
         id: "acme/over-time",
@@ -1007,6 +975,6 @@ describe("a limit setting beside a ranged query", () => {
         },
         settings: [{ name: "limit", type: "number", label: "Limit" }],
       })
-    ).toThrow(/acme\/over-time: declares a "limit" setting/);
+    ).not.toThrow();
   });
 });

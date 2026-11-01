@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CORE_CONDITIONS,
   CORE_DECLARATIONS,
   CORE_WIDGETS,
 } from "../../domains/widgets/core-widgets";
@@ -69,9 +70,11 @@ describe("the one call", () => {
       owner: "core",
       core: true,
       declarations: CORE_DECLARATIONS,
+      conditions: CORE_CONDITIONS,
     });
-    // Only core's group is marked: a plugin's never is.
+    // Only core's group is marked, and only it names conditions: a plugin's never does.
     expect(given.groups?.[1]?.core).toBeUndefined();
+    expect(given.groups?.[1]?.conditions).toBeUndefined();
     expect(given.groups?.[2]).toEqual({
       owner: SITE_CONFIG,
       declarations: [site],

@@ -5,9 +5,10 @@
  * (Mine), or what other people saved (Team), one row per document, every row
  * a link to it and a menu that pins or unpins it.
  *
- * Drawn from the card's own slot, which the dashboard batch fills from
- * `system:continue`; the tab is the card's one quick setting, on its header,
- * and reaches the source as the query's `where`. Every title in the answer was
+ * Drawn from the rows its `load` read from `system:continue`; the tab is the
+ * card's one quick setting, on its header, and its `load` asks the source for
+ * the tab chosen. The frame drew loading, no permission and error before this
+ * is reached. Every title in the answer was
  * read as the reader, so the card draws what it is given and never a stand-in.
  *
  * Drawn by the one list card: each row's collection icon, its title, its
@@ -18,7 +19,8 @@
  * @module components/features/dashboard/ContinueCard
  */
 
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
+import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { resolveIconName } from "@admin/components/features/widgets/archetypes/icon";
@@ -29,7 +31,7 @@ import {
   ListCard,
   type ListModel,
 } from "@admin/components/features/widgets/frame/list-card";
-import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
+import { useListCard } from "@admin/components/features/widgets/frame/list-card-hook";
 import { StatusPill } from "@admin/components/features/widgets/frame/row-parts";
 import type { PinTarget } from "@admin/hooks/queries/useDashboardPins";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
@@ -139,19 +141,24 @@ function continueModel(
   };
 }
 
-export const ContinueCard: React.FC<WidgetComponentProps> = props => {
-  const { tier, drawn, density, now, read } = useListCard(props);
+/** What the Continue card is handed: its declaration's props, with the rows its `load` read. */
+export type ContinueCardProps = Omit<DeclaredComponentProps, "data"> & {
+  data: CoreListWidgetData;
+};
+
+export const ContinueCard: React.FC<ContinueCardProps> = ({
+  data,
+  settings,
+}) => {
+  const { tier, drawn, density, now } = useListCard(settings.limit);
   const labelOf = useCollectionLabel();
   const pinItem = usePinRowItem();
-  const tab = continueTab(props.settings);
-  if ("node" in read) return read.node;
+  const tab = continueTab(settings);
   // A row this build cannot read is left out rather than drawn from guesses.
-  const rows = continueRows(read.list);
+  const rows = continueRows(data);
   if (rows.length === 0) {
     return (
-      <FrameState
-        state={{ kind: "empty", empty: continueEmpty(tab, read.list) }}
-      />
+      <FrameState state={{ kind: "empty", empty: continueEmpty(tab, data) }} />
     );
   }
   return (

@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { addPanelFacts } from "../add-panel";
+import { addPanelFacts, addPanelPlace } from "../add-panel";
 import { type CanonicalWidget, sizeFacts } from "../canonical";
 
 const widget = (patch: Partial<CanonicalWidget>): CanonicalWidget => ({
@@ -31,8 +31,8 @@ describe("a widget offered on request", () => {
   });
 
   it("is one row of the add panel's Overview, not a row per collection", () => {
-    const facts = addPanelFacts(widget({ offered: "on-request" }));
-    expect(facts.group).toBe("overview");
-    expect(facts).not.toHaveProperty("perCollection");
+    const offered = widget({ offered: "on-request" });
+    expect(addPanelPlace(offered).group).toBe("overview");
+    expect(addPanelFacts(offered)).not.toHaveProperty("perCollection");
   });
 });

@@ -16,11 +16,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { allWidgets } from "../../domains/widgets/canonical";
-import {
-  CORE_WIDGET_IDS,
-  CORE_WIDGETS,
-} from "../../domains/widgets/core-widgets";
-import { defaultLayoutPlacements } from "../../domains/widgets/default-layout";
+import { CORE_WIDGET_IDS } from "../../domains/widgets/core-widgets";
 import {
   deferredEntities,
   setDeferredEntities,
@@ -31,7 +27,6 @@ import {
   listWidgets,
   registerWidget,
 } from "../../domains/widgets/registry";
-import { drivesQuery } from "../../domains/widgets/settings";
 import {
   clearSources,
   getSource,
@@ -254,53 +249,24 @@ describe("resetWidgetRegistries", () => {
     expect(listWidgets()).toHaveLength(CORE_WIDGET_IDS.length);
   });
 
-  it("leaves no core card querying a source nothing serves", () => {
-    // 🔴 A definition naming an unregistered source is a legal definition: it
-    // is refused at QUERY time, and only for the reader unlucky enough to hold
-    // the card. So renaming a source is silent on both sides -- the source and
-    // its own tests keep passing, and the card keeps naming what used to serve
-    // it. Sharing one declaration is what makes that impossible; this is what
-    // makes it CHECKED, since a future card could still spell the id by hand.
+  it("answers every source core's own cards read in their load", () => {
+    // 🔴 A card's `load` reads its `system:` source through the resolver
+    // registered for it, so a source registered under another id, or not at
+    // all, would fail that card for every reader. Core's cards and their
+    // sources name each id by one shared constant, and this is what makes that
+    // CHECKED: each is answered once boot has run.
     resetWidgetRegistries();
-    const asking = CORE_WIDGETS.filter(card => asksOf(card).length > 0);
-    // The population, asserted before the verdict: with no querying card at all
-    // the check below is vacuously satisfied, which is the shape of a check
-    // reporting on nothing.
-    expect(asking.length).toBeGreaterThan(0);
-    expect(unservedAsks(CORE_WIDGETS, placedById())).toEqual([]);
-  });
-
-  it("reports a sourceless card no Collection setting supplies, and one placed set to nothing served", () => {
-    // The control: the check above passes only because each of these fails it.
-    resetWidgetRegistries();
-    const bare = { id: "core/bare", query: { op: "count" } };
-    const placedOnNothing = {
-      id: "core/placed",
-      query: { op: "count" },
-      settings: [
-        { name: "collection", type: "collection", defaultValue: "gone" },
-      ],
-    };
-    expect(
-      unservedAsks([bare, placedOnNothing], id => id === "core/placed")
-    ).toEqual([
-      "core/bare: names no source, and no Collection setting supplies one",
-      'core/placed: is placed by default, set to "gone", which nothing serves',
-    ]);
-  });
-
-  it("registers core's sources before core's cards, so a card's filter settings are admitted", () => {
-    // 🔴 Continue where you left off's Tab setting drives its query only
-    // because its source declares the `tab` filter, which the knobs read from
-    // the source registry: with no such filter the setting would be drawn and
-    // saved and change nothing the card asks.
-    expect(() => resetWidgetRegistries()).not.toThrow();
-    const card = listWidgets().find(widget => widget.id === "core/continue");
-    const settings = card?.settings?.map(setting => setting.name);
-    expect(settings).toEqual(expect.arrayContaining(["tab", "limit"]));
-    const tab = card?.settings?.find(setting => setting.name === "tab");
-    expect(tab).toBeDefined();
-    expect(tab && drivesQuery(tab, card?.query)).toBe(true);
+    for (const id of [
+      CONTENT_SOURCE_ID,
+      TEAM_SOURCE_ID,
+      CONTINUE_SOURCE_ID,
+      RELEASES_SOURCE_ID,
+      ACTIVITY_SOURCE_ID,
+    ]) {
+      expect([id, systemResolver(id) !== undefined]).toEqual([id, true]);
+    }
+    // The control: an id nothing registers has no resolver.
+    expect(systemResolver("system:nothing-serves-this")).toBeUndefined();
   });
 
   it("still refuses a genuine duplicate WITHIN one boot", () => {
@@ -317,67 +283,3 @@ describe("resetWidgetRegistries", () => {
     expect(() => seedWidget("stripe/revenue")).toThrow(/already registered/);
   });
 });
-
-/** A core card as this check reads it: its query, its cells' queries and its settings. */
-interface AskingCard {
-  id: string;
-  query?: { source?: unknown; op?: unknown };
-  cells?: readonly { query?: { source?: unknown; op?: unknown } }[];
-  settings?: readonly { type: string; defaultValue?: unknown }[];
-}
-
-/** Every query a card asks: its own, and each of its cells'. */
-function asksOf(card: AskingCard): { source?: unknown }[] {
-  return [
-    ...(card.query === undefined ? [] : [card.query]),
-    ...(card.cells ?? []).flatMap(cell => (cell.query ? [cell.query] : [])),
-  ];
-}
-
-/**
- * Whether core places each of its cards on a new dashboard: read from the default the layout
- * builds (`defaultLayoutPlacements`), the one rule, over core's cards.
- */
-function placedById(): (id: string) => boolean {
-  const placed = new Set(
-    defaultLayoutPlacements(allWidgets()).map(card => card.widgetId)
-  );
-  return id => placed.has(id);
-}
-
-/**
- * Why a card would query a source nothing serves, one line each: a named
- * source no one registered; a sourceless query no Collection setting supplies;
- * or a sourceless card placed by default set to a collection nothing serves.
- */
-function unservedAsks(
-  cards: readonly AskingCard[],
-  placed: (id: string) => boolean
-): string[] {
-  return cards.flatMap(card => {
-    const asks = asksOf(card);
-    const named = asks.flatMap(ask =>
-      typeof ask.source === "string" && getSource(ask.source) === undefined
-        ? [`${card.id}: queries ${ask.source}, which nothing serves`]
-        : []
-    );
-    if (!asks.some(ask => typeof ask.source !== "string")) return named;
-    const setting = card.settings?.find(entry => entry.type === "collection");
-    if (setting === undefined) {
-      return [
-        ...named,
-        `${card.id}: names no source, and no Collection setting supplies one`,
-      ];
-    }
-    const start = setting.defaultValue;
-    const served =
-      typeof start === "string" &&
-      getSource(`collection:${start}`) !== undefined;
-    return placed(card.id) && !served
-      ? [
-          ...named,
-          `${card.id}: is placed by default, set to ${JSON.stringify(start)}, which nothing serves`,
-        ]
-      : named;
-  });
-}

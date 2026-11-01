@@ -1,5 +1,5 @@
 /**
- * The dashboard's Content table, drawn from its `system:content` answer: its columns in order, a
+ * The dashboard's Content table, drawn from the rows its `load` read from `system:content`: its columns in order, a
  * collection's row and a Single's, the + only where the reader may create, Edit or View on a
  * Single by whether they may update it, Drafts linked to the list's Draft filter, zeros and
  * empty collections muted, the table at the medium and large tiers and narrowed on a narrow
@@ -8,7 +8,7 @@
  * listing the collections.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
@@ -18,14 +18,29 @@ import {
   CardTierContext,
 } from "@admin/components/features/widgets/frame/tier";
 
-import { ContentTable } from "./ContentTable";
+import { ContentTable, type ContentTableProps } from "./ContentTable";
+
+/** One row of the card's data, as JSON carries it. */
+type Row = CoreListWidgetData["items"][number];
+
+/**
+ * A row as JSON carries it, from fields a case may leave `undefined`: such a
+ * field is not there at all, as the browser receives it.
+ */
+function fields(given: Record<string, Row[string] | undefined>): Row {
+  return Object.fromEntries(
+    Object.entries(given).filter(
+      (entry): entry is [string, Row[string]] => entry[1] !== undefined
+    )
+  );
+}
 
 /** One collection's row as `system:content` answers it. */
 function collectionRow(
   slug: string,
-  overrides: Record<string, unknown> = {}
-): Record<string, unknown> {
-  return {
+  overrides: Record<string, Row[string] | undefined> = {}
+): Row {
+  return fields({
     kind: "collection",
     slug,
     label: slug.charAt(0).toUpperCase() + slug.slice(1),
@@ -39,7 +54,7 @@ function collectionRow(
     actorType: "user",
     identityErasedAt: null,
     ...overrides,
-  };
+  });
 }
 
 /** One Single's row: no counts, no create decision, and one the reader may update. */
@@ -56,11 +71,8 @@ const HOME = {
   identityErasedAt: null,
 };
 
-/** The query a card is asked at its size: the rows it draws, and one more. */
-const QUERY = { source: "system:content", op: "list" as const, limit: 11 };
-
 function draw(
-  items: Record<string, unknown>[],
+  items: readonly Row[],
   {
     tier = "large",
     total,
@@ -73,20 +85,17 @@ function draw(
     h?: number;
   } = {}
 ) {
-  const props: WidgetComponentProps = {
+  const props: ContentTableProps = {
     widgetId: "core/content-table",
     placementId: "core/content-table",
     settings: {},
-    isFetching: false,
-    query: QUERY,
-    slot: {
-      ok: true,
-      result: {
-        op: "list",
-        items,
-        ...(total === undefined ? {} : { total }),
-        ...(totalByKind === undefined ? {} : { totalByKind }),
-      },
+    size: { w: 12, h: h ?? 4, tier },
+    refreshing: false,
+    retry: () => undefined,
+    data: {
+      items,
+      ...(total === undefined ? {} : { total }),
+      ...(totalByKind === undefined ? {} : { totalByKind }),
     },
   };
   return render(
@@ -226,7 +235,11 @@ describe("the Content table", () => {
       collectionRow("posts"),
       collectionRow("tags", { updatedAt: undefined, userId: undefined }),
       // A date nobody is named for, as a Single saved before the trail holds.
-      { ...HOME, updatedAt: "2024-01-05T08:00:00.000Z", userId: undefined },
+      fields({
+        ...HOME,
+        updatedAt: "2024-01-05T08:00:00.000Z",
+        userId: undefined,
+      }),
     ]);
     const time = within(rowOf("Posts")).getByText(/ago|just now|Oct/);
     expect(time).toHaveAttribute("datetime", "2026-10-29T10:00:00.000Z");
@@ -281,7 +294,7 @@ describe("the Content table", () => {
       HOME,
       { ...HOME, slug: "about", label: "About", canUpdate: false },
       // A row whose answer says nothing about updating is a refusal, not a guess.
-      { ...HOME, slug: "terms", label: "Terms", canUpdate: undefined },
+      fields({ ...HOME, slug: "terms", label: "Terms", canUpdate: undefined }),
     ]);
     expect(
       within(rowOf("Home")).getByRole("link", { name: "Edit Home" })

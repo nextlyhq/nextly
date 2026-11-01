@@ -1,6 +1,6 @@
 /**
- * The dashboard's Upcoming releases card, answered by `system:releases` in the
- * dashboard's batch.
+ * The dashboard's Upcoming releases card, drawn from the rows its `load` read
+ * from `system:releases`.
  *
  * Above the upcoming releases, at every size, one line says which of the
  * reader's releases need attention ("1 stopped · 2 overdue"), each part linking
@@ -13,13 +13,16 @@
  * entries it holds, and whether its checks found it Ready or "N issues", and
  * leads to its release.
  *
- * With nothing scheduled, stopped or overdue the answer is empty and the card
- * reports it so; the widget hides when empty, so the dashboard takes it out.
+ * With nothing scheduled, stopped or overdue the answer is empty: the widget
+ * hides when empty, so the dashboard takes it out, and the frame draws its
+ * empty state where customise mode shows it. The frame also drew loading and
+ * error before this is reached.
  *
  * @module components/features/dashboard/UpcomingReleases
  */
 
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
+import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
@@ -29,7 +32,6 @@ import {
   type ListModel,
 } from "@admin/components/features/widgets/frame/list-card";
 import { useListDensity } from "@admin/components/features/widgets/frame/list-rows";
-import { readListSlot } from "@admin/components/features/widgets/frame/list-slot";
 import {
   LeadingChip,
   StatusPill,
@@ -68,7 +70,7 @@ function readRow(row: Record<string, unknown>): ReleaseSourceRow | undefined {
 }
 
 /** An answer's rows, split by kind: the attention counts, and the releases. */
-function rowsOf(items: readonly Record<string, unknown>[]) {
+function rowsOf(items: CoreListWidgetData["items"]) {
   const rows = items.flatMap(item => readRow(item) ?? []);
   return {
     attention: rows.flatMap(row => (row.kind === "attention" ? [row] : [])),
@@ -111,27 +113,29 @@ const AttentionLine: React.FC<{
   </p>
 );
 
-export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
-  slot,
-  isFetching,
-  query,
-  onRetry,
+/** What the Upcoming releases card is handed: its declaration's props, with the rows its `load` read. */
+export type UpcomingReleasesCardProps = Omit<DeclaredComponentProps, "data"> & {
+  data: CoreListWidgetData;
+};
+
+export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
+  data,
 }) => {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
-  const drawn = useRowsDrawn(tier, query?.limit, density);
+  // At most five rows, the most its `load` asks for before the one that says more exist: the
+  // card declares no "Number of items", so the rule's own default stands for it here and there.
+  const drawn = useRowsDrawn(tier, undefined, density);
   // With the attention line above them, the rows have its room the less.
   const drawnUnderLine = useRowsDrawn(
     tier,
-    query?.limit,
+    undefined,
     density,
     ATTENTION_LINE_PX
   );
 
-  const read = readListSlot({ slot, isFetching, rows: drawn, onRetry });
-  if ("node" in read) return read.node;
-  const { attention, releases } = rowsOf(read.list.items);
+  const { attention, releases } = rowsOf(data.items);
   if (attention.length === 0 && releases.length === 0) {
     return (
       <FrameState

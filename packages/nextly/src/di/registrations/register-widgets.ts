@@ -45,10 +45,12 @@ import {
   registerAttentionItems,
 } from "../../domains/widgets/attention/items";
 import {
+  CORE_CONDITIONS,
   CORE_DECLARATIONS,
   CORE_WIDGET_IDS,
   CORE_WIDGETS,
 } from "../../domains/widgets/core-widgets";
+import { provideCoreSourceRead } from "../../domains/widgets/core-widgets/system-read";
 import { setAdminComponentPlugins } from "../../domains/widgets/declaration/component-map-store";
 import {
   clearDeclaredWidgets,
@@ -56,6 +58,8 @@ import {
   registerDashboardWidgets,
   type DeclaredWidgetGroup,
 } from "../../domains/widgets/declaration/declared-widgets";
+import type { WidgetReadServices } from "../../domains/widgets/declaration/define-widget";
+import { boundCaller } from "../../domains/widgets/declaration/read-services";
 import {
   SITE_CONFIG,
   siteDashboardContext,
@@ -65,14 +69,21 @@ import {
   siteDefaultLayoutPlan,
 } from "../../domains/widgets/declaration/site-dashboard";
 import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
+import type { WidgetQuery } from "../../domains/widgets/query";
 import { clearWidgets } from "../../domains/widgets/registry";
+import type { ResolverOptions } from "../../domains/widgets/resolved-sources";
+import type { WidgetResult } from "../../domains/widgets/result";
 import { registerSetupCard } from "../../domains/widgets/setup-card";
 import {
   clearSiteDashboardRules,
   setSiteDashboardRules,
 } from "../../domains/widgets/site-rules";
 import { clearSources } from "../../domains/widgets/sources";
-import { clearSystemResolvers } from "../../domains/widgets/system-sources";
+import {
+  clearSystemResolvers,
+  systemResolver,
+} from "../../domains/widgets/system-sources";
+import { NextlyError } from "../../errors/nextly-error";
 import {
   pluginAlternatives,
   pluginDashboardSnapshots,
@@ -145,6 +156,10 @@ export function resetWidgetRegistries(
   registerSystemHealthSource();
   registerSummaryWidgetSources();
   registerContinueWidgetSource();
+  // Core's own cards read the sources above in their `load`, each as the
+  // caller its read services were bound for: handed here, from the binding
+  // the batch makes, so the widget list imports none of those services.
+  provideCoreSourceRead(readSystemSourceAsCard);
 
   // Every widget, through the one call: core's own list, the plugins' widgets
   // declared with `defineWidget()`, and the site's. Each is checked together
@@ -163,7 +178,13 @@ export function resetWidgetRegistries(
     // Core's own declarations first, through the same checks as a plugin's,
     // so a plugin claiming one of their ids is the one named.
     groups: [
-      { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
+      {
+        owner: CORE_OWNER,
+        core: true,
+        declarations: CORE_DECLARATIONS,
+        // When each is offered, published on its definition: core's alone.
+        conditions: CORE_CONDITIONS,
+      },
       ...pluginWidgetDeclarationGroups(dashboards),
       // The site's own widgets last, kept and published as a plugin's are.
       ...siteWidgetGroup(site),
@@ -201,6 +222,25 @@ export function resetWidgetRegistries(
   // sources HERE, first, so a plugin naming a built-in id is refused by
   // `registerSource` on the PLUGIN's registration -- naming the plugin an
   // operator can act on, rather than dying inside core's own publication.
+}
+
+/**
+ * A `system:` source's answer to `query`, read by its registered resolver as
+ * the caller `services` were bound for: how core's own cards read the sources
+ * registered above. A source nothing registered is a fault of the install.
+ */
+function readSystemSourceAsCard(
+  query: WidgetQuery,
+  services: WidgetReadServices,
+  opts: ResolverOptions
+): Promise<WidgetResult> {
+  const resolve = systemResolver(query.source);
+  if (resolve === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "core-source-unregistered", source: query.source },
+    });
+  }
+  return resolve(query, boundCaller(services), opts);
 }
 
 /**

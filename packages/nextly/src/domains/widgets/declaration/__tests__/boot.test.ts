@@ -13,7 +13,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
-import { getWidget, widgetSource } from "../../registry";
+import { getWidget, registerWidget, widgetSource } from "../../registry";
 import { clearDeclaredWidgets, declaredWidget } from "../declared-widgets";
 import { dashboard, revenue } from "./plugin/widgets";
 
@@ -78,11 +78,23 @@ describe("startup with plugins that declare widgets", () => {
 
   it("withdraws what a declaration published when the declarations are cleared, and nothing else", () => {
     resetWidgetRegistries([plugin("@acme/shop", { dashboard })]);
+    // Every core card is a declaration now, so a widget registered as a definition stands in for
+    // what no declaration published.
+    registerWidget({
+      id: "acme/written",
+      title: "Written",
+      description: "A card registered as a definition, not declared.",
+      archetype: "custom",
+      component: "acme#Written",
+      size: { default: { w: 6, h: 4 } },
+    });
     expect(getWidget("acme/orders-by-state")).toBeDefined();
     clearDeclaredWidgets();
     expect(getWidget("acme/orders-by-state")).toBeUndefined();
-    // Core's own cards were never a declaration's, so they stay.
-    expect(getWidget("core/continue")).toBeDefined();
+    // Core's cards are declarations too, so they go with the rest.
+    expect(getWidget("core/continue")).toBeUndefined();
+    // What no declaration published stays.
+    expect(getWidget("acme/written")).toBeDefined();
     // And the same declarations can be made again.
     expect(() =>
       resetWidgetRegistries([plugin("@acme/shop", { dashboard })])

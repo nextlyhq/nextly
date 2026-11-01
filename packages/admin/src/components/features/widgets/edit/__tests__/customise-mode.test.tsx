@@ -141,7 +141,6 @@ function branding(): AdminBranding {
         title: "Home page",
         archetype: "custom",
         size: RESIZABLE,
-        chrome: "none",
         component: "core#LinkedSection",
       },
       {
@@ -163,12 +162,9 @@ function branding(): AdminBranding {
   } as unknown as AdminBranding;
 }
 
-/** One card, listed in the add panel's Overview group as core lists it. */
+/** One card, which a dashboard holds once. */
 function facts(): WidgetLayoutFacts {
-  return {
-    allowsSeveral: false,
-    group: "overview",
-  };
+  return { allowsSeveral: false };
 }
 
 const OPENED: WidgetPlacement[] = [
