@@ -49,6 +49,10 @@
  * - GET    /api/media/folders/:id/contents   - Get folder contents
  * - GET    /api/media/folders/root/contents  - Get root folder contents
  * - GET    /api/media/counts                 - Every folder's and view's item count
+ * - GET    /api/media/:id/usage              - The documents using a media item
+ * - POST   /api/media/:id/replace            - Replace an item's file, keeping the item
+ * - POST   /api/media/deletions              - Delete items, undoable for 10 s
+ * - POST   /api/media/deletions/undo         - Bring back items inside the window
  *
  * @module api/media-handlers
  */
@@ -61,15 +65,19 @@ import {
   isErrorResponse,
   isVisitorRefusal,
   requirePermission,
+  type AuthContext,
 } from "../auth/middleware";
 import { actorFromAuthContext, type RequestActor } from "../auth/request-actor";
 import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
+import { MEDIA_DELETE_LIMIT } from "../domains/media/media-delete-limit";
+import type { PendingMediaDeletes } from "../domains/media/pending-delete";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
+import { getNextlyLogger } from "../observability/logger";
 import type {
   MediaService,
   ListMediaOptions,
@@ -85,6 +93,7 @@ import {
 } from "../types/media";
 
 import { executeBulkDelete } from "./media-bulk";
+import { listMediaOptionsFrom, mediaListResponse } from "./media-list";
 import { handleServeMediaBytes } from "./media-raw";
 import { readJsonBody } from "./read-json-body";
 import {
@@ -151,14 +160,20 @@ const MEDIA_ACTION_BY_ROUTE: Partial<
   "get-folder-contents": "read",
   "get-root-contents": "read",
   "media-counts": "read",
+  "media-usage": "read",
   "upload-media": "create",
   "create-folder": "create",
   "update-media": "update",
+  "replace-media": "update",
   "move-media": "update",
   "update-folder": "update",
   "delete-media": "delete",
   "delete-folder": "delete",
   "bulk-delete-media": "delete",
+  // Both halves of a delete that can be undone ask the delete permission,
+  // checked by the gate before either writes or removes a mark.
+  "delete-media-later": "delete",
+  "undo-delete-media": "delete",
 };
 
 /** Route types that only read — the sole surface the public mount serves. */
@@ -197,7 +212,9 @@ async function gateMediaRoute(
   path: string[] | undefined,
   method: string,
   requireAuth: boolean
-): Promise<{ authUserId?: string; actor?: RequestActor } | Response> {
+): Promise<
+  { authUserId?: string; actor?: RequestActor; auth?: AuthContext } | Response
+> {
   if (!requireAuth) {
     if (!READ_ROUTE_TYPES.has(route.type)) {
       throwUnmatchedRoute(path, method);
@@ -234,7 +251,13 @@ async function gateMediaRoute(
   // Surface both the acting user id (for uploader attribution on the DB row)
   // and the full actor (session vs API key) so media writes record the true
   // caller on their outbox events.
-  return { authUserId: auth.userId, actor: actorFromAuthContext(auth) };
+  // The whole auth context too, for a read that answers by what the caller
+  // may read (where an item is used).
+  return {
+    authUserId: auth.userId,
+    actor: actorFromAuthContext(auth),
+    auth,
+  };
 }
 
 // ============================================================
@@ -295,6 +318,10 @@ interface ParsedMediaRoute {
     | "get-folder-contents"
     | "get-root-contents"
     | "media-counts"
+    | "media-usage"
+    | "replace-media"
+    | "delete-media-later"
+    | "undo-delete-media"
     | "not-found";
   mediaId?: string;
   folderId?: string;
@@ -316,6 +343,18 @@ function parseMediaRoute(
   // segments.length === 1 block so neither is mistaken for a media ID.
   if (segments[0] === "counts" && segments.length === 1) {
     if (method === "GET") return { type: "media-counts" };
+    return { type: "not-found" };
+  }
+
+  // "deletions" is matched before the generic one- and two-segment blocks
+  // so it is never read as a media id.
+  if (segments[0] === "deletions") {
+    if (segments.length === 1 && method === "POST") {
+      return { type: "delete-media-later" };
+    }
+    if (segments.length === 2 && segments[1] === "undo" && method === "POST") {
+      return { type: "undo-delete-media" };
+    }
     return { type: "not-found" };
   }
 
@@ -358,6 +397,17 @@ function parseMediaRoute(
   if (segments.length === 2 && segments[1] === "raw") {
     if (method === "GET")
       return { type: "serve-media-bytes", mediaId: segments[0] };
+    return { type: "not-found" };
+  }
+
+  if (segments.length === 2 && segments[1] === "usage") {
+    if (method === "GET") return { type: "media-usage", mediaId: segments[0] };
+    return { type: "not-found" };
+  }
+
+  if (segments.length === 2 && segments[1] === "replace") {
+    if (method === "POST")
+      return { type: "replace-media", mediaId: segments[0] };
     return { type: "not-found" };
   }
 
@@ -405,55 +455,29 @@ async function handleListMedia(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const context = createRequestContext();
 
-  const folderIdParam = searchParams.get("folderId");
   const options: ListMediaOptions = {
-    page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-    limit: searchParams.get("limit") ? Number(searchParams.get("limit")) : 24,
-    search: searchParams.get("search") || undefined,
-    type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
-    folderId: folderIdParam === "root" ? "root" : folderIdParam || undefined,
+    ...listMediaOptionsFrom(searchParams),
     view: parseAtBoundary(
       mediaViewSchema.optional(),
       searchParams.get("view") ?? undefined
     ),
-    sortBy:
-      (searchParams.get("sortBy") as ListMediaOptions["sortBy"]) ||
-      "uploadedAt",
-    sortOrder:
-      (searchParams.get("sortOrder") as ListMediaOptions["sortOrder"]) ||
-      "desc",
   };
 
   const result = await mediaService.listMedia(options, context);
-
-  const page = options.page ?? 1;
-  const limit = Math.max(1, options.limit ?? 24);
-  const total = result.pagination.total;
-  const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
-  return respondList(result.data, {
-    total,
-    page,
-    limit,
-    totalPages,
-    hasNext: page < totalPages,
-    hasPrev: page > 1,
-  });
+  return mediaListResponse(result, options);
 }
 
-async function handleUploadMedia(
-  request: Request,
-  authUserId: string,
-  actor?: RequestActor
-): Promise<Response> {
-  const mediaService = await getMediaService();
-  const formData = await request.formData();
+/** The file a request sends as `file`, checked against the upload schema. */
+async function uploadedFile(
+  formData: FormData,
+  uploadedBy: string
+): Promise<{
+  buffer: Buffer;
+  filename: string;
+  mimeType: string;
+  size: number;
+}> {
   const file = formData.get("file") as File | null;
-  const folderId = formData.get("folderId") as string | null;
-
-  // The uploader is the authenticated caller, resolved from the session/API
-  // key — never a client-supplied `uploadedBy`, which could name anyone.
-  const uploadedByEnsured = authUserId;
-
   if (!file) {
     throw NextlyError.validation({
       errors: [
@@ -471,7 +495,7 @@ async function handleUploadMedia(
     filename: file.name,
     mimeType: resolveClaimedMimeType(file.name, file.type, buffer),
     size: file.size,
-    uploadedBy: uploadedByEnsured,
+    uploadedBy,
   };
 
   try {
@@ -480,27 +504,59 @@ async function handleUploadMedia(
     if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
     throw err;
   }
+  // The type the schema ACCEPTED, not a second resolution of the same
+  // question: validating one value and storing another means the record can
+  // carry a type nothing checked.
+  return {
+    buffer,
+    filename: file.name,
+    mimeType: input.mimeType,
+    size: file.size,
+  };
+}
 
-  const context = createAuthenticatedContext(uploadedByEnsured);
+async function handleUploadMedia(
+  request: Request,
+  authUserId: string,
+  actor?: RequestActor
+): Promise<Response> {
+  const mediaService = await getMediaService();
+  const formData = await request.formData();
+  const folderId = formData.get("folderId") as string | null;
+
+  // The uploader is the authenticated caller, resolved from the session/API
+  // key — never a client-supplied `uploadedBy`, which could name anyone.
+  const file = await uploadedFile(formData, authUserId);
+  const context = createAuthenticatedContext(authUserId);
 
   const mediaFile = await mediaService.upload(
-    {
-      buffer,
-      filename: file.name,
-      // The same resolution the schema was given above. Validating one value
-      // and storing another means the record can carry a type nothing checked.
-      // The value the schema ACCEPTED, not a second resolution of the same
-      // question. Two calls can diverge under any later edit, and the one that
-      // reaches storage would be the one nothing checked.
-      mimeType: input.mimeType,
-      size: file.size,
-      folderId: folderId || undefined,
-    },
+    { ...file, folderId: folderId || undefined },
     context,
     actor
   );
 
   return respondMutation("Media uploaded.", mediaFile, { status: 201 });
+}
+
+/**
+ * Replace an item's file, keeping the item, with the file the request
+ * sends, checked as an upload's is.
+ */
+async function handleReplaceMedia(
+  request: Request,
+  mediaId: string,
+  authUserId: string,
+  actor?: RequestActor
+): Promise<Response> {
+  const mediaService = await getMediaService();
+  const file = await uploadedFile(await request.formData(), authUserId);
+  const mediaFile = await mediaService.replaceFile(
+    mediaId,
+    file,
+    createAuthenticatedContext(authUserId),
+    actor
+  );
+  return respondMutation("Media file replaced.", mediaFile);
 }
 
 async function handleGetMedia(mediaId: string): Promise<Response> {
@@ -749,6 +805,258 @@ async function handleMediaCounts(): Promise<Response> {
   return respondData(counts as unknown as Record<string, unknown>);
 }
 
+/** The Used in query: every use, or only those naming the item by address. */
+/** The most documents one page of an item's uses names. */
+const MEDIA_USES_PAGE_LIMIT = 50;
+
+/**
+ * Where an item is used, as a request asks for it: one page, of at most
+ * {@link MEDIA_USES_PAGE_LIMIT} documents, of every use or only those by
+ * address.
+ */
+const usageQuerySchema = z.object({
+  byAddress: z
+    .enum(["true", "false"])
+    .optional()
+    .transform(value => value === "true"),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(MEDIA_USES_PAGE_LIMIT)
+    .default(20),
+});
+
+/**
+ * The ids a delete or its Undo names: one to {@link MEDIA_DELETE_LIMIT}
+ * items, each request marked or brought back whole on one transaction.
+ */
+const deletionBodySchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(MEDIA_DELETE_LIMIT),
+});
+
+/** The library reads that finish deletes whose window has ended. */
+const LIBRARY_READS = new Set<ParsedMediaRoute["type"]>([
+  "list-media",
+  "get-folder-contents",
+  "get-root-contents",
+  "media-counts",
+]);
+
+/**
+ * The marks, over the booted adapter, the ordinary media delete and the jobs
+ * queue, as every user of them assembles them (`bootedPendingDeletes`).
+ */
+async function pendingDeletes(): Promise<PendingMediaDeletes> {
+  await ensureInitialized();
+  // Loaded when a delete or a read needs it, not with the handlers.
+  const { bootedPendingDeletes } = await import(
+    "../domains/media/booted-pending-deletes"
+  );
+  return bootedPendingDeletes();
+}
+
+/**
+ * Finish `ids`, a delete's items, at `deadline` (an instant in ms): every one
+ * then due, however many; any not due yet, marked later than the earliest,
+ * at their own deadline by a timer set again. A moment after the deadline,
+ * so the marks are due when it runs. The fast path, on a server still
+ * running then: the job each delete queues finishes it durably on one that
+ * is not, and the library's reads sweep what is left. Unref'd: a waiting
+ * delete never keeps a process alive.
+ */
+function finishDeletesAt(ids: readonly string[], deadline: number): void {
+  const delay = Math.max(0, deadline - Date.now()) + 500;
+  setTimeout(() => {
+    void (async () => {
+      await sweepPendingDeletes(ids);
+      try {
+        const pending = await pendingDeletes();
+        const next = await pending.nextDeadline(ids);
+        if (next) finishDeletesAt(ids, next.getTime());
+      } catch (error) {
+        getNextlyLogger().warn({
+          kind: "media-delete-sweep-failed",
+          message:
+            "Deleted media items could not be scheduled; the next read finishes them.",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+  }, delay).unref?.();
+}
+
+/**
+ * Finish the deletes whose window has ended: every one of `ids` when a
+ * delete's timer names the items it marked, however many, else one bounded
+ * sweep of any that are due. Never fails its caller: what is left is tried
+ * again by the next library read.
+ */
+async function sweepPendingDeletes(ids?: readonly string[]): Promise<void> {
+  try {
+    const pending = await pendingDeletes();
+    if (ids) {
+      await pending.finalizeMarked(ids);
+    } else {
+      await pending.finalizeDue();
+    }
+  } catch (error) {
+    getNextlyLogger().warn({
+      kind: "media-delete-sweep-failed",
+      message:
+        "Deleted media items could not be finished; the next read tries again.",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Delete items so that the delete can be undone: each is marked, leaves the
+ * library at once, and is deleted with its files once the window ends, by a
+ * timer here, by the job queued with the marks, or by the next library read.
+ */
+async function handleDeleteMediaLater(
+  request: Request,
+  actor?: RequestActor
+): Promise<Response> {
+  const { ids } = parseAtBoundary(
+    deletionBodySchema,
+    await readJsonBody(request)
+  );
+  const pending = await pendingDeletes();
+  const marked = await pending.mark(ids, actor);
+  // From the deadline this delete answers, which a mark already standing
+  // makes earlier than a fresh window; marks due later get a timer of their
+  // own when this one has run.
+  finishDeletesAt(marked.ids, Date.parse(marked.deleteAfter));
+  return respondAction("Media deleted.", {
+    ids: marked.ids,
+    marked: marked.marked,
+    deleteAfter: marked.deleteAfter,
+    markedDeleteAfter: marked.markedDeleteAfter,
+  });
+}
+
+/** Bring back items deleted inside the window; say which had already gone. */
+async function handleUndoDeleteMedia(request: Request): Promise<Response> {
+  const { ids } = parseAtBoundary(
+    deletionBodySchema,
+    await readJsonBody(request)
+  );
+  const pending = await pendingDeletes();
+  const undone = await pending.undo(ids);
+  return respondAction(
+    undone.gone.length === 0
+      ? "Delete undone."
+      : "Some items were already deleted.",
+    { restored: undone.restored, gone: undone.gone }
+  );
+}
+
+/**
+ * `read()` and whether the usage record it read was complete: built for
+ * content written before it existed, and the same build throughout
+ * (`readWithinOneBuild`). Until it is, a use the record lacks may still be in
+ * some document, so an item listing no use is not known to be unused, and a
+ * Replace keeps the old file whatever the record lists. Before the usage
+ * table exists, `read` is never run, since it reads that table: the answer is
+ * `none`, from a record not built.
+ */
+async function readUsageRecord<T>(
+  read: () => Promise<T>,
+  none: T
+): Promise<{ value: T; recorded: boolean }> {
+  const { mediaUsagePresent, readWithinOneBuild } = await import(
+    "../domains/media/usage/media-usage-store"
+  );
+  const adapter = getService("adapter");
+  if (!(await mediaUsagePresent(adapter))) {
+    return { value: none, recorded: false };
+  }
+  return readWithinOneBuild(adapter, read);
+}
+
+/**
+ * The documents using one item that the caller may read, and the rest
+ * counted by collection, read from the usage record a page at a time: the
+ * documents are paged, readable or not, and only the page's are read as the
+ * caller, so a widely used item costs one page's work. Served only on the
+ * gated mount, since it names documents: the public mount answers it as an
+ * unknown path. Per caller, so it is never cached for another.
+ *
+ * `meta.usageRecorded` is false while the record is still being built, when
+ * the list may lack uses in older content. Asked for the uses by address, it
+ * also says what else keeps the old file on a Replace: `meta.heldByAddress`
+ * avatars and logos.
+ */
+async function handleMediaUsage(
+  request: Request,
+  mediaId: string,
+  auth: AuthContext | undefined
+): Promise<Response> {
+  // Only a gated mount reaches here, and it always carries the caller.
+  if (!auth) throw NextlyError.authRequired();
+  const mediaService = await getMediaService();
+  // An item that does not exist is not found, rather than used by nothing.
+  const item = await mediaService.findById(mediaId, createRequestContext());
+  // Loaded when it is asked, not with the handlers.
+  const [{ readCaller, PRIVATE_NO_STORE_HEADERS }, { mediaUsesOf }, source] =
+    await Promise.all([
+      import("./authenticated-read"),
+      import("../domains/media/usage/media-uses"),
+      import("../domains/media/usage/media-uses-source"),
+    ]);
+  // `?byAddress=true` asks only for the uses naming the item by its
+  // address, which keep the old file when it is replaced; `page` and
+  // `limit` which page of the documents using it.
+  const { byAddress, page, limit } = parseAtBoundary(
+    usageQuerySchema,
+    Object.fromEntries(new URL(request.url).searchParams)
+  );
+  const caller = await readCaller(auth);
+  // The uses, read within one build of the record, so a rebuild meanwhile
+  // never lets a partial list read as complete.
+  const { value: uses, recorded } = await readUsageRecord(
+    () =>
+      mediaUsesOf(
+        mediaId,
+        source.bootedMediaUsesSource(getService("adapter"), caller),
+        { byAddressOnly: byAddress, page, limit }
+      ),
+    { items: [], hidden: [], total: 0 }
+  );
+  // Said of every answer: whether the record is built. Of the uses by
+  // address, also how many avatars and logos keep the item's address.
+  const recordMeta = {
+    usageRecorded: recorded,
+    ...(byAddress
+      ? {
+          heldByAddress: item.url
+            ? await mediaService.addressHolderCount(item.url)
+            : 0,
+        }
+      : {}),
+  };
+  // Paged by documents, readable or not: `total` counts them all, which the
+  // pages' `items` and `hidden` add up to, and `hidden` counts this page's.
+  const totalPages = Math.ceil(uses.total / limit);
+  return respondList(
+    uses.items,
+    {
+      total: uses.total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+      ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
+      ...recordMeta,
+    },
+    { headers: PRIVATE_NO_STORE_HEADERS }
+  );
+}
+
 // ============================================================
 // Public API
 // ============================================================
@@ -796,6 +1104,10 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
         );
         if (gate instanceof Response) return gate;
 
+        // The library's reads finish any delete whose window ended while no
+        // timer was left to finish it.
+        if (LIBRARY_READS.has(route.type)) await sweepPendingDeletes();
+
         let response: Response;
         switch (route.type) {
           case "list-media":
@@ -818,6 +1130,13 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "media-counts":
             response = await handleMediaCounts();
+            break;
+          case "media-usage":
+            response = await handleMediaUsage(
+              request,
+              route.mediaId!,
+              gate.auth
+            );
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "GET");
@@ -851,6 +1170,20 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             break;
           case "create-folder":
             response = await handleCreateFolder(request, gate.authUserId!);
+            break;
+          case "replace-media":
+            response = await handleReplaceMedia(
+              request,
+              route.mediaId!,
+              gate.authUserId!,
+              gate.actor
+            );
+            break;
+          case "delete-media-later":
+            response = await handleDeleteMediaLater(request, gate.actor);
+            break;
+          case "undo-delete-media":
+            response = await handleUndoDeleteMedia(request);
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "POST");

@@ -100,8 +100,9 @@ describe("the dashboard tables are registered as core tables", () => {
     expect(CORE_TABLE_NAMES).toContain(MEDIA_USAGE_TABLE);
   });
 
-  it("keys a use of a media item by its document, field and language", () => {
+  it("keys a use of a media item by its document, field and language, with the address it names", () => {
     expect(columnNames(usagePg.nextlyMediaUsagePg)).toEqual([
+      "address:address",
       "documentId:document_id",
       "fieldPath:field_path",
       "id:id",

@@ -193,6 +193,34 @@ describe("createMediaHandlers authorization", () => {
     expect(await response.json()).toEqual(counts);
   });
 
+  it("says with Unused's own list whether the usage record it read was built, and with no other list", async () => {
+    container.registerSingleton("generalSettingsService", () => ({
+      getTimezone: async () => "UTC",
+    }));
+    const page = (usageRecorded?: boolean) => ({
+      data: [],
+      pagination: { total: 0, limit: 24, offset: 0, hasMore: false },
+      ...(usageRecorded === undefined ? {} : { usageRecorded }),
+    });
+    const list = async (query: string) => {
+      const response = await createMediaHandlers().GET(
+        new Request(`http://localhost/api/media${query}`),
+        { params: Promise.resolve({}) }
+      );
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { meta: Record<string, unknown> })
+        .meta;
+    };
+
+    mocks.mediaService.listMedia.mockResolvedValueOnce(page(false));
+    expect(await list("?view=unused")).toMatchObject({ usageRecorded: false });
+    mocks.mediaService.listMedia.mockResolvedValueOnce(page(true));
+    expect(await list("?view=unused")).toMatchObject({ usageRecorded: true });
+    // Another list says nothing of the record.
+    mocks.mediaService.listMedia.mockResolvedValueOnce(page());
+    expect(await list("")).not.toHaveProperty("usageRecorded");
+  });
+
   it("asks for the folder page the query names, and refuses one past the limit", async () => {
     container.registerSingleton("generalSettingsService", () => ({
       getTimezone: async () => "UTC",

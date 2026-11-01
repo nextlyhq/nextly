@@ -11,7 +11,9 @@
  *   - a rich-text value holds the item's address in an image, video or
  *     gallery node's `src`, never its id;
  *   - a block document (the value of a `blocks` field) lists the items it uses
- *     in `assets.mediaIds`, written with it; one that has no list is walked;
+ *     by id in `assets.mediaIds`, written with it, and its nodes are read for
+ *     the addresses they hold under `src` or `url`; one that has no list is
+ *     walked for ids too;
  *     any other JSON value is read for the addresses it holds under `src` or
  *     `url`, as a Page Builder font face holds its file;
  *   - a group, a repeater or a field group holds any of these inside it.
@@ -35,16 +37,27 @@ import { readFieldGroupType } from "../../field-groups/storage/field-group-type-
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { ComponentSchemaInfo } from "../../versions/restore-snapshot";
 
-/** One reference a value makes: to an item's id, or to its address. */
+/**
+ * One reference a value makes: to an item's id, or to its address. Which of
+ * the two it carries is the one account of how content names an item: the
+ * usage record keeps it with each row, and a Replace keeps the old file for
+ * exactly the rows that name the item by address.
+ */
 export interface MediaReference {
   /**
    * The field's name, after the names of the groups, repeaters and field
    * groups it sits in, joined by dots: `hero.image`, not `hero.0.image`.
    */
   fieldPath: string;
-  /** The item's id, for an upload field or a block document's list. */
+  /**
+   * The item's id: an upload field's, a block document's list, or an id read
+   * from a media route an address names.
+   */
   mediaId?: string;
-  /** The item's address, for a rich-text node. */
+  /**
+   * The item's address: a rich-text node's `src`, or a `src` or `url` in a
+   * block document or any other JSON value.
+   */
   url?: string;
 }
 
@@ -189,9 +202,12 @@ function blockStringReference(
 
 /**
  * The items a block document uses: its `assets.mediaIds` when it has the
- * list, which is derived on write for exactly this; otherwise every id-shaped
- * string and every `src` or `url` address in its nodes. A node's own `id` is
- * a node's, never an item's, and is passed over.
+ * list, which is derived on write for exactly this, and every `src` or `url`
+ * address in its nodes, which the list does not account for: a node naming a
+ * file by its address goes on showing that file after a Replace, so the use
+ * is recorded as one by address. A document with no list is walked for every
+ * id-shaped string as well. A node's own `id` is a node's, never an item's,
+ * and is passed over.
  */
 function blockDocumentReferences(
   document: Record<string, unknown>,
@@ -205,6 +221,7 @@ function blockDocumentReferences(
         into.push({ fieldPath, mediaId: id });
       }
     }
+    jsonAddressReferences(document.nodes, fieldPath, into);
     return;
   }
   const walk = (value: unknown, key: string | null, inNode: boolean): void => {

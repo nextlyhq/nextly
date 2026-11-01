@@ -28,6 +28,7 @@ import {
   MEDIA_TYPE_PREFIXES,
   type MediaCategory,
 } from "./media-categories";
+import { PENDING_DELETE_KEY_PREFIX } from "./pending-delete";
 
 /** The `media` columns the narrowing reads. */
 export interface MediaQueryColumns {
@@ -119,12 +120,27 @@ function mediaCategoryCondition(
   ) as SQL;
 }
 
-/** Whether `value` ends in `suffix`, each a column, on `dialect`. */
+/**
+ * An item's address, as a holder is asked about it: the `media` row's own
+ * column, or an address already read from it.
+ */
+export type MediaAddress = AnyColumn | string;
+
+/**
+ * Whether `value` ends in `suffix`, on `dialect`. A suffix given as a string
+ * is measured here, in characters, as each dialect's own length counts them.
+ */
 function endsWith(
   value: AnyColumn,
-  suffix: AnyColumn,
+  suffix: MediaAddress,
   dialect: UnusedSources["dialect"]
 ): SQL {
+  if (typeof suffix === "string") {
+    const length = [...suffix].length;
+    return dialect === "sqlite"
+      ? sql`SUBSTR(${value}, ${-length}) = ${suffix}`
+      : sql`RIGHT(${value}, ${length}) = ${suffix}`;
+  }
   if (dialect === "postgresql") {
     return sql`RIGHT(${value}, LENGTH(${suffix})) = ${suffix}`;
   }
@@ -135,18 +151,31 @@ function endsWith(
   return sql`SUBSTR(${value}, -LENGTH(${suffix})) = ${suffix}`;
 }
 
+/**
+ * The rows of one holder that keep `address`: the condition on its table.
+ * The `unused` view asks it of each item's own address, and Replace of the
+ * address it is about to stop serving.
+ */
+export function holderKeeps(
+  holder: MediaAddressHolder,
+  address: MediaAddress,
+  dialect: UnusedSources["dialect"]
+): SQL {
+  const names = holder.columns.map(column =>
+    holder.match === "exact"
+      ? sql`${column} = ${address}`
+      : endsWith(column, address, dialect)
+  );
+  return or(...names) as SQL;
+}
+
 /** Whether one holder keeps the item. */
 function heldBy(
   media: MediaQueryColumns,
   holder: MediaAddressHolder,
   dialect: UnusedSources["dialect"]
 ): SQL {
-  const names = holder.columns.map(column =>
-    holder.match === "exact"
-      ? sql`${column} = ${media.url}`
-      : endsWith(column, media.url, dialect)
-  );
-  return sql`EXISTS (SELECT 1 FROM ${holder.table} WHERE ${or(...names)})`;
+  return sql`EXISTS (SELECT 1 FROM ${holder.table} WHERE ${holderKeeps(holder, media.url, dialect)})`;
 }
 
 /**
@@ -166,7 +195,35 @@ export function unusedItem(
 }
 
 /**
- * The condition `filter` puts on the items, or `undefined` for every item.
+ * An item no one has deleted inside the Undo window: one with no
+ * `media.deleting:<id>` mark in `nextly_meta`. Every library read applies it,
+ * so a deleted item leaves the list, a folder, the views and the counts at
+ * once while its row and files wait for the window to end. The mark's key is
+ * matched from its own side (`SUBSTR`, which every dialect has) rather than
+ * built from the item's id, since the dialects join strings differently.
+ */
+export function notPendingDelete(media: Pick<MediaQueryColumns, "id">): SQL {
+  return sql`NOT ${pendingDelete(media)}`;
+}
+
+/**
+ * An item deleted inside the Undo window: one with a `media.deleting:<id>`
+ * mark. Hidden from every library read ({@link notPendingDelete}), but still
+ * there, so what would move or remove it, a folder's delete, asks this.
+ */
+export function pendingDelete(media: Pick<MediaQueryColumns, "id">): SQL {
+  // Under an alias of its own, since the counting query also joins
+  // `nextly_meta` for another row.
+  const meta = sql.identifier("nextly_meta");
+  const mark = sql.identifier("pending_mark");
+  const key = sql.identifier("key");
+  const idStart = sql.raw(String(PENDING_DELETE_KEY_PREFIX.length + 1));
+  return sql`EXISTS (SELECT 1 FROM ${meta} ${mark} WHERE ${mark}.${key} LIKE ${`${PENDING_DELETE_KEY_PREFIX}%`} AND SUBSTR(${mark}.${key}, ${idStart}) = ${media.id})`;
+}
+
+/**
+ * The condition `filter` puts on the items: never one deleted inside the
+ * Undo window ({@link notPendingDelete}).
  * `unused` is what the `unused` view reads, or `null` before `nextly migrate`
  * has created the usage table, when the view can say nothing and matches no
  * item.
@@ -176,7 +233,7 @@ export function mediaQueryCondition(
   unused: UnusedSources | null,
   filter: MediaQueryFilter
 ): SQL | undefined {
-  const conditions: SQL[] = [];
+  const conditions: SQL[] = [notPendingDelete(media)];
   if (filter.folderId !== undefined) {
     conditions.push(
       filter.folderId === null || filter.folderId === "root"
@@ -203,7 +260,7 @@ export function mediaQueryCondition(
   if (filter.view === "unused") {
     conditions.push(unused ? unusedItem(media, unused) : sql`1 = 0`);
   }
-  return conditions.length > 0 ? and(...conditions) : undefined;
+  return and(...conditions);
 }
 
 /** The sidebar's counts. */
@@ -234,24 +291,24 @@ export interface MediaCountGroup {
   items: number | string | null;
   missingAlt: number | string | null;
   unused: number | string | null;
-  recorded: number | string | null;
 }
 
 /**
  * The counts from the counting query's groups. A dialect returns a sum as a
  * number or as a string (MySQL's DECIMAL, PostgreSQL's BIGINT), so each is
- * read as a number. A library with no items has nothing to count and nothing
- * to be unused, so its record is complete.
+ * read as a number. `usage` says whether the usage table is there and whether
+ * its record is built (`readWithinOneBuild`); a library with no items has
+ * nothing to count and nothing to be unused, so its record is complete.
  */
 export function mediaLibraryCountsOf(
   groups: readonly MediaCountGroup[],
-  usagePresent: boolean
+  usage: { present: boolean; recorded: boolean }
 ): MediaLibraryCounts {
   const counts: MediaLibraryCounts = {
     all: 0,
     missingAltText: 0,
-    unused: usagePresent ? 0 : null,
-    usageRecorded: usagePresent,
+    unused: usage.present ? 0 : null,
+    usageRecorded: usage.present && (usage.recorded || groups.length === 0),
     root: 0,
     folders: {},
   };
@@ -265,7 +322,6 @@ function addGroup(counts: MediaLibraryCounts, group: MediaCountGroup): void {
   counts.all += items;
   counts.missingAltText += Number(group.missingAlt ?? 0);
   if (counts.unused !== null) counts.unused += Number(group.unused ?? 0);
-  if (Number(group.recorded ?? 0) !== 1) counts.usageRecorded = false;
   if (typeof group.folderId === "string") {
     counts.folders[group.folderId] = items;
   } else {

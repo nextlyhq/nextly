@@ -36,7 +36,7 @@
 import crypto from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
@@ -745,6 +745,21 @@ export class MediaFolderService extends BaseService {
       };
     }
 
+    // An item deleted moments ago is hidden from the folder's listing but is
+    // still in it until its Undo window ends. Deleting the folder would move
+    // it to the library root (the folder going) or delete it before its
+    // deadline (the folder's contents going), so the folder waits for it,
+    // with or without its contents.
+    if (await this.holdsPendingDeletes(folderId)) {
+      return {
+        success: false,
+        statusCode: 409,
+        code: "CONFLICT",
+        message:
+          "This folder holds items deleted moments ago that can still be brought back. Try again once their Undo has passed.",
+      };
+    }
+
     const contents = await this.getFolderContents(folderId);
     const hasContents =
       (contents.data?.subfolders.length ?? 0) > 0 ||
@@ -761,6 +776,50 @@ export class MediaFolderService extends BaseService {
     }
 
     return null;
+  }
+
+  /**
+   * `ids` in runs one statement may bind alongside `reserved` values of its
+   * own, by the adapter's `maxParamsPerQuery`: SQLite's limit is the lowest,
+   * so a large subtree takes a few statements there and one elsewhere.
+   */
+  private idRuns(ids: readonly string[], reserved: number): string[][] {
+    const limit = this.adapter.getCapabilities().maxParamsPerQuery;
+    const size = Number.isFinite(limit)
+      ? Math.max(1, Math.floor(limit) - reserved)
+      : 1;
+    const runs: string[][] = [];
+    for (let start = 0; start < ids.length; start += size) {
+      runs.push(ids.slice(start, start + size));
+    }
+    return runs;
+  }
+
+  /**
+   * Whether the folder, or any folder under it, holds an item deleted inside
+   * its Undo window: the folders asked together, in runs one statement may
+   * bind, on the items' folder index, for the first such item.
+   */
+  private async holdsPendingDeletes(folderId: string): Promise<boolean> {
+    const { media } = this.tables;
+    // Loaded when a folder is deleted, not with the service.
+    const { pendingDelete } = await import(
+      "../domains/media/media-library-query"
+    );
+    const folderIds = [
+      folderId,
+      ...(await this.collectAllSubfolderIds(folderId)),
+    ];
+    // The mark's key pattern is the one value the condition binds itself.
+    for (const run of this.idRuns(folderIds, 1)) {
+      const [found] = await this.db
+        .select({ id: media.id })
+        .from(media)
+        .where(and(inArray(media.folderId, run), pendingDelete(media)))
+        .limit(1);
+      if (found) return true;
+    }
+    return false;
   }
 
   async deleteFolder(
@@ -874,12 +933,13 @@ export class MediaFolderService extends BaseService {
   ): Promise<Array<{ id: string }>> {
     const { media } = this.tables;
     const records: Array<{ id: string }> = [];
-    for (const folderId of folderIds) {
-      const inFolder = await this.db
+    // The folders asked together, in runs one statement may bind.
+    for (const run of this.idRuns(folderIds, 0)) {
+      const inFolders = await this.db
         .select({ id: media.id })
         .from(media)
-        .where(eq(media.folderId, folderId));
-      records.push(...inFolder);
+        .where(inArray(media.folderId, run));
+      records.push(...inFolders);
     }
     return records;
   }
@@ -937,6 +997,33 @@ export class MediaFolderService extends BaseService {
           removed.map(record => record.id)
         );
         if (kept) await removeFiles(removed, kept);
+        await this.removeKeptFilesOf(removed.map(record => record.id));
+      });
+    }
+  }
+
+  /**
+   * The files a Replace kept for the removed items' uses by address, and the
+   * record of them: the step a delete of each item runs (`removeKeptFiles`),
+   * so a folder's items leave nothing of theirs behind. Never fails the
+   * cascade, whose rows are already gone.
+   */
+  private async removeKeptFilesOf(mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    try {
+      // Loaded when a folder's items are deleted, not with the service.
+      const { removeKeptFiles } = await import(
+        "../domains/media/usage/address-uses"
+      );
+      await removeKeptFiles(
+        this.adapter,
+        getMediaStorage(),
+        this.logger,
+        mediaIds
+      );
+    } catch (error) {
+      this.logger.warn("[MediaFolderService] Kept files not removed", {
+        error: errorForLog(error),
       });
     }
   }

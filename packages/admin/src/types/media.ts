@@ -170,7 +170,15 @@ export interface MediaParams {
   sortBy?: "filename" | "uploadedAt" | "size";
   sortOrder?: "asc" | "desc";
   folderId?: string | null;
+  /**
+   * A view across every folder: images with no alt text, or items no
+   * document uses. Absent for every item.
+   */
+  view?: MediaLibraryView;
 }
+
+/** The views beside the folders that narrow the library. */
+export type MediaLibraryView = "missing-alt" | "unused";
 
 /**
  * Media list response
@@ -188,6 +196,11 @@ export interface MediaListResponse {
     page: number;
     limit: number;
     totalPages: number;
+    /**
+     * The Unused view's list alone: whether the usage record it was read
+     * from was complete. The view lists its items only when this says so.
+     */
+    usageRecorded?: boolean;
   };
 }
 
