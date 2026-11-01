@@ -130,6 +130,10 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
+import {
+  isSampleContentPath,
+  sampleContentNotShipped,
+} from "./database/seeders/sample-content";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
@@ -1517,6 +1521,15 @@ async function serveServiceRequest(
       "root"
     );
     if (rootAnswer) return rootAnswer;
+
+    // The project's sample-content route, where the project ships none: a
+    // missing route, which the setup card's probe reads as "no sample
+    // content", rather than a malformed one.
+    if (isSampleContentPath(params)) {
+      return withinBuiltInLimit(() =>
+        Promise.resolve(sampleContentNotShipped(req))
+      );
+    }
 
     return withinBuiltInLimit(() =>
       Promise.resolve(

@@ -195,7 +195,7 @@ describe("a custom card asking through cells", () => {
     expect(titleAsAsked(count, {}, [posts])).toEqual({ title: "Count" });
   });
 
-  it("names its quick select's choice after its widget's name, so the subtitle says what the control set", () => {
+  it("names its quick select's choice in its automatic title, with its widget's name beneath", () => {
     const overTime: DashboardWidget = {
       ...count,
       id: "core/over-time",
@@ -215,13 +215,33 @@ describe("a custom card asking through cells", () => {
         },
       ],
     } as DashboardWidget;
+    // Untouched, a new card's title is its subject and its 30-day range.
     expect(titleAsAsked(overTime, { collection: "posts" }, [posts])).toEqual({
-      title: "Posts",
-      subtitle: "Over time · last 30 days",
+      title: "Posts · last 30 days",
+      subtitle: "Over time",
     });
     expect(
       titleAsAsked(overTime, { collection: "posts", dateRange: "90d" }, [posts])
-    ).toEqual({ title: "Posts", subtitle: "Over time · last 90 days" });
+    ).toEqual({ title: "Posts · last 90 days", subtitle: "Over time" });
+  });
+
+  it("takes the title its reader gave it in place of the automatic one, keeping its widget's name beneath", () => {
+    expect(
+      titleAsAsked(count, { collection: "posts" }, [posts], "  Our posts ")
+    ).toEqual({ title: "Our posts", subtitle: "Count" });
+    // A card set to no collection keeps the widget's name beneath its own title too.
+    expect(titleAsAsked(count, {}, [posts], "Everything")).toEqual({
+      title: "Everything",
+      subtitle: "Count",
+    });
+    // A title of only spaces is no title: the automatic one stands.
+    expect(titleAsAsked(count, { collection: "posts" }, [posts], "  ")).toEqual(
+      { title: "Posts", subtitle: "Count" }
+    );
+    // The widget's own name as the title draws it once, never twice.
+    expect(titleAsAsked(count, {}, [posts], "Count")).toEqual({
+      title: "Count",
+    });
   });
 
   it("names no quick toggle's On or Off, which says nothing on its own", () => {

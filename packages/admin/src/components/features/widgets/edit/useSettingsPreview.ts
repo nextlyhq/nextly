@@ -11,12 +11,15 @@
  * a number typed digit by digit is one request, not one per digit.
  *
  * The preview's request is its own card (`<placement>:preview`), never the card's: the card keeps
- * its answer until Done keeps the change, and Cancel leaves it exactly as it was.
+ * its answer until Done keeps the change, and Cancel leaves it exactly as it was. It is asked at
+ * the size the card is drawn at, its tier and its height, so the preview draws what the card
+ * will: the rows it holds, and whether it says more exist.
  *
  * @module components/features/widgets/edit/useSettingsPreview
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
+import type { GridSize } from "nextly/config";
 import { useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -31,6 +34,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import { listDensityOf } from "../frame/list-rows";
 import type { AnswerSize } from "../frame/tier";
 import { queryForTier } from "../tier-query";
 import { UNSOURCED_SLOT } from "../useWidgetBatch";
@@ -46,11 +50,11 @@ import {
 const PREVIEW_ASK_DELAY_MS = 300;
 
 /**
- * The tier the preview's own question is asked at: the widest. The preview draws at whatever
- * width the sheet gives it, measured only once it renders, and an answer fetched for a wider card
- * serves a narrower one, which draws a prefix of it and still knows more exist (`asksAgainAt`).
+ * The tier the preview's question is asked at when the card's own is not known yet: the widest,
+ * since an answer fetched for a wider card serves a narrower one, which draws a prefix of it and
+ * still knows more exist (`asksAgainAt`).
  */
-const PREVIEW_TIER: SizeTier = "large";
+const WIDEST_TIER: SizeTier = "large";
 
 /** What the card itself shows now, which the preview draws while the question is unchanged. */
 export interface ShownAnswer {
@@ -67,8 +71,8 @@ export interface SettingsPreview {
   definition: DashboardWidget;
   /** The widget's own name under the title, when the title names the card's subject. */
   subtitle?: string;
-  /** The preview's own card id, and the settings its component reads. */
-  placement: { id: string; settings: Record<string, unknown> };
+  /** The preview's own card id, the settings its component reads, and the size it is drawn at. */
+  placement: { id: string; settings: Record<string, unknown>; size?: GridSize };
   slot: WidgetSlot | undefined;
   slotFor?: CellSlotLookup;
   /** The preview is waiting for an answer to the question its values ask. */
@@ -87,7 +91,8 @@ function previewRequests(
   widget: DashboardWidget,
   definition: DashboardWidget,
   previewId: string,
-  draft: Record<string, unknown>
+  draft: Record<string, unknown>,
+  asked: AnswerSize & { tier: SizeTier }
 ): WidgetQueryRequest[] {
   // A card core answers on the server is asked with the draft settings, as its own card: never
   // the stored card's ask, so its answer is never filed as the stored card's.
@@ -114,9 +119,59 @@ function previewRequests(
     {
       placementId: previewId,
       query,
-      sized: { query: queryForTier(query, PREVIEW_TIER), tier: PREVIEW_TIER },
+      sized: {
+        query: queryForTier(query, asked.tier, asked.density, asked.h),
+        tier: asked.tier,
+      },
     },
   ];
+}
+
+/**
+ * The preview's own card, the settings its component reads and the size it is drawn at, and the
+ * size its question is asked at: the card's own, as the dashboard asks it, else the widest.
+ */
+function usePreviewPlacement(args: {
+  previewId: string;
+  widget: DashboardWidget;
+  draft: Record<string, unknown>;
+  sources: ReturnType<typeof useBranding>["widgetSources"];
+  size: GridSize | undefined;
+  tier: SizeTier | undefined;
+}): {
+  placement: SettingsPreview["placement"];
+  askedSize: AnswerSize & { tier: SizeTier };
+} {
+  const { previewId, widget, draft, sources, size, tier } = args;
+  return useMemo(() => {
+    const settings = settingsAsAsked(widget, draft, sources);
+    return {
+      placement: {
+        id: previewId,
+        settings,
+        ...(size === undefined ? {} : { size }),
+      },
+      askedSize: {
+        tier: tier ?? WIDEST_TIER,
+        ...(size === undefined ? {} : { h: size.h }),
+        density: listDensityOf(settings),
+      },
+    };
+  }, [previewId, widget, draft, sources, size, tier]);
+}
+
+/**
+ * What a card asks with `config`, and the density its answer is sized for: a density alone
+ * changes how many rows the answer holds, so the card's own answer, fetched at its stored
+ * density, does not serve a preview at another one.
+ */
+function askingAt(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined,
+  sources: ReturnType<typeof useBranding>["widgetSources"]
+): string {
+  const density = listDensityOf(settingsAsAsked(widget, config, sources));
+  return `${questionOf(widget, config, sources)}|${density}`;
 }
 
 export function useSettingsPreview(args: {
@@ -128,6 +183,12 @@ export function useSettingsPreview(args: {
   /** The sheet's current values, as `toStoredConfig` builds them. */
   draft: Record<string, unknown>;
   shown: ShownAnswer;
+  /** The title the panel holds for the card, its reader's own; empty for the automatic one. */
+  ownTitle?: string;
+  /** The size the card is drawn at on the dashboard, held to its widget's bounds. */
+  size?: GridSize;
+  /** The tier the card's real width gives it, when that width is known. */
+  tier?: SizeTier | undefined;
 }): SettingsPreview {
   const { widget, placementId, stored, draft, shown } = args;
   const previewId = `${placementId}:preview`;
@@ -136,8 +197,8 @@ export function useSettingsPreview(args: {
   const sources = useBranding().widgetSources;
 
   const heading = useMemo(
-    () => titleAsAsked(widget, draft, sources),
-    [widget, draft, sources]
+    () => titleAsAsked(widget, draft, sources, args.ownTitle),
+    [widget, draft, sources, args.ownTitle]
   );
   const definition = useMemo(() => {
     const asked = widgetAsAsked(widget, draft, sources);
@@ -147,28 +208,38 @@ export function useSettingsPreview(args: {
   }, [widget, draft, sources, heading.title]);
   const subtitle =
     heading.subtitle === undefined ? {} : { subtitle: heading.subtitle };
-  const asking = questionOf(widget, draft, sources);
-  const sameQuestion = asking === questionOf(widget, stored, sources);
+  const asking = askingAt(widget, draft, sources);
+  const sameQuestion = asking === askingAt(widget, stored, sources);
   // The question settles before it is asked, so a run of changes asks once.
   const settled = useDebouncedValue(asking, PREVIEW_ASK_DELAY_MS);
+
+  const { placement, askedSize } = usePreviewPlacement({
+    previewId,
+    widget,
+    draft,
+    sources,
+    size: args.size,
+    tier: args.tier,
+  });
 
   // The settled question itself is each request's query, so each new question is a new one.
   const requests = useMemo<WidgetQueryRequest[]>(
     () =>
       sameQuestion || settled !== asking
         ? []
-        : previewRequests(widget, definition, previewId, draft),
-    [sameQuestion, settled, asking, definition, previewId, widget, draft]
+        : previewRequests(widget, definition, previewId, draft, askedSize),
+    [
+      sameQuestion,
+      settled,
+      asking,
+      definition,
+      previewId,
+      widget,
+      draft,
+      askedSize,
+    ]
   );
   const asked = useWidgetQueries(requests);
-
-  const placement = useMemo(
-    () => ({
-      id: previewId,
-      settings: settingsAsAsked(widget, draft, sources),
-    }),
-    [previewId, widget, draft, sources]
-  );
 
   // The changed question's cell answers, once asked; see `previewCellLookup`.
   const ready = settled === asking;
@@ -193,7 +264,7 @@ export function useSettingsPreview(args: {
     // Only an answer asked sized has a size: a custom card's and a server card's were not.
     ...(definition.archetype === "custom" || widget.serverData === true
       ? {}
-      : { answerSize: { tier: PREVIEW_TIER } }),
+      : { answerSize: askedSize }),
   };
 }
 

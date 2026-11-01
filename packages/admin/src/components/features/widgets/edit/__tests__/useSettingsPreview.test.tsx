@@ -13,6 +13,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { queryForTier } from "../../tier-query";
 import { useSettingsPreview } from "../useSettingsPreview";
 import { gridBounds } from "../../__tests__/grid-bounds";
 
@@ -91,9 +92,15 @@ function preview(
   {
     widget = WIDGET,
     shown = {},
+    tier,
+    size,
   }: {
     widget?: DashboardWidget;
     shown?: { answerSize?: { tier: "small" | "medium" | "large" } };
+    /** The tier the card's real width gives it. */
+    tier?: "small" | "medium" | "large";
+    /** The size the card is drawn at on the dashboard. */
+    size?: { w: number; h: number };
   } = {}
 ) {
   return renderHook(
@@ -104,6 +111,8 @@ function preview(
         stored: undefined,
         draft,
         shown: { slot: SHOWN, updatedAt: null, isFetching: false, ...shown },
+        ...(tier === undefined ? {} : { tier }),
+        ...(size === undefined ? {} : { size }),
       }),
     { wrapper, initialProps: { draft: initialDraft } }
   );
@@ -141,14 +150,77 @@ describe("the settings sheet's preview", () => {
     );
     // One request, for the settled question only, with the settings it would keep. Sized as a
     // card the dashboard draws: one row more than the five it declares, which is how a list
-    // learns that more exist, at the widest tier, which serves whatever width the sheet gives it.
+    // learns that more exist, at the widest tier, which serves any width while the card's own is
+    // not known.
     expect(sent()).toEqual([
       [{ source: "collection:tags", op: "list", limit: 6 }],
     ]);
-    expect(result.current.answerSize).toEqual({ tier: "large" });
+    expect(result.current.answerSize).toEqual({
+      tier: "large",
+      density: "default",
+    });
     expect(result.current.placement.settings).toMatchObject({
       collection: "tags",
     });
+  });
+
+  it("asks a changed question at the tier the card's real width gives it, not the widest", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The card's own query, re-asked for another collection: a setting's name drives no rows, so
+    // the tier is what decides how many are asked.
+    const query = {
+      source: "collection:tags",
+      op: "list" as const,
+      limit: 5,
+    };
+    const small = queryForTier(query, "small").limit;
+    // The control: the two tiers ask for different rows, so the request says which was used.
+    expect(small).not.toBe(queryForTier(query, "large").limit);
+    const { result, rerender } = preview({}, { tier: "small" });
+    rerender({ draft: { collection: "tags" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    expect(sent()[0]?.[0]?.limit).toBe(small);
+    expect(result.current.answerSize).toMatchObject({ tier: "small" });
+  });
+
+  it("asks again when only the density changes, as many rows as the density chosen draws", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const query = {
+      source: "collection:posts",
+      op: "list" as const,
+      limit: 10,
+    };
+    // The control: at this height a compact list draws more rows than a default one, so the
+    // answer the card was fetched with is too short for the compact preview.
+    const compact = queryForTier(query, "large", "compact", 4).limit;
+    expect(compact).not.toBe(queryForTier(query, "large", "default", 4).limit);
+    const widget: DashboardWidget = {
+      ...WIDGET,
+      query,
+      settings: [
+        {
+          name: "density",
+          type: "select",
+          label: "Density",
+          defaultValue: "default",
+          options: [
+            { label: "Default", value: "default" },
+            { label: "Compact", value: "compact" },
+          ],
+        },
+      ],
+    };
+    const { result, rerender } = preview({}, { widget, size: { w: 4, h: 4 } });
+    rerender({ draft: { density: "compact" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    expect(sent()[0]?.[0]?.limit).toBe(compact);
+    expect(result.current.answerSize).toMatchObject({ density: "compact" });
   });
 
   it("draws the card's own answer with the tier it was fetched at", () => {

@@ -11,7 +11,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { ownSeat, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
@@ -153,47 +153,68 @@ const CASES: Array<[number, number, string]> = [
   [358, 12, "medium"],
 ];
 
-for (const [dashboardWidth, w, tier] of CASES) {
-  test(`a ${w}-column card on a ${dashboardWidth}px dashboard is ${tier}`, async ({
+/** Each case at one dashboard width: a card placed, the page reloaded, its tier read. */
+function casesAt(width: number): void {
+  for (const [dashboardWidth, w, tier] of CASES) {
+    if (dashboardWidth !== width) continue;
+    test(`a ${w}-column card on a ${dashboardWidth}px dashboard is ${tier}`, async ({
+      page,
+    }) => {
+      await gotoAdmin(page, "/");
+      await placeCard(page, cardFor(w), w);
+      await page.reload();
+      await expectTierAt(page, cardFor(w), dashboardWidth, tier);
+    });
+  }
+}
+
+// About forty REST reads a test, in fifteen tests that run in under a minute and a half: through
+// one account the last of them met the 500-a-minute limit. Each width reads through a seat of its
+// own (`ownSeat`), five tests to a seat; the 1,200 px cases keep the file's own, seat 0.
+test.describe("on a 1,200 px dashboard", () => {
+  casesAt(1200);
+});
+
+test.describe("on a 900 px dashboard", () => {
+  ownSeat(1);
+  casesAt(900);
+});
+
+test.describe("in a phone column, and across the bands' edges", () => {
+  ownSeat(2);
+  casesAt(358);
+
+  test("a 12-column card on a 900px dashboard draws its rows as a table", async ({
     page,
   }) => {
     await gotoAdmin(page, "/");
-    await placeCard(page, cardFor(w), w);
+    await placeCard(page, RECENT_ENTRIES, 12);
     await page.reload();
-    await expectTierAt(page, cardFor(w), dashboardWidth, tier);
+    await sizeDashboard(page, 900);
+    await expect(
+      cellOf(page, RECENT_ENTRIES).getByTestId("list-card-table")
+    ).toBeVisible();
   });
-}
 
-test("a 12-column card on a 900px dashboard draws its rows as a table", async ({
-  page,
-}) => {
-  await gotoAdmin(page, "/");
-  await placeCard(page, RECENT_ENTRIES, 12);
-  await page.reload();
-  await sizeDashboard(page, 900);
-  await expect(
-    cellOf(page, RECENT_ENTRIES).getByTestId("list-card-table")
-  ).toBeVisible();
-});
+  test("crosses from small to medium where the bands put the edge", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, "/");
+    await placeCard(page, RECENT_ENTRIES, 6);
+    await page.reload();
+    await expectTierAt(page, RECENT_ENTRIES, 680, "small");
+    await expectTierAt(page, RECENT_ENTRIES, 720, "medium");
 
-test("crosses from small to medium where the bands put the edge", async ({
-  page,
-}) => {
-  await gotoAdmin(page, "/");
-  await placeCard(page, RECENT_ENTRIES, 6);
-  await page.reload();
-  await expectTierAt(page, RECENT_ENTRIES, 680, "small");
-  await expectTierAt(page, RECENT_ENTRIES, 720, "medium");
+    // From 1,280 px the gap across is 24 px: a 3-column card is 337 px on 1,420 px, where a
+    // 16 px gap would make it 343 px and medium.
+    await placeCard(page, COUNT, 3);
+    await page.reload();
+    await expectTierAt(page, COUNT, 1420, "small");
+    await expectTierAt(page, COUNT, 1440, "medium");
 
-  // From 1,280 px the gap across is 24 px: a 3-column card is 337 px on 1,420 px, where a
-  // 16 px gap would make it 343 px and medium.
-  await placeCard(page, COUNT, 3);
-  await page.reload();
-  await expectTierAt(page, COUNT, 1420, "small");
-  await expectTierAt(page, COUNT, 1440, "medium");
-
-  await placeCard(page, RECENT_ENTRIES, 12);
-  await page.reload();
-  await expectTierAt(page, RECENT_ENTRIES, 330, "small");
-  await expectTierAt(page, RECENT_ENTRIES, 350, "medium");
+    await placeCard(page, RECENT_ENTRIES, 12);
+    await page.reload();
+    await expectTierAt(page, RECENT_ENTRIES, 330, "small");
+    await expectTierAt(page, RECENT_ENTRIES, 350, "medium");
+  });
 });

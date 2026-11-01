@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Badge,
   Button,
   DropdownMenu,
   DropdownMenuContent,
@@ -18,10 +19,19 @@ import {
   Pencil,
   Trash2,
   Folder as FolderIconDefault,
+  LayoutGrid,
+  Type,
 } from "@admin/components/icons";
 import { useRootFolders, useSubfolders } from "@admin/hooks/queries/useMedia";
 import { cn } from "@admin/lib/utils";
-import type { MediaFolder } from "@admin/types/media";
+import type { MediaFolder, MediaLibraryView } from "@admin/types/media";
+
+import { useMediaLibraryCounts } from "../media-library-queries";
+import {
+  MEDIA_LIBRARY_VIEW_LABELS,
+  setMediaLibraryView,
+  useMediaLibraryView,
+} from "../media-library-view";
 
 export interface FolderTreeViewProps {
   activeFolderId: string | null;
@@ -59,6 +69,7 @@ export function FolderTreeView({
     (e: React.KeyboardEvent, folderId: string | null) => {
       if (e.key === "Enter") {
         e.preventDefault();
+        setMediaLibraryView(null);
         onFolderSelect(folderId);
       } else if (e.key === "ArrowRight" && folderId) {
         e.preventDefault();
@@ -75,49 +86,82 @@ export function FolderTreeView({
     [onFolderSelect]
   );
 
-  return (
-    <div className={cn("flex flex-col h-full pt-1 pb-6", className)}>
-      {/* Sidebar Heading */}
-      <div className="flex items-center justify-between px-3 mb-2">
-        <span className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3">
-          Folders
-        </span>
-        <Button
-          variant="ghost"
-          size="md"
-          className="h-8 w-8 p-0 hover:bg-primary/5 transition-colors text-muted-foreground"
-          onClick={() => onCreateFolder()}
-          title="Create folder"
-        >
-          <FolderPlus className="h-4 w-4" />
-        </Button>
-      </div>
+  const counts = useMediaLibraryCounts().data;
+  const view = useMediaLibraryView();
 
-      <div className="flex-1 overflow-y-auto px-2 space-y-1">
-        {/* Top-level "All Media" */}
-        <button
-          type="button"
-          onClick={() => onFolderSelect(null)}
-          onKeyDown={e => handleKeyDown(e, null)}
-          className={cn(
-            "group flex w-full items-center px-2 py-2 text-sm transition-all duration-200 cursor-pointer rounded-md",
-            activeFolderId === null
-              ? "bg-primary/5 text-primary font-bold"
-              : "text-muted-foreground hover:bg-primary/5 font-medium"
-          )}
-        >
-          {/* Spacer to align with chevrons below */}
-          <div className="w-6 shrink-0" />
-          <FolderIconDefault
-            className={cn(
-              "h-4 w-4 shrink-0 transition-colors mr-2.5",
-              activeFolderId === null
-                ? "text-primary"
-                : "text-muted-foreground group-hover:text-foreground"
-            )}
-          />
-          <span className="truncate text-xs">All Media</span>
-        </button>
+  // A folder clears the view: a view spans every folder.
+  const selectFolder = React.useCallback(
+    (folderId: string | null) => {
+      setMediaLibraryView(null);
+      onFolderSelect(folderId);
+    },
+    [onFolderSelect]
+  );
+  // A view is across every folder, so it leaves the folder too.
+  const selectView = React.useCallback(
+    (next: MediaLibraryView) => {
+      onFolderSelect(null);
+      setMediaLibraryView(next);
+    },
+    [onFolderSelect]
+  );
+
+  return (
+    <nav
+      aria-label="Media library"
+      className={cn("flex flex-col h-full pt-1 pb-6", className)}
+    >
+      <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
+        <LibraryRow
+          label="All media"
+          icon={<LayoutGrid className="h-4 w-4 shrink-0" aria-hidden="true" />}
+          count={counts?.all}
+          current={activeFolderId === null && view === null}
+          onSelect={() => selectFolder(null)}
+        />
+
+        <h3 className="px-3 pb-1 pt-3 text-xs font-semibold text-muted-foreground">
+          Views
+        </h3>
+        <LibraryRow
+          label={MEDIA_LIBRARY_VIEW_LABELS["missing-alt"]}
+          icon={<Type className="h-4 w-4 shrink-0" aria-hidden="true" />}
+          count={counts?.missingAltText}
+          // Work left to do stands out; none reads as a plain zero.
+          emphasize={(counts?.missingAltText ?? 0) > 0}
+          current={view === "missing-alt"}
+          onSelect={() => selectView("missing-alt")}
+        />
+        <LibraryRow
+          label={MEDIA_LIBRARY_VIEW_LABELS.unused}
+          icon={<UnusedIcon />}
+          // Until the usage record covers older content, the count would
+          // name items content still uses, so none is shown.
+          count={
+            counts?.usageRecorded ? (counts.unused ?? undefined) : undefined
+          }
+          countHint={
+            counts && !counts.usageRecorded ? "Still being counted" : undefined
+          }
+          current={view === "unused"}
+          onSelect={() => selectView("unused")}
+        />
+
+        <div className="flex items-center justify-between pl-3 pr-1 pt-3">
+          <h3 className="text-xs font-semibold text-muted-foreground">
+            Folders
+          </h3>
+          <Button
+            variant="ghost"
+            size="md"
+            className="h-8 w-8 p-0 hover:bg-primary/5 transition-colors text-muted-foreground"
+            onClick={() => onCreateFolder()}
+            aria-label="New folder"
+            title="New folder"
+          >
+            <FolderPlus className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </div>
 
         {/* Loading state */}
         {isLoading && (
@@ -127,7 +171,7 @@ export function FolderTreeView({
         )}
 
         {/* Folder tree */}
-        <div className="mt-1">
+        <div>
           {rootFolders?.map(folder => (
             <FolderTreeItem
               key={folder.id}
@@ -137,7 +181,8 @@ export function FolderTreeView({
               isExpanded={expandedIds.has(folder.id)}
               expandedIds={expandedIds}
               activeFolderId={activeFolderId}
-              onSelect={onFolderSelect}
+              counts={counts?.folders}
+              onSelect={selectFolder}
               onToggle={toggleExpand}
               onCreateSubfolder={onCreateFolder}
               onEdit={onEditFolder}
@@ -147,7 +192,99 @@ export function FolderTreeView({
           ))}
         </div>
       </div>
-    </div>
+    </nav>
+  );
+}
+
+/** The mark for items nothing uses: a circle struck through. */
+function UnusedIcon(): React.JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4 shrink-0"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="m5.6 5.6 12.8 12.8" />
+    </svg>
+  );
+}
+
+/**
+ * One row above the folders: All media or a view, with its count. The row
+ * on screen says so to assistive technology (`aria-current`).
+ */
+function LibraryRow({
+  label,
+  icon,
+  count,
+  countHint,
+  emphasize = false,
+  current,
+  onSelect,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  count: number | undefined;
+  /** Said in place of a count that cannot be given yet. */
+  countHint?: string;
+  emphasize?: boolean;
+  current: boolean;
+  onSelect: () => void;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      // The name said with its count, or with why there is none yet.
+      aria-label={
+        count !== undefined
+          ? `${label}, ${count}`
+          : countHint
+            ? `${label}, ${countHint}`
+            : label
+      }
+      aria-current={current ? "page" : undefined}
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition-colors cursor-pointer",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        current
+          ? // The sidebar's own pair for the row on screen, which holds its
+            // contrast whatever colour a site brands the admin with.
+            "bg-sidebar-accent font-semibold text-sidebar-accent-foreground"
+          : "font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+      )}
+    >
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count !== undefined &&
+        (emphasize ? (
+          <Badge
+            variant="warning"
+            className="text-xs font-semibold tabular-nums"
+          >
+            {count}
+          </Badge>
+        ) : (
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {count}
+          </span>
+        ))}
+      {count === undefined && countHint && (
+        <span
+          className="text-xs text-muted-foreground"
+          title={countHint}
+          aria-hidden="true"
+        >
+          …
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -158,6 +295,8 @@ interface FolderTreeItemProps {
   isExpanded: boolean;
   expandedIds: Set<string>;
   activeFolderId: string | null;
+  /** Each folder's own item count, by id; a folder with none is absent. */
+  counts: Record<string, number> | undefined;
   onSelect: (folderId: string) => void;
   onToggle: (folderId: string) => void;
   onCreateSubfolder: (parentId: string) => void;
@@ -173,6 +312,7 @@ function FolderTreeItem({
   isExpanded,
   expandedIds,
   activeFolderId,
+  counts,
   onSelect,
   onToggle,
   onCreateSubfolder,
@@ -212,8 +352,9 @@ function FolderTreeItem({
         className={cn(
           "group flex w-full items-center transition-all duration-200 cursor-pointer relative rounded-md mx-0.5",
           isActive
-            ? "bg-primary/5 text-primary font-bold"
-            : "text-muted-foreground hover:bg-primary/5 font-medium"
+            ? // As the rows above: the sidebar's pair, whatever the brand.
+              "bg-sidebar-accent text-sidebar-accent-foreground font-semibold"
+            : "text-muted-foreground hover:bg-sidebar-accent font-medium"
         )}
         style={{ paddingLeft: `${4 + level * 10}px` }}
         onClick={() => {
@@ -226,6 +367,8 @@ function FolderTreeItem({
           {hasSubfolders ? (
             <button
               type="button"
+              aria-label={`${isExpanded ? "Collapse" : "Expand"} ${folder.name}`}
+              aria-expanded={isExpanded}
               onClick={e => {
                 e.stopPropagation();
                 onToggle(folder.id);
@@ -234,29 +377,49 @@ function FolderTreeItem({
                 "flex h-8 w-6 items-center justify-center transition-colors rounded-md cursor-pointer",
                 // Full-strength primary so the active expander icon meets contrast.
                 isActive
-                  ? "text-primary group-hover:text-primary"
+                  ? "text-sidebar-accent-foreground"
                   : "text-muted-foreground group-hover:text-foreground"
               )}
             >
-              <ExpandIcon className="h-3.5 w-3.5" />
+              <ExpandIcon className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           ) : (
             <div className="w-6" />
           )}
         </div>
 
-        {/* Folder Content */}
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 py-2.5 pr-2">
+        {/* The folder itself: a button, so it is reached and opened by
+            keyboard as by pointer. */}
+        <button
+          type="button"
+          aria-label={
+            counts ? `${folder.name}, ${counts[folder.id] ?? 0}` : folder.name
+          }
+          aria-current={isActive ? "page" : undefined}
+          onClick={event => {
+            event.stopPropagation();
+            onSelect(folder.id);
+            if (hasSubfolders) onToggle(folder.id);
+          }}
+          onKeyDown={event => onKeyDown(event, folder.id)}
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md py-2.5 pr-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+        >
           <FolderIconDefault
             className={cn(
               "h-4 w-4 shrink-0 transition-colors",
               isActive
-                ? "text-primary"
+                ? "text-sidebar-accent-foreground"
                 : "text-muted-foreground group-hover:text-foreground"
             )}
+            aria-hidden="true"
           />
-          <span className="truncate text-xs">{folder.name}</span>
-        </div>
+          <span className="min-w-0 flex-1 truncate text-xs">{folder.name}</span>
+          {counts && (
+            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+              {counts[folder.id] ?? 0}
+            </span>
+          )}
+        </button>
 
         {/* Context Menu (Optional/Simplified) */}
         <div
@@ -271,10 +434,13 @@ function FolderTreeItem({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer"
-                tabIndex={-1}
+                aria-label={`Actions for ${folder.name}`}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                <MoreHorizontal
+                  className="h-3.5 w-3.5 text-muted-foreground"
+                  aria-hidden="true"
+                />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -335,6 +501,7 @@ function FolderTreeItem({
                 isExpanded={expandedIds.has(sub.id)}
                 expandedIds={expandedIds}
                 activeFolderId={activeFolderId}
+                counts={counts}
                 onSelect={onSelect}
                 onToggle={onToggle}
                 onCreateSubfolder={onCreateSubfolder}

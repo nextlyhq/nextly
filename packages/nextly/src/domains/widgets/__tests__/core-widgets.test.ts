@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
 import * as loggerModule from "../../../observability/logger";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
+import { publishedWidgetDefinition } from "../../../plugins/test-widget-card";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
 import { teamWidget } from "../core-widgets/team";
@@ -26,6 +27,7 @@ import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
 import { DENSITY_OPTIONS } from "../declaration/setting-builders";
 import { LIST_DENSITIES, MAX_WIDGET_ROWS } from "../query-limits";
 import { getWidget } from "../registry";
+import { resolveWidgetSettings } from "../settings";
 import { TEAM_GATE } from "../team-gate";
 
 beforeEach(() => {
@@ -288,6 +290,57 @@ describe("the list cards' Density", () => {
       ).toEqual([...LIST_DENSITIES]);
     }
   );
+});
+
+describe("a new card's defaults, before its reader touches a setting", () => {
+  /** A declared core card as the registry publishes it to the admin. */
+  function published(id: string) {
+    const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
+    if (!declared) throw new Error(`no core declaration with id "${id}"`);
+    return publishedWidgetDefinition(declared, "core");
+  }
+
+  it("reads Over time's range as the last 30 days, through the reader its card is asked with", () => {
+    // Through `resolveWidgetSettings`, what the card's load and the admin read, rather than the
+    // literal: a default the reader set aside (one its options no longer hold) reads otherwise.
+    expect(
+      resolveWidgetSettings(published("core/over-time").settings, {}).dateRange
+    ).toBe("30d");
+  });
+
+  it("draws Over time's range with the card's data, and its chart style with how it shows", () => {
+    const sections = Object.fromEntries(
+      (published("core/over-time").settings ?? []).map(setting => [
+        setting.name,
+        setting.section,
+      ])
+    );
+    // The range is a select the panel cannot tell from any other: it says where it goes.
+    expect(sections.dateRange).toBe("data");
+    // The rest state nothing, and the panel places them by kind.
+    expect(sections.chartStyle).toBeUndefined();
+  });
+
+  // Every list card is a declaration now, so each is read as the registry publishes it.
+  it.each([
+    "core/recent-entries",
+    "core/continue",
+    "core/team-activity",
+    "core/upcoming-releases",
+  ])("folds %s's Density under Advanced", id => {
+    expect(
+      published(id).settings?.find(setting => setting.name === "density")
+        ?.section
+    ).toBe("advanced");
+  });
+
+  it("draws Continue's Tab with the card's data, since it narrows whose work the card reads", () => {
+    expect(
+      published("core/continue").settings?.find(
+        setting => setting.name === "tab"
+      )?.section
+    ).toBe("data");
+  });
 });
 
 describe("the content card", () => {

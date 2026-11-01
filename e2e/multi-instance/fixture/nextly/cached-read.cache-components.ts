@@ -1,15 +1,7 @@
 /**
- * Nextly's cached reads under Cache Components.
- *
- * Next.js caches non-fetch reads with `"use cache"` and `cacheTag` once Cache
- * Components is on, and the directive works only in code Next.js compiles, so
- * Nextly reads through this function of the app's own. It receives the read's
- * key, its tags and its lifetime, and runs the reader Nextly registered for
- * that key. The query modules import this file, so it is registered wherever
- * content is read.
- *
- * Use it only with `cacheComponents: true` and Nextly's cache handlers in
- * `next.config.ts`: https://nextlyhq.com/docs/guides/isr-caching#cache-components
+ * The read function the caching guide gives an app under Cache Components.
+ * Copied over `cached-read.ts` for the driver's Cache Components leg only:
+ * Next.js refuses `"use cache"` in a build with Cache Components off.
  */
 import { cacheLife, cacheTag } from "next/cache";
 import { registerCachedRead, runRegisteredRead } from "nextly/runtime";

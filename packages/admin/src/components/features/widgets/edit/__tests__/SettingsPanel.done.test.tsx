@@ -11,7 +11,8 @@ import type { AnyWidgetSetting } from "nextly/config";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { WidgetSettingsSheet, type DoneSettled } from "../WidgetSettingsSheet";
+import type { PanelKept } from "../panel-values";
+import { SettingsPanel, type DoneSettled } from "../SettingsPanel";
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({}),
@@ -29,12 +30,13 @@ const SETTINGS: AnyWidgetSetting[] = [
 /** The sheet over an `onDone` that waits, and how to end that wait. */
 function sheet(blocked?: string) {
   let settled: DoneSettled | undefined;
-  const onDone = vi.fn((_config: Record<string, unknown>, s: DoneSettled) => {
+  const onDone = vi.fn((_kept: PanelKept, s: DoneSettled) => {
     settled = s;
   });
   const onOpenChange = vi.fn();
   render(
-    <WidgetSettingsSheet
+    <SettingsPanel
+      placementId="p1"
       open
       onOpenChange={onOpenChange}
       title="Recent posts"
@@ -71,7 +73,7 @@ describe("the settings sheet's Done", () => {
     const items = () =>
       screen.getByRole("spinbutton", { name: /Number of items/ });
     const reset = () =>
-      screen.getByRole("button", { name: "Reset to defaults" });
+      screen.getByRole("button", { name: "Reset Display to defaults" });
     expect(items()).toBeEnabled();
     await userEvent.click(done());
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
@@ -132,7 +134,8 @@ describe("opening the settings sheet on its first field", () => {
   /** The sheet with something focusable ahead of the form, where the sheet's own choice lands. */
   function opened(focusFirstField: boolean) {
     render(
-      <WidgetSettingsSheet
+      <SettingsPanel
+        placementId="p1"
         open
         onOpenChange={vi.fn()}
         title="Recent posts"
@@ -177,7 +180,8 @@ describe("reopening the settings sheet", () => {
         <button type="button" onClick={() => setOpen(true)}>
           Open again
         </button>
-        <WidgetSettingsSheet
+        <SettingsPanel
+          placementId="p1"
           open={open}
           onOpenChange={setOpen}
           title="Recent posts"
@@ -221,7 +225,8 @@ describe("the settings sheet's preview", () => {
   it("is handed what Done would keep, as the reader changes the form", async () => {
     const renderPreview = vi.fn(() => null);
     render(
-      <WidgetSettingsSheet
+      <SettingsPanel
+        placementId="p1"
         open
         onOpenChange={() => {}}
         title="Recent posts"
@@ -232,13 +237,19 @@ describe("the settings sheet's preview", () => {
       />
     );
     // Nothing changed yet, so nothing would be kept.
-    expect(renderPreview).toHaveBeenLastCalledWith({});
+    expect(renderPreview).toHaveBeenLastCalledWith(
+      { config: {}, ownTitle: "" },
+      expect.any(Function)
+    );
     await userEvent.type(
       screen.getByRole("textbox", { name: /Heading/ }),
       "Latest"
     );
     await waitFor(() =>
-      expect(renderPreview).toHaveBeenLastCalledWith({ heading: "Latest" })
+      expect(renderPreview).toHaveBeenLastCalledWith(
+        { config: { heading: "Latest" }, ownTitle: "" },
+        expect.any(Function)
+      )
     );
   });
 });

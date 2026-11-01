@@ -125,13 +125,14 @@ npx create-nextly-app@alpha
 
 With a `src/` folder, all of these except `nextly.config.ts` and the env files go under `src/`. When git would not ignore `.env`, it also adds `.env` to `.gitignore`, creating the file if there is none.
 
-**What it extends.** In the Next config it adds the packages missing from `serverExternalPackages`, and turns [Cache Components](#cache-components) off, removing `partialPrefetching` where it is set. An app with no Next config gets a `next.config.ts`. The rest of the config stays as it was.
+**What it extends.** In the Next config it adds the packages missing from `serverExternalPackages`, and turns [Cache Components](#cache-components) and Partial Prefetching on where either is off or missing, with Nextly's cache handlers. An app an earlier Nextly release turned off is turned on again. An app with no Next config gets a `next.config.ts`. The rest of the config stays as it was.
 
 **What it leaves to you.** Its report lists every file it wrote, every file it changed, and every file it left alone and why. Nothing the app already has is replaced:
 
 - **A file that is already there** is kept, and the report prints Nextly's version of it: merge that in by hand. A route folder the app already uses, such as `app/api/health/`, is left alone the same way.
 - **An instrumentation hook the app already has** is kept, and the report prints the lines to add to its `register()`.
-- **A Next config it can't change safely**, because it can't tell where the settings are or the app runs Next.js 14, is left as it is, and the report prints the options to add.
+- **A Next config it can't change safely**, because it can't tell where the settings are (a spread, a computed value, a wrapper call) or the app runs Next.js 14, is left as it is, and the report prints the options to add.
+- **A Next config with a cache handler of its own** keeps it: Cache Components is turned on, and the report prints Nextly's handler lines for you to weigh against yours.
 - **An app that sets `pageExtensions`** gets no routes or hook written, since Next.js would not serve them under the default names; the report names the file to create and its content.
 - **A `.env` that git already tracks** gets no generated secret, since it would be committed; the report says how to stop tracking it.
 - **`--yes` with `--database postgresql` or `--database mysql`** puts a placeholder `DATABASE_URL` in `.env`: set your own before you start the app.
@@ -249,14 +250,18 @@ export default defineConfig({
 
 ### 3. Update `next.config.ts`
 
-Add `serverExternalPackages` so Next.js doesn't try to bundle server-only dependencies, and turn [Cache Components](#cache-components) off:
+Add `serverExternalPackages` so Next.js doesn't try to bundle server-only dependencies, and turn [Cache Components](#cache-components) and Partial Prefetching on, with Nextly's cache handlers:
 
 ```typescript title="next.config.ts"
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Off by default; see Cache Components below to turn it on.
-  cacheComponents: false,
+  // Nextly runs with both on; see Cache Components below.
+  cacheComponents: true,
+  partialPrefetching: true,
+  cacheHandler: require.resolve("nextly/cache-handler"),
+  cacheMaxMemorySize: 0,
+  cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
   serverExternalPackages: [
     "nextly",
     "@nextlyhq/adapter-drizzle",
@@ -277,7 +282,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-Drop adapters and drivers your project doesn't actually use. A project made with `create-next-app` 16.4 also has `partialPrefetching: true`: remove it, since Next.js accepts it only with Cache Components on.
+Drop adapters and drivers your project doesn't actually use. A project made with `create-next-app` 16.4 already has `cacheComponents: true` and `partialPrefetching: true`. In a `next.config.mjs`, which has no `require` of its own, add `import { createRequire } from "node:module";` and `const require = createRequire(import.meta.url);` at the top.
 
 ### 4. Set Up Admin Routes
 
@@ -380,6 +385,7 @@ export async function register(): Promise<void> {
   const { createRegister } = await import("nextly");
   const { default: config } = await import("../nextly.config");
   // Next.js writes its Cache Components setting into this file as it builds it.
+  // Nextly warns at start when it is off.
   await createRegister(config, {
     cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
   })();
@@ -485,11 +491,21 @@ Nextly installs and generates types under Yarn's Plug'n'Play, but Next.js's defa
 
 ### Cache Components
 
-A Nextly app runs with Next.js [Cache Components](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents) off by default: `cacheComponents: false` in `next.config`, with no `partialPrefetching`, which Next.js accepts only with Cache Components on. With it off, Nextly caches reads with `unstable_cache`.
+A Nextly app runs with Next.js [Cache Components](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents) and Partial Prefetching on, and Nextly supports only that state. `create-nextly-app` writes these settings into a new project's `next.config`, and into an existing app's when it adds Nextly, saying in its report what it changed:
 
-`create-next-app` 16.4 turns Cache Components on by default. `create-nextly-app` writes it off in a new project, and turns it off when it adds Nextly to an existing app, saying so in its report.
+```ts
+cacheComponents: true,
+partialPrefetching: true,
+cacheHandler: require.resolve("nextly/cache-handler"),
+cacheMaxMemorySize: 0,
+cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
+```
 
-To turn it on, follow [Cache Components](/docs/guides/isr-caching#cache-components) in the caching guide: the app reads through a `"use cache"` function of its own and installs Nextly's cache handlers. With Cache Components on and no such function registered, Nextly says so at the first cached read, and reads keep working through `unstable_cache`, though a page read right after a write can show the previous version.
+- **`cacheComponents` and `partialPrefetching`** turn the features on. `create-next-app` 16.4 sets both by default.
+- **Nextly's cache handlers** keep cached pages fresh after a write. Next.js's default cache serves a page's previous version once after a write expires it; Nextly's expire it at once.
+- **Cached reads** go through a `"use cache"` function of the app's own, which a scaffolded blog keeps in `src/nextly/cached-read.ts`. How to add one to another app: [Cache Components](/docs/guides/isr-caching#cache-components) in the caching guide.
+
+**An app with either option off** still runs, but it is not a state Nextly supports. Nextly warns once when it starts with `cacheComponents` off, from the value `instrumentation.ts` passes to `createRegister`, which is why that hook passes `process.env.__NEXT_CACHE_COMPONENTS`; a hook that passes nothing gets a warning that Nextly can't tell. `partialPrefetching` reaches no code while the app runs, so Nextly cannot see it there: only an app whose `next.config` is wrapped in `withNextly()` from `nextly/next` is warned about it, when Next.js loads the config. Apps made by an earlier Nextly release have `cacheComponents: false`: run `create-nextly-app` in the app again, or set the lines above by hand.
 
 Next.js 17 turns Cache Components on for every app and removes the option.
 
