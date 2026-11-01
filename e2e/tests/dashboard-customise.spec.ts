@@ -18,6 +18,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { includingHidden, test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -37,17 +38,6 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  * anywhere else.
  */
 const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
-
-/** Back to the default dashboard, through the guarded reset a reader uses. */
-async function resetToDefault(page: Page): Promise<void> {
-  const read = await page.request.get("/admin/api/dashboard/layout");
-  const body = (await read.json()) as { version: number; scope: string };
-  if (body.version === 0) return;
-  const reset = await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-  expect(reset.status()).toBe(200);
-}
 
 function bar(page: Page) {
   return page.getByRole("group", { name: "Customize your dashboard" });

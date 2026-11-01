@@ -678,6 +678,7 @@ export {
   // A card's loading shape and add-panel sketch.
   type WidgetSkeleton,
   type WidgetSummary,
+  type WidgetSummaryCount,
   type WidgetView,
 } from "./domains/widgets/declaration/public";
 // @experimental The list rows a card of a given height draws at a density: what a widget's `load`

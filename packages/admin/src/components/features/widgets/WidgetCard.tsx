@@ -113,6 +113,7 @@ import {
 import {
   CardTitleCountContext,
   titleCountSpoken,
+  titleCountText,
   type TitleCount,
 } from "./frame/title-count";
 import {
@@ -816,7 +817,10 @@ function headerClassName(): string {
   );
 }
 
-/** The count beside the title, muted, and read after it as ", N items"; nothing without one. */
+/**
+ * The count beside the title, muted, and read after it as ", N items" (", N or more items" for a
+ * floor, drawn "N+"); nothing without one.
+ */
 function TitleCountMark({ count }: { count: TitleCount | undefined }) {
   if (count === undefined) return null;
   return (
@@ -826,7 +830,7 @@ function TitleCountMark({ count }: { count: TitleCount | undefined }) {
         className="shrink-0 text-xs font-normal text-muted-foreground"
         data-testid="widget-card-title-count"
       >
-        {count}
+        {titleCountText(count)}
       </span>
       <span className="sr-only">{titleCountSpoken(count)}</span>
     </>

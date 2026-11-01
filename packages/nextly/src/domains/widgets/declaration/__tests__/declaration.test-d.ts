@@ -266,6 +266,9 @@ expectTypeOf<
   | "status"
   | "total"
   | "depth"
+  // What the read hands the collection's hooks: a hint a hook may act on (skip a count only a
+  // display needs), never a person, a user or an access option.
+  | "context"
   | "signal"
 >();
 // A count's window: a range a series is drawn over, the date it places entries by, and the

@@ -23,6 +23,7 @@ import { gotoAdmin } from "./support/admin";
 import { ownSeat, test } from "./support/test";
 import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -169,12 +170,9 @@ test.beforeEach(async ({ page }) => {
   await placeCard(page);
 });
 
+// Asserted: a reset that fails names itself here, not as a later spec's stray card.
 test.afterEach(async ({ page }) => {
-  const body = await readLayout(page);
-  if (body.version === 0) return;
-  await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
+  await resetToDefault(page);
 });
 
 const WIDTHS = [

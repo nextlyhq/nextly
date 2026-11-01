@@ -135,6 +135,29 @@ describe("a widget's part", () => {
   it("has nothing to say for no count, a negative one or one that is not a number", () => {
     for (const count of [0, -2, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(widgetPart("acme/forms", "card-1", "new", count)).toBeNull();
+      expect(widgetPart("acme/forms", "card-1", "new", { count })).toBeNull();
     }
+  });
+
+  it("keeps a count the widget answered as a floor, and only that one", () => {
+    expect(
+      widgetPart("acme/forms", "card-1", "new submissions", {
+        count: 1000,
+        atLeast: true,
+      })
+    ).toEqual({
+      kind: "widget",
+      widget: "acme/forms",
+      card: "card-1",
+      label: "new submissions",
+      count: 1000,
+      atLeast: true,
+    });
+    expect(
+      widgetPart("acme/forms", "card-1", "new submissions", {
+        count: 4,
+        atLeast: false,
+      })
+    ).not.toHaveProperty("atLeast");
   });
 });
