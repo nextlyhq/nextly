@@ -548,8 +548,8 @@ export const unanswered = defineAttentionItem({
 
 Name a component path as the `view`, and register the component from your plugin's `/admin`
 entry, as every admin component is (see [Component paths](#component-paths)). The host still
-draws the card's frame: the header, the footer link, and the loading, not-available and error
-states. Your component draws the body:
+draws the card's frame: the header, the footer that holds your body's one link, and the loading,
+not-available and error states. Your component draws the body:
 
 ```ts
 import { defineWidget } from "@nextlyhq/plugin-sdk";

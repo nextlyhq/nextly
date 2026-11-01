@@ -14,8 +14,8 @@
  * `isEmpty`, with its declared message), and this component draws only the
  * text it is handed.
  *
- * Loaded lazily, as the `text` archetype loads it, so a dashboard with no note
- * pays nothing for the renderer.
+ * Loaded lazily, with the Markdown renderer it draws the text through, so a
+ * dashboard with no note pays nothing for that renderer.
  *
  * @module components/features/dashboard/NoteCard
  */

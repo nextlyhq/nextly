@@ -264,7 +264,7 @@ export type {
 //
 // A widget is declared with `defineWidget`, never written as the shape the
 // registry publishes, so that shape has no name here: the admin reads it as
-// `nextly/testing/widget-card`'s `publishedWidgetDefinition` answers it.
+// `nextly/widget-result`'s `PublishedWidget`, the wire type for it.
 export type { WidgetSetting } from "./domains/widgets/definition";
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
