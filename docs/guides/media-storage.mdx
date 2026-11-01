@@ -496,7 +496,7 @@ It works item by item: it removes the item's size files, then clears its `sizes`
 npx nextly media remove-sizes --apply --drop
 ```
 
-Once no item names a size file, this drops `image_sizes` and then `media.sizes`. While any item still does, it drops nothing, says how many, and exits non-zero. It drops each only when the database shows it is what image sizes left: the column with the type Nextly gave it, and the table with exactly the columns Nextly created it with, beside that column, with neither recorded as your app's or a plugin's. A table named `image_sizes` that is not shown to be Nextly's is kept and named; check it, and drop it yourself if it is the one image sizes left.
+Once no item names a size file, this drops `image_sizes` and then `media.sizes`. While any item still does, it drops nothing, says how many, and exits non-zero. It also drops nothing while another table has a foreign key to `image_sizes`: it names each key, and you drop or change those first. The drop never cascades. It drops each only when the database shows it is what image sizes left: the column with the type Nextly gave it, and the table with exactly the columns Nextly created it with, beside that column, with neither recorded as your app's or a plugin's. A table named `image_sizes` that is not shown to be Nextly's is kept and named; check it, and drop it yourself if it is the one image sizes left.
 
 ### 6. Check
 
