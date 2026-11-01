@@ -19,7 +19,7 @@ import {
   takePendingExpiries,
 } from "../../revalidation/expiry-handoff";
 
-import { expireTags } from "./tag-expiry-view";
+import { recordExpiredTagsAgain } from "./tag-expiry-view";
 
 /** The first wait before a retry, doubled after each failure. */
 export const FIRST_RETRY_DELAY_MS = 1_000;
@@ -82,9 +82,16 @@ export function holdFailedRecord(tags: string[]): void {
   schedule(retry);
 }
 
-/** Arms the one timer, unless it is armed already. */
-function schedule(retry: RetryState): void {
-  if (retry.timer !== undefined) return;
+/**
+ * Arms the one timer, unless it is armed already; with `replace`, in place of
+ * one armed before the wait changed, so the next try waits the wait as it is.
+ */
+function schedule(retry: RetryState, replace = false): void {
+  if (retry.timer !== undefined) {
+    if (!replace) return;
+    clearTimeout(retry.timer);
+    retry.timer = undefined;
+  }
   retry.timer = setTimeout(() => {
     retry.timer = undefined;
     void retryFailedRecords();
@@ -128,7 +135,9 @@ async function attempt(retry: RetryState): Promise<void> {
     return;
   }
   retry.inFlight = tags;
-  const outcome = await expireTags(tags);
+  // The ledger alone: these tags expired here when they were written, and a
+  // retry that expired them again would refuse every entry regenerated since.
+  const outcome = await recordExpiredTagsAgain(tags);
   // The ledger was withdrawn meanwhile, which kept these tags again for the
   // next one: whatever came of this attempt, it settles nothing now.
   if (retry.generation !== generation) return;
@@ -149,7 +158,7 @@ async function attempt(retry: RetryState): Promise<void> {
     return;
   }
   retry.delayMs = Math.min(retry.delayMs * 2, MAX_RETRY_DELAY_MS);
-  schedule(retry);
+  schedule(retry, true);
 }
 
 /**
@@ -163,7 +172,7 @@ function finish(retry: RetryState, heldBefore: number): boolean {
     return true;
   }
   retry.delayMs = FIRST_RETRY_DELAY_MS;
-  schedule(retry);
+  schedule(retry, true);
   return false;
 }
 

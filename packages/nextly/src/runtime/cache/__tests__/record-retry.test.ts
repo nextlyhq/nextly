@@ -18,7 +18,15 @@ import {
   MAX_RETRY_DELAY_MS,
 } from "../record-retry";
 import type { TagExpiryLedger } from "../tag-expiry-ledger";
-import { publishTagExpiryLedger } from "../tag-expiry-view";
+import {
+  expireTags,
+  isEntryExpired,
+  localNow,
+  publishTagExpiryLedger,
+  refreshTagExpiries,
+  TAG_LOOKUP_TTL_MS,
+} from "../tag-expiry-view";
+import { HANDOFF_TIMEOUT_MS, handOffWithin } from "../next-cache-revalidator";
 import useCacheHandler from "../use-cache-handler";
 
 const warn = vi.fn();
@@ -283,5 +291,101 @@ describe("a record the ledger refused", () => {
 
     expect(vi.getTimerCount()).toBe(0);
     expect(takePendingExpiries()).toEqual(["posts"]);
+  });
+
+  it("keeps an entry regenerated since the write fresh: a retry records the expiry, it does not make it again", async () => {
+    const rows = new Map<string, number>();
+    let refusing = true;
+    publishTagExpiryLedger({
+      record: async tags => {
+        if (refusing) throw new Error("connection reset");
+        const at = Date.now() + 1_000;
+        for (const tag of tags) rows.set(tag, at);
+        return new Map(tags.map(tag => [tag, at] as const));
+      },
+      expiriesOf: async tags => ({
+        now: Date.now(),
+        expired: new Map(
+          tags.flatMap(tag => {
+            const at = rows.get(tag);
+            return at === undefined ? [] : [[tag, at] as const];
+          })
+        ),
+      }),
+      prune: async () => 0,
+    });
+    const before = localNow();
+    vi.advanceTimersByTime(5);
+    // The write: expired here, refused by the ledger, kept for a retry.
+    expect(await expireTags(["t"])).toBe("failed");
+    holdFailedRecord(["t"]);
+    vi.advanceTimersByTime(5);
+    // An entry this process regenerated after the write.
+    const regenerated = localNow();
+
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(2 * FIRST_RETRY_DELAY_MS);
+    refusing = false;
+    await vi.advanceTimersByTimeAsync(4 * FIRST_RETRY_DELAY_MS);
+    expect(rows.has("t")).toBe(true);
+
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await refreshTagExpiries(["t"]);
+    expect(isEntryExpired(["t"], regenerated)).toBe(false);
+    expect(isEntryExpired(["t"], before)).toBe(true);
+  });
+
+  it("waits the first wait again for a refusal kept during an attempt that then succeeded, not the wait it was armed with", async () => {
+    let release: () => void = () => undefined;
+    let calls = 0;
+    const seen: string[][] = [];
+    publishTagExpiryLedger({
+      record: async tags => {
+        calls += 1;
+        seen.push([...tags]);
+        if (calls <= 3) throw new Error("connection reset");
+        if (calls === 4) {
+          await new Promise<void>(resolve => {
+            release = resolve;
+          });
+        }
+        return new Map(tags.map(tag => [tag, Date.now()] as const));
+      },
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    holdFailedRecord(["posts"]);
+    // Three refusals: waits of 1, 2 and 4 s, so the next would be 8 s.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(calls).toBe(4);
+
+    // Refused while the fourth attempt records, armed at 8 s.
+    holdFailedRecord(["pages"]);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+
+    expect(calls).toBe(5);
+    expect(seen[4]).toEqual(["pages"]);
+  });
+
+  it("retries the tags a hand-off that never answered gave back", async () => {
+    const record = ledgerThat(() => "ok");
+    const hanging = { handOff: () => new Promise<void>(() => undefined) };
+    const handing = handOffWithin(
+      hanging,
+      ["posts"],
+      "a write made outside Next.js"
+    );
+    await vi.advanceTimersByTimeAsync(HANDOFF_TIMEOUT_MS);
+    await handing;
+
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect([...record.mock.calls[0][0]]).toEqual(["posts"]);
   });
 });
