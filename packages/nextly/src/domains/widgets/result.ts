@@ -12,9 +12,9 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { toDefinition } from "./declaration/declared-widgets";
 import type { TransportableValue } from "./declaration/transportable";
 import type { GridSize } from "./grid-size";
-import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
@@ -295,6 +295,17 @@ export function noSettingChosen(label: string): string {
 }
 
 /**
+ * The widget as `/admin-meta/workspace` serves it to the admin: one entry of the
+ * workspace payload's `widgets`. Never written by a widget author; declare a
+ * widget with `defineWidget`.
+ *
+ * Derived from the function the registry publishes every widget through
+ * (`toDefinition`), so the admin reads the shape the server actually sends and
+ * the two cannot drift. A type only: importing it adds nothing to a bundle.
+ */
+export type PublishedWidget = ReturnType<typeof toDefinition>;
+
+/**
  * One slot of the dashboard batch response: what ONE widget's query answered.
  *
  * 🔴 A failure is a VALUE here, not a thrown error, because the batch answers
@@ -421,9 +432,11 @@ export interface SettingEditorProps<Value> {
  * declaration, its settings and data left untyped here because only the
  * declaration knows them.
  *
- * 🔴 A `type`, for the reason `WidgetComponentProps` below is one: the admin
- * annotates the object it forwards through `PluginSlot` with it, so a renamed
- * or dropped prop fails to compile there.
+ * 🔴 A `type` and not an `interface`, for a reason the compiler enforces: an
+ * interface has no implicit index signature, so it is not assignable to the
+ * `Record<string, unknown>` that `PluginSlot` forwards props through, and the
+ * admin annotates the object it forwards with this, so a renamed or dropped
+ * prop fails to compile there.
  *
  * @experimental
  */
@@ -442,94 +455,4 @@ export type DeclaredComponentProps = {
   refreshing: boolean;
   /** Asks for the card's data again. */
   retry: () => void;
-};
-
-/**
- * The props a widget component is handed, whatever it draws.
- *
- * 🔴 Declared in core rather than in the admin that builds it or the plugin-sdk
- * that publishes it, because those two cannot both see a third place: plugin-sdk
- * already depends on the admin, so an admin dependency on plugin-sdk closes a
- * cycle the build refuses. Core is the one package both already depend on, and
- * it is not a stranger to presentation -- a widget definition here declares its
- * `component`, its `chrome` and its default size.
- *
- * The admin ANNOTATES the object it builds with this type, so a renamed or
- * dropped prop fails to compile rather than silently leaving plugin authors
- * compiling against a contract nothing keeps.
- *
- * Nested rather than spread: a widget declaring a setting named `slot` would
- * otherwise overwrite the answer to its own query.
- *
- * 🔴 A `type` and not an `interface`, for a reason the compiler enforces: an
- * interface has no implicit index signature, so it is not assignable to the
- * `Record<string, unknown>` that `PluginSlot` forwards props through -- the
- * admin could not annotate the object it builds with it, which is the whole
- * point of publishing it. Losing declaration merging is a second, smaller
- * benefit: a plugin cannot widen a contract the host has to satisfy.
- */
-export type WidgetComponentProps = {
-  /** The widget definition's id -- what the plugin registered. */
-  widgetId: string;
-  /**
-   * The CARD's id, which is what identifies this instance.
-   *
-   * 🔴 Not `widgetId`. One widget may sit on a dashboard twice -- a "recent
-   * entries" card for posts beside one for pages -- and everything belonging to
-   * a card, its settings and its answer included, is keyed by this.
-   */
-  placementId: string;
-  /**
-   * This card's settings, RESOLVED: the reader's stored values where they are
-   * usable and the declared defaults everywhere else, so a component never
-   * decides what a missing or unusable setting should have been.
-   */
-  settings: Record<string, unknown>;
-  /**
-   * This card's answer, when it has one.
-   *
-   * 🔴 `undefined` means TWO different things, and a component that treats them
-   * alike will draw an empty state over a request that is still running: the
-   * widget asks for nothing (no query, and no data of its own core builds), so
-   * no answer is ever coming; or the batch carrying this card's question has not
-   * answered YET. `isFetching` tells them apart. A widget that declares its own
-   * data gets it here as `{ op: "data", data }`.
-   */
-  slot: WidgetSlot | undefined;
-  /**
-   * The answer to each of this card's cells, by key, for a card that declares
-   * several reads (`cells`); absent for one that declares none. A key with no
-   * answer yet is absent from it, as `slot` is.
-   *
-   * @experimental While the content widgets are being built.
-   */
-  cells?: Readonly<Record<string, WidgetSlot>>;
-  /**
-   * Whether this card's question is in flight, the FIRST request included: its
-   * query, or the data core builds for a widget that declares its own.
-   *
-   * Always `false` for a widget that asks for nothing, which is what makes it
-   * the discriminator for an absent `slot`.
-   */
-  isFetching: boolean;
-  /**
-   * The query this card ASKED: its declaration's, with its reader's settings
-   * applied, the "Number of items" among them. A component drawing rows sizes
-   * them from this, as core's lists do. When the widget declares `sizedQuery`,
-   * the batch sent it sized to the card, one row more than the card draws, so
-   * that extra row says more exist; otherwise it was sent exactly as asked.
-   *
-   * Absent for a widget that declared no query.
-   *
-   * @experimental
-   */
-  query?: WidgetQuery;
-  /**
-   * Asks this card's question again, when the batch's answer was an error the
-   * component draws: the Retry a framed card's error offers. Absent while there
-   * is nothing to retry.
-   *
-   * @experimental
-   */
-  onRetry?: () => void;
 };

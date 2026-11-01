@@ -11,8 +11,8 @@
  * What the header ends the line with (`trailing`, "Resume setup") is drawn
  * after the parts whatever the summary says, as it is not one of them.
  *
- * The line is a polite live region, so a change to it is said without moving
- * the reader.
+ * The summary's words are a polite live region, so a change to them is said
+ * without moving the reader; what the line ends with sits outside it.
  *
  * @module components/features/dashboard/header/SummaryLine
  */
@@ -127,25 +127,31 @@ export function SummaryLine({
       : summaryLine(summary, now);
   if (line.kind === "none" && trailing == null) return null;
   return (
-    // A polite live region, read whole: when the counts change under the reader (an item dealt
-    // with, a release scheduled), the new line is said once they pause, as one sentence rather
-    // than the one part that changed.
     <p
-      aria-live="polite"
-      aria-atomic="true"
       className="mt-[3px] text-[12.5px] text-muted-foreground"
       data-testid="dashboard-summary"
     >
-      {line.kind === "none"
-        ? null
-        : line.kind === "caught-up"
-          ? "You're all caught up"
-          : line.parts.map((part, index) => (
-              <Fragment key={part.key}>
-                {index > 0 ? " · " : null}
-                <PartLink part={part} card={cardOf(part, cards)} />
-              </Fragment>
-            ))}
+      {/* A polite live region, read whole: when the counts change under the reader (an item dealt
+        with, a release scheduled), the new line is said once they pause, as one sentence rather
+        than the one part that changed. The summary's own words only: what the line ends with
+        (`trailing`) says its own news, so a status of its own is never nested in this region
+        and its news is not read out with every part of the line around it. */}
+      <span
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="dashboard-summary-said"
+      >
+        {line.kind === "none"
+          ? null
+          : line.kind === "caught-up"
+            ? "You're all caught up"
+            : line.parts.map((part, index) => (
+                <Fragment key={part.key}>
+                  {index > 0 ? " · " : null}
+                  <PartLink part={part} card={cardOf(part, cards)} />
+                </Fragment>
+              ))}
+      </span>
       {trailing == null ? null : (
         <>
           {line.kind === "none" ? null : " · "}

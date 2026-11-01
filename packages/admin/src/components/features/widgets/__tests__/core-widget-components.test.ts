@@ -48,11 +48,7 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  CORE_DECLARATIONS,
-  CORE_WIDGETS,
-} from "../../../../../../nextly/src/domains/widgets/core-widgets";
-import { LIST_RENDERED_FIELDS } from "../archetypes/list";
+import { CORE_DECLARATIONS } from "../../../../../../nextly/src/domains/widgets/core-widgets";
 
 /**
  * Resolved from this file rather than from `process.cwd()`, so the test reads
@@ -64,16 +60,12 @@ const CORE_COMPONENTS = join(
 );
 
 /**
- * The paths core's cards NAME, read off the definitions and the declarations
- * rather than matched out of their source text.
- *
- * A `custom` definition names one, and so does a declaration whose view is a
- * component of core's own; the archetype-drawn cards carry a `query`, and a
- * core view no path, so they are correctly absent here.
+ * The paths core's cards NAME, read off the declarations rather than matched
+ * out of their source text: a declaration whose view is a component of core's
+ * own names one, and a core view names no path, so it is correctly absent here.
  */
 const named = [
-  ...CORE_WIDGETS.map(widget => widget.component),
-  ...CORE_DECLARATIONS.map(widget =>
+  ...CORE_DECLARATIONS.map((widget): string | undefined =>
     typeof widget.view === "object" ? widget.view.component : undefined
   ),
 ].filter((path): path is string => typeof path === "string");
@@ -124,43 +116,5 @@ describe("core widget component paths resolve", () => {
    */
   it("names exactly what it registers", () => {
     expect([...registered].sort()).toEqual([...named].sort());
-  });
-});
-
-/**
- * A list card asking for fields its renderer will not draw.
- *
- * 🔴 This is the OTHER cross-package silence, and it fails more quietly than an
- * unregistered component: the card renders, correctly, showing fewer columns
- * than its author selected. Nothing throws, nothing logs, and the row looks
- * deliberate -- so it survives review by anyone who does not happen to know the
- * renderer takes two. Both shipped list cards were wrong this way, and one of
- * them dropped the timestamp from a card whose description promises "newest
- * first".
- *
- * The bound is IMPORTED from the renderer rather than written here, so drawing a
- * third field is a one-line change in one file rather than a number to find in
- * two.
- */
-describe("core list cards select only fields that get drawn", () => {
-  const listCards = CORE_WIDGETS.filter(
-    widget => widget.archetype === "list"
-  ).map(widget => [widget.id, widget.query?.select ?? []] as const);
-
-  /*
-   * The population, pinned rather than merely non-empty. Core declares no
-   * list card today: Continue and Upcoming releases each draw through a
-   * component of their own. Pinned, a card that becomes a list card fails here
-   * until it is named, and is then checked below; a bare loop over an empty
-   * list would pass having checked nothing.
-   */
-  it("knows which core cards are list cards", () => {
-    expect(listCards.map(([id]) => id)).toEqual([]);
-  });
-
-  it("holds each core list card to what is drawn", () => {
-    for (const [id, select] of listCards) {
-      expect(select.length, id).toBeLessThanOrEqual(LIST_RENDERED_FIELDS);
-    }
   });
 });

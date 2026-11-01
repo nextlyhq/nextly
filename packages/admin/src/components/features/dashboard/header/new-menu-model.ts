@@ -17,7 +17,11 @@ import {
   isCollectionPlacedElsewhere,
   resolveCollectionPlacement,
 } from "@admin/lib/plugins/collection-placement";
-import { collectionDisplayName } from "@admin/lib/sidebar-landing";
+import {
+  type CollectionsLandingDeps,
+  collectionDisplayName,
+  getSidebarCollectionsForLanding,
+} from "@admin/lib/sidebar-landing";
 import type { PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -49,15 +53,19 @@ export interface NewMenu {
   searchable: boolean;
 }
 
-export interface NewMenuInput {
+/**
+ * What the sidebar's Collections section is drawn for (the branding, whose
+ * custom groups and plugins also place every other type, the reader's
+ * capabilities and their pins), not the list the sidebar drew from it. That
+ * list is one page of collections, so a creatable type past it would leave
+ * the Collections section; the section is derived here from every creatable
+ * type, by the sidebar's own placement and order.
+ */
+export interface NewMenuInput extends CollectionsLandingDeps {
   /** Every type the reader may create, in any order. */
   creatable: readonly ApiCollection[];
   /** The reader's recent types' slugs, the most recent first. */
   recentSlugs: readonly string[];
-  /** The sidebar's Collections section, in the order it draws it. */
-  sidebarCollections: readonly ApiCollection[];
-  customGroups?: readonly { slug: string; name: string }[];
-  plugins?: readonly PluginMetadata[];
 }
 
 /** Order then shown name: how both the custom-group and plugin navs sort. */
@@ -76,8 +84,9 @@ interface SectionPlace {
 }
 
 /**
- * "Other" collects both a plugin's group-less types and types placed nowhere
- * else, so the menu draws one section for them, not two.
+ * "Other" collects a plugin's group-less types, a plugin's types grouped as
+ * "Other" and types placed nowhere else, so the menu draws one section for
+ * them, not two.
  */
 const OTHER_PLACE: SectionPlace = { id: "other", label: OTHER, kind: "plugin" };
 
@@ -102,8 +111,13 @@ function sectionOf(
     resolveCollectionPlacement(collection.name, plugins)
   );
   if (custom) return custom;
-  const group = collection.admin.group;
-  if (isCollectionPlacedElsewhere(collection.name, plugins) || !group) {
+  // A missing heading is "Other", as the plugin nav names it, so a group-less
+  // type and one grouped as "Other" share the one "Other" section.
+  const group = collection.admin.group || OTHER;
+  if (
+    isCollectionPlacedElsewhere(collection.name, plugins) ||
+    group === OTHER
+  ) {
     return OTHER_PLACE;
   }
   return { id: `plugin:${group}`, label: group, kind: "plugin" };
@@ -115,9 +129,9 @@ export function newMenu(input: NewMenuInput): NewMenu {
     .flatMap(slug => creatable.get(slug) ?? [])
     .slice(0, NEW_MENU_RECENT_LIMIT);
 
-  const inCollections = input.sidebarCollections.flatMap(
-    c => creatable.get(c.name) ?? []
-  );
+  // Every creatable type, never the sidebar's one page: the section's members
+  // and order come from the helper that draws the sidebar's own.
+  const inCollections = getSidebarCollectionsForLanding(input.creatable, input);
   const placed = new Set(inCollections.map(c => c.name));
   // Keyed by each section's id, never its heading: two groups of one name
   // are two sections.
@@ -127,8 +141,8 @@ export function newMenu(input: NewMenuInput): NewMenu {
     if (placed.has(collection.name)) continue;
     const { id, label, kind } = sectionOf(
       collection,
-      input.customGroups ?? [],
-      input.plugins
+      input.branding?.customGroups ?? [],
+      input.branding?.plugins
     );
     const into = kind === "custom" ? custom : plugin;
     const section = into.get(id);

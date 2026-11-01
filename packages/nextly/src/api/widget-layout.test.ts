@@ -96,6 +96,7 @@ import {
 import { collectionSettingsToken } from "../domains/widgets/collection-cards";
 import {
   clearDeclaredWidgets,
+  declaredWidget,
   registerDashboardWidgets,
 } from "../domains/widgets/declaration/declared-widgets";
 import { defineWidget } from "../domains/widgets/declaration/define-widget";
@@ -307,7 +308,9 @@ const REGISTERED_DEFAULT: DefaultLayoutPlan = {
       .filter(
         widget =>
           !core.has(widget.id) &&
-          widget.serverData !== true &&
+          // A widget a case declares is left to its `defaultLayout`, as a
+          // plugin's declared widget is placed only by what names it.
+          declaredWidget(widget.id) === undefined &&
           widget.offered === undefined
       )
       .sort((a, b) =>
@@ -497,7 +500,7 @@ describe("GET /api/dashboard/layout", () => {
 });
 
 describe("where the add panel lists each widget", () => {
-  it("says each widget's group, sub-group, description, category and sketch", async () => {
+  it("says each widget's description and category, and nothing of where the panel lists it", async () => {
     registerWidget(
       widget({
         id: "core/team",
@@ -509,20 +512,20 @@ describe("where the add panel lists each widget", () => {
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
-    // Core's group, beside the sizes the editor already reads.
-    expect(body.widgets?.["core/team"]).toMatchObject({
-      group: "team",
+    // Beside the sizes the editor already reads.
+    expect(body.widgets?.["core/team"]).toEqual({
       description: "How many users and roles the project has.",
-      sketch: "custom",
       allowsSeveral: false,
     });
     expect(body.widgets?.["forms/latest"]).toMatchObject({
-      group: "plugins",
-      subgroup: "@acme/forms",
       description: "The newest submissions.",
       category: "Forms",
-      sketch: "list",
     });
+    // Where the panel lists a widget, and in what order, is `available`'s
+    // order: no group, sub-group, sketch or rank is sent beside it.
+    for (const key of ["group", "subgroup", "sketch", "rank"]) {
+      expect(body.widgets?.["forms/latest"]).not.toHaveProperty(key);
+    }
   });
 
   it("offers widgets in the panel's order: the built-ins, the site's own, Team, then each plugin's", async () => {
@@ -544,29 +547,6 @@ describe("where the add panel lists each widget", () => {
       "core/team",
       "forms/latest",
     ]);
-  });
-
-  it("ranks every offered widget in that order, a placed one too", async () => {
-    // 🔴 `available` leaves out a placed widget that allows one card, but the panel still lists
-    // it, as on the dashboard, and needs its place. Without a rank it could only guess one.
-    registerWidget(widget({ id: "site/zeta" }));
-    registerWidget(widget({ id: "core/team" }));
-    registerWidget(widget({ id: "core/continue" }));
-    stored = {
-      version: 1,
-      layout: serializeLayout([
-        { id: "p-team", widgetId: "core/team", w: 12, h: 3, removed: false },
-      ]),
-    };
-
-    const body = await bodyOf(await getWidgetLayout(getReq()));
-
-    expect(body.available).not.toContain("core/team");
-    const ranked = Object.entries(body.widgets ?? {})
-      .filter(([, facts]) => typeof facts.rank === "number")
-      .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0))
-      .map(([id]) => id);
-    expect(ranked).toEqual(["core/continue", "site/zeta", "core/team"]);
   });
 });
 
@@ -1530,28 +1510,26 @@ describe("PUT /api/dashboard/layout", () => {
     expect(saved).toBeUndefined();
   });
 
-  it("refuses a write once the reader has gained a SHORTCUT'S permission, with the cards unchanged", async () => {
+  it("refuses a write once the reader has gained an empty-state ACTION'S permission, with the cards unchanged", async () => {
     // 🔴 The token is also what tells the admin its workspace payload is
-    // stale, and that payload withholds the shortcuts a reader may not see. A
-    // token of the ids alone stood still here -- the cards are the same
-    // cards -- so the newly permitted shortcut stayed withheld until some
+    // stale, and that payload withholds the empty-state action a reader may
+    // not take. A token of the ids alone stood still here -- the cards are the
+    // same cards -- so the newly permitted action stayed withheld until some
     // unrelated refresh. The view IS stale, and the guard says so.
     registerWidget(
       widget({
         id: "core/tools",
-        archetype: "actions",
-        component: undefined,
-        actions: [
-          { label: "Search", href: "/admin/search" },
-          {
+        empty: {
+          message: "Nothing to publish",
+          action: {
             label: "Publish",
-            href: "/admin/publish",
+            link: "/admin/publish",
             requiredPermission: "publish-notes",
           },
-        ],
+        },
       })
     );
-    // The client read while the shortcut's grant was absent...
+    // The client read while the action's grant was absent...
     const before = scopeFor(["core/tools"]);
     // ...and holds it by the time the write arrives.
     callerHoldsPermission.mockResolvedValue(true);
@@ -1586,11 +1564,13 @@ describe("PUT /api/dashboard/layout", () => {
     registerWidget(
       widget({
         id: "core/tools",
-        archetype: "actions",
-        component: undefined,
-        actions: [
-          { label: "Publish", href: "/x", requiredPermission: "publish-notes" },
-        ],
+        empty: {
+          action: {
+            label: "Publish",
+            link: "/x",
+            requiredPermission: "publish-notes",
+          },
+        },
       })
     );
     const first = await bodyOf(await getWidgetLayout(getReq()));
@@ -2156,7 +2136,7 @@ describe("a row of an earlier format", () => {
   ];
 
   beforeEach(() => {
-    registerWidget(widget({ id: STARTED, defaultOrder: 0, dismissible: true }));
+    registerWidget(widget({ id: STARTED, defaultOrder: 0 }));
     registerWidget(widget({ id: "core/upcoming-releases", defaultOrder: 10 }));
     stored = { version: 7, layout: EARLIER };
   });
@@ -2296,22 +2276,11 @@ describe("the sizes a card may take", () => {
   it("are not repeated in the widget facts: the admin reads them from the declaration", async () => {
     registerWidget(widget({ id: "core/any" }));
     const body = await bodyOf(await getWidgetLayout(getReq()));
-    // Whether a second card may be added, and where the add panel lists each
-    // one: neither is a built-in core knows, so both are the site's own,
-    // under Overview.
+    // Whether a second card may be added, and nothing else neither declares:
+    // where the add panel lists each is `available`'s order.
     expect(body.widgets).toEqual({
-      "core/narrow": {
-        allowsSeveral: false,
-        group: "overview",
-        sketch: "custom",
-        rank: 0,
-      },
-      "core/any": {
-        allowsSeveral: false,
-        group: "overview",
-        sketch: "custom",
-        rank: 1,
-      },
+      "core/narrow": { allowsSeveral: false },
+      "core/any": { allowsSeveral: false },
     });
   });
 
@@ -2762,7 +2731,6 @@ describe("a card's note", () => {
         archetype: "metric",
         component: undefined,
         size: { default: { w: 12, h: 3 } },
-        query: { source: "collection:posts", op: "count" },
         settings: [{ name: "source", label: "Collection", type: "collection" }],
       })
     );

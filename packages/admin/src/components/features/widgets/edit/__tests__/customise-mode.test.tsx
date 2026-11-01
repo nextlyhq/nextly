@@ -141,7 +141,6 @@ function branding(): AdminBranding {
         title: "Home page",
         archetype: "custom",
         size: RESIZABLE,
-        chrome: "none",
         component: "core#LinkedSection",
       },
       {
@@ -163,12 +162,9 @@ function branding(): AdminBranding {
   } as unknown as AdminBranding;
 }
 
-/** One card, listed in the add panel's Overview group as core lists it. */
+/** One card, which a dashboard holds once. */
 function facts(): WidgetLayoutFacts {
-  return {
-    allowsSeveral: false,
-    group: "overview",
-  };
+  return { allowsSeveral: false };
 }
 
 const OPENED: WidgetPlacement[] = [
@@ -252,6 +248,15 @@ beforeEach(() => {
   );
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
+  // Every card is asked for by its id; each is answered, so its component draws.
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    Promise.resolve({
+      results: (body as { queries: unknown[] }).queries.map(() => ({
+        ok: true,
+        result: { op: "data", data: null },
+      })),
+    })
+  );
   // A history the reader can go Back through: they came to the dashboard
   // from another admin page.
   window.history.pushState(null, "", CAME_FROM);
@@ -294,11 +299,14 @@ function live(): HTMLElement {
   return screen.getByTestId("widget-grid-live");
 }
 
-/** Every write the dashboard can make. */
+/**
+ * Every write the dashboard can make. The cards' batch is a POST that only reads, so it is not
+ * one: every card asks it, and customising asks again with the settings each is drawn with.
+ */
 function writes(): number {
   return (
     api.put.mock.calls.length +
-    api.post.mock.calls.length +
+    api.post.mock.calls.filter(([path]) => path !== "/dashboard/query").length +
     api.delete.mock.calls.length
   );
 }
@@ -722,6 +730,18 @@ describe("what customise mode says, through the grid's one live region", () => {
   });
 
   it("says a staged reset, and that it is not saved yet", async () => {
+    // The dashboard's first batch answers; a batch after it, for the reset's cards, stays on its
+    // way, so the region holds only what the reset said, never that batch's news beside it.
+    api.post.mockImplementation((_path: string, body: unknown) =>
+      api.post.mock.calls.length > 1
+        ? new Promise(() => undefined)
+        : Promise.resolve({
+            results: (body as { queries: unknown[] }).queries.map(() => ({
+              ok: true,
+              result: { op: "data", data: null },
+            })),
+          })
+    );
     renderDashboard();
     const user = await beginEditing();
     await confirmReset(user);

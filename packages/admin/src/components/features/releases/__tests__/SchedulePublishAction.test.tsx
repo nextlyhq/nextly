@@ -9,7 +9,7 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen } from "@admin/__tests__/utils";
+import { act, fireEvent, render, screen } from "@admin/__tests__/utils";
 
 import {
   useSchedulePublishAction,
@@ -273,6 +273,107 @@ describe("a request on its way", () => {
           "POST"
       );
       expect(posts).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /** The POSTs sent so far: each one is a schedule the server would make. */
+  const postsOf = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.filter(
+      call =>
+        (call as unknown as [string, RequestInit | undefined])[1]?.method ===
+        "POST"
+    );
+
+  /** Opens the dialog through the action and presses Schedule publish. */
+  async function scheduleFromTheAction() {
+    fireEvent.click(screen.getByRole("button", { name: "open", hidden: true }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      dialog.querySelector('button[type="submit"]') as HTMLButtonElement
+    );
+    await screen.findByRole("button", { name: "Scheduling…" });
+  }
+
+  it("is never sent a second time by leaving the document and coming back", async () => {
+    // The page outlives a move to another document and back, and the move
+    // closes the dialog: a lock kept in the dialog, or in the open state,
+    // is gone on return while the first request is still out.
+    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { rerender } = render(<Probe entryId="e1" />);
+      await scheduleFromTheAction();
+      expect(postsOf(fetchMock)).toHaveLength(1);
+
+      rerender(<Probe entryId="e2" />);
+      rerender(<Probe entryId="e1" />);
+      expect(text("reason")).toBe(
+        "This document is being scheduled. Wait for it to finish."
+      );
+
+      // Chosen anyway, as a menu that drew the hold late would let it be.
+      fireEvent.click(
+        screen.getByRole("button", { name: "open", hidden: true })
+      );
+      const again = screen.queryByRole("dialog");
+      if (again !== null) {
+        const send = again.querySelector(
+          'button[type="submit"]'
+        ) as HTMLButtonElement;
+        fireEvent.click(send);
+        fireEvent.submit(send.closest("form") as HTMLFormElement);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(postsOf(fetchMock)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("is sent once when Schedule publish is pressed twice before the page draws again", async () => {
+    // Two presses inside one turn, as a double click or a held Enter can
+    // land: the second comes before any render, so a guard read from the
+    // last render still says nothing is out.
+    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      show();
+      fireEvent.click(screen.getByRole("button", { name: "open" }));
+      const dialog = await screen.findByRole("dialog");
+      const send = dialog.querySelector(
+        'button[type="submit"]'
+      ) as HTMLButtonElement;
+      const form = send.closest("form") as HTMLFormElement;
+      act(() => {
+        fireEvent.submit(form);
+        fireEvent.submit(form);
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(postsOf(fetchMock)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("holds only its own document: another document can be scheduled meanwhile", async () => {
+    // The control: one lock for every document would pass the case above and
+    // stop an author scheduling the next document while the last is out.
+    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { rerender } = render(<Probe entryId="e1" />);
+      await scheduleFromTheAction();
+
+      rerender(<Probe entryId="e2" />);
+      expect(text("reason")).toBe("none");
+      await scheduleFromTheAction();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(postsOf(fetchMock)).toHaveLength(2);
     } finally {
       vi.unstubAllGlobals();
     }

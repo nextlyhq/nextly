@@ -15,7 +15,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAdapter } from "../../../database/factory";
 import type { SchemaRegistry } from "../../../database/schema-registry";
 import { container } from "../../../di/container";
-import { ensureFirstRunSetup } from "../../../init/first-run";
+import {
+  ensureFirstRunSetup,
+  firstStartSchemaLock,
+} from "../../../init/first-run";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -69,7 +72,11 @@ async function withBuilderProducts() {
     type: "sqlite",
     memory: true,
   } as Parameters<typeof createAdapter>[0]);
-  await ensureFirstRunSetup({ adapter, logger: silentLogger });
+  await ensureFirstRunSetup({
+    adapter,
+    logger: silentLogger,
+    holdSchemaLock: firstStartSchemaLock(adapter, silentLogger),
+  });
   await seedBuilderCollection(adapter, {
     slug: "products",
     fields: [{ name: "name", type: "text" }],

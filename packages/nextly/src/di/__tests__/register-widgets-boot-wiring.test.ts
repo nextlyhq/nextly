@@ -62,7 +62,6 @@ function seedPreviousBoot(): void {
       title: "Revenue",
       archetype: "metric",
       size: { default: { w: 3, h: 2 } },
-      query: { source: "plugin:stripe/revenue", op: "count" },
     },
     { source: "@acme/stripe" }
   );

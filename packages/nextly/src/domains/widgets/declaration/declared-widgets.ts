@@ -7,33 +7,19 @@
  * reported at once. Each declaration is then kept here whole, its server code
  * included, for the server's own use.
  *
- * 🔴 Each is published to the widget registry the admin reads as DATA ONLY,
- * through core's own door: its data function, query function and empty test
- * stay here, and the published definition says only that core builds its
- * card's data (`serverData`). The dashboard asks for such a card by its id and
- * core answers it from the declaration kept here, so a declared widget is
- * published in the same change that answers its cards, never before.
- *
- * Widgets declared in today's shape (`contributes.admin.widgets`) are drawn as
- * today, through their own path. They take part here only in the id rules: two
- * of them sharing an id keep today's first-wins, with a warning, and an id a
- * declared widget also takes stops startup.
+ * 🔴 Each is published to the widget registry the admin reads as DATA ONLY:
+ * its data function, query function and empty test stay here. The dashboard
+ * asks for every card by its id and core answers it from the declaration kept
+ * here, so a declared widget is published in the same change that answers its
+ * cards, never before.
  *
  * @module domains/widgets/declaration/declared-widgets
  */
 
-import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
-// The registry's own gate shape, which this file maps the declaration's
-// `WidgetAccessGate` (of `define-widget.ts`) onto.
-import type { WidgetPermissionGate as RequiredPermission } from "../gate";
+import type { WidgetDefinition } from "../definition";
 import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
-import {
-  deregisterWidget,
-  getWidget,
-  registerDeclaredDefinition,
-  registerWidget,
-  widgetSource,
-} from "../registry";
+import type { WidgetCondition } from "../lifecycle";
+import { deregisterWidget, registerWidget, widgetSource } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
 
 import type { WidgetAccessGate, WidgetSummary } from "./define-widget";
@@ -59,6 +45,17 @@ export interface DeclaredWidgetGroup extends WidgetDeclarationGroup {
    * lists them under; absent for core's and the site's.
    */
   readonly plugin?: string;
+  /**
+   * When each of core's own widgets is offered, by its id: a condition the
+   * add panel and the layout's visibility token judge, published as the
+   * registry's `lifecycle: "conditional"` and `visibleWhen`.
+   *
+   * 🔴 Read from core's own group alone (`core: true`), never from a plugin's
+   * or the site's: the conditions are core's internal vocabulary, so no
+   * declaration a plugin writes can name one, and `WidgetDeclarationInput`
+   * carries no field for it.
+   */
+  readonly conditions?: Readonly<Record<string, WidgetCondition>>;
 }
 
 /** A declaration as startup kept it, with who declared it. */
@@ -205,8 +202,8 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * 🔴 A fresh object of named fields, never a spread of the declaration: the
  * data function, the query function and the empty test stay on the server,
  * and a field a declaration gains later reaches the browser only once it is
- * named here. `serverData` says core builds the card's data, so there is no
- * query. The size is published with every end filled in (`sizeBounds`), the
+ * named here. Core builds the card's data from the declaration, so there is
+ * no query. The size is published with every end filled in (`sizeBounds`), the
  * one reading of a declared size, so no reader fills a missing end its own way.
  *
  * Exported for the test harness alone (`nextly/testing`), which describes a
@@ -214,7 +211,9 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  */
 export function toDefinition(
   declaration: DeclaredWidgetShape,
-  owner: string
+  owner: string,
+  // One of core's own conditions, from core's group alone (`conditionOf`).
+  condition?: WidgetCondition
 ): WidgetDefinition {
   const settings = Object.entries(declaration.settings ?? {}).map(
     // Each was checked at startup by the rules a definition's settings are
@@ -236,8 +235,23 @@ export function toDefinition(
     size: sizeBounds(declaration.size),
     ...publishedGates(declaration),
     ...withEmpty(publishedEmpty(declaration.empty)),
-    serverData: true,
+    // Offered only while the condition holds, judged where every conditional
+    // widget is: the add panel, and the layout's visibility token.
+    ...(condition === undefined
+      ? {}
+      : { lifecycle: "conditional", visibleWhen: condition }),
   };
+}
+
+/**
+ * The condition a declaration is offered under: core's own, named in core's
+ * group by the widget's id, and none for any other owner's.
+ */
+function conditionOf(
+  group: Pick<DeclaredWidgetGroup, "core" | "conditions">,
+  id: string
+): WidgetCondition | undefined {
+  return group.core === true ? group.conditions?.[id] : undefined;
 }
 
 /**
@@ -306,22 +320,21 @@ function publishedGates(
  * `undefined` for an access that is no gate: absent, the collections it
  * reads, or a predicate.
  *
- * 🔴 Mapped, not passed through: the registry reads a bare list as any-of,
- * which a declaration spells `{ anyOf }`, so each form is rewritten into the
- * registry's spelling of the same rule, and every gate is judged by the one
- * path that judges core's own widgets. A fresh value, so nothing else the
- * author's object carries is published.
+ * 🔴 The registry spells a gate as a declaration does, so each form is copied
+ * as it is written, and every gate is judged by the one path that judges
+ * core's own widgets. A fresh value, so nothing else the author's object
+ * carries is published.
  */
 function requiredPermissionOf(
   access: DeclaredWidgetShape["access"]
-): RequiredPermission | undefined {
+): WidgetAccessGate | undefined {
   if (typeof access === "string") return access;
   if (typeof access !== "object" || access === null) return undefined;
-  if ("anyOf" in access) return [...access.anyOf];
+  if ("anyOf" in access) return { anyOf: [...access.anyOf] };
   if ("allOf" in access) {
     return {
       allOf: access.allOf.map(entry =>
-        typeof entry === "string" ? entry : [...entry.anyOf]
+        typeof entry === "string" ? entry : { anyOf: [...entry.anyOf] }
       ),
     };
   }
@@ -373,12 +386,7 @@ export const CORE_OWNER = "core";
 
 /** Every widget a dashboard can show, by owner, as the one call takes them. */
 export interface DashboardWidgets {
-  /**
-   * Core's own widgets: the definitions core ships, until each is declared
-   * with `defineWidget` as a plugin's is.
-   */
-  core?: readonly WidgetDefinition[];
-  /** Each plugin's declarations, kept and published. */
+  /** Each owner's declarations, core's own among them, kept and published. */
   groups?: readonly DeclaredWidgetGroup[];
   /**
    * What names these widgets (the site config's dashboard, a plugin's
@@ -403,31 +411,20 @@ export interface DashboardWidgets {
  * owner never leaves the dashboard half registered from the others.
  */
 export function registerDashboardWidgets({
-  core = [],
   groups: given = [],
   references,
 }: DashboardWidgets): void {
   const groups = given.map(snapshot);
-  const faults = [
-    ...coreWidgetFaults(core),
-    ...collectWidgetDeclarationFaults(groups),
-  ];
+  const faults = collectWidgetDeclarationFaults(groups);
   if (references !== undefined) {
-    // Core's widgets among them: nothing is kept until every check has passed,
-    // so what names a core widget finds it here rather than in the registry.
-    const declared = new Map([
-      ...core.map(definition => [definition.id, definition] as const),
-      ...wellFormedDefinitions(groups, faults),
-    ]);
-    faults.push(...references(declared, groups));
+    // Nothing is kept until every check has passed, so what names a widget
+    // finds it here rather than in the registry.
+    faults.push(...references(wellFormedDefinitions(groups, faults), groups));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
 
-  for (const definition of core) {
-    registerWidget(definition, { source: CORE_OWNER });
-  }
-
-  for (const { owner, declarations, collections, plugin } of groups) {
+  for (const group of groups) {
+    const { owner, declarations, collections, plugin } = group;
     // Every group is a list by now: one that was not is a fault, refused above.
     for (const raw of declarations as readonly unknown[]) {
       const declaration = raw as DeclaredWidgetShape;
@@ -438,47 +435,16 @@ export function registerDashboardWidgets({
         ...(collections === undefined ? {} : { collections }),
         ...(plugin === undefined ? {} : { plugin }),
       });
-      // Published as it is kept, so every declared widget the admin is offered
-      // has a declaration here to answer its cards from. One drawn by its own
+      // Published as it is kept, so every widget the admin is offered has a
+      // declaration here to answer its cards from. One drawn by its own
       // component is published as a custom card core answers: the admin hands
       // that component the props its declaration types (`WidgetProps`).
-      registerDeclaredDefinition(toDefinition(declaration, owner), owner);
+      registerWidget(
+        toDefinition(declaration, owner, conditionOf(group, declaration.id)),
+        { source: owner }
+      );
     }
   }
-}
-
-/**
- * Every fault in core's own list, as the faults of every other owner are
- * reported: an id it lists twice, and a definition the registry would refuse.
- * Core's list is checked by the same rules as everyone's, so a mistake in it
- * stops startup with the rest rather than as a separate throw after some of
- * the dashboard was already registered.
- */
-function coreWidgetFaults(
-  core: readonly WidgetDefinition[]
-): WidgetDeclarationFault[] {
-  const faults: WidgetDeclarationFault[] = [];
-  const seen = new Set<string>();
-  for (const definition of core) {
-    if (seen.has(definition.id)) {
-      faults.push({
-        owner: CORE_OWNER,
-        widget: definition.id,
-        problem: `id "${definition.id}" is already declared by ${CORE_OWNER}`,
-      });
-    }
-    seen.add(definition.id);
-    try {
-      validateWidgetDefinition(definition);
-    } catch (error) {
-      faults.push({
-        owner: CORE_OWNER,
-        widget: definition.id,
-        problem: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return faults;
 }
 
 /**
@@ -492,12 +458,16 @@ function wellFormedDefinitions(
 ): ReadonlyMap<string, WidgetDefinition> {
   const faulty = new Set(faults.map(fault => fault.widget));
   const definitions = new Map<string, WidgetDefinition>();
-  for (const { owner, declarations } of groups) {
+  for (const group of groups) {
+    const { owner, declarations } = group;
     if (!Array.isArray(declarations)) continue;
     for (const raw of declarations as readonly unknown[]) {
       const id = (raw as { id?: unknown } | null)?.id;
       if (typeof id !== "string" || faulty.has(id)) continue;
-      definitions.set(id, toDefinition(raw as DeclaredWidgetShape, owner));
+      definitions.set(
+        id,
+        toDefinition(raw as DeclaredWidgetShape, owner, conditionOf(group, id))
+      );
     }
   }
   return definitions;
@@ -510,15 +480,15 @@ export function declaredWidget(id: string): DeclaredWidget | undefined {
 
 /**
  * Forgets every declared widget, and withdraws the definitions they published.
- * The registry's declared widgets are derived from this store, so clearing one
- * without the other would offer the admin widgets with no declaration left to
- * answer their cards from, and refuse the same declaration made again. Only
- * what a declaration published goes: its id, under its owner, with
- * `serverData`. Called at boot before declaring again.
+ * The registry's widgets are derived from this store, so clearing one without
+ * the other would offer the admin widgets with no declaration left to answer
+ * their cards from, and refuse the same declaration made again. Only what a
+ * declaration published goes: its id, under its owner. Called at boot before
+ * declaring again.
  */
 export function clearDeclaredWidgets(): void {
   for (const [id, { owner }] of store()) {
-    if (widgetSource(id) === owner && getWidget(id)?.serverData === true) {
+    if (widgetSource(id) === owner) {
       deregisterWidget(id);
     }
   }

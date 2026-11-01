@@ -76,6 +76,10 @@ beforeEach(() => {
     .__nextly_cache_entries;
   delete (globalThis as { __nextly_cache_reads?: unknown })
     .__nextly_cache_reads;
+  // A case that overflowed the remembered reads would otherwise date every
+  // later case's fills from the overflow.
+  delete (globalThis as { __nextly_cache_reads_overflowed_at?: unknown })
+    .__nextly_cache_reads_overflowed_at;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -396,6 +400,222 @@ describe("the incremental cache handler", () => {
     expect(warn.mock.calls[0][0]).toMatchObject({
       kind: "cache-tag-ledger-unreachable",
     });
+  });
+});
+
+/**
+ * A ledger whose lookups take time: each waits `queuedMs` before its statement
+ * reads the database's clock (a connection the pool was slow to give), then
+ * `repliedMs` before its answer arrives (a busy event loop). The clock runs
+ * `skewMs` ahead of this process's, and may be moved, as a failover can.
+ */
+function slowLedger() {
+  const rows = new Map<string, number>();
+  const timing = { queuedMs: 0, repliedMs: 0, skewMs: 0 };
+  // No timer for no wait: the clock only moves when a test advances it.
+  const wait = (ms: number) =>
+    ms === 0
+      ? Promise.resolve()
+      : new Promise<void>(resolve => {
+          setTimeout(resolve, ms);
+        });
+  const ledger: TagExpiryLedger = {
+    record: async () => false,
+    expiriesOf: async tags => {
+      await wait(timing.queuedMs);
+      const now = Date.now() + timing.skewMs;
+      const expired = new Map(
+        tags.flatMap(tag => {
+          const at = rows.get(tag);
+          return at === undefined ? [] : [[tag, at] as const];
+        })
+      );
+      await wait(timing.repliedMs);
+      return { now: expired.size > 0 ? now : undefined, expired };
+    },
+    prune: async () => 0,
+  };
+  return { ledger, rows, timing };
+}
+
+/** Reads `key`, letting `ms` pass while its lookup is under way. */
+async function getAfter(handler: IncrementalHandler, key: string, ms: number) {
+  const read = handler.get(key);
+  await vi.advanceTimersByTimeAsync(ms);
+  return read;
+}
+
+describe("the database's clock, learned from slow lookups", () => {
+  it("refuses an entry begun before another instance's write, however long the lookup's statement waited", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    // Another instance writes 100 ms after the entry began.
+    rows.set("posts", T0 + 100 + TAG_EXPIRY_GRACE_MS);
+    vi.advanceTimersByTime(200);
+
+    // The statement waits 10 s for a connection, then answers at once: its
+    // reading is 10 s after the read began, which the midpoint of the round
+    // trip would take for a database clock 5 s ahead of this process's.
+    timing.queuedMs = 10_000;
+    expect(await getAfter(handler, "k", 10_000)).toBeNull();
+  });
+
+  it("follows a database clock that stepped back at once, however slow the lookup that tells it", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    // A quick lookup learns a database clock 30 s ahead.
+    timing.skewMs = 30_000;
+    rows.set("posts", T0 - 60_000);
+    await handler.set("warm", page(0), { tags: ["posts"] });
+    expect(await getAfter(handler, "warm", 0)).not.toBeNull();
+
+    // The database fails over to a host whose clock matches this process's,
+    // and another instance writes after the entry began, on that clock.
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    timing.skewMs = 0;
+    await handler.set("k", page(1), { tags: ["posts"] });
+    rows.set("posts", Date.now() + 100 + TAG_EXPIRY_GRACE_MS);
+    vi.advanceTimersByTime(200);
+
+    // A slower lookup than the first still sets the offset: kept at +30 s,
+    // the entry would look begun 30 s later than it was, after the write.
+    timing.repliedMs = 2_000;
+    expect(await getAfter(handler, "k", 2_000)).toBeNull();
+  });
+
+  it("ignores the offset an earlier copy of this module writes to the shared state", async () => {
+    const { ledger, rows } = slowLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    rows.set("posts", T0 + 100 + TAG_EXPIRY_GRACE_MS);
+    vi.advanceTimersByTime(200);
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+
+    // An earlier copy, still loaded after a hot reload, writes the midpoint
+    // of a slow read of its own, 30 s too far ahead, where it keeps it.
+    await handler.set("k", page(1), { tags: ["posts"] });
+    rows.set("posts", Date.now() + 100 + TAG_EXPIRY_GRACE_MS);
+    (
+      globalThis as unknown as {
+        __nextly_tag_expiry_view: { offsetMs: number };
+      }
+    ).__nextly_tag_expiry_view.offsetMs = 30_000;
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+  });
+
+  it("asks again about an expiry an earlier copy looked up after a failover, though this copy had learned an offset", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    const expiriesOf = vi.spyOn(ledger, "expiriesOf");
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    // This copy learns a database clock 30 s ahead.
+    timing.skewMs = 30_000;
+    rows.set("posts", T0 - 60_000);
+    await handler.set("warm", page(0), { tags: ["posts"] });
+    expect(await getAfter(handler, "warm", 0)).not.toBeNull();
+
+    // The database fails over to a clock matching this process's; another
+    // instance writes after the entry began; and an earlier copy, still
+    // loaded, looks the tag up and writes its answer, unstamped, into the
+    // shared state, inside this copy's lookup TTL.
+    timing.skewMs = 0;
+    await handler.set("k", page(1), { tags: ["posts"] });
+    const written = Date.now() + 100 + TAG_EXPIRY_GRACE_MS;
+    rows.set("posts", written);
+    vi.advanceTimersByTime(200);
+    (
+      globalThis as unknown as {
+        __nextly_tag_expiry_view: {
+          lookups: Map<string, { expiredAt: number; askedAt: number }>;
+        };
+      }
+    ).__nextly_tag_expiry_view.lookups.set("posts", {
+      expiredAt: written,
+      askedAt: Date.now(),
+    });
+
+    // Judged by the +30 s this copy learned before the failover, the entry
+    // would look begun after the write. Asked again, it is refused.
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+    expect(expiriesOf).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a failing ledger about an expiry an earlier copy looked up once per TTL, refusing meanwhile what it may expire", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    const expiriesOf = vi.spyOn(ledger, "expiriesOf");
+    publishTagExpiryLedger(ledger);
+    // This copy learns a database clock 30 s ahead.
+    timing.skewMs = 30_000;
+    rows.set("posts", T0 - 60_000);
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(1);
+
+    // An entry begins; the database fails over to a clock matching this
+    // process's, another instance writes, and an earlier copy, still loaded,
+    // writes its answer, unstamped, into the shared lookups. Then the ledger
+    // starts refusing reads.
+    const begun = localNow();
+    const written = Date.now() + 100 + TAG_EXPIRY_GRACE_MS;
+    vi.advanceTimersByTime(200);
+    (
+      globalThis as unknown as {
+        __nextly_tag_expiry_view: {
+          lookups: Map<string, { expiredAt: number; askedAt: number }>;
+        };
+      }
+    ).__nextly_tag_expiry_view.lookups.set("posts", {
+      expiredAt: written,
+      askedAt: Date.now(),
+    });
+    expiriesOf.mockRejectedValue(new Error("connection reset"));
+
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(2);
+    // Within the TTL of the failed read, the ledger is not asked again.
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS / 2);
+    await refreshTagExpiries(["posts"]);
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(2);
+    // Nor is the entry judged fresh by the +30 s learned before the failover.
+    expect(isEntryExpired(["posts"], begun)).toBe(true);
+    // A TTL after the failed read, it is asked again.
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS / 2);
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(3);
+  });
+
+  it("asks again about an expiry an earlier copy of this module looked up, before judging by it", async () => {
+    const { ledger, rows } = slowLedger();
+    const expiriesOf = vi.spyOn(ledger, "expiriesOf");
+    // The state an earlier copy made: an expiry it looked up a moment ago,
+    // and an offset of its own, but none this copy learned.
+    rows.set("posts", T0 + 100 + TAG_EXPIRY_GRACE_MS);
+    (
+      globalThis as { __nextly_tag_expiry_view?: unknown }
+    ).__nextly_tag_expiry_view = {
+      ledger,
+      lookups: new Map([["posts", { expiredAt: T0 - 60_000, askedAt: T0 }]]),
+      asking: new Map(),
+      own: new Map(),
+      mine: new Map(),
+      offsetMs: 30_000,
+      sweptAt: T0,
+      lastLocal: 0,
+      warned: false,
+    };
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    vi.advanceTimersByTime(200);
+
+    // Within the lookup TTL, yet asked again: the answer it has carries no
+    // offset this copy can judge it by.
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+    expect(expiriesOf).toHaveBeenCalledTimes(1);
   });
 });
 

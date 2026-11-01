@@ -2,7 +2,8 @@
 
 /**
  * The dashboard's Content card: one compact table of the collections and Singles the reader may
- * see, answered by `system:content` in the dashboard's batch.
+ * see, drawn from the rows its `load` read from `system:content`. The frame drew loading, no
+ * permission and error before this is reached.
  *
  * A collection's row is its name, linking to its list; its Entries; its Drafts, by the collection
  * list's own Draft filter and linking to that filtered list ("—" for a collection without the
@@ -21,8 +22,8 @@
  *
  * The header's subtitle says how many collections and Singles the reader may see in all ("8
  * collections · 5 Singles"). The rows come in the server's order (latest update first, collections
- * holding no entries last), and the card draws as many as its body holds, from the query it was
- * asked at its size, with no footer: the admin has no page listing the collections to link to
+ * holding no entries last), and the card draws as many as its body holds, by the rule its `load`
+ * asked them by at its size, with no footer: the admin has no page listing the collections to link to
  * (`/admin/collections` only redirects to one collection's entries), and the subtitle already
  * says how many there are. The server counted the rows drawn and no others.
  *
@@ -39,8 +40,12 @@ import { Button } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { Plus } from "lucide-react";
 import { CARD_FRAME_PX } from "nextly/card-geometry";
-import type { ListDensity } from "nextly/config";
-import type { ActivityEvent, WidgetComponentProps } from "nextly/widget-result";
+import { MAX_WIDGET_ROWS, type ListDensity } from "nextly/config";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
+import type {
+  ActivityEvent,
+  DeclaredComponentProps,
+} from "nextly/widget-result";
 import { Fragment, useMemo, useState, type JSX, type ReactNode } from "react";
 
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
@@ -54,7 +59,7 @@ import {
   TABLE_ROW_CLASS,
 } from "@admin/components/features/widgets/frame/geometry";
 import { useCardSubtitle } from "@admin/components/features/widgets/frame/header-subtitle";
-import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
+import { useListCard } from "@admin/components/features/widgets/frame/list-card-hook";
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
@@ -615,19 +620,23 @@ function ContentListForm({
   );
 }
 
-export function ContentTable(props: WidgetComponentProps): JSX.Element {
-  const { tier, drawn, density, now, read } = useListCard(props);
+/** What the Content card is handed: its declaration's props, with the rows its `load` read. */
+export type ContentTableProps = Omit<DeclaredComponentProps, "data"> & {
+  data: CoreListWidgetData;
+};
+
+export function ContentTable({ data }: ContentTableProps): JSX.Element {
+  // At most the ten a list draws: the card offers no "Number of items", and its `load` asked the
+  // rows its size holds up to that.
+  const { tier, drawn, density, now } = useListCard(MAX_WIDGET_ROWS);
   // The body's own width, measured by the frame's hook once the rows are drawn: held as state,
   // so the measurement starts when the element appears rather than at the first render.
   const [body, setBody] = useState<HTMLDivElement | null>(null);
   const bodyRef = useMemo(() => ({ current: body }), [body]);
   const bodyWidth = useMeasuredWidth(bodyRef);
-  useCardSubtitle(
-    "list" in read ? contentSubtitle(read.list.totalByKind) : undefined
-  );
-  if ("node" in read) return read.node;
+  useCardSubtitle(contentSubtitle(data.totalByKind));
   // A row this build cannot read is left out rather than drawn from guesses.
-  const rows = read.list.items.flatMap(item => {
+  const rows = data.items.flatMap(item => {
     const row = contentRowOf(item);
     return row === undefined ? [] : [row];
   });

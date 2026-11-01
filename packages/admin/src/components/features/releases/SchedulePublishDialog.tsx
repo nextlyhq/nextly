@@ -49,6 +49,7 @@ import {
   scheduleTimeProblemText,
 } from "./schedule-publish";
 import { useMinuteClock } from "./useMinuteClock";
+import { useSchedulingInFlight } from "./useSchedulingInFlight";
 
 export interface SchedulePublishDialogProps {
   open: boolean;
@@ -76,16 +77,23 @@ export function SchedulePublishDialog({
   const [wall, setWall] = useState(() => defaultScheduleWall(Date.now(), zone));
   const instant = wall === "" ? null : instantFor(wall, zone);
   const title = scheduledReleaseTitle(documentTitle);
-  const { now, schedule, send, requestOpenChange, returnTo, canReadReleases } =
-    useSchedulingRequest({
-      wall,
-      instant,
-      zone,
-      title,
-      document,
-      opener,
-      onOpenChange,
-    });
+  const {
+    now,
+    schedule,
+    sending,
+    send,
+    requestOpenChange,
+    returnTo,
+    canReadReleases,
+  } = useSchedulingRequest({
+    wall,
+    instant,
+    zone,
+    title,
+    document,
+    opener,
+    onOpenChange,
+  });
 
   const problem = scheduleTimeProblem(wall, instant, now);
   const readback =
@@ -183,16 +191,13 @@ export function SchedulePublishDialog({
             <Button
               type="button"
               variant="outline"
-              disabled={schedule.isPending}
+              disabled={sending}
               onClick={() => requestOpenChange(false)}
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={problem !== null || schedule.isPending}
-            >
-              {schedule.isPending ? "Scheduling…" : "Schedule publish"}
+            <Button type="submit" disabled={problem !== null || sending}>
+              {sending ? "Scheduling…" : "Schedule publish"}
             </Button>
           </DialogFooter>
         </form>
@@ -235,7 +240,12 @@ function useSchedulingRequest({
   // Where focus goes when the dialog closes: the opener, or after a
   // schedule lands or may have landed, where its outcome is shown.
   const returnTo = useRef(opener);
-  const schedule = useScheduleDocument();
+  const schedule = useScheduleDocument(document);
+  // This dialog's request, or one for the same document from a dialog
+  // before it: every send runs under the document's key, so the cache's
+  // answer covers this dialog's own request too, and is the only one read,
+  // so the dialog and the action's hold never disagree.
+  const { inFlight: sending, inFlightNow } = useSchedulingInFlight(document);
 
   /*
    * Closing is refused while the request is out. The step makes a new
@@ -244,12 +254,14 @@ function useSchedulingRequest({
    * twice.
    */
   const requestOpenChange = (next: boolean) => {
-    if (!next && schedule.isPending) return;
+    if (!next && sending) return;
     onOpenChange(next);
   };
 
   const send = () => {
-    if (schedule.isPending || instant === null) return;
+    // Asked of the cache rather than of this render, which a second press
+    // in the same turn as the first still sees with nothing out.
+    if (inFlightNow() || instant === null) return;
     // Asked again at the moment of sending: the clock moves once a minute,
     // and a time can pass while the dialog sits open.
     const at = Date.now();
@@ -285,6 +297,7 @@ function useSchedulingRequest({
   return {
     now: Math.max(clock, checkedAt),
     schedule,
+    sending,
     send,
     requestOpenChange,
     returnTo,

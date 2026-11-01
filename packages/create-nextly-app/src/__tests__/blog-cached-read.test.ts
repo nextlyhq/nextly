@@ -12,17 +12,22 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const TEMPLATE = join(
   __dirname,
   "../../../../templates/blog/src/nextly/cached-read.ts"
 );
 const GUIDE = join(__dirname, "../../../../docs/guides/isr-caching.mdx");
-/** Where nextly sets the revalidate of a read its cache handlers don't serve. */
-const SHARED_HANDLERS = join(
+/** nextly's read path, which gives a read its handlers don't serve its revalidate. */
+const CACHED_FIND = join(
   __dirname,
-  "../../../nextly/src/runtime/cache/shared-handlers.ts"
+  "../../../nextly/src/runtime/cache/cached-find.ts"
+);
+/** Where nextly keeps the app's registered `"use cache"` read function. */
+const REGISTERED_READ = join(
+  __dirname,
+  "../../../nextly/src/runtime/cache/registered-read.ts"
 );
 
 /** What the stand-ins record. */
@@ -106,19 +111,47 @@ describe("blog template: the Cache Components read function", () => {
   it("refreshes a read its handlers don't serve within a minute of a visit, and holds none past 5 minutes", async () => {
     // nextly bounds such a read by its revalidate, past which a visit is
     // served the entry once while it refreshes, and relies on this function to
-    // expire the entry: read from nextly's source, so a change to either side
-    // is judged against the other.
-    const source = await readFile(SHARED_HANDLERS, "utf8");
-    const seconds = Number(
-      /export const UNSHARED_READ_LIFETIME_SECONDS = (\d+);/.exec(source)?.[1]
-    );
-    expect(seconds, "nextly's bound").toBeGreaterThan(0);
+    // expire the entry. Observed through nextly's own read path, in production
+    // with no handlers installed, with this function registered as the app's:
+    // what it is handed is what an app's read gets.
+    const registry = (await import(REGISTERED_READ)) as {
+      setCachedRead(read: typeof cachedRead | undefined): void;
+    };
+    const { applyCache } = (await import(CACHED_FIND)) as {
+      applyCache(
+        unstableCache: null,
+        reader: () => Promise<unknown>,
+        options: {
+          keyParts: string[];
+          tags: string[];
+          revalidate?: number | false;
+        }
+      ): Promise<unknown>;
+    };
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    registry.setCachedRead(cachedRead);
     calls.cacheLife.length = 0;
-    await cachedRead("k", [], seconds);
-    expect(seconds, "refreshed within a minute of a visit").toBeLessThanOrEqual(
-      30
-    );
-    expect(calls.cacheLife).toEqual([{ revalidate: seconds, expire: 300 }]);
+    try {
+      // Cached until a write expires it, as a read asks by default.
+      await applyCache(null, async () => "unused", {
+        keyParts: ["posts"],
+        tags: ["nextly:posts"],
+        revalidate: false,
+      });
+    } finally {
+      registry.setCachedRead(undefined);
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+    }
+    expect(calls.cacheLife).toHaveLength(1);
+    const [{ revalidate, expire }] = calls.cacheLife;
+    expect(
+      revalidate,
+      "refreshed within a minute of a visit"
+    ).toBeLessThanOrEqual(30);
+    expect(revalidate, "a timed read").toBeGreaterThan(0);
+    expect(expire, "kept in a static prerender, and no older").toBe(300);
   });
 
   it("tags the entry and runs the reader registered for its key", async () => {

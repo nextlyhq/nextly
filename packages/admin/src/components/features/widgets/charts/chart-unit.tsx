@@ -8,11 +8,9 @@
  */
 
 import pluralize from "pluralize";
-import type { JSX, ReactNode } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 
-import { collectionSlugOf } from "../frame/list-view-href";
 import { collectionLabel } from "../widget-as-asked";
 
 /** The noun a chart's numbers count, for one and for any other number: "post", "posts". */
@@ -58,22 +56,4 @@ export function useCollectionUnit(
   const one = pluralize.singular(other);
   const before = qualifier ? `${qualifier} ` : "";
   return { one: `${before}${one}`, other: `${before}${other}` };
-}
-
-/**
- * The unit of a card reading the collection a `collection:<slug>` source names, handed to a chart
- * drawn where no hook can be called: an archetype's body is drawn by a function.
- */
-export function WithCollectionUnit({
-  source,
-  qualifier,
-  children,
-}: {
-  source: string | undefined;
-  qualifier?: string;
-  children: (unit: ChartUnit | undefined) => ReactNode;
-}): JSX.Element {
-  return (
-    <>{children(useCollectionUnit(collectionSlugOf(source), qualifier))}</>
-  );
 }

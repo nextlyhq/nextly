@@ -6,7 +6,6 @@
 
 export {
   DATA_ARCHETYPES,
-  MAX_STAT_CELLS,
   validateWidgetDefinition,
   type WidgetSetting,
 } from "./definition";
@@ -57,8 +56,6 @@ export {
 } from "./sources";
 export {
   registerWidget,
-  overrideWidget,
-  extendWidget,
   deregisterWidget,
   widgetSource,
   clearWidgets,

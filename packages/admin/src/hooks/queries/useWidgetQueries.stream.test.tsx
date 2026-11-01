@@ -5,7 +5,6 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { WidgetQuery } from "nextly/config";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,12 +34,13 @@ function ownClient() {
   return { client, own };
 }
 
-const count = (source: string): WidgetQuery => ({ source, op: "count" });
+// A card asked for by its widget and its card, as the batch asks every card.
+const count = (card: string) => ({ widget: "core/count", card });
 const total = (n: number) => ({ ok: true, result: { op: "count", total: n } });
 
 const REQUESTS: WidgetQueryRequest[] = [
-  { placementId: "fast", query: count("collection:posts") },
-  { placementId: "slow", query: count("system:slow") },
+  { placementId: "fast", card: count("fast") },
+  { placementId: "slow", card: count("slow") },
 ];
 
 /**

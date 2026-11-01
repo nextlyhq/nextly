@@ -63,6 +63,47 @@ const REMOVED = [
   "PluginWidgetSource",
   "PluginSourceResolver",
   "PluginManySourceResolver",
+  // The props a component drew a definition's query answer with, and the
+  // admin's reading of that answer for core's list cards: a component is
+  // handed `WidgetProps`, its data already loaded.
+  "WidgetComponentProps",
+  "readListSlot",
+  "ListSlotReading",
+  // The registry's own gate type, whose bare list meant any-of.
+  "WidgetPermissionGate",
+  // The refusal of a `chrome` field, which no channel can carry any more.
+  "chromeFieldProblem",
+  // The name-matched limit knob and the rule that guarded it, and the
+  // definition settings whose `limit` name drove a query.
+  "isLimitSetting",
+  "rangedLimitSettingProblem",
+  "RECENT_ACTIVITY_ITEMS",
+  "CONTINUE_ITEMS",
+  // The text, actions and stats archetypes' vocabulary, and the cells a stats
+  // or custom card asked through the batch: every card is declared and asked
+  // by its card, so none of these has a reader.
+  "WidgetAction",
+  "WidgetStatCell",
+  "WidgetQueryCell",
+  "WIDGET_CELL_TIERS",
+  "WIDGET_CELL_CONDITIONS",
+  "WidgetCellTier",
+  "WidgetCellCondition",
+  "MAX_STAT_CELLS",
+  "MAX_TEXT_CONTENT",
+  "statCellProblem",
+  "CellWidgetArchetype",
+  "QuerylessWidgetArchetype",
+  "CellSlotLookup",
+  // The definition path: core's list of definitions, the doors that replaced
+  // or patched a registered definition, and the door that admitted a declared
+  // one beside them.
+  "CORE_WIDGETS",
+  "CORE_WIDGET_LITERALS",
+  "overrideWidget",
+  "extendWidget",
+  "WidgetPatch",
+  "registerDeclaredDefinition",
 ];
 
 const PATTERN = new RegExp(`\\b(${REMOVED.join("|")})\\b`);
@@ -74,6 +115,8 @@ const PATTERN = new RegExp(`\\b(${REMOVED.join("|")})\\b`);
 const ABSENCE_TESTS = [
   "packages/nextly/src/__tests__/export-contract.test.ts",
   "packages/plugin-sdk/src/plugin-surface.test.ts",
+  // Holds the SDK's root to publishing none of the removed doors.
+  "packages/plugin-sdk/src/index.test.ts",
 ];
 
 /** Where source lives: each package's `src`, the playground's, the templates and e2e. */
@@ -119,6 +162,46 @@ function offenders(files: readonly string[]): string[] {
   });
 }
 
+/**
+ * A widget field the older shape had, as code spells a property: a key being
+ * written (`chrome: "none"`), a key named as a string, or a member read. A word
+ * in a comment, such as the dashboard's own "chrome" around its grid, is none.
+ */
+const CHROME_FIELD = /\bchrome\??:[ \t]*\S|["']chrome["']|\.chrome\b/;
+
+/**
+ * A setting matched by its NAME to drive a query: the knob table's `limit`,
+ * `dateRange`, `onlyMine` and `tab`. A declared widget's settings reach its
+ * `load`, which reads them as it chooses, so nothing in the widget domain asks
+ * a setting's name to decide what a query is.
+ */
+const NAME_MATCHED_KNOB =
+  /\bname\s*===\s*["'](limit|dateRange|onlyMine|tab)["']/;
+
+/** The widget domain's own source, and the admin's widget code and types. */
+const WIDGET_CODE = [
+  join(REPO, "packages", "nextly", "src", "domains", "widgets"),
+  join(REPO, "packages", "admin", "src", "components", "features", "widgets"),
+  join(REPO, "packages", "admin", "src", "types", "dashboard"),
+];
+
+/**
+ * The flags a widget no longer carries, as code spells a property (written,
+ * named as a string, or read), as `CHROME_FIELD` reads `chrome`: core builds
+ * every card's data from its declaration, so `serverData` marks nothing, and
+ * no card asks its own list query sized (`sizedQuery`).
+ */
+const OLD_FLAG_FIELD =
+  /\b(serverData|sizedQuery)\??:[ \t]*\S|["'](serverData|sizedQuery)["']|\.(serverData|sizedQuery)\b/;
+
+/** Each file whose text `pattern` matches, with what it matched. */
+function matching(files: readonly string[], pattern: RegExp): string[] {
+  return files.flatMap(file => {
+    const found = pattern.exec(readFileSync(file, "utf8"));
+    return found ? [`${relative(REPO, file)}: ${found[0]}`] : [];
+  });
+}
+
 describe("the older widget shape", () => {
   it("leaves no removed name in any source", () => {
     const files = roots().flatMap(root => sources(root));
@@ -134,6 +217,52 @@ describe("the older widget shape", () => {
     // The absence tests exist, so leaving them out leaves out nothing else.
     expect([...absence].filter(file => !files.includes(file))).toEqual([]);
     expect(offenders(files.filter(file => !absence.has(file)))).toEqual([]);
+  });
+
+  it("leaves no chrome field in the widget domain or the admin's widget code", () => {
+    const files = WIDGET_CODE.flatMap(root => sources(root));
+    // The scan reaches the code it guards: the definition's validator, and the
+    // admin's card frame.
+    expect(files.some(file => file.endsWith("definition.ts"))).toBe(true);
+    expect(files.some(file => file.endsWith("WidgetCard.tsx"))).toBe(true);
+    expect(matching(files, CHROME_FIELD)).toEqual([]);
+  });
+
+  it("leaves no serverData or sizedQuery flag in the widget domain or the admin's widget code", () => {
+    const files = WIDGET_CODE.flatMap(root => sources(root));
+    // The scan reaches the code it guards: the published shape, the card's
+    // outcome and the admin's widget type.
+    expect(files.some(file => file.endsWith("definition.ts"))).toBe(true);
+    expect(files.some(file => file.endsWith("outcome.ts"))).toBe(true);
+    expect(files.some(file => file.endsWith("widgets.ts"))).toBe(true);
+    expect(matching(files, OLD_FLAG_FIELD)).toEqual([]);
+  });
+
+  it("leaves no setting matched by its name to drive a query", () => {
+    const files = sources(WIDGET_CODE[0]).filter(
+      file =>
+        !file.includes(`${join("widgets", "__tests__")}`) &&
+        !file.includes(".test.")
+    );
+    // The scan reaches the knob table.
+    expect(files.some(file => file.endsWith("settings.ts"))).toBe(true);
+    expect(matching(files, NAME_MATCHED_KNOB)).toEqual([]);
+  });
+
+  it("finds a chrome field and a name-matched knob, and passes the word in prose", () => {
+    // The controls: each pattern matches what it is there to find.
+    expect(CHROME_FIELD.test('{ chrome: "none" }')).toBe(true);
+    expect(CHROME_FIELD.test("widget.chrome")).toBe(true);
+    expect(CHROME_FIELD.test('Object.hasOwn(widget, "chrome")')).toBe(true);
+    expect(CHROME_FIELD.test(" * its data and its chrome:\n")).toBe(false);
+    expect(OLD_FLAG_FIELD.test("{ serverData: true }")).toBe(true);
+    expect(OLD_FLAG_FIELD.test("widget.sizedQuery")).toBe(true);
+    expect(OLD_FLAG_FIELD.test('"serverData"')).toBe(true);
+    expect(
+      OLD_FLAG_FIELD.test(" * whose data core builds on the server\n")
+    ).toBe(false);
+    expect(NAME_MATCHED_KNOB.test('setting.name === "onlyMine"')).toBe(true);
+    expect(NAME_MATCHED_KNOB.test('setting.type === "number"')).toBe(false);
   });
 
   it("finds a removed name, and passes a longer name that only contains one", () => {

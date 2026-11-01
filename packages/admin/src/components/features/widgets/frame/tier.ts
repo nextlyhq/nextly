@@ -198,17 +198,6 @@ export const AnswerSizeContext: Context<AnswerSize | undefined> = createContext<
   AnswerSize | undefined
 >(undefined);
 
-const TIER_ORDER: Readonly<Record<SizeTier, number>> = {
-  small: 0,
-  medium: 1,
-  large: 2,
-};
-
-/** Whether a card drawn at `tier` draws what is drawn from `from` up. */
-export function drawsFrom(tier: SizeTier, from: SizeTier): boolean {
-  return TIER_ORDER[tier] >= TIER_ORDER[from];
-}
-
 /**
  * The rows a card draws (`rowsDrawn`): at its own tier and height, or at the size its answer was
  * fetched at when that draws fewer. Counted at the card's size, a smaller answer would draw its

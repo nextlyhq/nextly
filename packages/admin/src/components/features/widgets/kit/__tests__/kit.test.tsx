@@ -155,12 +155,9 @@ describe("Widget.FooterLink", () => {
     ).toBeNull();
   });
 
-  it("takes the place of the widget's own link, so the footer holds one link", () => {
+  it("is the footer's one link", () => {
     render(
-      <WidgetCard
-        title="Orders"
-        link={{ label: "Open orders", href: "/orders" }}
-      >
+      <WidgetCard title="Orders">
         <Widget.FooterLink
           href="/admin/collections/orders"
           label="All orders"

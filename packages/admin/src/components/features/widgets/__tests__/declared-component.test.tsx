@@ -42,7 +42,6 @@ const declared: DashboardWidget = {
   archetype: "custom",
   size: gridBounds(4),
   component: PATH,
-  serverData: true,
 };
 
 const dataSlot = (
@@ -379,23 +378,5 @@ describe("a declared widget drawn by its own component", () => {
       screen.getByRole("button", { name: "Retry Revenue" })
     );
     expect(screen.getByTestId("revenue")).toHaveTextContent("drawn");
-  });
-
-  it("leaves a core custom card, which asks its own questions, drawing its own states", () => {
-    // The control: without `serverData` a custom card is self-drawn, handed
-    // its slot, as core's own custom cards are.
-    const props: unknown[] = [];
-    registerComponent(PATH, (p: unknown) => {
-      props.push(p);
-      return <p>self drawn</p>;
-    });
-    render(
-      <WidgetRenderer
-        definition={{ ...declared, serverData: undefined }}
-        slot={undefined}
-      />
-    );
-    expect(screen.getByText("self drawn")).toBeInTheDocument();
-    expect(props.at(-1)).toHaveProperty("slot", undefined);
   });
 });

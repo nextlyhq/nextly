@@ -17,7 +17,6 @@ import {
   applyWidgetSettings,
   CONTENT_SETTING_NOT_DRAWN,
   effectiveWidgetSettings,
-  fieldsSettingQueryProblem,
   MAX_CHOSEN_FIELDS,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
@@ -473,24 +472,10 @@ describe("resolveWidgetSettings reads a stored value without punishing it", () =
 describe("applyWidgetSettings drives only the knobs it declares", () => {
   const base = { source: "collection:posts", op: "list" as const, limit: 5 };
 
-  it("takes the reader's row count", () => {
-    const out = applyWidgetSettings(base, [limit], { limit: 12 });
-    expect(out.limit).toBe(12);
-  });
-
-  it("falls back to the declared default when the reader chose nothing", () => {
-    expect(applyWidgetSettings(base, [limit], {}).limit).toBe(5);
-  });
-
-  /*
-   * 🔴 The name is the contract AND so is the type. A `text` setting called
-   * `limit` drives nothing rather than putting a string where a row count goes
-   * — which would reach the query compiler as `LIMIT "ten"`.
-   */
-  it("ignores a setting whose name matches but whose type does not", () => {
-    const textLimit: WidgetSetting = { name: "limit", type: "text" };
-    const out = applyWidgetSettings(base, [textLimit], { limit: "ten" });
-    expect(out.limit).toBe(5);
+  it("leaves the row count as declared, whatever a setting named limit holds", () => {
+    // No setting drives a query because of its name: a declared widget's
+    // "Number of items" reaches its `load`, which sizes the rows it asks for.
+    expect(applyWidgetSettings(base, [limit], { limit: 12 })).toBe(base);
   });
 
   it("ignores a setting that drives no knob", () => {
@@ -506,20 +491,15 @@ describe("applyWidgetSettings drives only the knobs it declares", () => {
   });
 
   it("does not mutate the query it was given", () => {
-    const out = applyWidgetSettings(base, [limit], { limit: 12 });
-    expect(base.limit).toBe(5);
+    const collection: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+    };
+    const out = applyWidgetSettings(base, [collection], {
+      collection: "pages",
+    });
+    expect(base.source).toBe("collection:posts");
     expect(out).not.toBe(base);
-  });
-
-  /*
-   * Deliberately NOT clamped here. `validateReadWidgetQuery` bounds every query
-   * the endpoint accepts, and a second implementation of that rule in this
-   * module would agree on the day it was written and drift afterwards.
-   */
-  it("passes an out-of-range value through for the endpoint to bound", () => {
-    expect(applyWidgetSettings(base, [limit], { limit: 100000 }).limit).toBe(
-      100000
-    );
   });
 
   it("reads the collection a card is set to, in place of the one declared", () => {
@@ -645,22 +625,6 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
         { name: "shown", type: "fields", of: "collection" },
       ])
     ).toEqual([]);
-  });
-
-  it("refuses a Fields setting on a widget whose query is not a list", () => {
-    const settings = [
-      { name: "collection", type: "collection", rows: "titled" },
-      { name: "shown", type: "fields", of: "collection" },
-    ];
-    for (const op of ["count", "groupBy", "timeseries"]) {
-      expect(
-        fieldsSettingQueryProblem({ settings, query: { op } }),
-        op
-      ).toMatch(/only a list query's rows can show/);
-    }
-    expect(
-      fieldsSettingQueryProblem({ settings, query: { op: "list" } })
-    ).toBeUndefined();
   });
 
   it("refuses a dependency that names no Collection setting of the widget", () => {
@@ -901,55 +865,29 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
       expect(out.groupBy).toBeUndefined();
     });
 
-    it("reaches back as far as the card's Date range, as its query's since", () => {
+    it("leaves a query's window as declared, whatever a select named dateRange holds", () => {
+      // A card's Date range reaches its `load`, which reads it as it chooses
+      // (Over time's sets its read's range); its name drives no knob.
       const dateRange = {
         name: "dateRange",
         type: "select" as const,
         defaultValue: "30d",
         options: [
           { label: "7 days", value: "7d" },
-          { label: "30 days", value: "30d" },
-        ],
-      };
-      // On a count, which a window bounds.
-      const counted = { ...base, op: "count" as const };
-      expect(applyWidgetSettings(counted, [dateRange], {}).since).toBe("30d");
-      expect(
-        applyWidgetSettings(counted, [dateRange], { dateRange: "7d" }).since
-      ).toBe("7d");
-      // A list takes no window, so the same setting leaves it as declared.
-      expect(applyWidgetSettings(base, [dateRange], { dateRange: "7d" })).toBe(
-        base
-      );
-    });
-
-    it("sets a ranged chart's range from the card's Date range, never a since beside it", () => {
-      // 🔴 Joined by a since, the query names two windows and the server
-      // refuses it, so the chart would never draw.
-      const dateRange = {
-        name: "dateRange",
-        type: "select" as const,
-        defaultValue: "30d",
-        options: [
-          { label: "7 days", value: "7d" },
-          { label: "30 days", value: "30d" },
-          { label: "60 days", value: "60d" },
           { label: "12 months", value: "12m" },
         ],
       };
+      const counted = { ...base, op: "count" as const };
+      expect(
+        applyWidgetSettings(counted, [dateRange], { dateRange: "7d" })
+      ).toBe(counted);
       const ranged = {
         op: "timeseries" as const,
         dateField: "createdAt",
         range: "30d" as const,
       };
-      const asked = applyWidgetSettings(ranged, [dateRange], {
-        dateRange: "12m",
-      });
-      expect(asked).toMatchObject({ range: "12m" });
-      expect(asked).not.toHaveProperty("since");
-      // A span that is no range leaves the declared range as it was.
       expect(
-        applyWidgetSettings(ranged, [dateRange], { dateRange: "60d" })
+        applyWidgetSettings(ranged, [dateRange], { dateRange: "12m" })
       ).toBe(ranged);
     });
 

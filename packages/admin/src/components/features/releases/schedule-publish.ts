@@ -26,12 +26,21 @@ export const SCHEDULE_PUBLISH_LABEL = "Schedule publish…";
  * may not schedule at all.
  */
 export function schedulePublishRefusal(facts: {
+  /**
+   * A request to schedule this document is still out. Asked first: a second
+   * would make a second release for the document, and the person who sent
+   * the first has every permission the rest ask about.
+   */
+  scheduling: boolean;
   /** May create a release and schedule it: the two the server asks. */
   canSchedule: boolean;
   /** May publish this document, which the release does for them later. */
   canPublish: boolean;
   onDefaultLocale: boolean;
 }): string | undefined {
+  if (facts.scheduling) {
+    return "This document is being scheduled. Wait for it to finish.";
+  }
   if (!facts.canSchedule) {
     return "You do not have permission to schedule releases.";
   }

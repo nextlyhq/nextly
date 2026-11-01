@@ -162,6 +162,15 @@ beforeEach(() => {
   mockBranding = branding();
   layoutResponse = layout();
   api.get.mockImplementation(() => Promise.resolve(layoutResponse));
+  // Every card is asked for by its id; each is answered, so its component draws.
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    Promise.resolve({
+      results: (body as { queries: unknown[] }).queries.map(() => ({
+        ok: true,
+        result: { op: "data", data: null },
+      })),
+    })
+  );
   // The stand-in APPLIES the write, so the next read answers with it.
   api.put.mockImplementation((_path: string, body: unknown) => {
     const write = body as { placements: WidgetPlacement[] };
@@ -206,15 +215,14 @@ describe("a quick setting's change, saved at rest", () => {
 
 describe("a quick change to a card asked in a later request than the dashboard's first", () => {
   // Past `MAX_QUERIES_PER_REQUEST` the batch is split into requests that each answer at their
-  // own time. Each card asks a count; the last card's Collection names what it counts, so a new
-  // one asks its request again under a new question.
+  // own time. Each card answers a count; the last card's Collection names what it counts, so a
+  // new one asks for that card again, alone, with its new settings.
   const others = Array.from({ length: MAX_QUERIES_PER_REQUEST }, (_, i) => ({
     id: `core/n${String(i).padStart(2, "0")}`,
     title: `Count ${i}`,
     archetype: "custom",
     size: RESIZABLE,
     component: "core#SaidOnceBody",
-    query: { source: "collection:posts", op: "count" },
   }));
   const counting = {
     id: "core/counting",
@@ -222,7 +230,6 @@ describe("a quick change to a card asked in a later request than the dashboard's
     archetype: "custom",
     size: RESIZABLE,
     component: "core#SaidOnceBody",
-    query: { op: "count" },
     settings: [{ name: "collection", type: "collection", label: "Collection" }],
   };
   const source = (collection: string, label: string) => ({

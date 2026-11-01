@@ -1,12 +1,14 @@
 /**
- * Continue where you left off, drawn from its `system:continue` answer: a link
- * per document led by its collection's icon, its meta line on each tab, its
- * status pill, the Pin or Unpin its row menu offers, its empty text per tab,
- * and the frame's own states.
+ * Continue where you left off, drawn from the rows its `load` read from
+ * `system:continue`: a link per document led by its collection's icon, its
+ * meta line on each tab, its status pill, the Pin or Unpin its row menu
+ * offers, and its empty text per tab. The frame draws loading, no permission
+ * and error before the component is reached, so those are the frame's own
+ * tests.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import userEvent from "@testing-library/user-event";
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
@@ -34,7 +36,10 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   useBranding: () => mockBranding,
 }));
 
-import { ContinueCard } from "./ContinueCard";
+import { ContinueCard, type ContinueCardProps } from "./ContinueCard";
+
+/** One row of the card's data, as JSON carries it. */
+type Row = CoreListWidgetData["items"][number];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,7 +51,7 @@ afterEach(() => {
 });
 
 /** One row as `system:continue` answers it: a save by Ben, unless overridden. */
-function row(n: number, overrides: Record<string, unknown> = {}) {
+function row(n: number, overrides: Row = {}): Row {
   return {
     id: `save-${n}`,
     entryId: `doc-${n}`,
@@ -68,7 +73,7 @@ function row(n: number, overrides: Record<string, unknown> = {}) {
 }
 
 /** A pin's row: no saver, edited when the document last was. */
-function pinRow(n: number, overrides: Record<string, unknown> = {}) {
+function pinRow(n: number, overrides: Row = {}): Row {
   return row(n, {
     id: `pin-${n}`,
     actorType: null,
@@ -79,21 +84,20 @@ function pinRow(n: number, overrides: Record<string, unknown> = {}) {
   });
 }
 
-const QUERY = { source: "system:continue", op: "list" as const, limit: 5 };
-
 function draw(
-  props: Partial<WidgetComponentProps>,
+  data: CoreListWidgetData,
   tier: SizeTier = "medium",
-  tab: "mine" | "team" = "mine"
+  tab: "mine" | "team" = "mine",
+  limit = 5
 ) {
-  const full: WidgetComponentProps = {
+  const full: ContinueCardProps = {
     widgetId: "core/continue",
     placementId: "card-1",
-    settings: { tab },
-    slot: undefined,
-    isFetching: false,
-    query: { ...QUERY, where: { tab } },
-    ...props,
+    settings: { tab, limit },
+    size: { w: 6, h: 5, tier },
+    refreshing: false,
+    retry: () => undefined,
+    data,
   };
   return render(
     <CardTierContext.Provider value={tier}>
@@ -102,12 +106,11 @@ function draw(
   );
 }
 
+/** The data the card's `load` answers: the source's rows, and what it counted beside them. */
 const answered = (
-  items: Record<string, unknown>[],
-  extra: Record<string, unknown> = {}
-): Partial<WidgetComponentProps> => ({
-  slot: { ok: true, result: { op: "list", items, ...extra } },
-});
+  items: readonly Row[],
+  extra: Omit<CoreListWidgetData, "items"> = {}
+): CoreListWidgetData => ({ items, ...extra });
 
 describe("Continue where you left off", () => {
   it("draws Mine's rows in the answer's order, pins first, each linking to its document", () => {
@@ -251,10 +254,16 @@ describe("Continue where you left off", () => {
   });
 
   it("draws at most its number of items, and no footer, since it has no list to open", () => {
-    // Asked for 5: the batch asked 6, and the sixth is not drawn.
+    // Asked for 5: its `load` asked 6, and the sixth is not drawn.
     draw(answered([1, 2, 3, 4, 5, 6].map(n => row(n))));
     expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
     expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+  });
+
+  it("draws no more rows than its reader's number of items, where the card holds more", () => {
+    // Asked for 3: its `load` asked 4, and the card, which holds five, draws three.
+    draw(answered([1, 2, 3, 4].map(n => row(n))), "medium", "mine", 3);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
   });
 
   it("says what fills each tab when it is empty, and how far back Team looked", () => {
@@ -266,18 +275,6 @@ describe("Continue where you left off", () => {
     draw(answered([], { window: { days: 90 } }), "medium", "team");
     expect(screen.getByTestId("card-empty")).toHaveTextContent(
       "No edits by others in the last 90 days"
-    );
-  });
-
-  it("says it is not available, or that it failed, in the frame's own words", () => {
-    const { unmount } = draw({
-      slot: { ok: false, error: "Not available", code: "unavailable" },
-    });
-    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
-    unmount();
-    draw({ slot: { ok: false, error: "The database did not answer." } });
-    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
-      "The database did not answer."
     );
   });
 });

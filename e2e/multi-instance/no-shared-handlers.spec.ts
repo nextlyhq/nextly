@@ -1,16 +1,18 @@
 /**
  * A site served by two instances WITHOUT Nextly's shared cache handlers: each
  * instance keeps its own cache, so nothing tells one about the other's write.
- * In production Nextly then caps every cached read's lifetime at 60 s and
- * warns once per process, so a write still reaches every instance within
- * about a minute.
+ * In production Nextly then gives every cached read a 30 s revalidate and
+ * warns once per process: past it, an instance's first read gets the old
+ * value once while the entry refreshes in the background, so a write reaches
+ * every instance about 30 s after it, for as long as something reads it.
  *
  * Each leg builds the fixture with Next.js's default caches and serves it
  * twice, Cache Components off and on. The first check shows the instances do
  * not share: a write through A is not served by B at once. The later checks
- * wait for the cap: past it, an instance's first read is served stale once
- * while it refreshes in the background, so each wait reads in a loop until
- * the new value, with its deadline counted from the write.
+ * wait out the revalidate, reading in a loop until the new value, with the
+ * deadline counted from the write: the loop's reads are what start each
+ * refresh, so a stale answer just past 30 s is allowed, and only the deadline
+ * is not.
  *
  * @module multi-instance/no-shared-handlers
  */
@@ -27,13 +29,16 @@ import { WRITE_SECRET, type Leg } from "./instances";
 
 /**
  * The longest a read may be served unchanged without shared handlers: the
- * 60 s cap on its lifetime, then the one stale answer the first read past it
- * gets while the entry refreshes, with room for a loaded runner.
+ * 30 s revalidate, counted from a fill no later than the write; then one poll,
+ * whose read gets the old value once and starts the refresh; then about 2 s
+ * for the refreshed answer to arrive. With Cache Components on the entry also
+ * expires 300 s after its fill, whoever reads it; with it off nothing does, so
+ * there it holds only because this loop keeps reading.
  */
-const FRESH_WITHIN_CAP_MS = 70_000;
+const FRESH_WITHIN_REVALIDATE_MS = 33_000;
 
-/** Reads a second apart while waiting out the cap, not four a second for a minute. */
-const CAP_POLL_MS = 1_000;
+/** Reads a second apart while waiting out the revalidate. */
+const REVALIDATE_POLL_MS = 1_000;
 
 const LEGS: Leg[] = [
   {
@@ -73,7 +78,7 @@ for (const leg of LEGS) {
       expect(await noteOn(request, b)).toBe("v0");
     });
 
-    test("the other instance serves the write within the lifetime cap", async ({
+    test("the other instance serves the write within the revalidate", async ({
       request,
     }, testInfo) => {
       const took = await servedWithin(
@@ -81,8 +86,8 @@ for (const leg of LEGS) {
         running().b,
         "through-a",
         wroteAt,
-        FRESH_WITHIN_CAP_MS,
-        CAP_POLL_MS
+        FRESH_WITHIN_REVALIDATE_MS,
+        REVALIDATE_POLL_MS
       );
       testInfo.annotations.push({
         type: "fresh on the other instance",
@@ -90,15 +95,15 @@ for (const leg of LEGS) {
       });
     });
 
-    test("a write outside any request is served by both instances within the lifetime cap", async ({
+    test("a write outside any request is served by both instances within the revalidate", async ({
       request,
     }, testInfo) => {
       const { a, b } = running();
       // From when the write began, not when the writing process exited.
       const since = running().writeOutsideRequest("outside");
       // Both read at once: an instance refreshes on its first read past the
-      // cap, so one read only after the other is fresh could start its own
-      // refresh with too little of the bound left.
+      // revalidate, so one read only after the other is fresh could start its
+      // own refresh with too little of the bound left.
       const [tookA, tookB] = await Promise.all(
         [a, b].map(instance =>
           servedWithin(
@@ -106,8 +111,8 @@ for (const leg of LEGS) {
             instance,
             "outside",
             since,
-            FRESH_WITHIN_CAP_MS,
-            CAP_POLL_MS
+            FRESH_WITHIN_REVALIDATE_MS,
+            REVALIDATE_POLL_MS
           )
         )
       );

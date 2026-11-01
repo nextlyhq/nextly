@@ -13,8 +13,8 @@
  */
 
 import { declaredWidget } from "./declaration/declared-widgets";
+import type { WidgetAccessGate } from "./declaration/define-widget";
 import type { WidgetDefinition } from "./definition";
-import type { WidgetPermissionGate } from "./gate";
 import {
   sizeBounds,
   type WidgetSizeBounds,
@@ -44,12 +44,7 @@ export interface CanonicalWidget {
   archetype?: string;
   /** The sketch the declaration names in place of its archetype's, when it names one. */
   sketch?: string;
-  /**
-   * Set when core builds this widget's data on the server from its declaration,
-   * so the admin asks for its cards by card rather than by query.
-   */
-  serverData?: true;
-  requiredPermission?: WidgetPermissionGate;
+  requiredPermission?: WidgetAccessGate;
   /**
    * The size the declaration states, in grid units, as stated. Read through
    * {@link sizeFacts}, the one place an unstated end is filled in.
@@ -80,8 +75,6 @@ export interface CanonicalWidget {
    */
   lifecycle?: string;
   visibleWhen?: string | readonly string[];
-  /** Whether the reader may send this card away; see `WidgetDefinition`. */
-  dismissible?: boolean;
   /** Whether the card leaves the grid while its answer is empty; see `WidgetDefinition`. */
   hidesWhenEmpty?: boolean;
   /**
@@ -103,39 +96,17 @@ export interface CanonicalWidget {
    */
   collectionSetting?: AnyWidgetSetting;
   /**
-   * The queries a setting of the declaration may drive: its query, or each of
-   * its cells' queries. A Collection setting no knob drives on any of them
-   * names no collection the card reads, so it decides nothing about which
-   * cards are withheld. Absent on a summary built before the field existed,
-   * which is judged by its setting alone.
-   */
-  knobQueries?: readonly unknown[];
-  /**
-   * The gates INSIDE the declaration: one per action of an `actions` widget,
-   * verbatim, `undefined` where the action declares none, and a declared
-   * widget's empty-state action's, when it has one.
+   * The gates INSIDE the declaration: its empty-state action's, when it has
+   * one, verbatim.
    *
-   * Carried so the workspace payload can withhold an action from a reader
+   * Carried so the workspace payload can withhold the action from a reader
    * who lacks its grant before the declaration ships -- an action is a label
-   * and an href, and the browser hiding it afterwards is not a control.
+   * and a link, and the browser hiding it afterwards is not a control.
    * Verbatim for the same reason `requiredPermission` is: what a gate means
    * is decided in one place, and a summary that normalised it would be a
    * second opinion.
    */
   actionGates?: readonly unknown[];
-}
-
-/**
- * The gates an `actions` declaration carries, one per action; none for a
- * declaration without actions, or with actions that are not a list.
- */
-function actionGatesOf(actions: unknown): readonly unknown[] {
-  if (!Array.isArray(actions)) return [];
-  return actions.map(action =>
-    typeof action === "object" && action !== null
-      ? (action as { requiredPermission?: unknown }).requiredPermission
-      : undefined
-  );
 }
 
 /**
@@ -152,10 +123,8 @@ const REGISTRATION_FIELDS = [
   "defaultOrder",
   "allowsSeveral",
   "sketch",
-  "serverData",
   "lifecycle",
   "visibleWhen",
-  "dismissible",
   "hidesWhenEmpty",
   "offered",
 ] as const satisfies ReadonlyArray<
@@ -188,39 +157,14 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
   return {
     id: definition.id,
     ...(plugin === undefined ? {} : { plugin }),
-    // A declared widget's empty-state action is gated like a shortcut, so its
-    // gate is resolved with them, before the payload decides what to withhold.
-    actionGates: [
-      ...actionGatesOf(definition.actions),
-      ...emptyActionGate(definition.empty?.action),
-    ],
+    // A declared widget's empty-state action is gated, so its gate is
+    // resolved before the payload decides what to withhold.
+    actionGates: emptyActionGate(definition.empty?.action),
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
     ...textBoundsField(definition.settings),
     ...settingsField(definition.settings),
     ...collectionSettingField(definition.settings),
-    ...knobQueriesField(definition),
   };
-}
-
-/**
- * The queries a declaration's settings may drive, as a summary field: its
- * query, or each of its cells' queries.
- */
-function knobQueriesField(declaration: {
-  query?: unknown;
-  cells?: unknown;
-}): Pick<CanonicalWidget, "knobQueries"> {
-  const cells = Array.isArray(declaration.cells) ? declaration.cells : [];
-  const knobQueries = [
-    ...(declaration.query === undefined ? [] : [declaration.query]),
-    ...cells.map((cell: unknown) =>
-      typeof cell === "object" && cell !== null
-        ? (cell as { query?: unknown }).query
-        : undefined
-    ),
-  ];
-  // Absent when it asks nothing, as every unstated field is.
-  return knobQueries.length === 0 ? {} : { knobQueries };
 }
 
 /**

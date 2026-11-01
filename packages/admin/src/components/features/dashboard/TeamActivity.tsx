@@ -6,7 +6,7 @@
  * frame, which draws its heading and every state; this component draws the
  * rows, and reports an empty feed or an unreadable answer for the frame to say.
  * The server answers only events about what the reader may read, so every row
- * drawn, and the one row more the batch asks for, is one they may see.
+ * drawn, and the one row more its `load` asks for, is one they may see.
  *
  * ## It shows a fixed page and offers no way past it
  *
@@ -30,17 +30,21 @@
  */
 
 import { Avatar, AvatarFallback, AvatarImage } from "@nextlyhq/ui";
-import type { ActivityEvent, WidgetComponentProps } from "nextly/widget-result";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
+import type {
+  ActivityEvent,
+  DeclaredComponentProps,
+} from "nextly/widget-result";
 import type React from "react";
 
-import { answerTotal } from "@admin/components/features/widgets/archetypes/tiered-rows";
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { useCollectionLabel } from "@admin/components/features/widgets/frame/collection-label";
 import {
   ListCard,
   type ListModel,
+  type ListTotal,
 } from "@admin/components/features/widgets/frame/list-card";
-import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
+import { useListCard } from "@admin/components/features/widgets/frame/list-card-hook";
 import {
   activityFromRow,
   activityHref,
@@ -197,26 +201,41 @@ const EmptyState: React.FC = () => (
 );
 
 /**
- * The dashboard's Team activity card, answered by `system:activity` in the
- * dashboard's batch: framed, so the heading and the size are the card's.
+ * The dashboard's Team activity card, drawn from the rows its `load` read from
+ * `system:activity`: framed, so the heading and the size are the card's.
  *
  * It draws the rows its body holds, at most the "Number of items" its reader
  * chose, through the one list card core's lists use, each row leading to the
- * entry or Single it is about. The batch asks one row more than the card
+ * entry or Single it is about. Its `load` asks one row more than the card
  * draws, and that row is not drawn: the feed has no list to open, so the card
  * has no footer, and a footer only ever draws a link. A run of one person's
  * saves is one row.
  *
- * The frame draws every state; what this card's own answer says beyond its
- * rows (still loading, an unreadable answer, or an empty feed) it reports.
+ * The frame draws loading, no permission and error; an empty feed this card
+ * reports itself, saying what the feed holds.
  */
-export const TeamActivityCard: React.FC<WidgetComponentProps> = props => {
+/** How many events the read counted in all, as the footer counts them; nothing when it did not. */
+function listTotal(data: CoreListWidgetData): ListTotal | undefined {
+  if (data.total === undefined) return undefined;
+  return data.atLeast === true
+    ? { count: data.total, atLeast: true }
+    : { count: data.total };
+}
+
+/** What the Team activity card is handed: its declaration's props, with the rows its `load` read. */
+export type TeamActivityCardProps = Omit<DeclaredComponentProps, "data"> & {
+  data: CoreListWidgetData;
+};
+
+export const TeamActivityCard: React.FC<TeamActivityCardProps> = ({
+  data,
+  settings,
+}) => {
   // A relative time is read again as time passes: the clock ticks.
-  const { tier, drawn, density, now, read } = useListCard(props);
+  const { tier, drawn, density, now } = useListCard(settings.limit);
   const labelOf = useCollectionLabel();
-  if ("node" in read) return read.node;
   // A row this build cannot read is left out rather than drawn from guesses.
-  const rows = read.list.items.flatMap(row => {
+  const rows = data.items.flatMap(row => {
     const activity = activityFromRow(row);
     if (!activity) return [];
     // The feed names a collection by its slug; the row names it as the reader is shown it, and
@@ -240,7 +259,7 @@ export const TeamActivityCard: React.FC<WidgetComponentProps> = props => {
       model={activityListModel(now)}
       rows={rows}
       drawn={drawn}
-      total={answerTotal(read.list)}
+      total={listTotal(data)}
       tier={tier}
       density={density}
     />

@@ -7,7 +7,7 @@
  * measured itself would read its tier from.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +19,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { gridBounds } from "../../__tests__/grid-bounds";
+import { rowsDrawn } from "../../frame/tier";
 import { NO_FILTER_MATCH, SettingsPreview } from "../SettingsPreview";
 
 vi.mock("@admin/components/shared/preview/useMeasuredWidth", () => ({
@@ -56,12 +57,6 @@ const WIDGET: DashboardWidget = {
   title: "Recent posts",
   archetype: "list",
   size: gridBounds(3, 4),
-  query: {
-    source: "collection:posts",
-    op: "list",
-    select: ["title"],
-    limit: 5,
-  },
   settings: [
     { name: "collection", type: "collection", label: "Collection" },
     { name: "where", type: "filter", label: "Filter", of: "collection" },
@@ -132,6 +127,65 @@ describe("the preview's size", () => {
     const { box, tier } = preview({ w: 3, cardWidth: 300 });
     expect(tier).toBe("small");
     expect(box).toHaveAttribute("data-scale", "1");
+  });
+
+  it("draws the card's own held answer by the size it was fetched at, so its one row more is not drawn", () => {
+    // The card grew from three rows to six and still shows the answer its three rows asked for:
+    // the rows those three draw, and one more, the sign that more exist.
+    const fetched = { tier: "medium" as const, h: 3 };
+    const held = rowsDrawn(fetched, undefined);
+    // Six rows have room for every row that answer holds, so drawn by the card's own size the one
+    // more would be a row.
+    expect(rowsDrawn({ tier: "medium", h: 6 }, undefined)).toBeGreaterThan(
+      held + 1
+    );
+    const answer: WidgetSlot = {
+      ok: true,
+      result: {
+        op: "list",
+        items: Array.from({ length: held + 1 }, (_, index) => ({
+          title: `Entry ${index + 1}`,
+        })),
+      },
+    };
+    render(
+      <SettingsPreview
+        widget={WIDGET}
+        placementId="p1"
+        stored={{ collection: "posts" }}
+        draft={{ collection: "posts" }}
+        ownTitle=""
+        shown={{
+          slot: answer,
+          updatedAt: null,
+          isFetching: true,
+          answerSize: fetched,
+        }}
+        size={{ w: 6, h: 6 }}
+        cardWidth={600}
+        onClearFilters={() => {}}
+      />,
+      { wrapper }
+    );
+    const box = screen.getByTestId("settings-preview");
+    // The question is the card's own, so the card's answer is what is drawn, and nothing is asked.
+    expect(box).toHaveTextContent("Entry 1");
+    expect(within(box).getAllByTestId("entity-row")).toHaveLength(held);
+    expect(within(box).queryByText(`Entry ${held + 1}`)).toBeNull();
+    expect(protectedApi.post).not.toHaveBeenCalled();
+  });
+
+  it("asks a changed question at the size and the tier it draws the card at", async () => {
+    // 🔴 The tier is the one the card's real width gives it, large, not the panel's medium: what
+    // the widget's `load` is handed is the size the preview shows.
+    preview({ w: 12, cardWidth: 1200, draft: { collection: "posts" } });
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
+    const [, body] = vi.mocked(protectedApi.post).mock.calls[0] ?? [];
+    expect((body as { queries: unknown[] }).queries).toEqual([
+      expect.objectContaining({ size: { w: 12, h: 4, tier: "large" } }),
+    ]);
   });
 });
 

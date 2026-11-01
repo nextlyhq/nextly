@@ -8,30 +8,48 @@
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
  */
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { registerContinueWidgetSource } from "../../../services/dashboard/continue-widget-source";
+import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
+import * as loggerModule from "../../../observability/logger";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { publishedWidgetDefinition } from "../../../plugins/test-widget-card";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
-import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
+import { CORE_DECLARATIONS } from "../core-widgets";
+import { teamWidget } from "../core-widgets/team";
+import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
-  chromeFieldProblem,
   requiredPermissionSlugs,
   validateWidgetDefinition,
+  type WidgetDefinition,
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
 import { DENSITY_OPTIONS } from "../declaration/setting-builders";
 import { LIST_DENSITIES, MAX_WIDGET_ROWS } from "../query-limits";
+import { getWidget } from "../registry";
 import { resolveWidgetSettings } from "../settings";
-import { clearSources } from "../sources";
-import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
-import { clearSystemResolvers } from "../system-sources";
 import { TEAM_GATE } from "../team-gate";
 
-function card(id: string) {
-  const found = CORE_WIDGETS.find(widget => widget.id === id);
+beforeEach(() => {
+  vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
+    warn: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
+  // Every core widget as core publishes it from its declaration: what the add
+  // panel, the layout and the admin read.
+  resetWidgetRegistries([]);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+/** A core widget as core publishes it from its declaration. */
+function card(id: string): WidgetDefinition {
+  const found = getWidget(id);
   // Resolved through a lookup that REFUSES rather than through `!`, so a
   // renamed or removed card fails here naming itself, instead of every
   // assertion below reading `undefined` and reporting something unrelated.
@@ -39,43 +57,48 @@ function card(id: string) {
   return found;
 }
 
-/** A core widget's declared size, whether it is a definition or a declaration. */
+/** Every core widget as core publishes it, in core's order. */
+const published = () => CORE_WIDGET_IDS.map(card);
+
+/** A core widget's size as its declaration states it. */
 function sizeOf(id: string) {
   const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
-  return declared === undefined ? card(id).size : declared.size;
+  // Refused by name, as `card` refuses, so a missing declaration is not read
+  // as a widget that states no size.
+  if (declared === undefined) throw new Error(`no core declaration "${id}"`);
+  return declared.size;
 }
 
-// As boot orders it: a card's settings are admitted against the filters its
-// source declares, so the sources a card names are registered first.
-beforeAll(() => {
-  clearSources();
-  clearSystemResolvers();
-  registerContinueWidgetSource();
-});
+/**
+ * Whether core keeps a declaration for this widget, under core: what answers
+ * its cards on the server, so what makes it a widget whose data core builds.
+ */
+const keptByCore = (id: string) => declaredWidget(id)?.owner === CORE_OWNER;
 
 describe("core widget definitions", () => {
   /*
-   * Every card goes through the same door a plugin's does. Core's list is a
-   * hand-written literal that no caller validates on the way in -- boot calls
-   * `registerWidget`, which validates, but a definition that would be REFUSED
-   * there fails at boot rather than in a test naming the field.
+   * Every card goes through the same door a plugin's does: what core publishes
+   * from each declaration is held to the registry's own rules, so a published
+   * shape core got wrong fails here naming the widget and the field, rather
+   * than only at boot.
    */
-  it.each(CORE_WIDGETS.map(widget => [widget.id, widget] as const))(
-    "%s is a valid definition",
-    (_id, widget) => {
+  it.each(CORE_WIDGET_IDS.map(id => [id] as const))(
+    "%s is published as a valid definition, kept as core's declaration",
+    id => {
       // An assertion function: it THROWS with a named reason and returns
       // nothing, so the absence of a throw is the whole result.
-      expect(() => validateWidgetDefinition(widget)).not.toThrow();
+      expect(() => validateWidgetDefinition(card(id))).not.toThrow();
+      expect(keptByCore(id)).toBe(true);
     }
   );
 
-  it.each(CORE_WIDGETS.map(widget => [widget.id, widget] as const))(
+  it.each(CORE_WIDGET_IDS.map(id => [id] as const))(
     "%s is never sized below two rows",
-    (_id, widget) => {
+    id => {
       // One row cannot hold the frame's padding, header and gap, so a card
       // declared at one row draws a header with no body under it.
-      expect(sizeDeclarationProblems(widget.size)).toEqual([]);
-      const { min } = sizeBounds(widget.size);
+      expect(sizeDeclarationProblems(sizeOf(id))).toEqual([]);
+      const { min } = sizeBounds(sizeOf(id));
       expect(min.h).toBeGreaterThanOrEqual(2);
     }
   );
@@ -142,7 +165,6 @@ describe("core widget definitions", () => {
     // never a condition or the frame's dismissal.
     expect(card?.shows).toBeTypeOf("function");
     expect(card).not.toHaveProperty("lifecycle");
-    expect(card).not.toHaveProperty("dismissible");
     expect(card?.size).toEqual({
       default: { w: 12, h: 2 },
       min: { w: 12, h: 2 },
@@ -158,10 +180,7 @@ describe("core widget definitions", () => {
   });
 
   it("no longer declares the old Get started card, or the cards it replaced", () => {
-    const ids = [
-      ...CORE_WIDGETS.map(w => w.id),
-      ...CORE_DECLARATIONS.map(w => w.id),
-    ];
+    const ids = CORE_DECLARATIONS.map(w => w.id);
     expect(ids).not.toContain("core/get-started");
     expect(ids).not.toContain("core/seed-demo-content");
     expect(ids).not.toContain("core/onboarding-checklist");
@@ -170,9 +189,9 @@ describe("core widget definitions", () => {
   it("offers the Content card only while there is a collection or a Single to list", () => {
     // One card for both: a reader with Singles and no collections still has
     // something it lists, which `collections:present` alone would hide.
-    const content = CORE_WIDGETS.find(w => w.id === "core/content-table");
-    expect(content?.lifecycle).toBe("conditional");
-    expect(content?.visibleWhen).toBe("content:present");
+    const content = card("core/content-table");
+    expect(content.lifecycle).toBe("conditional");
+    expect(content.visibleWhen).toBe("content:present");
   });
 
   it("offers Upcoming releases on what it needs", () => {
@@ -188,8 +207,8 @@ describe("core widget definitions", () => {
 
   it("no longer declares the Content tile card, which the Content table replaced", () => {
     // Removed outright, not kept as an alias of the table: no core id, no
-    // definition and no place in core's default names it.
-    expect(CORE_WIDGETS.map(w => w.id)).not.toContain("core/content");
+    // widget and no place in core's default names it.
+    expect(getWidget("core/content")).toBeUndefined();
     expect(CORE_WIDGET_IDS).not.toContain("core/content");
     expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
       "core/content"
@@ -211,9 +230,8 @@ describe("core widget definitions", () => {
   });
 
   it("no longer declares the Collections and Singles cards Content replaced", () => {
-    const ids = CORE_WIDGETS.map(w => w.id);
-    expect(ids).not.toContain("core/collections");
-    expect(ids).not.toContain("core/singles");
+    expect(getWidget("core/collections")).toBeUndefined();
+    expect(getWidget("core/singles")).toBeUndefined();
   });
 
   it("keeps every OTHER core card permanent", () => {
@@ -224,9 +242,9 @@ describe("core widget definitions", () => {
     // Membership rather than a count: a change that made one card transient
     // while making another permanent leaves any total unmoved, and the card
     // that quietly stopped being offered is the one nobody would look for.
-    const conditional = CORE_WIDGETS.filter(
-      w => w.lifecycle === "conditional"
-    ).map(w => w.id);
+    const conditional = published()
+      .filter(w => w.lifecycle === "conditional")
+      .map(w => w.id);
     expect(conditional).toEqual([
       "core/content-table",
       "core/continue",
@@ -236,9 +254,12 @@ describe("core widget definitions", () => {
   });
 
   it("gates only the team card among those that predate the grid, and the releases card", () => {
-    const gated = CORE_WIDGETS.filter(
-      widget => widget.requiredPermission !== undefined
-    ).map(widget => widget.id);
+    // Core's widgets as published, each gate decided by who may be offered
+    // the card at all; System health's super-admin rule is a predicate judged
+    // per card, not a gate.
+    const gated = published()
+      .filter(widget => widget.requiredPermission !== undefined)
+      .map(widget => widget.id);
 
     expect(gated).toEqual(["core/team", "core/upcoming-releases"]);
   });
@@ -246,18 +267,10 @@ describe("core widget definitions", () => {
   it("offers the team card on the gate its source asks", () => {
     // The same constant, not an equal copy: the declaration and the resolver
     // cannot come to name different grants.
-    const team = card("core/team");
-    expect(team.requiredPermission).toBe(TEAM_GATE);
-    expect(team.query).toEqual({ source: TEAM_SOURCE_ID, op: "list" });
-  });
-
-  // Every card is drawn in the dashboard's one frame, which draws its header
-  // and every state, so no core widget may decline it -- by the same rule the
-  // registry refuses a plugin's that tries.
-  it("declines the grid's frame nowhere", () => {
-    for (const widget of CORE_WIDGETS) {
-      expect(chromeFieldProblem(widget), widget.id).toBeUndefined();
-    }
+    expect(teamWidget.access).toBe(TEAM_GATE);
+    // Its data is its `load`'s, so it is published with no query of its own.
+    expect(card("core/team")).not.toHaveProperty("query");
+    expect(keptByCore("core/team")).toBe(true);
   });
 });
 
@@ -268,8 +281,7 @@ describe("the list cards' Density", () => {
     "%s offers the shared choice, one option for every density",
     id => {
       // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
-      const widget = CORE_WIDGETS.find(w => w.id === id);
-      const density = widget?.settings?.find(
+      const density = card(id).settings?.find(
         setting => setting.name === "density"
       );
       expect(density).toMatchObject({
@@ -315,49 +327,44 @@ describe("a new card's defaults, before its reader touches a setting", () => {
     expect(sections.chartStyle).toBeUndefined();
   });
 
+  // Every list card is a declaration now, so each is read as the registry publishes it.
   it.each([
-    ["core/recent-entries", true],
-    ["core/continue", false],
-    ["core/team-activity", false],
-    ["core/upcoming-releases", false],
-  ])("folds %s's Density under Advanced", (id, declared) => {
-    const settings = declared
-      ? published(id).settings
-      : CORE_WIDGETS.find(widget => widget.id === id)?.settings;
-    expect(settings?.find(setting => setting.name === "density")?.section).toBe(
-      "advanced"
-    );
+    "core/recent-entries",
+    "core/continue",
+    "core/team-activity",
+    "core/upcoming-releases",
+  ])("folds %s's Density under Advanced", id => {
+    expect(
+      published(id).settings?.find(setting => setting.name === "density")
+        ?.section
+    ).toBe("advanced");
   });
 
   it("draws Continue's Tab with the card's data, since it narrows whose work the card reads", () => {
     expect(
-      CORE_WIDGETS.find(
-        widget => widget.id === "core/continue"
-      )?.settings?.find(setting => setting.name === "tab")?.section
+      published("core/continue").settings?.find(
+        setting => setting.name === "tab"
+      )?.section
     ).toBe("data");
   });
 });
 
 describe("the content card", () => {
-  it("is the table, asked for the rows its size draws, never every collection", () => {
-    // 🔴 Asked at the most a query may return, the card's source counted fifty
-    // collections on every load. Sized, it is asked the rows the card draws and
-    // one more, and its source counts only those.
+  it("is the table, drawn by its own component from what its load reads", () => {
+    // How many rows its load asks is `core-source-cards.test.ts`'s to show.
     expect(card("core/content-table")).toMatchObject({
+      archetype: "custom",
       component: "core#ContentTable",
-      sizedQuery: true,
-      query: {
-        source: CONTENT_SOURCE_ID,
-        op: "list",
-        limit: MAX_WIDGET_ROWS,
-      },
     });
+    // Answered from core's declaration, so it is published with no query.
+    expect(keptByCore("core/content-table")).toBe(true);
+    expect(card("core/content-table")).not.toHaveProperty("query");
   });
 });
 
 describe("Continue where you left off", () => {
   it("takes Recently edited's place: no core id, card or default names the old one", () => {
-    const ids = CORE_WIDGETS.map(widget => widget.id);
+    const ids: readonly string[] = CORE_WIDGET_IDS;
     const defaults = CORE_DEFAULT_LAYOUT.map(entry => entry.widget);
     // The control: the card that replaced it is there, so an absence below is
     // the old id being gone rather than a list that is empty.
@@ -388,18 +395,17 @@ describe("Continue where you left off", () => {
 });
 
 describe("the team activity card", () => {
-  it("is asked like core's own lists, so it can say more exist at every size", () => {
-    // Its component draws the rows its size allows and says more exist from
-    // the one row more; asked exactly its "Number of items", that row never
-    // comes at medium or large and the card can never say it.
-    const card = CORE_WIDGETS.find(
-      widget => widget.id === "core/team-activity"
-    );
-    expect(card).toMatchObject({
+  it("is drawn by its own component from what its load reads, and offers the rows a list draws", () => {
+    // How many rows its load asks, one more than it draws so it can say more
+    // exist at every size, is `core-source-cards.test.ts`'s to show.
+    expect(card("core/team-activity")).toMatchObject({
       archetype: "custom",
-      sizedQuery: true,
-      query: { op: "list" },
+      component: "core#TeamActivity",
     });
+    expect(keptByCore("core/team-activity")).toBe(true);
+    expect(
+      card("core/team-activity").settings?.find(s => s.name === "limit")
+    ).toMatchObject({ type: "number", min: 1, max: MAX_WIDGET_ROWS });
   });
 });
 
@@ -413,9 +419,7 @@ describe("the removed Recent activity card", () => {
   it("is no core widget: Team activity replaced it, with no alias", () => {
     const ids: readonly string[] = CORE_WIDGET_IDS;
     expect(ids).not.toContain("core/recent-activity");
-    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain(
-      "core/recent-activity"
-    );
+    expect(getWidget("core/recent-activity")).toBeUndefined();
     // The control: its replacement is.
     expect(ids).toContain("core/team-activity");
   });
@@ -425,9 +429,9 @@ describe("the team card's description", () => {
   it("names no figure the card may leave out", () => {
     // A small card draws the people alone, and a reader may be allowed to see only one of the
     // two counts, so a line promising both would describe a card that is not there.
-    const team = CORE_WIDGETS.find(widget => widget.id === "core/team");
-    expect(team?.description).toBeDefined();
-    expect(team?.description).not.toMatch(/\b(users|roles)\b/i);
+    const team = card("core/team");
+    expect(team.description).toBeDefined();
+    expect(team.description).not.toMatch(/\b(users|roles)\b/i);
   });
 });
 
@@ -524,7 +528,7 @@ describe("the default dashboard", () => {
   });
 
   it("states no defaultOrder on any of core's widgets: the order is the defaultLayout's", () => {
-    for (const widget of CORE_WIDGETS) {
+    for (const widget of published()) {
       expect([widget.id, widget.defaultOrder]).toEqual([widget.id, undefined]);
     }
   });
@@ -589,13 +593,8 @@ describe("the default dashboard", () => {
       "core/system-health",
     ].sort();
     expect([...CORE_WIDGET_IDS].sort()).toEqual(expected);
-    // The ids the registry is handed: the definitions and the declarations together.
-    expect(
-      [
-        ...CORE_WIDGETS.map(widget => widget.id),
-        ...CORE_DECLARATIONS.map(widget => widget.id),
-      ].sort()
-    ).toEqual(expected);
+    // The ids the registry is handed: core's declarations.
+    expect(CORE_DECLARATIONS.map(widget => widget.id).sort()).toEqual(expected);
   });
 });
 
@@ -604,7 +603,7 @@ describe("the Create card", () => {
   // palette's, so core registers no card for it, under its old id or any.
   it("is not one of core's widgets, nor on the default dashboard", () => {
     expect(CORE_WIDGET_IDS).not.toContain("core/quick-create");
-    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain(
+    expect(CORE_DECLARATIONS.map(widget => widget.id)).not.toContain(
       "core/quick-create"
     );
     expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(

@@ -108,6 +108,8 @@ async function boot(fresh: FreshDatabase) {
       executeQuery: async () => undefined,
     },
     logger,
+    // The initialized path never reaches the lock.
+    holdSchemaLock: work => work(),
   });
   expect(result).toEqual({ ranSetup: false, reason: "already_initialized" });
   return logger;

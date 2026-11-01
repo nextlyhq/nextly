@@ -33,7 +33,6 @@ function cellProps(): CellSettingsProps {
     title: "Notes",
     archetype: "list",
     size: gridBounds(4),
-    query: { source: "collection:posts", op: "list", limit: 5 },
   };
   const size = { w: 4, h: 3 };
   return {

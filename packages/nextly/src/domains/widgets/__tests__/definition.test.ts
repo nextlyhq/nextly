@@ -1,19 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  rangedLimitSettingProblem,
-  validateWidgetDefinition,
-  widgetValueProblem,
-  MAX_TEXT_CONTENT,
-} from "../definition";
-import { applyWidgetSettings } from "../settings";
+import { validateWidgetDefinition, widgetValueProblem } from "../definition";
 
 const valid = {
   id: "core/recent-entries",
   title: "Recently edited",
   archetype: "list" as const,
   size: { default: { w: 6, h: 4 } },
-  query: { source: "collection:posts", op: "list" as const, limit: 5 },
 };
 
 describe("validateWidgetDefinition", () => {
@@ -36,7 +29,6 @@ describe("validateWidgetDefinition", () => {
       id: valid.id,
       title: valid.title,
       archetype: valid.archetype,
-      query: valid.query,
     };
     expect(() => validateWidgetDefinition(unsized)).toThrow(
       /size is required, as \{ default: \{ w, h \}, min\?, max\? \}/
@@ -148,191 +140,34 @@ describe("validateWidgetDefinition", () => {
     ).toThrow(/component/);
   });
 
-  it("requires a query for every archetype that reads data", () => {
-    const { query: _omitted, ...noQuery } = valid;
-    expect(() => validateWidgetDefinition(noQuery)).toThrow(/query/);
-  });
-
-  it("allows text and actions archetypes to carry no query", () => {
+  it("refuses an archetype outside the six it draws", () => {
+    // Every widget is a declaration whose view maps onto one of core's
+    // displays or onto its own component, so a name outside those, such as a
+    // display core no longer draws, is refused naming the six it takes.
+    for (const archetype of ["stats", "text", "actions", "pie"]) {
+      expect(() =>
+        validateWidgetDefinition({ ...valid, archetype } as never)
+      ).toThrow(
+        /archetype must be one of metric, table, list, bars, timeseries, custom/
+      );
+    }
+    // The control: each of the six registers, `custom` with its component.
+    for (const archetype of [
+      "metric",
+      "table",
+      "list",
+      "bars",
+      "timeseries",
+    ] as const) {
+      expect(() =>
+        validateWidgetDefinition({ ...valid, archetype })
+      ).not.toThrow();
+    }
     expect(() =>
       validateWidgetDefinition({
-        id: "core/notes",
-        title: "Notes",
-        archetype: "text",
-        size: { default: { w: 4, h: 3 } },
-        content: "Some notes.",
-      })
-    ).not.toThrow();
-  });
-
-  it("requires a text widget to carry its prose, and bounds it", () => {
-    // A `text` widget IS its prose, the way an `actions` widget is its
-    // shortcuts: without content it describes an empty card. The bound is
-    // REFUSED rather than cut -- the content rides in every layout response.
-    const notes = {
-      id: "core/notes",
-      title: "Notes",
-      archetype: "text" as const,
-      size: { default: { w: 4, h: 3 } },
-    };
-    expect(() => validateWidgetDefinition(notes)).toThrow(
-      /requires non-empty content/
-    );
-    expect(() =>
-      validateWidgetDefinition({ ...notes, content: "   \n  " })
-    ).toThrow(/requires non-empty content/);
-    expect(() =>
-      validateWidgetDefinition({
-        ...notes,
-        content: "x".repeat(MAX_TEXT_CONTENT + 1),
-      })
-    ).toThrow(/the most a text widget may carry/);
-    expect(() =>
-      validateWidgetDefinition({
-        ...notes,
-        content: "x".repeat(MAX_TEXT_CONTENT),
-      })
-    ).not.toThrow();
-  });
-
-  it("refuses content on any other archetype, the way actions is refused", () => {
-    // Both directions, like every field an archetype owns: prose on a metric
-    // is a field nothing will draw, accepted at every layer and reporting
-    // nothing.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/n",
-        title: "N",
-        archetype: "metric",
-        size: { default: { w: 3, h: 2 } },
-        query: { source: "collection:posts", op: "count" },
-        content: "Prose nobody draws.",
-      })
-    ).toThrow(/content is only valid for archetype "text"/);
-  });
-
-  it("FORBIDS a query on text and actions, both directions like component", () => {
-    // The interface says "Required for every data archetype; forbidden for
-    // `text` and `actions`", and only the first half was enforced. A `text`
-    // widget carrying a query is a declaration whose author expected data and
-    // whose renderer will never ask for any -- accepted at registration,
-    // silently inert afterwards. `validateComponent` beside it already checks
-    // both directions; this now matches.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/notes",
-        title: "Notes",
-        archetype: "text",
-        size: { default: { w: 4, h: 3 } },
-        // Carries its prose, so it reaches the QUERY rule rather than being
-        // refused earlier for describing an empty card.
-        content: "Some notes.",
-        query: { source: "collection:posts", op: "list", limit: 5 },
-      })
-    ).toThrow(/query is only valid for/);
-
-    // Carries its shortcuts, so it reaches the QUERY rule rather than being
-    // refused earlier for describing an empty card. Isolating the rule under
-    // test is the point: without them this asserts the actions rule instead and
-    // the query rule goes unexercised.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/shortcuts",
-        title: "Shortcuts",
-        archetype: "actions",
-        size: { default: { w: 4, h: 3 } },
-        actions: [{ label: "New post", href: "/admin/posts/new" }],
-        query: { source: "collection:posts", op: "count", limit: 5 },
-      })
-    ).toThrow(/query is only valid for/);
-  });
-
-  it("requires an actions widget to carry its shortcuts", () => {
-    // An `actions` widget IS its list, so an empty one describes an empty card.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/shortcuts",
-        title: "Shortcuts",
-        archetype: "actions",
-        size: { default: { w: 4, h: 3 } },
-      })
-    ).toThrow(/requires a non-empty actions array/);
-  });
-
-  it("forbids actions on an archetype that cannot draw them", () => {
-    // The other direction, the same reading `component` takes: shortcuts on a
-    // metric describe something nothing will draw -- accepted at every layer,
-    // rendering nothing, reporting nothing.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/posts",
-        title: "Posts",
-        archetype: "metric",
-        size: { default: { w: 3, h: 2 } },
-        query: { source: "collection:posts", op: "count" },
-        actions: [{ label: "New post", href: "/admin/posts/new" }],
-      })
-    ).toThrow(/only valid for archetype "actions"/);
-  });
-
-  it("requires each shortcut to carry a label and an href", () => {
-    // Neither has a sensible default, and a blank one is a shortcut that looks
-    // broken rather than absent.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/shortcuts",
-        title: "Shortcuts",
-        archetype: "actions",
-        size: { default: { w: 4, h: 3 } },
-        actions: [{ label: "   ", href: "/admin/posts/new" }],
-      })
-    ).toThrow(/requires a non-empty label/);
-
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/shortcuts",
-        title: "Shortcuts",
-        archetype: "actions",
-        size: { default: { w: 4, h: 3 } },
-        actions: [{ label: "New post", href: "" }],
-      })
-    ).toThrow(/requires a non-empty href/);
-  });
-
-  it("accepts a well-formed actions widget", () => {
-    // The positive control. A validator that refused every actions widget would
-    // satisfy all three assertions above.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/shortcuts",
-        title: "Shortcuts",
-        archetype: "actions",
-        size: { default: { w: 4, h: 3 } },
-        actions: [
-          { label: "New post", href: "/admin/posts/new" },
-          {
-            label: "Docs",
-            href: "https://nextly.dev/docs",
-            external: true,
-            requiredPermission: "read-docs",
-          },
-        ],
-      })
-    ).not.toThrow();
-  });
-
-  it("still allows a query on the custom archetype", () => {
-    // The negative control, and the reason the forbidden set is named rather
-    // than inferred as "everything that is not a data archetype": `custom`
-    // draws itself and may legitimately want core to run its query.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/chart",
-        title: "Chart",
+        ...valid,
         archetype: "custom",
-        size: { default: { w: 4, h: 3 } },
         component: "pkg#Chart",
-        query: { source: "collection:posts", op: "count", limit: 5 },
       })
     ).not.toThrow();
   });
@@ -370,13 +205,8 @@ describe("a custom widget's component must be able to resolve", () => {
 });
 
 describe("defaultOrder places a widget without depending on which channel it came through", () => {
-  const base = {
-    id: "core/notes",
-    title: "Notes",
-    archetype: "text" as const,
-    size: { default: { w: 4, h: 3 } },
-    content: "Some notes.",
-  };
+  // A data widget as core publishes one, with no query riding with it.
+  const base = valid;
 
   it("accepts a definition that omits it", () => {
     // The control, and the compatibility bound: every widget that exists today
@@ -425,17 +255,6 @@ describe("every widget is framed", () => {
 
   it("accepts a widget that says nothing about its frame", () => {
     expect(() => validateWidgetDefinition(custom)).not.toThrow();
-  });
-
-  it("refuses a widget that names chrome, whatever its value", () => {
-    // The frame draws every card's header and every state, so no widget may
-    // decline it; a plain-JavaScript declaration that still names the field
-    // learns so at startup. Cast, because the field is no longer typed.
-    for (const chrome of ["none", "card", 42]) {
-      expect(() =>
-        validateWidgetDefinition({ ...custom, chrome } as never)
-      ).toThrow(/chrome is not a widget field/);
-    }
   });
 });
 
@@ -492,30 +311,31 @@ describe("a declared permission", () => {
     expect(widgetValueProblem({})).toBeUndefined();
   });
 
-  it("accepts an any-of list", () => {
+  it("accepts an anyOf gate", () => {
     expect(
       widgetValueProblem({
-        requiredPermission: [
-          "read-content-releases",
-          "create-content-releases",
-        ],
+        requiredPermission: {
+          anyOf: ["read-content-releases", "create-content-releases"],
+        },
       })
     ).toBeUndefined();
   });
 
   /*
-   * 🔴 The forms the array introduced, each refused for the same reason the
-   * object above is: they are PRESENT and unusable, and the gate reads an
-   * unusable declaration as a refusal. Admitting them here while the gate
-   * refuses them would hide a card with no error anywhere -- and admitting an
-   * empty array is worse than that, because "any of nothing" is satisfied by
-   * nobody, so `requiredPermission: []` would silently mean the opposite of
-   * what its author plainly wrote.
+   * 🔴 The forms an any-of group allows to go wrong, each refused for the same
+   * reason the object above is: they are PRESENT and unusable, and the gate
+   * reads an unusable declaration as a refusal. Admitting them here while the
+   * gate refuses them would hide a card with no error anywhere -- and admitting
+   * an empty `anyOf` is worse than that, because "any of nothing" is satisfied
+   * by nobody, so it would silently mean the opposite of what its author
+   * plainly wrote. A bare list is no gate at all: it reads as "any" to one
+   * author and "all" to the next.
    */
   it.each([
-    ["an empty array", []],
-    ["an array with an empty member", ["read-posts", ""]],
-    ["an array with a non-slug member", ["read-posts", 7]],
+    ["an empty anyOf", { anyOf: [] }],
+    ["an anyOf with an empty member", { anyOf: ["read-posts", ""] }],
+    ["an anyOf with a non-slug member", { anyOf: ["read-posts", 7] }],
+    ["a bare list", ["read-posts", "create-posts"]],
     ["an empty string", ""],
   ])("refuses %s", (_label, requiredPermission) => {
     expect(widgetValueProblem({ requiredPermission })).toMatch(
@@ -524,232 +344,23 @@ describe("a declared permission", () => {
   });
 });
 
-describe("a stats widget draws from cells, not from one query", () => {
-  const statsBase = {
-    id: "core/content-health",
-    title: "Content health",
-    archetype: "stats" as const,
-    size: { default: { w: 4, h: 3 } },
-  };
-  const cell = (key: string) => ({
-    key,
-    label: key,
-    query: { source: "collection:posts", op: "count" as const },
-  });
-
-  it("accepts a well-formed stats widget", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...statsBase, cells: [cell("a")] })
-    ).not.toThrow();
-  });
-
-  it("refuses a stats widget with no cells", () => {
-    // Every other archetype's "requires its body" rule, for the field that IS
-    // this one's body: a stats card without cells is a title over blank space.
-    expect(() => validateWidgetDefinition(statsBase)).toThrow(
-      /requires a non-empty cells/
-    );
-    expect(() => validateWidgetDefinition({ ...statsBase, cells: [] })).toThrow(
-      /requires a non-empty cells/
-    );
-  });
-
-  it("refuses cells on any OTHER archetype", () => {
-    // The direction that would otherwise pass silently: a `metric` carrying
-    // cells is an author who meant `stats`, and nothing would draw them.
-    expect(() =>
-      validateWidgetDefinition({ ...valid, cells: [cell("a")] })
-    ).toThrow(/only valid for archetype "stats"/);
-  });
-
-  it("refuses a top-level query on a stats widget, naming where it belongs", () => {
-    // 🔴 Refused with its OWN reason rather than the queryless one. `stats` is
-    // not queryless -- it takes MORE queries than any other archetype -- so a
-    // message saying it takes no data would send the author to delete the very
-    // thing the card is made of.
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [cell("a")],
-        query: { source: "collection:posts", op: "count" as const },
-      })
-    ).toThrow(/draws from cells, so it takes no top-level query/);
-  });
-
-  it("refuses a cell whose query is not a count", () => {
-    // 🔴 The card draws ONE number per cell and refuses any other result shape.
-    // A `list` here passes the container check, reaches a source that supports
-    // it, succeeds, and then renders a muted dash forever -- a declaration
-    // mistake wearing the appearance of unavailable data, which is the one
-    // reading nobody investigates.
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [
-          {
-            key: "a",
-            label: "A",
-            query: { source: "collection:posts", op: "list" },
-          },
-        ],
-      })
-    ).toThrow(/must be a "count" query/);
-  });
-
-  it("refuses two cells sharing a key", () => {
-    // 🔴 The card keys each answer back by `key`, so a duplicate collapses two
-    // cells into one answer: the same number drawn twice under two different
-    // labels, which no reader can detect.
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [cell("a"), cell("a")],
-      })
-    ).toThrow(/declare the key "a" more than once/);
-  });
-
-  it("refuses a cell link that cannot be followed", () => {
-    // 🔴 The admin hands `href` to `Link`, whose external-destination check
-    // calls `href.startsWith` -- so a blank or non-string href makes activating
-    // the number throw instead of navigating, in the one card whose whole point
-    // is navigating.
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [{ ...cell("a"), link: { label: "Go", href: "" } }],
-      })
-    ).toThrow(/link requires a non-empty href/);
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [{ ...cell("a"), link: { label: "  ", href: "/admin" } }],
-      })
-    ).toThrow(/link requires a non-empty label/);
-  });
-
-  it("accepts a cell with a usable link", () => {
-    // The control: a check that refused every link would satisfy both cases.
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [{ ...cell("a"), link: { label: "Go", href: "/admin" } }],
-      })
-    ).not.toThrow();
-  });
-
-  it("refuses more cells than one batch can afford", () => {
-    // Each cell is its own query, so an unbounded card would consume the whole
-    // request budget and darken every other widget on the dashboard.
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: Array.from({ length: 9 }, (_, i) => cell(`c${i}`)),
-      })
-    ).toThrow(/at most 8 cells/);
-  });
-
-  it("refuses a cell missing its label or its query", () => {
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [{ key: "a", label: "  ", query: { source: "x", op: "count" } }],
-      })
-    ).toThrow(/requires a non-empty label/);
-    expect(() =>
-      validateWidgetDefinition({
-        ...statsBase,
-        cells: [{ key: "a", label: "A" }],
-      })
-    ).toThrow(/requires a query object/);
-  });
-});
-
-describe("an archetype draws one kind of result", () => {
-  it("refuses a metric declared with a grouped query", () => {
-    // Registration is the last point an author can be told. Accepted, the card
-    // executes successfully and the admin's metric body replaces it with an
-    // "expected a count" error on every load -- a declaration mistake wearing
-    // the appearance of a broken server.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/x",
-        title: "X",
-        size: { default: { w: 6, h: 4 } },
-        archetype: "metric",
-        query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
-      })
-    ).toThrow(/cannot use op "groupBy"/);
-  });
-
-  it("refuses a list declared with a count", () => {
-    // The mirror, so the rule is not satisfied by refusing one op everywhere.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "core/x",
-        title: "X",
-        size: { default: { w: 6, h: 4 } },
-        archetype: "list",
-        query: { source: "collection:posts", op: "count" },
-      })
-    ).toThrow(/cannot use op "count"/);
-  });
-
-  it("leaves a custom widget free to draw whatever its component draws", () => {
-    // The flexibility that archetype exists for: its component receives the
-    // result whole, so constraining the op here would be this file guessing at
-    // a plugin's intent.
-    expect(() =>
-      validateWidgetDefinition({
-        id: "plugin/x",
-        title: "X",
-        size: { default: { w: 6, h: 4 } },
-        archetype: "custom",
-        component: "plugin/x/Body",
-        query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
-      })
-    ).not.toThrow();
-  });
-});
-
-describe("a widget whose data core builds on the server", () => {
-  const { query: _query, ...noQuery } = valid;
-  const built = { ...noQuery, serverData: true as const };
-
-  it("carries no query, which its data archetype would otherwise require", () => {
-    expect(() => validateWidgetDefinition(built)).not.toThrow();
-    // The control: the same definition without the mark still needs its query.
-    expect(() => validateWidgetDefinition(noQuery)).toThrow(/requires a query/);
-  });
-
-  it("is refused beside a query, which would be a second answer to what the card shows", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...built, query: valid.query })
-    ).toThrow(/built on the server takes no query/);
-  });
-
-  it("is a mark, and only true marks it", () => {
-    for (const value of [false, "yes", 1]) {
-      expect(() =>
-        validateWidgetDefinition({ ...built, serverData: value })
-      ).toThrow(/serverData may only be true/);
-    }
-  });
-
-  it("alone may carry an empty state's words and action, which core publishes from its declaration", () => {
+describe("a widget's empty state and settings", () => {
+  it("may carry an empty state's words and action, which core publishes from its declaration", () => {
     const empty = {
       message: "No orders yet",
       action: { label: "Add", link: "collections/orders" },
     };
-    expect(() => validateWidgetDefinition({ ...built, empty })).not.toThrow();
-    expect(() => validateWidgetDefinition({ ...valid, empty })).toThrow(
-      /empty is published by core for a declared widget only/
-    );
+    expect(() => validateWidgetDefinition({ ...valid, empty })).not.toThrow();
+    // Its shape is still judged: a message that is only spaces is not text.
     expect(() =>
-      validateWidgetDefinition({ ...built, empty: { message: "  " } })
-    ).toThrow(/not text/);
+      validateWidgetDefinition({ ...valid, empty: { message: "  " } })
+    ).toThrow(/empty has a message or an action that is not text/);
   });
 
-  it("may hold a content setting, which a widget with its own query may not", () => {
+  it("may hold content settings, which reach its declaration's load", () => {
+    // Every published widget is answered by its declaration's `load`, which
+    // reads its settings as it chooses, so a Collection setting and a filter
+    // on it are judged as core's own query reads them and admitted.
     const collection = {
       name: "collection",
       label: "Collection",
@@ -761,19 +372,9 @@ describe("a widget whose data core builds on the server", () => {
       type: "filter",
       of: "collection",
     };
-    // The widget whose data core builds holds them. One with its own query
-    // over a source no content knob drives, a system source, may not: there
-    // they would change nothing its card asks.
     expect(() =>
-      validateWidgetDefinition({ ...built, settings: [collection, filter] })
+      validateWidgetDefinition({ ...valid, settings: [collection, filter] })
     ).not.toThrow();
-    expect(() =>
-      validateWidgetDefinition({
-        ...valid,
-        query: { ...valid.query, source: "system:releases" },
-        settings: [collection, filter],
-      })
-    ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
   });
 });
 
@@ -800,148 +401,25 @@ describe("a widget's add panel terms", () => {
   });
 });
 
-describe("a query whose source a Collection setting supplies", () => {
-  const { source: _declared, ...sourceless } = valid.query;
+describe("an offered mode", () => {
   const collection = { name: "collection", type: "collection" as const };
 
-  it("registers with no source of its own beside a Collection setting", () => {
+  it("registers a widget offered per collection beside its Collection setting", () => {
     expect(() =>
       validateWidgetDefinition({
         ...valid,
         offered: "per-collection",
         settings: [collection],
-        query: sourceless,
       })
     ).not.toThrow();
-  });
-
-  it("is refused with no source and nothing to supply one", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...valid, query: sourceless })
-    ).toThrow(/names no source, and no Collection setting supplies one/);
-  });
-
-  it("reads its declared source until the Collection setting is set", () => {
-    // The declared source is the card's collection until its reader picks one,
-    // so a definition may state both.
-    expect(() =>
-      validateWidgetDefinition({ ...valid, settings: [collection] })
-    ).not.toThrow();
-  });
-});
-
-describe("a custom card's cells", () => {
-  const collection = { name: "collection", type: "collection" as const };
-  const card = {
-    id: "core/count",
-    title: "Count",
-    archetype: "custom" as const,
-    component: "core#Count",
-    size: { default: { w: 3, h: 2 } },
-  };
-  const split = {
-    key: "split",
-    query: {
-      op: "groupBy" as const,
-      groupBy: "status",
-      status: "all" as const,
-    },
-  };
-  const trend = {
-    key: "trend",
-    query: {
-      op: "timeseries" as const,
-      dateField: "createdAt",
-      interval: "day" as const,
-    },
-  };
-
-  it("registers keyed reads whose source the Collection setting supplies", () => {
-    expect(() =>
-      validateWidgetDefinition({
-        ...card,
-        offered: "per-collection",
-        settings: [collection],
-        cells: [split, trend],
-      })
-    ).not.toThrow();
-  });
-
-  it("refuses two cells under one key", () => {
-    expect(() =>
-      validateWidgetDefinition({
-        ...card,
-        settings: [collection],
-        cells: [split, { ...trend, key: "split" }],
-      })
-    ).toThrow(/declare the key "split" more than once/);
-  });
-
-  it("refuses a custom card asking through both a query and cells", () => {
-    expect(() =>
-      validateWidgetDefinition({
-        ...card,
-        settings: [collection],
-        query: { op: "count" as const },
-        cells: [split],
-      })
-    ).toThrow(/asks through its query or its cells, not both/);
   });
 
   it("refuses a widget offered per collection that declares no Collection setting", () => {
     // Its add-panel rows each start a card set to a collection; with no such
     // setting it could be added nowhere.
     expect(() =>
-      validateWidgetDefinition({
-        ...card,
-        offered: "per-collection",
-        cells: [
-          { ...split, query: { ...split.query, source: "collection:posts" } },
-        ],
-      })
+      validateWidgetDefinition({ ...valid, offered: "per-collection" })
     ).toThrow(/offered per collection needs a Collection setting/);
-  });
-
-  it("refuses a content setting no cell's source lets a knob drive", () => {
-    // 🔴 Judged as a query a Collection setting supplies, these would be drawn
-    // and saved while every cell reads releases, which no content knob drives.
-    const filter = {
-      name: "filter",
-      type: "filter" as const,
-      of: "collection",
-    };
-    const releases = {
-      key: "releases",
-      query: { source: "system:releases", op: "count" as const },
-    };
-    expect(() =>
-      validateWidgetDefinition({
-        ...card,
-        settings: [collection, filter],
-        cells: [releases, { ...releases, key: "more" }],
-      })
-    ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
-  });
-
-  it("admits a content setting one cell's source lets a knob drive", () => {
-    const filter = {
-      name: "filter",
-      type: "filter" as const,
-      of: "collection",
-    };
-    expect(() =>
-      validateWidgetDefinition({
-        ...card,
-        settings: [collection, filter],
-        cells: [
-          split,
-          {
-            key: "releases",
-            query: { source: "system:releases", op: "count" as const },
-          },
-        ],
-      })
-    ).not.toThrow();
   });
 
   it("refuses an offered mode it does not know", () => {
@@ -949,64 +427,11 @@ describe("a custom card's cells", () => {
     // no collection to read.
     expect(() =>
       validateWidgetDefinition({
-        ...card,
+        ...valid,
         offered: "per-colletion" as "per-collection",
-        cells: [
-          { ...split, query: { ...split.query, source: "collection:posts" } },
-        ],
       })
     ).toThrow(
       /has offered "per-colletion", which is not one of per-collection, on-request/
     );
-  });
-
-  it("refuses a cell with no source and nothing to supply one", () => {
-    expect(() => validateWidgetDefinition({ ...card, cells: [split] })).toThrow(
-      /its cell "split" names no source, and no Collection setting supplies one/
-    );
-  });
-});
-
-describe("a limit setting beside a ranged query", () => {
-  // The rule refuses exactly the setting the limit knob would apply: one test
-  // of what a limit setting is, read by both, so the two cannot part.
-  it.each([
-    [{ name: "limit", type: "number" as const, label: "Limit" }, 3],
-    [{ name: "limit", type: "text" as const, label: "Limit" }, "3"],
-    [{ name: "items", type: "number" as const, label: "Items" }, 3],
-  ])("refuses %o exactly when the limit knob applies it", (setting, value) => {
-    const applied = applyWidgetSettings(
-      { source: "collection:posts", op: "list" as const },
-      [setting],
-      { [setting.name]: value }
-    );
-    const refused = rangedLimitSettingProblem({
-      query: {
-        source: "collection:posts",
-        op: "timeseries",
-        dateField: "createdAt",
-        range: "30d",
-      },
-      settings: [setting],
-    });
-    expect(refused !== undefined).toBe("limit" in applied);
-  });
-
-  it("is refused at registration, naming the widget", () => {
-    expect(() =>
-      validateWidgetDefinition({
-        id: "acme/over-time",
-        title: "Over time",
-        archetype: "timeseries",
-        size: { default: { w: 4, h: 3 } },
-        query: {
-          source: "collection:posts",
-          op: "timeseries",
-          dateField: "createdAt",
-          range: "30d",
-        },
-        settings: [{ name: "limit", type: "number", label: "Limit" }],
-      })
-    ).toThrow(/acme\/over-time: declares a "limit" setting/);
   });
 });

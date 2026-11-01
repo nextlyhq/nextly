@@ -27,8 +27,12 @@ import {
   vi,
 } from "vitest";
 
-import { CORE_WIDGETS } from "../domains/widgets/core-widgets";
-import { clearWidgets, registerWidget } from "../domains/widgets/registry";
+import { CORE_WIDGET_IDS } from "../domains/widgets/core-widgets";
+import {
+  clearWidgets,
+  getWidget,
+  registerWidget,
+} from "../domains/widgets/registry";
 import { createDynamicHandlers } from "../routeHandler";
 import { sanitizeConfig } from "../shared/types/config";
 
@@ -81,7 +85,6 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         title: "Revenue",
         archetype: "metric",
         size: { default: { w: 3, h: 2 } },
-        query: { source: "collection:orders", op: "count" },
       },
       { source: "@acme/stripe" }
     );
@@ -100,7 +103,6 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         title: "Revenue",
         archetype: "metric",
         size: { default: { w: 3, h: 2 } },
-        query: { source: "collection:orders", op: "count" },
       })
     );
 
@@ -110,11 +112,24 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
     // grant at all, so the core cards with a gate are withheld, exactly as the
     // layout endpoint would withhold them: a declaration ships to a reader only
     // when the reader may see the card.
-    const gated = CORE_WIDGETS.filter(
+    // Core's cards as core published them from their declarations.
+    const core = CORE_WIDGET_IDS.flatMap(id => {
+      const widget = getWidget(id);
+      return widget === undefined ? [] : [widget];
+    });
+    expect(core.map(widget => widget.id)).toEqual([...CORE_WIDGET_IDS]);
+    const gated = core.filter(
       widget => widget.requiredPermission !== undefined
     );
-    const open = CORE_WIDGETS.filter(
-      widget => widget.requiredPermission === undefined
+    // Setup and System health are left out of the open set: each is judged
+    // per reader by its own rule (Setup's `shows`, System health's super-admin
+    // predicate), not by a gate, so whether this reader is sent them is
+    // theirs to answer.
+    const judgedPerReader = new Set(["core/setup", "core/system-health"]);
+    const open = core.filter(
+      widget =>
+        widget.requiredPermission === undefined &&
+        !judgedPerReader.has(widget.id)
     );
     expect(gated.map(widget => widget.id)).toEqual([
       "core/team",

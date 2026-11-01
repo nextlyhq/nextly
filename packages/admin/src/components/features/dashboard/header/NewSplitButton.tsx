@@ -3,7 +3,8 @@
 /**
  * The dashboard header's New split button, fed by what the reader may create,
  * the types they created last (kept on the server, so every device agrees) and
- * the sidebar's own order.
+ * what the sidebar orders by: the branding, the reader's capabilities and
+ * their pins. Not the sidebar's list itself, which is one page of collections.
  *
  * @module components/features/dashboard/header/NewSplitButton
  */
@@ -12,7 +13,8 @@ import type { JSX } from "react";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDashboardNewTypes } from "@admin/hooks/queries/useDashboardNewTypes";
 import { useCreatableCollections } from "@admin/hooks/useCreatableCollections";
-import { useSidebarCollectionList } from "@admin/hooks/useSidebarContentLists";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useSidebarCollectionPins } from "@admin/hooks/useSidebarContentLists";
 
 import { newMenu } from "./new-menu-model";
 import {
@@ -26,14 +28,15 @@ export function NewSplitButton(): JSX.Element | null {
   // in sidebar order: recent types are a convenience, never a gate.
   const { data: recentSlugs, isPending: recentPending } =
     useDashboardNewTypes();
-  const { items: sidebarCollections } = useSidebarCollectionList();
+  const { capabilities } = useCurrentUserPermissions();
+  const { pinned } = useSidebarCollectionPins();
   const branding = useBranding();
   const menu = newMenu({
     creatable: collections,
     recentSlugs: recentSlugs ?? [],
-    sidebarCollections,
-    customGroups: branding?.customGroups,
-    plugins: branding?.plugins,
+    branding,
+    capabilities,
+    pinnedCollections: pinned,
   });
   // Until what New leads with is known (the types the reader may create, and
   // the ones they made last), its place is held at its own size, so it is

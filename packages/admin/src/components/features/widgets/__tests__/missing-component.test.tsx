@@ -39,7 +39,6 @@ const declared: DashboardWidget = {
   size: gridBounds(4),
   component: PATH,
   owner: 'plugin "@acme/shop"',
-  serverData: true,
 };
 
 const answered: WidgetSlot = { ok: true, result: { op: "data", data: 1 } };
@@ -120,22 +119,6 @@ describe("a card whose component the admin does not hold", () => {
     expect(error).toHaveTextContent(COMPONENT_MISSING);
     expect(error).not.toHaveTextContent(PATH);
     expect(error).not.toHaveTextContent("acme/shop");
-  });
-
-  it("draws its error in place of a component that draws without an answer, too", () => {
-    // A custom card with no query: its component draws without one.
-    const selfDrawn: DashboardWidget = {
-      id: declared.id,
-      title: declared.title,
-      archetype: "custom",
-      size: declared.size,
-      component: PATH,
-    };
-    render(<WidgetRenderer definition={selfDrawn} slot={undefined} />);
-    expect(screen.getByRole("region", { name: "Revenue" })).toHaveAttribute(
-      "data-state",
-      "error"
-    );
   });
 
   it("says first that the reader may not see it, before any word about its component", () => {

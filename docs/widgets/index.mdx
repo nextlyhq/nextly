@@ -76,10 +76,10 @@ state but ready either way: loading, empty, not available and error. See
 [Plugin admin UI](/docs/plugins/admin-ui#dashboard-widgets) for both, and for the props a
 component is handed.
 
-There is no core view for a column of shortcuts, for prose, or for several numbers in one card,
-which the older contribution shape drew as its `actions`, `text` and `stats` archetypes. A
-declared widget draws one of those with its own component. `access` gates the whole card:
-nothing in a declaration gates one item inside it.
+There is no core view for a column of shortcuts, for prose, or for several numbers in one card.
+A widget declared with `defineWidget` draws one of those with its own component,
+`view: { component }`, handed its `load`'s data. `access` gates the whole card: nothing in a
+declaration gates one item inside it.
 
 A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
 from 1 to 12 columns and `h` from 2 to 12 rows. It declares the size a card starts at and, if it

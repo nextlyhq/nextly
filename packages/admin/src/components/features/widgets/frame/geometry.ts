@@ -13,7 +13,7 @@
 
 import type { ListDensity } from "nextly/config";
 
-/** A figure: a metric's number, a stats cell's value. One line, as tall as its type. */
+/** A figure: a metric's number, a count card's count. One line, as tall as its type. */
 export const FIGURE_VALUE_CLASS =
   "text-2xl font-bold leading-none tabular-nums tracking-tight";
 
@@ -72,13 +72,3 @@ export const TABLE_HEAD_ROW_CLASS = "align-bottom";
 
 /** A table's body row, ruled above, as a list's rows are divided. */
 export const TABLE_ROW_CLASS = "border-t border-border";
-
-/** A stats card's cells, as many to a row as fit. */
-export const STATS_GRID_CLASS =
-  "grid grid-cols-[repeat(auto-fit,minmax(6.5rem,1fr))] gap-4";
-
-/** One stats cell: its value, then its label. */
-export const STATS_CELL_CLASS = "flex flex-col gap-1";
-
-/** A stats cell's label line. Its weight is the cell's to choose; only its type sets its height. */
-export const STATS_LABEL_CLASS = "text-xs";

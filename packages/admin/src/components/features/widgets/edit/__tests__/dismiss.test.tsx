@@ -2,8 +2,8 @@
  * Sending a card away from the card itself, outside customise mode, and
  * taking that back.
  *
- * Remove in every card's menu at rest is the reader's dismissal of it, whether
- * or not its widget declared `dismissible`: it commits on its own, because the
+ * Remove in every card's menu at rest is the reader's dismissal of it, for
+ * every card alike: it commits on its own, because the
  * editor's mutations write to a draft that does not exist there, as a write
  * that does not arrange the dashboard, so a reader on the default stays on it.
  * It leaves the same notice a Remove in customise mode does, and its Undo
@@ -21,6 +21,7 @@ import {
   WelcomeHeader,
 } from "@admin/components/features/dashboard/WelcomeHeader";
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 import type { AdminBranding } from "@admin/types/branding";
 import type {
   DashboardLayoutResponse,
@@ -103,7 +104,11 @@ vi.mock("@admin/components/ui", async importOriginal => ({
 
 const api = vi.mocked(protectedApi);
 
-/** Two cards, only the first of which its author said may be sent away. */
+// The cards' own component, so each card draws its answer rather than a missing component's
+// error, which the grid would count as a failure.
+registerCoreComponent("core#Whatever", () => <p>Body</p>);
+
+/** Two cards, each of which a reader may send away from its menu. */
 function branding(
   patch: Record<string, Record<string, unknown>> = {}
 ): AdminBranding {
@@ -115,7 +120,6 @@ function branding(
         archetype: "custom",
         size: { default: { w: 12, h: 3 } },
         component: "core#Whatever",
-        dismissible: true,
         ...patch["core/onboarding"],
       },
       {
@@ -198,6 +202,16 @@ beforeEach(() => {
         : layoutResponse
     )
   );
+  // Every card is asked for by its id; each is answered, so its component draws and its menu
+  // holds nothing a failed card would add.
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    Promise.resolve({
+      results: (body as { queries: unknown[] }).queries.map(() => ({
+        ok: true,
+        result: { op: "data", data: null },
+      })),
+    })
+  );
   /*
    * 🔴 The stand-in APPLIES the write, so the next read answers with it. A
    * `put` that merely resolves leaves every later GET returning the original
@@ -246,7 +260,7 @@ async function removeFromMenu(
 }
 
 describe("the control a card carries itself", () => {
-  it("is Remove in every card's menu, dismissible or not, without entering customise mode", async () => {
+  it("is Remove in every card's menu, without entering customise mode", async () => {
     const user = userEvent.setup();
     renderGrid();
     for (const title of ["Set up your project", "Collections"]) {
@@ -266,19 +280,16 @@ describe("the control a card carries itself", () => {
     api.get.mockImplementation(() =>
       Promise.reject(new Error("layout unavailable"))
     );
+    const user = userEvent.setup();
     renderGrid();
 
-    // The card itself MUST be drawn, or the absence below is satisfied by a
-    // grid that rendered nothing at all.
-    await waitFor(() =>
-      expect(screen.getByTestId("widget-cell-core/onboarding")).toBeVisible()
-    );
-    // Its menu would hold Remove alone, so it is not drawn at all.
+    // The menu is drawn for the card's Refresh, so the absence of Remove
+    // below is not satisfied by a card that drew no menu at all.
+    const menu = await openMenu(user);
     expect(
-      screen.queryByRole("button", {
-        name: "Card menu for Set up your project",
-      })
-    ).toBeNull();
+      within(menu).getByRole("menuitem", { name: /Refresh/ })
+    ).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Remove" })).toBeNull();
   });
 
   it("gives way to the customise menu while customising", async () => {
@@ -303,7 +314,7 @@ describe("the control a card carries itself", () => {
 });
 
 describe("what a dismiss writes", () => {
-  it("marks a dismissible card removed, carrying the read's own guards, as NOT an arrangement", async () => {
+  it("marks a card removed, carrying the read's own guards, as NOT an arrangement", async () => {
     const user = userEvent.setup();
     renderGrid();
     await removeFromMenu(user);
@@ -365,7 +376,7 @@ describe("what a dismiss writes", () => {
   });
 });
 
-describe("Remove for a card that never declared itself dismissible", () => {
+describe("Remove for a second card", () => {
   it("is the same dismissal: marked removed, nothing dropped, NOT an arrangement", async () => {
     const user = userEvent.setup();
     renderGrid();
@@ -478,6 +489,21 @@ describe("a card dismissed from the default dashboard", () => {
 });
 
 describe("the notice a dismiss leaves", () => {
+  beforeEach(() => {
+    // The dashboard's first batch answers; any batch after it stays on its way, so the grid's
+    // live region says only what the dismiss did, never a later batch's news beside it.
+    api.post.mockImplementation((_path: string, body: unknown) =>
+      api.post.mock.calls.length > 1
+        ? new Promise(() => undefined)
+        : Promise.resolve({
+            results: (body as { queries: unknown[] }).queries.map(() => ({
+              ok: true,
+              result: { op: "data", data: null },
+            })),
+          })
+    );
+  });
+
   it("says the card was removed once it has actually gone, and offers Undo", async () => {
     const user = userEvent.setup();
     renderGrid();
@@ -563,7 +589,8 @@ describe("the notice a dismiss leaves", () => {
         "Set up your project was updated, but the dashboard could not be refreshed. Reload the page to see it."
       )
     );
-    expect(live()).toHaveTextContent("");
+    // The region says only the batch's own news, nothing of a removal that did not show.
+    expect(live()).not.toHaveTextContent(/removed/i);
     expect(screen.queryByTestId("removal-notice")).toBeNull();
   });
 
@@ -578,7 +605,8 @@ describe("the notice a dismiss leaves", () => {
         "Could not dismiss Set up your project: version conflict"
       )
     );
-    expect(live()).toHaveTextContent("");
+    // The region says only the batch's own news, nothing of a removal that did not happen.
+    expect(live()).not.toHaveTextContent(/removed/i);
   });
 });
 

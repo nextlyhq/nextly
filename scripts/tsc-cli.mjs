@@ -9,12 +9,14 @@
 // answer, and a failed run that printed none could not be asked.
 //
 // `NEXTLY_TSC` names another `tsc` entry script to run these checks with, such
-// as TypeScript 7's while the repository still installs 5.x.
+// as a 5.x compiler's, to compare the two.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+
+import { localLimits } from "./local-limits.mjs";
 
 /** The `tsc` entry script: `NEXTLY_TSC`, or the one the installed `typescript` declares. */
 export function tscEntry() {
@@ -27,8 +29,48 @@ export function tscEntry() {
 }
 
 /**
+ * The `--checkers` a type-checking `tsc` run is given: as many of TypeScript
+ * 7's parallel checkers as `local-limits.mjs` says this machine should run.
+ *
+ * The one place it is spelled, for `scripts/tsc.mjs`, which every
+ * `check-types` runs, and for `compile()` below, which tests run. Left out, the
+ * compiler takes its own default of four, its 5.5 GB setting on nextly, which a
+ * test once started beside two test workers on an 8 GB machine.
+ *
+ * Only TypeScript 7 has the option: a 5.x compiler named by `NEXTLY_TSC`
+ * refuses it (TS5023) and checks nothing, so below 7 there is none to give,
+ * and 5.x checks on one thread anyway.
+ *
+ * @param {{ checkers: number }} [limits]
+ * @param {number} [compilerMajor] the major version of the `tsc` that runs
+ */
+export function checkerArgs(
+  limits = localLimits(),
+  compilerMajor = tscMajor()
+) {
+  if (compilerMajor < 7) return [];
+  return ["--checkers", String(limits.checkers)];
+}
+
+/**
+ * What a `tsc` run ended by a signal is reported as. A compiler the kernel
+ * stopped for memory prints nothing, and its exit read as a plain failure
+ * looks like a type error that is not there.
+ *
+ * @param {string} signal
+ * @param {number} checkers
+ */
+export function killedMessage(signal, checkers) {
+  return (
+    `tsc was killed by ${signal} (out of memory?), running ${checkers} ` +
+    "type-checking worker(s). NEXTLY_LOCAL_MAX_WORKERS=1 runs one, on less memory."
+  );
+}
+
+/**
  * Runs `tsc` with `args` from `cwd`, through this Node so it starts the same
- * way on every platform, and returns its exit status and everything it printed.
+ * way on every platform, and returns its exit status, the signal that ended it
+ * if one did, and everything it printed.
  */
 function runTsc(args, cwd) {
   const result = spawnSync(process.execPath, [tscEntry(), ...args], {
@@ -39,6 +81,7 @@ function runTsc(args, cwd) {
   if (result.error) throw result.error;
   return {
     status: result.status,
+    signal: result.signal,
     output: `${result.stdout ?? ""}${result.stderr ?? ""}`,
   };
 }
@@ -100,13 +143,26 @@ export function diagnosticsIn(output) {
  *
  * `--incremental false` because the shared base config turns incremental on:
  * a build-info file another program wrote answers from that program's state,
- * and an error count read from it can be stale.
+ * and an error count read from it can be stale. The checkers are this
+ * machine's (`checkerArgs`), as every `check-types` run's are.
  */
 export function compile(args, cwd) {
-  const { status, output } = runTsc(
-    ["--noEmit", "--incremental", "false", "--pretty", "false", ...args],
+  const limits = localLimits();
+  const { status, signal, output } = runTsc(
+    [
+      "--noEmit",
+      "--incremental",
+      "false",
+      "--pretty",
+      "false",
+      ...checkerArgs(limits),
+      ...args,
+    ],
     cwd
   );
+  if (signal) {
+    throw new Error(`${killedMessage(signal, limits.checkers)}\n${output}`);
+  }
   const diagnostics = diagnosticsIn(output);
   if (status !== 0 && diagnostics.length === 0) {
     throw new Error(

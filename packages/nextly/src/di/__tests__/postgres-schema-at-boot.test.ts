@@ -38,6 +38,18 @@ vi.mock("../../domains/schema/pipeline/fresh-push", async () => {
   };
 });
 
+/**
+ * First-run sets up under the schema lock, which the thin adapter below cannot hold. Run the work
+ * directly: what this file asserts is the order of publishing and pushing, not the exclusion,
+ * which `init/__tests__/first-run-concurrent.integration.test.ts` covers on a real database.
+ */
+vi.mock("../../domains/schema/pipeline/schema-lock", () => ({
+  withSchemaLock: async (_options: unknown, work: () => Promise<unknown>) => ({
+    ran: true,
+    value: await work(),
+  }),
+}));
+
 const { registerServices } = await import("../register");
 const {
   activePostgresSchema,

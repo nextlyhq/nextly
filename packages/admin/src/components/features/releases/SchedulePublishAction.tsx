@@ -31,7 +31,9 @@ import {
   SCHEDULE_PUBLISH_LABEL,
   schedulePublishRefusal,
 } from "./schedule-publish";
+import type { SchedulePublishDialogProps } from "./SchedulePublishDialog";
 import { useOpenForDocument } from "./useOpenForDocument";
+import { useSchedulingInFlight } from "./useSchedulingInFlight";
 
 const SchedulePublishDialog = lazy(() =>
   import("./SchedulePublishDialog").then(module => ({
@@ -89,6 +91,11 @@ export function useSchedulePublishAction({
   // Open only for the document it was opened for, and closed by leaving it.
   const documentKey = `${scopeKind}:${scopeSlug}:${entryId}`;
   const { open, setOpen } = useOpenForDocument(documentKey);
+  const { inFlight: scheduling, inFlightNow } = useSchedulingInFlight({
+    scopeKind,
+    scopeSlug,
+    entryId,
+  });
   // Each opening starts afresh: a new key mounts a new form.
   const [opening, setOpening] = useState(0);
   // Where focus goes back to when the dialog closes.
@@ -101,6 +108,7 @@ export function useSchedulePublishAction({
   }
 
   const disabledReason = schedulePublishRefusal({
+    scheduling,
     canSchedule: canCreateReleases && canScheduleReleases,
     canPublish: canPublishDocument,
     onDefaultLocale,
@@ -115,9 +123,10 @@ export function useSchedulePublishAction({
     },
     binding: {
       onSelect: edited => {
-        // Already open: a second form over the first would be a second
-        // request while the first may still be out.
-        if (open) return;
+        // Already open, or a request for this document still out, sent
+        // from a dialog a move away and back has since closed: a second form
+        // would be a second request while the first may still be out.
+        if (open || inFlightNow()) return;
         setOpener(dialogOpenerOf(globalThis.document?.activeElement ?? null));
         setTitle(documentTitle(edited));
         setOpening(count => count + 1);
@@ -126,21 +135,31 @@ export function useSchedulePublishAction({
     },
   };
 
-  // Not mounted, and so not loaded, until somebody first asks for it.
-  const dialog =
-    opening === 0 ? null : (
-      <Suspense fallback={null}>
-        <SchedulePublishDialog
-          key={opening}
-          open={open}
-          onOpenChange={setOpen}
-          document={{ scopeKind, scopeSlug, entryId }}
-          documentTitle={title}
-          savesGoLive={savesGoLive}
-          opener={opener}
-        />
-      </Suspense>
-    );
+  const dialog = dialogFor(opening, {
+    open,
+    onOpenChange: setOpen,
+    document: { scopeKind, scopeSlug, entryId },
+    documentTitle: title,
+    savesGoLive,
+    opener,
+  });
 
   return { contributed, dialog };
+}
+
+/**
+ * The dialog for the `opening`th time the action was chosen. Not mounted, and
+ * so not loaded, until somebody first asks for it; each opening is keyed
+ * apart, so it starts afresh.
+ */
+function dialogFor(
+  opening: number,
+  props: SchedulePublishDialogProps
+): ReactNode {
+  if (opening === 0) return null;
+  return (
+    <Suspense fallback={null}>
+      <SchedulePublishDialog key={opening} {...props} />
+    </Suspense>
+  );
 }

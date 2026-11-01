@@ -1,7 +1,8 @@
 /**
- * A card core answers on the server: one whose widget declares its own data, so
- * the admin holds no query for it. What the admin carries from the declaration,
- * how it reads the answer, and the empty state drawn in the widget's words.
+ * A card core answers on the server, as every card is: its widget declares its
+ * own data, so the admin holds no query for it. What the admin carries from the
+ * declaration, how it reads the answer, and the empty state drawn in the
+ * widget's words.
  */
 import { describe, expect, it } from "vitest";
 
@@ -48,7 +49,6 @@ const declared: DashboardWidget = {
   title: "Open orders",
   archetype: "list",
   size: gridBounds(12, 4),
-  serverData: true,
   declaredEmpty: { title: "No open orders", action: createOrder },
 };
 
@@ -65,15 +65,13 @@ const markedEmpty = (items: Record<string, unknown>[]): WidgetSlot => ({
 });
 
 describe("what the admin carries from a declaration core answers", () => {
-  it("marks it as answered on the server and draws its empty state's link under the admin", () => {
+  it("draws its empty state's link under the admin", () => {
     const widget = registered({
-      serverData: true,
       empty: {
         message: "No open orders",
         action: { label: "Create an order", link: "collections/orders" },
       },
     });
-    expect(widget.serverData).toBe(true);
     expect(widget.declaredEmpty).toEqual({
       title: "No open orders",
       action: {
@@ -85,7 +83,6 @@ describe("what the admin carries from a declaration core answers", () => {
 
   it("keeps the declared words and drops an action whose link leaves the admin", () => {
     const widget = registered({
-      serverData: true,
       empty: {
         message: "No open orders",
         action: { label: "Elsewhere", link: "//example.com" },
@@ -96,7 +93,6 @@ describe("what the admin carries from a declaration core answers", () => {
 
   it("carries an action that opens the card's settings as one, with no link to make", () => {
     const widget = registered({
-      serverData: true,
       empty: {
         message: "Nothing written yet.",
         action: { label: "Write a note", opens: "settings" },
@@ -111,21 +107,15 @@ describe("what the admin carries from a declaration core answers", () => {
   it("carries neither for a widget that declares neither", () => {
     // The control: a resolver that set both on every widget would satisfy the
     // two cases above.
-    const widget = registered({
-      query: { source: "collection:orders", op: "list" },
-    });
-    expect(widget.serverData).toBeUndefined();
+    const widget = registered({});
     expect(widget.declaredEmpty).toBeUndefined();
   });
 });
 
 describe("a card core answers, as the frame draws it", () => {
   it("is loading, not refused, while its answer is on its way", () => {
-    // It has no query by design, which for any other card means "this widget
-    // declares none" and fails.
+    // It has no query by design: every card is asked for by its id.
     expect(resolveWidgetOutcome(declared, undefined).state).toBe("loading");
-    const { serverData: _, ...asked } = declared;
-    expect(resolveWidgetOutcome(asked, undefined).state).toBe("failed");
   });
 
   it("draws the widget's empty state when the server says its empty test held, rows or none", () => {
@@ -194,29 +184,10 @@ describe("a card core answers, as the frame draws it", () => {
 
 describe("what a card core answers asks with", () => {
   it("asks again for a change of its settings, which core builds its data from", () => {
-    const before = questionOf(declared, { items: 5 });
-    expect(questionOf(declared, { items: 5 })).toBe(before);
-    expect(questionOf(declared, { items: 7 })).not.toBe(before);
-    expect(questionOf(declared, undefined)).toBe(questionOf(declared, {}));
-  });
-});
-
-describe("what a card that asks through its cells asks with", () => {
-  it("asks again when its Collection setting changes, though it has no query of its own", () => {
-    // A Count card's numbers come from its cells, each with no source until
-    // its Collection setting supplies one: a change of collection is a new
-    // question even though the card declares no top-level query.
-    const count = {
-      id: "core/count",
-      title: "Count",
-      archetype: "custom",
-      component: "core#Count",
-      settings: [{ name: "collection", type: "collection" }],
-      cells: [{ key: "total", query: { op: "count", status: "all" } }],
-    } as unknown as DashboardWidget;
-    const posts = questionOf(count, { collection: "posts" });
-    expect(questionOf(count, { collection: "posts" })).toBe(posts);
-    expect(questionOf(count, { collection: "pages" })).not.toBe(posts);
+    const before = questionOf({ items: 5 });
+    expect(questionOf({ items: 5 })).toBe(before);
+    expect(questionOf({ items: 7 })).not.toBe(before);
+    expect(questionOf(undefined)).toBe(questionOf({}));
   });
 });
 

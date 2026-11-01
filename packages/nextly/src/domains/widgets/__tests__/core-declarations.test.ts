@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
 import * as loggerModule from "../../../observability/logger";
 import { IN_RELEASE_KEY } from "../../collections/query/reserved-filter-keys";
-import { addPanelFacts } from "../add-panel";
 import { allWidgets, sizeFacts } from "../canonical";
 import { rowsThatFit } from "../card-geometry";
 import { breakdownWidget } from "../core-widgets/breakdown";
@@ -27,6 +26,7 @@ import {
   resolveCardSettings,
   unsetSetting,
 } from "../declaration/card-settings";
+import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import type {
   WidgetCollectionDescription,
   WidgetLoadSize,
@@ -194,17 +194,19 @@ describe("core's declared cards", () => {
     for (const widget of declared) {
       expect(getWidget(widget.id), widget.id).toMatchObject({
         archetype: "custom",
-        serverData: true,
       });
+      // Answered on the server from the declaration core keeps for it.
+      expect(declaredWidget(widget.id)?.owner, widget.id).toBe(CORE_OWNER);
     }
   });
 
-  it("sketches each one's add-panel row by the skeleton it states", () => {
+  it("publishes each one's loading shape by the skeleton it states", () => {
     resetWidgetRegistries([]);
+    // The registry's `sketch`, which the card's skeleton is drawn as.
     const sketches = Object.fromEntries(
       allWidgets()
         .filter(widget => declared.some(each => each.id === widget.id))
-        .map(widget => [widget.id, addPanelFacts(widget).sketch])
+        .map(widget => [widget.id, widget.sketch])
     );
     expect(sketches).toEqual({
       "core/count": "metric",

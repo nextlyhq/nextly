@@ -6,35 +6,29 @@
  * The card is drawn HERE rather than by each archetype, so an archetype added
  * later contributes a body function and inherits the header, the footer, the
  * busy state, the error presentation and the region label without deciding any
- * of them again. Adding `table`, `list`, `text` and `actions` is one entry in
- * `ARCHETYPE_BODIES` each.
+ * of them again. Adding one is one entry in `ARCHETYPE_BODIES`.
  *
  * WHICH of those states a widget is in is decided by `resolveWidgetOutcome`
  * rather than here, because the grid has to count the same answer for its live
  * region. See `./outcome`.
  *
- * `custom` is the exception, and it does NOT get a second resolution path: it
- * goes through `PluginSlot`, which already resolves a component path against
- * the registry and already isolates a throw behind `PluginComponentBoundary`.
- * A widget-specific resolver beside it would be a second place for a plugin
- * component to fail differently.
+ * `custom` is drawn by the widget's own component, handed its answer
+ * (`DeclaredComponent`), inside the same frame: the frame draws every state but
+ * the answered one.
  *
  * @module components/features/widgets/WidgetRenderer
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
-import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX, ReactNode } from "react";
 
-import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type {
   DashboardWidget,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import type { CellSlotLookup } from "./archetypes/types";
 import { DeclaredComponent, useComponentDraw } from "./declared-component";
 import { DREW_NOTHING, missingComponentMessage } from "./draw-failures";
 import { preloadWidgetSettingsSheet } from "./edit/settings-sheet-code";
@@ -47,7 +41,6 @@ import {
   useHidesWhenAnswerEmpty,
 } from "./hidden-while-empty";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
-import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
 
 /**
@@ -66,52 +59,42 @@ function skeletonDisplayOf(definition: DashboardWidget): string {
 }
 
 /**
- * The columns a declared table's skeleton holds the place of, beside its title: a table drawn by
- * the widget's own component asks no query the count could be read from, so the skeleton stands
- * in with two, which draws a table's heading and columns at the large tier and a row's detail
- * line below it.
+ * The columns a table's skeleton holds the place of, beside its title: its columns are its
+ * answer's, which has not arrived, so the skeleton stands in with two, which draws a table's
+ * heading and columns at the large tier and a row's detail line below it.
  */
 const DECLARED_TABLE_COLUMNS = 2;
 
 /**
- * The items setting a list or table card's skeleton holds the place of, from the query as asked;
- * `null` for one that declared no limit, which draws the default number, and `undefined` for any
- * other card, whose skeleton draws its default rows.
+ * The items setting a list or table card's skeleton holds the place of: `null`, the default
+ * number, since a card's rows are what its widget's `load` reads for its size; `undefined` for
+ * any other card, whose skeleton draws its default rows.
  */
 function skeletonItemsFor(definition: DashboardWidget): unknown {
   const display = skeletonDisplayOf(definition);
-  if (display !== "list" && display !== "table") return undefined;
-  return definition.query?.limit ?? null;
+  return display === "list" || display === "table" ? null : undefined;
 }
 
 /**
- * How many columns a list or table card selects, which is how its skeleton is laid out at each
- * tier. Undefined for any other card, whose skeleton has no rows to lay out. A declared table,
- * which asks no query, stands in with `DECLARED_TABLE_COLUMNS`.
+ * How many columns a list or table card's skeleton is laid out with at each tier. Undefined for
+ * any other card, whose skeleton has no rows to lay out. A card's columns are its answer's, which
+ * have not arrived, so a table stands in with `DECLARED_TABLE_COLUMNS` and a list with none
+ * beyond its title.
  */
 function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
   const display = skeletonDisplayOf(definition);
-  if (display !== "list" && display !== "table") return undefined;
-  if (definition.query === undefined && display === "table") {
-    return DECLARED_TABLE_COLUMNS;
-  }
-  return definition.query?.select?.length ?? 0;
+  if (display === "table") return DECLARED_TABLE_COLUMNS;
+  return display === "list" ? 0 : undefined;
 }
 
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
       return "figure";
-    case "stats":
-      return "stats";
     case "timeseries":
       return "chart";
     case "bars":
       return "bars";
-    case "actions":
-      return "actions";
-    case "text":
-      return "text";
     default:
       return "rows";
   }
@@ -120,11 +103,8 @@ function skeletonFor(archetype: string): SkeletonShape {
 /** What a card its widget does not show for this person says, where customise mode shows it. */
 const NOT_SHOWN = "Not shown for you right now";
 
-/** Every outcome the frame draws itself, which is all but a plugin's own component. */
-type FramedOutcome = Exclude<
-  WidgetOutcome,
-  { state: "self-drawn" } | { state: "answered" }
->;
+/** Every outcome the frame draws itself, which is all but a widget's own component. */
+type FramedOutcome = Exclude<WidgetOutcome, { state: "answered" }>;
 
 /**
  * The state a card with an answer on show is in: refreshing while a new one is on the way, which
@@ -251,18 +231,9 @@ export interface WidgetRendererProps {
   onOpenSettings?: () => void;
   /**
    * This widget's slot from the batch. `undefined` means the batch has not
-   * answered yet — which is why a data widget with no slot is BUSY rather than
-   * empty, and a widget that asked for nothing is neither.
+   * answered yet — which is why a card with no slot is BUSY rather than empty.
    */
   slot: WidgetSlot | undefined;
-  /**
-   * How a `stats` card reaches each cell's answer.
-   *
-   * Optional, and absent for every archetype that asks one question: their
-   * answer arrives in `slot` above. A stats card's numbers are keyed per cell,
-   * so its own `slot` is permanently undefined and this is where its data is.
-   */
-  slotFor?: CellSlotLookup;
   /**
    * Whether a request for this widget is in flight RIGHT NOW, including a
    * background refetch that is keeping the previous answer on screen.
@@ -274,8 +245,8 @@ export interface WidgetRendererProps {
    */
   isFetching?: boolean;
   /**
-   * The size the answer in `slot` was fetched at, when the card has grown past it: a list then
-   * draws only the rows that answer was asked for. See `AnswerSizeContext`.
+   * The size the answer in `slot` was read at, where the caller knows it (a card drawn for a
+   * test): a list then draws no more rows than that answer holds. See `AnswerSizeContext`.
    */
   answerSize?: AnswerSize;
   /**
@@ -287,12 +258,11 @@ export interface WidgetRendererProps {
   /**
    * Which CARD this render is, and what its reader configured.
    *
-   * 🔴 Handed to a plugin's own component, because nothing else can reach it.
+   * 🔴 Handed to a widget's own component, because nothing else can reach it.
    * `plugin-sdk` is an author's only stable import surface, so a component that
    * cannot receive its settings as props cannot observe them at all — a widget
    * could declare a `text`, `checkbox` or `select` setting, a reader could
    * choose a value, and the component drawing the card would never learn of it.
-   * Only `limit` reaches anything otherwise, through the query.
    *
    * The ID travels with them because `widgetId` does not identify a card. The
    * same widget can sit on a dashboard twice with different settings, and a
@@ -332,7 +302,6 @@ function sharedCardProps(
   const hides = definition.hidesWhenEmpty === true;
   return {
     title: definition.title,
-    link: definition.link,
     ...rest,
     hiddenWhileEmpty: hides && hiddenWhileEmpty,
     hidesWhenAnswerEmpty: hides && hidesWhenAnswerEmpty,
@@ -347,97 +316,7 @@ function sharedCardProps(
     // The density the card's list rows, and the skeleton holding their place, are drawn at.
     listDensity: listDensityOf(placement?.settings),
     skeletonFields: skeletonFieldsFor(definition),
-    // A stats card's labels; a custom card's cells draw no skeleton of their own.
-    skeletonCells: definition.cells?.flatMap(cell =>
-      "label" in cell ? [cell.label] : []
-    ),
   };
-}
-
-/**
- * The props a self-drawn widget's component receives.
- *
- * 🔴 RETURNS the published type rather than an inferred one. `PluginSlot`
- * forwards `Record<string, unknown>`, so nothing downstream would object to a
- * renamed, dropped or retyped prop here -- and plugin authors compile against
- * `WidgetComponentProps`, which would go on describing the old shape. That is
- * the same parallel-definition drift this contract exists to end, so the
- * producer is held to it here, where a mismatch fails to compile.
- */
-function componentPropsFor(
-  definition: WidgetRendererProps["definition"],
-  slot: WidgetRendererProps["slot"],
-  placement: WidgetRendererProps["placement"],
-  live: {
-    isFetching: boolean;
-    onRetry?: () => void;
-    cells?: Record<string, WidgetSlot>;
-  }
-): WidgetComponentProps {
-  return {
-    widgetId: definition.id,
-    placementId: placement?.id ?? definition.id,
-    settings: placement?.settings ?? {},
-    slot,
-    // Each declared read's answer by key, for a custom card that declares
-    // several; absent for every other card.
-    ...(live.cells === undefined ? {} : { cells: live.cells }),
-    isFetching: live.isFetching,
-    // The Retry the frame's error offers, for a component whose own data reports an error.
-    ...(live.onRetry ? { onRetry: live.onRetry } : {}),
-    // The query as asked, which `definition` already is: the grid draws each card
-    // from the same declaration the batch sent. One with no source yet was not
-    // asked, so it is not handed on.
-    ...(askableQuery(definition.query) ? { query: definition.query } : {}),
-  };
-}
-
-/**
- * A custom card's answers by cell key, for a card that declares several reads;
- * `undefined` for any other card, which is handed `slot` alone.
- */
-function customCellAnswers(
-  definition: WidgetRendererProps["definition"],
-  slotFor: CellSlotLookup | undefined
-): Record<string, WidgetSlot> | undefined {
-  if (definition.archetype !== "custom" || !definition.cells?.length) {
-    return undefined;
-  }
-  return cellAnswersOf(
-    definition.cells.map(cell => cell.key),
-    slotFor
-  );
-}
-
-/** Each cell's answer by key, leaving out the keys with none yet. */
-function cellAnswersOf(
-  keys: readonly string[],
-  slotFor: CellSlotLookup | undefined
-): Record<string, WidgetSlot> {
-  const answers: Record<string, WidgetSlot> = Object.create(null);
-  for (const key of keys) {
-    const answer = slotFor?.(key);
-    if (answer !== undefined) answers[key] = answer;
-  }
-  return answers;
-}
-
-/**
- * A custom card's own component, inside the frame. It is reached with an answer or while one is
- * on the way; a failed answer is the frame's (`resolveWidgetOutcome`), and anything the answer
- * says beyond that the component reports with `FrameState`.
- */
-function selfDrawnCard(
-  definition: WidgetRendererProps["definition"],
-  shared: ReturnType<typeof sharedCardProps>,
-  componentProps: WidgetComponentProps,
-  isFetching: boolean
-): JSX.Element {
-  return (
-    <WidgetCard {...shared} state={answeredState(isFetching)}>
-      <PluginSlot path={definition.component} props={componentProps} />
-    </WidgetCard>
-  );
 }
 
 /**
@@ -502,7 +381,7 @@ function useMissingComponent(
   // The server's answer to whether it runs in development (`devReload`): this
   // package's own NODE_ENV says where the library was built, not where it runs.
   const development = useBranding().devReload === true;
-  return outcome.state === "self-drawn" || outcome.state === "answered"
+  return outcome.state === "answered"
     ? missingComponentMessage(definition, development)
     : undefined;
 }
@@ -525,15 +404,12 @@ function missingCard(
 }
 
 /**
- * The card for its outcome: its error where its component is missing, the component with no
- * answer to wait for, a declared widget's component with its answer, or the frame's own state.
+ * The card for its outcome: its error where its component is missing, a `custom` card's component
+ * with its answer, or the frame's own state.
  *
- * A component drawn with the batch's answer: `custom` may carry a query, which the grid puts in
- * the batch rather than leaving the component to ask again. `undefined` while that answer is on
- * the way, which the component reports as loading; a failed answer never reaches it
- * (`resolveWidgetOutcome`). It is told when a refetch is in flight, because `slot` alone cannot
- * say it: the slot holds the PREVIOUS answer during a refetch and is indistinguishable from
- * idle. The frame marks the card busy then, as for any card.
+ * A declared widget's component is drawn with the answer its `load` gave, the frame marking the
+ * card busy through a refetch as for any card; a failed answer never reaches it
+ * (`resolveWidgetOutcome`).
  */
 function cardFor(
   definition: WidgetRendererProps["definition"],
@@ -542,7 +418,6 @@ function cardFor(
   live: {
     missing: string | undefined;
     draw: ReturnType<typeof useComponentDraw>;
-    componentProps: WidgetComponentProps;
     placement: WidgetRendererProps["placement"];
     isFetching: boolean;
     onRetry: (() => void) | undefined;
@@ -552,14 +427,6 @@ function cardFor(
 ): JSX.Element {
   if (live.missing !== undefined) {
     return missingCard(shared, live.missing, live.isFetching);
-  }
-  if (outcome.state === "self-drawn") {
-    return selfDrawnCard(
-      definition,
-      shared,
-      live.componentProps,
-      live.isFetching
-    );
   }
   if (outcome.state === "answered") {
     return declaredCard(definition, shared, outcome.data, live.draw, live);
@@ -579,7 +446,6 @@ function cardFor(
 export function WidgetRenderer({
   definition,
   slot,
-  slotFor,
   placement,
   headerAction,
   quick,
@@ -610,7 +476,7 @@ export function WidgetRenderer({
     ...(tier === undefined ? {} : { tier }),
   });
 
-  const outcome = resolveWidgetOutcome(definition, slot, slotFor);
+  const outcome = resolveWidgetOutcome(definition, slot);
   const missing = useMissingComponent(definition, outcome);
   // Whether a declared widget's own component threw drawing this answer, or is
   // missing: asked for every card, as a hook must be, and false for any other.
@@ -621,21 +487,9 @@ export function WidgetRenderer({
     placementId: placement?.id ?? definition.id,
     missing: missing !== undefined,
   });
-  // A custom card that declares several reads is handed each answer by key; a
-  // key with no answer yet is left out, as `slot` is.
-  const cellAnswers = customCellAnswers(definition, slotFor);
-
-  // Built once, so every card drawn by a component is handed the same props.
-  const componentProps = componentPropsFor(definition, slot, placement, {
-    ...(cellAnswers === undefined ? {} : { cells: cellAnswers }),
-    isFetching,
-    onRetry,
-  });
-
   return cardFor(definition, shared, outcome, {
     missing,
     draw,
-    componentProps,
     placement,
     isFetching,
     onRetry,

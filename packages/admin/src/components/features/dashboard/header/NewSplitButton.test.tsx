@@ -1,9 +1,12 @@
 /**
  * The header's New button while what it leads with is still on its way: its
  * place is held at the size it is drawn at, unseen and out of reach, so it
- * appears where it stays and moves nothing beside it.
+ * appears where it stays and moves nothing beside it. And once drawn, its
+ * Collections section holds every creatable type the sidebar would place
+ * there, not only those on the sidebar's one page.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiCollection } from "@admin/types/entities";
@@ -35,9 +38,26 @@ vi.mock("@admin/hooks/useCreatableCollections", () => ({
 vi.mock("@admin/hooks/queries/useDashboardNewTypes", () => ({
   useDashboardNewTypes: () => reads.recent,
 }));
+// The sidebar's own list is one page of 100 collections, so New must not read
+// it: it is mocked as that page, and only the pins are New's to read.
 vi.mock("@admin/hooks/useSidebarContentLists", () => ({
-  useSidebarCollectionList: () => ({ items: reads.creatable.collections }),
+  useSidebarCollectionList: () => ({
+    items: reads.creatable.collections.slice(0, 100),
+  }),
+  useSidebarCollectionPins: () => ({ pinned: new Set<string>() }),
 }));
+vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("@admin/hooks/useCurrentUserPermissions")
+    >();
+  const capabilities = actual.buildCapabilities([], true, {
+    isSuperAdmin: true,
+    validUntil: null,
+    entities: {},
+  });
+  return { ...actual, useCurrentUserPermissions: () => ({ capabilities }) };
+});
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => undefined,
 }));
@@ -91,5 +111,28 @@ describe("the header's New button before its answers arrive", () => {
     render(<NewSplitButton />);
     expect(screen.queryByTestId("dashboard-new-reserve")).toBeNull();
     expect(screen.queryByTestId("dashboard-new")).toBeNull();
+  });
+});
+
+describe("the header's New button once drawn", () => {
+  it("lists a creatable type past the sidebar's one page under Collections", async () => {
+    // 101 ordinary types: the sidebar's page holds the first 100 by name, and
+    // the last one only arrives with every page, as `useCreatableCollections`
+    // reads them.
+    const many = Array.from({ length: 101 }, (_, i): ApiCollection => {
+      const name = `type${String(i).padStart(3, "0")}`;
+      return { ...posts, id: name, name, label: name, labels: undefined };
+    });
+    reads.creatable = { collections: many, isReady: true, failed: false };
+    reads.recent = { data: [], isPending: false };
+    render(<NewSplitButton />);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Choose what to create" }));
+    const collections = screen.getByRole("group", { name: "Collections" });
+    expect(
+      within(collections).getByTestId("dashboard-new-type-type100")
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Other" })).toBeNull();
   });
 });

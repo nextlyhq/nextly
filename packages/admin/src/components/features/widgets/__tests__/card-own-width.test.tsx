@@ -3,8 +3,8 @@
  *
  * Three copies of one list card in one viewport, in containers 300, 500 and 800 px wide: the
  * narrow one is small (three rows, titles only), the middle one medium (five rows, each with its
- * line of detail), the wide one large (a table of ten). One window, three layouts: only the
- * card's width decides.
+ * line of detail), the wide one large (a table, of the default five rows). One window, three
+ * layouts: only the card's width decides.
  */
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,12 +20,6 @@ const columns = [
   { name: "title", label: "Title" },
   { name: "status", label: "Status" },
 ];
-const query = {
-  source: "collection:posts",
-  op: "list" as const,
-  select: ["title", "status"],
-  limit: 10,
-};
 
 beforeEach(() => {
   // jsdom lays nothing out: a card measures the width its test container states.
@@ -56,12 +50,7 @@ function cardAt(width: number) {
   return (
     <div data-width={width} data-testid={`at-${width}`}>
       <WidgetCard title="Recent posts">
-        <TieredRows
-          items={items}
-          columns={columns}
-          labelField="title"
-          query={query}
-        />
+        <TieredRows items={items} columns={columns} labelField="title" />
       </WidgetCard>
     </div>
   );
@@ -93,7 +82,7 @@ describe("one card at three widths in one viewport", () => {
     expect(middle.getAllByText("draft")).toHaveLength(5);
 
     expect(wide.getByTestId("list-card-table")).toBeInTheDocument();
-    expect(wide.getAllByTestId("list-card-table-row")).toHaveLength(10);
+    expect(wide.getAllByTestId("list-card-table-row")).toHaveLength(5);
     expect(wide.queryByTestId("list-card-rows")).not.toBeInTheDocument();
   });
 

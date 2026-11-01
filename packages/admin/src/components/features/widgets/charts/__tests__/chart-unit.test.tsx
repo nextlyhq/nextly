@@ -2,10 +2,10 @@
  * What a chart's numbers count: written after each number in its tooltip ("12 new posts"), from
  * the collection's label as published to this reader, singular for one.
  */
-import { render, screen } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { withUnit, WithCollectionUnit } from "../chart-unit";
+import { useCollectionUnit, withUnit } from "../chart-unit";
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({
@@ -16,21 +16,12 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   }),
 }));
 
-/** The unit a card reading `source` hands its chart, written as "one / other". */
-function unitOf(source: string | undefined, qualifier?: string): string {
-  const { unmount } = render(
-    <WithCollectionUnit source={source} {...(qualifier ? { qualifier } : {})}>
-      {unit => (
-        <span data-testid="unit">
-          {unit ? `${unit.one} / ${unit.other}` : "none"}
-        </span>
-      )}
-    </WithCollectionUnit>
-  );
-  const text = screen.getByTestId("unit").textContent ?? "";
-  // Unmounted at once, so a test may read several sources in turn.
-  unmount();
-  return text;
+/** The unit a card reading `collection` hands its chart, written as "one / other". */
+function unitOf(collection: string | undefined, qualifier?: string): string {
+  // The hook a core card calls with the collection its settings name.
+  const { result } = renderHook(() => useCollectionUnit(collection, qualifier));
+  const unit = result.current;
+  return unit ? `${unit.one} / ${unit.other}` : "none";
 }
 
 describe("a chart's unit", () => {
@@ -52,17 +43,14 @@ describe("a chart's unit", () => {
   });
 
   it("is the collection's label as a noun, lowercased word by word", () => {
-    expect(unitOf("collection:posts", "new")).toBe(
-      "new blog post / new blog posts"
-    );
+    expect(unitOf("posts", "new")).toBe("new blog post / new blog posts");
   });
 
   it("keeps an acronym in the label as it is written", () => {
-    expect(unitOf("collection:faqs")).toBe("FAQ entry / FAQ entries");
+    expect(unitOf("faqs")).toBe("FAQ entry / FAQ entries");
   });
 
-  it("is none for a source that reads no one collection", () => {
-    expect(unitOf("system:activity")).toBe("none");
+  it("is none for a card that reads no one collection", () => {
     expect(unitOf(undefined)).toBe("none");
   });
 });

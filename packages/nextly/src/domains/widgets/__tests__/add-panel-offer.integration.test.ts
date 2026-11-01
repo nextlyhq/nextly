@@ -2,9 +2,10 @@
  * What the add panel is offered, through the real layout read, on every
  * configured dialect.
  *
- * The read names each widget the reader may add, with the group core assigns
- * it. A widget the reader may not see is not named at all, and no widget is
- * named after a collection: a card about one is a Content widget set to it.
+ * The read names each widget the reader may add, in the panel's order, which
+ * the groups core assigns decide. A widget the reader may not see is not named
+ * at all, and no widget is named after a collection: a card about one is a
+ * Content widget set to it.
  */
 
 // Must be set before the harness boots (env validation) and to sign tokens.
@@ -49,7 +50,7 @@ const GATED = "core/upcoming-releases";
 interface LayoutRead {
   placements: { widgetId: string }[];
   available: string[];
-  widgets: Record<string, { group?: string; subgroup?: string }>;
+  widgets: Record<string, { allowsSeveral?: boolean; perCollection?: true }>;
 }
 
 describeEachDialect("what the add panel is offered", dialect => {
@@ -138,12 +139,17 @@ describeEachDialect("what the add panel is offered", dialect => {
     handle = undefined;
   });
 
-  it("names a widget the reader may see, with the group core assigns it", async () => {
+  it("names a widget the reader may see, ordered by the group core assigns it", async () => {
     const layout = await read(admin);
     expect(named(layout).has(GATED)).toBe(true);
-    expect(layout.widgets[GATED]?.group).toBe("overview");
-    expect(layout.widgets["core/team"]?.group).toBe("team");
-    expect(layout.widgets["core/team-activity"]?.group).toBe("team");
+    // Overview's widgets come before Team's: the panel's order is `available`'s.
+    const at = (id: string) => layout.available.indexOf(id);
+    const offered = [GATED, "core/team", "core/team-activity"].filter(
+      id => at(id) !== -1
+    );
+    expect(offered.map(at)).toEqual([...offered.map(at)].sort((a, b) => a - b));
+    // The facts beside a widget say nothing of where it is listed.
+    expect(layout.widgets[GATED]).not.toHaveProperty("group");
   });
 
   it("does not name a widget the reader may not see", async () => {
@@ -174,11 +180,12 @@ describeEachDialect("what the add panel is offered", dialect => {
       ).toEqual([]);
     }
     // The control: the Content widget a collection is reached through IS
-    // named, in the Content group, so the absence above is not an empty read.
-    expect(layout.widgets["core/count"]?.group).toBe("content");
-    // Everything that IS offered has a group to be listed in.
+    // named, offered once per collection, so the absence above is not an
+    // empty read.
+    expect(layout.widgets["core/count"]?.perCollection).toBe(true);
+    // Everything that IS offered is described beside it.
     for (const id of layout.available) {
-      expect(layout.widgets[id]?.group, id).toEqual(expect.any(String));
+      expect(layout.widgets[id], id).toBeDefined();
     }
   });
 });
