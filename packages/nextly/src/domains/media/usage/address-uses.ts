@@ -79,6 +79,20 @@ function replacedRecordOf(stored: unknown): ReplacedRecord | null {
   return read.success ? read.data : null;
 }
 
+/** The items' replaced-file records among `nextly_meta` rows, each readable one. */
+function replacedRecordsOf(
+  rows: ReadonlyArray<Record<string, unknown>>
+): Array<{ mediaId: string; record: ReplacedRecord }> {
+  const records: Array<{ mediaId: string; record: ReplacedRecord }> = [];
+  for (const row of rows) {
+    const key = typeof row.key === "string" ? row.key : "";
+    const record = replacedRecordOf(row.value);
+    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
+    records.push({ mediaId: key.slice(REPLACED_KEY_PREFIX.length), record });
+  }
+  return records;
+}
+
 /** The addresses of the files a record keeps, each once. */
 function keptAddressesOf(files: ReplacedRecord["files"]): string[] {
   return [...new Set(files.map(file => file.url).filter(url => url !== ""))];
@@ -201,11 +215,7 @@ export async function indexKeptAddresses(
     },
   });
   let indexed = 0;
-  for (const row of rows) {
-    const key = typeof row.key === "string" ? row.key : "";
-    const record = replacedRecordOf(row.value);
-    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
-    const mediaId = key.slice(REPLACED_KEY_PREFIX.length);
+  for (const { mediaId, record } of replacedRecordsOf(rows)) {
     const urls = keptAddressesOf(record.files);
     await db.transaction(tx => writeKeptAddresses(tx, mediaId, urls));
     indexed += urls.length;
@@ -279,11 +289,7 @@ export async function removeKeptFiles(
     });
     return;
   }
-  for (const row of rows) {
-    const key = typeof row.key === "string" ? row.key : "";
-    const record = replacedRecordOf(row.value);
-    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
-    const mediaId = key.slice(REPLACED_KEY_PREFIX.length);
+  for (const { mediaId, record } of replacedRecordsOf(rows)) {
     try {
       await removeRecordedFiles(db, storage, logger, mediaId, record);
     } catch (error) {
