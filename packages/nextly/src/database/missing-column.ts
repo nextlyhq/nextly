@@ -76,7 +76,7 @@ const WORDINGS: ReadonlyArray<readonly [RegExp, MissingColumnKind]> = [
  * it was running rather than out of the driver's complaint, and match any query that
  * merely mentions the column.
  */
-function ownCode(link: unknown): string | undefined {
+export function ownCode(link: unknown): string | undefined {
   if (!link || typeof link !== "object") return undefined;
   const record = link as Record<string, unknown>;
   const raw = record.code ?? record.sqlState ?? record.state ?? record.errno;
@@ -92,7 +92,7 @@ function ownCode(link: unknown): string | undefined {
  * stringified: `String(someObject)` produces "[object Object]", which matches nothing and
  * would quietly make the level unexaminable while looking like it had been examined.
  */
-function ownMessage(link: unknown): string {
+export function ownMessage(link: unknown): string {
   if (link instanceof Error) return link.message;
   if (typeof link === "string") return link;
   return "";
@@ -125,7 +125,7 @@ function kindOfLevel(link: unknown): MissingColumnKind | undefined {
  * once — v1 puts the original on `.cause` of a DrizzleQueryError — so the level that
  * knows the code is rarely the level thrown.
  */
-function firstAnswer<T>(
+export function firstAnswer<T>(
   error: unknown,
   visit: (link: unknown) => T | undefined
 ): T | undefined {
