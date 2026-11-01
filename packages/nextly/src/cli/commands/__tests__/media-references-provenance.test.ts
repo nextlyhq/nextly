@@ -17,6 +17,7 @@ import {
   setRetiredSizes,
 } from "../../../__tests__/helpers/retired-image-sizes";
 import { createTestDb } from "../../../__tests__/fixtures/db";
+import { retiredSizesReader } from "../../../domains/media/retired-image-sizes-store";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import { referencedNowIn, referencedStoredPaths } from "../media";
 
@@ -123,5 +124,34 @@ describe("the retired column's provenance, asked once per scan", () => {
     ]);
     expect(catalogue.reads).toBe(1);
     expect(ownerReads).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a reader whose column is dropped after its provenance was asked", () => {
+  // As `nextly media remove-sizes --apply --drop` can, between a folder
+  // delete's chunks or between a delete's check and its read. The drop runs
+  // only once no item names a size file, so reading none loses nothing,
+  // while failing would abort the delete.
+  it("reads no sizes rather than failing", async () => {
+    const db = await libraryOfThreePages();
+    const reader = retiredSizesReader(db.db, "sqlite");
+    const last = "item-01200";
+    expect((await reader([last])).get(last)).toBeDefined();
+
+    db.sqlite.exec('ALTER TABLE "media" DROP COLUMN "sizes"');
+
+    await expect(reader([last])).resolves.toEqual(new Map());
+    // Remembered: the next read does not name the column again.
+    await expect(reader(["item-00000"])).resolves.toEqual(new Map());
+  });
+
+  it("still fails for any other failure (the control)", async () => {
+    const db = await libraryOfThreePages();
+    const reader = retiredSizesReader(db.db, "sqlite");
+    await reader(["item-00000"]);
+
+    db.sqlite.exec('ALTER TABLE "media" RENAME TO "media_gone"');
+
+    await expect(reader(["item-00000"])).rejects.toThrow();
   });
 });

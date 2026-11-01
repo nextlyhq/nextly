@@ -720,6 +720,98 @@ describe("a delete that fails while the file may still be there", () => {
 });
 
 describe("sizes stored on another storage than the one configured now", () => {
+  // The key is the same, the storage is not: the size's file is the old
+  // bucket's, and another item's original is this bucket's. Taken as in use
+  // by its path, the size would be kept here and the item cleared, leaving
+  // the old bucket's file served with nothing naming it.
+  it("are refused when the key collides with an original on this storage", async () => {
+    const adapter = new Bucket("s3");
+    const key = "2026/10/photo.png";
+    const current = await put(adapter, "own.png");
+    adapter.files.set(key, Buffer.from("another item's original"));
+    const store = new MemoryStore([
+      {
+        id: "moved",
+        filename: current.path,
+        url: current.url,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({
+          small: {
+            path: key,
+            url: `https://old-bucket.s3.us-east-1.amazonaws.com/${key}`,
+          },
+        }),
+      },
+      {
+        id: "other",
+        filename: key,
+        url: adapter.getPublicUrl(key),
+        thumbnailUrl: null,
+        sizes: null,
+      },
+    ]);
+    const before = [...adapter.files.keys()].sort();
+    const lines: string[] = [];
+
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: line => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(store.cleared).toEqual([]);
+    expect(holdsStoredSizes(store.table[0].sizes)).toBe(true);
+    expect([...adapter.files.keys()].sort()).toEqual(before);
+    expect(report.itemsLeft.map(item => item.id)).toEqual(["moved"]);
+    expect(lines.join("\n")).toContain(
+      "is not on the media storage configured now (s3), but at https://old-bucket.s3.us-east-1.amazonaws.com/2026/10/photo.png"
+    );
+  });
+
+  // The control: a size whose very URL another item uses is that item's
+  // file, wherever it is served from, and is kept for it.
+  it("keep a size whose exact URL another item uses, and clear the item", async () => {
+    const adapter = new Bucket("s3");
+    const shared = "https://cdn.example.com/2026/10/shared.webp";
+    const current = await put(adapter, "own.png");
+    const store = new MemoryStore([
+      {
+        id: "sizes",
+        filename: current.path,
+        url: current.url,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({
+          small: { path: "2026/10/shared.webp", url: shared },
+        }),
+      },
+      {
+        id: "user",
+        filename: "elsewhere/shared.webp",
+        url: "https://cdn.example.com/elsewhere/shared.webp",
+        thumbnailUrl: shared,
+        sizes: null,
+      },
+    ]);
+    const before = [...adapter.files.keys()].sort();
+
+    const { code } = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(store.cleared).toEqual(["sizes"]);
+    expect([...adapter.files.keys()].sort()).toEqual(before);
+  });
+
   // A URL relative to the site was written by local disk, which serves files
   // from the site itself. An object storage serves from its own host, so the
   // same path under it is another file: the local one would stay, publicly

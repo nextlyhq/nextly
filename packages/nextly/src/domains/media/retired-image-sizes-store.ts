@@ -28,6 +28,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { isMissingNamedColumnError } from "../../database/missing-column";
 import { NextlyError } from "../../errors/nextly-error";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners/table-name";
 import type { OwnerRecord } from "../schema/ownership/owner-registry";
@@ -403,14 +404,27 @@ export function retiredSizesReader(
       throw error;
     });
     if (!(await column)) return found;
-    const rows = await rowsOf<{ id: string; sizes: unknown }>(
-      db,
-      dialect,
-      sql`SELECT ${id}, ${sizes} FROM ${media} WHERE ${id} IN (${sql.join(
-        ids.map(value => sql`${value}`),
-        sql`, `
-      )}) AND ${sizes} IS NOT NULL`
-    );
+    let rows: Array<{ id: string; sizes: unknown }>;
+    try {
+      rows = await rowsOf<{ id: string; sizes: unknown }>(
+        db,
+        dialect,
+        sql`SELECT ${id}, ${sizes} FROM ${media} WHERE ${id} IN (${sql.join(
+          ids.map(value => sql`${value}`),
+          sql`, `
+        )}) AND ${sizes} IS NOT NULL`
+      );
+    } catch (error) {
+      // The column dropped since its provenance was asked, as
+      // `nextly media remove-sizes --apply --drop` can during a delete. It is
+      // dropped only once no item names a size file, so there are none to
+      // read, and failing would abort the delete. Told by the driver's code
+      // for a missing column and by its name; any other failure is the
+      // caller's.
+      if (!isMissingNamedColumnError(error, RETIRED_SIZES_COLUMN)) throw error;
+      column = Promise.resolve(false);
+      return found;
+    }
     for (const row of rows) found.set(row.id, row.sizes);
     return found;
   };
@@ -432,6 +446,63 @@ export function storedSizesOf(
 
 /** Runs one generated DDL statement. */
 type ExecuteSql = (statement: string) => Promise<unknown>;
+
+/** A foreign key another table holds to `image_sizes`: its table, and its name. */
+interface InboundForeignKey {
+  table: string;
+  name: string;
+}
+
+/**
+ * The foreign keys other tables hold to `image_sizes`, from each dialect's
+ * catalogue: PostgreSQL's `pg_constraint`, MySQL's key usage, and SQLite's
+ * foreign key list of every table, which names no constraint, so a key is
+ * named there by its column. An app could have pointed one at the table
+ * while Nextly published it.
+ */
+async function foreignKeysToImageSizes(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<InboundForeignKey[]> {
+  const table = sql.identifier("table");
+  const name = sql.identifier("name");
+  const statement =
+    dialect === "postgresql"
+      ? sql`SELECT conrelid::regclass::text AS ${table}, conname AS ${name} FROM pg_constraint WHERE contype = 'f' AND confrelid = to_regclass(${RETIRED_IMAGE_SIZES_TABLE})`
+      : dialect === "mysql"
+        ? sql`SELECT DISTINCT TABLE_NAME AS ${table}, CONSTRAINT_NAME AS ${name} FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME = ${RETIRED_IMAGE_SIZES_TABLE}`
+        : sql`SELECT m.name AS ${table}, 'on column ' || f."from" AS ${name} FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE m.type = 'table' AND f."table" = ${RETIRED_IMAGE_SIZES_TABLE}`;
+  return rowsOf<InboundForeignKey>(db, dialect, statement);
+}
+
+/**
+ * Why nothing may be dropped now, or null when the drop may go on: a media
+ * item still naming a size file, which dropping the column would leave in
+ * storage with nothing pointing at it, or a foreign key another table holds
+ * to `image_sizes`. That key is an app's, and dropping the table would break
+ * it, or on PostgreSQL remove it with the table. Either refuses the whole
+ * drop, the column included: the column is what shows the table is Nextly's
+ * on the next run.
+ */
+async function dropRefusal(
+  db: unknown,
+  dialect: SupportedDialect,
+  objects: RetiredObjects
+): Promise<string | null> {
+  if (objects.column) {
+    const remaining = await countItemsWithSizes(db, dialect);
+    if (remaining > 0) {
+      return `Dropped nothing: ${remaining} ${remaining === 1 ? "item still names its" : "items still name their"} image size files, which dropping the \`${RETIRED_SIZES_COLUMN}\` column would leave in storage with nothing pointing at them. Run \`${REMOVE_SIZES_COMMAND} --apply\` until it removes them all.`;
+    }
+  }
+  if (objects.tableRows !== null) {
+    const keys = await foreignKeysToImageSizes(db, dialect);
+    if (keys.length > 0) {
+      return `Dropped nothing: the \`${RETIRED_IMAGE_SIZES_TABLE}\` table has foreign keys from other tables (${keys.map(key => `${key.table}: ${key.name}`).join(", ")}), which dropping it would break. Drop or change those foreign keys, then run this again.`;
+    }
+  }
+  return null;
+}
 
 /**
  * Drops the retired `image_sizes` table and the media table's `sizes` column,
@@ -458,14 +529,10 @@ export async function dropRetiredImageSizes(options: {
   // Read afresh rather than taken from the removal's listing: an item can
   // have come to name size files since, and only now decides it.
   const objects = await readRetiredObjects(db, dialect);
-  if (objects.column) {
-    const remaining = await countItemsWithSizes(db, dialect);
-    if (remaining > 0) {
-      say(
-        `Dropped nothing: ${remaining} ${remaining === 1 ? "item still names its" : "items still name their"} image size files, which dropping the \`${RETIRED_SIZES_COLUMN}\` column would leave in storage with nothing pointing at them. Run \`${REMOVE_SIZES_COMMAND} --apply\` until it removes them all.`
-      );
-      return 1;
-    }
+  const refusal = await dropRefusal(db, dialect, objects);
+  if (refusal !== null) {
+    say(refusal);
+    return 1;
   }
   const { generateSQL } = await import("../schema/pipeline/sql-templates");
   let code = 0;
@@ -476,11 +543,12 @@ export async function dropRetiredImageSizes(options: {
     code = 1;
   }
   if (objects.tableRows !== null) {
-    await executeSql(
-      generateSQL(
-        { type: "drop_table", tableName: RETIRED_IMAGE_SIZES_TABLE },
-        dialect
-      )
+    // Never cascading, on any dialect: a foreign key that came to point at
+    // the table after the check above makes the drop fail rather than go.
+    await run(
+      db,
+      dialect,
+      sql`DROP TABLE ${sql.identifier(RETIRED_IMAGE_SIZES_TABLE)}`
     );
     say(
       `Dropped the \`${RETIRED_IMAGE_SIZES_TABLE}\` table (${objects.tableRows} size ${objects.tableRows === 1 ? "definition" : "definitions"} nothing reads).`

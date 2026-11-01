@@ -345,12 +345,26 @@ function planSize(plan: ItemPlan, size: StoredSize, at: SizeContext): void {
     plan.unlocated.push(size.name);
     return;
   }
-  if (isOwnThumbnail(size, path, row)) {
+  // A size whose very URL an item uses is that item's file, wherever it is
+  // served from: kept for it. Anything judged by path comes only after the
+  // size is shown to be on this storage, since another storage's file can
+  // share a key with this one's, and kept on that likeness the size's own
+  // file would lose its record.
+  const urlUsed = at.inUse.urls.has(urlKey(size.url));
+  if (urlUsed) {
+    const own =
+      row.thumbnailUrl != null && urlKey(size.url) === urlKey(row.thumbnailUrl);
+    plan.keep.push({
+      name: size.name,
+      path,
+      reason: own ? "thumbnail" : "in-use",
+    });
+  } else if (!servedHere(size.url, path, at.storage)) {
+    plan.elsewhere.push({ name: size.name, url: size.url });
+  } else if (isOwnThumbnail(size, path, row)) {
     plan.keep.push({ name: size.name, path, reason: "thumbnail" });
   } else if (isInUse(at.inUse, size, path)) {
     plan.keep.push({ name: size.name, path, reason: "in-use" });
-  } else if (!servedHere(size.url, path, at.storage)) {
-    plan.elsewhere.push({ name: size.name, url: size.url });
   } else if (!at.planned.has(path)) {
     // By the key exactly as stored: an object storage keeps `media//x.webp`
     // and `media/x.webp` as two objects, and one taken for the other would

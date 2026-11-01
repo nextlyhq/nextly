@@ -908,10 +908,24 @@ export async function previewRetiredImageSizes(
       import("../../domains/media/retired-image-sizes-constants"),
     ]);
   const objects = await readRetiredObjects(db, dialect);
-  if (!objects.column && objects.tableRows === null) return;
-  logger.info(
-    `  • would keep the retired column media.sizes and table image_sizes: \`nextly migrate\` never drops them. Once this release is serving, run \`${REMOVE_SIZES_COMMAND}\`, then \`${DROP_SIZES_COMMAND}\`.`
-  );
+  // Each named only where the database has it: after a drop that stopped
+  // between the two, the column can be there without the table.
+  const retired = [
+    ...(objects.column ? ["column media.sizes"] : []),
+    ...(objects.tableRows !== null ? ["table image_sizes"] : []),
+  ];
+  if (retired.length > 0) {
+    logger.info(
+      `  • would keep the retired ${retired.join(" and ")}: \`nextly migrate\` never drops ${retired.length === 1 ? "it" : "them"}. Once this release is serving, run \`${REMOVE_SIZES_COMMAND}\`, then \`${DROP_SIZES_COMMAND}\`.`
+    );
+  }
+  // A table of that name not shown to be the retired one is never called
+  // so, and nothing drops it.
+  if (objects.keptTable !== null) {
+    logger.info(
+      `  • would keep the table image_sizes, which is not shown to be the one image sizes left (${objects.keptTable}): nothing drops it.`
+    );
+  }
 }
 
 /**
