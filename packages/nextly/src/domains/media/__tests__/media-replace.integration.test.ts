@@ -1167,9 +1167,11 @@ describe.each(getConfiguredTestDialects())(
       const finaliser = (later: number) =>
         new PendingMediaDeletes({
           db: t.adapter,
-          deleteItem: async id => {
-            await t.getService("mediaService").delete(id, {});
+          deleteItem: async (id, actor, claim) => {
+            await t.getService("mediaService").delete(id, {}, actor, claim);
           },
+          removeFiles: (id, files) =>
+            t.getService("mediaService").removeFilesOfDeleted(id, files),
           now: () => new Date(Date.now() + later),
         });
       // Deleted now, finished once the window has passed.

@@ -44,6 +44,7 @@ import type {
   MediaLibraryCounts,
   UnusedSources,
 } from "../domains/media/media-library-query";
+import type { DeleteClaim } from "../domains/media/pending-delete";
 import {
   errorForLog,
   filesKeptByOthers,
@@ -55,7 +56,10 @@ import {
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
 import { StoredFileSearchReader } from "../domains/media/stored-file-search";
-import { storedFilesOf } from "../domains/media/stored-files";
+import {
+  storedFilesOf,
+  type MediaFilesRecord,
+} from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -789,7 +793,15 @@ export class MediaService extends BaseService {
    */
   async deleteMedia(
     mediaId: string,
-    actor?: RequestActor
+    actor?: RequestActor,
+    /**
+     * Work run in the delete's own transaction once the row is locked and
+     * read, before it is removed: the end of an Undo window taking its mark.
+     * `false` refuses the delete, changing nothing. A delete it allows leaves
+     * the stored files to it ({@link removeFilesOfDeleted}), so a removal cut
+     * short can be finished from what it recorded.
+     */
+    claim?: DeleteClaim
   ): Promise<DeleteMediaResponse> {
     // A precondition, ahead of every read and write, so a refused delete
     // touches neither the row nor storage.
@@ -824,8 +836,10 @@ export class MediaService extends BaseService {
       // the latest committed state rather than the pre-transaction read. The
       // transaction returns the deleted row (or null when it was already gone).
       let recorded = false;
+      let refused = false;
       const deletedRow = await this.adapter.transaction<StoredMediaRow | null>(
         async tx => {
+          refused = false;
           await tx.lockRow("media", mediaId);
           const currentRows = await tx.select<StoredMediaRow>("media", {
             where: this.whereEq("id", mediaId),
@@ -834,6 +848,12 @@ export class MediaService extends BaseService {
           // Lost a delete race: the row is already gone, so record nothing.
           // Only the request that actually removes the row emits media.deleted.
           if (!current) {
+            return null;
+          }
+          // Asked under the row's lock, so it commits with the row's removal
+          // or not at all.
+          if (claim && !(await claim(tx, current))) {
+            refused = true;
             return null;
           }
 
@@ -859,6 +879,14 @@ export class MediaService extends BaseService {
       // The row was gone before we could delete it: report not-found and skip
       // physical cleanup (the winning request owns the file) rather than
       // returning a false success for a no-op delete.
+      if (refused) {
+        return {
+          success: false,
+          statusCode: 409,
+          code: "CONFLICT",
+          message: "Media is no longer waiting to be deleted.",
+        };
+      }
       if (!deletedRow) {
         return {
           success: false,
@@ -888,18 +916,13 @@ export class MediaService extends BaseService {
       // Once the delete is durable: inside an enclosing SQLite transaction
       // this delete is a savepoint of it, and a rollback would bring the row
       // back pointing at files already gone.
-      await this.afterCommit(async () => {
-        // Every file except those another item still refers to, asked now
-        // that this delete has committed; none when that cannot be asked.
-        const kept = await filesKeptByOthers(
-          this.storedFileSearch,
-          storedFilesOf(mediaData).paths,
-          [mediaId]
-        );
-        if (kept)
-          await removeStoredFiles(this.storage, mediaData, mediaId, kept);
-        await this.removeKeptFilesOf(mediaId);
-      });
+      // A claimed delete's files are removed by its claimer, which recorded
+      // them in the same transaction.
+      if (!claim) {
+        await this.afterCommit(async () => {
+          await this.removeFilesOfDeleted(mediaId, mediaData);
+        });
+      }
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
@@ -924,24 +947,51 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * Remove every file stored for a deleted item, `record` being its row as
+   * it was: its own files, except those another item still refers to, asked
+   * now that the delete has committed, and the files a Replace kept for it.
+   * Removing a file already gone is no failure, so running this again
+   * finishes what an interrupted run left. Answers whether it could finish:
+   * `false` when what to keep, or what a Replace kept, could not be read,
+   * and nothing unasked was removed. Never throws: the delete has committed.
+   */
+  async removeFilesOfDeleted(
+    mediaId: string,
+    record: MediaFilesRecord
+  ): Promise<boolean> {
+    const kept = await filesKeptByOthers(
+      this.storedFileSearch,
+      storedFilesOf(record).paths,
+      [mediaId]
+    );
+    if (kept) await removeStoredFiles(this.storage, record, mediaId, kept);
+    const keptFilesGone = await this.removeKeptFilesOf(mediaId);
+    return kept !== null && keptFilesGone;
+  }
+
+  /**
    * The files a Replace kept for pages naming a deleted item's old address,
    * and the record of them. Here, in the delete every other one goes
    * through (one item, a bulk delete, the end of an Undo window), so none of
    * them leaves the kept files behind. Never fails the committed delete: a
    * file that cannot go is named in the log, as the item's own files are.
+   * Answers whether the record could be read and acted on.
    */
-  private async removeKeptFilesOf(mediaId: string): Promise<void> {
+  private async removeKeptFilesOf(mediaId: string): Promise<boolean> {
     try {
       // Loaded when an item is deleted, not with the service.
       const { removeKeptFiles } = await import(
         "../domains/media/usage/address-uses"
       );
-      await removeKeptFiles(this.adapter, this.storage, this.logger, [mediaId]);
+      return await removeKeptFiles(this.adapter, this.storage, this.logger, [
+        mediaId,
+      ]);
     } catch (error) {
       this.logger.warn("[MediaService] Kept files not removed", {
         mediaId,
         error: errorForLog(error),
       });
+      return false;
     }
   }
 

@@ -223,28 +223,31 @@ export async function indexKeptAddresses(
   return indexed;
 }
 
-/** One deleted item's kept files and their record, as its record lists them. */
+/**
+ * One deleted item's kept files and their record, as its record lists them.
+ * The record stays when what another item refers to could not be asked, so
+ * none of the files is forgotten while it may still be stored.
+ */
 async function removeRecordedFiles(
   db: DrizzleAdapter,
   storage: StoredFileRemover,
   logger: Logger,
   mediaId: string,
   record: ReplacedRecord
-): Promise<void> {
+): Promise<boolean> {
   const kept = await filesKeptByOthers(
     new StoredFileSearchReader(db, logger).search,
     record.files.map(file => file.path),
     [mediaId]
   );
-  if (kept) {
-    for (const file of record.files) {
-      await removeStoredFiles(
-        storage,
-        { filename: file.path, url: file.url },
-        mediaId,
-        kept
-      );
-    }
+  if (!kept) return false;
+  for (const file of record.files) {
+    await removeStoredFiles(
+      storage,
+      { filename: file.path, url: file.url },
+      mediaId,
+      kept
+    );
   }
   for (const url of keptAddressesOf(record.files)) {
     await db.delete("nextly_meta", {
@@ -254,6 +257,7 @@ async function removeRecordedFiles(
   await db.delete("nextly_meta", {
     and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
   });
+  return true;
 }
 
 /**
@@ -263,14 +267,16 @@ async function removeRecordedFiles(
  * window, a folder deleted with its contents). The records are read in one
  * query, so a caller hands it a bounded run of ids. Never fails the delete
  * that has already committed: what cannot be removed is named in the log.
+ * Answers whether every record could be read and acted on; one that could
+ * not stays, for a later run to finish.
  */
 export async function removeKeptFiles(
   db: DrizzleAdapter,
   storage: StoredFileRemover,
   logger: Logger,
   mediaIds: readonly string[]
-): Promise<void> {
-  if (mediaIds.length === 0) return;
+): Promise<boolean> {
+  if (mediaIds.length === 0) return true;
   let rows: Array<Record<string, unknown>>;
   try {
     rows = await db.select<Record<string, unknown>>("nextly_meta", {
@@ -284,16 +290,21 @@ export async function removeKeptFiles(
       mediaIds,
       error: errorForLog(error),
     });
-    return;
+    return false;
   }
+  let finished = true;
   for (const { mediaId, record } of replacedRecordsOf(rows)) {
     try {
-      await removeRecordedFiles(db, storage, logger, mediaId, record);
+      if (!(await removeRecordedFiles(db, storage, logger, mediaId, record))) {
+        finished = false;
+      }
     } catch (error) {
+      finished = false;
       logger.warn("[MediaService] Kept files not removed", {
         mediaId,
         error: errorForLog(error),
       });
     }
   }
+  return finished;
 }

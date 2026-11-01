@@ -13,14 +13,18 @@ import { enqueueInTransaction } from "../jobs/jobs-repository";
 
 import { MEDIA_FINALIZE_DELETES_JOB } from "./finalize-deletes-job";
 import { PendingMediaDeletes } from "./pending-delete";
+import type { MediaService } from "./services/media-service";
 
 /** The marks over the booted instance, judged at `now` when one is given. */
 export function bootedPendingDeletes(now?: () => Date): PendingMediaDeletes {
   const adapter = getService("adapter");
-  const media = getService("mediaService");
+  // Named by its type, the class whose methods the deletes below call.
+  const media: MediaService = getService("mediaService");
   return new PendingMediaDeletes({
     db: adapter,
-    deleteItem: (mediaId, actor) => media.delete(mediaId, {}, actor),
+    deleteItem: (mediaId, actor, claim) =>
+      media.delete(mediaId, {}, actor, claim),
+    removeFiles: (mediaId, files) => media.removeFilesOfDeleted(mediaId, files),
     logger: getNextlyLogger(),
     // Queued in the transaction that writes the marks, so the job exists
     // exactly when they do.

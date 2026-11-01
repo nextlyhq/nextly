@@ -92,7 +92,9 @@ import {
   type Media as LegacyMedia,
 } from "../../../types/media";
 import type { MediaLibraryCounts } from "../media-library-query";
+import type { DeleteClaim } from "../pending-delete";
 import { withMediaRevalidationBatch } from "../revalidate-media";
+import type { MediaFilesRecord } from "../stored-files";
 import type {
   MediaFile,
   UploadMediaInput,
@@ -770,7 +772,10 @@ export class MediaService {
     mediaId: string,
     context: RequestContext,
     // The transport-resolved caller, threaded to the outbox event.
-    actor?: RequestActor
+    actor?: RequestActor,
+    // Run in the delete's transaction, for the end of an Undo window: see
+    // the legacy service's `deleteMedia`.
+    claim?: DeleteClaim
   ): Promise<void> {
     this.logger.debug("Deleting media file", { mediaId });
 
@@ -782,7 +787,8 @@ export class MediaService {
 
     const result = await this.legacyMediaService.deleteMedia(
       mediaId,
-      resolvedActor
+      resolvedActor,
+      claim
     );
 
     if (!result.success) {
@@ -801,6 +807,18 @@ export class MediaService {
 
     // The delete committed a media.deleted outbox row; drain and prune it.
     await this.afterWrite();
+  }
+
+  /**
+   * Remove the stored files of an item already deleted, `record` being its
+   * row as it was; answers whether it could finish. For a delete whose
+   * claimer removes the files, and to finish a removal cut short.
+   */
+  removeFilesOfDeleted(
+    mediaId: string,
+    record: MediaFilesRecord
+  ): Promise<boolean> {
+    return this.legacyMediaService.removeFilesOfDeleted(mediaId, record);
   }
 
   /**

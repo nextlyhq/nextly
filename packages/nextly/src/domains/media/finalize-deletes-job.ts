@@ -10,10 +10,12 @@
  *
  * The delete's own timer still finishes it at once on a server that keeps
  * running, and the library's reads still sweep any mark left due; whichever
- * comes first takes each mark by the one guarded statement
- * (`PendingMediaDeletes`), so this is idempotent: an item already finished,
- * or brought back by Undo, has no mark left and is passed over. A delete that
- * fails puts its mark back, already due, and the job is tried again.
+ * comes first takes each mark by the one guarded statement, in the
+ * transaction that removes the item's row (`PendingMediaDeletes`), so this is
+ * idempotent: an item already finished, or brought back by Undo, has no mark
+ * left and is passed over. A delete that fails leaves its mark, already due,
+ * and one whose files were not all removed leaves a record of them, and the
+ * job is tried again.
  *
  * @module domains/media/finalize-deletes-job
  */
@@ -58,9 +60,11 @@ export function createMediaFinalizeDeletesJob(
       if (!read.success) return;
       const deletes: PendingMediaDeletes = await pending(context.now);
       await deletes.finalizeMarked(read.data.ids);
-      // A mark still due is a delete that failed and was put back: thrown,
-      // so the queue tries again. A mark not yet due is another delete's,
-      // made after an Undo, and that delete's own job finishes it.
+      // A mark still due is a delete that failed, and files still recorded
+      // as left to remove are a removal cut short: thrown, so the queue
+      // tries again, and a run delivered again finishes them. A mark not yet
+      // due is another delete's, made after an Undo, and that delete's own
+      // job finishes it.
       const left = await deletes.dueAmong(read.data.ids);
       if (left.length > 0) {
         throw NextlyError.internal({
