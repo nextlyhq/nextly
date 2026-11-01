@@ -475,14 +475,112 @@ async function foreignKeysToImageSizes(
   return rowsOf<InboundForeignKey>(db, dialect, statement);
 }
 
+/** A view or a trigger, as each dialect's catalogue keeps its SQL. */
+interface SchemaObjectSql {
+  kind: string;
+  name: string;
+  /** A trigger's table; null for a view. */
+  on: string | null;
+  body: string | null;
+}
+
+/** Whether `text` names `identifier` as a whole name, quoted or not. */
+function namesIdentifier(text: string, identifier: string): boolean {
+  return new RegExp(
+    `(^|[^A-Za-z0-9_$])${identifier}([^A-Za-z0-9_$]|$)`,
+    "i"
+  ).test(text);
+}
+
+/**
+ * The views and triggers whose SQL uses what the drop removes: the
+ * `image_sizes` table, or the media table's `sizes` column. Each dialect
+ * keeps that SQL and lets the drop go on under it, or refuses with an error
+ * only partway: SQLite and MySQL keep a view over the dropped table, which
+ * then fails on every read; a trigger's body, or on PostgreSQL its
+ * function's, is kept everywhere and fails when it fires; and the column's
+ * drop under a view is refused by PostgreSQL and SQLite, SQLite's after the
+ * table has gone. Judged from the SQL text, as no dialect records what a
+ * trigger body uses: a whole-name match can only refuse more, naming what it
+ * refused for. A trigger on `image_sizes` itself goes with the table.
+ */
+async function schemaObjectsUsingRetired(
+  db: unknown,
+  dialect: SupportedDialect,
+  objects: RetiredObjects
+): Promise<string[]> {
+  if (!objects.column && objects.tableRows === null) return [];
+  const found = await rowsOf<SchemaObjectSql>(
+    db,
+    dialect,
+    viewsAndTriggersStatement(dialect)
+  );
+  return found.flatMap(object => {
+    const use = retiredUseOf(object, objects);
+    return use === null ? [] : [use];
+  });
+}
+
+/**
+ * Each dialect's views and triggers, with their SQL: a view's definition,
+ * a trigger's body, or on PostgreSQL its function's. Every name that
+ * matters contains `sizes`, so only those are read.
+ */
+function viewsAndTriggersStatement(dialect: SupportedDialect): SQL {
+  const kind = sql.identifier("kind");
+  const name = sql.identifier("name");
+  const on = sql.identifier("on");
+  const body = sql.identifier("body");
+  if (dialect === "postgresql") {
+    return sql`SELECT 'view' AS ${kind}, viewname AS ${name}, NULL AS ${on}, definition AS ${body} FROM pg_views WHERE schemaname = current_schema() AND definition ILIKE '%sizes%' UNION ALL SELECT 'trigger', t.tgname, c.relname, p.prosrc FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_proc p ON p.oid = t.tgfoid WHERE NOT t.tgisinternal AND n.nspname = current_schema() AND p.prosrc ILIKE '%sizes%'`;
+  }
+  if (dialect === "mysql") {
+    return sql`SELECT 'view' AS ${kind}, TABLE_NAME AS ${name}, NULL AS ${on}, VIEW_DEFINITION AS ${body} FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() AND VIEW_DEFINITION LIKE '%sizes%' UNION ALL SELECT 'trigger', TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND ACTION_STATEMENT LIKE '%sizes%'`;
+  }
+  return sql`SELECT type AS ${kind}, name AS ${name}, CASE WHEN type = 'trigger' THEN tbl_name END AS ${on}, sql AS ${body} FROM sqlite_master WHERE type IN ('view', 'trigger') AND sql LIKE '%sizes%'`;
+}
+
+/**
+ * How a view or trigger uses what the drop removes, for the refusal, or
+ * null when it uses neither: the `image_sizes` table, unless it is a
+ * trigger on that table, which goes with it; or the media table's `sizes`
+ * column, named beside the media table or in a trigger on it.
+ */
+function retiredUseOf(
+  object: SchemaObjectSql,
+  objects: RetiredObjects
+): string | null {
+  const text = object.body ?? "";
+  const uses: string[] = [];
+  if (
+    objects.tableRows !== null &&
+    object.on !== RETIRED_IMAGE_SIZES_TABLE &&
+    namesIdentifier(text, RETIRED_IMAGE_SIZES_TABLE)
+  ) {
+    uses.push(`the \`${RETIRED_IMAGE_SIZES_TABLE}\` table`);
+  }
+  const onMedia = object.on === "media" || namesIdentifier(text, "media");
+  if (
+    objects.column &&
+    onMedia &&
+    namesIdentifier(text, RETIRED_SIZES_COLUMN)
+  ) {
+    uses.push(`the \`media.${RETIRED_SIZES_COLUMN}\` column`);
+  }
+  if (uses.length === 0) return null;
+  const where = object.on === null ? "" : ` on \`${object.on}\``;
+  return `${object.kind} \`${object.name}\`${where} uses ${uses.join(" and ")}`;
+}
+
 /**
  * Why nothing may be dropped now, or null when the drop may go on: a media
  * item still naming a size file, which dropping the column would leave in
- * storage with nothing pointing at it, or a foreign key another table holds
- * to `image_sizes`. That key is an app's, and dropping the table would break
- * it, or on PostgreSQL remove it with the table. Either refuses the whole
- * drop, the column included: the column is what shows the table is Nextly's
- * on the next run.
+ * storage with nothing pointing at it, a foreign key another table holds
+ * to `image_sizes`, or a view or trigger using either
+ * (`schemaObjectsUsingRetired`). Those are an app's, and the drop would break
+ * them, or on PostgreSQL remove a key with the table. Any of them refuses
+ * the whole drop, the column included: the column is what shows the table
+ * is Nextly's on the next run.
  */
 async function dropRefusal(
   db: unknown,
@@ -500,6 +598,10 @@ async function dropRefusal(
     if (keys.length > 0) {
       return `Dropped nothing: the \`${RETIRED_IMAGE_SIZES_TABLE}\` table has foreign keys from other tables (${keys.map(key => `${key.table}: ${key.name}`).join(", ")}), which dropping it would break. Drop or change those foreign keys, then run this again.`;
     }
+  }
+  const using = await schemaObjectsUsingRetired(db, dialect, objects);
+  if (using.length > 0) {
+    return `Dropped nothing: ${using.join("; ")}, which the drop would break. Drop or change ${using.length === 1 ? "it" : "them"}, then run this again.`;
   }
   return null;
 }

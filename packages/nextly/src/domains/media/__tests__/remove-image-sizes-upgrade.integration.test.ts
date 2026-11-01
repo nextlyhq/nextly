@@ -636,6 +636,114 @@ describe.each(availableDialects())(
       });
     });
 
+    /**
+     * An app's view or trigger that uses the table or the column. SQLite and
+     * MySQL drop the table under a view and keep the view, which then fails
+     * on every read; a trigger's body is kept on every dialect and fails when
+     * it fires; and the column's drop is refused by PostgreSQL and SQLite
+     * with a raw error, SQLite's after the table has already gone.
+     */
+    const dependents: Array<{
+      what: string;
+      name: string;
+      create: (q: string) => string[];
+      use: (q: string) => string;
+      remove: (q: string) => string[];
+    }> = [
+      {
+        what: "a view over the image_sizes table",
+        name: "app_size_names",
+        create: q => [
+          `CREATE VIEW ${q}app_size_names${q} AS SELECT ${q}name${q} FROM ${q}image_sizes${q}`,
+        ],
+        use: q => `SELECT * FROM ${q}app_size_names${q}`,
+        remove: q => [`DROP VIEW ${q}app_size_names${q}`],
+      },
+      {
+        what: "a view over the media table's sizes column",
+        name: "app_media_sizes",
+        create: q => [
+          `CREATE VIEW ${q}app_media_sizes${q} AS SELECT ${q}id${q}, ${q}sizes${q} FROM ${q}media${q}`,
+        ],
+        use: q => `SELECT * FROM ${q}app_media_sizes${q}`,
+        remove: q => [`DROP VIEW ${q}app_media_sizes${q}`],
+      },
+      {
+        what: "a trigger that writes the media table's sizes column",
+        name: "app_clear_sizes",
+        create: q => {
+          const log = `CREATE TABLE ${q}app_log${q} (${q}x${q} ${dialect === "mysql" ? "varchar(36)" : "text"})`;
+          const write = `UPDATE ${q}media${q} SET ${q}sizes${q} = NULL`;
+          if (dialect === "postgresql") {
+            return [
+              log,
+              `CREATE FUNCTION app_clear_sizes_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ${write}; RETURN NEW; END $$`,
+              `CREATE TRIGGER app_clear_sizes AFTER INSERT ON app_log FOR EACH ROW EXECUTE FUNCTION app_clear_sizes_fn()`,
+            ];
+          }
+          return dialect === "mysql"
+            ? [
+                log,
+                `CREATE TRIGGER app_clear_sizes AFTER INSERT ON app_log FOR EACH ROW ${write}`,
+              ]
+            : [
+                log,
+                `CREATE TRIGGER app_clear_sizes AFTER INSERT ON app_log BEGIN ${write}; END`,
+              ];
+        },
+        use: q => `INSERT INTO ${q}app_log${q} (${q}x${q}) VALUES ('a')`,
+        remove: q =>
+          dialect === "postgresql"
+            ? [
+                "DROP TRIGGER app_clear_sizes ON app_log",
+                "DROP FUNCTION app_clear_sizes_fn()",
+              ]
+            : [`DROP TRIGGER ${q}app_clear_sizes${q}`],
+      },
+    ];
+
+    it.each(dependents)(
+      "drops nothing while $what, names it, and drops both once it is gone",
+      async ({ name, create, use, remove }) => {
+        await withFreshDatabase(dialect, "nextly_sizes_dep", async fresh => {
+          await buildCurrentCoreSchema(fresh);
+          await addRetiredImageSizes(dialect, statement =>
+            fresh.exec(statement)
+          );
+          const q = dialect === "mysql" ? "`" : '"';
+          for (const statement of create(q)) await fresh.exec(statement);
+          const drop = async () => {
+            const lines: string[] = [];
+            const code = await dropRetiredImageSizes({
+              db: fresh.db,
+              dialect,
+              executeSql: statement => fresh.exec(statement),
+              say: line => lines.push(line),
+            });
+            return { code, said: lines.join("\n") };
+          };
+
+          const refused = await drop();
+
+          expect(refused.code).toBe(1);
+          expect(refused.said).toContain("Dropped nothing:");
+          expect(refused.said).toContain(name);
+          expect(await retired(fresh)).toEqual({ column: true, table: true });
+          // The app's object still works.
+          await fresh.exec(use(q));
+
+          // The control: with that object gone, nothing else stops the drop.
+          for (const statement of remove(q)) await fresh.exec(statement);
+          const dropped = await drop();
+          expect(dropped.code).toBe(0);
+          expect(await retired(fresh)).toEqual({
+            column: false,
+            table: false,
+          });
+        });
+      }
+    );
+
     it("has `nextly migrate --dry-run` name exactly what is there", async () => {
       await withFreshDatabase(dialect, "nextly_sizes_preview", async fresh => {
         await buildCurrentCoreSchema(fresh);
