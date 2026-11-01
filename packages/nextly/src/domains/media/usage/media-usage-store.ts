@@ -447,7 +447,7 @@ export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded:2";
  * give the same build saw no rebuild finish between them, so what was read
  * between them came from that one complete record.
  */
-export async function mediaUsageRecordBuild(
+async function mediaUsageRecordBuild(
   db: Pick<UsageDb, "select">
 ): Promise<string | null> {
   const rows = await db.select<Record<string, unknown>>("nextly_meta", {
@@ -459,6 +459,25 @@ export async function mediaUsageRecordBuild(
   if (rows.length === 0) return null;
   const value = rows[0].value;
   return typeof value === "string" ? value : JSON.stringify(value ?? null);
+}
+
+/**
+ * `read()`, and whether the record it read was complete: the build is read
+ * before and after it, and only one build standing throughout, the same
+ * before and after, counts. A rebuild that starts, finishes or runs whole
+ * between the two reads leaves them different or absent, so whatever `read`
+ * saw of a record being rebuilt is never taken as complete. The one check
+ * every answer about the record makes: the library's counts and an item's
+ * uses.
+ */
+export async function readWithinOneBuild<T>(
+  db: Pick<UsageDb, "select">,
+  read: () => Promise<T>
+): Promise<{ value: T; recorded: boolean }> {
+  const before = await mediaUsageRecordBuild(db);
+  const value = await read();
+  const after = await mediaUsageRecordBuild(db);
+  return { value, recorded: before !== null && before === after };
 }
 
 /**

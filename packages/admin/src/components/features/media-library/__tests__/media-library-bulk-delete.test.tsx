@@ -47,6 +47,8 @@ import { MediaProvider } from "@admin/context/providers/MediaProvider";
 import { MediaLibrary } from "..";
 
 const COUNT = 150;
+/** An item an earlier delete had already marked. */
+const EARLIER = "m5";
 /** The list's first page; the rest are on the second. */
 const PAGE = 96;
 
@@ -99,7 +101,8 @@ beforeEach(() => {
     if (url === "/admin/api/media/deletions") {
       return Promise.resolve({
         ids: sent,
-        marked: sent,
+        // `m5` was already waiting to be deleted, from an earlier delete.
+        marked: sent.filter(id => id !== EARLIER),
         deleteAfter: new Date(Date.now() + 10_000).toISOString(),
       });
     }
@@ -111,7 +114,7 @@ beforeEach(() => {
 });
 
 describe("a bulk delete of more than one page of items", () => {
-  it("sends the selection as one request, with one Undo for all of it", async () => {
+  it("sends the selection as one request, with one Undo for what it marked", async () => {
     renderWithProviders(
       <MediaProvider>
         <MediaLibrary />
@@ -159,7 +162,10 @@ describe("a bulk delete of more than one page of items", () => {
     act(() => options.action.onClick());
 
     await waitFor(() =>
-      expect(sentTo("/admin/api/media/deletions/undo")).toEqual([all])
+      // Only what this delete marked: the earlier delete is left alone.
+      expect(sentTo("/admin/api/media/deletions/undo")).toEqual([
+        all.filter(id => id !== EARLIER),
+      ])
     );
     await waitFor(() =>
       expect(toasts.toast.success).toHaveBeenCalledWith(

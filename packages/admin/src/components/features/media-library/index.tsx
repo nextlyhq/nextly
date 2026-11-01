@@ -479,8 +479,11 @@ export function MediaLibrary({
         for (const id of ids) next.delete(id);
         return next;
       });
+      // Undo takes back only what this delete marked: an item an earlier
+      // delete marked stays as that delete left it, with its own Undo.
+      const own = pending.marked;
       const left = Date.parse(pending.deleteAfter) - Date.now();
-      if (!(left > 0)) {
+      if (!(left > 0) || own.length === 0) {
         setAnnouncement(`${label} deleted.`);
         toast(`${label} deleted`);
         return;
@@ -493,7 +496,7 @@ export function MediaLibrary({
         duration: left,
         action: {
           label: "Undo",
-          onClick: () => void handleUndoDelete(ids, label),
+          onClick: () => void handleUndoDelete(own, label),
         },
       });
     },

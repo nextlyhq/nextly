@@ -961,19 +961,23 @@ async function handleUndoDeleteMedia(request: Request): Promise<Response> {
 }
 
 /**
- * Whether the usage record has been built for content written before it
- * existed. Until it has, a use the record lacks may still be in some
- * document, so an item listing no use is not known to be unused, and a
+ * `read()` and whether the usage record it read was complete: built for
+ * content written before it existed, and the same build throughout
+ * (`readWithinOneBuild`). Until it is, a use the record lacks may still be in
+ * some document, so an item listing no use is not known to be unused, and a
  * Replace keeps the old file whatever the record lists.
  */
-async function usageRecordBuilt(): Promise<boolean> {
-  const { mediaUsagePresent, mediaUsageRecorded } = await import(
+async function readUsageRecord<T>(
+  read: () => Promise<T>
+): Promise<{ value: T; recorded: boolean }> {
+  const { mediaUsagePresent, readWithinOneBuild } = await import(
     "../domains/media/usage/media-usage-store"
   );
   const adapter = getService("adapter");
-  return (
-    (await mediaUsagePresent(adapter)) && (await mediaUsageRecorded(adapter))
-  );
+  if (!(await mediaUsagePresent(adapter))) {
+    return { value: await read(), recorded: false };
+  }
+  return readWithinOneBuild(adapter, read);
 }
 
 /**
@@ -1010,15 +1014,20 @@ async function handleMediaUsage(
     usageQuerySchema,
     Object.fromEntries(new URL(request.url).searchParams)
   );
-  const uses = await mediaUsesOf(
-    mediaId,
-    source.bootedMediaUsesSource(getService("adapter"), await readCaller(auth)),
-    { byAddressOnly: byAddress }
+  const caller = await readCaller(auth);
+  // The uses, read within one build of the record, so a rebuild meanwhile
+  // never lets a partial list read as complete.
+  const { value: uses, recorded } = await readUsageRecord(() =>
+    mediaUsesOf(
+      mediaId,
+      source.bootedMediaUsesSource(getService("adapter"), caller),
+      { byAddressOnly: byAddress }
+    )
   );
   // Said of every answer: whether the record is built. Of the uses by
   // address, also how many avatars and logos keep the item's address.
   const recordMeta = {
-    usageRecorded: await usageRecordBuilt(),
+    usageRecorded: recorded,
     ...(byAddress
       ? {
           heldByAddress: item.url

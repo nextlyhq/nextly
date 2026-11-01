@@ -274,38 +274,37 @@ export class MediaService extends BaseService {
     // Loaded when the library is read, not with the service.
     const [
       { mediaLibraryCountsOf, missingAltText, notPendingDelete, unusedItem },
-      { mediaUsageRecordBuild },
+      { readWithinOneBuild },
     ] = await Promise.all([
       import("../domains/media/media-library-query"),
       import("../domains/media/usage/media-usage-store"),
     ]);
-    // The record's build, read before the counting and again after it: the
+    // Counted within one build of the record (`readWithinOneBuild`): the
     // counts are trusted as complete only when one build stood throughout,
     // so a rebuild that starts or finishes meanwhile reads as unbuilt.
     const present = unused !== null;
-    const before = present ? await mediaUsageRecordBuild(this.adapter) : null;
-    const groups = await this.db
-      .select({
-        folderId: media.folderId,
-        items: count(),
-        missingAlt: sql<
-          number | string | null
-        >`SUM(CASE WHEN ${missingAltText(media)} THEN 1 ELSE 0 END)`,
-        unused: unused
-          ? sql<
-              number | string | null
-            >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
-          : sql<number>`0`,
-      })
-      .from(media)
-      // Never an item deleted inside the Undo window, as every library read.
-      .where(notPendingDelete(media))
-      .groupBy(media.folderId);
-    const after = present ? await mediaUsageRecordBuild(this.adapter) : null;
-    return mediaLibraryCountsOf(groups, {
-      present,
-      recorded: before !== null && before === after,
-    });
+    const countGroups = () =>
+      this.db
+        .select({
+          folderId: media.folderId,
+          items: count(),
+          missingAlt: sql<
+            number | string | null
+          >`SUM(CASE WHEN ${missingAltText(media)} THEN 1 ELSE 0 END)`,
+          unused: unused
+            ? sql<
+                number | string | null
+              >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
+            : sql<number>`0`,
+        })
+        .from(media)
+        // Never an item deleted inside the Undo window, as every library read.
+        .where(notPendingDelete(media))
+        .groupBy(media.folderId);
+    const { value: groups, recorded } = present
+      ? await readWithinOneBuild(this.adapter, countGroups)
+      : { value: await countGroups(), recorded: false };
+    return mediaLibraryCountsOf(groups, { present, recorded });
   }
 
   /**

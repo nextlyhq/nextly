@@ -38,8 +38,11 @@ Media Replace, delete and Undo are safer.
 - A page that still names a replaced file's old address goes on counting as a
   use when it is saved again, so the item is not shown as unused and its old
   file is not deleted without warning.
-- Deleting more than 100 selected items works: the admin sends them in
-  batches of at most 100 under one Undo.
+- Deleting a selection across pages works: up to 1,000 items
+  (`MEDIA_DELETE_LIMIT`, exported from `nextly/config`) are deleted in one
+  request, all of them or none, under one Undo. A larger selection is
+  refused before you confirm. Undo brings back only what that delete
+  removed, never an item another delete was already removing.
 - Every item of a large delete is removed once its Undo window ends, not just
   the first 25.
 - Undo of several items brings back all of them or none of them.

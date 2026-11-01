@@ -671,6 +671,45 @@ describe.each(getConfiguredTestDialects())(
       ).toContain(loose.id);
     });
 
+    it("says the usage record is unbuilt when a rebuild finishes while the uses are read", async () => {
+      const image = await looseImage();
+      const meta = t.getService("metaService");
+      // The first read of the mark is answered, and then a rebuild finishes:
+      // the mark is written anew before anything else is read.
+      const original = t.adapter.select.bind(t.adapter);
+      let flipped = false;
+      t.adapter.select = (async (
+        table: string,
+        options?: Parameters<typeof original>[1]
+      ) => {
+        const rows = await original(table, options);
+        if (
+          !flipped &&
+          table === "nextly_meta" &&
+          JSON.stringify(options).includes(MEDIA_USAGE_RECORDED_KEY)
+        ) {
+          flipped = true;
+          await meta.set(MEDIA_USAGE_RECORDED_KEY, {
+            rebuiltAt: new Date(Date.now() + 1_000).toISOString(),
+          });
+        }
+        return rows;
+      }) as typeof t.adapter.select;
+      let answer: Doc;
+      try {
+        answer = await usageOf(editor, image.id);
+      } finally {
+        t.adapter.select = original;
+      }
+
+      expect(flipped).toBe(true);
+      expect(answer.meta).toMatchObject({ usageRecorded: false });
+      // POSITIVE CONTROL: with no rebuild meanwhile, the record reads as built.
+      expect((await usageOf(editor, image.id)).meta).toMatchObject({
+        usageRecorded: true,
+      });
+    });
+
     it("says on every usage answer whether the usage record is built", async () => {
       const image = await looseImage();
       expect((await usageOf(editor, image.id)).meta).toMatchObject({
