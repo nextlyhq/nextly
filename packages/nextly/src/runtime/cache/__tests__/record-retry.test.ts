@@ -26,8 +26,10 @@ import {
   isEntryExpired,
   LEDGER_CALL_TIMEOUT_MS,
   localNow,
+  MAX_LEDGER_CALLS_IN_FLIGHT,
   publishTagExpiryLedger,
   refreshTagExpiries,
+  refusalLanded,
   TAG_LOOKUP_TTL_MS,
 } from "../tag-expiry-view";
 import { HANDOFF_TIMEOUT_MS, handOffWithin } from "../next-cache-revalidator";
@@ -408,6 +410,179 @@ describe("a record the ledger refused", () => {
       await vi.advanceTimersByTimeAsync(MAX_RETRY_DELAY_MS);
     }
     expect(refusals().size).toBe(0);
+  });
+
+  it("does not let a stuck call of a withdrawn ledger hold back the one installed after it", async () => {
+    const wedged = vi.fn(
+      () => new Promise<Map<string, number>>(() => undefined)
+    );
+    publishTagExpiryLedger({
+      record: wedged,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    const first = expireTags(["posts"]);
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(await first).toBe("failed");
+
+    // A healthy ledger replaces it, while the old call never answers.
+    const healthy = vi.fn(
+      async (tags: readonly string[]) =>
+        new Map(tags.map(tag => [tag, Date.now()] as const))
+    );
+    publishTagExpiryLedger({
+      record: healthy,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    expect(await expireTags(["pages"])).toBe("recorded");
+    expect(healthy).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts no more than its limit of ledger calls at once, before any is given up on", async () => {
+    let started = 0;
+    const record = vi.fn(() => {
+      started += 1;
+      return new Promise<Map<string, number>>(() => undefined);
+    });
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    // A burst of writes in the first moment of an outage.
+    const writes = Array.from(
+      { length: 3 * MAX_LEDGER_CALLS_IN_FLIGHT },
+      (_, i) => expireTags([`t${i}`])
+    );
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(await Promise.all(writes)).toEqual(writes.map(() => "failed"));
+    expect(started, "calls the database was asked to run").toBe(
+      MAX_LEDGER_CALLS_IN_FLIGHT
+    );
+  });
+
+  it("lets a stuck record's late landing cover its refusal, though a retry was turned away meanwhile", async () => {
+    let land: (() => void) | undefined;
+    const record = vi.fn(
+      (tags: readonly string[]) =>
+        new Promise<Map<string, number>>(resolve => {
+          land = () =>
+            resolve(new Map(tags.map(tag => [tag, Date.now()] as const)));
+        })
+    );
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    const first = expireTags(["posts"]);
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(await first).toBe("failed");
+    holdFailedRecord(["posts"]);
+    // The first retry is turned away: the record is still stuck.
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    expect(record).toHaveBeenCalledTimes(1);
+
+    // The stuck record lands, and the next retry has nothing to make again.
+    land?.();
+    await vi.advanceTimersByTimeAsync(2 * FIRST_RETRY_DELAY_MS);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls.map(([entry]) => entry.kind)).toContain(
+      "cache-tag-record-recovered"
+    );
+  });
+
+  it("starts no record of a ledger withdrawn while it waited for a slot, so its landing cannot cover a refusal of the next", async () => {
+    const lands: (() => void)[] = [];
+    const withdrawn = vi.fn(
+      (tags: readonly string[]) =>
+        new Promise<Map<string, number>>(resolve => {
+          lands.push(() =>
+            resolve(new Map(tags.map(tag => [tag, Date.now()] as const)))
+          );
+        })
+    );
+    publishTagExpiryLedger({
+      record: withdrawn,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    const busy = Array.from({ length: MAX_LEDGER_CALLS_IN_FLIGHT }, (_, i) =>
+      expireTags([`t${i}`])
+    );
+    // Every slot is taken, so this write waits for one.
+    const waiting = expireTags(["posts"]);
+
+    // The next ledger is installed and refuses the same tag.
+    ledgerThat(() => "refuse");
+    expect(await expireTags(["posts"])).toBe("failed");
+
+    // The withdrawn ledger's calls answer, freeing their slots.
+    for (const land of lands) land();
+    await vi.advanceTimersByTimeAsync(0);
+    for (const land of lands) land();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Only the calls started before the withdrawal reached it, and the
+    // current ledger's refusal is still waiting for a retry to record it.
+    expect(withdrawn).toHaveBeenCalledTimes(MAX_LEDGER_CALLS_IN_FLIGHT);
+    expect(refusalLanded("posts")).toBe(false);
+    expect(await waiting).toBe("failed");
+    expect(await Promise.all(busy)).toEqual(busy.map(() => "recorded"));
+  });
+
+  it("turns away the calls waiting on a withdrawn ledger's slots at once, rather than at the end of their wait", async () => {
+    publishTagExpiryLedger({
+      record: () => new Promise<Map<string, number>>(() => undefined),
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    for (let i = 0; i < MAX_LEDGER_CALLS_IN_FLIGHT; i += 1) {
+      void expireTags([`t${i}`]);
+    }
+    let answered: string | undefined;
+    void expireTags(["posts"]).then(outcome => {
+      answered = outcome;
+    });
+
+    ledgerThat(() => "ok");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answered).toBe("failed");
+  });
+
+  it("starts no call handed a slot once another of its kind has been given up on", async () => {
+    const lands: (() => void)[] = [];
+    const record = vi.fn(
+      (tags: readonly string[]) =>
+        new Promise<Map<string, number>>(resolve => {
+          lands.push(() =>
+            resolve(new Map(tags.map(tag => [tag, Date.now()] as const)))
+          );
+        })
+    );
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    const first = expireTags(["t0"]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (let i = 1; i < MAX_LEDGER_CALLS_IN_FLIGHT; i += 1) {
+      void expireTags([`t${i}`]);
+    }
+    // Queued a second after the first call started, so its own wait outlasts
+    // the moment the first is given up on.
+    const waiting = expireTags(["posts"]);
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS - 1_000);
+    expect(await first).toBe("failed");
+
+    // A call still within its bound answers and hands its slot on, while the
+    // first is still stuck.
+    lands[1]?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(record).toHaveBeenCalledTimes(MAX_LEDGER_CALLS_IN_FLIGHT);
+    expect(await waiting).toBe("failed");
   });
 
   it("stops retrying once the ledger has no table: no instance reads expiries until it does", async () => {
