@@ -398,10 +398,10 @@ an answer arrives.
 >
 > `total` is how many rows the read matched in all, for the card's "View all (N)" link.
 
-There is no core view for a column of shortcuts, for prose, or for several numbers in one card,
-which the older contribution shape drew as its `actions`, `text` and `stats` archetypes. A
-declared widget draws one of those with its own component, below. `access` gates the whole
-card: nothing in a declaration gates one item inside it.
+There is no core view for a column of shortcuts, for prose, or for several numbers in one card.
+A widget declared with `defineWidget` under `contributes.dashboard` draws one of those with its
+own component, below, handed its `load`'s data. `access` gates the whole card: nothing in a
+declaration gates one item inside it.
 
 ### Where a card sits
 
