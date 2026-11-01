@@ -668,6 +668,33 @@ describe("deleting a folder with its contents", () => {
     expect(await onDisk()).toEqual([]);
   });
 
+  // An item can come into the folder after the delete's first reads and
+  // before its transaction locks the folder. It is deleted with the rest, so
+  // its retired sizes are read for the rows the transaction holds, not for
+  // the ones the folder held when the delete began.
+  it("removes the size files of an item moved into the folder as its delete begins", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    await uploadPhoto(folder);
+    const moved = await uploadPhoto();
+    const begin = db.adapter.transaction.bind(db.adapter);
+    vi.spyOn(db.adapter, "transaction").mockImplementationOnce(
+      async (...args: Parameters<typeof begin>) => {
+        await db.db
+          .update(db.schema.media)
+          .set({ folderId: folder })
+          .where(eq(db.schema.media.id, moved));
+        return begin(...args);
+      }
+    );
+
+    const result = await folders().deleteFolder(folder, true);
+
+    expect(result.success).toBe(true);
+    expect(result.deletedMedia).toBe(2);
+    expect(await onDisk()).toEqual([]);
+  });
+
   // A caller may still hand over storage with `bulkDelete`, as the cleanup
   // argument took before.
   it("hands a given storage every file of each item, once its rows are gone", async () => {
