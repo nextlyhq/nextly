@@ -34,6 +34,6 @@ Core's Content, Team, Continue where you left off, Upcoming releases and Team ac
 Removed exports:
 
 - `nextly/widget-result`: `WidgetComponentProps`. A widget's component is handed `WidgetProps`.
-- `nextly/widget-gate`: `WidgetPermissionGate`. A gate is typed `WidgetAccessGate`, from `nextly`.
+- `nextly/widget-gate`: `WidgetPermissionGate`. A gate is typed `WidgetAccessGate`, from `nextly`. To migrate, import `WidgetAccessGate` from `nextly` in its place, set it as a declared widget's `access`, and write a bare list of permissions (`["a", "b"]`) as `{ anyOf: ["a", "b"] }`.
 
 The dashboard layout read no longer sends each widget's add-panel group, sub-group, sketch or rank; its `available` list is already in the add panel's order.
