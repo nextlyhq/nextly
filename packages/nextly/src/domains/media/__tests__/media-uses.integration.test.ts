@@ -29,8 +29,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { ServiceContainer } from "../../../services/index";
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
+import { listMediaUsagePage } from "../usage/media-usage-store";
 
 type Doc = Record<string, unknown>;
 
@@ -327,6 +329,7 @@ describe.each(getConfiguredTestDialects())(
           ],
         },
       ]);
+      expect(body.meta).toMatchObject({ hiddenCount: 0 });
       expect(body.meta).not.toHaveProperty("hidden");
     });
 
@@ -375,11 +378,7 @@ describe.each(getConfiguredTestDialects())(
         expect(JSON.stringify(body)).not.toContain("privateImage");
         expect(JSON.stringify(body)).not.toContain(onlyId);
         // The document using it only there is counted, never named.
-        expect(
-          (body.meta as { hidden?: Doc[] }).hidden?.find(
-            scope => scope.scopeSlug === "usesprivate"
-          )
-        ).toMatchObject({ count: 1 });
+        expect((body.meta as Doc).hiddenCount).toBeGreaterThanOrEqual(1);
       } finally {
         for (const entryId of [bothId, onlyId]) {
           await handler.deleteEntry({
@@ -399,11 +398,14 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (body.items as Doc[]).map(item => [item.slug, item.documentId])
       ).toEqual([["usesposts", postId]]);
-      expect((body.meta as Doc).hidden).toEqual([
-        { scopeKind: "collection", scopeSlug: "usessecrets", count: 1 },
-        { scopeKind: "email-template", scopeSlug: "", count: 1 },
-      ]);
+      // One count, naming neither the collection nor the templates the
+      // reader may not open, anywhere in what is sent.
+      expect((body.meta as Doc).hiddenCount).toBe(2);
+      expect(body.meta).not.toHaveProperty("hidden");
       const sent = JSON.stringify(body);
+      expect(sent).not.toContain("usessecrets");
+      expect(sent).not.toContain("email-template");
+      expect(sent).not.toContain("scopeSlug");
       expect(sent).not.toContain(secretId);
       expect(sent).not.toContain("Hidden");
       expect(sent).not.toContain("Welcome");
@@ -481,9 +483,7 @@ describe.each(getConfiguredTestDialects())(
         [guide, [["body", ["en"]]]],
         [note, [["body", ["es"]]]],
       ]);
-      expect((body.meta as Doc).hidden).toEqual([
-        { scopeKind: "collection", scopeSlug: "usesguides", count: 1 },
-      ]);
+      expect((body.meta as Doc).hiddenCount).toBe(1);
       // Nothing of the refused translation is sent.
       expect(JSON.stringify(body)).not.toContain(spanishGuide);
     });
@@ -526,7 +526,7 @@ describe.each(getConfiguredTestDialects())(
           `?page=${page}&limit=3`
         );
         expect(status).toBe(200);
-        const meta = json.meta as Doc & { hidden?: Array<{ count: number }> };
+        const meta = json.meta as Doc & { hiddenCount: number };
         expect(meta).toMatchObject({
           total: 7,
           page,
@@ -535,10 +535,7 @@ describe.each(getConfiguredTestDialects())(
           hasPrev: page > 1,
         });
         const items = json.items as Array<{ documentId: string }>;
-        const counted = (meta.hidden ?? []).reduce(
-          (sum, scope) => sum + scope.count,
-          0
-        );
+        const counted = meta.hiddenCount;
         // Each page holds three documents, the last one what is left.
         expect(items.length + counted).toBe(page < 3 ? 3 : 1);
         told.push(...items.map(item => item.documentId));
@@ -548,6 +545,69 @@ describe.each(getConfiguredTestDialects())(
 
       expect(told.sort()).toEqual([...posts].sort());
       expect(hidden).toBe(2);
+    });
+
+    // A Single's id is always "", so a page naming one by its id alone
+    // would read the rows of every Single using the item.
+    it("reads only the rows of the page's documents, however many Singles use the item", async () => {
+      const item = randomUUID();
+      await t.adapter.insert("media", {
+        id: item,
+        filename: `2026/11/${item}.png`,
+        originalFilename: "singles.png",
+        mimeType: "image/png",
+        size: 1,
+        url: `/uploads/2026/11/${item}.png`,
+        uploadedAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const singles = Array.from(
+        { length: 40 },
+        (_, n) => `site${String(n).padStart(2, "0")}`
+      );
+      for (const slug of singles) {
+        await t.adapter.insert(MEDIA_USAGE_TABLE, {
+          id: randomUUID(),
+          mediaId: item,
+          subjectKind: "single",
+          subjectSlug: slug,
+          documentId: "",
+          fieldPath: "logo",
+          locale: "",
+          address: null,
+        });
+      }
+      // How many usage rows each statement brought back.
+      const read: number[] = [];
+      const counting = {
+        select: async <T>(
+          table: string,
+          options: Parameters<TestNextly["adapter"]["select"]>[1]
+        ): Promise<T[]> => {
+          const rows = await t.adapter.select<T>(table, options);
+          if (table === MEDIA_USAGE_TABLE) read.push(rows.length);
+          return rows;
+        },
+        count: t.adapter.count.bind(t.adapter),
+        getCapabilities: t.adapter.getCapabilities.bind(t.adapter),
+      } as unknown as Parameters<typeof listMediaUsagePage>[0];
+
+      for (const offset of [0, 35]) {
+        read.length = 0;
+        const page = await listMediaUsagePage(counting, item, {
+          byAddressOnly: false,
+          offset,
+          limit: 5,
+        });
+
+        expect(page.total).toBe(40);
+        expect(page.rows.map(row => row.subjectSlug)).toEqual(
+          singles.slice(offset, offset + 5)
+        );
+        // The page's five documents, then their five rows: never the other
+        // Singles' rows.
+        expect(read).toEqual([5, 5]);
+      }
     });
 
     it("refuses a page larger than the most one page names", async () => {

@@ -36,6 +36,7 @@
 import crypto from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
@@ -182,6 +183,20 @@ interface FolderStorageCleanup {
     successful: string[];
     failed: Array<{ filePath: string; error: string }>;
   }>;
+}
+
+/**
+ * The answer to a folder delete while the folder holds an item deleted
+ * inside its Undo window: the folder waits for it.
+ */
+function pendingDeletesRefusal(): DeleteFolderOutcome {
+  return {
+    success: false,
+    statusCode: 409,
+    code: "CONFLICT",
+    message:
+      "This folder holds items deleted moments ago that can still be brought back. Try again once their Undo has passed.",
+  };
 }
 
 /** The removal a cascading folder delete runs, from what its caller gave. */
@@ -751,13 +766,7 @@ export class MediaFolderService extends BaseService {
     // deadline (the folder's contents going), so the folder waits for it,
     // with or without its contents.
     if (await this.holdsPendingDeletes(folderId)) {
-      return {
-        success: false,
-        statusCode: 409,
-        code: "CONFLICT",
-        message:
-          "This folder holds items deleted moments ago that can still be brought back. Try again once their Undo has passed.",
-      };
+      return pendingDeletesRefusal();
     }
 
     const contents = await this.getFolderContents(folderId);
@@ -822,6 +831,57 @@ export class MediaFolderService extends BaseService {
     return false;
   }
 
+  /** The folder and every folder under it, as `tx` reads them. */
+  private async subtreeOn(
+    tx: TransactionContext,
+    folderId: string
+  ): Promise<string[]> {
+    const all = [folderId];
+    let level = [folderId];
+    while (level.length > 0) {
+      const next: string[] = [];
+      for (const run of this.idRuns(level, 0)) {
+        const rows = await tx.select<{ id: string }>("media_folders", {
+          columns: ["id"],
+          where: { and: [{ column: "parentId", op: "IN", value: run }] },
+        });
+        next.push(...rows.map(row => String(row.id)));
+      }
+      all.push(...next);
+      level = next;
+    }
+    return all;
+  }
+
+  /**
+   * The ids of the media the folders hold, each row locked on `tx` for the
+   * rest of it: read first, then locked in id order, in runs one statement
+   * may bind, the order a delete that can be undone locks its items in, so
+   * the two take turns rather than each waiting on the other.
+   */
+  private async lockHeldMedia(
+    tx: TransactionContext,
+    folderIds: readonly string[]
+  ): Promise<string[]> {
+    const held: string[] = [];
+    for (const run of this.idRuns(folderIds, 0)) {
+      const rows = await tx.select<{ id: string }>("media", {
+        columns: ["id"],
+        where: { and: [{ column: "folderId", op: "IN", value: run }] },
+      });
+      held.push(...rows.map(row => String(row.id)));
+    }
+    const ordered = [...new Set(held)].sort();
+    for (const run of this.idRuns(ordered, 0)) {
+      await tx.select("media", {
+        columns: ["id"],
+        where: { and: [{ column: "id", op: "IN", value: run }] },
+        forUpdate: true,
+      });
+    }
+    return ordered;
+  }
+
   async deleteFolder(
     folderId: string,
     deleteContents: boolean = false,
@@ -834,8 +894,6 @@ export class MediaFolderService extends BaseService {
   ): Promise<DeleteFolderOutcome> {
     const removeFiles = removalFrom(cleanup);
     try {
-      const { mediaFolders } = this.tables;
-
       const refusal = await this.refuseUndeletableFolder(
         folderId,
         deleteContents
@@ -844,17 +902,15 @@ export class MediaFolderService extends BaseService {
 
       let deletedMediaCount = 0;
       let deletedFoldersCount = 0;
-      // Hoisted: the folder delete below needs this list too, because
-      // `media.folder_id` nulls on its parent's removal and any row still
-      // pointing at one of these folders is changed by it.
-      const subfolderIds = await this.collectAllSubfolderIds(folderId);
-      const allFolderIds = [folderId, ...subfolderIds];
 
       if (deleteContents) {
+        const subfolderIds = await this.collectAllSubfolderIds(folderId);
         deletedFoldersCount = subfolderIds.length;
 
-        const records = await this.collectMediaInFolders(allFolderIds);
-        deletedMediaCount = records.length;
+        const records = await this.collectMediaInFolders([
+          folderId,
+          ...subfolderIds,
+        ]);
 
         // ONE shared-tag flush for a delete that commits in chunks. Each
         // chunk busts its own rows' tags as it commits; this scope holds only
@@ -865,7 +921,7 @@ export class MediaFolderService extends BaseService {
         // validation above and the folder-row delete below emit no media tags,
         // and holding the shared one across them would defer it behind work
         // that has nothing to do with it.
-        await withMediaRevalidationBatch(() =>
+        deletedMediaCount = await withMediaRevalidationBatch(() =>
           this.deleteMediaRowsInChunks(
             records.map(record => record.id),
             removeFiles
@@ -873,38 +929,37 @@ export class MediaFolderService extends BaseService {
         );
       }
 
-      // A file uploaded or moved INTO one of these folders after the
-      // collection above is absent from `records`, and `media.folder_id` is
-      // ON DELETE SET NULL — so the folder delete silently changes that row
-      // while nothing busts its tags. Collected here, as close to the delete
-      // as the code can get, because the gap otherwise spans the storage
-      // cleanup and its retry backoffs.
+      // The folder goes in one transaction with a last look at what it and
+      // every folder under it still hold, read on that transaction: a folder
+      // created under this one meanwhile is cascaded into by the delete, so
+      // its media are read too. `media.folder_id` is ON DELETE SET NULL, so
+      // what is held moves to the library root, and its tags are busted.
       //
-      // The DESCENDANT list is re-derived rather than reused: a folder created
-      // under this one during that same gap is absent from the earlier
-      // snapshot, the root delete cascades into it, and its media would be
-      // re-parented with nothing naming it. Reusing the snapshot covers a file
-      // added to a known folder and misses a file added to a new one.
-      //
-      // This NARROWS the window; it does not close it. A row arriving between
-      // this query and the statement below is still missed, and closing that
-      // needs the two to share a transaction or a lock on the folder rows,
-      // which this method does not have.
-      const currentFolderIds = [
-        folderId,
-        ...(await this.collectAllSubfolderIds(folderId)),
-      ];
-      const strays = await this.collectMediaInFolders(currentFolderIds);
-
-      // Delete folder (CASCADE handles subfolder records)
-      await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
+      // An item marked for a delete since the check above refuses it, with
+      // or without the contents: deleting the item would cut its Undo short,
+      // and moving it would bring it back outside its folder. With the
+      // contents, the items not marked are gone by then (the chunks above
+      // leave a marked one), and the folder stays with what waits.
+      const removal = await this.adapter.transaction(async tx => {
+        const held = await this.lockHeldMedia(
+          tx,
+          await this.subtreeOn(tx, folderId)
+        );
+        // Under the rows' locks, the ones a delete that can be undone takes
+        // to mark them: a mark written since the check above is seen here,
+        // and one written later finds its item already moved or gone.
+        if ((await this.markedAmong(tx, held)).size > 0) return null;
+        await tx.delete("media_folders", {
+          and: [{ column: "id", op: "=", value: folderId }],
+        });
+        return held;
+      });
+      if (removal === null) return pendingDeletesRefusal();
 
       // After the statement, so this only names rows the delete really changed,
       // and inside an enclosing SQLite transaction after that commits.
-      if (strays.length > 0) {
-        await this.afterCommit(() =>
-          revalidateMedia(strays.map(record => record.id))
-        );
+      if (removal.length > 0) {
+        await this.afterCommit(() => revalidateMedia(removal));
       }
 
       return {
@@ -965,8 +1020,9 @@ export class MediaFolderService extends BaseService {
   private async deleteMediaRowsInChunks(
     mediaIds: string[],
     removeFiles: RemoveStoredFiles
-  ): Promise<void> {
-    if (mediaIds.length === 0) return;
+  ): Promise<number> {
+    if (mediaIds.length === 0) return 0;
+    let deleted = 0;
     const chunkSize = 100;
     // In one order, so two deletes holding overlapping chunks cannot each
     // wait on a row the other holds.
@@ -983,13 +1039,33 @@ export class MediaFolderService extends BaseService {
           where: inChunk,
           forUpdate: true,
         });
-        if (current.length > 0) await tx.delete("media", inChunk);
-        return current;
+        // An item marked since the folder was checked waits for its Undo
+        // window: it stays, and so does its folder (`deleteFolder`).
+        const marked = await this.markedAmong(
+          tx,
+          current.map(record => record.id)
+        );
+        const going = current.filter(record => !marked.has(record.id));
+        if (going.length > 0) {
+          await tx.delete("media", {
+            and: [
+              {
+                column: "id",
+                op: "IN",
+                value: going.map(record => record.id),
+              },
+            ],
+          });
+        }
+        return going;
       });
+      deleted += removed.length;
+      if (removed.length === 0) continue;
+      const removedIds = removed.map(record => record.id);
       // After the statement, so this only ever names rows that are gone, and
       // inside an enclosing SQLite transaction after that commits. The files
       // another item still refers to are asked for then (filesKeptByOthers).
-      await this.afterCommit(() => revalidateMedia(chunk));
+      await this.afterCommit(() => revalidateMedia(removedIds));
       await this.afterCommit(async () => {
         const kept = await filesKeptByOthers(
           this.storedFileSearch,
@@ -997,9 +1073,40 @@ export class MediaFolderService extends BaseService {
           removed.map(record => record.id)
         );
         if (kept) await removeFiles(removed, kept);
-        await this.removeKeptFilesOf(removed.map(record => record.id));
+        await this.removeKeptFilesOf(removedIds);
       });
     }
+    return deleted;
+  }
+
+  /**
+   * Which of `ids` are marked for a delete inside its Undo window, as the
+   * latest committed marks say: read with a lock, so on MySQL it is not
+   * answered from a snapshot taken before the rows' locks were waited for.
+   */
+  private async markedAmong(
+    tx: TransactionContext,
+    ids: readonly string[]
+  ): Promise<Set<string>> {
+    const marked = new Set<string>();
+    if (ids.length === 0) return marked;
+    // Loaded when a folder is deleted, not with the service.
+    const { pendingDeleteKey, PENDING_DELETE_KEY_PREFIX } = await import(
+      "../domains/media/pending-delete"
+    );
+    for (const run of this.idRuns(ids, 0)) {
+      const rows = await tx.select<{ key: string }>("nextly_meta", {
+        columns: ["key"],
+        where: {
+          and: [{ column: "key", op: "IN", value: run.map(pendingDeleteKey) }],
+        },
+        forUpdate: true,
+      });
+      for (const row of rows) {
+        marked.add(String(row.key).slice(PENDING_DELETE_KEY_PREFIX.length));
+      }
+    }
+    return marked;
   }
 
   /**

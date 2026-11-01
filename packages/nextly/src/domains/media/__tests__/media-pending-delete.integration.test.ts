@@ -25,7 +25,7 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { defineCollection, text, upload } from "../../../config";
@@ -38,6 +38,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { ServiceContainer } from "../../../services/index";
+import { MediaFolderService } from "../../../services/media-folder";
 import {
   PNG_1X1,
   pdfDocument,
@@ -566,6 +567,47 @@ describe.each(getConfiguredTestDialects())(
       expect(settled?.state).toBe("done");
     });
 
+    // Storage that refuses a delete leaves a file behind: the record of it
+    // must stay, so the job tries again rather than forgetting the file.
+    it("keeps the record of a file storage could not remove, and the job removes it once it can", async () => {
+      const file = await unusedFile();
+      const filename = String((await row(file))?.filename);
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      const { jobId, deadline } = await queuedJob(file, deleted);
+      const storage = getMediaStorage();
+      const refusing = vi
+        .spyOn(storage, "delete")
+        .mockRejectedValue(new Error("the bucket refused the delete"));
+      try {
+        const finished = await new PendingMediaDeletes({
+          ...mediaDeletes(),
+          now: () => new Date(deadline + 1_000),
+        }).finalizeMarked([file]);
+
+        expect(finished).toEqual([file]);
+        expect(refusing).toHaveBeenCalled();
+      } finally {
+        refusing.mockRestore();
+      }
+      expect(await row(file)).toBeUndefined();
+      expect(await storage.exists(filename, "media")).toBe(true);
+      expect(await deleteRecords(file)).toEqual([removingKey(file)]);
+
+      // The job, run once storage takes deletes again, removes the file.
+      const run = await runJobNow(
+        t.adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        jobId,
+        { now: () => new Date(deadline + 2_000) }
+      );
+
+      expect(run.claimed).toBe(1);
+      expect(await storage.exists(filename, "media")).toBe(false);
+      expect(await deleteRecords(file)).toEqual([]);
+    });
+
     it("lets a job delivered again after its delete finished do nothing", async () => {
       const file = await unusedFile();
       const deleted = await api(editor, "POST", ["deletions"], {
@@ -1053,6 +1095,178 @@ describe.each(getConfiguredTestDialects())(
       await freshFinaliser().finalizeMarked([file]);
       expect(await row(file)).toBeUndefined();
       expect((await api(editor, "DELETE", ["folders", own])).status).toBe(200);
+    });
+
+    /** A fresh folder holding one fresh unused file: their ids. */
+    async function folderWithFile(): Promise<{ folder: string; file: string }> {
+      const folder = randomUUID();
+      await t.adapter.insert("media_folders", {
+        id: folder,
+        name: `Raced ${folder.slice(0, 6)}`,
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const file = await unusedFile();
+      await t.adapter.update(
+        "media",
+        { folderId: folder },
+        { and: [{ column: "id", op: "=", value: file }] }
+      );
+      return { folder, file };
+    }
+
+    async function folderExists(id: string): Promise<boolean> {
+      const rows = await t.adapter.select<Doc>("media_folders", {
+        where: { and: [{ column: "id", op: "=", value: id }] },
+      });
+      return rows.length === 1;
+    }
+
+    type FolderChecks = Record<
+      "holdsPendingDeletes" | "refuseUndeletableFolder",
+      (...args: unknown[]) => Promise<unknown>
+    >;
+
+    /**
+     * Run `between` once, the next time a folder delete has made `check`
+     * (one of its checks before it changes anything), right after the check
+     * has answered: a deterministic point inside the delete.
+     */
+    function onceAfter(
+      check: keyof FolderChecks,
+      between: () => Promise<void>
+    ): void {
+      const prototype = MediaFolderService.prototype as unknown as FolderChecks;
+      const original = prototype[check];
+      vi.spyOn(prototype, check).mockImplementationOnce(async function (
+        this: unknown,
+        ...args: unknown[]
+      ) {
+        const answer = await original.apply(this, args);
+        await between();
+        return answer;
+      });
+    }
+
+    // A delete that can be undone commits its mark after the folder delete
+    // has looked for marks: the folder delete must still neither move the
+    // item to the root (the folder going) nor delete it before its deadline
+    // (the contents going).
+    it("refuses a folder delete when an item in it is marked after the folder was checked, with or without its contents", async () => {
+      for (const deleteContents of [false, true]) {
+        const { folder, file } = await folderWithFile();
+        // Marked once the check for marks has answered that there are none,
+        // and before the listing of the folder's contents, which then shows
+        // it empty.
+        onceAfter("holdsPendingDeletes", async () => {
+          const marked = await api(editor, "POST", ["deletions"], {
+            body: { ids: [file] },
+          });
+          expect(marked.status).toBe(200);
+        });
+
+        const answer = await api(editor, "DELETE", ["folders", folder], {
+          query: deleteContents ? "?deleteContents=true" : "",
+        });
+
+        expect(answer.status).toBe(409);
+        expect(await folderExists(folder)).toBe(true);
+        expect(await row(file)).toMatchObject({ folderId: folder });
+        // Undo brings it back where it was.
+        const undone = await api(editor, "POST", ["deletions", "undo"], {
+          body: { ids: [file] },
+        });
+        expect(undone.json).toMatchObject({ restored: [file], gone: [] });
+        expect(await row(file)).toMatchObject({ folderId: folder });
+        // POSITIVE CONTROL: with nothing marked, the same delete goes.
+        const again = await api(editor, "DELETE", ["folders", folder], {
+          query: "?deleteContents=true",
+        });
+        expect(again.status).toBe(200);
+        expect(await folderExists(folder)).toBe(false);
+      }
+    });
+
+    // A mark whose transaction is still open when the folder delete starts:
+    // it holds the item's row lock, and the folder delete, past its checks,
+    // must wait for it and then see the mark. SQLite runs one writer at a
+    // time, so no delete can start while the mark's transaction is open.
+    it.skipIf(dialect === "sqlite")(
+      "waits for a mark still being written, then refuses the folder delete with its contents",
+      async () => {
+        const { folder, file } = await folderWithFile();
+        let entered!: () => void;
+        const inMark = new Promise<void>(resolve => (entered = resolve));
+        let release!: () => void;
+        const released = new Promise<void>(resolve => (release = resolve));
+        // The mark's transaction, held open once its row lock is taken and
+        // its mark written.
+        const marking = new PendingMediaDeletes({
+          ...mediaDeletes(),
+          schedule: async () => {
+            entered();
+            await released;
+          },
+        }).mark([file]);
+        await inMark;
+        let checked!: () => void;
+        const pastChecks = new Promise<void>(resolve => (checked = resolve));
+        onceAfter("refuseUndeletableFolder", async () => checked());
+
+        const deleting = api(editor, "DELETE", ["folders", folder], {
+          query: "?deleteContents=true",
+        });
+        // The folder delete has found no mark, since none is committed; only
+        // then does the mark commit.
+        await pastChecks;
+        release();
+        await marking;
+        const answer = await deleting;
+
+        expect(answer.status).toBe(409);
+        expect(await folderExists(folder)).toBe(true);
+        expect(await row(file)).toMatchObject({ folderId: folder });
+        const undone = await api(editor, "POST", ["deletions", "undo"], {
+          body: { ids: [file] },
+        });
+        expect(undone.json).toMatchObject({ restored: [file], gone: [] });
+      }
+    );
+
+    // An item deleted at once (the ordinary delete route) inside another
+    // delete's Undo window is gone for good: Undo must say so.
+    it("answers an item deleted at once inside its Undo window as gone, never restored", async () => {
+      const file = await unusedFile();
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+
+      const removed = await api(editor, "DELETE", [file]);
+
+      expect(removed.status).toBe(200);
+      // The delete took the mark with the row.
+      expect(await deleteRecords(file)).toEqual([]);
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+      expect(undone.json).toMatchObject({ restored: [], gone: [file] });
+      expect(await row(file)).toBeUndefined();
+    });
+
+    it("answers an item whose row went another way inside its Undo window as gone, and takes its mark", async () => {
+      const file = await unusedFile();
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+      // Removed by no media delete at all, so its mark is left behind.
+      await t.adapter.delete("media", {
+        and: [{ column: "id", op: "=", value: file }],
+      });
+      expect(await deleteRecords(file)).toEqual([pendingDeleteKey(file)]);
+
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+
+      expect(undone.json).toMatchObject({ restored: [], gone: [file] });
+      expect(await deleteRecords(file)).toEqual([]);
     });
 
     // MySQL and SQLite keep a mark's time to the second. The deadline a

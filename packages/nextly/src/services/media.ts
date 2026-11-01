@@ -858,6 +858,20 @@ export class MediaService extends BaseService {
           }
 
           await tx.delete("media", this.whereEq("id", mediaId));
+          // A delete that is not the end of an Undo window takes any mark
+          // an earlier delete left on the item, with its row, so an Undo
+          // still inside that window finds the item gone rather than
+          // reporting it restored.
+          if (!claim) {
+            const { pendingDeleteKey } = await import(
+              "../domains/media/pending-delete"
+            );
+            await tx.delete("nextly_meta", {
+              and: [
+                { column: "key", op: "=", value: pendingDeleteKey(mediaId) },
+              ],
+            });
+          }
 
           // The removed row's final state ships as `data`, without its stored
           // `sizes`; there is no post-delete state, so `previous` is null
@@ -953,7 +967,8 @@ export class MediaService extends BaseService {
    * Removing a file already gone is no failure, so running this again
    * finishes what an interrupted run left. Answers whether it could finish:
    * `false` when what to keep, or what a Replace kept, could not be read,
-   * and nothing unasked was removed. Never throws: the delete has committed.
+   * and nothing unasked was removed, or when a file could not be removed.
+   * Never throws: the delete has committed.
    */
   async removeFilesOfDeleted(
     mediaId: string,
@@ -964,9 +979,11 @@ export class MediaService extends BaseService {
       storedFilesOf(record).paths,
       [mediaId]
     );
-    if (kept) await removeStoredFiles(this.storage, record, mediaId, kept);
+    const ownFilesGone = kept
+      ? await removeStoredFiles(this.storage, record, mediaId, kept)
+      : false;
     const keptFilesGone = await this.removeKeptFilesOf(mediaId);
-    return kept !== null && keptFilesGone;
+    return ownFilesGone && keptFilesGone;
   }
 
   /**

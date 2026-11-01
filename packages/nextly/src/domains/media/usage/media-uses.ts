@@ -62,24 +62,16 @@ export interface MediaUse {
 }
 
 /**
- * How many documents using the item the reader may not read, in one
- * collection or Single (or among the email templates, `scopeSlug` ""), as the
- * list envelope's `meta.hidden` counts them.
- */
-export interface HiddenMediaUses {
-  scopeKind: UsageSubjectKind;
-  scopeSlug: string;
-  count: number;
-}
-
-/**
  * A page of the documents using the item: those the reader may read, and how
  * many more on the page they may not, and how many documents use it in all.
  */
 export interface MediaUses {
   items: MediaUse[];
-  /** The page's documents the reader may not read, by scope. */
-  hidden: HiddenMediaUses[];
+  /**
+   * How many of the page's documents the reader may not read: one count,
+   * never split by collection or Single, so nothing names where they are.
+   */
+  hidden: number;
   /**
    * How many documents use the item, readable or not: what every page's
    * `items` and `hidden` add up to, so it tells no more than they do.
@@ -337,7 +329,7 @@ export async function mediaUsesOf(
     ? await source.keptAddresses(mediaId)
     : new Set<string>();
   const documents = gathered(rows, kept);
-  if (documents.length === 0) return { items: [], hidden: [], total };
+  if (documents.length === 0) return { items: [], hidden: 0, total };
   const languages = documents.some(doc => doc.kind !== "email-template")
     ? await source.languages()
     : [];
@@ -345,22 +337,12 @@ export async function mediaUsesOf(
     documents.flatMap(document => readsOf(document, languages))
   );
   const items: MediaUse[] = [];
-  const hidden = new Map<string, HiddenMediaUses>();
+  let hidden = 0;
   for (const document of documents) {
     const use = toldOf(document, headings, languages);
-    if (use) {
-      items.push(use);
-      continue;
-    }
-    // Counted under its scope and named nowhere.
-    const scope = JSON.stringify([document.kind, document.slug]);
-    const counted = hidden.get(scope) ?? {
-      scopeKind: document.kind,
-      scopeSlug: document.slug,
-      count: 0,
-    };
-    counted.count += 1;
-    hidden.set(scope, counted);
+    // One the reader may not read is counted, and named nowhere.
+    if (use) items.push(use);
+    else hidden += 1;
   }
-  return { items, hidden: [...hidden.values()], total };
+  return { items, hidden, total };
 }

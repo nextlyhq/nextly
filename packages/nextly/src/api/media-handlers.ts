@@ -978,8 +978,8 @@ async function readUsageRecord<T>(
 }
 
 /**
- * The documents using one item that the caller may read, and the rest
- * counted by collection, read from the usage record a page at a time: the
+ * The documents using one item that the caller may read, and how many more
+ * there are, read from the usage record a page at a time: the
  * documents are paged, readable or not, and only the page's are read as the
  * caller, so a widely used item costs one page's work. Served only on the
  * gated mount, since it names documents: the public mount answers it as an
@@ -1024,7 +1024,7 @@ async function handleMediaUsage(
         source.bootedMediaUsesSource(getService("adapter"), caller),
         { byAddressOnly: byAddress, page, limit }
       ),
-    { items: [], hidden: [], total: 0 }
+    { items: [], hidden: 0, total: 0 }
   );
   // Said of every answer: whether the record is built. Of the uses by
   // address, also how many avatars and logos keep the item's address.
@@ -1039,7 +1039,8 @@ async function handleMediaUsage(
       : {}),
   };
   // Paged by documents, readable or not: `total` counts them all, which the
-  // pages' `items` and `hidden` add up to, and `hidden` counts this page's.
+  // pages' `items` and `hiddenCount` add up to, and `hiddenCount` counts
+  // this page's the caller may not read, naming no collection or Single.
   const totalPages = Math.ceil(uses.total / limit);
   return respondList(
     uses.items,
@@ -1050,7 +1051,7 @@ async function handleMediaUsage(
       totalPages,
       hasNext: page < totalPages,
       hasPrev: page > 1,
-      ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
+      hiddenCount: uses.hidden,
       ...recordMeta,
     },
     { headers: PRIVATE_NO_STORE_HEADERS }

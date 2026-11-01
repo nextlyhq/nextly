@@ -142,15 +142,13 @@ export async function fetchMediaUsage(
     meta?: {
       total?: number;
       hasNext?: boolean;
-      hidden?: Array<{ count: number }>;
+      /** The page's documents the reader may not open, as one count. */
+      hiddenCount?: number;
       heldByAddress?: number;
       usageRecorded?: boolean;
     };
   }>(`/${encodeURIComponent(mediaId)}/usage${query}`);
-  const hidden = (body.meta?.hidden ?? []).reduce(
-    (sum, scope) => sum + scope.count,
-    0
-  );
+  const hidden = body.meta?.hiddenCount ?? 0;
   return {
     items: body.items,
     hidden,

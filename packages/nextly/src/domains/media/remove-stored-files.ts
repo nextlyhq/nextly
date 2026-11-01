@@ -226,16 +226,21 @@ export async function filesKeptByOthers(
  * on a transient failure, so one that fails leaves the others to go, and is
  * named in the log with its item, so the leftover can be found. Never throws:
  * the record is already gone, and a storage failure must not fail its delete.
+ *
+ * Answers whether every file asked for is gone: `false` when any could not
+ * be removed, for a caller holding a record of them to keep it and try
+ * again. A file already missing counts as removed, since a storage's delete
+ * of one succeeds.
  */
 export async function removeStoredFiles(
   storage: StoredFileRemover,
   record: MediaFilesRecord,
   mediaId: string,
   kept: ReadonlySet<string> = new Set()
-): Promise<void> {
+): Promise<boolean> {
   const { paths, unlocated } = storedFilesOf(record);
   for (const url of unlocated) warnUnlocated(url, mediaId);
-  await Promise.all(
+  const removed = await Promise.all(
     paths
       .filter(filePath => !kept.has(filePath))
       .map(async filePath => {
@@ -251,9 +256,12 @@ export async function removeStoredFiles(
               );
             },
           });
+          return true;
         } catch (error) {
           warnNotRemoved(filePath, mediaId, error);
+          return false;
         }
       })
   );
+  return removed.every(Boolean);
 }
