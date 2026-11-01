@@ -1,8 +1,9 @@
 /**
  * Tag expiries the ledger refused are retried until it takes them: by one
  * timer that backs off to 30 s, and by the next cached read where a timer may
- * never fire. Said once when retries begin and once when they succeed, never
- * retried for a missing table, and no timer outlives a withdrawn ledger.
+ * never fire. Each refused record is said with its tags; its retries are said
+ * once when they begin and once when they succeed. Never retried for a missing
+ * table, and no timer outlives a withdrawn ledger.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -120,6 +121,34 @@ describe("a record the ledger refused", () => {
     expect(vi.getTimerCount()).toBe(1);
     // The tags are still kept, for the next flush as well.
     expect(takePendingExpiries()).toEqual(["posts"]);
+  });
+
+  it("says each refused record with its tags, while its retries say only when they begin", async () => {
+    const record = ledgerThat(() => "refuse");
+    // Two writes refused while the retry for the first is already running.
+    if ((await expireTags(["posts"])) === "failed") holdFailedRecord(["posts"]);
+    if ((await expireTags(["pages", "home"])) === "failed") {
+      holdFailedRecord(["pages", "home"]);
+    }
+    await vi.advanceTimersByTimeAsync(
+      FIRST_RETRY_DELAY_MS + 2 * FIRST_RETRY_DELAY_MS
+    );
+
+    // Both writes' records, then two refused retries of them.
+    expect(record).toHaveBeenCalledTimes(4);
+    const failed = warn.mock.calls
+      .map(([entry]) => entry)
+      .filter(entry => entry.kind === "cache-tag-record-failed");
+    expect(failed.map(entry => entry.tags)).toEqual([
+      ["posts"],
+      ["pages", "home"],
+    ]);
+    expect(failed[1].message).toContain("pages, home");
+    expect(
+      warn.mock.calls.filter(
+        ([entry]) => entry.kind === "cache-tag-record-retrying"
+      )
+    ).toHaveLength(1);
   });
 
   it("stops retrying once the ledger has no table: no instance reads expiries until it does", async () => {

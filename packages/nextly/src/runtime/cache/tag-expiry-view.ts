@@ -338,6 +338,17 @@ async function record(
     return "recorded";
   } catch (error) {
     warnOnce("the cache tag expiry ledger could not record an expiry", error);
+    // Every refused record is said with its tags, so the content another
+    // instance may still serve stale can be named; a retry of tags already
+    // said is not, since the retry says when it begins and when it succeeds.
+    if (!again) {
+      getNextlyLogger().warn({
+        kind: "cache-tag-record-failed",
+        message: `the cache tag expiry ledger refused the expiry of ${tags.join(", ")}; it is retried until recorded`,
+        tags: [...tags],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return "failed";
   }
 }
