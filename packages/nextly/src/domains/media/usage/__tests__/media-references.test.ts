@@ -129,11 +129,44 @@ describe("collectMediaReferences", () => {
     ];
 
     expect(collectMediaReferences(fields, { listed, unlisted })).toEqual([
-      // The list is the document's own account: its nodes are not walked.
+      // The list is the document's own account of its ids: its nodes are not
+      // walked for more.
       { fieldPath: "listed", mediaId: ID_1 },
       // Walked: the id-shaped prop and the address, never the node's own id.
       { fieldPath: "unlisted", mediaId: ID_1 },
       { fieldPath: "unlisted", url: "/p.png" },
+    ]);
+  });
+
+  // The list names items by id; a node can still name a file by its address,
+  // which goes on showing that file after a Replace. Both are kept.
+  it("reads a listed block document's addresses as well as its list", () => {
+    const listed = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: NODE_ID,
+          type: "core/image",
+          props: {
+            image: ID_2,
+            poster: { src: "/uploads/poster.png" },
+            link: { url: `/api/media/${ID_2}/raw` },
+          },
+        },
+      ],
+      assets: { mediaIds: [ID_1] },
+    };
+
+    expect(
+      collectMediaReferences([f({ type: "blocks", name: "listed" })], {
+        listed: JSON.stringify(listed),
+      })
+    ).toEqual([
+      { fieldPath: "listed", mediaId: ID_1 },
+      // Addresses only: the id-shaped prop is the list's to name.
+      { fieldPath: "listed", url: "/uploads/poster.png" },
+      { fieldPath: "listed", mediaId: ID_2 },
     ]);
   });
 

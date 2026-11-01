@@ -29,6 +29,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { defineCollection, text, upload } from "../../../config";
+import { container } from "../../../di/container";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -42,7 +43,10 @@ import {
   pdfDocument,
 } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { getMediaStorage } from "../../../storage/storage";
+import type { JobRegistry } from "../../jobs/job-registry";
+import { runJobNow } from "../../jobs/jobs-runner";
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
+import { MEDIA_FINALIZE_DELETES_JOB } from "../finalize-deletes-job";
 import {
   PENDING_DELETE_WINDOW_MS,
   PendingMediaDeletes,
@@ -122,7 +126,7 @@ async function keyWith(t: TestNextly, grants: string[]): Promise<string> {
 /** One call to the admin's media routes as the holder of `key`. */
 async function api(
   key: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string[],
   options: { query?: string; body?: unknown } = {}
 ): Promise<{ status: number; json: Doc }> {
@@ -340,6 +344,101 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(stored.filter(Boolean)).toEqual([]);
     }, 90_000);
+
+    // The worker that took a delete can be gone before its window ends (a
+    // serverless function, a restart), and no one may read the library
+    // after. The job the delete queued finishes it on the next jobs run.
+    it("finishes a delete through the job it queued, with no timer and no library read", async () => {
+      const image = await usedImage();
+      const filename = String((await row(image.id))?.filename);
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [image.id] },
+      });
+      expect(deleted.status).toBe(200);
+      const deadline = Date.parse(String(deleted.json.markedDeleteAfter));
+
+      // The job, queued with the mark, to run at the window's end.
+      const jobs = (
+        await t.adapter.select<Doc>("nextly_jobs", {
+          where: {
+            and: [
+              {
+                column: "slug",
+                op: "=",
+                value: MEDIA_FINALIZE_DELETES_JOB,
+              },
+            ],
+          },
+        })
+      ).filter(job =>
+        (typeof job.input === "string"
+          ? job.input
+          : JSON.stringify(job.input)
+        ).includes(image.id)
+      );
+      expect(jobs).toHaveLength(1);
+      const jobId = String(jobs[0]!.id);
+      const registry = container.get<JobRegistry>("jobRegistry");
+
+      // Before the deadline the job is not due, and the item stays.
+      const early = await runJobNow(t.adapter, registry, jobId, {
+        now: () => new Date(deadline - 2_000),
+      });
+      expect(early.claimed).toBe(0);
+      expect(await row(image.id)).toBeDefined();
+
+      // A run after it finishes the delete: the row, its files and its usage.
+      const run = await runJobNow(t.adapter, registry, jobId, {
+        now: () => new Date(deadline + 1_000),
+      });
+      expect(run.claimed).toBe(1);
+      expect(await row(image.id)).toBeUndefined();
+      expect(await getMediaStorage().exists(filename, "media")).toBe(false);
+      expect(await usageRows(image.id)).toBe(0);
+      const [settled] = await t.adapter.select<Doc>("nextly_jobs", {
+        where: { and: [{ column: "id", op: "=", value: jobId }] },
+      });
+      expect(settled?.state).toBe("done");
+    });
+
+    it("lets the job of a delete that was undone finish nothing", async () => {
+      const file = await unusedFile();
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+      const deadline = Date.parse(String(deleted.json.markedDeleteAfter));
+      const job = (
+        await t.adapter.select<Doc>("nextly_jobs", {
+          where: {
+            and: [
+              {
+                column: "slug",
+                op: "=",
+                value: MEDIA_FINALIZE_DELETES_JOB,
+              },
+            ],
+          },
+        })
+      ).find(found =>
+        (typeof found.input === "string"
+          ? found.input
+          : JSON.stringify(found.input)
+        ).includes(file)
+      );
+
+      const run = await runJobNow(
+        t.adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        String(job?.id),
+        { now: () => new Date(deadline + 1_000) }
+      );
+
+      expect(run.claimed).toBe(1);
+      expect(await row(file)).toBeDefined();
+    });
 
     it("finishes a delete of an item already marked by that mark's deadline, not a fresh window", async () => {
       const file = await unusedFile();
@@ -698,6 +797,98 @@ describe.each(getConfiguredTestDialects())(
       expect(marks).toHaveLength(1);
       expect(await freshFinaliser(0).finalizeDue()).toContain(file);
       expect(await row(file)).toBeUndefined();
+    });
+
+    // An item inside its Undo window is hidden from the folder's listing but
+    // is still in it: the folder is not empty, and deleting it must neither
+    // move the item to the library root (its folder going) nor delete it
+    // before its deadline (the folder's contents going).
+    it("refuses to delete a folder holding an item inside its Undo window, with or without its contents", async () => {
+      const own = randomUUID();
+      await t.adapter.insert("media_folders", {
+        id: own,
+        name: "Waiting",
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const file = await unusedFile();
+      await t.adapter.update(
+        "media",
+        { folderId: own },
+        { and: [{ column: "id", op: "=", value: file }] }
+      );
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+      // As the folder's listing shows it: empty.
+      const listed = await api(editor, "GET", ["folders", own, "contents"]);
+      expect(
+        ((listed.json.items ?? listed.json.files) as Doc[]).map(i => i.id)
+      ).toEqual([]);
+
+      const alone = await api(editor, "DELETE", ["folders", own]);
+      const withContents = await api(editor, "DELETE", ["folders", own], {
+        query: "?deleteContents=true",
+      });
+
+      expect(alone.status).toBe(409);
+      expect(withContents.status).toBe(409);
+      const folders = await t.adapter.select<Doc>("media_folders", {
+        where: { and: [{ column: "id", op: "=", value: own }] },
+      });
+      expect(folders).toHaveLength(1);
+      expect(await row(file)).toMatchObject({ folderId: own });
+      // Undo brings it back where it was.
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+      expect(undone.json).toMatchObject({ restored: [file] });
+      expect(await row(file)).toMatchObject({ folderId: own });
+
+      // POSITIVE CONTROL: once its item has gone, the folder deletes.
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+      await freshFinaliser().finalizeMarked([file]);
+      expect(await row(file)).toBeUndefined();
+      expect((await api(editor, "DELETE", ["folders", own])).status).toBe(200);
+    });
+
+    // MySQL and SQLite keep a mark's time to the second. The deadline a
+    // delete answers is the one the stored mark gives, so Undo is never
+    // refused before it; a time kept from the unstored instant could be up to
+    // a second later than the database's.
+    it("answers the deadline the stored mark gives, never later, whatever the database's precision", async () => {
+      const file = await unusedFile();
+      // Late in a second, as most deletes are.
+      const base = Math.floor(Date.now() / 1_000) * 1_000 + 400;
+      let clock = base;
+      const deletes = new PendingMediaDeletes({
+        db: t.adapter,
+        deleteItem: async (id, actor) => {
+          await t.getService("mediaService").delete(id, {}, actor);
+        },
+        now: () => new Date(clock),
+      });
+
+      const marked = await deletes.mark([file]);
+      const deadline = Date.parse(String(marked.markedDeleteAfter));
+      expect(Date.parse(marked.deleteAfter)).toBe(deadline);
+
+      // Just before the answered deadline, Undo still brings it back.
+      clock = deadline - 50;
+      expect(await deletes.undo([file])).toEqual({
+        restored: [file],
+        gone: [],
+      });
+
+      // POSITIVE CONTROL: just after it, Undo is refused, so the answered
+      // deadline is not a later one either.
+      clock = base;
+      const again = await deletes.mark([file]);
+      clock = Date.parse(String(again.markedDeleteAfter)) + 50;
+      expect(await deletes.undo([file])).toEqual({
+        restored: [],
+        gone: [file],
+      });
+      expect(await deletes.finalizeMarked([file])).toEqual([file]);
     });
 
     it("still undoes inside the window", async () => {

@@ -829,27 +829,27 @@ const LIBRARY_READS = new Set<ParsedMediaRoute["type"]>([
   "media-counts",
 ]);
 
-/** The marks, over the booted adapter and the ordinary media delete. */
+/**
+ * The marks, over the booted adapter, the ordinary media delete and the jobs
+ * queue, as every user of them assembles them (`bootedPendingDeletes`).
+ */
 async function pendingDeletes(): Promise<PendingMediaDeletes> {
-  const mediaService = await getMediaService();
+  await ensureInitialized();
   // Loaded when a delete or a read needs it, not with the handlers.
-  const { PendingMediaDeletes } = await import(
-    "../domains/media/pending-delete"
+  const { bootedPendingDeletes } = await import(
+    "../domains/media/booted-pending-deletes"
   );
-  return new PendingMediaDeletes({
-    db: getService("adapter"),
-    deleteItem: (mediaId, actor) =>
-      mediaService.delete(mediaId, createRequestContext(), actor),
-    logger: getNextlyLogger(),
-  });
+  return bootedPendingDeletes();
 }
 
 /**
  * Finish `ids`, a delete's items, at `deadline` (an instant in ms): every one
  * then due, however many; any not due yet, marked later than the earliest,
  * at their own deadline by a timer set again. A moment after the deadline,
- * so the marks are due when it runs. Unref'd: a waiting delete never keeps a
- * process alive, and the sweep covers one that exits first.
+ * so the marks are due when it runs. The fast path, on a server still
+ * running then: the job each delete queues finishes it durably on one that
+ * is not, and the library's reads sweep what is left. Unref'd: a waiting
+ * delete never keeps a process alive.
  */
 function finishDeletesAt(ids: readonly string[], deadline: number): void {
   const delay = Math.max(0, deadline - Date.now()) + 500;
@@ -899,7 +899,7 @@ async function sweepPendingDeletes(ids?: readonly string[]): Promise<void> {
 /**
  * Delete items so that the delete can be undone: each is marked, leaves the
  * library at once, and is deleted with its files once the window ends, by a
- * timer here or by the next library read.
+ * timer here, by the job queued with the marks, or by the next library read.
  */
 async function handleDeleteMediaLater(
   request: Request,

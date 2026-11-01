@@ -17,17 +17,21 @@
  * inside the window always wins, an Undo after it never does, even when no
  * timer or sweep has run yet, and every later attempt finds nothing to do.
  *
- * Two things finalise: a timer set when the mark is written, for a server
+ * Three things finalise: a timer set when the mark is written, for a server
  * that is still running when the window ends, which finishes every item its
- * delete marked, in bounded runs; and a sweep that the library's reads run,
- * for one that is not (restarted, or a serverless instance gone).
- * The sweep asks one bounded question: marks older than the window, at most
- * {@link SWEEP_LIMIT} of them, on `nextly_meta`'s `updated_at` index.
+ * delete marked, in bounded runs; a job queued with the marks, in their
+ * transaction, to run at the window's end (`finalize-deletes-job`), which the
+ * jobs queue runs whatever became of the server that took the delete; and a
+ * sweep that the library's reads run, the last backstop, for a mark the job
+ * gave up on. The sweep asks one bounded question: marks older than the
+ * window, at most {@link SWEEP_LIMIT} of them, on `nextly_meta`'s
+ * `updated_at` index.
  *
  * @module domains/media/pending-delete
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
 import type { RequestActor } from "../../auth/request-actor";
@@ -68,6 +72,15 @@ export interface PendingDeleteDeps {
   deleteItem(mediaId: string, actor?: RequestActor): Promise<void>;
   /** Where a delete that could not finish is reported. */
   logger?: { warn(payload: object): void };
+  /**
+   * Queue the durable finish of `ids` at `runAt`, on `tx`, the transaction
+   * writing their marks, so it exists exactly when they do: what finishes a
+   * delete when no timer and no library read is left to.
+   */
+  schedule?: (
+    tx: TransactionContext,
+    job: { ids: readonly string[]; runAt: Date; now: Date }
+  ) => Promise<void>;
   now?: () => Date;
   windowMs?: number;
 }
@@ -185,7 +198,8 @@ export class PendingMediaDeletes {
    * item leaves every one of them unmarked and in the library. An item
    * already marked keeps its mark and its time, and the deadline answered is
    * the earliest of the batch's real ones: a standing mark's own, read from
-   * it, since an Undo after that would find the item already gone.
+   * it, since an Undo after that would find the item already gone. Every
+   * deadline is taken from the time as stored, never the instant written.
    */
   async mark(
     ids: readonly string[],
@@ -194,7 +208,7 @@ export class PendingMediaDeletes {
     const wanted = [...new Set(ids)];
     const now = this.now();
     const fresh: string[] = [];
-    const earliest = await this.deps.db.transaction(async tx => {
+    const times = await this.deps.db.transaction(async tx => {
       // Filled afresh on each attempt, should the transaction be retried.
       fresh.length = 0;
       // Each item's row locked, in one order, so two deletes of the same
@@ -239,24 +253,64 @@ export class PendingMediaDeletes {
         });
         fresh.push(id);
       }
+      const stored = await this.storedTime(tx, fresh, now);
+      if (fresh.length > 0) {
+        await this.deps.schedule?.(tx, {
+          ids: fresh,
+          runAt: new Date(stored.getTime() + this.windowMs),
+          now,
+        });
+      }
       // A mark whose time cannot be read is taken as due already.
-      return earliestMarkTime(
-        marked,
-        now,
-        new Date(now.getTime() - this.windowMs)
-      );
+      return {
+        earliest: earliestMarkTime(
+          marked,
+          stored,
+          new Date(now.getTime() - this.windowMs)
+        ),
+        stored,
+      };
     });
     return {
       ids: wanted,
       marked: fresh,
-      deleteAfter: new Date(earliest.getTime() + this.windowMs).toISOString(),
-      // Every fresh mark was written at `now`, so they share one deadline,
-      // never shortened by an earlier delete's standing mark.
+      deleteAfter: new Date(
+        times.earliest.getTime() + this.windowMs
+      ).toISOString(),
+      // Every fresh mark was written at one instant, so they share one
+      // deadline, never shortened by an earlier delete's standing mark.
       markedDeleteAfter:
         fresh.length > 0
-          ? new Date(now.getTime() + this.windowMs).toISOString()
+          ? new Date(times.stored.getTime() + this.windowMs).toISOString()
           : null,
     };
+  }
+
+  /**
+   * The time the fresh marks were stored with, as the database holds it:
+   * MySQL and SQLite keep it to the second, so it can differ from the
+   * instant written by up to a second either way, and every later judgement
+   * of the mark (Undo, the finaliser) compares against the stored value. All
+   * were written at `written`, so one is read. Unreadable, it is taken a
+   * second earlier than written, so the deadline answered is never later
+   * than the real one.
+   */
+  private async storedTime(
+    tx: Pick<PendingDeleteDb, "select">,
+    fresh: readonly string[],
+    written: Date
+  ): Promise<Date> {
+    if (fresh.length === 0) return written;
+    const [row] = await tx.select<Record<string, unknown>>(META_TABLE, {
+      columns: ["key", "updatedAt"],
+      where: {
+        and: [{ column: "key", op: "=", value: pendingDeleteKey(fresh[0]) }],
+      },
+    });
+    return (
+      markTime(row?.updatedAt ?? row?.updated_at) ??
+      new Date(written.getTime() - 1_000)
+    );
   }
 
   /**
@@ -382,6 +436,36 @@ export class PendingMediaDeletes {
       deleted.push(...(await this.finalizeRows(rows, due)));
     }
     return deleted;
+  }
+
+  /**
+   * Which of `ids` still have a mark that is due: a delete that failed and
+   * was marked again, for the job that finishes them to try once more.
+   */
+  async dueAmong(ids: readonly string[]): Promise<string[]> {
+    const wanted = [...new Set(ids)];
+    const due = this.cutoff();
+    const left: string[] = [];
+    for (let start = 0; start < wanted.length; start += READ_RUN) {
+      const run = wanted.slice(start, start + READ_RUN);
+      const rows = await this.deps.db.select<Record<string, unknown>>(
+        META_TABLE,
+        {
+          columns: ["key"],
+          where: {
+            and: [
+              { column: "key", op: "IN", value: run.map(pendingDeleteKey) },
+              { column: "updatedAt", op: "<=", value: due },
+            ],
+          },
+        }
+      );
+      for (const row of rows) {
+        const id = idOfKey(row.key);
+        if (id !== null) left.push(id);
+      }
+    }
+    return left;
   }
 
   /**

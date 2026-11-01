@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import type { Logger } from "../../../shared/types";
 import {
+  errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
   type StoredFileRemover,
@@ -78,6 +79,20 @@ function replacedRecordOf(stored: unknown): ReplacedRecord | null {
   return read.success ? read.data : null;
 }
 
+/** The items' replaced-file records among `nextly_meta` rows, each readable one. */
+function replacedRecordsOf(
+  rows: ReadonlyArray<Record<string, unknown>>
+): Array<{ mediaId: string; record: ReplacedRecord }> {
+  const records: Array<{ mediaId: string; record: ReplacedRecord }> = [];
+  for (const row of rows) {
+    const key = typeof row.key === "string" ? row.key : "";
+    const record = replacedRecordOf(row.value);
+    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
+    records.push({ mediaId: key.slice(REPLACED_KEY_PREFIX.length), record });
+  }
+  return records;
+}
+
 /** The addresses of the files a record keeps, each once. */
 function keptAddressesOf(files: ReplacedRecord["files"]): string[] {
   return [...new Set(files.map(file => file.url).filter(url => url !== ""))];
@@ -95,33 +110,70 @@ export async function keptAddresses(
   return new Set(record ? keptAddressesOf(record.files) : []);
 }
 
-/** The statements recording kept files runs, on its own transaction. */
-type KeptFilesDb = Pick<DrizzleAdapter, "transaction">;
+/** The statements a kept-file record is written with: a transaction's. */
+type KeptFilesTx = Pick<DrizzleAdapter, "select" | "delete" | "insert">;
+
+/** Write an item's replaced-file record as `record`, or remove it when empty. */
+async function writeReplacedRecord(
+  tx: KeptFilesTx,
+  mediaId: string,
+  record: ReplacedRecord
+): Promise<void> {
+  await tx.delete("nextly_meta", {
+    and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
+  });
+  if (record.files.length === 0) return;
+  await tx.insert("nextly_meta", {
+    key: replacedKey(mediaId),
+    value: JSON.stringify(record),
+    updated_at: new Date(),
+  });
+}
 
 /**
  * Record that `files` are kept for the item's uses by address, added to what
  * an earlier Replace of the same item kept, and each file's address as one
- * the item is still known by, all on one transaction.
+ * the item is still known by, on `tx`: the Replace's own transaction, so the
+ * item never points at its new file without its old files recorded as its.
  */
 export async function recordKeptFiles(
-  db: KeptFilesDb,
+  tx: KeptFilesTx,
   mediaId: string,
   files: ReplacedRecord["files"]
 ): Promise<void> {
+  if (files.length === 0) return;
+  const earlier = await readReplacedRecord(tx, mediaId);
+  await writeReplacedRecord(tx, mediaId, {
+    files: [...(earlier?.files ?? []), ...files],
+  });
+  await writeKeptAddresses(tx, mediaId, keptAddressesOf(files));
+}
+
+/**
+ * Take `files` back out of the item's record, once a Replace has found
+ * nothing names them, with each address no file left in the record keeps,
+ * all on one transaction. Before their files are removed, so a failure here
+ * leaves the files and the record agreeing that they are kept.
+ */
+export async function forgetKeptFiles(
+  db: Pick<DrizzleAdapter, "transaction">,
+  mediaId: string,
+  files: ReplacedRecord["files"]
+): Promise<void> {
+  if (files.length === 0) return;
+  const same = (a: ReplacedRecord["files"][number]) =>
+    files.some(file => file.path === a.path && file.url === a.url);
   await db.transaction(async tx => {
     const earlier = await readReplacedRecord(tx, mediaId);
-    const record: ReplacedRecord = {
-      files: [...(earlier?.files ?? []), ...files],
-    };
-    await tx.delete("nextly_meta", {
-      and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
-    });
-    await tx.insert("nextly_meta", {
-      key: replacedKey(mediaId),
-      value: JSON.stringify(record),
-      updated_at: new Date(),
-    });
-    await writeKeptAddresses(tx, mediaId, keptAddressesOf(files));
+    const left = (earlier?.files ?? []).filter(file => !same(file));
+    await writeReplacedRecord(tx, mediaId, { files: left });
+    const stillKept = new Set(keptAddressesOf(left));
+    for (const url of keptAddressesOf(files)) {
+      if (stillKept.has(url)) continue;
+      await tx.delete("nextly_meta", {
+        and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
+      });
+    }
   });
 }
 
@@ -163,11 +215,7 @@ export async function indexKeptAddresses(
     },
   });
   let indexed = 0;
-  for (const row of rows) {
-    const key = typeof row.key === "string" ? row.key : "";
-    const record = replacedRecordOf(row.value);
-    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
-    const mediaId = key.slice(REPLACED_KEY_PREFIX.length);
+  for (const { mediaId, record } of replacedRecordsOf(rows)) {
     const urls = keptAddressesOf(record.files);
     await db.transaction(tx => writeKeptAddresses(tx, mediaId, urls));
     indexed += urls.length;
@@ -175,18 +223,14 @@ export async function indexKeptAddresses(
   return indexed;
 }
 
-/**
- * Remove the files kept for a deleted item's address uses, except any
- * another item refers to, and the record of them.
- */
-export async function removeKeptFiles(
+/** One deleted item's kept files and their record, as its record lists them. */
+async function removeRecordedFiles(
   db: DrizzleAdapter,
   storage: StoredFileRemover,
   logger: Logger,
-  mediaId: string
+  mediaId: string,
+  record: ReplacedRecord
 ): Promise<void> {
-  const record = await readReplacedRecord(db, mediaId);
-  if (!record) return;
   const kept = await filesKeptByOthers(
     new StoredFileSearchReader(db, logger).search,
     record.files.map(file => file.path),
@@ -210,4 +254,46 @@ export async function removeKeptFiles(
   await db.delete("nextly_meta", {
     and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
   });
+}
+
+/**
+ * Remove the files kept for deleted items' address uses, except any another
+ * item refers to, and the record of them: the one step every delete runs
+ * once its rows are gone (one item, a bulk delete, the end of an Undo
+ * window, a folder deleted with its contents). The records are read in one
+ * query, so a caller hands it a bounded run of ids. Never fails the delete
+ * that has already committed: what cannot be removed is named in the log.
+ */
+export async function removeKeptFiles(
+  db: DrizzleAdapter,
+  storage: StoredFileRemover,
+  logger: Logger,
+  mediaIds: readonly string[]
+): Promise<void> {
+  if (mediaIds.length === 0) return;
+  let rows: Array<Record<string, unknown>>;
+  try {
+    rows = await db.select<Record<string, unknown>>("nextly_meta", {
+      columns: ["key", "value"],
+      where: {
+        and: [{ column: "key", op: "IN", value: mediaIds.map(replacedKey) }],
+      },
+    });
+  } catch (error) {
+    logger.warn("[MediaService] Kept files not removed", {
+      mediaIds,
+      error: errorForLog(error),
+    });
+    return;
+  }
+  for (const { mediaId, record } of replacedRecordsOf(rows)) {
+    try {
+      await removeRecordedFiles(db, storage, logger, mediaId, record);
+    } catch (error) {
+      logger.warn("[MediaService] Kept files not removed", {
+        mediaId,
+        error: errorForLog(error),
+      });
+    }
+  }
 }

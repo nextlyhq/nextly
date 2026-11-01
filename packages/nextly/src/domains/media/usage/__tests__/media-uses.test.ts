@@ -47,7 +47,7 @@ function row(
  */
 function source(
   rows: IdentifiedUsageRow[],
-  readable: Array<[MediaUseRead, MediaUseHeading]>,
+  readable: Array<[ReadIn, HeadingIn]>,
   kept: string[] = [],
   languages: string[] = ["en", "es", "fr"]
 ): MediaUsesSource & { asked: MediaUseRead[][] } {
@@ -59,20 +59,38 @@ function source(
     languages: () => Promise.resolve(languages),
     headings: reads => {
       asked.push([...reads]);
-      return Promise.resolve(
-        new Map(
-          readable.map(([read, heading]) => [mediaUseReadKey(read), heading])
-        )
+      const answered = new Map(
+        readable.map(([read, heading]) => [mediaUseReadKey(read), heading])
       );
+      const headings = new Map<string, MediaUseHeading>();
+      for (const read of reads) {
+        const heading = answered.get(mediaUseReadKey(read));
+        if (!heading) continue;
+        // Every field the read asks about is readable unless the heading
+        // names the ones that are.
+        headings.set(mediaUseReadKey(read), {
+          ...heading,
+          paths: heading.paths ?? new Set(read.paths),
+        });
+      }
+      return Promise.resolve(headings);
     },
   };
 }
+
+/** A read as a test names it: the document and its language. */
+type ReadIn = Omit<MediaUseRead, "paths">;
+
+/** A heading as a test gives it, its readable fields every one by default. */
+type HeadingIn = Omit<MediaUseHeading, "paths"> & {
+  paths?: ReadonlySet<string>;
+};
 
 /** `document` read in `locale`, the default language when `null`. */
 function readIn(
   document: MediaUseDocument,
   locale: string | null = null
-): MediaUseRead {
+): ReadIn {
   return { ...document, locale };
 }
 
@@ -203,16 +221,76 @@ describe("mediaUsesOf", () => {
     // Every document is asked about once in each language its rows name,
     // and for a shared value in the default one and every language, all in
     // one call.
+    // Each read names the document's fields that use the item.
+    const s2 = { ...secret, documentId: "s2" };
     expect(read.asked).toEqual([
       [
-        readIn(post),
-        readIn(post, "en"),
-        readIn(secret),
-        readIn(secret, "en"),
-        readIn({ ...secret, documentId: "s2" }),
-        readIn({ ...secret, documentId: "s2" }, "en"),
-        readIn({ kind: "email-template", slug: "", documentId: "t1" }),
+        { ...readIn(post), paths: ["cover"] },
+        { ...readIn(post, "en"), paths: ["cover"] },
+        { ...readIn(secret), paths: ["cover", "body"] },
+        { ...readIn(secret, "en"), paths: ["cover", "body"] },
+        { ...readIn(s2), paths: ["cover"] },
+        { ...readIn(s2, "en"), paths: ["cover"] },
+        {
+          ...readIn({ kind: "email-template", slug: "", documentId: "t1" }),
+          paths: ["html"],
+        },
       ],
+    ]);
+  });
+
+  // A field a read rule withholds from the reader is not told: neither its
+  // name nor that it uses the item, in any language.
+  it("tells only the fields the reader may read, and counts a document whose every such field is withheld", async () => {
+    const answer = await mediaUsesOf(
+      ITEM,
+      source(
+        [
+          row("collection", "posts", "p1", "cover"),
+          row("collection", "posts", "p1", "secretImage"),
+          row("collection", "posts", "p1", "notes", "en", "/a.png"),
+          row("collection", "posts", "p2", "secretImage"),
+        ],
+        [
+          [
+            readIn(post),
+            { title: "Hello", owner: "Posts", paths: new Set(["cover"]) },
+          ],
+          [
+            readIn(post, "en"),
+            { title: "Hello", owner: "Posts", paths: new Set(["cover"]) },
+          ],
+          [
+            readIn({ ...post, documentId: "p2" }),
+            { title: "Other", owner: "Posts", paths: new Set() },
+          ],
+          [
+            readIn({ ...post, documentId: "p2" }, "en"),
+            { title: "Other", owner: "Posts", paths: new Set() },
+          ],
+        ],
+        [],
+        ["en"]
+      )
+    );
+
+    expect(answer.items).toEqual([
+      expect.objectContaining({
+        documentId: "p1",
+        fields: [
+          {
+            path: "cover",
+            locales: [],
+            byAddress: false,
+            showsPreviousFile: false,
+          },
+        ],
+      }),
+    ]);
+    expect(JSON.stringify(answer)).not.toContain("secretImage");
+    expect(JSON.stringify(answer)).not.toContain("notes");
+    expect(answer.hidden).toEqual([
+      { scopeKind: "collection", scopeSlug: "posts", count: 1 },
     ]);
   });
 

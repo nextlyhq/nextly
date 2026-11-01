@@ -748,11 +748,14 @@ describe.each(getConfiguredTestDialects())(
       const meta = t.getService("metaService");
       const original = t.adapter.select.bind(t.adapter);
       let flipped = false;
+      // The executor is passed on: a transaction's own select comes through
+      // here with its connection, and must stay on it.
       t.adapter.select = (async (
         table: string,
-        options?: Parameters<typeof original>[1]
+        options?: Parameters<typeof original>[1],
+        executor?: Parameters<typeof original>[2]
       ) => {
-        const rows = await original(table, options);
+        const rows = await original(table, options, executor);
         if (
           !flipped &&
           table === "nextly_meta" &&

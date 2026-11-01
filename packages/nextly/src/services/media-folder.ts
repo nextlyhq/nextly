@@ -746,6 +746,21 @@ export class MediaFolderService extends BaseService {
       };
     }
 
+    // An item deleted moments ago is hidden from the folder's listing but is
+    // still in it until its Undo window ends. Deleting the folder would move
+    // it to the library root (the folder going) or delete it before its
+    // deadline (the folder's contents going), so the folder waits for it,
+    // with or without its contents.
+    if (await this.holdsPendingDeletes(folderId)) {
+      return {
+        success: false,
+        statusCode: 409,
+        code: "CONFLICT",
+        message:
+          "This folder holds items deleted moments ago that can still be brought back. Try again once their Undo has passed.",
+      };
+    }
+
     const contents = await this.getFolderContents(folderId);
     const hasContents =
       (contents.data?.subfolders.length ?? 0) > 0 ||
@@ -762,6 +777,32 @@ export class MediaFolderService extends BaseService {
     }
 
     return null;
+  }
+
+  /**
+   * Whether the folder, or any folder under it, holds an item deleted inside
+   * its Undo window: one query per folder, on the items' folder index, for
+   * the first such item.
+   */
+  private async holdsPendingDeletes(folderId: string): Promise<boolean> {
+    const { media } = this.tables;
+    // Loaded when a folder is deleted, not with the service.
+    const { pendingDelete } = await import(
+      "../domains/media/media-library-query"
+    );
+    const folderIds = [
+      folderId,
+      ...(await this.collectAllSubfolderIds(folderId)),
+    ];
+    for (const id of folderIds) {
+      const [found] = await this.db
+        .select({ id: media.id })
+        .from(media)
+        .where(and(eq(media.folderId, id), pendingDelete(media)))
+        .limit(1);
+      if (found) return true;
+    }
+    return false;
   }
 
   async deleteFolder(
@@ -951,6 +992,33 @@ export class MediaFolderService extends BaseService {
           removed.map(record => record.id)
         );
         if (kept) await removeFiles(removed, kept);
+        await this.removeKeptFilesOf(removed.map(record => record.id));
+      });
+    }
+  }
+
+  /**
+   * The files a Replace kept for the removed items' uses by address, and the
+   * record of them: the step a delete of each item runs (`removeKeptFiles`),
+   * so a folder's items leave nothing of theirs behind. Never fails the
+   * cascade, whose rows are already gone.
+   */
+  private async removeKeptFilesOf(mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    try {
+      // Loaded when a folder's items are deleted, not with the service.
+      const { removeKeptFiles } = await import(
+        "../domains/media/usage/address-uses"
+      );
+      await removeKeptFiles(
+        this.adapter,
+        getMediaStorage(),
+        this.logger,
+        mediaIds
+      );
+    } catch (error) {
+      this.logger.warn("[MediaFolderService] Kept files not removed", {
+        error: errorForLog(error),
       });
     }
   }

@@ -839,6 +839,37 @@ describe("Replace with an avatar or a logo keeping the address", () => {
   });
 });
 
+describe("Replace when the uses by address cannot be read", () => {
+  it("asks first, saying it could not check, and keeps nothing from the person", async () => {
+    library.fetchMediaUsage.mockImplementation(
+      (_id: string, options?: { byAddress?: boolean }) =>
+        options?.byAddress
+          ? Promise.reject(new Error("offline"))
+          : Promise.resolve(USED)
+    );
+    renderLibrary();
+    const panel = await openItem(1);
+    fireEvent.click(
+      within(panel).getByRole("button", { name: /Replace file/ })
+    );
+    const file = new File(["x"], "new-photo.jpg", { type: "image/jpeg" });
+    await userEvent.upload(screen.getByTestId("media-replace-input"), file);
+
+    const ask = await screen.findByRole("alertdialog", {
+      name: "Replace photo-1.jpg?",
+    });
+    expect(ask).toHaveTextContent(
+      "Couldn't check whether rich text or email templates show this image by its address. Any that do keep the previous image until they're edited."
+    );
+    expect(ask).not.toHaveTextContent("usage record is still being built");
+    expect(library.replaceMediaFile).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole("button", { name: "Replace" }));
+    await waitFor(() =>
+      expect(library.replaceMediaFile).toHaveBeenCalledWith("m1", file)
+    );
+  });
+});
+
 describe("a reader", () => {
   it("sees where an item is used, and is offered neither Replace nor Delete", async () => {
     held.slugs = new Set(["read-media"]);

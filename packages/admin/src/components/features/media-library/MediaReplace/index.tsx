@@ -71,6 +71,62 @@ function addressUseKinds(usage: MediaUsage): string {
     : "avatars and logos";
 }
 
+/** The question's title: the change of kind, or the item's name. */
+function replaceTitle({ media, file, kindChanges }: PendingReplace): string {
+  return kindChanges
+    ? `Replace ${KIND_NAMES[getMediaType(media.mimeType)]} with ${KIND_NAMES[getMediaType(file.type)]}?`
+    : `Replace ${media.originalFilename}?`;
+}
+
+/** How many places keep the previous image, and what they are; none, nothing. */
+function AddressUseNote({
+  usage,
+}: {
+  usage: MediaUsage;
+}): React.JSX.Element | null {
+  const kept = addressUseCount(usage);
+  if (kept === 0) return null;
+  const one = kept === 1;
+  return (
+    <p>
+      {placesText(kept)} {one ? "shows" : "show"} this image by its address (
+      {addressUseKinds(usage)}) and {one ? "keeps" : "keep"} the previous image
+      until {one ? "it's" : "they're"} edited.
+    </p>
+  );
+}
+
+/**
+ * What a Replace leaves behind, as far as the uses by address could be read:
+ * the places keeping the previous image, a record still being built, or that
+ * they could not be read at all.
+ */
+function AddressUseNotes({
+  usage,
+}: {
+  usage: MediaUsage | null;
+}): React.JSX.Element {
+  if (usage === null) {
+    return (
+      <p>
+        Couldn&apos;t check whether rich text or email templates show this image
+        by its address. Any that do keep the previous image until they&apos;re
+        edited.
+      </p>
+    );
+  }
+  return (
+    <>
+      <AddressUseNote usage={usage} />
+      {!usage.usageRecorded && (
+        <p>
+          The usage record is still being built, so the previous file is kept.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** What the person is told before a Replace that needs asking about. */
 function ReplaceQuestion({
   pending,
@@ -78,15 +134,10 @@ function ReplaceQuestion({
   pending: PendingReplace;
 }): React.JSX.Element {
   const { media, file, kindChanges, addressUses } = pending;
-  const kept = addressUses ? addressUseCount(addressUses) : 0;
   return (
     <>
       <AlertDialogHeader>
-        <AlertDialogTitle>
-          {kindChanges
-            ? `Replace ${KIND_NAMES[getMediaType(media.mimeType)]} with ${KIND_NAMES[getMediaType(file.type)]}?`
-            : `Replace ${media.originalFilename}?`}
-        </AlertDialogTitle>
+        <AlertDialogTitle>{replaceTitle(pending)}</AlertDialogTitle>
         <AlertDialogDescription asChild>
           <div className="flex flex-col gap-2">
             {kindChanges && (
@@ -96,27 +147,7 @@ function ReplaceQuestion({
                 .
               </p>
             )}
-            {addressUses && kept > 0 && (
-              <p>
-                {placesText(kept)} {kept === 1 ? "shows" : "show"} this image by
-                its address ({addressUseKinds(addressUses)}) and{" "}
-                {kept === 1 ? "keeps" : "keep"} the previous image until{" "}
-                {kept === 1 ? "it's" : "they're"} edited.
-              </p>
-            )}
-            {addressUses?.usageRecorded === false && (
-              <p>
-                The usage record is still being built, so the previous file is
-                kept.
-              </p>
-            )}
-            {addressUses === null && (
-              <p>
-                Couldn&apos;t check whether rich text or email templates show
-                this image by its address. Any that do keep the previous image
-                until they&apos;re edited.
-              </p>
-            )}
+            <AddressUseNotes usage={addressUses} />
           </div>
         </AlertDialogDescription>
       </AlertDialogHeader>

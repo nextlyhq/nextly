@@ -203,13 +203,22 @@ export function unusedItem(
  * built from the item's id, since the dialects join strings differently.
  */
 export function notPendingDelete(media: Pick<MediaQueryColumns, "id">): SQL {
+  return sql`NOT ${pendingDelete(media)}`;
+}
+
+/**
+ * An item deleted inside the Undo window: one with a `media.deleting:<id>`
+ * mark. Hidden from every library read ({@link notPendingDelete}), but still
+ * there, so what would move or remove it, a folder's delete, asks this.
+ */
+export function pendingDelete(media: Pick<MediaQueryColumns, "id">): SQL {
   // Under an alias of its own, since the counting query also joins
   // `nextly_meta` for another row.
   const meta = sql.identifier("nextly_meta");
   const mark = sql.identifier("pending_mark");
   const key = sql.identifier("key");
   const idStart = sql.raw(String(PENDING_DELETE_KEY_PREFIX.length + 1));
-  return sql`NOT EXISTS (SELECT 1 FROM ${meta} ${mark} WHERE ${mark}.${key} LIKE ${`${PENDING_DELETE_KEY_PREFIX}%`} AND SUBSTR(${mark}.${key}, ${idStart}) = ${media.id})`;
+  return sql`EXISTS (SELECT 1 FROM ${meta} ${mark} WHERE ${mark}.${key} LIKE ${`${PENDING_DELETE_KEY_PREFIX}%`} AND SUBSTR(${mark}.${key}, ${idStart}) = ${media.id})`;
 }
 
 /**
@@ -288,7 +297,7 @@ export interface MediaCountGroup {
  * The counts from the counting query's groups. A dialect returns a sum as a
  * number or as a string (MySQL's DECIMAL, PostgreSQL's BIGINT), so each is
  * read as a number. `usage` says whether the usage table is there and whether
- * its record is built (`mediaUsageRecorded`); a library with no items has
+ * its record is built (`readWithinOneBuild`); a library with no items has
  * nothing to count and nothing to be unused, so its record is complete.
  */
 export function mediaLibraryCountsOf(

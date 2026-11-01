@@ -516,6 +516,43 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    // A folder deleted with its contents removes each item the way a delete
+    // of that item does, the files a Replace kept for it included.
+    it("removes the kept file and its record when the item's folder is deleted with its contents", async () => {
+      const deleter = await keyWith(t, ["read-media", "delete-media"]);
+      const doomed = randomUUID();
+      await t.adapter.insert("media_folders", {
+        id: doomed,
+        name: "Doomed",
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const item = await replacedWithKeptFile();
+      await t.adapter.update(
+        "media",
+        { folderId: doomed },
+        { and: [{ column: "id", op: "=", value: item.id }] }
+      );
+
+      const path = ["folders", doomed];
+      const res = await createMediaHandlers({ requireAuth: true }).DELETE(
+        new Request(
+          `http://localhost/admin/api/media/${path.join("/")}?deleteContents=true`,
+          {
+            method: "DELETE",
+            headers: { authorization: `Bearer ${deleter}` },
+          }
+        ),
+        { params: Promise.resolve({ path }) }
+      );
+
+      expect(res.status).toBe(200);
+      expect(await row(item.id)).toBeUndefined();
+      expect(await getMediaStorage().exists(item.oldPath, "media")).toBe(false);
+      expect(await readReplacedRecord(t.adapter, item.id)).toBeNull();
+    });
+
     /** Replace `id`'s file, and answer whether its old file is still served. */
     async function oldFileServedAfterReplace(id: string): Promise<boolean> {
       const oldPath = String((await row(id))!.filename);
@@ -617,6 +654,55 @@ describe.each(getConfiguredTestDialects())(
       expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
     });
 
+    /** A block document listing `listed` by id, its node showing `src`. */
+    function blockDocument(listed: string, src?: string): Doc {
+      return {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: randomUUID(),
+            type: "core/image",
+            props: { image: listed, ...(src ? { poster: { src } } : {}) },
+          },
+        ],
+        assets: { mediaIds: [listed] },
+      };
+    }
+
+    it("keeps the old file while a block document with its own list names the item by its address", async () => {
+      const image = await looseImage();
+      const oldPath = String((await row(image.id))!.filename);
+      await t
+        .getService("collectionsHandler")
+        .createEntry(
+          { collectionName: "replaceposts", overrideAccess: true },
+          { title: "Page", extra: blockDocument(image.id, image.url) }
+        );
+      // The field's use is recorded as one by address, the node's, though the
+      // list names the item by id too.
+      const rows = await t.adapter.select<Doc>(MEDIA_USAGE_TABLE, {
+        where: { and: [{ column: "mediaId", op: "=", value: image.id }] },
+      });
+      expect(rows.map(r => r.address)).toEqual([image.url]);
+
+      expect(await oldFileServedAfterReplace(image.id)).toBe(true);
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+    });
+
+    it("removes the old file of an item a block document only lists by id", async () => {
+      // POSITIVE CONTROL for the one above: the same document without the
+      // address shows whatever file the item has, so the old file goes.
+      const image = await looseImage();
+      await t
+        .getService("collectionsHandler")
+        .createEntry(
+          { collectionName: "replaceposts", overrideAccess: true },
+          { title: "Page", extra: blockDocument(image.id) }
+        );
+      expect(await oldFileServedAfterReplace(image.id)).toBe(false);
+    });
+
     it("still counts a use by the old address once its document is saved again unchanged", async () => {
       const image = await looseImage();
       const reader = await keyWith(t, [
@@ -677,18 +763,24 @@ describe.each(getConfiguredTestDialects())(
       ).toContain(loose.id);
     });
 
-    it("says the usage record is unbuilt when a rebuild finishes while the uses are read", async () => {
-      const image = await looseImage();
+    /**
+     * `read()`, with a rebuild finishing just after it first reads the
+     * record's mark: the mark is written anew before anything else is read.
+     */
+    async function withRebuildAfterFirstMarkRead<T>(
+      read: () => Promise<T>
+    ): Promise<T> {
       const meta = t.getService("metaService");
-      // The first read of the mark is answered, and then a rebuild finishes:
-      // the mark is written anew before anything else is read.
       const original = t.adapter.select.bind(t.adapter);
       let flipped = false;
+      // The executor is passed on: a transaction's own select comes through
+      // here with its connection, and must stay on it.
       t.adapter.select = (async (
         table: string,
-        options?: Parameters<typeof original>[1]
+        options?: Parameters<typeof original>[1],
+        executor?: Parameters<typeof original>[2]
       ) => {
-        const rows = await original(table, options);
+        const rows = await original(table, options, executor);
         if (
           !flipped &&
           table === "nextly_meta" &&
@@ -701,19 +793,163 @@ describe.each(getConfiguredTestDialects())(
         }
         return rows;
       }) as typeof t.adapter.select;
-      let answer: Doc;
       try {
-        answer = await usageOf(editor, image.id);
+        return await read();
       } finally {
         t.adapter.select = original;
+        expect(flipped).toBe(true);
       }
+    }
 
-      expect(flipped).toBe(true);
+    it("says the usage record is unbuilt when a rebuild finishes while the uses are read", async () => {
+      const image = await looseImage();
+      const answer = await withRebuildAfterFirstMarkRead(() =>
+        usageOf(editor, image.id)
+      );
+
       expect(answer.meta).toMatchObject({ usageRecorded: false });
       // POSITIVE CONTROL: with no rebuild meanwhile, the record reads as built.
       expect((await usageOf(editor, image.id)).meta).toMatchObject({
         usageRecorded: true,
       });
+    });
+
+    // Replace reads which uses name the item by address, and whether the
+    // record holding them was built, in one read: a rebuild finishing between
+    // two separate reads could clear the rows of a record still marked built.
+    it("keeps the old file when a rebuild finishes while Replace reads the uses", async () => {
+      const image = await looseImage();
+      const oldPath = String((await row(image.id))!.filename);
+
+      const replaced = await withRebuildAfterFirstMarkRead(() =>
+        replace(editor, image.id, {
+          data: PNG_1X1,
+          name: "after.png",
+          type: "image/png",
+        })
+      );
+
+      expect(replaced.status).toBe(200);
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+      expect(
+        (await readReplacedRecord(t.adapter, image.id))?.files
+      ).toContainEqual({ path: oldPath, url: image.url });
+      // POSITIVE CONTROL: with no rebuild meanwhile, the same Replace of an
+      // item nothing names by address removes the old file.
+      const loose = await looseImage();
+      expect(await oldFileServedAfterReplace(loose.id)).toBe(false);
+    });
+
+    /**
+     * `read()`, with every transaction opened after the one that points the
+     * item at its new file failing, as a database lost just after that commit
+     * would make them.
+     */
+    async function withWritesFailingAfterTheSwitch<T>(
+      read: () => Promise<T>
+    ): Promise<{ value: T; refused: number }> {
+      const original = t.adapter.transaction.bind(t.adapter);
+      let switched = false;
+      let refused = 0;
+      t.adapter.transaction = (async (
+        work: Parameters<typeof original>[0],
+        options?: Parameters<typeof original>[1]
+      ) => {
+        if (switched) {
+          refused += 1;
+          throw new Error("connection lost");
+        }
+        let switches = false;
+        const result = await original(
+          tx =>
+            work(
+              new Proxy(tx, {
+                get(target, property, receiver) {
+                  const value: unknown = Reflect.get(
+                    target,
+                    property,
+                    receiver
+                  );
+                  if (property !== "update" || typeof value !== "function") {
+                    return typeof value === "function"
+                      ? (value as (...args: unknown[]) => unknown).bind(target)
+                      : value;
+                  }
+                  return (table: string, ...rest: unknown[]) => {
+                    if (table === "media") switches = true;
+                    return (value as (...args: unknown[]) => unknown).call(
+                      target,
+                      table,
+                      ...rest
+                    );
+                  };
+                },
+              })
+            ),
+          options
+        );
+        if (switches) switched = true;
+        return result;
+      }) as typeof t.adapter.transaction;
+      try {
+        return { value: await read(), refused };
+      } finally {
+        t.adapter.transaction = original;
+      }
+    }
+
+    // Once the item points at its new file, the Replace has happened: what
+    // follows it is bookkeeping, and its failure is logged, never answered
+    // as the Replace failing (which would have the person try again).
+    it("answers a committed Replace as done, with its kept files recorded, though the database fails just after", async () => {
+      const image = await looseImage();
+      const oldPath = String((await row(image.id))!.filename);
+      await t
+        .getService("collectionsHandler")
+        .createEntry(
+          { collectionName: "replaceposts", overrideAccess: true },
+          { title: "Story", body: imageText(image.url) }
+        );
+
+      const { value: replaced } = await withWritesFailingAfterTheSwitch(() =>
+        replace(editor, image.id, {
+          data: PNG_1X1,
+          name: "after.png",
+          type: "image/png",
+        })
+      );
+
+      expect(replaced.status).toBe(200);
+      expect((await row(image.id))!.filename).not.toBe(oldPath);
+      // Recorded with the switch itself, so the kept file is known as the
+      // item's and goes when the item does.
+      expect(
+        (await readReplacedRecord(t.adapter, image.id))?.files
+      ).toContainEqual({ path: oldPath, url: image.url });
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+    });
+
+    it("keeps the old file, still recorded, when the database fails just after a Replace that would remove it", async () => {
+      const image = await looseImage();
+      const oldPath = String((await row(image.id))!.filename);
+
+      const { value: replaced, refused } =
+        await withWritesFailingAfterTheSwitch(() =>
+          replace(editor, image.id, {
+            data: PNG_1X1,
+            name: "after.png",
+            type: "image/png",
+          })
+        );
+
+      expect(replaced.status).toBe(200);
+      expect(refused).toBeGreaterThan(0);
+      // The record could not be taken back, so the file it names stays: a
+      // file kept is one the item's delete still removes.
+      expect(await getMediaStorage().exists(oldPath, "media")).toBe(true);
+      expect(
+        (await readReplacedRecord(t.adapter, image.id))?.files
+      ).toContainEqual({ path: oldPath, url: image.url });
     });
 
     it("says on every usage answer whether the usage record is built", async () => {

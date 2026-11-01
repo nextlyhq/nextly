@@ -434,12 +434,14 @@ export async function listMediaUsage(
  * The key names the record's format, so a mark written for an earlier one
  * does not count. Rows written before the record kept each use's address
  * (`address`) read as uses by id, and a Replace trusting them would remove a
- * file a page still shows; a record marked under the earlier key
+ * file a page still shows; a record marked under an earlier key
  * (`media.usage.recorded`) therefore reads as still being built until the
- * rebuild writes this key. Raise the format whenever the rows gain something
- * a reader of a complete record relies on.
+ * rebuild writes this key. The same holds for `media.usage.recorded:2`, whose
+ * rows for a block document with its own list of items lack the addresses its
+ * nodes name. Raise the format whenever the rows gain something a reader of
+ * a complete record relies on.
  */
-export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded:2";
+export const MEDIA_USAGE_RECORDED_KEY = "media.usage.recorded:3";
 
 /**
  * Which build of the record stands, or `null` while none does: the mark's
@@ -468,7 +470,9 @@ async function mediaUsageRecordBuild(
  * between the two reads leaves them different or absent, so whatever `read`
  * saw of a record being rebuilt is never taken as complete. The one check
  * every answer about the record makes: the library's counts and an item's
- * uses.
+ * uses, the Unused list and Replace's uses by address. Until a build
+ * stands, a use the record lacks, or one it holds without its address, may
+ * still be in some document.
  */
 export async function readWithinOneBuild<T>(
   db: Pick<UsageDb, "select">,
@@ -478,20 +482,6 @@ export async function readWithinOneBuild<T>(
   const value = await read();
   const after = await mediaUsageRecordBuild(db);
   return { value, recorded: before !== null && before === after };
-}
-
-/**
- * Whether the record has been built for content written before it existed,
- * in its current format: its {@link MEDIA_USAGE_RECORDED_KEY} mark is there.
- * Until it is, a use the record lacks, or one it holds without its address,
- * may still be in some document. The one answer to this question, from the
- * build that stands (`mediaUsageRecordBuild`): a Replace, the usage answers
- * and the library's counts all ask it here.
- */
-export async function mediaUsageRecorded(
-  db: Pick<UsageDb, "select">
-): Promise<boolean> {
-  return (await mediaUsageRecordBuild(db)) !== null;
 }
 
 /**
