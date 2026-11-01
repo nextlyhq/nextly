@@ -347,15 +347,9 @@ const collectBlockDocument: FieldCollector = (
   }
 };
 
-/**
- * The one kind of field whose references name an item by its address rather
- * than its id: rich text, whose image, video and gallery nodes keep `src`.
- */
-const ADDRESS_FIELD_TYPE = "richText";
-
 const COLLECTORS: Readonly<Record<string, FieldCollector>> = {
   upload: collectUpload,
-  [ADDRESS_FIELD_TYPE]: collectRichText,
+  richText: collectRichText,
   group: collectGroup,
   repeater: collectRepeater,
 };
@@ -518,65 +512,4 @@ function childReferences(
   const found: MediaReference[] = [];
   collectField(child, raw, path, schemas, found);
   for (const ref of found) into.push({ ...ref, translated });
-}
-
-/** The field-group schemas a field may hold, each not yet followed. */
-function unfollowedSchemas(
-  field: FieldConfig,
-  schemas: FieldGroupSchemas,
-  followed: ReadonlySet<string>
-): Array<[string, readonly FieldConfig[]]> {
-  const { single, many } = extractFieldGroupReferences(field);
-  const found: Array<[string, readonly FieldConfig[]]> = [];
-  for (const slug of [single, ...(many ?? [])]) {
-    if (slug === undefined || followed.has(slug)) continue;
-    const nested = schemas.get(slug);
-    if (nested) found.push([slug, nested.fields]);
-  }
-  return found;
-}
-
-/** Add to `into` the address fields among `list`, below `prefix`. */
-function addAddressFields(
-  list: readonly FieldConfig[],
-  prefix: string,
-  schemas: FieldGroupSchemas,
-  followed: ReadonlySet<string>,
-  into: Set<string>
-): void {
-  for (const field of list) {
-    const name = (field as { name?: unknown }).name;
-    if (typeof name !== "string" || name === "") continue;
-    const path = joinPath(prefix, name);
-    const type = (field as { type?: unknown }).type;
-    if (type === ADDRESS_FIELD_TYPE) {
-      into.add(path);
-    } else if (type === "group" || type === "repeater") {
-      addAddressFields(childFields(field), path, schemas, followed, into);
-    } else if (typeof type === "string" && isFieldGroupFieldType(type)) {
-      for (const [slug, fields] of unfollowedSchemas(
-        field,
-        schemas,
-        followed
-      )) {
-        const deeper = new Set([...followed, slug]);
-        addAddressFields(fields, path, schemas, deeper, into);
-      }
-    }
-  }
-}
-
-/**
- * The paths of the fields among `fields` whose references name an item by
- * its address, named as the references they make are named: inside groups,
- * repeaters and field groups, by the names they sit in, joined by dots. A
- * field group is followed through every schema it may hold, once each.
- */
-export function addressFieldPaths(
-  fields: readonly FieldConfig[],
-  schemas: FieldGroupSchemas = new Map()
-): Set<string> {
-  const into = new Set<string>();
-  addAddressFields(fields, "", schemas, new Set(), into);
-  return into;
 }
