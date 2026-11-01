@@ -166,25 +166,36 @@ for (const viewport of WIDTHS) {
     await gotoAdmin(page, "/");
 
     const card = page.getByTestId("widget-cell-core/over-time");
-    // Set to posts, the card is titled by its subject, "Posts", and its control is named for
-    // that title; the widget's name and the range it is set to are its subtitle.
-    const range = card.getByRole("combobox", { name: "Date range for Posts" });
+    // Set to posts, the card is titled by its subject and the range it is set to, with the
+    // widget's name beneath, and its control is named for that title.
+    const range = card.getByRole("combobox", {
+      name: "Date range for Posts · last 30 days",
+    });
     await expect(range).toBeVisible();
     await expect(range).toHaveText(/Last 30 days/);
-    await expect(card.getByText("Over time · last 30 days")).toBeVisible();
+    await expect(
+      card.getByRole("heading", { name: "Posts · last 30 days" })
+    ).toBeVisible();
+    await expect(card.getByText("Over time", { exact: true })).toBeVisible();
 
     await range.click();
     await page.getByRole("option", { name: "Last 12 months" }).click();
-    // Said once the card shows the new range, by the toast that offers its Undo, and the card
-    // redrawn under it: its subtitle names the range chosen.
+    // Said once the card shows the new range, by the toast that offers its Undo, which names the
+    // card by the title it has now, and the card redrawn under it: its title names the range.
     await expect(
-      page.getByText("Posts: Date range set to Last 12 months.")
+      page.getByText(
+        "Posts · last 12 months: Date range set to Last 12 months."
+      )
     ).toBeVisible();
-    await expect(card.getByText("Over time · last 12 months")).toBeVisible();
+    await expect(
+      card.getByRole("heading", { name: "Posts · last 12 months" })
+    ).toBeVisible();
     // Kept for this reader: it is there after a reload.
     await page.reload();
     await expect(
-      card.getByRole("combobox", { name: "Date range for Posts" })
+      card.getByRole("combobox", {
+        name: "Date range for Posts · last 12 months",
+      })
     ).toHaveText(/Last 12 months/);
   });
 }
