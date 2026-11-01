@@ -247,6 +247,18 @@ async function expectVisibleFocus(
   twin?: Locator
 ): Promise<void> {
   await expect(target).toBeFocused();
+  await expectDrawnIndicator(target, twin);
+}
+
+/**
+ * `target` draws an indicator at 3:1 against what is behind it, measured as `expectVisibleFocus`
+ * measures it, whether or not it holds focus: an option a list marks as active
+ * (`aria-activedescendant`) shows where the keys are while focus stays in the search.
+ */
+async function expectDrawnIndicator(
+  target: Locator,
+  twin?: Locator
+): Promise<void> {
   const rest =
     twin === undefined ? undefined : await twin.evaluate(drawnColours);
   // Polled as the strongest indicator's contrast, so a failure prints the ratio it measured.
@@ -643,6 +655,8 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
   // Held to the drawn option: a page kept mounted but hidden could hold an element of that id.
   const reached = menu.locator(`[id="${active}"]:visible`);
   await expect(reached).toHaveAttribute("aria-selected", "true");
+  // Where the keys are is drawn on the option, not only named to a screen reader.
+  await expectDrawnIndicator(reached);
   const second = await options.nth(1).getAttribute("data-testid");
   expect(await reached.getAttribute("data-testid")).toBe(second);
   const slug = (second ?? "").replace(/^dashboard-new-(recent|type)-/, "");
@@ -652,6 +666,47 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
     new RegExp(`/admin/collections/${slug}/create$`)
   );
 });
+
+// A brand primary as close to the popover as a colour can be: white in light, black in dark.
+// Branding writes its primary into the primary and ring tokens (BrandingProvider), so the page
+// is given those tokens as such an installation's would be.
+for (const [theme, primary] of [
+  ["light", "rgb(255, 255, 255)"],
+  ["dark", "rgb(0, 0, 0)"],
+] as Array<[Theme, string]>) {
+  test(`the New menu's search and reached option stay outlined under a brand primary of ${primary} (${theme})`, async ({
+    page,
+  }) => {
+    await dashboardAtRest(page, theme);
+    await page.addStyleTag({
+      content: `html .nextly-admin, html .nextly-admin.dark { --nx-primary: ${primary}; --nx-ring: ${primary}; --nx-focus-ring: ${primary}; }`,
+    });
+    const caret = newCaret(page);
+    await caret.focus();
+    await page.keyboard.press("Enter");
+    const menu = newMenuOf(page);
+    await expect(menu).toBeVisible();
+    // The brand's ring reaches the menu, so a ring-coloured outline would vanish into it.
+    expect(
+      await menu.evaluate(node =>
+        getComputedStyle(node).getPropertyValue("--nx-ring").trim()
+      )
+    ).toBe(primary);
+    const search = menu.getByRole("combobox", {
+      name: "Search types to create",
+    });
+    await expectVisibleFocus(search);
+    await page.keyboard.type("p");
+    await page.keyboard.press("ArrowDown");
+    const active = await search.getAttribute("aria-activedescendant");
+    expect(active).toBeTruthy();
+    // Held to the drawn option: a page kept mounted but hidden could hold an element of that id.
+    const reached = menu.locator(`[id="${active}"]:visible`);
+    await expect(reached).toHaveAttribute("aria-selected", "true");
+    await expectDrawnIndicator(reached);
+    await page.keyboard.press("Escape");
+  });
+}
 
 test("the gallery says how many it lists for the chip and the search that are on", async ({
   page,

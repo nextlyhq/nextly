@@ -104,21 +104,24 @@ const SEARCH_LABEL = "Search types to create";
 
 /**
  * Where the keys are in the list, drawn so it can be seen: the option the arrow keys have reached
- * is outlined in the ring colour, which holds 3:1 against the popover in both schemes. The
- * shared item's own mark for it (a 5% tint) is all but invisible on its own. Its text stays in
- * the foreground colour: the shared item's primary falls under 4.5:1 on the popover when a brand
- * colour replaces the default primary.
+ * is outlined in the foreground colour, the popover's own text colour, so it holds 3:1 against
+ * the popover in both schemes whatever brand colour an installation sets (branding writes its
+ * primary into the ring token, and a primary near the popover's colour would hide a ring-coloured
+ * outline). The shared item removes its outline (`outline-none` sets the outline style to none),
+ * so the style is put back with the width and colour. The shared item's own mark (a 5% tint) is
+ * all but invisible on its own, and its text stays in the foreground colour: the shared item's
+ * primary falls under 4.5:1 on the popover when a brand colour replaces the default primary.
  */
 const SELECTED_OPTION_CLASS =
-  "data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-ring aria-selected:text-foreground data-[selected=true]:text-foreground";
+  "data-[selected=true]:outline-solid data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-foreground aria-selected:text-foreground data-[selected=true]:text-foreground";
 
 /**
- * The search box, focused, outlined in the same ring colour as the reached option. The shared
- * input removes its outline (`outline-none` sets the outline style to none), so the style is put
- * back as well as the width and colour; without it a caret is all that marks focus.
+ * The search box, focused, outlined as the reached option is, in the foreground colour for the
+ * same reason. The shared input removes its outline too, so the style is put back here as well;
+ * without it a caret is all that marks focus.
  */
 const SEARCH_FOCUS_CLASS =
-  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
+  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground";
 
 /**
  * What the button says when its main part starts creating another type while it is drawn, as
