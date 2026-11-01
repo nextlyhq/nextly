@@ -39,6 +39,7 @@ import {
   AUTH_TOKEN_LIFETIME_MS,
   lockAccount,
   tokenTable,
+  wholeSecondExpiry,
   type AuthTokenKind,
   type BindingAccount,
   type TokenBindingDb,
@@ -606,7 +607,10 @@ export class AuthService extends BaseService {
     try {
       const rawToken = randomBytes(32).toString("hex");
       const tokenHash = createHash("sha256").update(rawToken).digest("hex");
-      const expiresAt = new Date(Date.now() + expirationMs);
+      // The whole second the instant falls in: a column that keeps whole
+      // seconds rounds milliseconds rather than cutting them, which would
+      // store an expiry later than the one computed.
+      const expiresAt = wholeSecondExpiry(new Date(Date.now() + expirationMs));
 
       // Issued for the account holding the address, holding its row so an
       // address change or a deletion running at the same time is ordered
@@ -878,7 +882,12 @@ export class AuthService extends BaseService {
       // address, so a legacy mixed-case row keyed by its canonical form could
       // never be verified.
       const identifier = user.email;
-      const expiresAt = new Date(Date.now() + AUTH_TOKEN_LIFETIME_MS);
+      // The whole second the instant falls in, as the reset expiry above:
+      // a rounding column must not store the link as living longer than
+      // the lifetime its issuer set.
+      const expiresAt = wholeSecondExpiry(
+        new Date(Date.now() + AUTH_TOKEN_LIFETIME_MS)
+      );
 
       // Issued for the matched account, holding its row, as a reset link is.
       // An account that moved or was deleted since the lookup gets nothing.
