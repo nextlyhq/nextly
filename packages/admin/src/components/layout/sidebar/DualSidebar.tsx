@@ -78,6 +78,15 @@ import type {
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
+/**
+ * Where keyboard focus is on the rail. The browser's outline is turned off,
+ * and the ring drawn in its place on `:focus-visible` alone, so a pointer
+ * click draws none. Offset onto the rail's own surface, so it stays clear of
+ * a selected entry's fill and reads in both themes.
+ */
+const RAIL_FOCUS_RING =
+  "outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar";
+
 interface DualSidebarProps {
   isMobile?: boolean;
 }
@@ -467,7 +476,10 @@ export function DualSidebar({
         {/* Logo */}
         <Link
           href={ROUTES.DASHBOARD}
-          className="mb-8 flex items-center justify-center h-10 w-10 group"
+          className={cn(
+            "mb-8 flex items-center justify-center h-10 w-10 rounded-md group",
+            RAIL_FOCUS_RING
+          )}
         >
           <ThemeAwareLogo
             boxed
@@ -496,7 +508,8 @@ export function DualSidebar({
 
             // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
             const className = cn(
-              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
+              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
+              RAIL_FOCUS_RING,
               isSelected
                 ? // `sidebar-accent` rather than `muted`: it is the surface
                   // `sidebar-accent-foreground` is declared against. Pairing

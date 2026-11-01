@@ -191,3 +191,39 @@ describe("DualSidebar's rail while its answers arrive", () => {
     expect(marker()).toBe("settled");
   });
 });
+
+describe("DualSidebar's rail under the keyboard", () => {
+  // The rail's controls draw no browser outline, so a keyboard reader sees where focus is only
+  // by the ring each control draws on :focus-visible. A control without it is invisible to Tab.
+  const FOCUS_RING = [
+    "focus-visible:ring-2",
+    "focus-visible:ring-sidebar-ring",
+    "focus-visible:ring-offset-2",
+    "focus-visible:ring-offset-sidebar",
+  ];
+
+  it("draws a focus ring on the logo and on every rail entry", () => {
+    answers = {
+      workspacePending: false,
+      permissionsLoading: false,
+      contentLoading: false,
+    };
+    render(<DualSidebar />);
+    const entries = Array.from(
+      document.querySelectorAll<HTMLElement>("aside nav [aria-label]")
+    );
+    const logo = document.querySelector<HTMLElement>("aside > a");
+    // Both kinds of entry are present, so a ring added to the link branch alone fails here.
+    expect(entries.some(node => node.tagName === "A")).toBe(true);
+    expect(entries.some(node => node.tagName === "BUTTON")).toBe(true);
+    expect(logo).not.toBeNull();
+    for (const control of [logo!, ...entries]) {
+      for (const name of FOCUS_RING) {
+        expect(
+          control.classList.contains(name),
+          `${name} on ${control.getAttribute("aria-label") ?? "the logo"}`
+        ).toBe(true);
+      }
+    }
+  });
+});
