@@ -399,43 +399,6 @@ describe.each(getConfiguredTestDialects())(
         .toBe(false);
     }, 45_000);
 
-    it("marks a hundred and fifty items in one request, or none when one is missing", async () => {
-      const files: string[] = [];
-      for (let made = 0; made < 150; made += 1) files.push(await unusedFile());
-      const marks = async () =>
-        (
-          await t.adapter.select<Doc>("nextly_meta", {
-            columns: ["key"],
-            where: {
-              and: [
-                {
-                  column: "key",
-                  op: "IN",
-                  value: files.map(pendingDeleteKey),
-                },
-              ],
-            },
-          })
-        ).length;
-
-      const refused = await api(editor, "POST", ["deletions"], {
-        body: { ids: [...files, randomUUID()] },
-      });
-      expect(refused.status).toBe(404);
-      expect(await marks()).toBe(0);
-
-      const deleted = await api(editor, "POST", ["deletions"], {
-        body: { ids: files },
-      });
-      expect(deleted.status).toBe(200);
-      expect((deleted.json.marked as string[]).length).toBe(150);
-      expect(await marks()).toBe(150);
-      const undone = await api(editor, "POST", ["deletions", "undo"], {
-        body: { ids: files },
-      });
-      expect((undone.json.restored as string[]).length).toBe(150);
-    }, 90_000);
-
     it("says which items a delete marked itself", async () => {
       const files = [await unusedFile(), await unusedFile()];
       const first = await api(editor, "POST", ["deletions"], {
@@ -815,5 +778,43 @@ describe.each(getConfiguredTestDialects())(
         (await api(editor, "GET", [], { query: "?limit=100" })).json.items
       ).toContainEqual(expect.objectContaining({ id: file }));
     });
+
+    // Last, so its many items crowd no other test's first page of the list.
+    it("marks a hundred and fifty items in one request, or none when one is missing", async () => {
+      const files: string[] = [];
+      for (let made = 0; made < 150; made += 1) files.push(await unusedFile());
+      const marks = async () =>
+        (
+          await t.adapter.select<Doc>("nextly_meta", {
+            columns: ["key"],
+            where: {
+              and: [
+                {
+                  column: "key",
+                  op: "IN",
+                  value: files.map(pendingDeleteKey),
+                },
+              ],
+            },
+          })
+        ).length;
+
+      const refused = await api(editor, "POST", ["deletions"], {
+        body: { ids: [...files, randomUUID()] },
+      });
+      expect(refused.status).toBe(404);
+      expect(await marks()).toBe(0);
+
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: files },
+      });
+      expect(deleted.status).toBe(200);
+      expect((deleted.json.marked as string[]).length).toBe(150);
+      expect(await marks()).toBe(150);
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: files },
+      });
+      expect((undone.json.restored as string[]).length).toBe(150);
+    }, 90_000);
   }
 );
