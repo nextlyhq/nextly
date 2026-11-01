@@ -59,6 +59,7 @@
 import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { textLength } from "../../shared/text-length";
 
 import { FORMER_CORE_WIDGET_IDS } from "./core-widgets/ids";
 import {
@@ -70,7 +71,11 @@ import {
   type GridSize,
   type WidgetSizeBounds,
 } from "./grid-size";
-import { isUsableText, MAX_PLACEMENTS } from "./layout-limits";
+import {
+  isUsableText,
+  MAX_CARD_TITLE_LENGTH,
+  MAX_PLACEMENTS,
+} from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
 import { isRetiredWidget } from "./retired-widget-namespaces";
 
@@ -118,6 +123,16 @@ export interface WidgetPlacement {
   removed: boolean;
   /** Per-placement settings. Opaque to core; the widget's own vocabulary. */
   config?: Record<string, unknown>;
+  /**
+   * The title the reader gave this card, trimmed, at most
+   * `MAX_CARD_TITLE_LENGTH` characters. Absent means the card is titled
+   * automatically from its widget and settings.
+   *
+   * On the PLACEMENT, beside `config` rather than in it: `config` is the
+   * widget's own vocabulary, where a setting a plugin happened to name
+   * `title` would collide with it, and a title belongs to every card.
+   */
+  title?: string;
 }
 
 /** The decoded contents of one `nextly_widget_layout.layout` column. */
@@ -194,7 +209,33 @@ const PLACEMENT_RULES: readonly PlacementRule[] = [
     p.config !== undefined && exceedsDepth(p.config, MAX_CONFIG_DEPTH)
       ? `"config" may nest at most ${MAX_CONFIG_DEPTH} levels`
       : undefined,
+  p => titleProblem(p.title),
 ];
+
+/**
+ * Why a placement's `title` cannot be stored, or `undefined`. Judged after
+ * trimming, as it is stored (`ownTitleOf`), so surrounding spaces never count
+ * against the bound, and in code points, as every bound a person is told in
+ * characters is.
+ */
+function titleProblem(title: unknown): string | undefined {
+  if (title === undefined) return undefined;
+  if (typeof title !== "string") return '"title", when given, must be text';
+  return textLength(title.trim()) > MAX_CARD_TITLE_LENGTH
+    ? `"title" may hold at most ${MAX_CARD_TITLE_LENGTH} characters`
+    : undefined;
+}
+
+/**
+ * A placement's own title as stored: trimmed, and absent when nothing is left,
+ * so a reader clearing the field returns the card to its automatic title
+ * rather than storing an empty one.
+ */
+function ownTitleOf(title: unknown): { title?: string } {
+  if (typeof title !== "string") return {};
+  const trimmed = title.trim();
+  return trimmed === "" ? {} : { title: trimmed };
+}
 
 /**
  * Whether a value nests deeper than `limit`.
@@ -326,6 +367,7 @@ function toPlacement(value: Record<string, unknown>): WidgetPlacement {
     ...(value.config === undefined
       ? {}
       : { config: value.config as Record<string, unknown> }),
+    ...ownTitleOf(value.title),
   };
 }
 
@@ -547,6 +589,9 @@ export function dismissalsApplied(
           : {}),
         removed: choice.removed,
         ...(choice.config === undefined ? {} : { config: choice.config }),
+        // The reader's own title, like their settings, is their choice about
+        // this card, so it follows the card the same way.
+        ...(choice.title === undefined ? {} : { title: choice.title }),
       };
     }
   );
@@ -767,7 +812,7 @@ const ORPHANED = "\u0000orphaned";
  * the byte limit it shares a reason with; it is declared in the import-free
  * `layout-limits.ts` because the browser reads it too.
  */
-export { MAX_PLACEMENTS } from "./layout-limits";
+export { MAX_CARD_TITLE_LENGTH, MAX_PLACEMENTS } from "./layout-limits";
 
 /**
  * The ceiling on the row as STORED, carried placements included: twice a full

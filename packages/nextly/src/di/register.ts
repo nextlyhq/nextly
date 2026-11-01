@@ -132,7 +132,6 @@ import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/w
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
-import { registerResolvedSource } from "../domains/widgets/resolved-sources";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
@@ -224,10 +223,6 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
-import {
-  collectWidgetSources,
-  type CollectedWidgetSource,
-} from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import {
   installTagExpiryLedger,
@@ -968,8 +963,7 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard,
-    resolvedLogger
+    transformedConfig.admin?.dashboard
   );
 
   // Before any step that writes to the database or the registry: the Builder
@@ -1440,17 +1434,15 @@ function validateBootContributions(
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
   collectRoles(transformedConfig, transformedPlugins);
 
-  // Fail fast on contributed routes and widget sources: a path or method that
-  // cannot be served, an option that cannot mean what it says, a collision,
-  // or a source outside the `plugin:` namespace. Both folds are pure, so they
-  // run here, before the adapter connects — boot migrations, extension-table
+  // Fail fast on contributed routes: a path or method that cannot be served,
+  // an option that cannot mean what it says, or a collision. The fold is
+  // pure, so it runs here, before the adapter connects — boot migrations, extension-table
   // creation and code-first syncs all run before `initializePlugins`, and a
   // configuration the boot is going to refuse must not change the database
   // first. The results are handed to `initializePlugins` rather than folded
   // again there.
   const pluginBootContributions: PluginBootContributions = {
     routes: collectPluginRoutes(transformedPlugins),
-    widgetSources: collectWidgetSources(transformedPlugins),
   };
 
   registerPluginFieldTypes(transformedPlugins);
@@ -2605,13 +2597,12 @@ function bindDirectApi(): void {
 // ============================================================
 
 /**
- * The contributed routes and widget sources of the boot's plugin list, each
- * folded and validated once, before the adapter connects, and registered by
- * `initializePlugins` once every plugin has a context.
+ * The contributed routes of the boot's plugin list, folded and validated
+ * once, before the adapter connects, and registered by `initializePlugins`
+ * once every plugin has a context.
  */
 interface PluginBootContributions {
   routes: CollectedRoute[];
-  widgetSources: CollectedWidgetSource[];
 }
 
 /**
@@ -4369,7 +4360,7 @@ async function initializePlugins(
   /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
   pluginGrants: PluginGrants,
   /**
-   * The routes and widget sources of `transformedConfig.plugins`, collected
+   * The routes of `transformedConfig.plugins`, collected
    * and validated by `registerServicesOnce` before the adapter connected,
    * so an invalid plugin fails the boot before anything is migrated.
    */
@@ -4542,11 +4533,6 @@ async function initializePlugins(
     }
   };
 
-  // Folded once, across every plugin, so a duplicate source id or a reserved
-  // namespace is a boot failure naming BOTH owners. Folded before the adapter
-  // connected, so a refusal writes no store at all.
-  const contributedSources = contributions.widgetSources;
-
   // PASS 1 — build every enabled plugin's context, register its contributed
   // services (D64) and declared event names. Services register BEFORE any init
   // runs, so a plugin's `init` can resolve any other plugin's service lazily via
@@ -4592,46 +4578,6 @@ async function initializePlugins(
         }
         return factory(pluginContext);
       });
-    }
-
-    // Contributed widget SOURCES, bound the same way and for the same reason.
-    // They cannot register with the other widget stores in
-    // `resetWidgetRegistries`: that runs before any context is built, and a
-    // resolver without its context can answer nothing -- a plugin's data
-    // services are reachable through nothing else.
-    //
-    // Per plugin rather than in one sweep afterwards, so each resolver closes
-    // over ITS OWN context. One shared context would hand every plugin the
-    // first one's `ctx.self`, which is how a plugin would come to read another
-    // plugin's entities while believing they were its own.
-    //
-    // Validated across ALL plugins before the loop (`contributedSources`), so a
-    // duplicate id or a reserved namespace is refused naming both owners rather
-    // than discovered halfway through registration.
-    for (const contributed of contributedSources) {
-      if (contributed.owner !== plugin.name) continue;
-      // The source goes through AS DECLARED. The fold has already refused any
-      // kind but `plugin`, so rewriting it here would only be able to hide a
-      // contribution the fold would have caught.
-      // `resolveMany` is bound to the same context, when the plugin wrote one.
-      // Read once, and called on its entry as `resolve` is, so one written
-      // with method syntax that reaches `this.resolve` keeps its receiver.
-      const { resolveMany } = contributed;
-      registerResolvedSource(
-        contributed.source,
-        (query, caller, opts) =>
-          contributed.resolve(query, caller, pluginContext, opts),
-        resolveMany === undefined
-          ? undefined
-          : (queries, caller, opts) =>
-              resolveMany.call(
-                contributed,
-                queries,
-                caller,
-                pluginContext,
-                opts
-              )
-      );
     }
 
     // Register contributed email providers (C2/D65) — fail-fast on type collision.

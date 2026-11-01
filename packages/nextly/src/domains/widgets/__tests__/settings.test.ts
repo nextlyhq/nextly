@@ -1341,6 +1341,30 @@ describe("quick settings: at most three sit in the card's quick popover", () => 
   });
 });
 
+describe("a setting's section in the card's settings panel", () => {
+  const style: AnyWidgetSetting = {
+    name: "style",
+    type: "select",
+    options: [{ label: "Line", value: "line" }],
+    defaultValue: "line",
+  };
+
+  it("accepts each of the panel's three sections, and none", () => {
+    for (const section of ["data", "display", "advanced"] as const) {
+      expect(widgetSettingsProblems([{ ...style, section }])).toEqual([]);
+    }
+    expect(widgetSettingsProblems([style])).toEqual([]);
+  });
+
+  it("refuses a section the panel does not draw, naming the three it does", () => {
+    expect(
+      widgetSettingsProblems([{ ...style, section: "sidebar" } as never])
+    ).toEqual([
+      'setting "style" has section "sidebar"; expected one of "data", "display", "advanced"',
+    ]);
+  });
+});
+
 describe("a date setting holds the ISO 8601 date its picker writes", () => {
   const since: WidgetSetting = {
     name: "since",

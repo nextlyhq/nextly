@@ -11,7 +11,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReadAccessCaller } from "../../../auth/entity-read-access";
-import { setContributedWidgets } from "../canonical";
 import { clearWidgets, registerWidget } from "../registry";
 import { setSiteDashboardRules } from "../site-rules";
 import { clearSources, registerSource } from "../sources";
@@ -77,14 +76,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearWidgets();
   clearSources();
-  setContributedWidgets([]);
   reader([]);
 });
 
 afterEach(() => {
   clearWidgets();
   clearSources();
-  setContributedWidgets([]);
   setSiteDashboardRules(NO_SITE_RULES);
 });
 
@@ -99,16 +96,13 @@ const ids = (widgets: readonly { id: string }[]) =>
   widgets.map(widget => widget.id);
 
 describe("visibleWidgets", () => {
-  it("withholds a declared widget whose gate this reader fails, from either channel", async () => {
-    // 🔴 The disclosure. A declaration is its whole content -- a text widget's
-    // prose travels with it -- so a reader the gate refuses must not be told
-    // the card exists, whether a plugin contributed it or an app registered
-    // it. The ungated card and the one whose gate holds are the controls:
-    // without them a filter that returns nothing satisfies the refusal.
-    setContributedWidgets([
-      { id: "acme/runbook", requiredPermission: "manage-settings" },
-      { id: "acme/welcome" },
-    ]);
+  it("withholds a declared widget whose gate this reader fails", async () => {
+    // 🔴 The disclosure. A declaration ships whole, so a reader the gate
+    // refuses must not be told the card exists. The ungated card and the one
+    // whose gate holds are the controls: without them a filter that returns
+    // nothing satisfies the refusal.
+    register("acme/runbook", { requiredPermission: "manage-settings" });
+    register("acme/welcome");
     register("app/secrets", { requiredPermission: "read-secrets" });
     register("app/notes", { requiredPermission: "read-notes" });
     reader(["read-notes"]);
@@ -117,21 +111,6 @@ describe("visibleWidgets", () => {
       "acme/welcome",
       "app/notes",
     ]);
-  });
-
-  it("gates a colliding pair on the one gate the canonical merge keeps", async () => {
-    // A registration that TIGHTENED the permission on a contributed id gates
-    // both copies. The contribution carries no gate of its own, and shipping
-    // it on that basis would hand the reader the prose the registration was
-    // written to withhold.
-    setContributedWidgets([{ id: "acme/runbook" }]);
-    register("acme/runbook", { requiredPermission: "manage-settings" });
-    reader([]);
-
-    expect(ids(await visibleWidgets(CALLER))).toEqual([]);
-
-    reader(["manage-settings"]);
-    expect(ids(await visibleWidgets(CALLER))).toEqual(["acme/runbook"]);
   });
 
   it("denies when the permission decision itself rejects", async () => {
@@ -220,10 +199,10 @@ describe("widgetAudience", () => {
     expect((await widgetAudience(CALLER)).token).not.toBe(before);
   });
 
-  it("declares every visible widget, from either channel, and nothing beside them", async () => {
-    // The workspace payload matches both channels' declarations against
+  it("declares every visible widget, and nothing beside them", async () => {
+    // The workspace payload matches the published widgets against
     // `declared`; a sourced collection adds nothing for it to ship.
-    setContributedWidgets([{ id: "acme/welcome" }]);
+    register("acme/welcome");
     register("app/notes");
     registerSource(source("posts"));
     reader([], ["posts"]);
@@ -235,13 +214,12 @@ describe("widgetAudience", () => {
     expect(audience).not.toHaveProperty("generated");
   });
 
-  it("answers for the gates INSIDE a visible declaration, from either channel", async () => {
+  it("answers for the gates INSIDE a visible declaration", async () => {
     // 🔴 An `actions` widget's shortcuts each carry a gate of their own, and
     // a shortcut is a label and an href. The card's gate alone let the whole
     // list ship and left the browser to hide the protected ones -- readable
     // from the payload regardless. The verdicts here are what the payload
-    // withholds them with, resolved for the actions a registration and a
-    // contribution declare.
+    // withholds them with, resolved for the actions each declares.
     register("app/shortcuts", {
       archetype: "actions",
       content: undefined,
@@ -259,9 +237,18 @@ describe("widgetAudience", () => {
         },
       ],
     });
-    setContributedWidgets([
-      { id: "acme/links", actionGates: [undefined, "export-notes"] },
-    ]);
+    register("acme/links", {
+      archetype: "actions",
+      content: undefined,
+      actions: [
+        { label: "Open", href: "/admin/open" },
+        {
+          label: "Export",
+          href: "/admin/export",
+          requiredPermission: "export-notes",
+        },
+      ],
+    });
     reader(["publish-notes", "export-notes"]);
 
     const audience = await widgetAudience(CALLER);

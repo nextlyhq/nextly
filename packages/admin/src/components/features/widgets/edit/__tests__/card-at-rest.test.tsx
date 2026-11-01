@@ -10,7 +10,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
@@ -27,6 +35,7 @@ import {
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -156,6 +165,7 @@ function followedDefault(
       h: choice.h,
       removed: choice.removed,
       ...(choice.config === undefined ? {} : { config: choice.config }),
+      ...(choice.title === undefined ? {} : { title: choice.title }),
     };
   });
 }
@@ -253,6 +263,14 @@ function pressUndo() {
   if (options?.action?.label !== "Undo") throw new Error("no Undo offered");
   options.action.onClick();
 }
+
+// The settings panel's code loads apart from the dashboard's, ahead of its opening, as a pointer
+// over the card's menu fetches it. Fetched once here, so a test opening the panel meets the panel
+// rather than its loading screen.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../CellSettings");
+});
 
 beforeEach(() => {
   stubDashboardWidth();
@@ -389,6 +407,84 @@ describe("the quick popover at rest", () => {
     expect(
       await screen.findByRole("dialog", { name: "Quick settings for Styled" })
     ).toBeInTheDocument();
+  });
+});
+
+describe("what a card's own write says it is", () => {
+  it("names the card by the title its reader gave it, as the card shows it", async () => {
+    // Two copies of one widget are told apart by their own titles: so is what a write says.
+    layoutResponse = {
+      ...layout(),
+      placements: [
+        layout().placements[0]!,
+        { ...DEFAULTS[1]!, title: "Drafts board" },
+      ],
+    };
+    // The write fails, so what is said comes from the write itself.
+    api.put.mockRejectedValue(new Error("network down"));
+    renderGrid();
+    const user = userEvent.setup();
+    await chooseWidthAtRest(user, "Drafts board", "Half width, 6 columns");
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toast.error.mock.calls.at(-1)?.[0]).toMatch(
+      /^Could not save Drafts board's size/
+    );
+  });
+});
+
+describe("Settings for a card whose widget declares none", () => {
+  it("opens the card's settings panel, where its own title is set", async () => {
+    // Every card has a title its reader can give it, so every card has Settings.
+    renderGrid();
+    const user = userEvent.setup();
+    const menu = await openMenu(user, "Plain");
+    await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+    // Its popover holds its Size, and More settings leads on to the panel.
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Plain",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: "Plain settings" });
+    expect(within(panel).getByLabelText("Title")).toBeInTheDocument();
+  });
+
+  it("opens the panel straight from Settings where there is no popover, and hands focus back to the menu", async () => {
+    // A card of one size and no settings has no popover: Settings opens its panel itself.
+    const fixed = { w: 4, h: 3 };
+    const branded = branding();
+    mockBranding = {
+      ...branded,
+      widgets: [
+        ...(branded.widgets ?? []),
+        {
+          id: "core/fixed",
+          title: "Fixed",
+          archetype: "custom",
+          size: { default: fixed, min: fixed, max: fixed },
+          component: "core#AtRestBody",
+        },
+      ],
+    } as AdminBranding;
+    layoutResponse = {
+      ...layout(),
+      placements: [
+        ...layout().placements,
+        { id: "p3", widgetId: "core/fixed", ...fixed, removed: false },
+      ],
+    };
+    renderGrid();
+    const user = userEvent.setup();
+    const menu = await openMenu(user, "Fixed");
+    await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+    const panel = await screen.findByRole("dialog", { name: "Fixed settings" });
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Card menu for Fixed" })
+      ).toHaveFocus()
+    );
   });
 });
 

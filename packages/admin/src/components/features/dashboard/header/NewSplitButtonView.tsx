@@ -13,6 +13,7 @@
  */
 import {
   Button,
+  buttonVariants,
   Command,
   CommandEmpty,
   CommandGroup,
@@ -55,6 +56,43 @@ function matchesSearch(
     : 0;
 }
 
+/**
+ * The main part's width, the same whatever type it leads with: New is drawn
+ * before that type is known (`NewSplitButtonPlaceholder`), so a width taken
+ * from the label would move Customize beside it once the label arrived. A
+ * longer label is cut short inside it; a narrow header narrows it further.
+ */
+const MAIN_PART_WIDTH = "w-44";
+
+/**
+ * New's place, held at the size New is drawn at while what it leads with is
+ * not known yet, unseen and out of reach: New then appears where it stays,
+ * and nothing beside it moves.
+ */
+export function NewSplitButtonPlaceholder(): JSX.Element {
+  return (
+    <div
+      aria-hidden="true"
+      inert
+      className="invisible inline-flex min-w-0 max-w-full"
+      data-testid="dashboard-new-reserve"
+    >
+      <span
+        className={buttonVariants({
+          size: "sm",
+          className: `${MAIN_PART_WIDTH} min-w-0 rounded-r-none`,
+        })}
+      />
+      <span
+        className={buttonVariants({
+          size: "icon-sm",
+          className: "shrink-0 rounded-l-none",
+        })}
+      />
+    </div>
+  );
+}
+
 export interface NewSplitButtonViewProps {
   menu: NewMenu;
 }
@@ -94,12 +132,17 @@ export function NewSplitButtonView({
 
   const primaryLabel = `New ${collectionSingularLabel(primary)}`;
   return (
-    // The main part is capped and its label cut short with an ellipsis, so a
-    // long type name never widens the header past a narrow screen. The whole
-    // label stays the link's text, so it is still the accessible name, and
-    // the title shows it to a pointer.
+    // The main part is one fixed width and its label cut short with an
+    // ellipsis, so a long type name never widens the header past a narrow
+    // screen, and no label moves what is beside it. The whole label stays the
+    // link's text, so it is still the accessible name, and the title shows it
+    // to a pointer.
     <div className="inline-flex min-w-0 max-w-full" data-testid="dashboard-new">
-      <Button asChild size="sm" className="min-w-0 max-w-64 rounded-r-none">
+      <Button
+        asChild
+        size="sm"
+        className={`${MAIN_PART_WIDTH} min-w-0 rounded-r-none`}
+      >
         <Link
           href={createHref(primary)}
           title={primaryLabel}
@@ -118,7 +161,9 @@ export function NewSplitButtonView({
             size="icon-sm"
             // The divider is the label's own colour at a quarter strength, so
             // it reads on the primary fill in both schemes.
-            className="rounded-l-none border-l-primary-foreground/25"
+            // Never narrowed: the label gives way first, so the caret stays
+            // whole on the narrowest header.
+            className="shrink-0 rounded-l-none border-l-primary-foreground/25"
             aria-label="Choose what to create"
             data-testid="dashboard-new-more"
           >
@@ -127,7 +172,10 @@ export function NewSplitButtonView({
         </PopoverTrigger>
         <PopoverContent
           align="end"
-          className="w-64 p-0"
+          // Held inside the viewport with a gutter on each side, so on a phone
+          // the menu neither runs off the screen nor widens the page.
+          collisionPadding={16}
+          className="w-64 max-w-[calc(100vw_-_2rem)] p-0"
           // Focus the list itself, so the arrow keys move through it at once
           // when there is no search box to land in.
           onOpenAutoFocus={event => {

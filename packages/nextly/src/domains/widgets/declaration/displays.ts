@@ -117,8 +117,12 @@ export const CORE_VIEWS = {
 /** One of core's views, by the name a declaration gives it. */
 export type CoreView = keyof typeof CORE_VIEWS;
 
-/** How a widget declares its view: a core view's name, or its own component's path. */
-export type WidgetView = CoreView | ComponentDisplay;
+/**
+ * How a widget declares its view: a core view's name, or its own component's
+ * path. The component form is written out rather than named, so the view is
+ * published as these two and no display vocabulary beside them.
+ */
+export type WidgetView = CoreView | { component: string };
 
 /** The display a view is drawn by: a core view's, or the component itself. */
 export type DisplayOf<View> = View extends CoreView

@@ -48,6 +48,8 @@
 // PR 4 migration: replaced ServiceError throws + mapLegacy/mapSimple helpers
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
@@ -71,7 +73,10 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
-import type { UploadValidator } from "../../../services/upload-validation";
+import type {
+  UploadValidator,
+  ValidatedFile,
+} from "../../../services/upload-validation";
 import type {
   ImageProcessor,
   ImageValidity,
@@ -349,40 +354,17 @@ export class MediaService {
   // ============================================================
 
   /**
-   * Upload a media file
-   *
-   * @param input - Upload data (buffer, filename, mimeType, size)
-   * @param context - Request context with user info
-   * @returns Uploaded media file
-   * @throws NextlyError if upload fails (e.g., invalid file, size limit).
-   *
-   * @example
-   * ```typescript
-   * const file = await service.upload({
-   *   buffer: fileBuffer,
-   *   filename: 'photo.jpg',
-   *   mimeType: 'image/jpeg',
-   *   size: 1024000,
-   * }, context);
-   * ```
+   * A file a person sends, checked as every upload is: its size against the
+   * configured limit, its metadata sanitized, and its bytes by the upload
+   * validator. Answers the file as the validator passed it. Shared by an
+   * upload and a replace, so a file is accepted for one exactly when it is
+   * for the other.
    */
-  async upload(
+  private async checkedFile(
     input: UploadMediaInput,
     context: RequestContext,
-    // The transport-resolved caller, threaded to the outbox event so an upload
-    // attributes to the real session or API key rather than only the uploader.
-    actor?: RequestActor
-  ): Promise<MediaFile> {
-    // Ensure storage is configured before upload
-    this.ensureStorageConfigured();
-
-    this.logger.debug("Uploading media file", {
-      filename: input.filename,
-      mimeType: input.mimeType,
-      size: input.size,
-      userId: context.user?.id,
-    });
-
+    operation: "upload" | "replace"
+  ): Promise<ValidatedFile> {
     // Validate file size. Field-level message names the path ("size") but
     // never the value; the actual byte count + driver-supplied reason live
     // in logContext for operators.
@@ -421,7 +403,7 @@ export class MediaService {
       this.logger.warn("upload.rejected", {
         event: "nextly.upload.rejected",
         code: validation.errors[0]?.code,
-        route: "media-service.upload",
+        route: `media-service.${operation}`,
         mimeType: input.mimeType,
         filename: input.filename,
         size: input.size,
@@ -430,12 +412,51 @@ export class MediaService {
         errors: validation.errors,
         logContext: {
           ...validation.logContext,
-          operation: "media-service.upload",
+          operation: `media-service.${operation}`,
           userId: context.user?.id ?? null,
         },
       });
     }
     const validated = validation.value;
+    return validated;
+  }
+
+  /**
+   * Upload a media file
+   *
+   * @param input - Upload data (buffer, filename, mimeType, size)
+   * @param context - Request context with user info
+   * @returns Uploaded media file
+   * @throws NextlyError if upload fails (e.g., invalid file, size limit).
+   *
+   * @example
+   * ```typescript
+   * const file = await service.upload({
+   *   buffer: fileBuffer,
+   *   filename: 'photo.jpg',
+   *   mimeType: 'image/jpeg',
+   *   size: 1024000,
+   * }, context);
+   * ```
+   */
+  async upload(
+    input: UploadMediaInput,
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event so an upload
+    // attributes to the real session or API key rather than only the uploader.
+    actor?: RequestActor
+  ): Promise<MediaFile> {
+    // Ensure storage is configured before upload
+    this.ensureStorageConfigured();
+
+    this.logger.debug("Uploading media file", {
+      filename: input.filename,
+      mimeType: input.mimeType,
+      size: input.size,
+      userId: context.user?.id,
+    });
+
+    const validated = await this.checkedFile(input, context, "upload");
 
     // Validate the target folder BEFORE persisting the file so a bad folderId
     // fails fast (throws NOT_FOUND) instead of leaving an orphaned upload, and
@@ -498,6 +519,73 @@ export class MediaService {
     await this.afterWrite();
 
     return this.mapToMediaFile(result.data);
+  }
+
+  /**
+   * Replace an item's file, keeping the item: the same id, name, alt text,
+   * caption, folder and usage, with the new file at a new address and a new
+   * thumbnail, and the old files removed once the change has committed.
+   * The new file is checked exactly as an upload's is.
+   *
+   * @throws NextlyError(NOT_FOUND) when the item does not exist.
+   */
+  async replaceFile(
+    mediaId: string,
+    input: UploadMediaInput,
+    context: RequestContext,
+    actor?: RequestActor
+  ): Promise<MediaFile> {
+    this.ensureStorageConfigured();
+    const validated = await this.checkedFile(input, context, "replace");
+    // Loaded when a file is replaced, not with the service.
+    const [
+      { replaceMediaFile },
+      { container },
+      { getMediaStorage },
+      { bootedAddressPaths },
+    ] = await Promise.all([
+      import("../replace-media-file"),
+      import("../../../di/container"),
+      import("../../../storage/storage"),
+      import("../usage/media-uses-source"),
+    ]);
+    const replaced = await replaceMediaFile(
+      {
+        adapter: container.get<DrizzleAdapter>("adapter"),
+        storage: getMediaStorage(),
+        images: this.imageProcessor,
+        logger: this.logger,
+        addressPaths: bootedAddressPaths(),
+        addressHolders: address =>
+          this.legacyMediaService.addressHolderCount(address),
+      },
+      mediaId,
+      {
+        buffer: validated.buffer,
+        filename: validated.filename,
+        mimeType: validated.mimeType,
+        ...(validated.isSvg && this.svgCsp
+          ? { contentDisposition: "attachment" as const }
+          : {}),
+      },
+      actorForWrite(actor, context.user)
+    );
+    this.logger.info("Media file replaced", { mediaId });
+    await this.legacyMediaService.whenCommitted(() =>
+      emitMediaEvent("updated", { mediaId })
+    );
+    // The replace committed a media.updated outbox row; drain and prune it.
+    await this.afterWrite();
+    return this.mapToMediaFile(replaced);
+  }
+
+  /**
+   * How many records outside content (users' avatars, the email brand's
+   * logo, the site's logos) keep `address`. Each goes on naming it after a
+   * Replace, so the old file is kept for them.
+   */
+  addressHolderCount(address: string): Promise<number> {
+    return this.legacyMediaService.addressHolderCount(address);
   }
 
   /**

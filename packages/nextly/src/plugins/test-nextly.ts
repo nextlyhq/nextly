@@ -699,25 +699,7 @@ export async function createTestNextly(
     adapter = provisioned.adapter;
   }
   if (!adapter) {
-    // The inherited snapshot points further back than one taken now would, so
-    // it wins when there is one.
-    restoreEnv = inheritedRestore ?? snapshotEnv();
-    // Force the SQLite dialect so the env validation the factory triggers
-    // (env.DATABASE_URL access) passes without a configured database — SQLite
-    // needs no DATABASE_URL, and production-only checks are skipped under test.
-    process.env.DB_DIALECT = "sqlite";
-    giveTestSecret();
-    // Same reason as the provisioned path: a previous boot on another dialect
-    // would otherwise still be the one this process's `env` reports.
-    _resetEnvCache();
-    // `memory: true` forces an in-memory DB. The factory otherwise falls back
-    // to a default SQLite *file*, which would persist across test runs. The
-    // SqliteAdapter honours `memory` ahead of any url, but the factory's
-    // AdapterConfig type doesn't declare it — hence the cast.
-    adapter = await createAdapter({
-      type: "sqlite",
-      memory: true,
-    } as Parameters<typeof createAdapter>[0]);
+    ({ adapter, restoreEnv } = await defaultSqliteAdapter(inheritedRestore));
   }
   const logger = opts.logger ?? defaultTestLogger;
   adapter = guardAgainstAbortedTransactions(adapter);
@@ -750,6 +732,46 @@ export async function createTestNextly(
     // recovery path above, nothing is about to set an environment here.
     await releaseActiveDatabase();
     restoreEnv?.();
+    throw error;
+  }
+}
+
+/**
+ * The in-memory SQLite adapter a boot given none runs on, with the snapshot
+ * that puts back what it changes about the environment.
+ *
+ * The environment is changed before the adapter exists, and the boot's own
+ * failure path only starts once it does, so an adapter that cannot be created
+ * (the package or its native module missing) puts the environment back here,
+ * as a failed boot would, before the error goes on: nothing else holds the
+ * snapshot yet.
+ */
+async function defaultSqliteAdapter(
+  inheritedRestore: (() => void) | undefined
+): Promise<{ adapter: TestAdapter; restoreEnv: () => void }> {
+  // The inherited snapshot points further back than one taken now would, so
+  // it wins when there is one.
+  const restoreEnv = inheritedRestore ?? snapshotEnv();
+  // Force the SQLite dialect so the env validation the factory triggers
+  // (env.DATABASE_URL access) passes without a configured database — SQLite
+  // needs no DATABASE_URL, and production-only checks are skipped under test.
+  process.env.DB_DIALECT = "sqlite";
+  giveTestSecret();
+  // Same reason as the provisioned path: a previous boot on another dialect
+  // would otherwise still be the one this process's `env` reports.
+  _resetEnvCache();
+  try {
+    // `memory: true` forces an in-memory DB. The factory otherwise falls back
+    // to a default SQLite *file*, which would persist across test runs. The
+    // SqliteAdapter honours `memory` ahead of any url, but the factory's
+    // AdapterConfig type doesn't declare it — hence the cast.
+    const adapter = await createAdapter({
+      type: "sqlite",
+      memory: true,
+    } as Parameters<typeof createAdapter>[0]);
+    return { adapter, restoreEnv };
+  } catch (error) {
+    restoreEnv();
     throw error;
   }
 }

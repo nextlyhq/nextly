@@ -19,6 +19,7 @@ import {
   registeredCachedRead,
   reportUnregisteredUnderCacheComponents,
 } from "./registered-read";
+import { noteCachedRead, publicReadLifetime } from "./shared-handlers";
 
 /** The subset of `unstable_cache` this helper uses. */
 export type UnstableCache = <T>(
@@ -145,6 +146,8 @@ export function applyCache<T>(
   reader: () => Promise<T>,
   options: CachedFindOptions
 ): Promise<T> {
+  // Each path's lifetime is bounded in production while nextly's cache
+  // handlers do not serve it, so a write from elsewhere shows within a minute.
   // Under Cache Components, through the app's `"use cache"` function when it
   // registered one: `unstable_cache` is the model Cache Components replaces,
   // and a page read right after a write can be served its previous entry once.
@@ -155,7 +158,8 @@ export function applyCache<T>(
       JSON.stringify(options.keyParts),
       afterLanguagesRead(reader),
       readTags(options.tags),
-      options.revalidate ?? false
+      publicReadLifetime(options.revalidate ?? false, true),
+      () => noteCachedRead(true)
     );
   }
   reportUnregisteredUnderCacheComponents();
@@ -165,9 +169,9 @@ export function applyCache<T>(
     // in the order given: the routes put their own collection's or Single's
     // tag first, and a caller's own `cachedFind` keeps its order.
     tags: readTags(options.tags),
-    revalidate: options.revalidate ?? false,
+    revalidate: publicReadLifetime(options.revalidate ?? false, false),
   });
-  return runCachedOrDirect(cached, reader);
+  return runCachedOrDirect(cached, reader, () => noteCachedRead(false));
 }
 
 /**
@@ -200,10 +204,14 @@ function afterLanguagesRead<T>(reader: () => Promise<T>): () => Promise<T> {
  */
 async function runCachedOrDirect<T>(
   cached: () => Promise<T>,
-  reader: () => Promise<T>
+  reader: () => Promise<T>,
+  onCached: () => void
 ): Promise<T> {
   try {
-    return await cached();
+    const value = await cached();
+    // Only a read that was cached tells anything about the cache handlers.
+    onCached();
+    return value;
   } catch (error) {
     if (isMissingCacheScopeError(error)) return reader();
     throw error;

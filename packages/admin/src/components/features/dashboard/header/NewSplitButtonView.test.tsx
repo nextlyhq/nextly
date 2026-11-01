@@ -115,7 +115,7 @@ describe("NewSplitButtonView", () => {
     // The whole label is the title a pointer shows, and the text is cut by
     // the label's own box, inside a main part held to a width.
     expect(main).toHaveAttribute("title", `New ${singular}`);
-    expect(main).toHaveClass("min-w-0", "max-w-64");
+    expect(main).toHaveClass("min-w-0", "w-44");
     expect(screen.getByTestId("dashboard-new-primary-label")).toHaveClass(
       "truncate"
     );

@@ -16,7 +16,6 @@ import { compile, listedFiles } from "../../../../scripts/tsc-cli.mjs";
 
 import type {
   GridSize,
-  WidgetArchetype,
   WidgetOp,
   WidgetSizeDeclaration,
   WidgetSourceField,
@@ -112,6 +111,65 @@ const REMOVED_WIDGET_SOURCE_TYPES = [
   "PluginSourceResolver",
   "PluginManySourceResolver",
 ];
+
+// The older widget shape's names: the definition a widget was written as, the
+// archetype vocabulary it was drawn by, the stats card's cells, the contributed
+// `PluginAdmin*Widget` family, the display vocabulary beside `WidgetView`, the
+// registry's reads that answered a definition, and the props a component drew
+// a definition's query answer with. A widget is declared with `defineWidget`
+// and drawn by `WidgetView`, so none of these is published.
+const REMOVED_WIDGET_SHAPE_NAMES = [
+  "WidgetDefinition",
+  "WIDGET_ARCHETYPES",
+  "WidgetArchetype",
+  "DataWidgetArchetype",
+  "QuerylessWidgetArchetype",
+  "CellWidgetArchetype",
+  "DeclarativeWidgetArchetype",
+  "WidgetStatCell",
+  "WidgetQueryCell",
+  "WidgetAction",
+  "WidgetPatch",
+  "PluginAdminWidget",
+  "PluginAdminCustomWidget",
+  "PluginAdminDataWidget",
+  "PluginAdminStatsWidget",
+  "PluginAdminDeclarativeWidget",
+  "PluginAdminQuerylessWidget",
+  "CoreDisplay",
+  "ComponentDisplay",
+  "WidgetDisplay",
+  "getWidget",
+  "listWidgets",
+  "WidgetComponentProps",
+  "WidgetSlot",
+  "WidgetQueryBatchResponse",
+];
+
+/**
+ * The entry points the admin reads the registry's wire shapes from, and the
+ * older names each still carries for it alone.
+ *
+ * 🔴 Named, so the list can only shrink: core's own Content, Create, Team,
+ * Continue, Upcoming releases and Team activity cards are still written as
+ * definitions and drawn by the admin from their query's answer, so the admin
+ * still needs the definition, its actions and cells, and the component props.
+ * Each name leaves with the last card that uses it. A name here on another
+ * entry point, or a new entry, fails below.
+ */
+const ADMIN_WIRE_NAMES: Readonly<Record<string, readonly string[]>> = {
+  "nextly/config": [
+    "WidgetDefinition",
+    "WidgetAction",
+    "WidgetStatCell",
+    "WidgetQueryCell",
+  ],
+  "nextly/widget-result": [
+    "WidgetComponentProps",
+    "WidgetSlot",
+    "WidgetQueryBatchResponse",
+  ],
+};
 
 /**
  * What a published function looks like from an import site.
@@ -279,7 +337,9 @@ const ASKED = [
   "toPublicMediaUrl",
   ...REMOVED_WIDGET_DOORS,
   ...REMOVED_WIDGET_SOURCE_TYPES,
+  ...REMOVED_WIDGET_SHAPE_NAMES,
   "WidgetSourceResolver",
+  "WidgetView",
   "WidgetSizeDeclaration",
   "UserListResponse",
   "UserListResponseSchema",
@@ -647,16 +707,43 @@ describe("published export surface", () => {
     }
   );
 
-  it("still publishes the one door and the registry's reads from the root", async () => {
+  it("still publishes the one door from the root", async () => {
     // The control: the absence above is also satisfied by an entry point that
     // published nothing. The root is where the registry's writers were, and
     // what stayed beside them is asserted there, so the scan is seen reading
     // the module they lived in.
     const root = (await import("../index")) as Record<string, unknown>;
-    for (const name of ["defineWidget", "getWidget", "listWidgets"]) {
+    for (const name of ["defineWidget", "listSources"]) {
       expect([name, typeof root[name]]).toEqual([name, "function"]);
     }
   });
+
+  it(
+    "publishes none of the older widget shape's names, beyond the admin's wire shapes",
+    () => {
+      const compiled = exported();
+      const leaked = [...compiled].flatMap(([entry, names]) =>
+        REMOVED_WIDGET_SHAPE_NAMES.filter(
+          name =>
+            names.has(name) && !(ADMIN_WIRE_NAMES[entry] ?? []).includes(name)
+        ).map(name => `${entry}: ${name}`)
+      );
+      expect(leaked).toEqual([]);
+
+      // Every name the admin's list keeps is still there: a name gone from
+      // its entry point leaves the list, so the list states what remains.
+      const kept = Object.entries(ADMIN_WIRE_NAMES).flatMap(([entry, names]) =>
+        names.filter(name => !compiled.get(entry)?.has(name))
+      );
+      expect(kept).toEqual([]);
+
+      // The controls: every entry point was asked, and the view a widget is
+      // drawn by, published beside the removed names, is read through the root.
+      expect(compiled.size).toBe(ENTRY_POINTS.length);
+      expect(compiled.get("nextly")?.has("WidgetView")).toBe(true);
+    },
+    COMPILE_TIMEOUT_MS
+  );
 
   it(
     "exports no type of the removed widget source contract from any entry point",
@@ -753,9 +840,9 @@ describe("published export surface", () => {
     expect(typeof cfg.fieldGroup).toBe("function");
   });
 
-  it("publishes every contract a widget definition names", async () => {
-    // `WidgetDefinition` is exported from the root and its `size` is typed
-    // `WidgetSizeDeclaration`. There is no `nextly/widgets` subpath, so the root
+  it("publishes every contract a widget declaration names", async () => {
+    // A declaration's `size` is typed `WidgetSizeDeclaration`. There is no
+    // `nextly/widgets` subpath, so the root
     // entry point is the only place a plugin author can reach these -- and a
     // publicly visible property whose type has no public name cannot be
     // annotated, only inferred. Same argument for the source contract:
@@ -763,7 +850,6 @@ describe("published export surface", () => {
     // built out of have to be nameable too.
     const root = (await import("../index")) as Record<string, unknown>;
     expect(root.GRID_COLUMNS).toBe(12);
-    expect(root.WIDGET_ARCHETYPES).toContain("metric");
     expect(root.WIDGET_SOURCE_KINDS).toContain("collection");
     expect(root.WIDGET_OPS).toContain("count");
 
@@ -773,10 +859,9 @@ describe("published export surface", () => {
     // plugin author actually needs.
     const unit: GridSize = { w: 6, h: 4 };
     const size: WidgetSizeDeclaration = { default: unit };
-    const archetype: WidgetArchetype = "metric";
     const op: WidgetOp = "count";
     const field: WidgetSourceField = { name: "title", type: "string" };
-    expect([unit, size, archetype, op, field.name]).toHaveLength(5);
+    expect([unit, size, op, field.name]).toHaveLength(4);
   });
 
   it("publishes the grid size functions from the config entry point", async () => {

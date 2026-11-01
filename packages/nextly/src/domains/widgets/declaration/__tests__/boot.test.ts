@@ -13,13 +13,8 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
-import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { getWidget, widgetSource } from "../../registry";
-import {
-  clearDeclaredWidgets,
-  declaredWidget,
-  resetLegacyIdWarnings,
-} from "../declared-widgets";
+import { clearDeclaredWidgets, declaredWidget } from "../declared-widgets";
 import { dashboard, revenue } from "./plugin/widgets";
 
 function plugin(
@@ -43,19 +38,6 @@ function plugin(
 const untyped = (widgets: unknown): PluginContributions["dashboard"] =>
   ({ widgets }) as unknown as PluginContributions["dashboard"];
 
-/**
- * A plugin carrying widgets under `contributes.admin.widgets`, as plain
- * JavaScript hands it over: the key is no field of the contributions type, and
- * plugin resolution refuses it before this reset runs.
- */
-const olderShape = (name: string, widgets: unknown): PluginDefinition =>
-  ({
-    name,
-    version: "1.0.0",
-    nextly: "*",
-    contributes: { admin: { widgets } },
-  }) as unknown as PluginDefinition;
-
 /** The startup error's detail, or a failure when startup did not stop. */
 function refusal(run: () => void): string {
   try {
@@ -68,7 +50,6 @@ function refusal(run: () => void): string {
 }
 
 beforeEach(() => {
-  resetLegacyIdWarnings();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn: vi.fn(),
     info: vi.fn(),
@@ -179,44 +160,5 @@ describe("startup with plugins that declare widgets", () => {
     expect(message).toContain(
       'plugin "@acme/shop", widget "(none)": its dashboard widgets must be a list'
     );
-  });
-
-  it("stops when a declared widget takes an id another plugin uses in today's shape", () => {
-    const message = refusal(() =>
-      resetWidgetRegistries([
-        olderShape("@old/stats", [
-          {
-            id: "acme/revenue",
-            title: "Revenue",
-            component: "@old/stats/admin#Revenue",
-          },
-        ]),
-        plugin("@acme/shop", { dashboard: { widgets: [revenue] } }),
-      ])
-    );
-    expect(message).toContain(
-      'id "acme/revenue" is already used by plugin "@old/stats", which declares it in the old shape'
-    );
-  });
-
-  it("stops when a plugin uses one of core's declared ids in today's shape, saying it is core's and what to do", () => {
-    // 🔴 One id has one owner: core declares core/note, so the plugin using it
-    // in the old shape is told to remove it or contribute an id of its own.
-    const message = refusal(() =>
-      resetWidgetRegistries([
-        olderShape("@old/notes", [
-          {
-            id: "core/note",
-            title: "Note",
-            component: "@old/notes/admin#Note",
-          },
-        ]),
-      ])
-    );
-    expect(message).toContain(
-      'plugin "@old/notes" contributes core/note through contributes.admin.widgets; core owns that id. Remove it, or contribute your own id through contributes.dashboard.'
-    );
-    // Filed under the plugin that has to change, not under core.
-    expect(message).toContain('plugin "@old/notes", widget "core/note"');
   });
 });

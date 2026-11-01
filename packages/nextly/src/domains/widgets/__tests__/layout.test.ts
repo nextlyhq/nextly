@@ -9,6 +9,7 @@ import {
   LAYOUT_SCHEMA_VERSION,
   MAX_CONFIG_DEPTH,
   DASHBOARD_FULL_MESSAGE,
+  MAX_CARD_TITLE_LENGTH,
   MAX_PLACEMENTS,
   MAX_STORED_PLACEMENTS,
   chosenSizeIds,
@@ -160,6 +161,31 @@ describe("reading placements", () => {
         config: { range: 7 },
       },
     ]);
+  });
+
+  it("keeps a card's own title trimmed, and drops one with nothing left", () => {
+    const [titled, cleared] = readPlacements([
+      placement({ title: "  Drafts to finish  " }),
+      placement({ id: "p2", title: "   " }),
+    ]);
+    expect(titled?.title).toBe("Drafts to finish");
+    // Absent, not "": a cleared title is the automatic one again.
+    expect(cleared).not.toHaveProperty("title");
+  });
+
+  it("refuses a title longer than a card's header holds, counted after trimming and in characters", () => {
+    const most = "é".repeat(MAX_CARD_TITLE_LENGTH);
+    expect(placementProblem(placement({ title: ` ${most} ` }))).toBeUndefined();
+    expect(placementProblem(placement({ title: `${most}x` }))).toMatch(
+      /"title" may hold at most 80 characters/
+    );
+    // Code points, not UTF-16 units: 80 emoji are 160 units and still fit.
+    expect(
+      placementProblem(placement({ title: "😀".repeat(MAX_CARD_TITLE_LENGTH) }))
+    ).toBeUndefined();
+    expect(placementProblem(placement({ title: 7 }))).toMatch(
+      /"title", when given, must be text/
+    );
   });
 
   it("names the index of the offending placement", () => {
@@ -463,6 +489,19 @@ describe("a row of an earlier format is no saved arrangement", () => {
       )
     );
     expect(dismissalsApplied(defaults, row)).not.toEqual(defaults);
+  });
+
+  it("carries a card's own title to the default's card, as its settings are", () => {
+    const row = readStoredLayout(
+      serializeLayout(
+        [card("mine", "core/b", { title: "Drafts", config: { range: "7d" } })],
+        false
+      )
+    );
+    const mine = dismissalsApplied(defaults, row).find(
+      each => each.widgetId === "core/b"
+    );
+    expect(mine).toMatchObject({ title: "Drafts", config: { range: "7d" } });
   });
 
   it("keeps each card's own choice where the default places one widget twice", () => {

@@ -260,6 +260,10 @@ export default defineConfig({
       // The render-retry harness route, gated the same way: its render fails on
       // an id's first load, for the test of an error boundary's retry().
       NEXTLY_E2E_RETRY_HARNESS: "1",
+      // The site page that links to the admin, gated the same way: it stands
+      // in for a site's own header link, for the test of what a hidden admin
+      // leaves behind.
+      NEXTLY_E2E_SITE_HARNESS: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout

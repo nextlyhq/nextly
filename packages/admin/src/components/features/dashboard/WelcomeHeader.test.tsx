@@ -140,6 +140,7 @@ function Grid({ state }: { state: Partial<DashboardChromeState> }) {
   usePublishDashboardChrome(
     {
       customizable: true,
+      awaitingArrangement: false,
       editing: false,
       writing: false,
       oldestAnswerAt: null,
@@ -249,6 +250,58 @@ describe("the dashboard header", () => {
     cleanup();
     renderHeader({ customizable: true, editing: true });
     expect(screen.queryByTestId("dashboard-new")).toBeNull();
+  });
+
+  it("holds Customize's place before the grid has said, unseen and unreachable, with New after it", () => {
+    // No grid has published yet: the first paint of a cold load.
+    renderHeader();
+    const held = screen.getByTestId("dashboard-edit-reserve");
+    expect(held).toHaveClass("invisible");
+    expect(held).toHaveAttribute("aria-hidden", "true");
+    expect(held).toHaveAttribute("inert");
+    expect(held).toHaveAttribute("tabindex", "-1");
+    // Held in the place Customize takes: before New, in the one group.
+    const create = screen.getByTestId("dashboard-new");
+    expect(held.parentElement).toBe(create.parentElement);
+    expect(
+      held.compareDocumentPosition(create) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Customize" })).toBeNull();
+    cleanup();
+    // The grid has published, and the reader's arrangement is still on its
+    // way: not customizable YET, which says nothing, so the place stays held.
+    renderHeader({ customizable: false, awaitingArrangement: true });
+    expect(screen.getByTestId("dashboard-edit-reserve")).toHaveClass(
+      "invisible"
+    );
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    cleanup();
+    // Once the grid has said, the real control takes the place, or none does.
+    renderHeader({ customizable: true });
+    expect(screen.queryByTestId("dashboard-edit-reserve")).toBeNull();
+    expect(screen.getByTestId("dashboard-edit-begin")).toBeVisible();
+    cleanup();
+    renderHeader({ customizable: false });
+    expect(screen.queryByTestId("dashboard-edit-reserve")).toBeNull();
+  });
+
+  it("holds the summary's line while the summary is read, so its arrival moves nothing", () => {
+    // Pending: the line is not drawn, and its place is held all the same.
+    renderHeader({});
+    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
+    expect(screen.getByTestId("dashboard-summary-slot").className).toContain(
+      "min-h-[calc(1lh_+_3px)]"
+    );
+    cleanup();
+    // Answered: the line is drawn inside that same held place.
+    summaryRead = {
+      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
+    };
+    renderHeader({});
+    expect(screen.getByTestId("dashboard-summary").parentElement).toBe(
+      screen.getByTestId("dashboard-summary-slot")
+    );
   });
 
   it("says all caught up only when every part was read, and nothing when a part failed", () => {

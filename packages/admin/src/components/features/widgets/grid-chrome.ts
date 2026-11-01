@@ -60,11 +60,12 @@ export interface GridChromeSource {
  */
 export function usePublishGridChrome(source: GridChromeSource): void {
   const { arrangement, requested, updatedAtFor, refresh } = source;
-  const { visible, editor, hasArrangement } = arrangement;
+  const { visible, editor, hasArrangement, awaitingArrangement } = arrangement;
   const queryClient = useQueryClient();
   usePublishDashboardChrome(
     {
       customizable: hasArrangement,
+      awaitingArrangement,
       editing: editor.isEditing,
       writing: editor.isWriting,
       oldestAnswerAt: oldestAnswerAt(visible, requested, updatedAtFor),

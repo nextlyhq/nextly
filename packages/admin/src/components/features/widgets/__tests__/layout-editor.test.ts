@@ -492,6 +492,22 @@ describe("recording what a reader chose for one card", () => {
     setPlacementConfig(list, "a", { x: 1 });
     expect(list[0].config).toBeUndefined();
   });
+
+  it("sets the card's own title, trimmed, where the change gives one, and keeps it where not", () => {
+    const titled = setPlacementConfig(placements("a"), "a", {}, "  Mine ");
+    expect(titled[0].title).toBe("Mine");
+    // A quick setting changes settings alone: the title stays.
+    expect(setPlacementConfig(titled, "a", { x: 1 })[0].title).toBe("Mine");
+    // Emptied, the card is titled automatically again: no title at all, as the write stores it.
+    expect("title" in setPlacementConfig(titled, "a", {}, " ")[0]).toBe(false);
+  });
+
+  it("sees a change of the card's own title alone as a change", () => {
+    const list = placements("a");
+    expect(hasChanges(list, setPlacementConfig(list, "a", {}, "Mine"))).toBe(
+      true
+    );
+  });
 });
 
 describe("a save over the submission limit", () => {

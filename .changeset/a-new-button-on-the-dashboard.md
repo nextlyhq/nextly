@@ -44,3 +44,7 @@ card, as the per-collection and per-Single cards are: a site whose
 refused at startup with a message saying creating entries now lives in the
 dashboard header's New button, so remove it from the config. A saved layout
 holding it reads without it.
+
+The header holds its layout from the first paint: the summary line's height,
+Customize's place and the New button's fixed width are reserved before their
+data arrives, so nothing in the header moves as the dashboard loads.

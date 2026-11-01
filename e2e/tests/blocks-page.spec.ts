@@ -27,6 +27,7 @@
  */
 import { expect, type APIResponse } from "@playwright/test";
 
+import { CACHE_COMPONENTS } from "./support/cache-components";
 import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ mode: "serial" });
@@ -270,12 +271,6 @@ test("a condition-gated node is never sent to the client", async ({
   expect(html).toContain(PAGE_HEADING);
   expect(html).not.toContain(GATED_TEXT);
 });
-
-/**
- * Whether the playground under test was built with Cache Components, which its
- * `next.config` turns on from this same variable.
- */
-const CACHE_COMPONENTS = process.env.NEXTLY_PLAYGROUND_CACHE_COMPONENTS === "1";
 
 test("an unpublished entry is not served", async ({ page }) => {
   if (!CACHE_COMPONENTS) {

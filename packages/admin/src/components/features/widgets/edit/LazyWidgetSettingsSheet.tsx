@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * A card's settings sheet, with its code loaded when a reader is about to
- * open it rather than with the dashboard.
+ * A card's settings panel (`CellSettings`), with its code loaded when a reader
+ * is about to open it rather than with the dashboard.
  *
- * The sheet draws its form with the entry editor's field renderer, and that
+ * The panel draws its form with the entry editor's field renderer, and that
  * renderer reaches the whole editor (a relationship field can create the entry
  * it links to, in the editor's own form). Imported statically, every dashboard
- * visit loaded the editor for a sheet most visits never open. Its code is
+ * visit loaded the editor for a panel most visits never open. Its code is
  * asked for on the first sign a reader is heading for it (`preloadWidgetSettingsSheet`:
  * a pointer over, or focus on, a control that opens it), so it has usually
  * arrived by the time it opens. The fetch and those handlers live in
@@ -29,8 +29,9 @@ import type { JSX } from "react";
 
 import { useRetryableModule } from "@admin/hooks/useRetryableModule";
 
+import type { CellSettingsProps } from "./CellSettings";
+import { closeFocusTo } from "./panel-close-focus";
 import { settingsSheetModule } from "./settings-sheet-code";
-import type { WidgetSettingsSheetProps } from "./WidgetSettingsSheet";
 
 /**
  * The sheet as it stands while its code is still arriving: the same panel and
@@ -46,12 +47,11 @@ function SheetLoading({
   open,
   onOpenChange,
   title,
-  renderPreview,
+  returnFocusTo,
   failure,
-}: Pick<
-  WidgetSettingsSheetProps,
-  "open" | "onOpenChange" | "title" | "renderPreview"
-> & {
+}: Pick<CellSettingsProps, "open" | "onOpenChange" | "returnFocusTo"> & {
+  /** The card's title, which names the panel as the loaded one names it. */
+  title: string;
   /**
    * Set once the fetch has failed: the panel says so, with Try again, or,
    * once a retry has failed as well, Reload the page.
@@ -59,16 +59,16 @@ function SheetLoading({
   failure?: { exhausted: boolean; onRetry: () => void };
 }): JSX.Element {
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    // Not modal, as the loaded panel is not: the dashboard beside it stays usable while it loads.
+    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
       <SheetContent
         side="right"
         aria-busy={failure ? undefined : true}
-        // The loaded sheet's width, so the panel does not jump once the form arrives.
-        className={
-          renderPreview
-            ? "flex w-full flex-col overflow-hidden sm:max-w-md lg:max-w-4xl"
-            : "flex w-full flex-col overflow-hidden sm:max-w-md"
-        }
+        // The loaded panel's width, so it does not jump once the form arrives.
+        className="flex w-full flex-col overflow-hidden sm:w-[520px] sm:min-w-[480px] sm:max-w-[560px]"
+        onInteractOutside={event => event.preventDefault()}
+        // Closed before the code arrives, focus goes back where the loaded panel's would.
+        onCloseAutoFocus={closeFocusTo(returnFocusTo)}
       >
         <SheetHeader>
           <SheetTitle>{title} settings</SheetTitle>
@@ -110,26 +110,25 @@ function SheetLoading({
 }
 
 /**
- * {@link WidgetSettingsSheet} once its code has arrived, and {@link SheetLoading}
- * in its place until then, or saying the code could not be fetched.
+ * The card's settings panel (`CellSettings`) once its code has arrived, and
+ * {@link SheetLoading} in its place until then, or saying the code could not be
+ * fetched.
  */
-export function LazyWidgetSettingsSheet(
-  props: WidgetSettingsSheetProps
-): JSX.Element {
+export function LazyWidgetSettingsSheet(props: CellSettingsProps): JSX.Element {
   const { state, attempt, retry } = useRetryableModule(
     settingsSheetModule,
-    "The card settings sheet's code"
+    "The card settings panel's code"
   );
   if (state.status === "ok") {
-    const WidgetSettingsSheet = state.value;
-    return <WidgetSettingsSheet {...props} />;
+    const CellSettings = state.value;
+    return <CellSettings {...props} />;
   }
   return (
     <SheetLoading
       open={props.open}
       onOpenChange={props.onOpenChange}
-      title={props.title}
-      renderPreview={props.renderPreview}
+      title={props.widget.title}
+      returnFocusTo={props.returnFocusTo}
       {...(state.status === "error"
         ? { failure: { exhausted: attempt > 0, onRetry: retry } }
         : {})}

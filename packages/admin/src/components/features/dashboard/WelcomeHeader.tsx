@@ -121,16 +121,24 @@ export function WelcomeHeader(): JSX.Element {
             <EnvironmentBadge environment={summary.data.environment} />
           ) : null}
         </div>
-        <SummaryLine
-          summary={currentSummary(summary)}
-          cards={chrome?.cards ?? {}}
-          now={now}
-          trailing={
-            setupResume.resumable ? (
-              <ResumeSetupLink resume={setupResume} />
-            ) : null
-          }
-        />
+        {/* The summary's one line is held from the first paint (its margin
+            and a line of its text), so its arrival moves nothing: neither the
+            header's actions, which sit at its foot, nor the cards below. */}
+        <div
+          className="flow-root min-h-[calc(1lh_+_3px)] text-[12.5px]"
+          data-testid="dashboard-summary-slot"
+        >
+          <SummaryLine
+            summary={currentSummary(summary)}
+            cards={chrome?.cards ?? {}}
+            now={now}
+            trailing={
+              setupResume.resumable ? (
+                <ResumeSetupLink resume={setupResume} />
+              ) : null
+            }
+          />
+        </div>
         <Freshness
           oldestAnswerAt={chrome?.oldestAnswerAt ?? null}
           now={now}
@@ -138,9 +146,29 @@ export function WelcomeHeader(): JSX.Element {
         />
       </div>
       {/* The header's actions, Customize then New, as the approved design
-          places them; both give way to customise mode's own bar. */}
-      <div className="flex items-center gap-2">
-        {chrome?.customizable && !chrome.editing ? (
+          places them; both give way to customise mode's own bar. The group
+          may narrow to the header's width (New's label then cuts short), so
+          it never widens a phone's page. */}
+      <div className="flex min-w-0 max-w-full items-center gap-2">
+        {chrome === null || chrome.awaitingArrangement ? (
+          // Until the grid knows whether this reader may customise (it has
+          // not published, or their arrangement is still on its way),
+          // Customize's place is held, unseen and out of reach, so New is
+          // drawn from the first paint where it stays instead of moving over
+          // when Customize arrives.
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-hidden="true"
+            tabIndex={-1}
+            inert
+            className="invisible"
+            data-testid="dashboard-edit-reserve"
+          >
+            Customize
+          </Button>
+        ) : chrome.customizable && !chrome.editing ? (
           <div className="flex gap-2" data-testid="dashboard-edit-offer">
             <Button
               ref={chrome.customizeRef}
