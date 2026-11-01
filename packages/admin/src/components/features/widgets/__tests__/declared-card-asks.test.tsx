@@ -41,7 +41,6 @@ const orders: DashboardWidget = {
   title: "Open orders",
   archetype: "custom",
   size: gridBounds(12),
-  serverData: true,
 };
 
 function sent(call = 0): unknown[] {

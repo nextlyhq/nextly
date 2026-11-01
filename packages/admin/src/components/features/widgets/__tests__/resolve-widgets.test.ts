@@ -23,7 +23,6 @@ const REGISTERED_SHARED = {
   title: "From the registry",
   archetype: "metric",
   size: { default: { w: 3, h: 3 } },
-  query: { source: "collection:posts", op: "count" },
 } as unknown as RegisteredWidgetMeta;
 
 /** A registered widget drawn by its own component, with `extra` beside it. */
@@ -44,7 +43,6 @@ describe("resolveDashboardWidgets", () => {
       title: "Orders",
       archetype: "custom",
       component: "acme#Orders",
-      serverData: true,
       sketch: "bars",
       size: { default: { w: 4, h: 3 } },
     } as unknown as RegisteredWidgetMeta;
@@ -66,21 +64,6 @@ describe("resolveDashboardWidgets", () => {
     expect(widgets.find(each => each.id === "shared")?.owner).toBeUndefined();
   });
 
-  it("carries the filters core published for a registered widget", () => {
-    // The knobs build a card's query from these, so a widget reading across
-    // collections that lost them would have its Collection setting replace its
-    // source instead of narrowing it.
-    const edits = {
-      ...REGISTERED_SHARED,
-      id: "edits",
-      archetype: "list",
-      query: { source: "system:edits", op: "list" },
-      sourceFilters: ["collection", "onlyMine"],
-    } as unknown as RegisteredWidgetMeta;
-    const [widget] = resolveDashboardWidgets([edits], allow);
-    expect(widget?.sourceFilters).toEqual(["collection", "onlyMine"]);
-  });
-
   it("withholds a widget whose permission this reader lacks, and keeps it for one who holds it", () => {
     const gated = {
       ...REGISTERED_SHARED,
@@ -93,7 +76,7 @@ describe("resolveDashboardWidgets", () => {
   it("drops a duplicate registration whose FIRST entry was withheld", () => {
     // Deduplication and the permission gate must agree about which of the two
     // the payload meant: the second entry, carrying no permission, must not
-    // render in place of the restricted first and put its query in the batch.
+    // render in place of the restricted first and put its card in the batch.
     const widgets = resolveDashboardWidgets(
       [
         { ...REGISTERED_SHARED, requiredPermission: "read-secrets" },
@@ -103,38 +86,6 @@ describe("resolveDashboardWidgets", () => {
     );
 
     expect(widgets).toEqual([]);
-  });
-
-  it("drops a shortcut this reader may not use, keeping the card", () => {
-    // The two gates answer different questions and both are needed. The card's
-    // own permission decides whether the widget appears; an item's decides
-    // whether that shortcut does.
-    const shortcuts = {
-      id: "core/shortcuts",
-      title: "Shortcuts",
-      archetype: "actions",
-      size: { default: { w: 3, h: 3 } },
-      actions: [
-        { label: "New post", href: "/admin/posts/new" },
-        {
-          label: "Invite user",
-          href: "/admin/users/new",
-          requiredPermission: "create-users",
-        },
-      ],
-    } as unknown as RegisteredWidgetMeta;
-    const widgets = resolveDashboardWidgets(
-      [shortcuts],
-      permission => permission !== "create-users"
-    );
-
-    expect(widgets).toHaveLength(1);
-    expect(widgets[0].actions?.map(a => a.label)).toEqual(["New post"]);
-    // The positive control: a filter that dropped everything would satisfy
-    // the assertion above.
-    expect(resolveDashboardWidgets([shortcuts], allow)[0].actions).toHaveLength(
-      2
-    );
   });
 
   it("drops a duplicate id inside the registry payload itself", () => {
@@ -199,25 +150,6 @@ describe("defaultOrder decides position, and only where it is stated", () => {
       allow
     );
     expect(ids(widgets)).toEqual(["a", "b", "c", "d"]);
-  });
-});
-
-describe("who may send a card away travels with the declaration", () => {
-  it("carries dismissible from a registration", () => {
-    const [widget] = resolveDashboardWidgets(
-      [drawnBy("core/onboarding", { dismissible: true })],
-      allow
-    );
-
-    expect(widget.dismissible).toBe(true);
-  });
-
-  it("leaves a card that declared nothing without the field", () => {
-    // The control is drawn on the strength of this field, so a resolver that
-    // defaulted it to `true` would put a dismiss button on every card.
-    const [widget] = resolveDashboardWidgets([drawnBy("acme/plain")], allow);
-
-    expect(widget.dismissible).toBeUndefined();
   });
 });
 

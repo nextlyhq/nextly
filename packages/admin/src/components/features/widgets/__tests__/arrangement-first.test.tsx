@@ -45,7 +45,7 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
 
 const api = vi.mocked(protectedApi);
 
-/** Two data widgets, each fetching its own count. */
+/** Two declared count widgets, each card asked for by its id. */
 const branding = {
   widgets: ["posts", "orders"]
     .map(name => ({
@@ -53,22 +53,15 @@ const branding = {
       title: `${name} count`,
       archetype: "metric",
       size: { default: { w: 3, h: 3 } },
-      query: { source: `collection:${name}`, op: "count" },
     }))
     .concat([
       {
         // Declared six columns wide, so a card sized from its declaration and one
-        // sized from an arrangement that widens it ask for different rows.
+        // sized from an arrangement that widens it are asked at different sizes.
         id: "acme/recent",
         title: "recent list",
         archetype: "list",
         size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
-        query: {
-          source: "collection:recent",
-          op: "list",
-          select: ["title"],
-          limit: 8,
-        },
       } as never,
     ]),
 } as unknown as AdminBranding;
@@ -93,11 +86,11 @@ const arrangement: DashboardLayoutResponse = {
   audience: "aud",
 };
 
-/** The sources every widget query asked for so far, across every batch. */
-function askedSources(): string[] {
+/** The widgets every card asked for so far belongs to, across every batch. */
+function askedWidgets(): string[] {
   return api.post.mock.calls.flatMap(([, body]) =>
-    ((body as { queries?: { source: string }[] }).queries ?? []).map(
-      query => query.source
+    ((body as { queries?: { widget: string }[] }).queries ?? []).map(
+      query => query.widget
     )
   );
 }
@@ -161,7 +154,7 @@ describe("before the arrangement is known", () => {
     // The declared posts card is not in this arrangement: never drawn, never
     // asked about.
     expect(screen.queryByTestId("widget-cell-acme/posts")).toBeNull();
-    expect(askedSources()).toEqual(["collection:orders"]);
+    expect(askedWidgets()).toEqual(["acme/orders"]);
     expect(
       screen.queryByRole("status", { name: /loading your dashboard/i })
     ).toBeNull();
@@ -181,7 +174,7 @@ describe("a return visit in the same session", () => {
     expect(
       screen.queryByRole("status", { name: /loading your dashboard/i })
     ).toBeNull();
-    await waitFor(() => expect(askedSources()).toEqual(["collection:orders"]));
+    await waitFor(() => expect(askedWidgets()).toEqual(["acme/orders"]));
   });
 });
 
@@ -198,11 +191,11 @@ describe("when the arrangement cannot be read", () => {
 
 describe("the first request a card makes", () => {
   it("is sized for the width its arrangement gives it, not its declared one", async () => {
-    // As declared, the card is three rows tall: two rows, asked as three. This person's
-    // arrangement draws it six rows tall: seven rows of its eight, asked as eight.
+    // As declared, the card is six columns by three rows. This person's arrangement draws it
+    // twelve by six, and its widget's `load` is handed the size it is drawn at.
     // 🔴 A grid that sized from the declaration while the arrangement was on its way would ask
-    // four first. The declared fallback (a FAILED read) cannot tell the two apart, so this is
-    // the case that does.
+    // at six by three first. The declared fallback (a FAILED read) cannot tell the two apart, so
+    // this is the case that does.
     unstubDashboardWidth();
     stubDashboardWidth(680);
     api.get.mockResolvedValue({
@@ -235,8 +228,10 @@ describe("the first request a card makes", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     const [, firstBody] = api.post.mock.calls[0];
     const first = (
-      firstBody as { queries: { source: string; limit?: number }[] }
-    ).queries.find(query => query.source === "collection:recent");
-    expect(first?.limit).toBe(8);
+      firstBody as {
+        queries: { widget: string; size?: { w: number; h: number } }[];
+      }
+    ).queries.find(query => query.widget === "acme/recent");
+    expect(first?.size).toMatchObject({ w: 12, h: 6 });
   });
 });

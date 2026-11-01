@@ -1,11 +1,10 @@
 /**
- * A list card at each tier: how many rows it draws, and when its footer says there are more.
+ * A list card at each tier: how many rows it draws, and that the list archetype draws no footer.
  *
- * The card's query asks one row more than its tier draws, so without a total an answer holding
- * that extra row is the only sign more exist; an answer of exactly the rows drawn has nothing
- * more to point to. A list from one collection points to that collection's list view, with the
- * card's own filter and sort, as "View all (N)"; a list without one collection says how many
- * more there are and links nowhere.
+ * Its rows are what its widget's `load` answered; the card draws as many of them as its tier
+ * holds. The archetype names no list view for its rows, so its footer is never drawn: a card
+ * that links to a list view draws that link itself (`Widget.List`'s `viewAllHref`). The View
+ * all link's own address, from a card's read, is `listViewHref`'s, tested below.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { render, screen } from "@testing-library/react";
@@ -19,27 +18,11 @@ import { tableBody } from "../table";
 
 afterEach(() => cleanup());
 
-const where = { status: { equals: "draft" } };
-
+// A declared list card, answered on the server: its rows are drawn by the fields they carry.
 const recentPosts = {
   id: "core/recent-posts",
   title: "Recent posts",
   archetype: "list",
-  query: {
-    source: "collection:posts",
-    op: "list",
-    select: ["title", "status"],
-    where,
-    sort: "-updatedAt",
-    limit: 5,
-  },
-} as unknown as Parameters<typeof listBody>[1];
-
-const teamActivity = {
-  ...recentPosts,
-  id: "core/team-activity",
-  title: "Team activity",
-  query: { source: "system:activity", op: "list", select: ["title"], limit: 5 },
 } as unknown as Parameters<typeof listBody>[1];
 
 function items(count: number) {
@@ -101,57 +84,17 @@ describe("a list card's rows at each tier", () => {
     ).toEqual(Array(5).fill("draft"));
   });
 
-  it("draws ten rows at large, however many items the card asks for", () => {
-    const many = {
-      ...recentPosts,
-      query: { ...recentPosts.query, limit: 25 },
-    } as unknown as Parameters<typeof listBody>[1];
-    drawAt("large", 26, many);
-    // Large draws the rows as a table, one row per item.
-    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(10);
+  it("draws at most the default five rows at large, where a table is drawn", () => {
+    // No items setting reaches the archetype, so its rows are capped at the default number.
+    drawAt("large", 26);
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(5);
   });
 });
 
-describe("saying there are more", () => {
-  it("offers View all with no count when the answer holds exactly the rows the tier draws", () => {
-    // 🔴 The separating case: a card that counted a full page as more fails here; one that
-    // never counted fails the cases below.
-    drawAt("small", 3);
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
-    const footer = screen.getByTestId("list-card-footer");
-    expect(footer).toHaveTextContent(/^View all/);
-    expect(footer.textContent).not.toMatch(/\(\d/);
-  });
-
-  it("links to the collection's list view with the card's filter and sort when there are more", () => {
-    drawAt("small", 4);
-    const link = screen.getByRole("link", { name: /view all/i });
-    // No total from the source: the extra row says only that at least four exist.
-    expect(link).toHaveTextContent("View all (4+)");
-    const href = new URL(link.getAttribute("href") ?? "", "http://admin.test");
-    expect(href.pathname).toBe("/admin/collections/posts");
-    expect(JSON.parse(href.searchParams.get("where") ?? "null")).toEqual(where);
-    expect(href.searchParams.get("sort")).toBe("-updatedAt");
-  });
-
-  it("counts every row the list holds when the source gave its total", () => {
-    drawAt("small", 4, recentPosts, 42);
-    expect(screen.getByRole("link", { name: /view all/i })).toHaveTextContent(
-      "View all (42)"
-    );
-  });
-
-  it("counts nothing when the source's total is the rows it draws", () => {
-    // The total, not the extra row, decides: three in all is everything a small card draws.
-    drawAt("small", 3, recentPosts, 3);
-    const footer = screen.getByTestId("list-card-footer");
-    expect(footer).toHaveTextContent(/^View all/);
-    expect(footer.textContent).not.toMatch(/\(\d/);
-  });
-
-  it("has no footer for a list that is not one collection's, however many more it holds", () => {
-    // A footer holds a link, never a bare count, and this list has no list view to open.
-    drawAt("medium", 6, teamActivity);
+describe("its footer", () => {
+  it("has none, however many more its answer holds", () => {
+    // A footer holds a link, never a bare count, and the archetype names no list view to open.
+    drawAt("medium", 6, recentPosts, 42);
     expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
@@ -231,7 +174,7 @@ describe("the lifecycle a View all link carries", () => {
 });
 
 describe("an answer smaller than the card", () => {
-  it("draws the rows its answer was asked for, and says there are more", () => {
+  it("draws the rows its answer was asked for", () => {
     // Fetched for a small card (three rows and one more), shown on a card that has since grown to
     // medium while its larger answer is out or was refused: the extra row is not an item.
     const outcome = listBody(
@@ -248,8 +191,5 @@ describe("an answer smaller than the card", () => {
       </CardTierContext.Provider>
     );
     expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
-    expect(screen.getByRole("link", { name: /view all/i })).toHaveTextContent(
-      "View all (4+)"
-    );
   });
 });

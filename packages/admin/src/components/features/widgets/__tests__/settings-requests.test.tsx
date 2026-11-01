@@ -1,14 +1,14 @@
 /**
  * A change to one card's settings asks that card again, alone, and quietly.
  *
- * The batch keys each card by the question it DECLARES and sends the one its settings ask, so
- * changing a card's settings is not a new question for the dashboard: no other card is asked,
- * none goes back to its skeleton, and the changed card keeps what it shows until its new answer
- * arrives.
+ * The batch keys each card by its card id and files its answer under the stored settings it was
+ * asked with, so changing a card's settings is not a new question for the dashboard: no other
+ * card is asked, none goes back to its skeleton, and the changed card keeps what it shows until
+ * its new answer arrives. The server reads a card's stored settings itself, so the mock below
+ * answers from the settings the test has stored for each card.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import type { WidgetQuery } from "nextly/config";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,45 +35,47 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-const DECLARED: WidgetQuery = {
-  source: "collection:posts",
-  op: "list",
-  limit: 5,
-};
+/** The items setting each card has stored on the server, by placement; five when unset. */
+let stored: Record<string, number> = {};
 
-/** A plugin-drawn card, asked as declared or with its settings' `limit`. */
+/** A declared card, asked by its id with the settings it has stored: an items setting, if any. */
 function card(placementId: string, limit?: number): BatchCard {
   const widget: DashboardWidget = {
     id: `core/${placementId}`,
     title: placementId,
     archetype: "custom",
     size: gridBounds(4),
-    query: limit === undefined ? DECLARED : { ...DECLARED, limit },
   };
   return limit === undefined
     ? { placementId, widget }
-    : { placementId, widget, declaredQuery: DECLARED };
+    : { placementId, widget, config: { items: limit } };
 }
 
-/** The queries each request to the batch endpoint carried, in order. */
-function sent(): Array<Array<{ limit?: number }>> {
+/** The cards each request to the batch endpoint asked for, by placement, in order. */
+function sent(): string[][] {
   return vi
     .mocked(protectedApi.post)
-    .mock.calls.map(
-      ([, body]) => (body as { queries: Array<{ limit?: number }> }).queries
+    .mock.calls.map(([, body]) =>
+      (body as { queries: Array<{ card: string }> }).queries.map(
+        query => query.card
+      )
     );
 }
 
+/** The items setting the server reads for a card it is asked for. */
+const limitOf = (query: { card: string }) => stored[query.card] ?? 5;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  stored = {};
   vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
     Promise.resolve({
-      results: (body as { queries: Array<{ limit?: number }> }).queries.map(
-        // The limit asked comes back as the one row's title, so a test can tell which answer
-        // a card is showing.
+      results: (body as { queries: Array<{ card: string }> }).queries.map(
+        // The items read come back as the one row's title, so a test can tell which answer a
+        // card is showing.
         query => ({
           ok: true,
-          result: { op: "list", items: [{ title: `limit ${query.limit}` }] },
+          result: { op: "list", items: [{ title: `limit ${limitOf(query)}` }] },
         })
       ),
     })
@@ -88,13 +90,14 @@ describe("a change to one card's settings", () => {
       { wrapper, initialProps: { cards: [card("a"), card("b")] } }
     );
     await waitFor(() => expect(result.current.slots.b).toBeDefined());
-    expect(sent()).toEqual([[{ ...DECLARED }, { ...DECLARED }]]);
+    expect(sent()).toEqual([["a", "b"]]);
 
-    // Card b's settings now ask 12 rows.
+    // Card b's stored settings now ask 12 rows.
+    stored.b = 12;
     rerender({ cards: [card("a"), card("b", 12)] });
     await waitFor(() => expect(sent()).toHaveLength(2));
-    // One request, for b alone, sent as its settings ask it.
-    expect(sent()[1]).toEqual([{ ...DECLARED, limit: 12 }]);
+    // One request, for b alone.
+    expect(sent()[1]).toEqual(["b"]);
     // Neither card went back to having no answer while it was asked.
     expect(result.current.slots.a).toBeDefined();
     expect(result.current.slots.b).toBeDefined();
@@ -117,9 +120,9 @@ describe("a change to one card's settings", () => {
     let refuseTwelve = true;
     vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
       Promise.resolve({
-        results: (body as { queries: Array<{ limit?: number }> }).queries.map(
+        results: (body as { queries: Array<{ card: string }> }).queries.map(
           query => {
-            if (query.limit === 12 && refuseTwelve) {
+            if (limitOf(query) === 12 && refuseTwelve) {
               refuseTwelve = false;
               return { ok: false, error: "Refused" };
             }
@@ -127,7 +130,7 @@ describe("a change to one card's settings", () => {
               ok: true,
               result: {
                 op: "list",
-                items: [{ title: `limit ${query.limit}` }],
+                items: [{ title: `limit ${limitOf(query)}` }],
               },
             };
           }
@@ -146,15 +149,18 @@ describe("a change to one card's settings", () => {
       )?.result?.items?.[0]?.title;
     await waitFor(() => expect(shownOnB()).toBe("limit 5"));
 
+    stored.b = 12;
     rerender({ cards: [card("a"), card("b", 12)] });
     await waitFor(() => expect(sent()).toHaveLength(2));
+    stored.b = 20;
     rerender({ cards: [card("a"), card("b", 20)] });
     await waitFor(() => expect(shownOnB()).toBe("limit 20"));
 
     // Back to 12: a different question from the 20 rows shown, so it is asked.
+    stored.b = 12;
     rerender({ cards: [card("a"), card("b", 12)] });
     await waitFor(() => expect(shownOnB()).toBe("limit 12"));
-    expect(sent().at(-1)).toEqual([{ ...DECLARED, limit: 12 }]);
+    expect(sent().at(-1)).toEqual(["b"]);
   });
 
   it("asks a card again when its settings change after its first request failed", async () => {
@@ -169,14 +175,16 @@ describe("a change to one card's settings", () => {
     await waitFor(() => expect(result.current.slots.b?.ok).toBe(false));
     expect(sent()).toHaveLength(3);
 
+    stored.b = 12;
     rerender({ cards: [card("a"), card("b", 12)] });
     await waitFor(() => expect(result.current.slots.b?.ok).toBe(true));
-    // b alone, as its new settings ask it.
+    // b alone, asked with its new settings.
     expect(sent()).toHaveLength(4);
-    expect(sent()[3]).toEqual([{ ...DECLARED, limit: 12 }]);
+    expect(sent()[3]).toEqual(["b"]);
   });
 
   it("asks nothing again when a render hands the same settings", async () => {
+    stored.b = 12;
     const { result, rerender } = renderHook(
       ({ cards }: { cards: BatchCard[] }) => useWidgetBatch(cards),
       { wrapper, initialProps: { cards: [card("a"), card("b", 12)] } }

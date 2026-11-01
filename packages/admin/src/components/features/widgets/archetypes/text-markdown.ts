@@ -1,5 +1,5 @@
 /**
- * What a `text` widget's markdown may turn into, and what it may not.
+ * What a note card's markdown may turn into, and what it may not.
  *
  * The parsing is Lexical's own: `$convertFromMarkdownString` with the editor's
  * transformers, so a heading, a list or an emphasis in a card is the same

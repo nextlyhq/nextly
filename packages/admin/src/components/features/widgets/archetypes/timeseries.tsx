@@ -12,11 +12,10 @@
 
 import { answerHasNothing } from "nextly/widget-result";
 
-import { WithCollectionUnit } from "../charts/chart-unit";
 import { OverTimeChart } from "../charts/over-time-chart";
 import { cardLocale } from "../frame/format";
 
-import type { ArchetypeAccepts, ArchetypeBody } from "./types";
+import type { ArchetypeBody } from "./types";
 
 /**
  * How each interval's start is written.
@@ -55,12 +54,6 @@ export function pointLabel(start: string, interval: string): string {
   return interval === "week" ? `Week of ${date}` : date;
 }
 
-export const timeseriesAccepts: ArchetypeAccepts = definition => {
-  if (definition.query) return undefined;
-  const name = definition.title ?? "This timeseries widget";
-  return `"${name}" is drawn from a query, and this widget declares none.`;
-};
-
 export const timeseriesBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "timeseries") {
     return {
@@ -94,24 +87,19 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
     // The chart draws the line, its axis, its latest point and its words; this adapter only
     // reads the one series out of the answer, its intervals named in UTC.
     node: (
-      // Counting a collection's new entries, its tooltip names them ("12 new posts").
-      <WithCollectionUnit source={definition.query?.source} qualifier="new">
-        {unit => (
-          <OverTimeChart
-            title={definition.title ?? "Over time"}
-            labelHeading="Interval"
-            intervals={rows.map(row => ({ key: row.key, label: row.label }))}
-            series={[
-              {
-                key: "count",
-                name: definition.title ?? "Over time",
-                points: rows.map(row => ({ key: row.key, value: row.count })),
-              },
-            ]}
-            unit={unit}
-          />
-        )}
-      </WithCollectionUnit>
+      // No unit: the answer does not say what it counts, so its tooltip gives the bare number.
+      <OverTimeChart
+        title={definition.title ?? "Over time"}
+        labelHeading="Interval"
+        intervals={rows.map(row => ({ key: row.key, label: row.label }))}
+        series={[
+          {
+            key: "count",
+            name: definition.title ?? "Over time",
+            points: rows.map(row => ({ key: row.key, value: row.count })),
+          },
+        ]}
+      />
     ),
   };
 };

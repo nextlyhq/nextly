@@ -56,12 +56,6 @@ const WIDGET: DashboardWidget = {
   title: "Recent posts",
   archetype: "list",
   size: gridBounds(3, 4),
-  query: {
-    source: "collection:posts",
-    op: "list",
-    select: ["title"],
-    limit: 5,
-  },
   settings: [
     { name: "collection", type: "collection", label: "Collection" },
     { name: "where", type: "filter", label: "Filter", of: "collection" },

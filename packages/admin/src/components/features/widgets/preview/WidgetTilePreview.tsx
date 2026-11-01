@@ -28,19 +28,19 @@ import { WidgetRenderer } from "../WidgetRenderer";
 
 import { readyAnswer } from "./preview-states";
 
-/** The icon each sketch, or archetype, is drawn with when there is no case to draw. */
+/**
+ * The icon each sketch, or archetype, is drawn with when there is no case to draw: one for each
+ * display a card is drawn as, and any other as the grid's.
+ */
 const SKETCHES: Readonly<Record<string, Icons.LucideIcon>> = {
   metric: Icons.Hash,
   figure: Icons.Hash,
-  stats: Icons.LayoutGrid,
   list: Icons.List,
   rows: Icons.List,
   table: Icons.Table,
   timeseries: Icons.TrendingUp,
   series: Icons.TrendingUp,
   bars: Icons.Activity,
-  text: Icons.FileText,
-  actions: Icons.Zap,
   custom: Icons.Puzzle,
 };
 
@@ -86,7 +86,6 @@ export function WidgetTilePreview({
           <WidgetRenderer
             definition={widget}
             slot={answer.slot}
-            slotFor={answer.slotFor}
             // The case's settings over the starting collection, over the widget's defaults, as a
             // card on the dashboard is handed them.
             placement={{

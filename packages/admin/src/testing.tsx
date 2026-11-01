@@ -10,13 +10,14 @@
  * @module testing
  * @experimental Until the widget SDK's test helpers settle.
  */
-import type { WidgetDefinition } from "nextly/config";
 import type { WidgetSlot } from "nextly/widget-result";
 import type { ComponentType, JSX } from "react";
 
 import { resolveDashboardWidgets } from "./components/features/widgets/resolve-widgets";
 import { WidgetRenderer } from "./components/features/widgets/WidgetRenderer";
 import { registerComponent } from "./lib/plugins/component-registry";
+// The admin's one name for a widget as the registry publishes it.
+import type { RegisteredWidgetMeta } from "./types/branding";
 
 /**
  * A card's grid size, `w` columns by `h` rows, and the tier the dashboard's
@@ -30,7 +31,7 @@ interface CardSize {
 
 export interface WidgetCardElementOptions {
   /** The widget as the registry publishes it. */
-  definition: WidgetDefinition;
+  definition: RegisteredWidgetMeta;
   /** What the card is drawn with: its answer, or none while it loads. */
   slot: WidgetSlot | undefined;
   /** The card's size; the widget's starting size when left out. */

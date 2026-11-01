@@ -23,7 +23,6 @@ const widget = {
   id: "acme/posts-per-day",
   title: "Posts per day",
   archetype: "timeseries",
-  query: { source: "collection:posts", op: "timeseries", interval: "day" },
 } as DashboardWidget;
 
 // Nine days; the last day holds 4 of the 45 posts.

@@ -31,7 +31,6 @@ const definition = {
   id: "core/upcoming-releases",
   title: "Upcoming releases",
   archetype: "list",
-  query: { source: "system:releases", op: "list", select: ["title", "when"] },
 } as unknown as Parameters<typeof listBody>[1];
 
 function draw(fields: { name: string; type?: string }[]) {

@@ -5,20 +5,18 @@
  *
  * A setting changes a card in one of two ways, and the preview follows both. It changes how the
  * card is drawn, which the component reads from the card's settings (`placement.settings`); and
- * it can change the question the card asks, as `limit` does. While the question is the one the
- * card already asked, the preview draws the card's own answer and asks nothing. When the values
- * change the question, the preview asks it once, alone, after the reader stops changing them, so
- * a number typed digit by digit is one request, not one per digit.
+ * it changes the question the card asks, since its widget's `load` reads the settings too. While
+ * the question is the one the card already asked, the preview draws the card's own answer and
+ * asks nothing. When the values change the question, the preview asks it once, alone, after the
+ * reader stops changing them, so a number typed digit by digit is one request, not one per digit.
  *
- * The preview's request is its own card (`<placement>:preview`), never the card's: the card keeps
- * its answer until Done keeps the change, and Cancel leaves it exactly as it was. It is asked at
- * the size the card is drawn at, its tier and its height, so the preview draws what the card
- * will: the rows it holds, and whether it says more exist.
+ * The preview's request is its own card (`<placement>:preview`) asked with the sheet's values,
+ * never the stored card's: the card keeps its answer until Done keeps the change, and Cancel
+ * leaves it exactly as it was.
  *
  * @module components/features/widgets/edit/useSettingsPreview
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import { useMemo } from "react";
 
@@ -33,37 +31,16 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import type { CellSlotLookup } from "../archetypes/types";
-import { listDensityOf } from "../frame/list-rows";
-import type { AnswerSize } from "../frame/tier";
-import { queryForTier } from "../tier-query";
-import { UNSOURCED_SLOT } from "../useWidgetBatch";
-import {
-  questionOf,
-  settingsAsAsked,
-  askableQuery,
-  titleAsAsked,
-  widgetAsAsked,
-} from "../widget-as-asked";
+import { questionOf, settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 /** How long the values must stay still before a changed question is asked. */
 const PREVIEW_ASK_DELAY_MS = 300;
 
-/**
- * The tier the preview's question is asked at when the card's own is not known yet: the widest,
- * since an answer fetched for a wider card serves a narrower one, which draws a prefix of it and
- * still knows more exist (`asksAgainAt`).
- */
-const WIDEST_TIER: SizeTier = "large";
-
 /** What the card itself shows now, which the preview draws while the question is unchanged. */
 export interface ShownAnswer {
   slot: WidgetSlot | undefined;
-  slotFor?: CellSlotLookup;
   updatedAt: Date | null;
   isFetching: boolean;
-  /** The size that answer was fetched at, for a sized card. */
-  answerSize?: AnswerSize;
 }
 
 export interface SettingsPreview {
@@ -74,104 +51,42 @@ export interface SettingsPreview {
   /** The preview's own card id, the settings its component reads, and the size it is drawn at. */
   placement: { id: string; settings: Record<string, unknown>; size?: GridSize };
   slot: WidgetSlot | undefined;
-  slotFor?: CellSlotLookup;
   /** The preview is waiting for an answer to the question its values ask. */
   isFetching: boolean;
-  /** The size the answer drawn was fetched at, so a list knows whether more exist. */
-  answerSize?: AnswerSize;
 }
 
 /**
- * The preview's own questions for the values the sheet holds: the card as its own card, for one
- * core answers on the server; each cell that applies, for a custom card asking through cells; or
- * its one query. Asked as declared for a custom card, whose own component draws the raw answer
- * with no tier, and sized as the batch sizes a card it draws otherwise.
+ * The preview's own question for the values the sheet holds: the card as its own card, asked
+ * with the draft settings, never the stored card's ask, so its answer is never filed as the
+ * stored card's.
  */
 function previewRequests(
   widget: DashboardWidget,
-  definition: DashboardWidget,
   previewId: string,
-  draft: Record<string, unknown>,
-  asked: AnswerSize & { tier: SizeTier }
+  draft: Record<string, unknown>
 ): WidgetQueryRequest[] {
-  // A card core answers on the server is asked with the draft settings, as its own card: never
-  // the stored card's ask, so its answer is never filed as the stored card's.
-  if (widget.serverData === true) {
-    return [
-      { placementId: previewId, card: { widget: widget.id, settings: draft } },
-    ];
-  }
-  // Every cell that applies, as the widest card draws them: a cell its draft has not given a
-  // source asks nothing, as on the dashboard.
-  if (definition.cells?.length) {
-    return definition.cells.flatMap(cell =>
-      askableQuery(cell.query)
-        ? [{ placementId: previewId, cellKey: cell.key, query: cell.query }]
-        : []
-    );
-  }
-  const query = definition.query;
-  if (!askableQuery(query)) return [];
-  if (definition.archetype === "custom") {
-    return [{ placementId: previewId, query }];
-  }
   return [
-    {
-      placementId: previewId,
-      query,
-      sized: {
-        query: queryForTier(query, asked.tier, asked.density, asked.h),
-        tier: asked.tier,
-      },
-    },
+    { placementId: previewId, card: { widget: widget.id, settings: draft } },
   ];
 }
 
-/**
- * The preview's own card, the settings its component reads and the size it is drawn at, and the
- * size its question is asked at: the card's own, as the dashboard asks it, else the widest.
- */
+/** The preview's own card, the settings its component reads, and the size it is drawn at. */
 function usePreviewPlacement(args: {
   previewId: string;
   widget: DashboardWidget;
   draft: Record<string, unknown>;
   sources: ReturnType<typeof useBranding>["widgetSources"];
   size: GridSize | undefined;
-  tier: SizeTier | undefined;
-}): {
-  placement: SettingsPreview["placement"];
-  askedSize: AnswerSize & { tier: SizeTier };
-} {
-  const { previewId, widget, draft, sources, size, tier } = args;
-  return useMemo(() => {
-    const settings = settingsAsAsked(widget, draft, sources);
-    return {
-      placement: {
-        id: previewId,
-        settings,
-        ...(size === undefined ? {} : { size }),
-      },
-      askedSize: {
-        tier: tier ?? WIDEST_TIER,
-        ...(size === undefined ? {} : { h: size.h }),
-        density: listDensityOf(settings),
-      },
-    };
-  }, [previewId, widget, draft, sources, size, tier]);
-}
-
-/**
- * What a card asks with `config`, and the density its answer is sized for: a density alone
- * changes how many rows the answer holds, so the card's own answer, fetched at its stored
- * density, does not serve a preview at another one.
- */
-function askingAt(
-  widget: DashboardWidget,
-  config: Record<string, unknown> | undefined,
-  sources: ReturnType<typeof useBranding>["widgetSources"]
-): string {
-  const density = listDensityOf(settingsAsAsked(widget, config, sources));
-  return `${questionOf(widget, config, sources)}|${density}`;
+}): SettingsPreview["placement"] {
+  const { previewId, widget, draft, sources, size } = args;
+  return useMemo(
+    () => ({
+      id: previewId,
+      settings: settingsAsAsked(widget, draft, sources),
+      ...(size === undefined ? {} : { size }),
+    }),
+    [previewId, widget, draft, sources, size]
+  );
 }
 
 export function useSettingsPreview(args: {
@@ -187,67 +102,52 @@ export function useSettingsPreview(args: {
   ownTitle?: string;
   /** The size the card is drawn at on the dashboard, held to its widget's bounds. */
   size?: GridSize;
-  /** The tier the card's real width gives it, when that width is known. */
-  tier?: SizeTier | undefined;
 }): SettingsPreview {
   const { widget, placementId, stored, draft, shown } = args;
   const previewId = `${placementId}:preview`;
-  // The reader's collections, as the dashboard asks with them: which fields a setting may name,
-  // and which cells a collection's lifecycle answers.
+  // The reader's collections, as the dashboard reads settings against them: which fields a
+  // setting may name.
   const sources = useBranding().widgetSources;
 
   const heading = useMemo(
     () => titleAsAsked(widget, draft, sources, args.ownTitle),
     [widget, draft, sources, args.ownTitle]
   );
-  const definition = useMemo(() => {
-    const asked = widgetAsAsked(widget, draft, sources);
-    return heading.title === asked.title
-      ? asked
-      : { ...asked, title: heading.title };
-  }, [widget, draft, sources, heading.title]);
+  // The widget under the title the sheet's values give the card.
+  const definition = useMemo(
+    () =>
+      heading.title === widget.title
+        ? widget
+        : { ...widget, title: heading.title },
+    [widget, heading.title]
+  );
   const subtitle =
     heading.subtitle === undefined ? {} : { subtitle: heading.subtitle };
-  const asking = askingAt(widget, draft, sources);
-  const sameQuestion = asking === askingAt(widget, stored, sources);
+  // What the card asks with the sheet's values, and with its stored ones: its settings are what
+  // its widget's `load` reads, so any change of them, its density included, is a new question.
+  const asking = questionOf(draft);
+  const sameQuestion = asking === questionOf(stored);
   // The question settles before it is asked, so a run of changes asks once.
   const settled = useDebouncedValue(asking, PREVIEW_ASK_DELAY_MS);
 
-  const { placement, askedSize } = usePreviewPlacement({
+  const placement = usePreviewPlacement({
     previewId,
     widget,
     draft,
     sources,
     size: args.size,
-    tier: args.tier,
   });
 
-  // The settled question itself is each request's query, so each new question is a new one.
+  // The settled settings themselves are the request's card, so each new question is a new one.
   const requests = useMemo<WidgetQueryRequest[]>(
     () =>
       sameQuestion || settled !== asking
         ? []
-        : previewRequests(widget, definition, previewId, draft, askedSize),
-    [
-      sameQuestion,
-      settled,
-      asking,
-      definition,
-      previewId,
-      widget,
-      draft,
-      askedSize,
-    ]
+        : previewRequests(widget, previewId, draft),
+    [sameQuestion, settled, asking, previewId, widget, draft]
   );
   const asked = useWidgetQueries(requests);
-
-  // The changed question's cell answers, once asked; see `previewCellLookup`.
   const ready = settled === asking;
-  const previewCells = asked.cellSlots[previewId];
-  const slotFor = useMemo(
-    () => previewCellLookup(definition.cells, previewCells, ready),
-    [definition.cells, previewCells, ready]
-  );
 
   if (sameQuestion) {
     return { ...shownPreview(definition, placement, shown), ...subtitle };
@@ -259,32 +159,7 @@ export function useSettingsPreview(args: {
     // Nothing until the changed question is answered: the card's own answer was asked another
     // way, and drawing it here would preview what the change does not show.
     slot: ready ? asked.slots[previewId] : undefined,
-    ...(slotFor === undefined ? {} : { slotFor }),
     isFetching: !ready || asked.fetchingPlacementIds.has(previewId),
-    // Only an answer asked sized has a size: a custom card's and a server card's were not.
-    ...(definition.archetype === "custom" || widget.serverData === true
-      ? {}
-      : { answerSize: askedSize }),
-  };
-}
-
-/**
- * A cells card's answers for the preview, by key: a cell that asks nothing is not available, as
- * on the dashboard, and the rest are on their way until the preview's own question is answered.
- * `undefined` for a card with no cells.
- */
-function previewCellLookup(
-  cells: DashboardWidget["cells"],
-  answers: Record<string, WidgetSlot> | undefined,
-  ready: boolean
-): CellSlotLookup | undefined {
-  if (!cells?.length) return undefined;
-  const unsourced = new Set(
-    cells.filter(cell => !askableQuery(cell.query)).map(cell => cell.key)
-  );
-  return key => {
-    if (unsourced.has(key)) return UNSOURCED_SLOT;
-    return ready ? answers?.[key] : undefined;
   };
 }
 
@@ -298,8 +173,6 @@ function shownPreview(
     definition,
     placement,
     slot: shown.slot,
-    ...(shown.slotFor === undefined ? {} : { slotFor: shown.slotFor }),
     isFetching: shown.isFetching,
-    ...(shown.answerSize === undefined ? {} : { answerSize: shown.answerSize }),
   };
 }

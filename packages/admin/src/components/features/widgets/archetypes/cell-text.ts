@@ -63,23 +63,6 @@ export function asText(value: unknown): string | undefined {
 }
 
 /**
- * The refusal an archetype gives when its query selects nothing.
- *
- * Both row-drawing archetypes need this and each names its own unit — a list
- * has rows, a table has columns — so the sentence is built rather than copied.
- * Judged from the DECLARATION, before any request is made, which is what keeps
- * the grid from spending an unprojected read on a card that can never draw.
- */
-export function selectsNothing(
-  title: string | undefined,
-  archetype: string,
-  unit: string
-): string {
-  const name = title ?? `This ${archetype} widget`;
-  return `"${name}" is a ${archetype} widget whose query selects no fields, so there is nothing to show in each ${unit}.`;
-}
-
-/**
  * One cell as text, PRESENTED according to the kind the source declared it.
  *
  * 🔴 The layer `asText` deliberately is not. `asText` answers "can this value be
@@ -225,9 +208,10 @@ export function presentedDate(
 }
 
 /**
- * The fields a declared widget's answer is drawn by, for a card core answered
- * on the server, which has no query to select them: the answer's own `fields`
- * when it describes them, else the first row's own keys, in their order.
+ * The fields a widget's answer is drawn by: the answer's own `fields` when it
+ * describes them, else the first row's own keys, in their order. Every card is
+ * answered on the server from its declaration, with no query of its own to
+ * select them.
  *
  * 🔴 The first row's keys only: a key a later row carries and the first does
  * not is not drawn. The rows are what the widget's own data function answered,
@@ -248,7 +232,7 @@ export function declaredAnswerFields(result: {
  * A row display's answer as its list of rows, or what it draws instead: a
  * refusal when the answer is not a list, and its one empty state, worded for
  * what it lists, when there are no rows. Asked before any field is read, since
- * a card core answered on the server names its fields by its first row: with
+ * an answer that describes no fields is drawn by its first row's: with
  * no rows it is empty, not undrawable. One reading for every row display, so
  * a list and a table cannot come to disagree about either.
  */

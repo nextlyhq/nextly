@@ -121,46 +121,6 @@ describe("WidgetCard", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders at most one footer link, beside a drawn body", () => {
-    render(
-      <WidgetCard
-        title="Published posts"
-        link={{ label: "View all", href: "/dashboard/entries/posts" }}
-      >
-        <p>42</p>
-      </WidgetCard>
-    );
-    const links = screen.getAllByRole("link");
-    expect(links).toHaveLength(1);
-    expect(links[0]).toHaveAttribute("href", "/dashboard/entries/posts");
-  });
-
-  it("drops the footer's link while the card is loading, failed or not available", () => {
-    for (const state of STATES) {
-      const { unmount } = render(
-        <WidgetCard
-          title="Published posts"
-          state={state}
-          link={{ label: "View all", href: "/dashboard/entries/posts" }}
-        >
-          <p>42</p>
-        </WidgetCard>
-      );
-      // An empty card keeps its link: "View all" still leads somewhere. The footer itself is
-      // always kept, so the card is one height whatever it shows.
-      const keepsLink =
-        state.kind === "ready" ||
-        state.kind === "refreshing" ||
-        state.kind === "empty";
-      const footer = screen.getByTestId("widget-card-footer");
-      expect(
-        within(footer).queryByRole("link", { name: "View all" }) !== null,
-        state.kind
-      ).toBe(keepsLink);
-      unmount();
-    }
-  });
-
   it("says nothing about when its data arrived, in any state", () => {
     // Every card's time was the batch's, the same on all of them; the page says
     // it once. A card that says it again repeats one fact many times.
@@ -404,18 +364,12 @@ describe("a state the body reports", () => {
     );
   });
 
-  it("withholds the footer's link when the body reports an error", () => {
+  it("draws the error its body reports, in the frame's own error state", () => {
     render(
-      <WidgetCard
-        title="Posts"
-        link={{ label: "View all", href: "/dashboard/entries/posts" }}
-      >
+      <WidgetCard title="Posts">
         <FrameState state={{ kind: "error", message: "Unreadable." }} />
       </WidgetCard>
     );
-    expect(
-      within(screen.getByTestId("widget-card-footer")).queryByRole("link")
-    ).toBeNull();
     expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
       "Unreadable."
     );

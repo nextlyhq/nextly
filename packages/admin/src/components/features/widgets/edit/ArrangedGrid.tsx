@@ -28,14 +28,12 @@ import type {
 } from "nextly/config";
 import { useContext, useMemo, type JSX, type RefObject } from "react";
 
-import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
 import type {
   WidgetPlacement,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
   type IsDrawn,
@@ -130,14 +128,11 @@ export interface ArrangedGridProps {
       | undefined;
   };
   slots: Record<string, WidgetSlot>;
-  cellSlots: CellSlots;
   requested: ReadonlySet<string>;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
   /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
   answeredAtFor: (placementId: string) => Date | null;
-  /** The size the answer one card shows was fetched at. */
-  fetchedSizeFor: (placementId: string) => AnswerSize | undefined;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   /** Reload one card's data on its own, from its error state's Retry. */
@@ -319,27 +314,18 @@ function cellData(
   placementId: string,
   answers: Pick<
     ArrangedGridProps,
-    | "slots"
-    | "cellSlots"
-    | "requested"
-    | "answeredAtFor"
-    | "fetchingPlacementIds"
-    | "fetchedSizeFor"
-    | "retry"
+    "slots" | "requested" | "answeredAtFor" | "fetchingPlacementIds" | "retry"
   >
 ): ArrangedCellProps["data"] {
   const asked = answers.requested.has(placementId);
   return {
     slot: answers.slots[placementId],
-    // This card's own answers, by cell key.
-    slotFor: key => answers.cellSlots[placementId]?.[key],
     // Only a card that actually ASKED can be waiting on an answer. Its own answer's time, not
     // the page's oldest: its quick change is said once its own answer is in.
     updatedAt: asked ? answers.answeredAtFor(placementId) : null,
     // 🔴 This card's own request, not the batch's: partitions settle independently, and a
     // settled card must not dim.
     isFetching: answers.fetchingPlacementIds.has(placementId),
-    answerSize: answers.fetchedSizeFor(placementId),
     // Retry only for a card in the batch: one rejected before it was asked has no question to
     // ask again, so the button could change nothing.
     onRetry: asked ? () => answers.retry(placementId) : undefined,

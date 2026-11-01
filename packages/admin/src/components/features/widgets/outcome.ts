@@ -15,6 +15,10 @@
  * computing them alongside is what keeps them from drifting the day a new
  * archetype lands.
  *
+ * Every card is a widget declared with `defineWidget`, answered on the server
+ * from its declaration's `load`: a `custom` card is drawn by its own component
+ * with that answer, and every other archetype by the body below for it.
+ *
  * The grid and the renderer each call this, so a body runs twice per render.
  * That is deliberate and it is the cheap half of the trade: a body returns an
  * element it does not mount, while the alternative — the grid counting
@@ -23,61 +27,50 @@
  * @module components/features/widgets/outcome
  */
 
-import type { WidgetDefinition } from "nextly/config";
 import { noSettingChosen, settingInSentence } from "nextly/widget-result";
 import type { ReactNode } from "react";
 
+import type { RegisteredWidgetMeta } from "@admin/types/branding";
 import type {
   DashboardWidget,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { actionsBody } from "./archetypes/actions";
-import { barsAccepts, barsBody } from "./archetypes/bars";
-import { listAccepts, listBody } from "./archetypes/list";
-import { metricAccepts, metricBody } from "./archetypes/metric";
-import { statsAccepts, statsBody } from "./archetypes/stats";
-import { tableAccepts, tableBody } from "./archetypes/table";
-import { textBody } from "./archetypes/text";
-import { timeseriesAccepts, timeseriesBody } from "./archetypes/timeseries";
-import type {
-  ArchetypeOutcome,
-  ArchetypeRenderer,
-  CellSlotLookup,
-  DeclaredWidget,
-} from "./archetypes/types";
+import { barsBody } from "./archetypes/bars";
+import { listBody } from "./archetypes/list";
+import { metricBody } from "./archetypes/metric";
+import { tableBody } from "./archetypes/table";
+import { timeseriesBody } from "./archetypes/timeseries";
+import type { ArchetypeBody, ArchetypeOutcome } from "./archetypes/types";
 import { EMPTY_DEFAULT, type CardEmptyContent } from "./frame/states";
 
 /** An archetype a published widget names. */
-type Archetype = WidgetDefinition["archetype"];
+type Archetype = RegisteredWidgetMeta["archetype"];
 
 /**
- * The archetypes core draws from a query result.
+ * The archetypes core draws from a card's answer.
  *
  * Partial on purpose: an archetype with no entry is one this release does not
  * render, and the card says so by name rather than coming up blank. `custom`
- * is deliberately absent — it is not drawn from a result at all.
+ * is deliberately absent — it is drawn by the widget's own component.
  */
-const ARCHETYPE_BODIES: Partial<Record<Archetype, ArchetypeRenderer>> = {
-  metric: { accepts: metricAccepts, body: metricBody },
-  list: { accepts: listAccepts, body: listBody },
-  table: { accepts: tableAccepts, body: tableBody },
-  bars: { accepts: barsAccepts, body: barsBody },
-  timeseries: { accepts: timeseriesAccepts, body: timeseriesBody },
-  actions: { declared: actionsBody },
-  text: { declared: textBody },
-  stats: { accepts: statsAccepts, cells: statsBody },
+const ARCHETYPE_BODIES: Partial<Record<Archetype, ArchetypeBody>> = {
+  metric: metricBody,
+  list: listBody,
+  table: tableBody,
+  bars: barsBody,
+  timeseries: timeseriesBody,
 };
 
 /**
- * The renderer for an archetype, or `undefined` — by OWN property only.
+ * The body for an archetype, or `undefined` — by OWN property only.
  *
  * `ARCHETYPE_BODIES[archetype]` is not this question, and the difference is
  * reachable. The archetype arrives over the wire from a plugin that may be
  * JavaScript or built against a newer core, and boot deliberately accepts a
  * name this release does not know so one unknown card cannot abort the install.
  * A plain object answers for every name on `Object.prototype` as well as its
- * own: `"__proto__"` returns an object, so the renderer looked present and then
+ * own: `"__proto__"` returns an object, so the body looked present and then
  * threw "body is not a function", taking the whole grid down with it — and
  * `"constructor"`, `"toString"` and `"valueOf"` are worse, because they are
  * FUNCTIONS. Those get CALLED with a widget result, return something whose `ok`
@@ -85,54 +78,20 @@ const ARCHETYPE_BODIES: Partial<Record<Archetype, ArchetypeRenderer>> = {
  *
  * `Object.hasOwn` asks the question that was meant.
  */
-function archetypeRenderer(archetype: string): ArchetypeRenderer | undefined {
+function archetypeBody(archetype: string): ArchetypeBody | undefined {
   return Object.hasOwn(ARCHETYPE_BODIES, archetype)
     ? ARCHETYPE_BODIES[archetype as Archetype]
     : undefined;
 }
 
 /**
- * Whether core can draw this archetype from a result in this release.
- *
- * Exported so `resolve-widgets` can ask the question rather than answer it
- * again. It decides whether a widget that ALSO shipped a component should be
- * drawn from that component instead, and the honest input to that decision is
- * the table above -- not a second list that has to be remembered when an
- * archetype lands here.
+ * An empty card's words and action as the outcome decides them: the frame's own action, or the
+ * card's settings, which only the card can open and draws as a button where it can
+ * (`WidgetRenderer`), and not at all where it cannot.
  */
-/**
- * Why core cannot draw this DECLARATION, or `undefined` when it can.
- *
- * The question every caller actually has, and the one `coreDrawsArchetype` --
- * "is there an entry in the table?" -- only approximated. An archetype having a
- * renderer says nothing about whether that renderer can draw a particular
- * widget: a `list` needs `select`, and a declaration without one is refused by
- * the same renderer that claims the archetype.
- *
- * Treating those as the same question cost two things. The grid batched a query
- * for a widget that could never be drawn, spending an unprojected read and one
- * of the batch's slots on documents thrown away on arrival. And a widget
- * declared through both channels lost its contributed component -- the
- * fallback fires when core cannot draw, and core reported that it could.
- *
- * `custom` is not asked about here: it is drawn by the plugin, and its
- * declaration is judged where the component is resolved.
- */
-export function coreCannotDraw(definition: DeclaredWidget): string | undefined {
-  const archetype = definition.archetype;
-  if (typeof archetype !== "string" || archetype === "custom") return undefined;
-
-  const renderer = archetypeRenderer(archetype);
-  if (!renderer) {
-    return `The "${archetype}" widget archetype is not rendered yet.`;
-  }
-
-  // What an archetype accepts is judged from the declaration's query, and a
-  // card core answers on the server has none: its answer was held to the
-  // display's shape before it was sent, so there is nothing left to refuse.
-  if (definition.serverData === true) return undefined;
-  return renderer.accepts?.(definition);
-}
+type OutcomeEmpty = Omit<CardEmptyContent, "action"> & {
+  action?: CardEmptyContent["action"] | { label: string; opensSettings: true };
+};
 
 /**
  * A card's empty state with its widget's declared one in place of the frame's:
@@ -152,33 +111,14 @@ function emptyFor(
     : { ...words, action: declared.action };
 }
 
-/** Whether core can draw this declaration at all. */
-export function coreDraws(definition: DeclaredWidget): boolean {
-  return coreCannotDraw(definition) === undefined;
-}
-
 /**
- * What the card is about to be, as four cases the grid can count and the
- * renderer can draw.
- *
- * `self-drawn` is neither success nor failure and must not be counted as
- * either: the component draws the answer, and reports to the frame anything its
- * data says beyond it (`FrameState`), which the grid does not see. A failed
- * answer is never `self-drawn`: it is `failed` or `unavailable` like any card's.
+ * What the card is about to be, as cases the grid can count and the renderer
+ * can draw. Every one is decided from the card's answer, so the grid counts
+ * exactly what is on screen.
  */
-/**
- * An empty card's words and action as the outcome decides them: the frame's own action, or the
- * card's settings, which only the card can open and draws as a button where it can
- * (`WidgetRenderer`), and not at all where it cannot.
- */
-type OutcomeEmpty = Omit<CardEmptyContent, "action"> & {
-  action?: CardEmptyContent["action"] | { label: string; opensSettings: true };
-};
-
 export type WidgetOutcome =
-  | { state: "self-drawn" }
-  // A widget declared with `defineWidget` and drawn by its own component, with
-  // its data: the frame draws every other state, and the component this one.
+  // A `custom` card, drawn by its widget's own component with its data: the
+  // frame draws every other state, and the component this one.
   | { state: "answered"; data: unknown }
   | { state: "loading" }
   | { state: "failed"; message: string }
@@ -190,58 +130,14 @@ export type WidgetOutcome =
   | { state: "empty"; empty: OutcomeEmpty }
   | { state: "ready"; node: ReactNode };
 
-/**
- * An archetype's own answer, as the grid's outcome.
- *
- * Stated once rather than at each of the three places a body is run. The
- * mapping is the same for every kind of body, and repeating the ternary made
- * the dispatch read as three decisions where there is one.
- */
+/** An archetype's own answer, as the grid's outcome. */
 function asOutcome(drawn: ArchetypeOutcome): WidgetOutcome {
-  if (!drawn.ok) {
-    return drawn.unavailable
-      ? { state: "unavailable" }
-      : { state: "failed", message: drawn.message };
-  }
+  if (!drawn.ok) return { state: "failed", message: drawn.message };
   return drawn.empty !== undefined
     ? { state: "empty", empty: drawn.empty }
     : { state: "ready", node: drawn.node };
 }
 
-/**
- * The bodies that need no slot, drawn before any slot logic is reached.
- *
- * Both kinds are here because they share the reason: no slot is ever coming
- * for either. A `declared` archetype asks nothing, and a `cells` archetype's
- * answers are keyed PER CELL, so the widget's own slot is permanently absent --
- * reading that below as "in flight" would leave the card loading forever.
- */
-function slotlessOutcome(
-  renderer: ArchetypeRenderer,
-  definition: DashboardWidget,
-  slotFor: CellSlotLookup | undefined
-): WidgetOutcome | undefined {
-  if (renderer.cells) {
-    return asOutcome(renderer.cells(definition, slotFor ?? (() => undefined)));
-  }
-  if (renderer.declared) return asOutcome(renderer.declared(definition));
-  return undefined;
-}
-
-/**
- * Whether a card is a widget declared with `defineWidget` and drawn by its own
- * component: a custom card whose data core builds on the server. Core's own
- * custom cards ask their own queries and draw their own states.
- */
-function drawsDeclaredComponent(definition: DashboardWidget): boolean {
-  return definition.archetype === "custom" && definition.serverData === true;
-}
-
-/**
- * A slot with no data as the grid's outcome: one code marks every "not available", a card whose
- * widget needs a setting asks for it as its empty state, and one its widget does not show for
- * this person is left out. Only the rest are failures.
- */
 /**
  * What a card missing a setting says, with the one step that fixes it: its own settings, opened
  * on their first field. The button is drawn only where the card can open them
@@ -259,6 +155,11 @@ function needsSettingEmpty(setting: string): OutcomeEmpty {
   };
 }
 
+/**
+ * A slot with no data as the grid's outcome: one code marks every "not available", a card whose
+ * widget needs a setting asks for it as its empty state, and one its widget does not show for
+ * this person is left out. Only the rest are failures.
+ */
 function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
   switch (slot.code) {
     case "unavailable":
@@ -273,9 +174,9 @@ function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
 }
 
 /**
- * A declared widget drawn by its own component: core builds its data, so the
- * frame draws loading, no permission and error as for any card core answers,
- * and the component is called only once there is data (`WidgetProps`).
+ * A `custom` card, drawn by its widget's own component: core builds its data,
+ * so the frame draws loading, no permission and error as for any card, and the
+ * component is called only once there is data (`WidgetProps`).
  *
  * Its data is what the declaration types it as: a data function's answer,
  * carried as an `op: "data"` result and unwrapped here, or, for a widget
@@ -291,37 +192,9 @@ function declaredComponentOutcome(slot: WidgetSlot | undefined): WidgetOutcome {
   };
 }
 
-/**
- * The outcome of a card drawn by a component, or `undefined` for one core draws.
- *
- * A declared widget's component is handed its data once there is some, the frame drawing every
- * other state. A custom card's own component is reached with an answer or while one is on the
- * way: a failed answer is the frame's to draw and the grid's to count, like any other card's, and
- * what its answer says beyond that, the component reports to the frame (`FrameState`).
- */
-function componentOutcome(
-  definition: DashboardWidget,
-  slot: WidgetSlot | undefined
-): WidgetOutcome | undefined {
-  if (drawsDeclaredComponent(definition)) {
-    return declaredComponentOutcome(slot);
-  }
-  if (definition.archetype !== "custom") return undefined;
-  return slot?.ok === false ? slotFailure(slot) : { state: "self-drawn" };
-}
-
 export function resolveWidgetOutcome(
   definition: DashboardWidget,
-  slot: WidgetSlot | undefined,
-  /**
-   * How a `stats` card reaches each cell's answer.
-   *
-   * A third parameter rather than a widened second one, so every existing
-   * caller and every single-question archetype is untouched. Absent for a
-   * stats card means no answers have been keyed back yet, which is the same
-   * "in flight" its cells already render.
-   */
-  slotFor?: CellSlotLookup
+  slot: WidgetSlot | undefined
 ): WidgetOutcome {
   // A declared widget's empty test held: the frame draws its empty state, the
   // widget's own words in place of its own, whatever draws the card when it
@@ -330,64 +203,28 @@ export function resolveWidgetOutcome(
     return { state: "empty", empty: emptyFor(definition) };
   }
 
-  const component = componentOutcome(definition, slot);
-  if (component !== undefined) return component;
+  // Every `custom` card is drawn by its widget's own component, handed the
+  // answer its `load` gave.
+  if (definition.archetype === "custom") return declaredComponentOutcome(slot);
 
-  // Everything knowable WITHOUT a payload, decided first: an archetype with no
-  // renderer, and a declaration the renderer refuses. Both are settled before
-  // the slot is consulted, so a card that can never be drawn says why on the
-  // first render instead of waiting for a request the grid does not make.
-  const refusal = coreCannotDraw(definition);
-  if (refusal !== undefined) return { state: "failed", message: refusal };
-
-  const renderer = archetypeRenderer(definition.archetype);
-  // Unreachable: `coreCannotDraw` returned nothing, which for a non-`custom`
-  // archetype means the table held a renderer. Narrowing rather than asserting,
-  // so a future archetype that answers differently cannot walk past this.
-  if (!renderer) {
+  // An archetype with no body is settled before the slot is consulted, so a
+  // card that can never be drawn says why on the first render instead of
+  // waiting for an answer it cannot use.
+  const body = archetypeBody(definition.archetype);
+  if (!body) {
     return {
       state: "failed",
       message: `The "${definition.archetype}" widget archetype is not rendered yet.`,
     };
   }
 
-  // A DECLARED archetype is drawn before the slot logic is reached, because no
-  // slot is ever coming for it. `text` and `actions` are queryless by core's
-  // own contract -- the registry validator refuses a query on them -- so they
-  // never enter the batch. Reading that absence below as "in flight" or as
-  // "drawn from a query and declaring none" is right for every data archetype
-  // and would have been permanently wrong for these two: the first body
-  // registered for one would have failed on every render.
-  const slotless = slotlessOutcome(renderer, definition, slotFor);
-  if (slotless) return slotless;
-
-  if (!renderer.body) {
-    // A renderer with neither kind of body is a table entry nobody finished.
-    return {
-      state: "failed",
-      message: `The "${definition.archetype}" widget archetype is not rendered yet.`,
-    };
-  }
-
-  if (!slot) {
-    // Absent means IN FLIGHT, and only a widget that actually asked for
-    // something can have a request in flight. One with no query never will, so
-    // reading its absent slot as busy leaves the card spinning for the life of
-    // the page -- with nothing on screen, in the live region or in the console
-    // saying why. `resolve-widgets` prefers a contributed component over this,
-    // so reaching here means there was none to prefer.
-    if (!definition.query && definition.serverData !== true) {
-      return {
-        state: "failed",
-        message: `The "${definition.archetype}" archetype is drawn from a query, and this widget declares none.`,
-      };
-    }
-    return { state: "loading" };
-  }
+  // Absent means IN FLIGHT: every card is asked for by its id, so an answer
+  // is on its way for each one the batch holds.
+  if (!slot) return { state: "loading" };
 
   if (!slot.ok) return slotFailure(slot);
 
-  const drawn = asOutcome(renderer.body(slot.result, definition));
+  const drawn = asOutcome(body(slot.result, definition));
   // A display that finds nothing in its answer draws its empty state with the
   // widget's declared one in place of its own, as the server's verdict does.
   return drawn.state === "empty"

@@ -132,12 +132,8 @@ function PreviewCard({
         definition={preview.definition}
         placement={preview.placement}
         slot={preview.slot}
-        {...(preview.slotFor === undefined ? {} : { slotFor: preview.slotFor })}
         subtitle={preview.subtitle}
         isFetching={preview.isFetching}
-        {...(preview.answerSize === undefined
-          ? {}
-          : { answerSize: preview.answerSize })}
         {...(tier === undefined ? {} : { tier })}
       />
     </div>
@@ -197,7 +193,6 @@ export function SettingsPreview(props: {
     shown: props.shown,
     ownTitle: props.ownTitle,
     size,
-    tier,
   });
   const { roomRef, scale } = usePreviewScale(cardWidth);
   const height = cardHeightPx(size.h);

@@ -1,4 +1,4 @@
-import type { WidgetDefinition } from "nextly/config";
+import type { publishedWidgetDefinition } from "nextly/testing/widget-card";
 import { expectTypeOf } from "vitest";
 
 import type {
@@ -37,7 +37,22 @@ expectTypeOf<NonNullable<PluginMetadata["settings"]>>().toMatchTypeOf<{
 }>();
 
 // Widget metadata. A widget reaches the admin only through the registry, so the
-// admin's view of it is DERIVED from the server's published definition rather
-// than restated, and a plugin's own metadata carries none.
-expectTypeOf<RegisteredWidgetMeta>().toEqualTypeOf<WidgetDefinition>();
+// admin's view of it is DERIVED from what the registry publishes each widget as
+// (`publishedWidgetDefinition`) rather than restated, and a plugin's own
+// metadata carries none.
+expectTypeOf<RegisteredWidgetMeta>().toEqualTypeOf<
+  ReturnType<typeof publishedWidgetDefinition>
+>();
+// Every card is answered on the server from its declaration's `load`, so a
+// published widget carries no query, cells, actions or text of its own for the
+// admin to ask or draw: none of the fields that described that is published.
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("serverData");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("query");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("cells");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("actions");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("content");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("link");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("dismissible");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("sizedQuery");
+expectTypeOf<RegisteredWidgetMeta>().not.toHaveProperty("sourceFilters");
 expectTypeOf<PluginMetadata>().not.toHaveProperty("widgets");

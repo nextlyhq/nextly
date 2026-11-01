@@ -59,7 +59,6 @@ const branding = {
       title: "Orders waiting",
       archetype: "metric",
       size: { default: { w: 4, h: 3 } },
-      query: { source: "collection:orders", op: "count" },
       hidesWhenEmpty: true,
     },
   ],

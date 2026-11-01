@@ -68,7 +68,6 @@ const WIDGETS: DashboardWidget[] = [
     title: "Over time",
     archetype: "custom",
     component: "core#OverTime",
-    serverData: true,
     size: OVER_TIME_SIZE,
     settings: [
       { name: "collection", type: "collection", label: "Collection" },
@@ -92,7 +91,6 @@ const WIDGETS: DashboardWidget[] = [
     title: "Note",
     archetype: "custom",
     component: "core#Note",
-    serverData: true,
     size: sizeBounds({ default: { w: 4, h: 3 } }),
   },
   {
@@ -709,7 +707,6 @@ describe("collections a widget can be set to", () => {
     title: "Breakdown",
     archetype: "custom",
     component: "core#Breakdown",
-    serverData: true,
     size: sizeBounds({ default: { w: 4, h: 3 } }),
     settings: [
       { name: "collection", type: "collection", label: "Collection" },

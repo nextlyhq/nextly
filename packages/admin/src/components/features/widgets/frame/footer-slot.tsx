@@ -58,8 +58,8 @@ export interface CardFooterClaims {
 }
 
 /**
- * How a body tells the frame its footer holds the body's own link, so the frame draws none of
- * its own, and learns whether its link is the one the footer draws.
+ * How a body tells the frame its footer holds the body's own link, and learns whether its link
+ * is the one the footer draws.
  */
 const CardFooterClaim = createContext<CardFooterClaims | undefined>(undefined);
 
@@ -76,7 +76,7 @@ export function drawnClaim(
 }
 
 /**
- * A card footer's link, the frame's own and a body's alike: foreground, with the brand on the
+ * A card footer's link, whichever body draws it: foreground, with the brand on the
  * underline. A brand primary is any colour its owner picked, and small text in it can fall under
  * AA contrast.
  */
@@ -84,8 +84,7 @@ export const CARD_FOOTER_LINK_CLASS =
   "text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary";
 
 /**
- * Draws `children` in the card's footer, or where it stands outside a frame, in place of the
- * widget's own link while it is drawn.
+ * Draws `children` in the card's footer, or where it stands outside a frame.
  *
  * 🔴 Replaces, never appends: the footer draws one claim's content (`drawnClaim`), so a
  * `Widget.FooterLink` beside a list's "View all" draws one link, the FooterLink's.

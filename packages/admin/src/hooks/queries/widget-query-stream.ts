@@ -13,7 +13,6 @@
  * @module hooks/queries/widget-query-stream
  */
 
-import type { WidgetQuery } from "nextly/config";
 import type { WidgetRenderSize } from "nextly/widget-result";
 
 import { BASE_URL, noteSchemaVersion } from "@admin/lib/api/fetcher";
@@ -22,8 +21,8 @@ import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import type { WidgetQueryBatchResponse } from "@admin/types/dashboard/widgets";
 
 /**
- * A card asked for rather than a query: by its id, or with settings of the reader's choosing
- * (one not yet saved, or a settings preview). The server answers either from the declaration.
+ * A card asked for: by its id, or with settings of the reader's choosing (one not yet saved, or
+ * a settings preview). The server answers either from the widget's declaration.
  */
 export type CardAsk =
   | { widget: string; card: string }
@@ -83,12 +82,12 @@ export function readResults(body: unknown): unknown[] {
 }
 
 /**
- * Asks `queries` and hands each settled slot to `onSlots` as it arrives,
+ * Asks for `queries`, one card each, and hands each settled slot to `onSlots` as it arrives,
  * resolving with every slot by position once the answer has ended: `undefined`
  * where the stream never carried one.
  *
  * `readAheadToken` is the token of the layout read the dashboard was drawn
- * from, sent beside the queries so a card answered ahead by that read is
+ * from, sent beside the cards so a card answered ahead by that read is
  * handed that read's answer; left out when there is none.
  *
  * Rejects as `fetcher` does for a refused request (the parsed error envelope),
@@ -96,7 +95,7 @@ export function readResults(body: unknown): unknown[] {
  * stream cut off partway, so the caller's retry and failure states see it.
  */
 export async function fetchWidgetBatch(
-  queries: readonly (WidgetQuery | SentCardAsk | undefined)[],
+  queries: readonly SentCardAsk[],
   options: {
     signal?: AbortSignal;
     onSlots: (slots: readonly StreamedSlot[]) => void;

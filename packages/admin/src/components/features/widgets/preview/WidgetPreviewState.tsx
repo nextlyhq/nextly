@@ -31,9 +31,13 @@ import {
   type PreviewStateName,
 } from "./preview-states";
 
-/** What a state says in the card's place when the card does not reach it. */
+/**
+ * What a state says in the card's place when the card does not reach it: the outcome the
+ * dashboard resolves for that answer is another state, as for an archetype this release does not
+ * draw, which says so in every state.
+ */
 export const NOT_REACHED =
-  "This card does not show this state: it asks for no data, or draws this state itself.";
+  "This card does not show this state: it draws another state for this answer.";
 
 /** What a ready state says for a widget that declares no preview case. */
 export const NO_PREVIEW_CASE =
@@ -108,7 +112,6 @@ export function WidgetPreviewState({
           <WidgetRenderer
             definition={definition}
             slot={drawn.slot}
-            slotFor={drawn.slotFor}
             // As a card on the dashboard is handed them: the case's
             // settings over the widget's defaults (`settingsAsAsked`).
             placement={{

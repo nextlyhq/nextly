@@ -10,8 +10,8 @@
  * cards retried before it, and never replaces their answers.
  *
  * A card is also asked again on its own, quietly, when it now asks a different question than its
- * answer was fetched with: it grew into a tier drawing more rows, or its settings changed. It
- * keeps what it shows until the new answer arrives, and no other card is asked.
+ * answer was fetched with: it was resized or crossed a tier, or its settings changed. It keeps
+ * what it shows until the new answer arrives, and no other card is asked.
  *
  * @module components/features/widgets/useCardRetries
  */
@@ -21,27 +21,20 @@ import { useCallback, useEffect, useMemo, useReducer } from "react";
 import {
   appliedKey,
   useWidgetQueries,
-  type CellSlots,
-  type CellsApplied,
-  type SizedAt,
   type UseWidgetQueriesResult,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
-import { asksAgainAt } from "./tier-query";
-
 /** A retried card's answer, and when it arrived. */
 interface SettledRetry {
   slot?: WidgetSlot;
-  cells?: Record<string, WidgetSlot>;
   at: Date | null;
-  /** The size the answer was fetched at, which a later rise is judged against. */
-  size?: SizedAt;
-  /** What the answer was asked with (`appliedKey`), which a change of settings is judged against. */
+  /**
+   * What the answer was asked with (`appliedKey`): its settings and the size it was drawn at,
+   * which a change of either is judged against.
+   */
   applied?: string;
-  /** What each of a cells card's answers was asked with, by cell key. */
-  cellsApplied?: CellsApplied;
 }
 
 interface RetryState {
@@ -50,9 +43,9 @@ interface RetryState {
   /** Cards whose retry has answered, with that answer. */
   settled: ReadonlyMap<string, SettledRetry & { attempt: number }>;
   /**
-   * In-flight cards asked again because they grew or their settings changed, not because Retry
-   * was pressed, with what each now asks (`askingKey`): they keep what they were showing until
-   * the new answer arrives, rather than drawing a skeleton.
+   * In-flight cards asked again because their size or settings changed, not because Retry was
+   * pressed, with what each now asks (`appliedKey`): they keep what they were showing until the
+   * new answer arrives, rather than drawing a skeleton.
    */
   quiet: ReadonlyMap<string, string>;
   /**
@@ -69,20 +62,10 @@ type RetryAction =
   | {
       type: "grow";
       placementId: string;
-      /** The query as the card's settings ask it, before sizing. */
-      query: WidgetQueryRequest["query"];
-      /** The size the card is drawn at, for a sized card. */
-      size?: SizedAt;
       /** What the card asks with now (`appliedKey`). */
       applied: string;
-      /** The size the batch's answer for the card was fetched at. */
-      batchFetchedAt: SizedAt | undefined;
       /** What the batch's answer for the card was asked with. */
       batchApplied: string | undefined;
-      /** For a cells card: what each cell its tier draws asks with now, by cell key. */
-      cellsApplied?: CellsApplied;
-      /** For a cells card: what each cell the batch answered was asked with. */
-      batchCellsApplied?: CellsApplied;
     }
   | {
       type: "arrived";
@@ -138,16 +121,11 @@ function pressed(state: RetryState, placementId: string): RetryState {
   };
 }
 
-/** What a quiet re-ask asks, as one comparable value: the size and the settings together. */
-function askingKey(size: SizedAt | undefined, applied: string): string {
-  return `${size === undefined ? "" : JSON.stringify(size)}\u0000${applied}`;
-}
-
 /**
- * A card that now asks more than, or other than, what its shown answer was fetched with: it grew
- * into a tier drawing more rows, or its settings changed. Asked again alone, keeping its answer on
- * screen until the new one arrives. Ignored while the card is already being asked again, when its
- * answer already serves it, and when the same question was just refused.
+ * A card that now asks other than what its shown answer was fetched with: its size or its
+ * settings changed. Asked again alone, keeping its answer on screen until the new one arrives.
+ * Ignored while the card is already being asked again, when its answer already serves it, and
+ * when the same question was just refused.
  *
  * Judged here, against the answer the card shows in THIS state, rather than by the caller: the
  * caller's view can be a render old, and a re-ask that answered in the same commit would
@@ -159,12 +137,10 @@ function grown(
 ): RetryState {
   const { placementId } = action;
   if (state.inFlight.has(placementId)) return state;
-  const asking = askingKey(action.size, action.applied);
+  const asking = action.applied;
   if (state.stalled.get(placementId) === asking) return state;
   const settled = state.settled.get(placementId);
-  if (!grewPast(settled, action) && !settingsChanged(settled, action)) {
-    return state;
-  }
+  if (!asksOther(settled, action)) return state;
   const previous = settled?.attempt ?? 0;
   // A different question is being asked, so an earlier refusal no longer stands: left in place,
   // it would keep that question from being asked again should the reader come back to it.
@@ -178,60 +154,22 @@ function grown(
   };
 }
 
-/** Whether the card now draws more rows than its shown answer was fetched for. */
-function grewPast(
-  settled: SettledRetry | undefined,
-  action: Extract<RetryAction, { type: "grow" }>
-): boolean {
-  const fetchedAt = settled ? settled.size : action.batchFetchedAt;
-  // A card asked for by id or with its settings is never sized, so it has no
-  // tier and no query to grow past; only a sized query can.
-  return (
-    action.size !== undefined &&
-    action.query !== undefined &&
-    fetchedAt !== undefined &&
-    asksAgainAt(action.query, fetchedAt, action.size)
-  );
-}
-
 /**
- * Whether the card's settings now ask other than its shown answer was asked with. Only once an
- * answer says what it was asked with: before then there is nothing to differ from, and the
- * first answer is the batch's own.
+ * Whether the card's settings or size now ask other than its shown answer was asked with. Only
+ * once an answer says what it was asked with: before then there is nothing to differ from, and
+ * the first answer is the batch's own.
  */
-function settingsChanged(
+function asksOther(
   settled: SettledRetry | undefined,
   action: Extract<RetryAction, { type: "grow" }>
 ): boolean {
-  if (action.cellsApplied !== undefined) {
-    return cellsAskOther(
-      settled ? settled.cellsApplied : action.batchCellsApplied,
-      action.cellsApplied
-    );
-  }
   const fetchedWith = settled ? settled.applied : action.batchApplied;
   return fetchedWith !== undefined && fetchedWith !== action.applied;
 }
 
 /**
- * Whether a cells card now asks other than its answers were asked with, cell by cell, over the
- * cells its tier draws now: a cell asked otherwise, or one with no answer at all, which the card
- * widened to draw. A cell its answers hold and its tier no longer draws asks nothing, as a list
- * that shrinks draws a prefix of what it holds.
- */
-function cellsAskOther(
-  fetchedWith: CellsApplied | undefined,
-  asking: CellsApplied
-): boolean {
-  if (fetchedWith === undefined) return false;
-  return Object.keys(asking).some(
-    key => !Object.hasOwn(fetchedWith, key) || fetchedWith[key] !== asking[key]
-  );
-}
-
-/**
  * Retries that answered: out of flight, each with its answer and its time. A refused quiet
- * re-ask settles nothing: its card keeps the answer it had, stalled at the tier it grew to.
+ * re-ask settles nothing: its card keeps the answer it had, stalled at the question it asked.
  */
 function arrived(
   state: RetryState,
@@ -273,19 +211,15 @@ function arrivals(
   for (const placementId of state.inFlight.keys()) {
     if (retried.fetchingPlacementIds.has(placementId)) continue;
     const slot = retried.slots[placementId];
-    const cells = retried.cellSlots[placementId];
-    if (!slot && !cells) continue;
-    if (state.quiet.has(placementId) && slot?.ok === false) {
+    if (!slot) continue;
+    if (state.quiet.has(placementId) && !slot.ok) {
       refused.add(placementId);
       continue;
     }
     answers.set(placementId, {
       slot,
-      cells,
       at: seenAt,
-      size: retried.fetchedSizeFor(placementId),
       applied: retried.fetchedAppliedFor(placementId),
-      cellsApplied: retried.fetchedCellsAppliedFor(placementId),
     });
   }
   return { answers, refused };
@@ -293,38 +227,29 @@ function arrivals(
 
 export interface CardRetries {
   slots: Record<string, WidgetSlot>;
-  cellSlots: CellSlots;
   /** Reload one card; see the module note. */
   retry: (placementId: string) => void;
   /** When the answer this card shows arrived: its retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
   /** When this card's own answer arrived: its retry's, or its own request's in the batch. */
   answeredAtFor: (placementId: string) => Date | null;
+  /** Ask one card again if it now asks other than its answer was fetched for; see `grown`. */
+  grow: (request: WidgetQueryRequest) => void;
   /**
-   * Ask one card again if it now asks more, or other, than its answer was fetched for; see
-   * `grown`. Handed the card's requests: its one, or one per cell.
-   */
-  grow: (requests: readonly WidgetQueryRequest[]) => void;
-  /**
-   * The cards being asked again, by Retry or because they grew. A quiet re-ask keeps the answer
-   * on screen, so without this a card refreshing for its new tier would not say it is reading.
+   * The cards being asked again, by Retry or because their size or settings changed. A quiet
+   * re-ask keeps the answer on screen, so without this a card refreshing for its new size would
+   * not say it is reading.
    */
   fetchingPlacementIds: ReadonlySet<string>;
-  /** The size the answer this card shows was fetched at: its own re-ask's, or the batch's. */
-  fetchedSizeFor: (placementId: string) => SizedAt | undefined;
 }
 
 export function useCardRetries(
   requests: readonly WidgetQueryRequest[],
   batch: {
     slots: Record<string, WidgetSlot>;
-    cellSlots: CellSlots;
     updatedAt: Date | null;
     answeredAtFor: (placementId: string) => Date | null;
-    fetchedSizeFor: (placementId: string) => SizedAt | undefined;
     fetchedAppliedFor: (placementId: string) => string | undefined;
-    fetchedCellsAppliedFor: (placementId: string) => CellsApplied | undefined;
-    fetchingPlacementIds: ReadonlySet<string>;
   }
 ): CardRetries {
   const [state, dispatch] = useReducer(reduce, EMPTY);
@@ -368,52 +293,22 @@ export function useCardRetries(
     (placementId: string) => dispatch({ type: "press", placementId }),
     []
   );
-  const batchSizeFor = batch.fetchedSizeFor;
   const batchAppliedFor = batch.fetchedAppliedFor;
-  const batchCellsAppliedFor = batch.fetchedCellsAppliedFor;
-  const batchFetching = batch.fetchingPlacementIds;
   const grow = useCallback(
-    (requests: readonly WidgetQueryRequest[]) => {
-      const [request] = requests;
-      if (request === undefined) return;
-      const { placementId } = request;
-      if (request.cellKey === undefined) {
-        dispatch({
-          type: "grow",
-          placementId,
-          query: request.applied ?? request.query,
-          ...(request.sized ? { size: sizeOf(request.sized) } : {}),
-          applied: appliedKey(request),
-          batchFetchedAt: batchSizeFor(placementId),
-          batchApplied: batchAppliedFor(placementId),
-        });
-        return;
-      }
-      // A cells card the batch is still answering is not judged: the cells answered so far are
-      // not all it asked, and a cell not yet in would read as one the card widened to draw.
-      if (batchFetching.has(placementId)) return;
-      const cellsApplied = cellsAsking(requests);
+    (request: WidgetQueryRequest) => {
       dispatch({
         type: "grow",
-        placementId,
-        query: undefined,
-        applied: JSON.stringify(cellsApplied),
-        batchFetchedAt: undefined,
-        batchApplied: undefined,
-        cellsApplied,
-        batchCellsApplied: batchCellsAppliedFor(placementId),
+        placementId: request.placementId,
+        applied: appliedKey(request),
+        batchApplied: batchAppliedFor(request.placementId),
       });
     },
-    [batchSizeFor, batchAppliedFor, batchCellsAppliedFor, batchFetching]
+    [batchAppliedFor]
   );
 
-  const { slots, cellSlots } = useMemo(
-    () =>
-      mergeRetries({ slots: batch.slots, cellSlots: batch.cellSlots }, state, {
-        slots: retried.slots,
-        cellSlots: retried.cellSlots,
-      }),
-    [batch.slots, batch.cellSlots, state, retried.slots, retried.cellSlots]
+  const slots = useMemo(
+    () => mergeRetries(batch.slots, state, retried.slots),
+    [batch.slots, state, retried.slots]
   );
 
   const updatedAtFor = useCallback(
@@ -436,37 +331,14 @@ export function useCardRetries(
     [state.inFlight]
   );
 
-  // A settled re-ask's answer is shown in place of the batch's, so its size is the one shown; a
-  // quiet re-ask still in flight shows the answer it had.
-  const fetchedSizeFor = useCallback(
-    (placementId: string) => {
-      const settled = state.settled.get(placementId);
-      return settled ? settled.size : batchSizeFor(placementId);
-    },
-    [state.settled, batchSizeFor]
-  );
-
   return {
     slots,
-    cellSlots,
     retry,
     updatedAtFor,
     answeredAtFor,
     grow,
     fetchingPlacementIds,
-    fetchedSizeFor,
   };
-}
-
-/** What each cell a cells card's tier draws asks with now, by cell key; see `appliedKey`. */
-function cellsAsking(requests: readonly WidgetQueryRequest[]): CellsApplied {
-  const asking: Record<string, string> = Object.create(null);
-  for (const request of requests) {
-    if (request.cellKey !== undefined && request.undrawn !== true) {
-      asking[request.cellKey] = appliedKey(request);
-    }
-  }
-  return asking;
 }
 
 /**
@@ -474,29 +346,25 @@ function cellsAsking(requests: readonly WidgetQueryRequest[]): CellsApplied {
  * flight, nothing -- which draws the card's skeleton rather than the error it is retried from.
  */
 function mergeRetries(
-  batch: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots },
+  batch: Record<string, WidgetSlot>,
   state: RetryState,
-  retried: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots }
-): { slots: Record<string, WidgetSlot>; cellSlots: CellSlots } {
-  if (state.inFlight.size === 0 && state.settled.size === 0) {
-    return { slots: batch.slots, cellSlots: batch.cellSlots };
-  }
-  const merged = {
-    slots: { ...batch.slots },
-    cellSlots: { ...batch.cellSlots },
-  };
+  retried: Record<string, WidgetSlot>
+): Record<string, WidgetSlot> {
+  if (state.inFlight.size === 0 && state.settled.size === 0) return batch;
+  const merged = { ...batch };
   for (const [placementId, answer] of state.settled) {
-    // A card asked again because it grew keeps this answer until the new one is in, below.
-    putAnswer(merged, placementId, answer, true);
+    // A card asked again quietly keeps this answer until the new one is in, below.
+    putAnswer(merged, placementId, answer.slot, true);
   }
   for (const placementId of state.inFlight.keys()) {
-    const answer = {
-      slot: retried.slots[placementId],
-      cells: retried.cellSlots[placementId],
-    };
     // A quiet re-ask keeps what the card was showing until its answer is in; a pressed Retry
     // clears it, so the card draws its skeleton rather than the error it is retried from.
-    putAnswer(merged, placementId, answer, !state.quiet.has(placementId));
+    putAnswer(
+      merged,
+      placementId,
+      retried[placementId],
+      !state.quiet.has(placementId)
+    );
   }
   return merged;
 }
@@ -506,25 +374,11 @@ function mergeRetries(
  * cleared first when `clear` says so or when there is a new answer to show; otherwise it stays.
  */
 function putAnswer(
-  merged: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots },
+  merged: Record<string, WidgetSlot>,
   placementId: string,
-  answer: { slot?: WidgetSlot; cells?: Record<string, WidgetSlot> },
+  slot: WidgetSlot | undefined,
   clear: boolean
 ): void {
-  if (clear || answer.slot || answer.cells) {
-    delete merged.slots[placementId];
-    delete merged.cellSlots[placementId];
-  }
-  if (answer.slot) merged.slots[placementId] = answer.slot;
-  if (answer.cells) merged.cellSlots[placementId] = answer.cells;
-}
-
-/** The size a sized request was asked at, without the query it was asked with. */
-function sizeOf(sized: NonNullable<WidgetQueryRequest["sized"]>): SizedAt {
-  const { tier, h, density } = sized;
-  return {
-    tier,
-    ...(h === undefined ? {} : { h }),
-    ...(density === undefined ? {} : { density }),
-  };
+  if (clear || slot) delete merged[placementId];
+  if (slot) merged[placementId] = slot;
 }
