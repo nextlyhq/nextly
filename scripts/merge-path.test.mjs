@@ -125,7 +125,11 @@ describe("directPaths", () => {
   it("names only an actor every queue ruleset lets through, when each names someone", () => {
     const both = [...rules, { type: "merge_queue", ruleset_id: 3 }];
     const otherQueue = { id: 3, name: "queue-too", enforcement: "active" };
-    expect(directPaths([{ ...queue, bypass_actors: [team] }, { ...otherQueue, bypass_actors: [releaseBot] }], both)).toEqual([]);
+    // Different entries are not proof of no path: two teams, or a team and a
+    // role, can share a member, so it is unchecked rather than none.
+    expect(directPaths([{ ...queue, bypass_actors: [team] }, { ...otherQueue, bypass_actors: [releaseBot] }], both)).toEqual([
+      { text: expect.stringContaining("whether one person can bypass them all cannot be read"), known: false },
+    ]);
     expect(directPaths([{ ...queue, bypass_actors: [team, releaseBot] }, { ...otherQueue, bypass_actors: [releaseBot] }], both)).toEqual([
       { text: "ruleset 1 (protect-main) and ruleset 3 (queue-too) let Integration 9 bypass the merge queue (always)", known: true },
     ]);
