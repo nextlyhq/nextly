@@ -218,6 +218,14 @@ export interface UseDashboardLayoutResult {
    * the same thing a reader's eyes do.
    */
   cached: () => DashboardLayoutResponse | undefined;
+  /**
+   * When the arrangement in the cache was read, and whether the latest read of it failed.
+   *
+   * 🔴 What tells a re-read that landed from one that did not: `invalidateQueries` resolves
+   * either way, and a failed re-read leaves the earlier answer in the cache, so `cached()` alone
+   * reads the same before and after a re-read that failed.
+   */
+  lastRead: () => { at: number; failed: boolean };
   reload: () => Promise<unknown>;
 }
 
@@ -375,6 +383,12 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     [queryClient]
   );
 
+  // The query's own state, so a failed re-read is told apart from one that landed.
+  const lastRead = useCallback(() => {
+    const state = queryClient.getQueryState(DASHBOARD_LAYOUT_KEY);
+    return { at: state?.dataUpdatedAt ?? 0, failed: state?.status === "error" };
+  }, [queryClient]);
+
   const save = useMutation(writeLayout);
 
   /*
@@ -396,7 +410,8 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
    * RETURNED for the reason `onSuccess` returns its invalidation: the channel
    * stays pending through the re-read, so nothing else is sent against the
    * refused guards, and a `mutate` callback finds the cache holding the
-   * guards a second attempt must carry (`useDismissPlacement`). Without it the
+   * guards a second attempt must carry, or `lastRead` saying the re-read
+   * failed and there are none (`useDismissPlacement`). Without it the
    * cache kept the refused guards, and every later attempt was refused the
    * same way until the page was reloaded.
    */
@@ -444,6 +459,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     isUnreadable: query.data?.source === "unreadable",
     isArranged: query.data?.arranged === true,
     cached,
+    lastRead,
     reload: invalidate,
   };
 }

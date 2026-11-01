@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Undo after removing a card from its menu now puts the card back when the widgets you may see changed in the meantime, for example when someone else scheduled the site's first release. The dashboard used to refuse the write as a conflict and keep refusing every later Undo until the page was reloaded, so the card was lost. A removal or Undo refused as a conflict now reads the dashboard again and is sent once more against what is stored now; Remove from a card's menu gets the same retry.
+Undo puts a removed card back even when the widgets you can add changed in the meantime, such as when a colleague schedules the site's first release.

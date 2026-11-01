@@ -42,6 +42,7 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 // file and a plain `const` here is not yet initialised when the factory runs.
 const toast = vi.hoisted(() => ({
   error: vi.fn(),
+  info: vi.fn(),
   success: vi.fn(),
   dismiss: vi.fn(),
 }));
@@ -613,6 +614,7 @@ describe("a write refused because the dashboard moved since it was read", () => 
         placements: WidgetPlacement[];
         version: number;
         scope: string;
+        arranged: boolean;
       };
       const now = layoutResponse as DashboardLayoutResponse;
       if (sent.version !== now.version || sent.scope !== now.scope) {
@@ -622,6 +624,9 @@ describe("a write refused because the dashboard moved since it was read", () => 
         ...now,
         placements: sent.placements,
         version: now.version + 1,
+        // As the server keeps it: a write that arranges makes the row arranged, and a row
+        // already arranged stays so.
+        arranged: now.arranged === true || sent.arranged,
       };
       return Promise.resolve({ message: "ok", item: {} });
     });
@@ -698,6 +703,82 @@ describe("a write refused because the dashboard moved since it was read", () => 
     // The Remove, then Undo twice: the first refusal and the one retry.
     expect(api.put).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId("removal-notice")).toBeInTheDocument();
+  });
+
+  it("Undo after a reset elsewhere writes no arrangement back, and says why", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+    const undo = await screen.findByTestId("removal-notice-undo");
+    // Another tab resets the dashboard: the row is gone, and the read is the default again,
+    // whose cards are its own, so the removed card is not among them.
+    const reset = layout({
+      placements: [
+        { id: "d1", widgetId: "core/onboarding", w: 12, h: 3, removed: false },
+        { id: "d2", widgetId: "core/permanent", w: 6, h: 3, removed: false },
+      ],
+      source: "default",
+      version: 0,
+      scope: "tok-default",
+      arranged: false,
+    });
+    layoutResponse = reset;
+    await user.click(undo);
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("removal-notice")).toBeNull()
+    );
+    // 🔴 The reset stands: no arranged row was made again. The one Undo sent was made of the
+    // read before the reset, and refused; none followed it.
+    expect(layoutResponse).toEqual(reset);
+    expect(api.put).toHaveBeenCalledTimes(2);
+    expect(toast.info).toHaveBeenCalledWith(
+      "Your dashboard was reset elsewhere, so there is nothing to undo."
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("Undo of a card already put back elsewhere writes nothing more, quietly", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+    const undo = await screen.findByTestId("removal-notice-undo");
+    // Another tab put the same card back, at the same place.
+    layoutResponse = {
+      ...(layoutResponse as DashboardLayoutResponse),
+      placements: ARRANGED,
+      version: 9,
+    };
+    await user.click(undo);
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("removal-notice")).toBeNull()
+    );
+    expect(api.put).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByTestId("widget-cell-core/onboarding")
+    ).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+
+  it("reports the refresh, sending nothing again, when the re-read after a refusal fails", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+    const undo = await screen.findByTestId("removal-notice-undo");
+    widgetsMoveElsewhere();
+    api.get.mockRejectedValue(new Error("layout unavailable"));
+    await user.click(undo);
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Set up your project was updated, but the dashboard could not be refreshed. Reload the page to see it."
+      )
+    );
+    // 🔴 The refused guards are all the cache holds, so a second write would only be refused.
+    expect(api.put).toHaveBeenCalledTimes(2);
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 
   it("sends nothing again after a failure that is not a conflict", async () => {
