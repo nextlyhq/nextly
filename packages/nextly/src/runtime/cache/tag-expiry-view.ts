@@ -38,17 +38,38 @@ export const LEDGER_CALL_TIMEOUT_MS = 5_000;
 /** What {@link withinLedgerBound} gives for a call that did not answer in time. */
 const NO_ANSWER = Symbol("no ledger answer");
 
-/** `call`'s answer, or {@link NO_ANSWER} once {@link LEDGER_CALL_TIMEOUT_MS} passes without one. */
+/** The two kinds of ledger call, each kept to one stuck call at a time. */
+type LedgerCall = "record" | "lookup";
+
+/**
+ * The answer of the call `start` makes, or {@link NO_ANSWER} once
+ * {@link LEDGER_CALL_TIMEOUT_MS} passes without one. The wait is bounded, but
+ * the query is not cancelled, and goes on holding its connection: so while one
+ * of this kind is given up on and still running, none is started, and the
+ * answer is {@link NO_ANSWER} at once.
+ */
 async function withinLedgerBound<T>(
-  call: Promise<T>
+  view: ViewState,
+  kind: LedgerCall,
+  start: () => Promise<T>
 ): Promise<T | typeof NO_ANSWER> {
+  if (view.stuck[kind] > 0) return NO_ANSWER;
+  const call = start();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<typeof NO_ANSWER>(resolve => {
     timer = setTimeout(() => resolve(NO_ANSWER), LEDGER_CALL_TIMEOUT_MS);
     timer.unref?.();
   });
   try {
-    return await Promise.race([call, timedOut]);
+    const answer = await Promise.race([call, timedOut]);
+    if (answer === NO_ANSWER) {
+      view.stuck[kind] += 1;
+      const settled = () => {
+        view.stuck[kind] -= 1;
+      };
+      void call.then(settled, settled);
+    }
+    return answer;
   } finally {
     clearTimeout(timer);
   }
@@ -79,12 +100,26 @@ interface ViewState {
    * cleared its registry rows at once).
    */
   mine: Map<string, number>;
+  /** The last record attempt's number: attempts are numbered as they start. */
+  recordSeq: number;
   /**
-   * When a record of each tag last landed, on this process's clock, whether it
-   * answered in time or after it was given up on: a retry of a tag recorded
-   * since it was refused would advance its expiry for nothing.
+   * Per tag, the latest record attempt the ledger refused or did not answer,
+   * and when, on this process's clock.
    */
-  landedAt: Map<string, number>;
+  refusals: Map<string, { seq: number; at: number }>;
+  /**
+   * Per tag, the latest record attempt that landed, whether it answered in
+   * time or after it was given up on. An attempt began after its write
+   * committed and read the database's time then, so one that landed covers
+   * every refused attempt begun no later than it.
+   */
+  landedSeq: Map<string, number>;
+  /**
+   * Ledger calls given up on and still running, by kind. While one is, no
+   * other of its kind starts: a database that does not answer would otherwise
+   * gather one more waiting query, and connection, at every retry and lookup.
+   */
+  stuck: Record<LedgerCall, number>;
   /** The database's clock less this process's, as of the last read that told it. */
   offsetMs: number;
   /** When stale answers were last dropped, on this process's clock. */
@@ -107,7 +142,10 @@ function state(): ViewState {
     asking: new Map(),
     own: new Map(),
     mine: new Map(),
-    landedAt: new Map(),
+    recordSeq: 0,
+    refusals: new Map(),
+    landedSeq: new Map(),
+    stuck: { record: 0, lookup: 0 },
     offsetMs: 0,
     sweptAt: 0,
     lastLocal: 0,
@@ -118,7 +156,10 @@ function state(): ViewState {
   // has no `mine`: given one here, the first record would otherwise throw.
   return Object.assign(view, {
     mine: view.mine ?? new Map(),
-    landedAt: view.landedAt ?? new Map<string, number>(),
+    recordSeq: view.recordSeq ?? 0,
+    refusals: view.refusals ?? new Map<string, { seq: number; at: number }>(),
+    landedSeq: view.landedSeq ?? new Map<string, number>(),
+    stuck: view.stuck ?? { record: 0, lookup: 0 },
   });
 }
 
@@ -179,10 +220,13 @@ function sweep(view: ViewState, now: number): void {
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
+  for (const [tag, refusal] of view.refusals) {
+    if (refusal.at < horizon) view.refusals.delete(tag);
+  }
   for (const [tag, storedAt] of view.mine) {
     if (storedAt < databaseHorizon) {
       view.mine.delete(tag);
-      view.landedAt.delete(tag);
+      view.landedSeq.delete(tag);
     }
   }
 }
@@ -215,7 +259,9 @@ export async function refreshTagExpiries(
     const read = (async () => {
       const startedAt = Date.now();
       try {
-        const answer = await withinLedgerBound(ledger.expiriesOf(stale));
+        const answer = await withinLedgerBound(view, "lookup", () =>
+          ledger.expiriesOf(stale)
+        );
         if (answer === NO_ANSWER) {
           warnOnce(
             "the cache tag expiry ledger could not be read",
@@ -375,27 +421,36 @@ async function record(
   tags: readonly string[],
   again: boolean
 ): Promise<ExpiryRecord> {
-  if (view.ledger === undefined) return "no-ledger";
-  // What a record that lands stores, even one given up on: a late one is the
-  // expiry this process judges by, and a retry need not make it again.
-  const writing = view.ledger.record(tags).then(stored => {
-    if (stored === false) return stored;
-    const landed = Date.now();
-    for (const [tag, at] of stored) {
-      view.mine.set(tag, at);
-      view.landedAt.set(tag, landed);
-    }
-    return stored;
-  });
+  const ledger = view.ledger;
+  if (ledger === undefined) return "no-ledger";
+  view.recordSeq += 1;
+  const seq = view.recordSeq;
   try {
-    const answer = await withinLedgerBound(writing);
+    // What a record that lands stores, even one given up on: a late one is
+    // the expiry this process judges by, and a retry need not make it again.
+    const answer = await withinLedgerBound(view, "record", () =>
+      ledger.record(tags).then(stored => {
+        if (stored === false) return stored;
+        for (const [tag, at] of stored) {
+          view.mine.set(tag, at);
+          view.landedSeq.set(tag, Math.max(view.landedSeq.get(tag) ?? 0, seq));
+        }
+        return stored;
+      })
+    );
     if (answer === NO_ANSWER) {
-      refused(tags, again, `no answer within ${LEDGER_CALL_TIMEOUT_MS} ms`);
+      refused(
+        view,
+        tags,
+        seq,
+        again,
+        `no answer within ${LEDGER_CALL_TIMEOUT_MS} ms`
+      );
       return "failed";
     }
     return answer === false ? "no-table" : "recorded";
   } catch (error) {
-    refused(tags, again, error);
+    refused(view, tags, seq, again, error);
     return "failed";
   }
 }
@@ -407,10 +462,17 @@ async function record(
  * retry says when it begins and when it succeeds.
  */
 function refused(
+  view: ViewState,
   tags: readonly string[],
+  seq: number,
   again: boolean,
   error: unknown
 ): void {
+  const at = Date.now();
+  for (const tag of tags) {
+    const before = view.refusals.get(tag)?.seq ?? 0;
+    view.refusals.set(tag, { seq: Math.max(before, seq), at });
+  }
   warnOnce("the cache tag expiry ledger could not record an expiry", error);
   if (again) return;
   getNextlyLogger().warn({
@@ -421,7 +483,28 @@ function refused(
   });
 }
 
-/** Whether a record of `tag` landed at or after `since`, on this process's clock. */
-export function recordLandedSince(tag: string, since: number): boolean {
-  return (state().landedAt.get(tag) ?? -Infinity) >= since;
+/**
+ * Whether the latest refused record of `tag` is covered by one that landed
+ * since: that attempt itself, answering after it was given up on, or a later
+ * one. An earlier attempt landing late covers nothing: it read the database's
+ * time before the refused write's, which it may not have followed.
+ */
+export function refusalLanded(tag: string): boolean {
+  const view = state();
+  const refusal = view.refusals.get(tag);
+  return refusal !== undefined && (view.landedSeq.get(tag) ?? 0) >= refusal.seq;
+}
+
+/**
+ * Forgets the refusals a landed record covers, once the retry has acted on
+ * them, so tags another flush recorded leave nothing behind. Those not yet
+ * covered stay, and age out with the ledger's retention.
+ */
+export function forgetLandedRefusals(): void {
+  const view = state();
+  for (const [tag, refusal] of view.refusals) {
+    if ((view.landedSeq.get(tag) ?? 0) >= refusal.seq) {
+      view.refusals.delete(tag);
+    }
+  }
 }

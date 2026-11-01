@@ -19,7 +19,11 @@ import {
   takePendingExpiries,
 } from "../../revalidation/expiry-handoff";
 
-import { recordExpiredTagsAgain, recordLandedSince } from "./tag-expiry-view";
+import {
+  forgetLandedRefusals,
+  recordExpiredTagsAgain,
+  refusalLanded,
+} from "./tag-expiry-view";
 
 /** The first wait before a retry, doubled after each failure. */
 export const FIRST_RETRY_DELAY_MS = 1_000;
@@ -49,8 +53,6 @@ interface RetryState {
   inFlight: string[];
   /** Moved on by each withdrawal, so an attempt begun before one changes nothing after it. */
   generation: number;
-  /** When each kept tag was last refused, on this process's clock. */
-  refusedAt: Map<string, number>;
 }
 
 // One per process, across module copies, like the hand-off it retries into.
@@ -66,10 +68,7 @@ function state(): RetryState {
     held: 0,
     inFlight: [],
     generation: 0,
-    refusedAt: new Map(),
   };
-  // A copy of this module from before `refusedAt` was kept may have made it.
-  globalForRetry.__nextly_record_retry.refusedAt ??= new Map();
   return globalForRetry.__nextly_record_retry;
 }
 
@@ -80,8 +79,6 @@ function state(): RetryState {
 export function holdFailedRecord(tags: string[]): void {
   holdForNextFlush(tags);
   const retry = state();
-  const now = Date.now();
-  for (const tag of tags) retry.refusedAt.set(tag, now);
   // The failure was an attempt: a read waits the backoff from it too.
   retry.lastAttemptAt = Date.now();
   retry.held += 1;
@@ -147,14 +144,10 @@ async function attempt(retry: RetryState): Promise<void> {
   // again would only move its expiry on, and refuse what other instances
   // regenerated since.
   const kept = takePendingExpiries();
-  const tags = kept.filter(tag => {
-    const refused = retry.refusedAt.get(tag);
-    if (refused !== undefined && recordLandedSince(tag, refused)) {
-      retry.refusedAt.delete(tag);
-      return false;
-    }
-    return true;
-  });
+  const tags = kept.filter(tag => !refusalLanded(tag));
+  // What landed is acted on; so are the refusals of tags another flush took
+  // and recorded meanwhile, which no retry would otherwise come back to.
+  forgetLandedRefusals();
   if (tags.length === 0) {
     // Every kept expiry landed late: the retries end as if this one had
     // recorded them, and are said to.
@@ -170,7 +163,7 @@ async function attempt(retry: RetryState): Promise<void> {
   if (retry.generation !== generation) return;
   retry.inFlight = [];
   if (outcome === "recorded") {
-    for (const tag of tags) retry.refusedAt.delete(tag);
+    forgetLandedRefusals();
     if (finish(retry, heldBefore)) recovered(kept.length);
     return;
   }
