@@ -38,7 +38,9 @@ an item already deleted, and a folder delete never moves or removes an item wait
 - An item deleted at once (the delete route, a bulk delete, `nextly.media.delete`) while an earlier
   delete's Undo was open is answered by that Undo as already deleted, not restored.
 - Deleting a folder while an item in it is being deleted with Undo is refused (409) even when the
-  delete with Undo started a moment after the folder was checked, with or without its contents.
+  delete with Undo started a moment after the folder was checked, with or without its contents, and
+  nothing in the folder is removed or moved. A folder delete and a delete with Undo over the same
+  items wait for each other rather than failing with a database deadlock.
 - Switching between All media, Missing alt text and Unused, changing folder, searching or filtering
   by type clears the selection, so a bulk delete or move acts only on files on screen.
 - Used in reads only the usage rows of the documents on the page, however many Singles use the item.
