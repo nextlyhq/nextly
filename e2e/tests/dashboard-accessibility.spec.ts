@@ -202,25 +202,43 @@ function drawnColours(node: Element) {
     width: Number.parseFloat(style.getPropertyValue(`${kind}-width`)),
     color: over(rgba(style.getPropertyValue(`${kind}-color`)), backdrop),
   });
+  // A frame drawn by the element's `::after` box (a row that marks focus inside its own edges),
+  // when that box is drawn at all.
+  const after = getComputedStyle(node, "::after");
+  const frame =
+    after.content === "none" || after.content === "normal"
+      ? null
+      : {
+          style: after.borderTopStyle,
+          width: Number.parseFloat(after.borderTopWidth),
+          color: over(rgba(after.borderTopColor), backdrop),
+        };
   return {
     backdrop,
     border: line("border-top"),
     outline: line("outline"),
     rings,
+    frame,
   };
 }
 
 /**
  * The colours of every focus indicator `node` draws, each against what is behind it: an outline
- * with a width, each ring of its box shadow, and its border.
+ * with a width, each ring of its box shadow, the frame its `::after` box draws, and its border.
  */
 function indicatorsOf(drawn: ReturnType<typeof drawnColours>) {
   const outline =
     drawn.outline.style !== "none" && drawn.outline.width > 0
       ? [drawn.outline.color]
       : [];
+  const frame =
+    drawn.frame !== null &&
+    drawn.frame.style !== "none" &&
+    drawn.frame.width > 0
+      ? [drawn.frame.color]
+      : [];
   return {
-    marks: [...outline, ...drawn.rings],
+    marks: [...outline, ...drawn.rings, ...frame],
     border:
       drawn.border.style !== "none" && drawn.border.width > 0
         ? drawn.border.color
@@ -281,6 +299,48 @@ async function expectDrawnIndicator(
       }
     )
     .toBeGreaterThanOrEqual(3);
+}
+
+/** Where a row's `::after` frame is drawn, read in the page: its position, insets and box. */
+function frameGeometry(row: Element) {
+  const after = getComputedStyle(row, "::after");
+  const px = (value: string) => Number.parseFloat(value);
+  const box = row.getBoundingClientRect();
+  // The padding box the frame is placed in when the row is its containing block.
+  const left = box.left + row.clientLeft + px(after.left);
+  const top = box.top + row.clientTop + px(after.top);
+  const icon = row.querySelector("svg")?.getBoundingClientRect();
+  const input = row.querySelector("input")?.getBoundingClientRect();
+  return {
+    position: after.position,
+    insets: [after.top, after.right, after.bottom, after.left].map(px),
+    // The frame's own box (border-box sizing), and the row's padding box less the insets.
+    frame: { left, top, width: px(after.width), height: px(after.height) },
+    room: {
+      width: row.clientWidth - px(after.left) - px(after.right),
+      height: row.clientHeight - px(after.top) - px(after.bottom),
+    },
+    iconLeft: icon?.left ?? Number.NaN,
+    inputRight: input?.right ?? Number.NaN,
+  };
+}
+
+/**
+ * The search row's frame is drawn around the row, not merely somewhere in it: an absolutely
+ * placed `::after` box, inset 4px on every side (so it never meets the menu's edges), filling
+ * the row's own padding box (so the row, not an ancestor, is what it is placed in), from before
+ * the magnifier to past the search field. Judged apart from its colour, so a failure says which.
+ */
+async function expectFramedRow(row: Locator): Promise<void> {
+  const at = await row.evaluate(frameGeometry);
+  expect(at.position, "the frame is an absolutely placed box").toBe("absolute");
+  for (const inset of at.insets) expect(inset).toBeCloseTo(4, 0);
+  expect(Math.abs(at.frame.width - at.room.width)).toBeLessThanOrEqual(2);
+  expect(Math.abs(at.frame.height - at.room.height)).toBeLessThanOrEqual(2);
+  expect(at.frame.left).toBeLessThanOrEqual(at.iconLeft + 2);
+  expect(at.frame.left + at.frame.width).toBeGreaterThanOrEqual(
+    at.inputRight - 2
+  );
 }
 
 /** Whether focus is anywhere inside `within`. */
@@ -599,6 +659,8 @@ const newCaret = (page: Page) =>
   page.getByRole("button", { name: "Choose what to create" });
 const newMenuOf = (page: Page) =>
   page.getByRole("dialog", { name: "Choose what to create" });
+/** The menu's search row: the box around the magnifier and the search field (cmdk's wrapper). */
+const searchRow = (menu: Locator) => menu.locator("[cmdk-input-wrapper]");
 
 for (const theme of ["light", "dark"] as Theme[]) {
   test(`the header and its New menu pass axe (${theme})`, async ({ page }) => {
@@ -644,8 +706,9 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
     search,
     "the playground's types fit in ten, so the menu offers no search"
   ).toBeFocused();
-  // Focus in the search is drawn, not only a caret: the shared input removes its outline.
-  await expectVisibleFocus(search);
+  // Focus in the search is drawn, not only a caret: on the whole search row, magnifier included.
+  await expectFramedRow(searchRow(menu));
+  await expectDrawnIndicator(searchRow(menu));
   await page.keyboard.type("p");
   const options = menu.getByRole("option");
   await expect.poll(() => options.count()).toBeGreaterThan(1);
@@ -695,7 +758,9 @@ for (const [theme, primary] of [
     const search = menu.getByRole("combobox", {
       name: "Search types to create",
     });
-    await expectVisibleFocus(search);
+    await expect(search).toBeFocused();
+    await expectFramedRow(searchRow(menu));
+    await expectDrawnIndicator(searchRow(menu));
     await page.keyboard.type("p");
     await page.keyboard.press("ArrowDown");
     const active = await search.getAttribute("aria-activedescendant");
