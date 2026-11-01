@@ -28,6 +28,53 @@ import {
 /** How long a tag's answer from the ledger is reused before it is asked again. */
 export const TAG_LOOKUP_TTL_MS = 5_000;
 
+/**
+ * The longest a ledger call is waited for. A database that takes connections
+ * but never answers would otherwise hold every cached read that asks it, and
+ * every write's record, for as long as it stays that way.
+ */
+export const LEDGER_CALL_TIMEOUT_MS = 5_000;
+
+/** What {@link withinLedgerBound} gives for a call that did not answer in time. */
+const NO_ANSWER = Symbol("no ledger answer");
+
+/** The two kinds of ledger call, each kept to one stuck call at a time. */
+type LedgerCall = "record" | "lookup";
+
+/**
+ * The answer of the call `start` makes, or {@link NO_ANSWER} once
+ * {@link LEDGER_CALL_TIMEOUT_MS} passes without one. The wait is bounded, but
+ * the query is not cancelled, and goes on holding its connection: so while one
+ * of this kind is given up on and still running, none is started, and the
+ * answer is {@link NO_ANSWER} at once.
+ */
+async function withinLedgerBound<T>(
+  view: ViewState,
+  kind: LedgerCall,
+  start: () => Promise<T>
+): Promise<T | typeof NO_ANSWER> {
+  if (view.stuck[kind] > 0) return NO_ANSWER;
+  const call = start();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<typeof NO_ANSWER>(resolve => {
+    timer = setTimeout(() => resolve(NO_ANSWER), LEDGER_CALL_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try {
+    const answer = await Promise.race([call, timedOut]);
+    if (answer === NO_ANSWER) {
+      view.stuck[kind] += 1;
+      const settled = () => {
+        view.stuck[kind] -= 1;
+      };
+      void call.then(settled, settled);
+    }
+    return answer;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 interface TagLookup {
   /** When the tag last expired, on the database's clock; 0 when it never has. */
   expiredAt: number;
@@ -53,6 +100,26 @@ interface ViewState {
    * cleared its registry rows at once).
    */
   mine: Map<string, number>;
+  /** The last record attempt's number: attempts are numbered as they start. */
+  recordSeq: number;
+  /**
+   * Per tag, the latest record attempt the ledger refused or did not answer,
+   * and when, on this process's clock.
+   */
+  refusals: Map<string, { seq: number; at: number }>;
+  /**
+   * Per tag, the latest record attempt that landed, whether it answered in
+   * time or after it was given up on. An attempt began after its write
+   * committed and read the database's time then, so one that landed covers
+   * every refused attempt begun no later than it.
+   */
+  landedSeq: Map<string, number>;
+  /**
+   * Ledger calls given up on and still running, by kind. While one is, no
+   * other of its kind starts: a database that does not answer would otherwise
+   * gather one more waiting query, and connection, at every retry and lookup.
+   */
+  stuck: Record<LedgerCall, number>;
   /** The database's clock less this process's, as of the last read that told it. */
   offsetMs: number;
   /** When stale answers were last dropped, on this process's clock. */
@@ -75,6 +142,10 @@ function state(): ViewState {
     asking: new Map(),
     own: new Map(),
     mine: new Map(),
+    recordSeq: 0,
+    refusals: new Map(),
+    landedSeq: new Map(),
+    stuck: { record: 0, lookup: 0 },
     offsetMs: 0,
     sweptAt: 0,
     lastLocal: 0,
@@ -83,7 +154,13 @@ function state(): ViewState {
   const view = globalForView.__nextly_tag_expiry_view;
   // A bundled or hot-reloaded copy keeps the state an older copy made, which
   // has no `mine`: given one here, the first record would otherwise throw.
-  return Object.assign(view, { mine: view.mine ?? new Map() });
+  return Object.assign(view, {
+    mine: view.mine ?? new Map(),
+    recordSeq: view.recordSeq ?? 0,
+    refusals: view.refusals ?? new Map<string, { seq: number; at: number }>(),
+    landedSeq: view.landedSeq ?? new Map<string, number>(),
+    stuck: view.stuck ?? { record: 0, lookup: 0 },
+  });
 }
 
 /** Publishes the ledger the handlers read and record into; `null` withdraws it. */
@@ -143,8 +220,14 @@ function sweep(view: ViewState, now: number): void {
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
+  for (const [tag, refusal] of view.refusals) {
+    if (refusal.at < horizon) view.refusals.delete(tag);
+  }
   for (const [tag, storedAt] of view.mine) {
-    if (storedAt < databaseHorizon) view.mine.delete(tag);
+    if (storedAt < databaseHorizon) {
+      view.mine.delete(tag);
+      view.landedSeq.delete(tag);
+    }
   }
 }
 
@@ -176,7 +259,31 @@ export async function refreshTagExpiries(
     const read = (async () => {
       const startedAt = Date.now();
       try {
-        const answer = await ledger.expiriesOf(stale);
+        const answer = await withinLedgerBound(view, "lookup", () =>
+          ledger.expiriesOf(stale)
+        );
+        if (answer === NO_ANSWER) {
+          warnOnce(
+            "the cache tag expiry ledger could not be read",
+            `no answer within ${LEDGER_CALL_TIMEOUT_MS} ms`
+          );
+          // Unlike a read that failed, which says the ledger is down, one that
+          // never answered may have been about to say these tags expired. So
+          // they count as expired when it was given up on: an entry begun
+          // before then is refused and read afresh, and one begun after it is
+          // served. The next lookup, a TTL later, says what the ledger holds.
+          const givenUpAt = Date.now();
+          for (const tag of stale) {
+            view.lookups.set(tag, {
+              expiredAt: Math.max(
+                view.lookups.get(tag)?.expiredAt ?? 0,
+                givenUpAt + view.offsetMs
+              ),
+              askedAt: givenUpAt,
+            });
+          }
+          return;
+        }
         const finishedAt = Date.now();
         // A read that found no rows carries no clock to learn from.
         if (answer?.now !== undefined) {
@@ -294,14 +401,110 @@ export async function expireTags(
   const view = state();
   const now = localNow();
   for (const tag of tags) view.own.set(tag, now);
-  if (view.ledger === undefined) return "no-ledger";
+  return record(view, tags, false);
+}
+
+/**
+ * Records `tags` again, for other instances, without expiring them in this
+ * process a second time: their expiry here is the one made when they were
+ * written, and an entry regenerated since then is fresh.
+ */
+export function recordExpiredTagsAgain(
+  tags: readonly string[]
+): Promise<ExpiryRecord> {
+  return record(state(), tags, true);
+}
+
+/** Writes `tags` to the ledger; `again` marks a retry of an earlier expiry. */
+async function record(
+  view: ViewState,
+  tags: readonly string[],
+  again: boolean
+): Promise<ExpiryRecord> {
+  const ledger = view.ledger;
+  if (ledger === undefined) return "no-ledger";
+  view.recordSeq += 1;
+  const seq = view.recordSeq;
   try {
-    const stored = await view.ledger.record(tags);
-    if (stored === false) return "no-table";
-    for (const [tag, at] of stored) view.mine.set(tag, at);
-    return "recorded";
+    // What a record that lands stores, even one given up on: a late one is
+    // the expiry this process judges by, and a retry need not make it again.
+    const answer = await withinLedgerBound(view, "record", () =>
+      ledger.record(tags).then(stored => {
+        if (stored === false) return stored;
+        for (const [tag, at] of stored) {
+          view.mine.set(tag, at);
+          view.landedSeq.set(tag, Math.max(view.landedSeq.get(tag) ?? 0, seq));
+        }
+        return stored;
+      })
+    );
+    if (answer === NO_ANSWER) {
+      refused(
+        view,
+        tags,
+        seq,
+        again,
+        `no answer within ${LEDGER_CALL_TIMEOUT_MS} ms`
+      );
+      return "failed";
+    }
+    return answer === false ? "no-table" : "recorded";
   } catch (error) {
-    warnOnce("the cache tag expiry ledger could not record an expiry", error);
+    refused(view, tags, seq, again, error);
     return "failed";
+  }
+}
+
+/**
+ * Says that the ledger refused `tags`: once as the ledger's state, and for a
+ * first attempt with its tags, so the content another instance may still
+ * serve stale can be named. A retry of tags already said is not, since the
+ * retry says when it begins and when it succeeds.
+ */
+function refused(
+  view: ViewState,
+  tags: readonly string[],
+  seq: number,
+  again: boolean,
+  error: unknown
+): void {
+  const at = Date.now();
+  for (const tag of tags) {
+    const before = view.refusals.get(tag)?.seq ?? 0;
+    view.refusals.set(tag, { seq: Math.max(before, seq), at });
+  }
+  warnOnce("the cache tag expiry ledger could not record an expiry", error);
+  if (again) return;
+  getNextlyLogger().warn({
+    kind: "cache-tag-record-failed",
+    message: `the cache tag expiry ledger refused the expiry of ${tags.join(", ")}; it is retried until recorded`,
+    tags: [...tags],
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/**
+ * Whether the latest refused record of `tag` is covered by one that landed
+ * since: that attempt itself, answering after it was given up on, or a later
+ * one. An earlier attempt landing late covers nothing: it read the database's
+ * time before the refused write's, which it may not have followed.
+ */
+export function refusalLanded(tag: string): boolean {
+  const view = state();
+  const refusal = view.refusals.get(tag);
+  return refusal !== undefined && (view.landedSeq.get(tag) ?? 0) >= refusal.seq;
+}
+
+/**
+ * Forgets the refusals a landed record covers, once the retry has acted on
+ * them, so tags another flush recorded leave nothing behind. Those not yet
+ * covered stay, and age out with the ledger's retention.
+ */
+export function forgetLandedRefusals(): void {
+  const view = state();
+  for (const [tag, refusal] of view.refusals) {
+    if ((view.landedSeq.get(tag) ?? 0) >= refusal.seq) {
+      view.refusals.delete(tag);
+    }
   }
 }

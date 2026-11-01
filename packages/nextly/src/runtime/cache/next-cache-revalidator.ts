@@ -37,6 +37,7 @@ import { consoleLogger } from "../../shared/types";
 import { loadNextModule, requireNextApi } from "../next-api";
 
 import { MAX_TAGS_PER_READ } from "./nextly-tags";
+import { holdFailedRecord } from "./record-retry";
 
 /** A Next `cacheLife`-style profile: `{ expire: 0 }` means expire immediately. */
 type CacheLifeProfile = string | { expire?: number };
@@ -428,8 +429,9 @@ export async function handOffWithin(
       consoleLogger.error(
         `[nextly] the cache expiry hand-off did not answer within ${HANDOFF_TIMEOUT_MS} ms: ${tags.join(", ")}`
       );
-      // It may still take them, but it may not: keep them for the next flush too.
-      holdForNextFlush(tags);
+      // It may still take them, but it may not: keep them for the next flush
+      // too, and retry them, since a quiet process may make no next flush.
+      holdFailedRecord(tags);
     }
   } catch (error) {
     consoleLogger.error(
