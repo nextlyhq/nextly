@@ -5,8 +5,8 @@
  * no case says so in place of its ready state and STILL draws every other
  * state (a section that bailed out on no case would show the message alone);
  * a case is drawn as its card draws a real answer (its value, in the card's
- * ready state, not the raw data); every size is drawn; and a card that draws
- * a state itself, with live data, is never mounted for that state.
+ * ready state, not the raw data); every size is drawn; and a card whose
+ * outcome for a state's answer is another state says so in its place.
  */
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ import type { WidgetPreview } from "../types";
 import { previewSizes, WidgetPreviewSection } from "../WidgetPreviewSection";
 import { NO_PREVIEW_CASE, NOT_REACHED } from "../WidgetPreviewState";
 
-// A self-drawn card's component reads live data, so it must never mount here.
+// A widget's own component is drawn only with an answer, so a state with none never mounts it.
 const pluginSlot = vi.fn((_props: { path: string }) => null);
 vi.mock("@admin/components/shared/plugin-slot", () => ({
   PluginSlot: (props: { path: string }) => pluginSlot(props),
@@ -37,7 +37,6 @@ const openOrders: DashboardWidget = {
   title: "Open orders",
   archetype: "metric",
   size: SIZE,
-  serverData: true,
   declaredEmpty: { title: "No open orders" },
 };
 
@@ -132,25 +131,25 @@ describe("a widget on the preview page", () => {
     expect(screen.queryByText(NO_PREVIEW_CASE)).toBeNull();
   });
 
-  it("never mounts a self-drawn card for a state it draws itself, and says so in its place", () => {
-    const content: DashboardWidget = {
-      id: "core/content-table",
-      title: "Content",
-      archetype: "custom",
-      component: "core#Content",
+  it("says so in its place where a card draws another state for the answer, as one this release cannot draw", () => {
+    const newer: DashboardWidget = {
+      id: "acme/sparkline",
+      title: "Sparkline",
+      archetype: "sparkline" as DashboardWidget["archetype"],
       size: SIZE,
     };
     render(
       <WidgetPreviewSection
-        preview={{ ...previewOf([]), id: content.id, title: content.title }}
-        definition={content}
+        preview={{ ...previewOf([]), id: newer.id, title: newer.title }}
+        definition={newer}
       />
     );
 
+    // Its loading answer resolves to the card's error, saying its archetype is not drawn.
     for (const wrapper of statesNamed("loading")) {
       expect(within(wrapper).getByText(NOT_REACHED)).toBeInTheDocument();
     }
-    // Its error and not-available states are the frame's, drawn without it.
+    // Its error state is the frame's, drawn as asked.
     for (const wrapper of statesNamed("error")) {
       expect(frameStateOf(wrapper)).toBe("error");
     }

@@ -129,6 +129,13 @@ const REMOVED_WIDGET_SHAPE_NAMES = [
   "WidgetStatCell",
   "WidgetQueryCell",
   "WidgetAction",
+  // The stats and custom cards' cell vocabulary, and the text card's bound.
+  "WIDGET_CELL_TIERS",
+  "WIDGET_CELL_CONDITIONS",
+  "WidgetCellTier",
+  "WidgetCellCondition",
+  "MAX_STAT_CELLS",
+  "MAX_TEXT_CONTENT",
   "WidgetPatch",
   "PluginAdminWidget",
   "PluginAdminCustomWidget",
@@ -151,24 +158,17 @@ const REMOVED_WIDGET_SHAPE_NAMES = [
 ];
 
 /**
- * The entry points the admin reads the registry's wire shapes from, and the
- * older names each still carries for it alone.
+ * The entry points the admin reads the batch's wire shapes from, and the older
+ * names each still carries for it alone.
  *
- * 🔴 Named, so the list can only shrink: core's Create card is still written
- * as a definition, so the admin reads the registry's definition shape, and
- * the admin still draws the stats, text and actions archetypes, whose cells
- * and actions it reads by these types. Every card's answer travels in the
- * batch's slot and response shapes, declared cards' included. Each name
- * leaves with the last reader that needs it. A name here on another entry
- * point, or a new entry, fails below.
+ * 🔴 Named, so the list can only shrink: every card is a declared one, asked
+ * for by its card in the dashboard's batch, and its answer travels in the
+ * batch's slot and response shapes, which the admin reads by these two names.
+ * Nothing of the definition shape is published any more: no entry point
+ * carries `WidgetDefinition` or the stats, text and actions archetypes' types.
+ * A name here on another entry point, or a new entry, fails below.
  */
 const ADMIN_WIRE_NAMES: Readonly<Record<string, readonly string[]>> = {
-  "nextly/config": [
-    "WidgetDefinition",
-    "WidgetAction",
-    "WidgetStatCell",
-    "WidgetQueryCell",
-  ],
   "nextly/widget-result": ["WidgetSlot", "WidgetQueryBatchResponse"],
 };
 

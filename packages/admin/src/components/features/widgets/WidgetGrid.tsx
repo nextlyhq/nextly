@@ -8,10 +8,10 @@
  * The grid is where the three cross-cutting decisions live, because none of
  * them can be made correctly by a widget on its own:
  *
- * - **Batching.** Every visible widget's query goes out together, so a
- *   dashboard costs one round trip rather than one per card.
- * - **Gating.** A widget the user may not see is dropped before its query is
- *   collected, so a denied card causes no request on their behalf.
+ * - **Batching.** Every visible card is asked for together, so a dashboard
+ *   costs one round trip rather than one per card.
+ * - **Gating.** A widget the user may not see is dropped before its card is
+ *   asked for, so a denied card causes no request on their behalf.
  * - **Announcement.** ONE live region for the whole grid, following
  *   `EntryForm/DocumentStatusLive`. Ten widgets each announcing their own
  *   refresh would interrupt each other, and a reader could not tell which
@@ -25,7 +25,6 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { PublishedContentSource } from "nextly/config";
 import {
   useMemo,
   useRef,
@@ -83,7 +82,6 @@ import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
 import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
-import { widgetAsAsked } from "./widget-as-asked";
 
 // At module scope, before any render. `PluginSlot` resolves a path DURING
 // render, so registering from an effect would land after the first paint and
@@ -153,54 +151,31 @@ function NothingToDraw({
 }
 
 /**
- * The cards the batch asks for, with each reader's own settings applied.
+ * The cards the batch asks for, each with the size it is drawn at.
  *
- * Applied HERE rather than inside the batch, because the stored config belongs
- * to the placement and the batch has no reason to read a layout. The ROW is
- * carried through rather than the widget alone, so the answer comes back keyed
- * to the placement that asked: the same widget placed twice with different
- * settings asks two different questions, and keying those by widget filed both
- * under one entry.
- *
- * Through `widgetAsAsked`, the rule the card is also drawn from, which returns the
- * widget it was given when nothing applies, so a card with no settings keeps its
- * identity through this map and the batch's memoisation does not see a new
- * object every render.
+ * The ROW is carried through rather than the widget alone, so the answer comes
+ * back keyed to the placement that asked: the same widget placed twice with
+ * different settings asks two different questions, and keying those by widget
+ * filed both under one entry. A row the dashboard has no width for is passed
+ * through as it is, so a card with nothing to size keeps its identity through
+ * this map and the batch's memoisation does not see a new object every render.
  */
 function askedWith(
   rows: ArrangedWidget[],
   dashboardWidth: number | undefined,
-  editing: boolean,
-  sources: readonly PublishedContentSource[] | undefined
+  editing: boolean
 ): Array<
   ArrangedWidget & { tier?: SizeTier; h?: number; w?: number; editing?: true }
 > {
   return rows.map(row => {
-    // The tier the card will be drawn at, from the dashboard's width and the card's drawn span,
-    // and the height its rows are counted from: the query is asked before the card can measure
-    // itself, and sized for both.
+    // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
+    // the card is asked before it can measure itself. A card is asked by its id at rest, and
+    // with the settings it is drawn with while customising, when they may not be saved yet;
+    // with the size it is drawn at, which its widget's `load` is handed (`cardAskFor`).
     const size = drawnSize(row.size, row.widget.size);
     const tier = predictedTier(size.w, dashboardWidth);
-    // A card core answers on the server is asked by its id at rest, and with
-    // the settings it is drawn with while customising, when they may not be
-    // saved yet (see `questionsFor`); with the size it is drawn at, which its
-    // widget's `load` is handed (`cardAskFor`).
-    if (row.widget.serverData === true) {
-      const drawn = tier ? { ...row, tier, w: size.w, h: size.h } : row;
-      return editing ? { ...drawn, editing: true as const } : drawn;
-    }
-    const sized = tier ? { ...row, tier, h: size.h } : row;
-    const widget = widgetAsAsked(row.widget, row.config, sources);
-    // The declared query, or cells, travel with the asked ones, so the batch keys the card by
-    // what it declares and a change of its settings asks this card again alone.
-    return widget === row.widget
-      ? sized
-      : {
-          ...sized,
-          widget,
-          declaredQuery: row.widget.query,
-          declaredCells: row.widget.cells,
-        };
+    const drawn = tier ? { ...row, tier, w: size.w, h: size.h } : row;
+    return editing ? { ...drawn, editing: true as const } : drawn;
   });
 }
 
@@ -240,12 +215,12 @@ function useBatchToken(
 const NO_CARDS: [] = [];
 
 /**
- * The element the dashboard's width is measured from, the one batch of the cards' queries, and
- * dragging the cards.
+ * The element the dashboard's width is measured from, the one batch of the cards, and dragging
+ * the cards.
  *
- * Each query is sized for the tier it will be drawn at. The width is measured before the first
- * paint, and no card is asked before it is known, so every first query is sized for its card's
- * tier. Dragging is decided from the same width: on wherever more than one column is drawn.
+ * Each card is asked for at the size it will be drawn at. The width is measured before the first
+ * paint, and no card is asked before it is known, so every first ask carries its card's size.
+ * Dragging is decided from the same width: on wherever more than one column is drawn.
  * The batch is asked under the token of `layout`, the layout answer the cards are drawn from.
  */
 function useCardsAtDashboardWidth(
@@ -259,15 +234,12 @@ function useCardsAtDashboardWidth(
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
-  // The collections the reader may read, with their fields: what a card's content settings are
-  // asked against.
-  const sources = useBranding().widgetSources;
   const cards = useMemo(
     () =>
       dashboardWidth === undefined
         ? NO_CARDS
-        : askedWith(visible, dashboardWidth, editing, sources),
-    [visible, dashboardWidth, editing, sources]
+        : askedWith(visible, dashboardWidth, editing),
+    [visible, dashboardWidth, editing]
   );
   // Cards whose own component threw drawing a fine answer, counted as failed.
   const draws = useDrawFailures();
@@ -501,7 +473,7 @@ function CardContexts({
  * - **The arrangement still on its way:** no card, no card's data, and one status where the grid
  *   will be. Nothing sits below the grid, so the cards arriving in its place move nothing that
  *   was already drawn. Inside the measured container all the same: the dashboard's width is
- *   observed from the element mounted first, and a card's first query waits for that width, so
+ *   observed from the element mounted first, and a card's first ask waits for that width, so
  *   a container drawn only once the arrangement lands would never be measured and no card would
  *   ever be asked for.
  */
@@ -595,11 +567,10 @@ export function WidgetGrid(): JSX.Element {
     dashboardWidth,
     drag,
     slots,
-    cellSlots,
     fetchingPlacementIds,
     updatedAtFor,
     answeredAtFor,
-    fetchedSizeFor,
+    fetchedAskFor,
     requested,
     counted,
     failed,
@@ -728,11 +699,11 @@ export function WidgetGrid(): JSX.Element {
                     settings: settingsWrite,
                   }}
                   slots={slots}
-                  cellSlots={cellSlots}
                   requested={requested}
                   updatedAtFor={updatedAtFor}
                   answeredAtFor={answeredAtFor}
-                  fetchedSizeFor={fetchedSizeFor}
+                  // Each card's held answer is drawn by the size and density it was fetched at.
+                  fetchedAskFor={fetchedAskFor}
                   fetchingPlacementIds={fetchingPlacementIds}
                   retry={retry}
                   announcement={announcement}

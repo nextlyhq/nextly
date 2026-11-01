@@ -33,7 +33,6 @@ describe("a widget's card for a test", () => {
     expect(last().definition).toMatchObject({
       id: "acme/open-orders",
       archetype: "metric",
-      serverData: true,
     });
     expect(last().slot).toBeUndefined();
   });

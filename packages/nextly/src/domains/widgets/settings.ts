@@ -698,38 +698,6 @@ function dependencyProblems(
 }
 
 /**
- * Why a widget's Fields setting cannot work on what it asks, or `undefined`:
- * only a list returns rows for its fields to fill. On a grouped or timeseries
- * query a chosen field would be refused by the query's own check, and on a
- * count it would be ignored, so a control that breaks the card or changes
- * nothing is never offered. A widget whose data core builds on the server
- * (`serverData`) asks no query here: its own `load` reads the setting, as
- * `widgetSettingsProblem` admits its other content settings.
- */
-export function fieldsSettingQueryProblem(widget: {
-  settings?: unknown;
-  query?: unknown;
-  serverData?: unknown;
-}): string | undefined {
-  if (!Array.isArray(widget.settings)) return undefined;
-  if (widget.serverData === true) return undefined;
-  const fields = (widget.settings as unknown[]).find(
-    (setting): setting is { name: unknown } =>
-      typeof setting === "object" &&
-      setting !== null &&
-      (setting as { type?: unknown }).type === "fields"
-  );
-  if (fields === undefined) return undefined;
-  const op =
-    typeof widget.query === "object" && widget.query !== null
-      ? (widget.query as { op?: unknown }).op
-      : undefined;
-  return op === "list"
-    ? undefined
-    : `setting ${quote(fields.name)} is a Fields setting, which only a list query's rows can show; this widget asks ${quote(op)}`;
-}
-
-/**
  * The fault for a setting that is not an object at all. Named so a caller that
  * can say which setting it was, as a declaration keyed by name can, puts its
  * own words in place of this one.
@@ -1215,7 +1183,7 @@ export interface KnobSource {
  *
  * @experimental The shape may grow while the content widgets are built.
  */
-export function knobSourceFor(id: string): KnobSource {
+function knobSourceFor(id: string): KnobSource {
   const filters = getSource(id)?.filters;
   return filters === undefined ? { id } : { id, filters: [...filters] };
 }
@@ -1291,18 +1259,6 @@ function filterOnlyCellSetting(
 }
 
 /** The knob source a query declares, or `undefined` when it names none. */
-/**
- * Whether a knob drives `setting` on `query`, the source it declares or none
- * yet: the table's own answer, for a rule that must know which of a widget's
- * queries a setting reaches, not merely that some knob takes it.
- */
-export function drivesQuery(
-  setting: AnyWidgetSetting,
-  query: unknown
-): boolean {
-  return knobFor(setting, declaredKnobSource(query)) !== undefined;
-}
-
 function declaredKnobSource(query: unknown): KnobSource | undefined {
   const source =
     typeof query === "object" && query !== null

@@ -3,8 +3,8 @@
  * endpoint would place for them, through the real catch-all handler and the
  * real permission decision.
  *
- * A widget declaration is its whole content: a `text` widget carries its
- * prose. Filtering the payload in the browser is not a control -- the JSON is
+ * A widget declaration is its whole content: its description is prose a
+ * reader is told. Filtering the payload in the browser is not a control -- the JSON is
  * what a signed-in caller can fetch -- so this asserts the WIRE: a caller
  * lacking a widget's gate never receives its declaration, and a caller holding
  * it does. The caller is an API key rather than a session
@@ -57,7 +57,7 @@ const PINNED_TO_EVENTS: NonNullable<WidgetDefinition["settings"]>[number] = {
   defaultValue: EVENTS,
 };
 
-/** The prose the gated cards carry -- what must never reach the wrong reader. */
+/** The prose the gated cards describe themselves with -- what must never reach the wrong reader. */
 const RUNBOOK = "## Runbook\n\nRotate the keys before a release.";
 const EDITORS_ONLY = "Editors: the queue drains at midnight.";
 
@@ -81,42 +81,42 @@ const NOTES_WIDGETS: WidgetDefinition[] = [
   {
     id: "notes/welcome",
     title: "Welcome",
-    archetype: "text",
+    archetype: "metric",
     size: { default: { w: 4, h: 3 } },
-    content: "Welcome to the notes desk.",
+    description: "Welcome to the notes desk.",
   },
   // Gated on a grant the read-only key HOLDS.
   {
     id: "notes/runbook",
     title: "Runbook",
-    archetype: "text",
+    archetype: "metric",
     size: { default: { w: 4, h: 3 } },
     requiredPermission: `read-${NOTES}`,
-    content: RUNBOOK,
+    description: RUNBOOK,
   },
   // Gated on a grant it LACKS.
   {
     id: "notes/editors",
     title: "For editors",
-    archetype: "text",
+    archetype: "metric",
     size: { default: { w: 4, h: 3 } },
     requiredPermission: `create-${NOTES}`,
-    content: EDITORS_ONLY,
+    description: EDITORS_ONLY,
   },
-  // Shortcuts, each with its own gate or none.
+  // An empty state whose action carries a gate of its own.
   {
     id: "notes/shortcuts",
     title: "Shortcuts",
-    archetype: "actions",
+    archetype: "list",
     size: { default: { w: 3, h: 2 } },
-    actions: [
-      { label: "All notes", href: "/admin/collections/notes" },
-      {
+    empty: {
+      message: "No drafts waiting",
+      action: {
         label: "Publish queue",
-        href: "/admin/collections/notes?status=draft",
+        link: "/admin/collections/notes?status=draft",
         requiredPermission: `publish-${NOTES}`,
       },
-    ],
+    },
   },
   // Its Collection setting defaults to events, which a key holding only
   // read on notes may not read.
@@ -125,16 +125,15 @@ const NOTES_WIDGETS: WidgetDefinition[] = [
     title: "Pinned",
     archetype: "metric",
     size: { default: { w: 3, h: 2 } },
-    query: { source: `collection:${NOTES}`, op: "count" },
     settings: [PINNED_TO_EVENTS],
   },
 ];
 
 interface WorkspaceDeclaration {
   id: string;
-  content?: string;
+  description?: string;
   settings?: { name: string; defaultValue?: unknown }[];
-  actions?: { label: string; requiredPermission?: string }[];
+  empty?: { message?: string; action?: { label: string } };
 }
 
 interface WorkspaceBody {
@@ -207,10 +206,10 @@ beforeEach(async () => {
     {
       id: "app/ops-notes",
       title: "Ops notes",
-      archetype: "text",
+      archetype: "metric",
       size: { default: { w: 4, h: 3 } },
       requiredPermission: `create-${NOTES}`,
-      content: EDITORS_ONLY,
+      description: EDITORS_ONLY,
     },
     { source: "@test/app" }
   );
@@ -218,9 +217,9 @@ beforeEach(async () => {
     {
       id: "app/board",
       title: "Board",
-      archetype: "text",
+      archetype: "metric",
       size: { default: { w: 4, h: 3 } },
-      content: "The board meets on Mondays.",
+      description: "The board meets on Mondays.",
     },
     { source: "@test/app" }
   );
@@ -228,16 +227,16 @@ beforeEach(async () => {
     {
       id: "app/tools",
       title: "Tools",
-      archetype: "actions",
+      archetype: "list",
       size: { default: { w: 3, h: 2 } },
-      actions: [
-        { label: "Search", href: "/admin/search" },
-        {
+      empty: {
+        message: "Nothing to publish",
+        action: {
           label: "Bulk publish",
-          href: "/admin/bulk",
+          link: "/admin/bulk",
           requiredPermission: `publish-${NOTES}`,
         },
-      ],
+      },
     },
     { source: "@test/app" }
   );
@@ -358,17 +357,17 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
       ])
     );
 
-    // Then the absences, and on the CONTENT rather than only the id: the whole
+    // Then the absences, and on the PROSE rather than only the id: the whole
     // declaration is what must not ship.
     const declarations = everyDeclaration(body);
     expect(ids(declarations)).not.toContain("notes/editors");
     expect(ids(declarations)).not.toContain("app/ops-notes");
-    expect(declarations.map(widget => widget.content)).not.toContain(
+    expect(declarations.map(widget => widget.description)).not.toContain(
       EDITORS_ONLY
     );
     // And the prose they MAY read is there, which is what separates a gate
-    // from a projection that dropped `content` on the way out.
-    expect(declarations.map(widget => widget.content)).toContain(RUNBOOK);
+    // from a projection that dropped `description` on the way out.
+    expect(declarations.map(widget => widget.description)).toContain(RUNBOOK);
   });
 
   it("withholds a Collection setting's default naming a collection the reader may not read", async () => {
@@ -378,7 +377,6 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
         title: "Pinned",
         archetype: "metric",
         size: { default: { w: 3, h: 2 } },
-        query: { source: `collection:${NOTES}`, op: "count" },
         settings: [
           {
             name: "source",
@@ -420,27 +418,29 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(defaults(holding)).toEqual([EVENTS, EVENTS]);
   });
 
-  it("withholds an action whose own gate the reader lacks", async () => {
-    // 🔴 A shortcut is a label and an href. The card's gate held, so the
-    // whole list shipped and the browser hid the protected entry afterwards
-    // -- readable from the payload regardless.
+  it("withholds an empty-state action whose own gate the reader lacks", async () => {
+    // 🔴 The action is a label and a link. The card's gate held, so the
+    // whole empty state shipped and the browser hid the protected action
+    // afterwards -- readable from the payload regardless.
     const lacking = await workspaceFor(await keyHolding([`read-${NOTES}`]));
-    const labels = (body: WorkspaceBody, id: string) =>
-      everyDeclaration(body)
-        .find(widget => widget.id === id)
-        ?.actions?.map(action => action.label);
-    expect(labels(lacking, "notes/shortcuts")).toEqual(["All notes"]);
-    expect(labels(lacking, "app/tools")).toEqual(["Search"]);
+    const empty = (body: WorkspaceBody, id: string) =>
+      everyDeclaration(body).find(widget => widget.id === id)?.empty;
+    // The card itself ships, its message with it; only the action is withheld.
+    expect(empty(lacking, "notes/shortcuts")).toEqual({
+      message: "No drafts waiting",
+    });
+    expect(empty(lacking, "app/tools")).toEqual({
+      message: "Nothing to publish",
+    });
 
-    // The control: the grant held, the same lists are whole.
+    // The control: the grant held, the same empty states are whole.
     const holding = await workspaceFor(
       await keyHolding([`read-${NOTES}`, `publish-${NOTES}`])
     );
-    expect(labels(holding, "notes/shortcuts")).toEqual([
-      "All notes",
-      "Publish queue",
-    ]);
-    expect(labels(holding, "app/tools")).toEqual(["Search", "Bulk publish"]);
+    expect(empty(holding, "notes/shortcuts")?.action?.label).toBe(
+      "Publish queue"
+    );
+    expect(empty(holding, "app/tools")?.action?.label).toBe("Bulk publish");
   });
 
   it("ships the same declarations to a reader holding the grant", async () => {
@@ -459,7 +459,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
         "app/ops-notes",
       ])
     );
-    expect(everyDeclaration(body).map(widget => widget.content)).toContain(
+    expect(everyDeclaration(body).map(widget => widget.description)).toContain(
       EDITORS_ONLY
     );
   });
@@ -523,11 +523,11 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(body.widgetAudience).toBe(layout.audience);
   });
 
-  it("carries a different token for a reader told about different cards, or only different shortcuts", async () => {
+  it("carries a different token for a reader told about different cards, or only a different empty-state action", async () => {
     // The must-differ controls: a token that never moved would satisfy the
-    // equality above. The second key differs from the first only in a
-    // SHORTCUT's grant -- the same cards -- which is the change a token of the
-    // cards alone could not report.
+    // equality above. The second key differs from the first only in an
+    // empty-state ACTION's grant -- the same cards -- which is the change a
+    // token of the cards alone could not report.
     const base = await workspaceFor(await keyHolding([`read-${NOTES}`]));
     const moreCards = await workspaceFor(
       await keyHolding([`read-${NOTES}`, `create-${NOTES}`])

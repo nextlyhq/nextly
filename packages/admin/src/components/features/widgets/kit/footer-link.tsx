@@ -2,10 +2,9 @@
  * `Widget.FooterLink`: a link a widget's own view draws in its card's footer, where core's own
  * cards draw theirs ("View all" on a list), never under its body.
  *
- * Through the frame's one footer slot (`CardFooterContent`), so it takes the place of the
- * widget's own link while it is drawn and the footer holds one link, and in the footer link's own
- * style (`CARD_FOOTER_LINK_CLASS`), so it reads as every other card's. Outside a frame (a preview,
- * a test drawing a body alone) it is drawn where it stands.
+ * Through the frame's one footer slot (`CardFooterContent`), so the footer holds one link, and
+ * in the footer link's own style (`CARD_FOOTER_LINK_CLASS`), so it reads as every other card's.
+ * Outside a frame (a preview, a test drawing a body alone) it is drawn where it stands.
  *
  * @module components/features/widgets/kit/footer-link
  */

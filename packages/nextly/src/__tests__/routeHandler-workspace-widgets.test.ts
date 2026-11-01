@@ -85,7 +85,6 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         title: "Revenue",
         archetype: "metric",
         size: { default: { w: 3, h: 2 } },
-        query: { source: "collection:orders", op: "count" },
       },
       { source: "@acme/stripe" }
     );
@@ -104,7 +103,6 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         title: "Revenue",
         archetype: "metric",
         size: { default: { w: 3, h: 2 } },
-        query: { source: "collection:orders", op: "count" },
       })
     );
 
@@ -114,7 +112,7 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
     // grant at all, so the core cards with a gate are withheld, exactly as the
     // layout endpoint would withhold them: a declaration ships to a reader only
     // when the reader may see the card.
-    // Core's cards as core published them, declarations and definitions alike.
+    // Core's cards as core published them from their declarations.
     const core = CORE_WIDGET_IDS.flatMap(id => {
       const widget = getWidget(id);
       return widget === undefined ? [] : [widget];

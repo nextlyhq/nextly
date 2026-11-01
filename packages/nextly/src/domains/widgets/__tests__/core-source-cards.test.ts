@@ -22,6 +22,7 @@ import { continueWidget } from "../core-widgets/continue";
 import { teamWidget } from "../core-widgets/team";
 import { teamActivityWidget } from "../core-widgets/team-activity";
 import { upcomingReleasesWidget } from "../core-widgets/upcoming-releases";
+import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import { widgetDeclarationFaults } from "../declaration/validate";
 import { widgetGateHolds } from "../gate";
 import type { WidgetQuery } from "../query";
@@ -240,7 +241,8 @@ describe("as core publishes them", () => {
       const published = getWidget(id);
       return [
         id,
-        published?.serverData,
+        // Answered on the server from the declaration core keeps for it.
+        declaredWidget(id)?.owner === CORE_OWNER,
         published?.lifecycle,
         published?.visibleWhen,
       ];

@@ -111,7 +111,10 @@ const BOUNDED = {
   max: { w: 8, h: 4 },
 };
 
-/** Registered widgets, drawn by a component so no query is issued. */
+/**
+ * Registered widgets, each drawn by its own component, which this file registers: every card is
+ * asked for by its id and answered (see the `post` stand-in below).
+ */
 function branding(
   ids: string[],
   patch: Record<string, Record<string, unknown>> = {}
@@ -190,10 +193,24 @@ function renderGrid() {
   };
 }
 
+// The cards' own component, so each card draws its answer rather than a missing component's
+// error, which the grid would count and announce as a failure.
+registerCoreComponent("core#Whatever", () => <p>Body</p>);
+
 beforeEach(() => {
   // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
   stubDashboardWidth();
   vi.clearAllMocks();
+  // Every card answered with data of nothing in particular, so its component draws; a case
+  // about what a card shows answers its own.
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    Promise.resolve({
+      results: (body as { queries: unknown[] }).queries.map(() => ({
+        ok: true,
+        result: { op: "data", data: null },
+      })),
+    })
+  );
   layoutRejects = false;
   mockBranding = branding(["core/a", "core/b", "core/c"]);
   layoutResponse = layout([
@@ -774,7 +791,26 @@ describe("dragging a card from the keyboard", () => {
   });
 });
 
+/**
+ * Answers the dashboard's first batch and leaves every batch after it on its way, so the grid's
+ * live region says only what the reader's own change did, never a later batch's news beside it.
+ */
+function answerFirstBatchOnly(): void {
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    api.post.mock.calls.length > 1
+      ? new Promise(() => undefined)
+      : Promise.resolve({
+          results: (body as { queries: unknown[] }).queries.map(() => ({
+            ok: true,
+            result: { op: "data", data: null },
+          })),
+        })
+  );
+}
+
 describe("removing a card", () => {
+  beforeEach(answerFirstBatchOnly);
+
   it("takes it off the grid, says so, and offers Undo", async () => {
     renderGrid();
     const user = await beginEditing();
@@ -1336,6 +1372,7 @@ describe("a conflict", () => {
 
 describe("resetting to the default dashboard", () => {
   beforeEach(() => {
+    answerFirstBatchOnly();
     layoutResponse = layout(
       [
         { id: "p3", widgetId: "core/c", w: 3, h: 3 },
@@ -1783,7 +1820,6 @@ describe("an arrangement whose every card is not shown for its reader", () => {
       "acme/posts": {
         archetype: "list",
         component: undefined,
-        query: { source: "collection:posts", op: "list", select: ["title"] },
       },
     });
     layoutResponse = layout([{ id: "p1", widgetId: "acme/posts" }]);

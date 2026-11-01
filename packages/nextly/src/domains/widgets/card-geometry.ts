@@ -27,8 +27,7 @@
  * @internal
  */
 
-import type { WidgetCellTier } from "./definition";
-import { GRID_COLUMNS, type GridSize } from "./grid-size";
+import { GRID_COLUMNS, type CardTier, type GridSize } from "./grid-size";
 import { MAX_WIDGET_ROWS, type ListDensity } from "./query-limits";
 
 /**
@@ -255,7 +254,7 @@ export function cardOuterWidth(w: number, dashboardWidth: number): number {
  *
  * @internal
  */
-export function tierOfWidth(width: number): WidgetCellTier {
+export function tierOfWidth(width: number): CardTier {
   if (width < SMALL_TIER_BELOW_PX) return "small";
   return width >= LARGE_TIER_FROM_PX ? "large" : "medium";
 }
@@ -269,6 +268,6 @@ export function tierOfWidth(width: number): WidgetCellTier {
  *
  * @internal
  */
-export function cardTierAt(w: number, dashboardWidth: number): WidgetCellTier {
+export function cardTierAt(w: number, dashboardWidth: number): CardTier {
   return tierOfWidth(cardOuterWidth(w, dashboardWidth));
 }

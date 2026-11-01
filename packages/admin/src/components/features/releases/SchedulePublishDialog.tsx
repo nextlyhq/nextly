@@ -242,9 +242,10 @@ function useSchedulingRequest({
   const returnTo = useRef(opener);
   const schedule = useScheduleDocument(document);
   // This dialog's request, or one for the same document from a dialog
-  // before it: the cache keeps that one after its dialog is gone.
-  const { inFlight, inFlightNow } = useSchedulingInFlight(document);
-  const sending = inFlight || schedule.isPending;
+  // before it: every send runs under the document's key, so the cache's
+  // answer covers this dialog's own request too, and is the only one read,
+  // so the dialog and the action's hold never disagree.
+  const { inFlight: sending, inFlightNow } = useSchedulingInFlight(document);
 
   /*
    * Closing is refused while the request is out. The step makes a new

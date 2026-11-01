@@ -12,6 +12,7 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { toDefinition } from "./declaration/declared-widgets";
 import type { TransportableValue } from "./declaration/transportable";
 import type { GridSize } from "./grid-size";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
@@ -292,6 +293,17 @@ export function settingInSentence(label: string): string {
 export function noSettingChosen(label: string): string {
   return `No ${settingInSentence(label)} chosen yet`;
 }
+
+/**
+ * The widget as `/admin-meta/workspace` serves it to the admin: one entry of the
+ * workspace payload's `widgets`. Never written by a widget author; declare a
+ * widget with `defineWidget`.
+ *
+ * Derived from the function the registry publishes every widget through
+ * (`toDefinition`), so the admin reads the shape the server actually sends and
+ * the two cannot drift. A type only: importing it adds nothing to a bundle.
+ */
+export type PublishedWidget = ReturnType<typeof toDefinition>;
 
 /**
  * One slot of the dashboard batch response: what ONE widget's query answered.

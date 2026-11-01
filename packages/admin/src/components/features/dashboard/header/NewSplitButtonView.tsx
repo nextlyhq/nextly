@@ -116,12 +116,16 @@ const SELECTED_OPTION_CLASS =
   "data-[selected=true]:outline-solid data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-foreground aria-selected:text-foreground data-[selected=true]:text-foreground";
 
 /**
- * The search box, focused, outlined as the reached option is, in the foreground colour for the
- * same reason. The shared input removes its outline too, so the style is put back here as well;
- * without it a caret is all that marks focus.
+ * Focus in the search, drawn on the whole search row (cmdk's input wrapper, magnifier included)
+ * from the menu's root, so the shared input stays as it is everywhere else: a frame inside the
+ * row, rounded and clear of the popover's edges, in the foreground colour for the same reason as
+ * the reached option. It is a `::after` box rather than the row's own outline, since rounding the
+ * row would curl the ends of the line under it. The search takes focus whenever the menu opens,
+ * by mouse as well as by keyboard, so the frame is drawn for `focus-within`, not only for a
+ * keyboard's focus.
  */
-const SEARCH_FOCUS_CLASS =
-  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground";
+const SEARCH_ROW_FOCUS_CLASS =
+  "[&_[cmdk-input-wrapper]]:relative [&_[cmdk-input-wrapper]:focus-within]:after:pointer-events-none [&_[cmdk-input-wrapper]:focus-within]:after:absolute [&_[cmdk-input-wrapper]:focus-within]:after:inset-1 [&_[cmdk-input-wrapper]:focus-within]:after:rounded-md [&_[cmdk-input-wrapper]:focus-within]:after:border-2 [&_[cmdk-input-wrapper]:focus-within]:after:border-foreground [&_[cmdk-input-wrapper]:focus-within]:after:content-['']";
 
 /**
  * What the button says when its main part starts creating another type while it is drawn, as
@@ -176,13 +180,12 @@ function NewMenuList({
   );
   return (
     // The root's `label` is what names the search box (cmdk labels its input with it).
-    <Command label={SEARCH_LABEL} filter={matchesSearch}>
-      {menu.searchable ? (
-        <CommandInput
-          placeholder="Search types"
-          className={SEARCH_FOCUS_CLASS}
-        />
-      ) : null}
+    <Command
+      label={SEARCH_LABEL}
+      filter={matchesSearch}
+      className={SEARCH_ROW_FOCUS_CLASS}
+    >
+      {menu.searchable ? <CommandInput placeholder="Search types" /> : null}
       {/* Focusable, and named: with no search box, focus lands here, on the element that
         carries `aria-activedescendant`, so each option the arrow keys reach is announced. */}
       <CommandList

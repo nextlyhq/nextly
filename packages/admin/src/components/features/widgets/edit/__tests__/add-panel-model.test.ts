@@ -212,7 +212,7 @@ describe("removedCards", () => {
         {
           id: "core/team",
           title: "Team",
-          archetype: "stats",
+          archetype: "custom",
           size: sizeBounds({ default: { w: 4, h: 3 } }),
         },
       ],

@@ -51,7 +51,6 @@ const setupWidget: DashboardWidget = {
   archetype: "custom",
   size: gridBounds(12),
   component: PATH,
-  serverData: true,
 };
 const card: BatchCard = { placementId: PLACEMENT, widget: setupWidget };
 

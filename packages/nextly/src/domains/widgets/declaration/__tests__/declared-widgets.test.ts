@@ -7,11 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
-import type { WidgetDefinition } from "../../definition";
+import { CORE_DECLARATIONS } from "../../core-widgets";
 import { widgetGateHolds } from "../../gate";
 import { clearWidgets, getWidget } from "../../registry";
 import {
   clearDeclaredWidgets,
+  CORE_OWNER,
   declaredWidget,
   registerDashboardWidgets,
 } from "../declared-widgets";
@@ -51,31 +52,27 @@ describe("the one call every owner's widgets come through", () => {
   }
 
   it("names every fault of every owner, core's own included, in one message, and keeps none", () => {
-    // 🔴 Core's list was registered on its own before the declarations, so a
-    // mistake in it threw alone, and a plugin's fault was a second boot away,
-    // with core's cards already kept. Now both arrive in one message.
-    // Core writes no card as a definition now, so two stand in for its list: one given twice, and a
-    // second under another id.
-    const first: WidgetDefinition = {
-      id: "core/first",
-      title: "First",
-      description: "A core card written as a definition.",
-      archetype: "custom",
-      component: "core#First",
-      size: { default: { w: 6, h: 4 } },
+    // 🔴 Core's declarations go through the same checks as a plugin's, so a
+    // mistake in core's arrives in the one message beside a plugin's fault,
+    // before any card is kept. Core's first declaration twice, and a copy of
+    // it under another id at a size the grid cannot hold.
+    const [first] = CORE_DECLARATIONS;
+    if (first === undefined) throw new Error("core has a declaration");
+    const second = {
+      ...first,
+      id: "core/second",
+      size: { default: { w: 13, h: 3 } },
     };
-    const second: WidgetDefinition = { ...first, id: "core/second" };
     const message = refused(() =>
       registerDashboardWidgets({
-        core: [
-          first,
-          first,
+        groups: [
           {
-            ...second,
-            size: { default: { w: 13, h: 3 } },
-          } as WidgetDefinition,
+            owner: CORE_OWNER,
+            core: true,
+            declarations: [first, first, second],
+          },
+          { owner: SHOP, declarations: [{ ...revenue, title: "" }] },
         ],
-        groups: [{ owner: SHOP, declarations: [{ ...revenue, title: "" }] }],
       })
     );
     expect(message).toContain(
@@ -109,11 +106,10 @@ describe("registering declared widgets", () => {
         min: { w: 4, h: 3 },
         max: { w: 8, h: 6 },
       },
-      serverData: true,
     });
     // Data only: no query, no data function and no empty test reach what the admin is sent,
     // and what is published survives JSON exactly, so nothing in it is code.
-    expect(published?.query).toBeUndefined();
+    expect(published).not.toHaveProperty("query");
     expect(JSON.parse(JSON.stringify(published))).toEqual(published);
     expect(Object.keys(published ?? {})).not.toContain("data");
     expect(Object.keys(published ?? {})).not.toContain("load");
@@ -221,7 +217,6 @@ describe("registering declared widgets", () => {
     expect(getWidget("acme/revenue")).toMatchObject({
       archetype: "custom",
       component: revenue.view.component,
-      serverData: true,
       // Who declared it, so a card whose component is missing can say whose it is.
       owner: SHOP,
     });

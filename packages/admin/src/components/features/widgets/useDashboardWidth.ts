@@ -30,7 +30,7 @@ const useDrawnEffect =
  * The width of the dashboard at `ref`.
  *
  * `undefined` rather than a guess until the first measure: a tier predicted from a guessed
- * width would size a query for a card the dashboard then draws at another tier.
+ * width would ask for a card at one tier while the dashboard then draws it at another.
  *
  * Also names `ref` as the dashboard drawn now (`dashboardWidthNow`), from a layout effect, which
  * runs before the layout read a mounting dashboard makes is sent.
@@ -51,7 +51,7 @@ export function useDashboardWidth(
  * The drawn dashboard's width as it measures now, by the measure `useMeasuredWidth` takes, or
  * `undefined` off the dashboard or before it has a width (zero is none, as there). Read when the
  * layout is asked for, so the layout read judges each card that hides while empty at the tier
- * the card's first query will ask at (`predictedTier` of this same width).
+ * the card's first ask will carry (`predictedTier` of this same width).
  */
 export function dashboardWidthNow(): number | undefined {
   const width = drawnDashboard?.current?.getBoundingClientRect().width;

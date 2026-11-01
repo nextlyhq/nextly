@@ -4,18 +4,18 @@
  * A note a reader writes on their own dashboard: Markdown, drawn read-only.
  *
  * The text is the placement's own setting, so it lives in the reader's layout
- * row and no one else sees it. It is drawn through `TextMarkdown`, the `text`
- * archetype's renderer: the rich-text stack's own nodes, no HTML string between
- * the Markdown and the page, and links held to `http`, `https` and `mailto`
- * (`safeHref`), so what a reader writes cannot run.
+ * row and no one else sees it. It is drawn through `TextMarkdown`, the
+ * dashboard's one Markdown renderer: the rich-text stack's own nodes, no HTML
+ * string between the Markdown and the page, and links held to `http`, `https`
+ * and `mailto` (`safeHref`), so what a reader writes cannot run.
  *
  * Core/note is a declared widget: its `load` answers the text, the frame draws
  * every state but ready (an unwritten note is empty by its declaration's
  * `isEmpty`, with its declared message), and this component draws only the
  * text it is handed.
  *
- * Loaded lazily, as the `text` archetype loads it, so a dashboard with no note
- * pays nothing for the renderer.
+ * Loaded lazily, with the Markdown renderer it draws the text through, so a
+ * dashboard with no note pays nothing for that renderer.
  *
  * @module components/features/dashboard/NoteCard
  */

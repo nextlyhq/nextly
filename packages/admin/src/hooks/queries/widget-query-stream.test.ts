@@ -11,7 +11,8 @@ import { fetchWidgetBatch, type StreamedSlot } from "./widget-query-stream";
 vi.mock("@admin/lib/api/refreshInterceptor", () => ({ authFetch: vi.fn() }));
 
 const fetched = vi.mocked(authFetch);
-const count = { source: "collection:posts", op: "count" } as const;
+// One card's ask, as the batch sends every card: by its widget and its card.
+const count = { widget: "core/count", card: "posts" } as const;
 
 afterEach(() => {
   vi.clearAllMocks();

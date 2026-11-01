@@ -91,8 +91,8 @@ export interface WidgetKit {
  * - `Table`: rows across named columns, a table on a wide card.
  * - `BarChart`: one bar per group, longest first, with an optional `unit` for its tooltip.
  * - `SeriesChart`: one line per series over time, with an optional `unit`.
- * - `FooterLink`: one link in the card's own footer, as a list's "View all" is drawn, taking the
- *   place of the widget's own link while it is there, so the footer holds one link.
+ * - `FooterLink`: one link in the card's own footer, as a list's "View all" is drawn, so the
+ *   footer holds one link.
  * - `useTitleCount`: a hook, the frame's own: the count it is given is drawn beside the card's
  *   title, muted, and read with it ("New form submissions, 3 items"), from the first paint and
  *   until the body unmounts; a short phrase is drawn and read as written, a floor reads "N+"

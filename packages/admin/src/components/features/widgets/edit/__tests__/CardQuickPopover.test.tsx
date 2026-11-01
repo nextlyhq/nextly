@@ -12,10 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import {
-  CORE_DECLARATIONS,
-  CORE_WIDGETS,
-} from "../../../../../../../nextly/src/domains/widgets/core-widgets";
+import { CORE_DECLARATIONS } from "../../../../../../../nextly/src/domains/widgets/core-widgets";
 import { CORE_WIDGET_ID } from "../../../../../../../nextly/src/domains/widgets/core-widgets/ids";
 import { CardQuickPopover, CardTitleButton } from "../CardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "../useCardSettingsWrite";
@@ -66,25 +63,18 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
  */
 function coreCard(id: string): DashboardWidget {
   const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
-  if (declared) {
-    return {
-      id: declared.id,
-      title: declared.title,
-      archetype: "custom",
-      size: sizeBounds(declared.size),
-      settings: Object.entries(
-        (declared as { settings?: Record<string, object> }).settings ?? {}
-      ).map(([name, setting]) => ({
-        ...setting,
-        name,
-      })),
-    } as unknown as DashboardWidget;
-  }
-  const definition = CORE_WIDGETS.find(widget => widget.id === id);
-  if (!definition) throw new Error(`no core widget ${id}`);
+  if (!declared) throw new Error(`no core widget ${id}`);
   return {
-    ...definition,
-    size: sizeBounds(definition.size),
+    id: declared.id,
+    title: declared.title,
+    archetype: "custom",
+    size: sizeBounds(declared.size),
+    settings: Object.entries(
+      (declared as { settings?: Record<string, object> }).settings ?? {}
+    ).map(([name, setting]) => ({
+      ...setting,
+      name,
+    })),
   } as unknown as DashboardWidget;
 }
 

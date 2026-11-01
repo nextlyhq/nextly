@@ -71,7 +71,6 @@ function seedWidget(id: string): void {
       title: id,
       archetype: "metric",
       size: { default: { w: 3, h: 2 } },
-      query: { source: "plugin:stripe/revenue", op: "count" },
     },
     { source: "@acme/stripe" }
   );

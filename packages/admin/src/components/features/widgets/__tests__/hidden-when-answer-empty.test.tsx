@@ -25,7 +25,6 @@ const quietList = (id: string): DashboardWidget => ({
   title: "Quiet list",
   archetype: "list",
   size: gridBounds(4),
-  query: { source: "collection:posts", op: "list", select: ["title"] },
   hidesWhenEmpty: true,
 });
 

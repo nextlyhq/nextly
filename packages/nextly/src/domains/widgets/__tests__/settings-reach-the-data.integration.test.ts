@@ -5,9 +5,10 @@
  * which drives the query by its type: no setting drives a query because of its name.
  *
  * The card's settings go through the real layout endpoint and are read back, so what is applied
- * is what was stored; the declaration is the registry's, which is what the admin is sent; the
- * settings become the query through `applyWidgetSettings`, the one path they take; and the query
- * runs against real rows.
+ * is what was stored; the declared settings are the registry's, which is what the admin is sent;
+ * the settings become the query through `applyWidgetSettings`, the one path they take, over the
+ * query the card asks, as a declared card's `load` builds it; and the query runs against real
+ * rows.
  */
 
 // Must be set before the harness boots (env validation) and to sign tokens.
@@ -39,6 +40,16 @@ const NOTES = "notes";
 const WIDGET = "test/notes";
 /** More rows than any filter below admits, so each filter is what decides the count. */
 const ROWS = 9;
+/**
+ * The query the notes card asks before its settings change it. A published widget carries no
+ * query -- its declaration's `load` asks one -- so it is held here, as such a load holds it.
+ * Room for every note, so only the Filter decides how many are answered.
+ */
+const NOTES_QUERY: WidgetQuery = {
+  source: `collection:${NOTES}`,
+  op: "list",
+  limit: 10,
+};
 
 /** A Filter admitting the first `count` notes by title, so the rows answered are `count`. */
 function firstNotes(count: number): Record<string, unknown> {
@@ -76,8 +87,6 @@ function declare(defaultCount: number): void {
       title: "Notes",
       archetype: "list",
       size: { default: { w: 4, h: 3 } },
-      // Room for every note, so only the Filter decides how many are answered.
-      query: { source: `collection:${NOTES}`, op: "list", limit: 10 },
       settings: [
         {
           name: "collection",
@@ -164,7 +173,7 @@ describe.each(getConfiguredTestDialects())(
       expect(card).toBeDefined();
       const declared = getWidget(WIDGET)!;
       const query = applyWidgetSettings(
-        declared.query as WidgetQuery,
+        NOTES_QUERY,
         declared.settings,
         card!.config
       );
