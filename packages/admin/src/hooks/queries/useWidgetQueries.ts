@@ -123,6 +123,31 @@ export function appliedKey(request: WidgetQueryRequest): string {
   });
 }
 
+/**
+ * The size an answer was asked at, read back from what it is filed as asked with (`appliedKey`):
+ * `undefined` for no answer, or for one asked with no size.
+ *
+ * Read from the key rather than kept beside it, so the size a held answer is drawn by and the
+ * question a card's new size is judged against are one record, and cannot disagree.
+ */
+export function sizeAskedIn(
+  applied: string | undefined
+): WidgetRenderSize | undefined {
+  if (applied === undefined) return undefined;
+  const asked: unknown = JSON.parse(applied);
+  const size =
+    typeof asked === "object" && asked !== null && "size" in asked
+      ? asked.size
+      : undefined;
+  if (!Array.isArray(size)) return undefined;
+  const [w, h, tier]: unknown[] = size;
+  return typeof w === "number" &&
+    typeof h === "number" &&
+    (tier === "small" || tier === "medium" || tier === "large")
+    ? { w, h, tier }
+    : undefined;
+}
+
 /** What one request sends as its entry of the batch: its card with the size it is drawn at. */
 export function sentEntry(request: WidgetQueryRequest): SentCardAsk {
   return request.cardSize === undefined

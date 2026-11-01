@@ -570,6 +570,7 @@ export function WidgetGrid(): JSX.Element {
     fetchingPlacementIds,
     updatedAtFor,
     answeredAtFor,
+    fetchedSizeFor,
     requested,
     counted,
     failed,
@@ -701,6 +702,8 @@ export function WidgetGrid(): JSX.Element {
                   requested={requested}
                   updatedAtFor={updatedAtFor}
                   answeredAtFor={answeredAtFor}
+                  // Each card's held answer is drawn by the size it was fetched at.
+                  fetchedSizeFor={fetchedSizeFor}
                   fetchingPlacementIds={fetchingPlacementIds}
                   retry={retry}
                   announcement={announcement}

@@ -34,6 +34,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
   type IsDrawn,
@@ -133,6 +134,8 @@ export interface ArrangedGridProps {
   updatedAtFor: (placementId: string) => Date | null;
   /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
   answeredAtFor: (placementId: string) => Date | null;
+  /** The size the answer one card shows was fetched at: its own re-ask's, or the batch's. */
+  fetchedSizeFor: (placementId: string) => AnswerSize | undefined;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   /** Reload one card's data on its own, from its error state's Retry. */
@@ -314,7 +317,12 @@ function cellData(
   placementId: string,
   answers: Pick<
     ArrangedGridProps,
-    "slots" | "requested" | "answeredAtFor" | "fetchingPlacementIds" | "retry"
+    | "slots"
+    | "requested"
+    | "answeredAtFor"
+    | "fetchingPlacementIds"
+    | "fetchedSizeFor"
+    | "retry"
   >
 ): ArrangedCellProps["data"] {
   const asked = answers.requested.has(placementId);
@@ -326,6 +334,10 @@ function cellData(
     // 🔴 This card's own request, not the batch's: partitions settle independently, and a
     // settled card must not dim.
     isFetching: answers.fetchingPlacementIds.has(placementId),
+    // The size its answer was fetched at: a card that grew keeps its old answer on screen while
+    // the new size's loads, and drawn by the new size that answer's one row past its rows, the
+    // sign that more exist, would read as a row.
+    answerSize: answers.fetchedSizeFor(placementId),
     // Retry only for a card in the batch: one rejected before it was asked has no question to
     // ask again, so the button could change nothing.
     onRetry: asked ? () => answers.retry(placementId) : undefined,

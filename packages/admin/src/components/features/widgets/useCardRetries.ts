@@ -11,15 +11,19 @@
  *
  * A card is also asked again on its own, quietly, when it now asks a different question than its
  * answer was fetched with: it was resized or crossed a tier, or its settings changed. It keeps
- * what it shows until the new answer arrives, and no other card is asked.
+ * what it shows until the new answer arrives, and no other card is asked. While it does, it says
+ * the size the answer it shows was fetched at (`fetchedSizeFor`), so that answer is drawn by the
+ * rows it was asked for, not by the card's new size.
  *
  * @module components/features/widgets/useCardRetries
  */
 
+import type { WidgetRenderSize } from "nextly/widget-result";
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 
 import {
   appliedKey,
+  sizeAskedIn,
   useWidgetQueries,
   type UseWidgetQueriesResult,
   type WidgetQueryRequest,
@@ -241,6 +245,13 @@ export interface CardRetries {
    * not say it is reading.
    */
   fetchingPlacementIds: ReadonlySet<string>;
+  /**
+   * The size the answer this card shows was fetched at: its own re-ask's once that has answered,
+   * else the batch's. A card asked again quietly for a new size keeps its old answer on screen,
+   * and that answer holds only the rows its old size asked for, and the one more that says more
+   * exist; drawn at the new size, that one more would read as a row.
+   */
+  fetchedSizeFor: (placementId: string) => WidgetRenderSize | undefined;
 }
 
 export function useCardRetries(
@@ -331,6 +342,18 @@ export function useCardRetries(
     [state.inFlight]
   );
 
+  // A settled re-ask's answer is shown in place of the batch's, so its size is the one shown; a
+  // quiet re-ask still in flight shows the answer it had. Read from what each was asked with.
+  const fetchedSizeFor = useCallback(
+    (placementId: string) => {
+      const settled = state.settled.get(placementId);
+      return sizeAskedIn(
+        settled ? settled.applied : batchAppliedFor(placementId)
+      );
+    },
+    [state.settled, batchAppliedFor]
+  );
+
   return {
     slots,
     retry,
@@ -338,6 +361,7 @@ export function useCardRetries(
     answeredAtFor,
     grow,
     fetchingPlacementIds,
+    fetchedSizeFor,
   };
 }
 

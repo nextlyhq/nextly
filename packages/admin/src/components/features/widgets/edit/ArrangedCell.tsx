@@ -36,6 +36,7 @@ import {
   type CardCollapse,
 } from "../frame/collapse";
 import { CardGrowContext, grownRows } from "../frame/grow";
+import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
 import type { MoveDirection } from "../layout-editor";
 import type { PlacementReport } from "../reported-placements";
@@ -105,6 +106,11 @@ export interface ArrangedCellProps {
     /** When this card's own answer arrived; `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
+    /**
+     * The size the answer in `slot` was fetched at, which a card that grew draws that answer by
+     * until its new size's answer arrives; see `WidgetRenderer`'s own.
+     */
+    answerSize?: AnswerSize | undefined;
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };
