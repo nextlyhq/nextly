@@ -69,6 +69,32 @@ async function ownerOf(
 }
 
 /**
+ * The `id` and `name` of the templates among `ids`, read in runs the
+ * adapter's statement limit allows, each id binding one value, so an item
+ * many templates use is still named rather than refused.
+ */
+async function templateRows(
+  adapter: DrizzleAdapter,
+  ids: readonly string[]
+): Promise<Array<Record<string, unknown>>> {
+  const run = Math.max(1, adapter.getCapabilities().maxParamsPerQuery);
+  const rows: Array<Record<string, unknown>> = [];
+  for (let start = 0; start < ids.length; start += run) {
+    rows.push(
+      ...(await adapter.select<Record<string, unknown>>("email_templates", {
+        columns: ["id", "name"],
+        where: {
+          and: [
+            { column: "id", op: "IN", value: ids.slice(start, start + run) },
+          ],
+        },
+      }))
+    );
+  }
+  return rows;
+}
+
+/**
  * The names of the templates among `ids`, for a reader who may read
  * templates; none for one who may not.
  */
@@ -88,23 +114,7 @@ async function templateHeadings(
   ) {
     return headings;
   }
-  // In runs the adapter's statement limit allows, each id binding one value,
-  // so an item many templates use is still named rather than refused.
-  const run = Math.max(1, adapter.getCapabilities().maxParamsPerQuery);
-  const rows: Array<Record<string, unknown>> = [];
-  for (let start = 0; start < ids.length; start += run) {
-    rows.push(
-      ...(await adapter.select<Record<string, unknown>>("email_templates", {
-        columns: ["id", "name"],
-        where: {
-          and: [
-            { column: "id", op: "IN", value: ids.slice(start, start + run) },
-          ],
-        },
-      }))
-    );
-  }
-  for (const row of rows) {
+  for (const row of await templateRows(adapter, ids)) {
     const id = typeof row.id === "string" ? row.id : String(row.id);
     const name = typeof row.name === "string" && row.name ? row.name : id;
     headings.set(
