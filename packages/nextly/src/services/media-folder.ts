@@ -36,7 +36,7 @@
 import crypto from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
@@ -780,9 +780,26 @@ export class MediaFolderService extends BaseService {
   }
 
   /**
+   * `ids` in runs one statement may bind alongside `reserved` values of its
+   * own, by the adapter's `maxParamsPerQuery`: SQLite's limit is the lowest,
+   * so a large subtree takes a few statements there and one elsewhere.
+   */
+  private idRuns(ids: readonly string[], reserved: number): string[][] {
+    const limit = this.adapter.getCapabilities().maxParamsPerQuery;
+    const size = Number.isFinite(limit)
+      ? Math.max(1, Math.floor(limit) - reserved)
+      : 1;
+    const runs: string[][] = [];
+    for (let start = 0; start < ids.length; start += size) {
+      runs.push(ids.slice(start, start + size));
+    }
+    return runs;
+  }
+
+  /**
    * Whether the folder, or any folder under it, holds an item deleted inside
-   * its Undo window: one query per folder, on the items' folder index, for
-   * the first such item.
+   * its Undo window: the folders asked together, in runs one statement may
+   * bind, on the items' folder index, for the first such item.
    */
   private async holdsPendingDeletes(folderId: string): Promise<boolean> {
     const { media } = this.tables;
@@ -794,11 +811,12 @@ export class MediaFolderService extends BaseService {
       folderId,
       ...(await this.collectAllSubfolderIds(folderId)),
     ];
-    for (const id of folderIds) {
+    // The mark's key pattern is the one value the condition binds itself.
+    for (const run of this.idRuns(folderIds, 1)) {
       const [found] = await this.db
         .select({ id: media.id })
         .from(media)
-        .where(and(eq(media.folderId, id), pendingDelete(media)))
+        .where(and(inArray(media.folderId, run), pendingDelete(media)))
         .limit(1);
       if (found) return true;
     }
@@ -916,12 +934,13 @@ export class MediaFolderService extends BaseService {
   ): Promise<Array<{ id: string }>> {
     const { media } = this.tables;
     const records: Array<{ id: string }> = [];
-    for (const folderId of folderIds) {
-      const inFolder = await this.db
+    // The folders asked together, in runs one statement may bind.
+    for (const run of this.idRuns(folderIds, 0)) {
+      const inFolders = await this.db
         .select({ id: media.id })
         .from(media)
-        .where(eq(media.folderId, folderId));
-      records.push(...inFolder);
+        .where(inArray(media.folderId, run));
+      records.push(...inFolders);
     }
     return records;
   }

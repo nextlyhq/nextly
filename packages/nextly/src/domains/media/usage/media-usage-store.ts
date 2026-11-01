@@ -16,7 +16,12 @@
  * @module domains/media/usage/media-usage-store
  */
 
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type {
+  TransactionContext,
+  WhereClause,
+  WhereCondition,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import {
   MEDIA_USAGE_FIELD_PATH_LENGTH,
@@ -69,10 +74,13 @@ export interface MediaUsageRow {
   address: string | null;
 }
 
-/** The statements the record runs: a transaction's, or the adapter's own. */
+/**
+ * The statements the record runs: the transaction of the write that changed
+ * the document.
+ */
 export type UsageDb = Pick<
   TransactionContext,
-  "select" | "insertMany" | "delete"
+  "select" | "insertMany" | "delete" | "lockRow"
 >;
 
 /**
@@ -172,6 +180,109 @@ interface ResolvedItems {
   byUrl: Map<string, AddressMatch[]>;
 }
 
+/** `byUrl`'s matches for `url`, with `match` added. */
+function addMatch(
+  byUrl: Map<string, AddressMatch[]>,
+  url: string,
+  match: AddressMatch
+): void {
+  byUrl.set(url, [...(byUrl.get(url) ?? []), match]);
+}
+
+/**
+ * Each of `urls` that names an item, as the transaction reads them: the
+ * items whose address it is now, or else the item a Replace kept it for.
+ */
+async function addressMatches(
+  db: UsageDb,
+  urls: readonly string[],
+  maxParams: number
+): Promise<Map<string, AddressMatch[]>> {
+  const byUrl = new Map<string, AddressMatch[]>();
+  // Each address is one bound value.
+  for (const part of chunks(urls, maxParams)) {
+    const rows = await db.select<Record<string, unknown>>("media", {
+      columns: ["id", "url"],
+      where: { and: [{ column: "url", op: "IN", value: part }] },
+    });
+    for (const row of rows) {
+      const url = columnOf(row, "url", "url");
+      addMatch(byUrl, url, {
+        mediaId: columnOf(row, "id", "id"),
+        address: url,
+        current: true,
+      });
+    }
+  }
+  const kept = await findKeptAddresses(
+    db,
+    urls.filter(url => !byUrl.has(url)),
+    maxParams
+  );
+  for (const [url, found] of kept) {
+    addMatch(byUrl, url, {
+      mediaId: found.mediaId,
+      address: found.url,
+      current: false,
+    });
+  }
+  return byUrl;
+}
+
+/**
+ * The same as {@link addressMatches}, asked again once the items `locked`
+ * are locked, with each read taking the latest committed rows: the items by
+ * their ids, so only their rows are locked, and the kept addresses by key.
+ * A Replace, or the end of one that forgets a kept address, takes the same
+ * lock, so neither changes what this finds until the write holding it
+ * commits, and what it finds is what they last committed. An item gone is
+ * named by none of its addresses.
+ */
+async function lockedAddressMatches(
+  db: UsageDb,
+  urls: readonly string[],
+  locked: readonly string[],
+  maxParams: number
+): Promise<Map<string, AddressMatch[]>> {
+  const wanted = new Set(urls);
+  const present = new Set<string>();
+  const byUrl = new Map<string, AddressMatch[]>();
+  for (const part of chunks(locked, maxParams)) {
+    const rows = await db.select<Record<string, unknown>>("media", {
+      columns: ["id", "url"],
+      where: { and: [{ column: "id", op: "IN", value: part }] },
+      forUpdate: true,
+    });
+    for (const row of rows) {
+      const mediaId = columnOf(row, "id", "id");
+      const url = columnOf(row, "url", "url");
+      present.add(mediaId);
+      if (wanted.has(url)) {
+        addMatch(byUrl, url, { mediaId, address: url, current: true });
+      }
+    }
+  }
+  const kept = await findKeptAddresses(
+    db,
+    urls.filter(url => !byUrl.has(url)),
+    maxParams,
+    true
+  );
+  for (const [url, found] of kept) {
+    // An item not locked here was not one the address named a moment ago;
+    // it stays named, its presence asked with the ids below.
+    if (locked.includes(found.mediaId) && !present.has(found.mediaId)) {
+      continue;
+    }
+    addMatch(byUrl, url, {
+      mediaId: found.mediaId,
+      address: found.url,
+      current: false,
+    });
+  }
+  return byUrl;
+}
+
 /**
  * Which of the ids and addresses name a media item, and which item each
  * names: the ids found, and each address's items, in any of its forms
@@ -179,6 +290,14 @@ interface ResolvedItems {
  * a Replace kept (`kept-addresses`), so content still naming an item's
  * earlier address goes on counting as the item's use. A reference to
  * something that is not an item, or no longer is, records nothing.
+ *
+ * Every item an address names is locked, in one order, for the rest of the
+ * write, and the addresses are asked again under those locks
+ * ({@link lockedAddressMatches}): the lock a Replace takes, and the one the
+ * end of a Replace takes to decide whether an old file is still named. So
+ * that decision either waits for this write and sees its use, or comes first
+ * and this write sees the address forgotten, and never removes a file a use
+ * recorded here still names.
  */
 async function resolveItems(
   db: UsageDb,
@@ -188,33 +307,22 @@ async function resolveItems(
   const wantedUrls = [
     ...new Set(refs.flatMap(r => (r.url ? addressForms(r.url) : []))),
   ];
-  const byUrl = new Map<string, AddressMatch[]>();
-  // Each id or address is one bound value.
-  for (const part of chunks(wantedUrls, maxParams)) {
-    const rows = await db.select<Record<string, unknown>>("media", {
-      columns: ["id", "url"],
-      where: { and: [{ column: "url", op: "IN", value: part }] },
-    });
-    for (const row of rows) {
-      const url = columnOf(row, "url", "url");
-      const list = byUrl.get(url) ?? [];
-      list.push({
-        mediaId: columnOf(row, "id", "id"),
-        address: url,
-        current: true,
-      });
-      byUrl.set(url, list);
-    }
+  let byUrl = await addressMatches(db, wantedUrls, maxParams);
+  const named = [
+    ...new Set([...byUrl.values()].flat().map(match => match.mediaId)),
+  ].sort();
+  if (named.length > 0) {
+    for (const mediaId of named) await db.lockRow("media", mediaId);
+    byUrl = await lockedAddressMatches(db, [...byUrl.keys()], named, maxParams);
   }
-  const kept = await findKeptAddresses(
-    db,
-    wantedUrls.filter(url => !byUrl.has(url)),
-    maxParams
-  );
+  const keptItems = [...byUrl.values()]
+    .flat()
+    .filter(match => !match.current)
+    .map(match => match.mediaId);
   const wantedIds = [
     ...new Set([
       ...refs.flatMap(r => (r.mediaId ? [r.mediaId] : [])),
-      ...[...kept.values()].map(found => found.mediaId),
+      ...keptItems,
     ]),
   ];
   const ids = new Set<string>();
@@ -226,12 +334,12 @@ async function resolveItems(
     for (const row of rows) ids.add(columnOf(row, "id", "id"));
   }
   // A kept address counts only while its item is still there.
-  for (const [url, found] of kept) {
-    if (ids.has(found.mediaId)) {
-      byUrl.set(url, [
-        { mediaId: found.mediaId, address: found.url, current: false },
-      ]);
-    }
+  for (const [url, matches] of byUrl) {
+    const standing = matches.filter(
+      match => match.current || ids.has(match.mediaId)
+    );
+    if (standing.length > 0) byUrl.set(url, standing);
+    else byUrl.delete(url);
   }
   return { ids, byUrl };
 }
@@ -369,36 +477,28 @@ export interface IdentifiedUsageRow extends MediaUsageRow {
   id: string;
 }
 
-/**
- * Every row of the record for one media item, ids included: one query on
- * the item's index, reading no content table. Ordered so one document's
- * rows are together.
- */
-export async function listIdentifiedMediaUsage(
-  db: Pick<UsageDb, "select">,
-  mediaId: string
-): Promise<IdentifiedUsageRow[]> {
-  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
-    columns: [
-      "id",
-      "mediaId",
-      "subjectKind",
-      "subjectSlug",
-      "documentId",
-      "fieldPath",
-      "locale",
-      "address",
-    ],
-    where: { and: [{ column: "mediaId", op: "=", value: mediaId }] },
-    orderBy: [
-      { column: "subjectKind", direction: "asc" },
-      { column: "subjectSlug", direction: "asc" },
-      { column: "documentId", direction: "asc" },
-      { column: "fieldPath", direction: "asc" },
-      { column: "locale", direction: "asc" },
-    ],
-  });
-  return rows.map(row => ({
+/** The columns a row of the record is read with. */
+const USAGE_ROW_COLUMNS = [
+  "id",
+  "mediaId",
+  "subjectKind",
+  "subjectSlug",
+  "documentId",
+  "fieldPath",
+  "locale",
+  "address",
+];
+
+/** The order a document's rows are read in: one document's together. */
+const DOCUMENT_ORDER: Array<{ column: string; direction: "asc" }> = [
+  { column: "subjectKind", direction: "asc" },
+  { column: "subjectSlug", direction: "asc" },
+  { column: "documentId", direction: "asc" },
+];
+
+/** One row as the adapter read it. */
+function identifiedRowOf(row: Record<string, unknown>): IdentifiedUsageRow {
+  return {
     id: columnOf(row, "id", "id"),
     mediaId: columnOf(row, "mediaId", "media_id"),
     subjectKind: columnOf(
@@ -411,7 +511,130 @@ export async function listIdentifiedMediaUsage(
     fieldPath: columnOf(row, "fieldPath", "field_path"),
     locale: columnOf(row, "locale", "locale"),
     address: typeof row.address === "string" ? row.address : null,
-  }));
+  };
+}
+
+/**
+ * Every row of the record for one media item, ids included: one query on
+ * the item's index, reading no content table. Ordered so one document's
+ * rows are together.
+ */
+async function listIdentifiedMediaUsage(
+  db: Pick<UsageDb, "select">,
+  mediaId: string
+): Promise<IdentifiedUsageRow[]> {
+  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
+    columns: USAGE_ROW_COLUMNS,
+    where: { and: [{ column: "mediaId", op: "=", value: mediaId }] },
+    orderBy: [
+      ...DOCUMENT_ORDER,
+      { column: "fieldPath", direction: "asc" },
+      { column: "locale", direction: "asc" },
+    ],
+  });
+  return rows.map(identifiedRowOf);
+}
+
+/**
+ * Whether any document names the item by an address, as the record has it:
+ * one row looked for on the item's index.
+ */
+export async function usedByAddress(
+  db: Pick<UsageDb, "select">,
+  mediaId: string
+): Promise<boolean> {
+  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
+    columns: ["id"],
+    where: {
+      and: [
+        { column: "mediaId", op: "=", value: mediaId },
+        { column: "address", op: "IS NOT NULL" },
+      ],
+    },
+    limit: 1,
+  });
+  return rows.length > 0;
+}
+
+/** Which of an item's uses a page reads, and where it starts. */
+export interface MediaUsagePageQuery {
+  /** Only the documents naming the item by its address, by those uses. */
+  byAddressOnly: boolean;
+  /** The documents before this page, in the record's order. */
+  offset: number;
+  /** The most documents on the page. */
+  limit: number;
+}
+
+/**
+ * One page of the documents using an item, from the record alone: how many
+ * documents use it, counted in the database, and every row of the page's
+ * documents, which are `limit` of them in the record's order. Three bounded
+ * queries on the item's index, however many documents use it.
+ */
+export async function listMediaUsagePage(
+  db: Pick<DrizzleAdapter, "select" | "count">,
+  mediaId: string,
+  query: MediaUsagePageQuery
+): Promise<{ rows: IdentifiedUsageRow[]; total: number }> {
+  const conditions: WhereCondition[] = [
+    { column: "mediaId", op: "=", value: mediaId },
+    ...(query.byAddressOnly
+      ? [{ column: "address", op: "IS NOT NULL" as const }]
+      : []),
+  ];
+  const item: WhereClause = { and: conditions };
+  const total = await db.count(MEDIA_USAGE_TABLE, {
+    where: item,
+    distinctOn: ["subjectKind", "subjectSlug", "documentId"],
+  });
+  const documents = await db.select<Record<string, unknown>>(
+    MEDIA_USAGE_TABLE,
+    {
+      columns: ["subjectKind", "subjectSlug", "documentId"],
+      distinct: true,
+      where: item,
+      orderBy: DOCUMENT_ORDER,
+      limit: query.limit,
+      offset: query.offset,
+    }
+  );
+  if (documents.length === 0) return { rows: [], total };
+  const keyOf = (row: Record<string, unknown>) =>
+    JSON.stringify([
+      columnOf(row, "subjectKind", "subject_kind"),
+      columnOf(row, "subjectSlug", "subject_slug"),
+      columnOf(row, "documentId", "document_id"),
+    ]);
+  const onPage = new Set(documents.map(keyOf));
+  // The page's documents' rows, by their ids; an id another kind or slug
+  // shares is read with them and left out here.
+  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
+    columns: USAGE_ROW_COLUMNS,
+    where: {
+      and: [
+        ...conditions,
+        {
+          column: "documentId",
+          op: "IN",
+          value: [
+            ...new Set(
+              documents.map(row => columnOf(row, "documentId", "document_id"))
+            ),
+          ],
+        },
+      ],
+    },
+    orderBy: [
+      ...DOCUMENT_ORDER,
+      { column: "fieldPath", direction: "asc" },
+      { column: "locale", direction: "asc" },
+    ],
+  });
+  return {
+    rows: rows.filter(row => onPage.has(keyOf(row))).map(identifiedRowOf),
+    total,
+  };
 }
 
 /**

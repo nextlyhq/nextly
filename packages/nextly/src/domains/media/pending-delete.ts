@@ -17,6 +17,14 @@
  * inside the window always wins, an Undo after it never does, even when no
  * timer or sweep has run yet, and every later attempt finds nothing to do.
  *
+ * The finaliser takes the mark inside the media delete's own transaction,
+ * under the item's row lock, and records there what files are left to remove
+ * (`media.removing:<id>`, the row's files as they were): the mark, the row
+ * and its usage go together or not at all, so a worker stopped part way
+ * leaves either the mark, for the next attempt, or the record, from which
+ * the files are removed once more. A file already gone counts as removed,
+ * and the record goes once its files have.
+ *
  * Three things finalise: a timer set when the mark is written, for a server
  * that is still running when the window ends, which finishes every item its
  * delete marked, in bounded runs; a job queued with the marks, in their
@@ -31,11 +39,16 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  WhereClause,
+} from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
+
+import type { MediaFilesRecord } from "./stored-files";
 
 /** How long a deleted item can be brought back: ten seconds. */
 export const PENDING_DELETE_WINDOW_MS = 10_000;
@@ -56,6 +69,24 @@ export function pendingDeleteKey(mediaId: string): string {
   return `${PENDING_DELETE_KEY_PREFIX}${mediaId}`;
 }
 
+/** The key prefix of a finished delete's files still to remove. */
+const REMOVING_KEY_PREFIX = "media.removing:";
+
+/** The key of an item's files still to remove, once its row is gone. */
+export function removingKey(mediaId: string): string {
+  return `${REMOVING_KEY_PREFIX}${mediaId}`;
+}
+
+/**
+ * Work the media delete runs in its own transaction, once the item's row is
+ * locked and read and before it is removed, handed that transaction and the
+ * row. `false` refuses the delete, which then changes nothing.
+ */
+export type DeleteClaim = (
+  tx: TransactionContext,
+  row: MediaFilesRecord
+) => Promise<boolean>;
+
 /** The statements the marks need, as the adapter has them. */
 export type PendingDeleteDb = Pick<
   DrizzleAdapter,
@@ -66,10 +97,21 @@ export type PendingDeleteDb = Pick<
 export interface PendingDeleteDeps {
   db: PendingDeleteDb;
   /**
-   * The ordinary media delete: the row, its outbox event, its stored files
-   * and any a Replace kept for it. Throws not-found for an item already gone.
+   * The ordinary media delete of the row and its outbox event, running
+   * `claim` in its transaction and leaving the stored files to it. Throws
+   * not-found for an item already gone, and refuses when `claim` does.
    */
-  deleteItem(mediaId: string, actor?: RequestActor): Promise<void>;
+  deleteItem(
+    mediaId: string,
+    actor: RequestActor | undefined,
+    claim: DeleteClaim
+  ): Promise<void>;
+  /**
+   * Remove a deleted item's stored files and any a Replace kept for it, from
+   * its row as it was; answers whether it could finish. Removing a file
+   * already gone is no failure.
+   */
+  removeFiles(mediaId: string, files: MediaFilesRecord): Promise<boolean>;
   /** Where a delete that could not finish is reported. */
   logger?: { warn(payload: object): void };
   /**
@@ -143,6 +185,30 @@ function actorOfValue(value: unknown): RequestActor | undefined {
   }
   const read = markValueSchema.safeParse(parsed);
   return read.success ? read.data.actor : undefined;
+}
+
+/** What a finished delete's record of files left to remove holds. */
+const removingValueSchema = z.object({
+  files: z.object({
+    filename: z.string(),
+    url: z.string(),
+    thumbnailUrl: z.string().nullable().optional(),
+    sizes: z.unknown().optional(),
+  }),
+});
+
+/** The files a removal record names, or `null` when it cannot be read. */
+function removingFilesOf(value: unknown): MediaFilesRecord | null {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  const read = removingValueSchema.safeParse(parsed);
+  return read.success ? read.data.files : null;
 }
 
 /**
@@ -347,20 +413,34 @@ export class PendingMediaDeletes {
   }
 
   /**
-   * Delete an item whose mark this call took. A delete that fails puts the
-   * mark back, already due, so the next sweep tries again and the item stays
-   * out of every list meanwhile; one already gone is done.
+   * Delete an item whose mark is due: the mark is taken in the delete's own
+   * transaction ({@link claim}), so it goes exactly when the row does. A
+   * delete that fails leaves the mark as it was, already due, so the next
+   * attempt tries again and the item stays out of every list meanwhile. One
+   * whose mark has gone meanwhile (an Undo, another finaliser) is passed
+   * over. An item gone another way has nothing left but its mark, which is
+   * taken. Answers whether this call deleted the item.
    */
   private async deleteTaken(
     mediaId: string,
     actor: RequestActor | undefined,
     due: Date
   ): Promise<boolean> {
+    let asked = false;
+    let claimed = false;
     try {
-      await this.deps.deleteItem(mediaId, actor);
-      return true;
+      await this.deps.deleteItem(mediaId, actor, async (tx, row) => {
+        asked = true;
+        claimed = await this.claim(tx, mediaId, row, due);
+        return claimed;
+      });
     } catch (error) {
-      if (NextlyError.isNotFound(error)) return true;
+      if (NextlyError.isNotFound(error)) {
+        await this.deps.db.delete(META_TABLE, this.dueMark(mediaId, due));
+        return false;
+      }
+      // Refused because the mark was no longer there to take.
+      if (asked && !claimed) return false;
       this.deps.logger?.warn({
         kind: "media-delete-not-finished",
         message:
@@ -368,15 +448,102 @@ export class PendingMediaDeletes {
         mediaId,
         error: error instanceof Error ? error.message : String(error),
       });
-      await this.deps.db
-        .insert(META_TABLE, {
-          key: pendingDeleteKey(mediaId),
-          value: JSON.stringify(actor ? { actor } : {}),
-          updated_at: due,
-        })
-        .catch(() => undefined);
       return false;
     }
+    await this.finishRemovals([mediaId]);
+    return true;
+  }
+
+  /** The mark of `mediaId`, while it is due at `due`. */
+  private dueMark(mediaId: string, due: Date): WhereClause {
+    return {
+      and: [
+        { column: "key", op: "=", value: pendingDeleteKey(mediaId) },
+        { column: "updatedAt", op: "<=", value: due },
+      ],
+    };
+  }
+
+  /**
+   * In the delete's transaction, under the item's row lock: take the mark
+   * while it is still due, and record the row's files as left to remove, in
+   * the transaction that removes the row. `false` when the mark is gone.
+   */
+  private async claim(
+    tx: TransactionContext,
+    mediaId: string,
+    row: MediaFilesRecord,
+    due: Date
+  ): Promise<boolean> {
+    const taken = await tx.delete(META_TABLE, this.dueMark(mediaId, due));
+    if (taken === 0) return false;
+    const files: MediaFilesRecord = {
+      filename: row.filename,
+      url: row.url,
+      thumbnailUrl: row.thumbnailUrl ?? null,
+      sizes: row.sizes ?? null,
+    };
+    await tx.delete(META_TABLE, {
+      and: [{ column: "key", op: "=", value: removingKey(mediaId) }],
+    });
+    await tx.insert(META_TABLE, {
+      key: removingKey(mediaId),
+      value: JSON.stringify({ files }),
+      updated_at: this.now(),
+    });
+    return true;
+  }
+
+  /**
+   * Remove the files recorded as left by deletes of `ids` that have
+   * finished, and each record once its files are gone; a record recorded
+   * after `before`, when given, is left to the delete still at work on it.
+   * Read in runs, each one bounded query. Answers the items finished.
+   */
+  async finishRemovals(
+    ids: readonly string[],
+    before?: Date
+  ): Promise<string[]> {
+    const finished: string[] = [];
+    for (let start = 0; start < ids.length; start += READ_RUN) {
+      const run = ids.slice(start, start + READ_RUN);
+      const rows = await this.deps.db.select<Record<string, unknown>>(
+        META_TABLE,
+        {
+          columns: ["key", "value"],
+          where: {
+            and: [
+              { column: "key", op: "IN", value: run.map(removingKey) },
+              ...(before
+                ? [{ column: "updatedAt", op: "<=" as const, value: before }]
+                : []),
+            ],
+          },
+        }
+      );
+      finished.push(...(await this.removeRecorded(rows)));
+    }
+    return finished;
+  }
+
+  /** Each record's files removed, and the record with them; the items done. */
+  private async removeRecorded(
+    rows: ReadonlyArray<Record<string, unknown>>
+  ): Promise<string[]> {
+    const finished: string[] = [];
+    for (const row of rows) {
+      const key = typeof row.key === "string" ? row.key : "";
+      if (!key.startsWith(REMOVING_KEY_PREFIX)) continue;
+      const mediaId = key.slice(REMOVING_KEY_PREFIX.length);
+      const files = removingFilesOf(row.value);
+      // A record that cannot be read names nothing to remove.
+      if (files && !(await this.deps.removeFiles(mediaId, files))) continue;
+      await this.deps.db.delete(META_TABLE, {
+        and: [{ column: "key", op: "=", value: key }],
+      });
+      finished.push(mediaId);
+    }
+    return finished;
   }
 
   /**
@@ -403,7 +570,24 @@ export class PendingMediaDeletes {
         limit: SWEEP_LIMIT,
       }
     );
-    return this.finalizeRows(rows, due);
+    const deleted = await this.finalizeRows(rows, due);
+    // Removals a stopped worker left: older than the window, so not one a
+    // delete is still at work on.
+    const left = await this.deps.db.select<Record<string, unknown>>(
+      META_TABLE,
+      {
+        columns: ["key", "value"],
+        where: {
+          and: [
+            { column: "updatedAt", op: "<=", value: due },
+            { column: "key", op: "LIKE", value: `${REMOVING_KEY_PREFIX}%` },
+          ],
+        },
+        limit: SWEEP_LIMIT,
+      }
+    );
+    await this.removeRecorded(left);
+    return deleted;
   }
 
   /**
@@ -434,13 +618,16 @@ export class PendingMediaDeletes {
         }
       );
       deleted.push(...(await this.finalizeRows(rows, due)));
+      // Removals of these items a stopped worker left part way.
+      await this.finishRemovals(run);
     }
     return deleted;
   }
 
   /**
-   * Which of `ids` still have a mark that is due: a delete that failed and
-   * was marked again, for the job that finishes them to try once more.
+   * Which of `ids` are not finished: a mark still due (a delete that failed),
+   * or files still recorded as left to remove, for the job that finishes them
+   * to try once more.
    */
   async dueAmong(ids: readonly string[]): Promise<string[]> {
     const wanted = [...new Set(ids)];
@@ -464,8 +651,21 @@ export class PendingMediaDeletes {
         const id = idOfKey(row.key);
         if (id !== null) left.push(id);
       }
+      const removing = await this.deps.db.select<Record<string, unknown>>(
+        META_TABLE,
+        {
+          columns: ["key"],
+          where: {
+            and: [{ column: "key", op: "IN", value: run.map(removingKey) }],
+          },
+        }
+      );
+      for (const row of removing) {
+        const key = typeof row.key === "string" ? row.key : "";
+        left.push(key.slice(REMOVING_KEY_PREFIX.length));
+      }
     }
-    return left;
+    return [...new Set(left)];
   }
 
   /**
@@ -503,8 +703,8 @@ export class PendingMediaDeletes {
   }
 
   /**
-   * Take each of `rows`' marks that is still due at `due` and delete its
-   * item; answers the items deleted.
+   * Delete the item of each of `rows`' marks that is still due at `due`, the
+   * mark taken with it; answers the items deleted.
    */
   private async finalizeRows(
     rows: ReadonlyArray<Record<string, unknown>>,
@@ -514,13 +714,6 @@ export class PendingMediaDeletes {
     for (const row of rows) {
       const id = idOfKey(row.key);
       if (id === null) continue;
-      const taken = await this.deps.db.delete(META_TABLE, {
-        and: [
-          { column: "key", op: "=", value: pendingDeleteKey(id) },
-          { column: "updatedAt", op: "<=", value: due },
-        ],
-      });
-      if (taken === 0) continue;
       if (await this.deleteTaken(id, actorOfValue(row.value), due)) {
         deleted.push(id);
       }

@@ -29,7 +29,7 @@ import {
 import { configuredLocales } from "../../i18n/configured-locales";
 
 import { keptAddresses } from "./address-uses";
-import { listIdentifiedMediaUsage } from "./media-usage-store";
+import { listMediaUsagePage } from "./media-usage-store";
 import {
   mediaUseReadKey,
   type MediaUseDocument,
@@ -327,7 +327,7 @@ export function bootedMediaUsesSource(
   caller: ReadCaller
 ): MediaUsesSource {
   return {
-    rows: mediaId => listIdentifiedMediaUsage(adapter, mediaId),
+    page: (mediaId, query) => listMediaUsagePage(adapter, mediaId, query),
     keptAddresses: mediaId => keptAddresses(adapter, mediaId),
     // The configured languages as they are now; none where the site has no
     // localization or its languages cannot be read, which tells no language.

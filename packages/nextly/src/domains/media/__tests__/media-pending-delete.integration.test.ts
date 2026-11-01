@@ -51,7 +51,9 @@ import {
   PENDING_DELETE_WINDOW_MS,
   PendingMediaDeletes,
   pendingDeleteKey,
+  removingKey,
   type PendingDeleteDb,
+  type PendingDeleteDeps,
 } from "../pending-delete";
 
 type Doc = Record<string, unknown>;
@@ -297,16 +299,35 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
+    /** The booted media delete and file removal, as the routes use them. */
+    function mediaDeletes(): Pick<
+      PendingDeleteDeps,
+      "db" | "deleteItem" | "removeFiles"
+    > {
+      const media = t.getService("mediaService");
+      return {
+        db: t.adapter,
+        deleteItem: (id, actor, claim) => media.delete(id, {}, actor, claim),
+        removeFiles: (id, files) => media.removeFilesOfDeleted(id, files),
+      };
+    }
+
     /** A finaliser on its own, as a fresh process would build one. */
     function freshFinaliser(
       laterBy = PENDING_DELETE_WINDOW_MS + 1_000,
       onDelete: (id: string) => void = () => undefined
     ): PendingMediaDeletes {
       return new PendingMediaDeletes({
-        db: t.adapter,
-        deleteItem: async (id, actor) => {
-          onDelete(id);
-          await t.getService("mediaService").delete(id, {}, actor);
+        ...mediaDeletes(),
+        // Told of each delete whose mark it took.
+        deleteItem: async (id, actor, claim) => {
+          await t
+            .getService("mediaService")
+            .delete(id, {}, actor, async (tx, found) => {
+              const taken = await claim(tx, found);
+              if (taken) onDelete(id);
+              return taken;
+            });
         },
         now: () => new Date(Date.now() + laterBy),
       });
@@ -399,6 +420,179 @@ describe.each(getConfiguredTestDialects())(
         where: { and: [{ column: "id", op: "=", value: jobId }] },
       });
       expect(settled?.state).toBe("done");
+    });
+
+    /** The finalising job a delete of `id` queued, and when it is due. */
+    async function queuedJob(
+      id: string,
+      deleted: { json: Doc }
+    ): Promise<{ jobId: string; deadline: number }> {
+      const jobs = (
+        await t.adapter.select<Doc>("nextly_jobs", {
+          where: {
+            and: [
+              { column: "slug", op: "=", value: MEDIA_FINALIZE_DELETES_JOB },
+            ],
+          },
+        })
+      ).filter(job =>
+        (typeof job.input === "string"
+          ? job.input
+          : JSON.stringify(job.input)
+        ).includes(id)
+      );
+      expect(jobs).toHaveLength(1);
+      return {
+        jobId: String(jobs[0]!.id),
+        deadline: Date.parse(String(deleted.json.markedDeleteAfter)),
+      };
+    }
+
+    /** The `nextly_meta` rows a delete of `id` keeps: its mark, its removal. */
+    async function deleteRecords(id: string): Promise<string[]> {
+      const rows = await t.adapter.select<Doc>("nextly_meta", {
+        columns: ["key"],
+        where: {
+          and: [
+            {
+              column: "key",
+              op: "IN",
+              value: [pendingDeleteKey(id), removingKey(id)],
+            },
+          ],
+        },
+      });
+      return rows.map(found => String(found.key)).sort();
+    }
+
+    /** A promise that never settles: a worker stopped where it waits. */
+    const stopsHere = (): Promise<never> => new Promise<never>(() => {});
+
+    // A serverless worker can be stopped at any instant. Whatever it had
+    // done, the job queued with the mark, run again, finishes the delete.
+    it("finishes a delete whose worker stopped as it began to finalise, when the job runs", async () => {
+      const file = await unusedFile();
+      const filename = String((await row(file))?.filename);
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      const { jobId, deadline } = await queuedJob(file, deleted);
+
+      // Stopped as it set about deleting the item, its mark already read.
+      void new PendingMediaDeletes({
+        ...mediaDeletes(),
+        deleteItem: stopsHere,
+        now: () => new Date(deadline + 1_000),
+      }).finalizeMarked([file]);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      // Still out of the library while it waits to be finished.
+      expect((await libraryView()).list).not.toContain(file);
+
+      const run = await runJobNow(
+        t.adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        jobId,
+        { now: () => new Date(deadline + 2_000) }
+      );
+
+      expect(run.claimed).toBe(1);
+      expect(await row(file)).toBeUndefined();
+      expect(await getMediaStorage().exists(filename, "media")).toBe(false);
+      expect(await deleteRecords(file)).toEqual([]);
+    });
+
+    it("keeps the mark of a delete whose transaction stopped before it committed", async () => {
+      const file = await unusedFile();
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      const { deadline } = await queuedJob(file, deleted);
+      const media = t.getService("mediaService");
+
+      // The mark taken and the files recorded, then the transaction fails.
+      const answered = await new PendingMediaDeletes({
+        ...mediaDeletes(),
+        deleteItem: (id, actor, claim) =>
+          media.delete(id, {}, actor, async (tx, found) => {
+            await claim(tx, found);
+            throw new Error("worker stopped");
+          }),
+        now: () => new Date(deadline + 1_000),
+      }).finalizeMarked([file]);
+
+      expect(answered).toEqual([]);
+      expect(await row(file)).toBeDefined();
+      expect(await deleteRecords(file)).toEqual([pendingDeleteKey(file)]);
+      // POSITIVE CONTROL: the mark left is one the next attempt finishes.
+      expect(await freshFinaliser().finalizeMarked([file])).toEqual([file]);
+      expect(await row(file)).toBeUndefined();
+    });
+
+    it("removes the files of a delete whose worker stopped after its row went, when the job runs", async () => {
+      const file = await unusedFile();
+      const filename = String((await row(file))?.filename);
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      const { jobId, deadline } = await queuedJob(file, deleted);
+      const media = t.getService("mediaService");
+
+      // The row gone and committed, then stopped before any file went.
+      void new PendingMediaDeletes({
+        ...mediaDeletes(),
+        deleteItem: async (id, actor, claim) => {
+          await media.delete(id, {}, actor, claim);
+          return stopsHere();
+        },
+        now: () => new Date(deadline + 1_000),
+      }).finalizeMarked([file]);
+      await expect.poll(async () => Boolean(await row(file))).toBe(false);
+      expect(await getMediaStorage().exists(filename, "media")).toBe(true);
+      expect(await deleteRecords(file)).toEqual([removingKey(file)]);
+
+      const run = await runJobNow(
+        t.adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        jobId,
+        { now: () => new Date(deadline + 2_000) }
+      );
+
+      expect(run.claimed).toBe(1);
+      expect(await getMediaStorage().exists(filename, "media")).toBe(false);
+      expect(await deleteRecords(file)).toEqual([]);
+      const [settled] = await t.adapter.select<Doc>("nextly_jobs", {
+        where: { and: [{ column: "id", op: "=", value: jobId }] },
+      });
+      expect(settled?.state).toBe("done");
+    });
+
+    it("lets a job delivered again after its delete finished do nothing", async () => {
+      const file = await unusedFile();
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      const { deadline } = await queuedJob(file, deleted);
+      const later = () => new Date(deadline + 1_000);
+      const removed: string[] = [];
+      const counted = (): PendingMediaDeletes => {
+        const deps = mediaDeletes();
+        return new PendingMediaDeletes({
+          ...deps,
+          removeFiles: async (id, files) => {
+            removed.push(id);
+            return deps.removeFiles(id, files);
+          },
+          now: later,
+        });
+      };
+      expect(await counted().finalizeMarked([file])).toEqual([file]);
+      expect(removed).toEqual([file]);
+
+      // Delivered again: nothing to take, nothing to remove, nothing left.
+      expect(await counted().finalizeMarked([file])).toEqual([]);
+      expect(await counted().dueAmong([file])).toEqual([]);
+      expect(removed).toEqual([file]);
+      expect(await deleteRecords(file)).toEqual([]);
     });
 
     it("lets the job of a delete that was undone finish nothing", async () => {
@@ -523,6 +717,7 @@ describe.each(getConfiguredTestDialects())(
         new PendingMediaDeletes({
           db: t.adapter,
           deleteItem: async () => undefined,
+          removeFiles: async () => true,
           now: () => time,
         });
 
@@ -546,6 +741,7 @@ describe.each(getConfiguredTestDialects())(
         new PendingMediaDeletes({
           db: t.adapter,
           deleteItem: async () => undefined,
+          removeFiles: async () => true,
           now: () => time,
         });
       const after = (time: Date) =>
@@ -573,6 +769,7 @@ describe.each(getConfiguredTestDialects())(
         new PendingMediaDeletes({
           db: t.adapter,
           deleteItem: async () => undefined,
+          removeFiles: async () => true,
           now: () => time,
         });
       await at(first).mark([early]);
@@ -649,6 +846,7 @@ describe.each(getConfiguredTestDialects())(
       const pending = new PendingMediaDeletes({
         db: failing,
         deleteItem: async () => undefined,
+        removeFiles: async () => true,
       });
 
       await expect(pending.undo(files)).rejects.toThrow();
@@ -832,6 +1030,12 @@ describe.each(getConfiguredTestDialects())(
 
       expect(alone.status).toBe(409);
       expect(withContents.status).toBe(409);
+      // Said to the person, so the admin can show why.
+      expect(
+        (withContents.json.error as { message?: string } | undefined)?.message
+      ).toBe(
+        "This folder holds items deleted moments ago that can still be brought back. Try again once their Undo has passed."
+      );
       const folders = await t.adapter.select<Doc>("media_folders", {
         where: { and: [{ column: "id", op: "=", value: own }] },
       });
@@ -861,10 +1065,7 @@ describe.each(getConfiguredTestDialects())(
       const base = Math.floor(Date.now() / 1_000) * 1_000 + 400;
       let clock = base;
       const deletes = new PendingMediaDeletes({
-        db: t.adapter,
-        deleteItem: async (id, actor) => {
-          await t.getService("mediaService").delete(id, {}, actor);
-        },
+        ...mediaDeletes(),
         now: () => new Date(clock),
       });
 
@@ -946,6 +1147,7 @@ describe.each(getConfiguredTestDialects())(
       const pending = new PendingMediaDeletes({
         db: failing,
         deleteItem: async () => undefined,
+        removeFiles: async () => true,
       });
 
       await expect(pending.mark(files)).rejects.toThrow();

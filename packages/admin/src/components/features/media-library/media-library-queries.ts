@@ -6,6 +6,7 @@
  */
 
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -57,15 +58,65 @@ export function useMediaLibraryCounts(
   });
 }
 
-/** Where an item is used; nothing is asked while `mediaId` is null. */
-export function useMediaUsage(
-  mediaId: string | null
-): UseQueryResult<MediaUsage, Error> {
-  return useQuery<MediaUsage, Error>({
+/** Reading the next page of an item's uses. */
+export interface MediaUsageMore {
+  load: () => void;
+  loading: boolean;
+}
+
+/** Where an item is used, as far as it has been read. */
+export interface MediaUsageRead {
+  data?: MediaUsage;
+  isLoading: boolean;
+  isError: boolean;
+  refetch: () => void;
+  /** Reading the next page, while one follows; `null` when none does. */
+  more: MediaUsageMore | null;
+}
+
+/** The pages read so far, as one answer. */
+function pagesRead(pages: readonly MediaUsage[]): MediaUsage {
+  const last = pages[pages.length - 1];
+  return {
+    items: pages.flatMap(page => page.items),
+    hidden: pages.reduce((sum, page) => sum + page.hidden, 0),
+    total: last.total,
+    hasNext: last.hasNext,
+    heldByAddress: pages[0].heldByAddress,
+    usageRecorded: pages.every(page => page.usageRecorded),
+  };
+}
+
+/**
+ * Where an item is used, a page of documents at a time, the next asked for
+ * with `more`; nothing is asked while `mediaId` is null.
+ */
+export function useMediaUsage(mediaId: string | null): MediaUsageRead {
+  const query = useInfiniteQuery({
     queryKey: usageKey(mediaId ?? ""),
-    queryFn: () => fetchMediaUsage(mediaId ?? ""),
+    queryFn: ({ pageParam }) =>
+      fetchMediaUsage(mediaId ?? "", { page: pageParam }),
+    initialPageParam: 1,
+    getNextPageParam: (last: MediaUsage, all: MediaUsage[]) =>
+      last.hasNext ? all.length + 1 : undefined,
     enabled: mediaId !== null,
   });
+  const { fetchNextPage } = query;
+  return {
+    data:
+      query.data && query.data.pages.length > 0
+        ? pagesRead(query.data.pages)
+        : undefined,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    refetch: () => void query.refetch(),
+    more: query.hasNextPage
+      ? {
+          load: () => void fetchNextPage(),
+          loading: query.isFetchingNextPage,
+        }
+      : null,
+  };
 }
 
 /** Delete items so the delete can be undone; the lists refresh at once. */

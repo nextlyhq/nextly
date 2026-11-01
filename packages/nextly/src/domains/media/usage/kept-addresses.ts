@@ -58,18 +58,22 @@ interface KeptAddressReader {
     options: {
       columns: string[];
       where: { and: Array<{ column: string; op: "IN"; value: string[] }> };
+      forUpdate?: boolean;
     }
   ): Promise<T[]>;
 }
 
 /**
  * The kept addresses among `addresses`, each under the address it was asked
- * by, read in runs of at most `maxParams` keys.
+ * by, read in runs of at most `maxParams` keys. With `latest`, on a
+ * transaction, the rows are read as last committed and locked, rather than
+ * as the transaction first saw them.
  */
 export async function findKeptAddresses(
   db: KeptAddressReader,
   addresses: readonly string[],
-  maxParams: number
+  maxParams: number,
+  latest = false
 ): Promise<Map<string, KeptAddress>> {
   const byKey = new Map(
     addresses.map(address => [keptAddressKey(address), address])
@@ -87,6 +91,7 @@ export async function findKeptAddresses(
           { column: "key", op: "IN", value: keys.slice(start, start + run) },
         ],
       },
+      ...(latest ? { forUpdate: true } : {}),
     });
     for (const row of rows) {
       const asked =

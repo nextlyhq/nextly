@@ -806,11 +806,26 @@ async function handleMediaCounts(): Promise<Response> {
 }
 
 /** The Used in query: every use, or only those naming the item by address. */
+/** The most documents one page of an item's uses names. */
+const MEDIA_USES_PAGE_LIMIT = 50;
+
+/**
+ * Where an item is used, as a request asks for it: one page, of at most
+ * {@link MEDIA_USES_PAGE_LIMIT} documents, of every use or only those by
+ * address.
+ */
 const usageQuerySchema = z.object({
   byAddress: z
     .enum(["true", "false"])
     .optional()
     .transform(value => value === "true"),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(MEDIA_USES_PAGE_LIMIT)
+    .default(20),
 });
 
 /**
@@ -944,24 +959,29 @@ async function handleUndoDeleteMedia(request: Request): Promise<Response> {
  * content written before it existed, and the same build throughout
  * (`readWithinOneBuild`). Until it is, a use the record lacks may still be in
  * some document, so an item listing no use is not known to be unused, and a
- * Replace keeps the old file whatever the record lists.
+ * Replace keeps the old file whatever the record lists. Before the usage
+ * table exists, `read` is never run, since it reads that table: the answer is
+ * `none`, from a record not built.
  */
 async function readUsageRecord<T>(
-  read: () => Promise<T>
+  read: () => Promise<T>,
+  none: T
 ): Promise<{ value: T; recorded: boolean }> {
   const { mediaUsagePresent, readWithinOneBuild } = await import(
     "../domains/media/usage/media-usage-store"
   );
   const adapter = getService("adapter");
   if (!(await mediaUsagePresent(adapter))) {
-    return { value: await read(), recorded: false };
+    return { value: none, recorded: false };
   }
   return readWithinOneBuild(adapter, read);
 }
 
 /**
  * The documents using one item that the caller may read, and the rest
- * counted by collection, read from the usage record. Served only on the
+ * counted by collection, read from the usage record a page at a time: the
+ * documents are paged, readable or not, and only the page's are read as the
+ * caller, so a widely used item costs one page's work. Served only on the
  * gated mount, since it names documents: the public mount answers it as an
  * unknown path. Per caller, so it is never cached for another.
  *
@@ -988,20 +1008,23 @@ async function handleMediaUsage(
       import("../domains/media/usage/media-uses-source"),
     ]);
   // `?byAddress=true` asks only for the uses naming the item by its
-  // address, which keep the old file when it is replaced.
-  const { byAddress } = parseAtBoundary(
+  // address, which keep the old file when it is replaced; `page` and
+  // `limit` which page of the documents using it.
+  const { byAddress, page, limit } = parseAtBoundary(
     usageQuerySchema,
     Object.fromEntries(new URL(request.url).searchParams)
   );
   const caller = await readCaller(auth);
   // The uses, read within one build of the record, so a rebuild meanwhile
   // never lets a partial list read as complete.
-  const { value: uses, recorded } = await readUsageRecord(() =>
-    mediaUsesOf(
-      mediaId,
-      source.bootedMediaUsesSource(getService("adapter"), caller),
-      { byAddressOnly: byAddress }
-    )
+  const { value: uses, recorded } = await readUsageRecord(
+    () =>
+      mediaUsesOf(
+        mediaId,
+        source.bootedMediaUsesSource(getService("adapter"), caller),
+        { byAddressOnly: byAddress, page, limit }
+      ),
+    { items: [], hidden: [], total: 0 }
   );
   // Said of every answer: whether the record is built. Of the uses by
   // address, also how many avatars and logos keep the item's address.
@@ -1015,15 +1038,18 @@ async function handleMediaUsage(
         }
       : {}),
   };
+  // Paged by documents, readable or not: `total` counts them all, which the
+  // pages' `items` and `hidden` add up to, and `hidden` counts this page's.
+  const totalPages = Math.ceil(uses.total / limit);
   return respondList(
     uses.items,
     {
-      total: uses.items.length,
-      page: 1,
-      limit: uses.items.length,
-      totalPages: 1,
-      hasNext: false,
-      hasPrev: false,
+      total: uses.total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
       ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
       ...recordMeta,
     },

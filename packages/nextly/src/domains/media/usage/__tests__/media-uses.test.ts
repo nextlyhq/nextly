@@ -10,14 +10,25 @@ import { describe, expect, it } from "vitest";
 import type { IdentifiedUsageRow } from "../media-usage-store";
 import {
   mediaUseReadKey,
-  mediaUsesOf,
+  mediaUsesOf as mediaUsesPage,
   type MediaUseDocument,
   type MediaUseHeading,
   type MediaUseRead,
+  type MediaUses,
+  type MediaUsesQuery,
   type MediaUsesSource,
 } from "../media-uses";
 
 const ITEM = "item-1";
+
+/** The first page, large enough for every document here, unless asked. */
+function mediaUsesOf(
+  mediaId: string,
+  from: MediaUsesSource,
+  query: Partial<MediaUsesQuery> = {}
+): Promise<MediaUses> {
+  return mediaUsesPage(mediaId, from, { page: 1, limit: 50, ...query });
+}
 
 /** One row of the record; `address` set for a field naming the item by it. */
 function row(
@@ -54,7 +65,26 @@ function source(
   const asked: MediaUseRead[][] = [];
   return {
     asked,
-    rows: () => Promise.resolve(rows),
+    // The record's paging: its documents in the rows' order, each whole.
+    page: (_mediaId, query) => {
+      const told = query.byAddressOnly
+        ? rows.filter(found => found.address !== null)
+        : rows;
+      const keyOf = (found: IdentifiedUsageRow) =>
+        JSON.stringify([
+          found.subjectKind,
+          found.subjectSlug,
+          found.documentId,
+        ]);
+      const documents = [...new Set(told.map(keyOf))];
+      const onPage = new Set(
+        documents.slice(query.offset, query.offset + query.limit)
+      );
+      return Promise.resolve({
+        rows: told.filter(found => onPage.has(keyOf(found))),
+        total: documents.length,
+      });
+    },
     keptAddresses: () => Promise.resolve(new Set(kept)),
     languages: () => Promise.resolve(languages),
     headings: reads => {
@@ -193,6 +223,8 @@ describe("mediaUsesOf", () => {
         },
       ],
       hidden: [],
+      // Three documents use it, every one on this page.
+      total: 3,
     });
   });
 
@@ -296,7 +328,11 @@ describe("mediaUsesOf", () => {
 
   it("asks nothing about readers when nothing uses the item", async () => {
     const read = source([], []);
-    expect(await mediaUsesOf(ITEM, read)).toEqual({ items: [], hidden: [] });
+    expect(await mediaUsesOf(ITEM, read)).toEqual({
+      items: [],
+      hidden: [],
+      total: 0,
+    });
     expect(read.asked).toEqual([]);
   });
 
@@ -508,5 +544,44 @@ describe("mediaUsesOf", () => {
     expect(answer.hidden).toEqual([
       { scopeKind: "collection", scopeSlug: "secrets", count: 1 },
     ]);
+  });
+
+  it("reads and asks about one page of the documents, and counts them all", async () => {
+    const rows = [
+      row("collection", "posts", "p1", "cover"),
+      row("collection", "posts", "p1", "body", "en", "/a.png"),
+      row("collection", "secrets", "s1", "image"),
+      row("email-template", "", "t1", "htmlContent", "", "/a.png"),
+    ];
+    const readable: Array<[ReadIn, HeadingIn]> = [
+      [readIn(post), { title: "Hello", owner: "Posts" }],
+      [readIn(post, "en"), { title: "Hello", owner: "Posts" }],
+      [readIn(welcome), { title: "Welcome", owner: "Email templates" }],
+    ];
+    const first = source(rows, readable);
+
+    const one = await mediaUsesOf(ITEM, first, { page: 1, limit: 2 });
+
+    // Two documents, one of them unreadable: told one, counted one, and
+    // the third never read.
+    expect(one.total).toBe(3);
+    expect(one.items.map(item => item.documentId)).toEqual(["p1"]);
+    expect(one.hidden).toEqual([
+      { scopeKind: "collection", scopeSlug: "secrets", count: 1 },
+    ]);
+    expect(
+      first.asked
+        .flat()
+        .map(read => read.documentId)
+        .sort()
+    ).not.toContain("t1");
+
+    const two = await mediaUsesOf(ITEM, source(rows, readable), {
+      page: 2,
+      limit: 2,
+    });
+    expect(two.total).toBe(3);
+    expect(two.items.map(item => item.documentId)).toEqual(["t1"]);
+    expect(two.hidden).toEqual([]);
   });
 });

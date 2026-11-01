@@ -32,6 +32,9 @@ describe("fetchMediaUsage", () => {
     expect(await fetchMediaUsage("m1", { byAddress: true })).toEqual({
       items: [],
       hidden: 2,
+      // Not counted by the answer: the documents it names.
+      total: 2,
+      hasNext: false,
       heldByAddress: 3,
       usageRecorded: false,
     });
@@ -47,9 +50,26 @@ describe("fetchMediaUsage", () => {
     expect(await fetchMediaUsage("m1")).toEqual({
       items: [],
       hidden: 0,
+      total: 0,
+      hasNext: false,
       heldByAddress: 0,
       usageRecorded: false,
     });
+  });
+
+  it("asks for a later page, and reads how many documents there are in all", async () => {
+    fetchJson.mockResolvedValue({
+      items: [],
+      meta: { total: 45, hasNext: true, hidden: [{ count: 1 }] },
+    });
+
+    const usage = await fetchMediaUsage("m1", { byAddress: true, page: 2 });
+
+    expect(usage).toMatchObject({ total: 45, hasNext: true, hidden: 1 });
+    expect(fetchJson).toHaveBeenCalledWith(
+      "/admin/api/media/m1/usage?byAddress=true&page=2",
+      undefined
+    );
   });
 
   it("takes the record as built when the answer says so", async () => {

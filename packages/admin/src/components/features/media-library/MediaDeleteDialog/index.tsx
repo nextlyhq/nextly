@@ -158,7 +158,7 @@ export function MediaDeleteDialog({
 
         {usage.data && usageTotal(usage.data) > 0 && (
           <div className="max-h-56 overflow-y-auto rounded-md border border-border px-3 py-1">
-            <MediaUsageList usage={usage.data} />
+            <MediaUsageList usage={usage.data} more={usage.more} />
           </div>
         )}
 

@@ -6,8 +6,10 @@
  * Where an item is used: each document the reader may open, as a link to it,
  * with its collection or Single, the fields that use the item, and the
  * languages when only some use it; then how many more documents use it that
- * the reader may not open, never naming them. The details panel, the viewer
- * and the delete dialog all show it the same way.
+ * the reader may not open, never naming them. The documents come a page at
+ * a time: how many there are in all is said, and the next page is asked for
+ * with Show more. The details panel, the viewer and the delete dialog all
+ * show it the same way.
  */
 
 import * as React from "react";
@@ -17,7 +19,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 
 import type { MediaUsage, MediaUse } from "../media-library-api";
-import { useMediaUsage } from "../media-library-queries";
+import { useMediaUsage, type MediaUsageMore } from "../media-library-queries";
 
 /** The admin page a document using the item opens at. */
 function mediaUseHref(use: MediaUse): string {
@@ -62,16 +64,51 @@ function hiddenUsesText(hidden: number, afterOthers: boolean): string {
     : `Used in ${placesText(hidden)} you can't open.`;
 }
 
-/** How many uses there are in all, the ones not shown included. */
+/** How many uses there are in all, the ones not shown or not read included. */
 export function usageTotal(usage: MediaUsage): number {
-  return usage.items.length + usage.hidden;
+  return usage.total;
 }
 
-/** The list of uses, from an answer already in hand. */
-export function MediaUsageList({
+/**
+ * How far the list has been read, while more follows: "Showing 20 of 45
+ * places", and, where the next page can be asked for, Show more.
+ */
+function MoreUses({
   usage,
+  more,
 }: {
   usage: MediaUsage;
+  more?: MediaUsageMore | null;
+}): React.JSX.Element {
+  return (
+    <p className="flex items-center justify-between gap-3 pt-2 text-xs text-muted-foreground">
+      <span>
+        Showing {usage.items.length + usage.hidden} of {placesText(usage.total)}
+      </span>
+      {more && (
+        <button
+          type="button"
+          onClick={more.load}
+          disabled={more.loading}
+          className="shrink-0 rounded-sm font-medium text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+        >
+          {more.loading ? "Loading…" : "Show more"}
+        </button>
+      )}
+    </p>
+  );
+}
+
+/**
+ * The list of uses, from an answer already in hand; `more` asks for the
+ * next page, where one follows.
+ */
+export function MediaUsageList({
+  usage,
+  more,
+}: {
+  usage: MediaUsage;
+  more?: MediaUsageMore | null;
 }): React.JSX.Element {
   if (usageTotal(usage) === 0) {
     // Said to be unused only once the usage record is built: before then a
@@ -123,6 +160,7 @@ export function MediaUsageList({
           {hiddenUsesText(usage.hidden, usage.items.length > 0)}
         </p>
       )}
+      {usage.hasNext && <MoreUses usage={usage} more={more} />}
     </div>
   );
 }
@@ -133,17 +171,14 @@ export interface MediaUsageState {
   isLoading: boolean;
   isError: boolean;
   retry: () => void;
+  /** Reading the next page, while one follows. */
+  more?: MediaUsageMore | null;
 }
 
 /** The library's answer for one item, in the shape the details take. */
 export function useMediaUsageState(mediaId: string | null): MediaUsageState {
-  const { data, isLoading, isError, refetch } = useMediaUsage(mediaId);
-  return {
-    data,
-    isLoading,
-    isError,
-    retry: () => void refetch(),
-  };
+  const { data, isLoading, isError, refetch, more } = useMediaUsage(mediaId);
+  return { data, isLoading, isError, retry: refetch, more };
 }
 
 /** The Used in section of an item's details. */
@@ -152,7 +187,7 @@ export function MediaUsedIn({
 }: {
   usage: MediaUsageState;
 }): React.JSX.Element {
-  const { data, isLoading, isError, retry } = usage;
+  const { data, isLoading, isError, retry, more } = usage;
   const headingId = React.useId();
   return (
     <section aria-labelledby={headingId} className="flex flex-col gap-2">
@@ -180,7 +215,7 @@ export function MediaUsedIn({
           </button>
         </p>
       )}
-      {data && <MediaUsageList usage={data} />}
+      {data && <MediaUsageList usage={data} more={more} />}
     </section>
   );
 }

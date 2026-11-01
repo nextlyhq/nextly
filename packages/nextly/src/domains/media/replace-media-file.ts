@@ -25,6 +25,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { actorForWrite, type RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
@@ -49,9 +50,9 @@ import {
   type ReplacedRecord,
 } from "./usage/address-uses";
 import {
-  listIdentifiedMediaUsage,
   mediaUsagePresent,
   readWithinOneBuild,
+  usedByAddress,
 } from "./usage/media-usage-store";
 
 /** The new file, as the upload checks have passed it. */
@@ -170,6 +171,8 @@ function replacementChanges(
     // the item's size files are. Left as it is, it goes on naming them for
     // `nextly media remove-sizes`; cleared here, they would stay in storage
     // with nothing pointing at them.
+    // An upload never derives a playing time, so the old file's goes with it.
+    duration: null,
     focalX: null,
     focalY: null,
     updatedAt: new Date(),
@@ -219,36 +222,36 @@ async function removeNewFiles(
 }
 
 /**
- * Whether the files an item had before a Replace must be kept: while any
- * document names the item by an address (a usage row with one, as the
- * reference the content made says), or any avatar or logo names it, and,
- * until the usage record has been built, always, since a document the record
- * does not cover yet may name it. The rows and whether their record was built
- * are one read (`readWithinOneBuild`), so a rebuild clearing the rows while
- * the record is read never passes for a complete record that lists no use.
- * Kept, too, when this cannot be asked: a file kept is never a page broken.
+ * Whether the files an item had before a Replace are kept whatever documents
+ * say: until the usage table exists, when which documents name the address
+ * is not recorded, and while an avatar or a logo names the address.
  */
-async function keepsOldFiles(
+async function keptOutsideTheRecord(
   deps: ReplaceMediaFileDeps,
-  mediaId: string,
   previous: Media
 ): Promise<boolean> {
-  try {
-    if (!(await mediaUsagePresent(deps.adapter, deps.logger))) return true;
-    const { value: rows, recorded } = await readWithinOneBuild(
-      deps.adapter,
-      () => listIdentifiedMediaUsage(deps.adapter, mediaId)
-    );
-    if (!recorded || rows.some(row => row.address !== null)) return true;
-    const held = previous.url ? await deps.addressHolders(previous.url) : 0;
-    return held > 0;
-  } catch (error) {
-    deps.logger.warn("[MediaService] Replaced file kept", {
-      mediaId,
-      error: errorForLog(error),
-    });
-    return true;
-  }
+  if (!(await mediaUsagePresent(deps.adapter, deps.logger))) return true;
+  const held = previous.url ? await deps.addressHolders(previous.url) : 0;
+  return held > 0;
+}
+
+/**
+ * Whether a document may still name the item by an address, on `db`: while
+ * any usage row names it by one (as the reference the content made says),
+ * and, until the usage record has been built, always, since a document the
+ * record does not cover yet may name it. The row and whether its record was
+ * built are one read (`readWithinOneBuild`), so a rebuild clearing the rows
+ * while the record is read never passes for a complete record that lists no
+ * use.
+ */
+async function namedByAddress(
+  db: Pick<TransactionContext, "select">,
+  mediaId: string
+): Promise<boolean> {
+  const { value: named, recorded } = await readWithinOneBuild(db, () =>
+    usedByAddress(db, mediaId)
+  );
+  return !recorded || named;
 }
 
 /** The files `current` had that the replacement does not, by address. */
@@ -266,9 +269,16 @@ function oldFilesOf(
  * names the item by its address (rich text, an email template's image, an
  * avatar, a logo), which goes on naming the old file, or while the usage
  * record cannot yet say; otherwise taken out of the record and removed,
- * except any another item still refers to. The Replace has committed, so
- * nothing here fails it: a step that cannot finish leaves the files kept and
- * recorded as the item's, which its delete removes, and is logged.
+ * except any another item still refers to. Whether a document names the
+ * address is asked in the transaction that takes them out of the record,
+ * under the item's row lock (`forgetKeptFiles`), which a document's write
+ * naming a kept address also takes: a use such a write records is either
+ * seen there, keeping the files, or recorded once the address is forgotten,
+ * when it names no item. The files go only once that has committed. The
+ * Replace has committed, so nothing here fails it: a step that cannot finish
+ * leaves the files kept and recorded as the item's, which its delete
+ * removes, and is logged. Kept, too, when this cannot be asked: a file kept
+ * is never a page broken.
  */
 async function settleOldFiles(
   deps: ReplaceMediaFileDeps,
@@ -278,14 +288,17 @@ async function settleOldFiles(
 ): Promise<void> {
   const files = oldFilesOf(previous, replacement);
   try {
-    if (await keepsOldFiles(deps, mediaId, previous)) return;
+    if (await keptOutsideTheRecord(deps, previous)) return;
     const kept = await filesKeptByOthers(
       new StoredFileSearchReader(deps.adapter, deps.logger).search,
       files.map(file => file.path),
       [mediaId]
     );
     if (!kept) return;
-    await forgetKeptFiles(deps.adapter, mediaId, files);
+    const forgotten = await forgetKeptFiles(deps.adapter, mediaId, files, tx =>
+      namedByAddress(tx, mediaId)
+    );
+    if (!forgotten) return;
     await removeStoredFiles(
       deps.storage,
       previous,
