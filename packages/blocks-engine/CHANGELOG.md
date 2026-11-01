@@ -1,5 +1,1662 @@
 # @nextlyhq/blocks-engine
 
+## 0.0.2-alpha.73
+
+### Patch Changes
+
+- [#3048](https://github.com/nextlyhq/nextly/pull/3048) [`61e4ebf`](https://github.com/nextlyhq/nextly/commit/61e4ebf3582517cecf900de34abfc32bfa4365cf) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A Schema Builder Single now keeps its registry row in a migration when a code-first collection shadows a Builder collection of the same slug. `nextly migrate:create` used to leave out the row of every Builder entity sharing a shadowed slug, of any kind, so the Single's settings change reached the snapshot but not a deployed registry.
+
+  `nextly migrate --dry-run --step <n>` now also names a pending Schema Builder file with no snapshot that the step leaves out of the preview. A real run refuses such a file before applying anything, whatever `--step` says.
+
+- [#2967](https://github.com/nextlyhq/nextly/pull/2967) [`ba98d35`](https://github.com/nextlyhq/nextly/commit/ba98d35d2ac1be94f45389fa16a934083530dc6e) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A bulk or batch write is limited to the entries its access rule's filter matches, as a write to one entry is. A bulk update or delete by query changes only the entries the filter matches, and counts only those; an entry outside it is neither written nor named. A bulk update or delete by ids writes each entry the filter matches and fails each other one on its own: as a missing entry where the caller may not read it, and as refused where it may. A batch of updates or deletes in one transaction does the same for each item, and an item the caller may not read fails in the same words as one that does not exist. A by-ids bulk update that would move an entry out of the filter refuses that entry alone; inside a batch in one transaction, it refuses the whole batch, with nothing changed. The filter is matched in the default language, as the write to one entry matches it.
+
+- [#3063](https://github.com/nextlyhq/nextly/pull/3063) [`8f1d6aa`](https://github.com/nextlyhq/nextly/commit/8f1d6aabb2eb1bd06b8fae8a810c122acc581166) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A collection field with a camelCase name, created or changed through the API
+  or the Direct API, keeps its name, and its column is the snake_case form the
+  write path uses (`metaTitle` → `meta_title`), as with code-first collections.
+  Before, the name itself was lowercased on save (`metaTitle` became the field
+  `metatitle`), so every write to the field as declared failed with "no column
+  named meta_title".
+  - Existing collections keep their fields where they are: an update sending a
+    field that differs from a stored one only in case, or that names the same
+    column, keeps the stored name, so a field stored lowercased keeps its
+    column and values. Renaming such columns to the snake_case form is not done
+    here.
+  - Field names are checked by the column they become: two names that become
+    one column (`metaTitle` and `meta_title`), a name whose column is a system
+    column (`createdAt`), and a column longer than 63 characters are refused.
+  - A camelCase field's `min`, `max` and `minLength` constraints are created on
+    its column.
+  - A collection created through the API or Direct API with camelCase field
+    names is edited through the API: the Schema Builder refuses camelCase names,
+    its own and in its manifest.
+
+- [#3085](https://github.com/nextlyhq/nextly/pull/3085) [`2cd3af0`](https://github.com/nextlyhq/nextly/commit/2cd3af09a5635c443a9c7d50d1576f01adfab512) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard card's common settings change on the card itself, and every card's menu offers the same four things.
+  - **The quick popover**: a card's title, and Settings in its "…" menu, open a popover holding the card's Collection, the settings its widget marks quick (a period, such as Over time's Date range) and its Size, ending with "More settings", which opens the settings sheet. A change applies to the card at once, with the popover still open and the card beside it. Outside customise mode it is saved for that reader alone, and a toast says so and offers Undo, which puts back what the card had just before that change; the toast is the one place a screen reader hears it, and the dashboard's own announcement stays silent for it. In customise mode it is staged with the session's other changes until Save. Escape closes it, and focus goes back to the title or the menu it was opened from.
+  - **Every card's menu at rest lists Settings, Size, Refresh and Remove**, in that order, each where the card has it. Size saves the card's width and height at once, with Undo, through the same layout write customise mode's Save makes. A reader following the default keeps a size they choose this way: the stored row now records which cards they resized, held to each widget's bounds, while every other card goes on following the size the default gives it. Rows written before this read as they always did, with no migration, and resetting the dashboard clears the sizes with the rest. Remove takes any card off at once, asking nothing, with Undo in the removal notice. For a reader following the default dashboard it is their own dismissal of the card, so they keep following the default; for a reader who has arranged their dashboard it takes the card out of their arrangement, so adding the widget again from the gallery meets no hidden copy, and Undo puts it back where it was, with its settings. The layout read now says which of the two a reader is (`arranged`). Before, only a card whose widget declared `dismissible` could be removed outside customise mode, with a dismiss button of its own; that button is gone, and `dismissible` is deprecated: it has no effect, is still accepted, and will be removed with the legacy definition fields. The customise menu now lists Settings and Size first, then the moves, then Remove.
+  - **A widget may mark up to three settings `quick`**, where it could mark one. A declaration marking two or three, which startup refused, now starts; one marking four or more is still refused, with each named. The limit is published as `MAX_QUICK_SETTINGS` from `nextly/config`, beside `MAX_CHOSEN_FIELDS`, and the quick popover holds that many beside the card's Collection. The card's header draws the first marked setting it can draw.
+  - **A dashboard write no longer re-asks every card.** Each read of the layout carries a read-ahead token of its own, and the cards' batch was asked again under every new one, so the layout read that follows a reader's own write (a quick setting, a size, a removal) asked every card on the dashboard again for one card's change. The batch now takes a fresh layout answer's token only when that answer hides or reveals a card, so a write asks again only the card it changed, and a fresh read that reveals a card still has the batch asked for it once.
+  - **Entering customise mode takes a card's Undo toast down**, so an Undo pressed after customising began no longer writes underneath the open draft.
+
+- [#3109](https://github.com/nextlyhq/nextly/pull/3109) [`dc6ff76`](https://github.com/nextlyhq/nextly/commit/dc6ff762aa76e3015cdc32f82c93c708ba9eee63) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard card's quick changes hold up in three cases they did not.
+  - **A size a reader chose stays theirs when the default catches up.** A reader following the default who resized a card kept that size only while it differed from the default's, so once a later release gave the widget's default that same size, the next unrelated change outside customise mode (a setting, or removing another card) forgot the size was theirs, and a later change to the default moved their card. A chosen size now stays chosen while a write leaves it as stored, including for a card the row holds under an id an earlier default gave it; resizing the card, back to the default's size or to any other, is what gives it up or replaces it.
+  - **A quick change is always said, with its Undo.** When the card's new answer arrived before the save reported landing, the toast that says the change, and offers Undo, never appeared. It now does, as soon as the save lands, judged by the card's own answer, so a card on a dashboard large enough to be asked in several requests is said too. A change whose new answer was refused is still said as saved but not shown.
+  - **Removing a card takes its Undo toast down.** Removing a card within the ten seconds its last quick change's toast stays left that toast, and its Undo, on screen; pressing Undo could write the removed card's earlier setting or size back. The toast now goes with the card, and an Undo pressed after it does nothing.
+
+- [#3136](https://github.com/nextlyhq/nextly/pull/3136) [`427cd05`](https://github.com/nextlyhq/nextly/commit/427cd05e92ec3d2ed181737c1263e120c55015af) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard card no longer brings the settings panel's loading screen or the form label check with it. Each card only starts fetching its settings panel and asks whether the admin runs in development, so a page that draws cards without opening their settings, such as the development widget preview page, loads less. Nothing looks or works differently.
+
+- [#2917](https://github.com/nextlyhq/nextly/pull/2917) [`1e04032`](https://github.com/nextlyhq/nextly/commit/1e04032f8a9d454817ce891631f306f446eada0c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A collection something depends on can no longer be deleted. While a field of another collection, a Single or a field group points at it, a foreign key a plugin or the app declares points at its table, or a plugin or the app has added a column, index, foreign key or check to one of its tables, the Schema Builder's delete, the schema API, `nextly prune --force` and `migrate:create` refuse before anything is removed, naming each with its owner and table and saying what to do. Where those cannot be read the delete is refused rather than going ahead. A Builder bulk delete is now one request checked as a whole, so collections that point only at one another can be deleted together; deleting each alone is refused. A Builder delete that fails part-way, of one collection or several, now removes nothing on PostgreSQL and SQLite: their field-group values, translations, tables and registry rows go in one transaction, and the drop migration written for it is withdrawn. On MySQL, which keeps each table drop as it runs, every collection not yet deleted stays registered and the message says to delete again to finish.
+
+- [#3083](https://github.com/nextlyhq/nextly/pull/3083) [`5a1f466`](https://github.com/nextlyhq/nextly/commit/5a1f46609344007750a6e980f2305f540dc0b372) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `nextly generate:widget <name>` scaffolds a working dashboard widget in the site or plugin it runs in: a declaration, a component of its own for `--view component`, and a test that loads it as the instance's administrator and draws its card. Pick how it shows its data with `--view figure|list|table|bars|series|component` (a figure when left out), and whether it reads from a collection the reader chooses with `--collection`. It lists the widget in the site's `admin.dashboard.widgets` or the plugin's `contributes.dashboard.widgets` when the file has a shape it can edit safely, and otherwise leaves the file as it was and prints the line to add. A project without `@nextlyhq/plugin-sdk`, which the test imports, or `@nextlyhq/adapter-sqlite`, which it boots on, gets them added to its devDependencies at the running `nextly`'s version, and is told to install. It honours the root `-c, --config` path. It never writes over an existing file unless given `--force`, generating a widget again leaves it listed and imported once, and it refuses to switch a widget between a component of its own and a core view, naming the files to remove first; `--dry-run` shows everything without writing, and on a terminal it asks for anything left out. A site's widgets are named `site/<name>`, a plugin's under its own name, with its scope in front when that name is one core keeps (`@acme/core` → `acme-core/<name>`). `nextly` gains a dependency on `@babel/parser`, which the command reads the config with to find where the widget is listed; only `generate:widget` loads it, so nothing else pays for it. `createTestNextly` gains an experimental `widgets` option, for a site's own widgets, and gives an instance booted without a `NEXTLY_SECRET` a random one, so `runWidgetLoad` works without setting it first.
+
+- [#2939](https://github.com/nextlyhq/nextly/pull/2939) [`d448b12`](https://github.com/nextlyhq/nextly/commit/d448b129f4bd0b8d7c5fc028d616fe4ab7ea6168) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard asks for its collections, its layout and your permissions once per load instead of twice, and each screen you open asks for your permissions afresh. A card missing a setting says "No collection chosen yet" beside its "Choose collection" button, or, where no button is shown, to choose it in the card's settings.
+
+- [#2828](https://github.com/nextlyhq/nextly/pull/2828) [`86f764c`](https://github.com/nextlyhq/nextly/commit/86f764cc9ecd45b41db3179cae4523e9c86fb980) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A collection's `delete` access rule may answer a filter instead of `true`. A delete through the Direct API or a plugin service then removes an entry only if it matches the filter. An entry outside the filter is left in place and refused: with a 403 where the caller may read it, and as a missing entry (404) where it may not. The entry is matched under the delete's lock, so a concurrent change can't move it out of the filter between the check and the delete. A filter on a translated field is matched in the site's default language, since a delete removes every language.
+
+  Over REST, and for the bulk and batch deletes, a delete rule's filter is still refused, as before.
+
+- [#3089](https://github.com/nextlyhq/nextly/pull/3089) [`0d263df`](https://github.com/nextlyhq/nextly/commit/0d263df16f7a64921378c99de9d9a30dc067b34d) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Deleting a collection or a Single now expires its cached pages straight away, so the site stops showing content that is gone. A collection or Single that opts out of revalidation is still left alone.
+
+- [#3098](https://github.com/nextlyhq/nextly/pull/3098) [`d232fdf`](https://github.com/nextlyhq/nextly/commit/d232fdf7f032a2809f3d92d5443a9b45ba750d89) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Team activity no longer reads as though a whole collection was deleted. A row names the entry by its title when it carries one ("Ana deleted Spring launch announcement"), and otherwise says "an entry in" the collection ("Ana deleted an entry in Posts"); a Single without a name is "a Single". A row carries no title when the entry has none, or when the entry no longer exists, so a title the reader may not be told is never shown and never called empty. Settings changes keep naming what they changed, and legacy settings activity rows now arrive with `subjectKind: "settings"`: a row on `GET /dashboard/activity` or from the `system:activity` source that was recorded before the kind was, under a settings namespace, said `null` and now says `"settings"`.
+
+- [#2997](https://github.com/nextlyhq/nextly/pull/2997) [`40f6fb2`](https://github.com/nextlyhq/nextly/commit/40f6fb2d8db5173f014d73e316d96d672251dc36) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A development server now has a widget preview page. While the server runs in development, the admin offers a page (linked from customise mode's bar) that draws every widget the reader may see from its declared `preview` cases, at its smallest, default and largest sizes, in light and dark, in its ready state and in each frame state (loading, empty, error, not available), with an accessibility check beside each state. A widget with no preview case says so in place of its ready state. No widget's data is loaded. A production server neither serves the page nor its read, `GET /api/_dev/widget-previews`, which answers there as any path it does not serve. Startup now also refuses a preview case whose settings would not reach the browser as they are, such as a date inside a filter setting.
+
+- [#3110](https://github.com/nextlyhq/nextly/pull/3110) [`ce79d13`](https://github.com/nextlyhq/nextly/commit/ce79d13906f9036af5e9eddbb50edd2a7278c4d4) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A finished step on the dashboard's setup card has a border you can see: it now draws at full success strength instead of a faint tint that failed the contrast check.
+
+- [#2806](https://github.com/nextlyhq/nextly/pull/2806) [`9c61b19`](https://github.com/nextlyhq/nextly/commit/9c61b1922cbaeb3cb033caf3809eaca2c6edd251) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A plugin route whose `requiredPermission` cannot be worked out, because its resolver throws or returns an empty permission, now answers 500 `INTERNAL_ERROR`, as any server fault does. It is not answered 403, since no access the caller held could have been enough, and the request is never let through.
+
+  A REST request whose handler reports a failure as a returned result, rather than throwing it, is answered with that failure's own status and code: a refusal 403 `FORBIDDEN`, a missing record 404, a busy database 503. A reported failure with no message is answered by its status too.
+
+- [#3043](https://github.com/nextlyhq/nextly/pull/3043) [`6c5c357`](https://github.com/nextlyhq/nextly/commit/6c5c3579988188de75f6c1a86e63787006d9449b) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A field group with a many-to-many relationship can now be created on MySQL. Its relation column holds a list of ids, and it no longer gets a plain index on any database: MySQL refused the index, so the create failed, and on PostgreSQL the index refused a save once the list held about a hundred ids. A unique field in a field group also no longer gets a plain index beside its unique one.
+
+  The next migration drops an unused index on many-to-many fields in field groups.
+
+- [#2931](https://github.com/nextlyhq/nextly/pull/2931) [`f12038e`](https://github.com/nextlyhq/nextly/commit/f12038e0f747d9db0ad9f968d1e69a9af938292f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A field renamed and made required, or given a new default, in one change now keeps that change in the migration `nextly migrate:create` writes, on every database. On MySQL, a column made required or renamed by a migration keeps its comment, character set, collation and the checks that use it; on SQLite, a migration that would rebuild a table holding a collation, an index or a table option (`STRICT`, `WITHOUT ROWID`) the schema does not record is refused with a message saying so, rather than dropping it. Making a field required no longer stops `migrate:create` on MySQL or SQLite with a request to write the migration by hand.
+
+- [#3082](https://github.com/nextlyhq/nextly/pull/3082) [`2c5e1d8`](https://github.com/nextlyhq/nextly/commit/2c5e1d834449d4afaf6fdc5e4e8c1003bbfda193) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A new core table, `nextly_cache_tag_expiries`, keeps when each cache tag last expired, on the database's clock. It's where writes made outside a request (a job, the CLI, another instance) will record the tags they change, so every instance can expire its cached reads. Run `nextly migrate` to add it. Until it exists, nextly warns once and works as before.
+
+  Rows older than seven days are pruned by a retention pass, in bounded batches, both on writes and on the scheduled webhook drain.
+
+- [#3125](https://github.com/nextlyhq/nextly/pull/3125) [`29905db`](https://github.com/nextlyhq/nextly/commit/29905db3c17cf2bb762541c29a03391cbd1c76c8) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A cached read, through `cachedFind` or Nextly's collection and Single routes, now leaves out any tag longer than the 256 characters Next.js accepts before applying the 128-tag limit, so an over-long tag can no longer push a valid one off the end. The caching and REST guides now say when a page shows a write, what happens when an expiry fails, which writes expire pages, and that the login returns `accessToken`.
+
+- [#2858](https://github.com/nextlyhq/nextly/pull/2858) [`e86162c`](https://github.com/nextlyhq/nextly/commit/e86162c5ded69bfe263c9ddb100f0418a3d0269c) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A check of whether a caller may read a collection now answers yes where the collection's `read` rule answers with a filter, where it answered no before: `ctx.caller.can`, `GET /me/capabilities`, the dashboard and widget scopes, and the entity reader behind versions, translations and content events. What those checks let the caller read is limited to the entries the filter matches, and a document lock is read only for a document the filter matches.
+
+- [#2978](https://github.com/nextlyhq/nextly/pull/2978) [`51765f3`](https://github.com/nextlyhq/nextly/commit/51765f3d018aa0984a7b0f15f3b82c04ee60e6f5) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - On the media page, a page picked straight after it loads now stays picked. Moving to another page within a moment of the page opening used to send you back to page one, because the search box reset the page while settling a search that had not changed. Media tiles and their checkboxes are also named by the file name the tile shows, not its storage path, so screen readers read the name you uploaded, and voice control or a search by that name finds the tile.
+
+- [#3050](https://github.com/nextlyhq/nextly/pull/3050) [`b09382d`](https://github.com/nextlyhq/nextly/commit/b09382dd7e7ad31a4c74faedfb155bba9dd9c3b6) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A migration's state is now read from its latest outcome alone, and an interrupted run leaves nothing half-recorded.
+  - `nextly migrate`, `migrate:down`, `migrate:status` and `migrate:resolve` read an app migration as applied or rolled back from the last run, rollback or `migrate:resolve` that recorded one. An attempt that failed or stopped afterwards no longer makes an applied migration read as pending, so it is never applied twice.
+  - A migration file run in a transaction on PostgreSQL or SQLite records its attempt and its outcome inside that transaction. When the process is killed, its connection drops or a statement fails, nothing of the file is left, not even a ledger row, and the next `nextly migrate` applies it from its start. A failed file of this kind is no longer listed as failed by `migrate:status`; the command that ran it reported the error.
+  - On MySQL, and for a file marked `-- nextly:no-transaction`, `migrate:down` now records that a rollback started before its first statement, as `nextly migrate` already did for a file. A rollback that stops part-way is shown by `migrate:status` as one that recorded no outcome, and the migration stays recorded applied.
+  - An attempt cleared by `migrate:resolve --failed-cleanup` is no longer read as a rollback, so clearing an attempt made after a migration was applied leaves it applied.
+  - A migration file with no snapshot whose statement fails now ends with "Migration <name> failed: <reason>", as a file with a snapshot does, rather than the database's bare message.
+
+- [#2539](https://github.com/nextlyhq/nextly/pull/2539) [`7f61574`](https://github.com/nextlyhq/nextly/commit/7f61574f6b4f10d9c73e07dbe56ed36212baa8ea) Thanks [@aqib-rx](https://github.com/aqib-rx)! - On MySQL, a migration file marked to run outside a transaction now runs in strict mode like every other migration, so a statement that would cut a stored value short fails instead of silently truncating it.
+
+- [#2905](https://github.com/nextlyhq/nextly/pull/2905) [`36f75e4`](https://github.com/nextlyhq/nextly/commit/36f75e4bb47d0c43599ad35b0419fc4ad956c3b1) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard widget whose component is missing from the app's component map now draws its own
+  card's error state, and the rest of the admin serves. Production no longer reads, checks or
+  writes the map: the admin's server layout does nothing there, and no longer refuses the admin
+  over a missing widget component. In development the map is still written again when it falls
+  behind; where it cannot be (`NEXTLY_GENERATED_FILES_WRITE=0`, or a folder that is not writable)
+  the server log names each missing component, its owner and the fix instead of refusing.
+
+  The card's error names the widget, its owner and the missing path in development, and says only
+  that the component could not be loaded in production. The grid counts the card as failed.
+
+  New: `nextly generate:types --check` compares the committed map with the config and writes
+  nothing. It exits 1 naming each missing component and each path no longer declared, and 2 when
+  it cannot load the config. Run it in CI.
+
+  The error code `NEXTLY_ADMIN_COMPONENT_MAP_STALE` is gone with the refusal it named. The widget
+  definition gains an `owner` that core publishes for a widget drawn by its own component;
+  `registerWidget()` and `overrideWidget()` refuse it, as they refuse `serverData`.
+
+- [#3090](https://github.com/nextlyhq/nextly/pull/3090) [`addefbe`](https://github.com/nextlyhq/nextly/commit/addefbe37bb7009371d88a1460e83d7a264b60a4) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard header gains a New button beside Customize. Its main part
+  creates the type a person created most recently (or the first they may
+  create), and its menu lists the recent types, then every type they may create,
+  grouped as the sidebar groups them, with a search past ten. It is hidden for
+  someone who may create nothing. The command palette offers "Create <type>" for
+  each type too. A type is remembered as recent when an entry of it is created,
+  from anywhere in the admin, not when its form is opened.
+
+  The Create card is removed: `core/quick-create` is no longer a core widget, and
+  core's default dashboard gives Needs attention its row. Its id is now a retired
+  card, as the per-collection and per-Single cards are: a site whose
+  `admin.dashboard.defaultLayout` (or `hide` or `overrides`) still names it is
+  refused at startup with a message saying creating entries now lives in the
+  dashboard header's New button, so remove it from the config. A saved layout
+  holding it reads without it.
+
+  The header holds its layout from the first paint: the summary line's height,
+  Customize's place and the New button's fixed width are reserved before their
+  data arrives, so nothing in the header moves as the dashboard loads.
+
+- [#2835](https://github.com/nextlyhq/nextly/pull/2835) [`be529a6`](https://github.com/nextlyhq/nextly/commit/be529a69c968e275de44c3172a2e54a7fad06f2a) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A password inside a group is kept when an edit doesn't resend it. An update that leaves out, or sends empty, a password held in a group or repeater, or in a field group held inline in one, keeps its stored hash; `null` still clears it and a new value replaces it. Repeater rows keep their own by id, and a translated group keeps the written language's.
+
+- [#2609](https://github.com/nextlyhq/nextly/pull/2609) [`95e7772`](https://github.com/nextlyhq/nextly/commit/95e77720d0cfb3c0f37582ec563d90b4456f4a5a) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A plugin can pin a version in its own transaction (experimental). `ctx.services.versions.pins.registerHolder({ name, label })` registers a version pin holder in the plugin's namespace, so two plugins naming a holder alike hold apart and none reaches one of core's. Its `pin`, `release`, `releaseAll` and `list` take `{ tx }`: the handle `ctx.db.transaction` passes its callback, or the transaction `ctx.services.collections.withTransaction` hands its work. A pin commits or rolls back with the plugin's own writes, under the same document lock and refusals as core's pins. The plugin SDK exports the types, with `VersionPinHolderDefinition` (what `registerHolder` takes) and `VersionRef`. A registered holder now reads its own slots as well: `holder.list(db, ref)` takes a transaction or the adapter and names the holder in the query, so what other features pin on the same document is never read. Registration returns a `RegisteredVersionPinHolder`, a `VersionPinHolder` with `list`; `VersionPinHolder` itself is unchanged, so a type written to it keeps compiling.
+
+- [#3077](https://github.com/nextlyhq/nextly/pull/3077) [`e454ad1`](https://github.com/nextlyhq/nextly/commit/e454ad189c176a6ef1df69da302c120fc4d655b6) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A plugin's write made as a user inside `ctx.services.collections.withTransaction` reads that user's roles on the transaction. They were read on the pool, outside it: a role the transaction had taken away was still on the caller a field rule reads as `req.user`, so a rule checking `req.user.roles` could allow a write the transaction's own roles refuse, and on PostgreSQL and MySQL each lookup ran on another connection while the transaction held its own.
+
+- [#3119](https://github.com/nextlyhq/nextly/pull/3119) [`91cef56`](https://github.com/nextlyhq/nextly/commit/91cef56f68250ae869305fbcc303e2293ce90fa8) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A plugin that writes to columns it added to a collection, a Single or a component through `ctx.db.contributed` now expires the cached pages showing that entry or Single, as any other content write does. Inside `ctx.db.transaction` the pages expire once the transaction commits, and a rolled-back write expires nothing. A cached page also keeps its own collection's or Single's tag when a read names more tags than Next.js keeps. On SQLite, a collection or Single deleted inside `ctx.db.transaction` expires its cached pages once that transaction commits, and not at all when it rolls back; on PostgreSQL and MySQL that delete commits on its own connection, so it expires them straight away and a rollback does not undo it.
+
+- [#2837](https://github.com/nextlyhq/nextly/pull/2837) [`a6c1920`](https://github.com/nextlyhq/nextly/commit/a6c19209ecee2968ba2cbf927913827728c23524) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A populated relationship under the related collection's `read` rule that answers with a filter now shows the related rows the filter matches, where it withheld every row of that collection before. A row the filter does not match is withheld, as a row the caller may not read is.
+
+- [#2811](https://github.com/nextlyhq/nextly/pull/2811) [`b707e03`](https://github.com/nextlyhq/nextly/commit/b707e0316a5b798a0ec47bbdfcdf3810cbdc0cd7) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A built-in Public role is added: the role visitors will be judged by. It does not change access yet. It can't be deleted, renamed, given to a person or an API key, or joined to another role's inheritance; only its permissions can be set.
+
+  A site whose own role already used the slug `public` keeps that role under the next free slug (`public-1`, `public-2`, …) on the first boot of this version, with its name, holders, permissions and inheritance unchanged, and the change is logged. Code access rules that check the role slug `public` must check the new slug instead.
+
+  Saving a role in the admin keeps its slug.
+
+  An app or plugin role declared with the slug `public` is refused at boot, as one declared with `super-admin` already is.
+
+  At boot, the Public role is given `read-media` and the read of each collection and Single whose `read` rule answers `true` for a visitor. Each read is granted once, so one an owner removes stays removed. Access doesn't change yet.
+
+  Plugins can declare permissions for the Public role on their own collections with `contributes.publicGrants` (experimental), for example `[{ collection: "tickets", action: "create" }]`. Only `read` and `create` can be granted. Each grant is made once at boot, so one an owner removes stays removed, and a grant on a collection the plugin doesn't contribute is refused and logged. The form builder uses it to let the Public role create form submissions. A plugin's grant lasts only while an enabled plugin declares it: disabling or removing the plugin, or a version that no longer declares it, removes the grant, and the removal is logged. Declaring it again grants it again, except one an owner had already removed.
+
+  Each startup log names what the Public role does not hold yet that visitors may rely on: reads with no `read` rule, reads whose rule answers neither `true` nor `false`, writes whose rule answers `true` for anyone, and rules that failed or gave no answer when asked. Grant the Public role each one visitors should keep.
+
+- [#2868](https://github.com/nextlyhq/nextly/pull/2868) [`593302d`](https://github.com/nextlyhq/nextly/commit/593302d08f2e904c0991f2a61c8bde12be02e017) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A publish of every language at once is limited to the entries its `publish` rule's filter matches: through the Direct API (`nextly.update` by `id` with `locale: "*"`) or REST (`publish-all`, or a status-only write with `?locale=*`). The rule is asked in each language the publish puts live, and the entry is matched against that language's filter, in that language. `unpublish-all` is limited the same way, its filter matched in the default language. An entry outside a filter is refused and left as it was: with a 403 where the caller may read it, and as a missing entry (404) where it may not. The entry is matched before the write, under its row lock and once the write is in.
+
+- [#2829](https://github.com/nextlyhq/nextly/pull/2829) [`fbbdf63`](https://github.com/nextlyhq/nextly/commit/fbbdf63c1612512c49dec0ee0e014783f7da2dfc) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A read by id under a collection `read` rule that answers with a filter, through the Direct API, a plugin service or REST, now reads an entry the filter matches and answers one it does not match exactly as an entry that does not exist, where it refused such a caller before. Such a read returns the entry the filter matched, without its pending working draft. A read rule's filter can't name a field inside a component yet: a rule whose filter does is refused, and the refusal is logged once.
+
+  A read rule's filter that names a localized field must hold in each language the read may fall back to, so a read never shows a fallback value the rule refuses. A filter on a localized date, a read rule's or a caller's own `where`, now compares the date as the instant it names on every database.
+
+- [#2890](https://github.com/nextlyhq/nextly/pull/2890) [`b372376`](https://github.com/nextlyhq/nextly/commit/b372376b8be48707368cb8582f70f433dbcb0c56) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A collection's `read` rule is now typed to answer a filter, typed by the collection's own fields: `defineCollection` checks each key and operator the rule's filter names, and the value each is compared with, so a misspelt field or operator fails to compile. The keys are the top-level fields declared with a field factory or inline, and the system fields; a path into a group is not typed yet. The new types (`CollectionRuleFilter`, `CollectionFilterRule`, `CollectionRuleAnswer`, `UntypedRuleFilter`, `CollectionFilterRuleInput`) are experimental.
+
+  Existing code compiles unchanged, with one exception. `CollectionAccessControl['read']` now includes a filter-returning rule; code that used it as the type of any rule should use `AccessControlFunction | boolean`. The field factories that a filter can name (`text`, `textarea`, `email`, `code`, `number`, `checkbox`, `date`, `select`, `radio`, `upload`, `relationship`) keep the name as written, and still return their field's config type; a name built at runtime is a `string`, as before, and leaves the filter untyped. `CollectionConfigInput` takes two type parameters with defaults that keep its meaning. Code that calls a stored read rule and reads its answer as a boolean should handle the filter case, or treat any answer other than `true` as a refusal.
+
+- [#2810](https://github.com/nextlyhq/nextly/pull/2810) [`e2e162b`](https://github.com/nextlyhq/nextly/commit/e2e162ba33229f265b78286c6429fac94c61d2d8) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A collection's `read` rule may now answer with a filter (a `where`) instead of `true`, as an experimental step: a list, its total, a count, and the group and timeseries reads made through the Direct API or a plugin service then read only the entries the filter matches, as does a page the website resolves by its slug. Every other read, including a read by id, every REST route and relationship population, still refuses a caller whose rule answers with a filter, as before, and the rule's type is unchanged. A read rule's filter can't use `near` or `within` yet, nor the reserved `_translated`, `_pendingChange` and `_inRelease` keys: a rule whose filter does is refused, and the refusal is logged once.
+
+- [#2969](https://github.com/nextlyhq/nextly/pull/2969) [`df26ad9`](https://github.com/nextlyhq/nextly/commit/df26ad9c63ab3088400cc3c464f03ac0bb49d001) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A user who may publish a document but not change it now waits for a colleague who is editing it: while someone else holds the document, Publish, Publish changes, Unpublish and Publish all are held, and the read-only page names who is editing. The reader never claims the document; they read who holds it on the same beat an editor's claim is renewed, and their writes are held until that first read answers.
+
+- [#3144](https://github.com/nextlyhq/nextly/pull/3144) [`a9c81fe`](https://github.com/nextlyhq/nextly/commit/a9c81fec45940156db1e3da8ecfa0c8a42bb0065) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Fixed: in an app without nextly's cache handlers, a write made outside a request (a job, a script) or one whose cache expiry failed inside a request is expired in Next.js's own cache again at the next request, as before the cache tag expiry ledger was connected at startup. The ledger records it for nextly's handlers, and Next.js's own cache never reads that record, so a read cached without a revalidate time could otherwise keep the previous version.
+
+  Other instances now treat a recorded cache tag expiry as standing for one second past the write, the time an instance may keep a collection's settings cached. An entry another instance fills from settings cached before a schema change is therefore not served once the change is recorded. The instance that made the write isn't held to that second, since it cleared its own cached settings at once, and a tag that expires again never has its recorded time moved back.
+
+  A write made while nextly is restarting, after one registration released the ledger and before the next one connects it, is now kept and recorded by the next ledger, instead of reaching only the instance that made it.
+
+- [#3095](https://github.com/nextlyhq/nextly/pull/3095) [`f06be6e`](https://github.com/nextlyhq/nextly/commit/f06be6e70b5083ea0b90903cd19660dec9757173) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The Visual Schema Builder's create dialogs for a collection, a Single and a field group now show why an address is refused (for example, that a Single address cannot end in `_locales`, or that it names a Nextly system resource) instead of a bare "Validation failed.".
+
+- [#3169](https://github.com/nextlyhq/nextly/pull/3169) [`daa57a6`](https://github.com/nextlyhq/nextly/commit/daa57a6a98eb7904e75e584e2d21125652db6f03) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - When the database refuses the record that tells other instances a cache tag expired, nextly now retries it by itself until it succeeds: after 1 second, then waiting twice as long each time up to 30 seconds, and at the process's next cached read, where a timer may not run. Other instances see the write within about a minute of the database answering again, instead of only after the process's next write. It logs once when the retries start and once when they succeed, and the timer stops when nextly's services are released.
+
+- [#3099](https://github.com/nextlyhq/nextly/pull/3099) [`70ddd2d`](https://github.com/nextlyhq/nextly/commit/70ddd2da7e5082a4dadb353cfccb56deb2aa81f1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A Single publish refused because someone else published newer shared values now reads the
+  caller's grants inside its own transaction when the request was routed and trusted. They were read
+  on another database connection while the transaction held one, so a visitor's Public role read ran
+  outside it and, on a small connection pool, could wait for a connection that never came free.
+
+- [#2822](https://github.com/nextlyhq/nextly/pull/2822) [`a96eecf`](https://github.com/nextlyhq/nextly/commit/a96eecfb9048ddd9b9d0a49f8513d9d706a1f58d) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A REST request that only changes an entry's status and is refused now says which action it was refused (publish or unpublish), not edit.
+
+- [#3006](https://github.com/nextlyhq/nextly/pull/3006) [`40d4a03`](https://github.com/nextlyhq/nextly/commit/40d4a03d84a4e68f20c53c761ac4aa5b0c1b18af) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Populating a relationship under a read rule that answers a filter reads the related rows' columns with Drizzle's current column helper, so it runs unchanged on Drizzle v1.
+
+- [#3021](https://github.com/nextlyhq/nextly/pull/3021) [`ad1287e`](https://github.com/nextlyhq/nextly/commit/ad1287e1a93b2a1d883ddb42b0342eb83246c211) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A release that is not ready to go out now says so inside a border drawn at the destructive colour's full strength, which meets the 3:1 contrast a border needs, where the faded border before it did not.
+
+- [#3049](https://github.com/nextlyhq/nextly/pull/3049) [`d1c1822`](https://github.com/nextlyhq/nextly/commit/d1c18221f0c767d38f0778a5ed047474b06b194c) Thanks [@aqib-rx](https://github.com/aqib-rx)! - The Schema Builder's save preview no longer reports removing a field that
+  holds values as safe.
+  - A removed field's values are counted where they are stored: a translated
+    field's in its translations table, every other field's on the main table,
+    by its stored column name. Before, a translated field was counted on the
+    main table, and a field whose name differs from its column (`metaTitle`,
+    stored as `meta_title`) was queried by the wrong name. Both counts failed
+    and read as 0.
+  - A count that cannot be read is no longer taken as 0. The removal is classed
+    `destructive`, carries `rowCountUnknown: true` (a new optional field on the
+    preview's removed rows), and a warning says the count could not be read.
+    A field group or many-to-many relationship, whose values live in their own
+    table, is reported the same way.
+  - Switching a relationship between one related entry and many is classed
+    `destructive`, in both directions, with a warning that its values are
+    stored differently and may be lost.
+
+- [#2904](https://github.com/nextlyhq/nextly/pull/2904) [`12ebd59`](https://github.com/nextlyhq/nextly/commit/12ebd59f21baaae65a6a51f6148c730244a2b841) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A collection or Single removed from your configuration is no longer brought back by `next dev`, a configuration reload, `next build` or `nextly db:sync`. Once a migration has dropped its tables, no start creates them again, and while they are kept no start changes them or its registry row. A Schema Builder collection or Single still gets a missing table created in development, as before.
+
+- [#3123](https://github.com/nextlyhq/nextly/pull/3123) [`be33daa`](https://github.com/nextlyhq/nextly/commit/be33daaeec3f4794f9fd5ec62d71d4d0ee066fa2) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Where the server cannot read the app's migrations folder (a standalone or serverless bundle may leave it out), the admin no longer tells the operator to write a drop migration for a collection or Single removed from code; opening a version of such a document no longer sends a "seen" mark that the server would refuse; and reading a removed entity's state on a request no longer loads the CLI's migrate command.
+
+- [#2995](https://github.com/nextlyhq/nextly/pull/2995) [`b274eef`](https://github.com/nextlyhq/nextly/commit/b274eef37e550856a6bb5b61b1024498636ca09c) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - A collection on either side of a many-to-many relationship is no longer renamed. Its links live in a junction table spelled from both collections' slugs, which a rename keeps, so after a rename the relationship read every link as empty. The rename is now refused with a conflict naming the fields, and the links stay readable. A collection or Single rename also holds the schema lock now, as every other schema change does, so one started while a migration or another schema change is running is refused at once, with nothing changed.
+
+- [#2821](https://github.com/nextlyhq/nextly/pull/2821) [`5fdc335`](https://github.com/nextlyhq/nextly/commit/5fdc335401238e4f5714b2c67ecf74931795a45b) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A REST list or count of a collection's entries now reads only the entries a collection's `read` rule's filter matches, where it refused such a caller before. The rule is asked once in the request, for the route and the read alike. Every other REST route still refuses a caller whose read rule answers with a filter.
+
+- [#2893](https://github.com/nextlyhq/nextly/pull/2893) [`10b81a9`](https://github.com/nextlyhq/nextly/commit/10b81a93539d216dd92778a837afba7876510be1) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A REST write is limited to the entries its access rule's filter matches, as a write through the Direct API is: an update, a delete, a publish or unpublish sent as a status change, and the writes an editor makes through an entry's versions (a restore, a discard of the held edit, taking the live shared values, an autosave). The route lets a caller through on the filter its rule answers and keeps it for the request; the write matches the entry against that filter, in the language the write names, or the default where it names none. An entry outside it is refused and left as it was: with a 403 where the caller may read it, and as a missing entry (404) where it may not. A check that cannot apply the filter refuses rather than allowing every entry.
+
+  A restore that the update refuses is now answered as the update was: a 403 where the caller may read the entry, rather than a 404 for every refusal.
+
+- [#3004](https://github.com/nextlyhq/nextly/pull/3004) [`7ae01fc`](https://github.com/nextlyhq/nextly/commit/7ae01fc7ceba6193e96c8284f99f6ead15e7d7fe) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - A Schema Builder change that MySQL refused part-way is finished by saving it again:
+  - A relationship whose options name its target collection (`options.target`), the relationships
+    the schema pipeline gives a foreign key, gets that key when the change adds it, even when the
+    earlier attempt already added its column. A relationship the collection already records is
+    planned no new key, and one the change renames, in this attempt or in the one that failed,
+    keeps what its old column had: no key where it had none.
+  - A field made translated over a column the translations table already has takes that column as
+    its own only when it holds every value the field allows: the same type, a length or precision at
+    least as large, and empty values allowed. Otherwise the change is refused before anything
+    changes, naming the column, both definitions and how to go on, since the column may hold the
+    field's values from the change that did not finish.
+  - A field the change made translated whose values the earlier attempt already moved is finished by
+    the retry. A retry that also narrows its length or precision is refused, saying how to finish
+    the earlier change first.
+
+  The same check applies where a config sync (`nextly db:sync`, its `--watch` loop, `nextly migrate`
+  and a config reload under `next dev`) takes a translations column already there as a field's own,
+  for the fields that run newly translates, judged against the fields recorded before the run.
+
+  A config sync now widens a translated field's column when the config raises its length or
+  precision, keeping the column's other properties; a column already wide enough is left as it is.
+  A column that cannot hold the field and cannot be widened to it, such as one of another type, is
+  never converted: the run that changes the field is refused, and later runs report it as a warning.
+
+  The Schema Builder now shows why a schema change was refused, naming each field and its reason,
+  instead of only "Validation failed.".
+
+- [#3180](https://github.com/nextlyhq/nextly/pull/3180) [`fde2cc9`](https://github.com/nextlyhq/nextly/commit/fde2cc97d370cf392846615becdb7d4da6dbd79a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - With nextly's cache handlers installed, a database that takes connections but never answers can no longer hold cached public reads. Every call to the cache tag expiry ledger, a lookup or a record, is now given up on after 5 seconds, and a cached read waits at most a second on a retry of a refused record, which goes on in the background. Before, both waited for as long as the database did. A call given up on is not cancelled and keeps its connection, so while one is still running no other of its kind is started: a database that does not answer holds one waiting record and one waiting lookup per process, not one more at every write, retry and lookup. A lookup that is given up on counts its tags as expired at that moment: entries cached before it are read afresh, and those cached after it are served, until the next lookup says what the ledger holds.
+
+  A retried cache tag expiry record now writes only to the ledger: it no longer expires the tag in the instance again, so a page regenerated since the write stays cached while the retries fail. When a retry succeeds, it is judged by the database time it read, as a write's own record is, since another instance may have recorded the same tag in that millisecond; a page regenerated during the outage is rebuilt once then. A record that answers after it was given up on is not made again by the retry, but only for the write it was made for: an earlier record landing late does not stand in for a later one the ledger refused. A refusal kept while a retry is under way waits the first retry delay again once that retry succeeds, and the tags a cache expiry hand-off gave back after its timeout are retried too, rather than waiting for the next write. Each record the ledger refuses is now logged with its tags (`cache-tag-record-failed`), a refusal during a retry included, so the content another instance may still serve stale can be named; the retries themselves are said only when they begin and when they succeed.
+
+- [#3060](https://github.com/nextlyhq/nextly/pull/3060) [`70201c5`](https://github.com/nextlyhq/nextly/commit/70201c535868904e463dee592b44632b9ddb5196) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A role or permission change now takes effect at once everywhere in the server process that made it. A production Next.js build loads Nextly's modules more than once in one process, and each copy kept its own record of the role version, so a check asked through a service another copy had registered could serve the grant it had cached for up to a second after the change: a release's readiness then read Ready for a document whose author had just lost the right to publish it, and the early stop of a scheduled release on that change could miss it. Every copy now shares the one role version.
+
+- [#2794](https://github.com/nextlyhq/nextly/pull/2794) [`4211cec`](https://github.com/nextlyhq/nextly/commit/4211cecc38c19bbe24ea8b7ee1fc2c60d7d6fc05) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A code access rule that answers with a filter that isn't well formed (an unknown operator, an empty `in`, an `and` that isn't a list, and the other shapes a `where` refuses), or a filter from a create rule or a Single's rule, which may only answer `true` or `false`, is now reported in the log once, naming the rule's collection and operation. In development it is also raised as an error. The caller is refused either way, as before. A rule that answers a well-formed filter is refused as before too, and its log notice now says the check does not apply a rule's filter, rather than telling the rule to answer `true` or `false`.
+
+- [#3084](https://github.com/nextlyhq/nextly/pull/3084) [`8b1de71`](https://github.com/nextlyhq/nextly/commit/8b1de71e91e7a13d6836b059968716cff6fe1ae6) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A setting's own editor (`@experimental`) gets two fixes.
+  - **`SettingEditorProps<Value>["onChange"]` takes `Value | undefined`**, so an editor can clear an optional setting: `onChange(undefined)` saves the setting unset, and the card reads its default, or no value where it has none. This is a widening of the parameter: an editor that calls `onChange` with a value keeps compiling unchanged. Only code that builds `SettingEditorProps` itself, with an `onChange` that accepts `Value` alone, needs its callback to accept `undefined` too.
+  - **An editor for a Field setting is held to the fields the chosen collection offers the reader** in the settings sheet. A field the collection does not offer is named under the editor on Done ("names a field that is not available", the words the layout write refuses it with) and nothing is saved, rather than failing the whole sheet's save. The check is the layout write's own field-fit rule (`unfitContentField`).
+
+- [#2943](https://github.com/nextlyhq/nextly/pull/2943) [`3901727`](https://github.com/nextlyhq/nextly/commit/3901727917e92e033aad5dee1bc00705547a2cc7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A change to settings alone now reaches production. When only a collection's, Single's or field group's settings change (labels, description, icon, sidebar group and other admin options, versioning, Draft/Published, the localisation flag, or a field's help text, placeholder or hidden flag), in code or in the Schema Builder, `nextly migrate:create` writes a migration with no table statements that names each entity and what changed (`-- Settings: posts: description`), with its snapshot. A migration that changes columns also names every settings change since the previous snapshot, a cleared setting counts as a change, and a Builder entity's registry row travels with its settings change. Site content settings (general settings, the email setup) never appear in a migration.
+
+  Every snapshot `migrate:create` writes now records every entity's settings. Snapshots written before this release carry none and are read as saying nothing about them, so the first `migrate:create` after upgrading writes one settings-only migration that records every entity's settings (`-- Settings: posts: settings recorded`).
+
+  `nextly migrate` now refuses a pending migration file the Schema Builder wrote with no snapshot beside it (a `<timestamp>_create_<slug>.sql`, `_update_`, `_drop_`, `_i18n_` or `_status_` file), where it used to apply it as written. It stops before changing anything, names the file, and says to replace it with the migration `nextly migrate:create` writes for that change. `nextly migrate:check` names the same file and remedy.
+
+- [#2961](https://github.com/nextlyhq/nextly/pull/2961) [`3520911`](https://github.com/nextlyhq/nextly/commit/3520911c35ca7ad6b4a247f4c217cbf0faa15d42) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A site's own dashboard widgets, declared in `admin.dashboard.widgets`, are now registered and
+  offered like a plugin's, and `defaultLayout` may place them; startup no longer warns that they
+  are checked but not applied. Their components are listed in the generated component map, by
+  `next dev`, `nextly generate:types` and its `--check`, under the site config's name. A site names
+  a component relative to its config file (`"./dashboard/notes#NotesCard"`), which the map imports
+  from its own folder, or by a package name; a path alias is refused at startup with the relative
+  spelling to write instead. Widgets a plugin's `setup()` adds to the site's dashboard are listed
+  too, as the running server registers them. In development a map whose config has moved is
+  written again, so a component named relative to the config resolves from its new folder.
+
+- [#3182](https://github.com/nextlyhq/nextly/pull/3182) [`816e497`](https://github.com/nextlyhq/nextly/commit/816e49758fe1923f97f3b5e7c46577ceb279eb55) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - With nextly's cache handlers, a slow lookup of the tag expiry ledger can no longer make an instance serve an entry filled before another instance's write. Each instance learns the database's clock from its lookups, and it took the statement to have run halfway through the round trip. Under load, a lookup that waited for a connection could then put an entry seconds later than it began, past the write's recorded expiry, and that entry was served for its whole lifetime. The statement is now taken to have run as late as its answer arrived, so an entry looks no later than it began, and each lookup's bound replaces the last, so a database clock that stepped back, as after a failover, is followed at once. A slow lookup can still cost a rebuild, but never a stale read. An earlier copy of nextly's cache module still loaded after a hot reload keeps its own offset, which this one does not read.
+
+- [#2974](https://github.com/nextlyhq/nextly/pull/2974) [`297fd0d`](https://github.com/nextlyhq/nextly/commit/297fd0dc89a7fc73143511d595aafd66098c0734) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A SQLite migration that rebuilds a table to change a column's nullability or default is now refused when a column carries an `ON CONFLICT` policy the schema does not record, rather than rebuilding the table without it.
+
+- [#3191](https://github.com/nextlyhq/nextly/pull/3191) [`8eec014`](https://github.com/nextlyhq/nextly/commit/8eec0145cb586026bd6045c8854285bbab47e34c) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - With nextly's cache handlers, a database that stops answering now holds at most four cache tag ledger calls of each kind per process, a record or a lookup, from the moment they start. Before, every write and lookup in the first five seconds of an outage started a call of its own before any was given up on. Further calls wait for a slot within the same five seconds, and are turned away rather than started if a call of their kind is given up on meanwhile. A call of a withdrawn ledger that never answers no longer holds back the ledger installed after it, and a call still waiting for a withdrawn ledger's slot is turned away when the next is installed, never started against the withdrawn one. A retry turned away while an earlier record is stuck no longer stops that record, landing late, from counting as the expiry it was, so the retry doesn't record it a second time. After a hot reload, an expiry an earlier copy of nextly's cache module looked up is asked about again before it is judged by, so this copy never judges it by a clock offset it learned before a database failover. If that lookup fails, it is not asked again before the lookup lifetime passes, and meanwhile the expiry counts as no earlier than the failure, so entries begun before then are still refused.
+
+- [#3015](https://github.com/nextlyhq/nextly/pull/3015) [`65a6525`](https://github.com/nextlyhq/nextly/commit/65a6525b84252a4273eeefb1c7347817698a8cac) Thanks [@faisal-rx](https://github.com/faisal-rx)! - After a restart, a delete inside a plugin's own transaction, opened by `ctx.services.collections.withTransaction` or by `ctx.db.transaction`, is now judged by a delete rule's filter on a translated field. Before, such a delete was refused, even for an entry the filter matched, until some earlier write or read had looked at the collection's translation table, because a write inside a transaction cannot look that table up itself.
+
+  At boot, Nextly now looks up each translated collection's, Single's and field group's translation table once, in the background. Startup doesn't wait for it; it costs one database look-up per translated entity. Until it finishes, such a delete is refused as before. A look-up that fails is logged and skipped.
+
+- [#3039](https://github.com/nextlyhq/nextly/pull/3039) [`26617bb`](https://github.com/nextlyhq/nextly/commit/26617bb6cf7b2e8fc050a4c0237a11fd79c746d2) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A restore of a version and a take of the live values into a held edit are judged by the update rule in the language they write, as an update in that language is. A rule that refuses one language, such as `update: ({ locale }) => locale !== "de"`, now refuses a restore of a German version and a take of the live values into a German held edit; before, both went through, because the route judged them in every language and the write did not ask the rule again. A rule that allows only one language, such as `locale === "de"`, now allows a restore of a German version and a take of the live values into a German held edit, which it refused before. A rule whose filter is answered by language is matched in the written language: a restore or take that matches the German filter succeeds, and one that does not is refused. This holds for a collection entry and a Single.
+
+- [#2955](https://github.com/nextlyhq/nextly/pull/2955) [`e742eb1`](https://github.com/nextlyhq/nextly/commit/e742eb150894afe3ac99d3613217d950c4fc24ad) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A checked call with no signed-in user and no plugin person, which the Public role doesn't cover, is answered 401 `AUTH_REQUIRED` ("Authentication required.") by the Direct API and plugin services, as REST answers it, instead of 403: signing in could grant what it asked for. A rule that refuses a visitor the Public role does cover is still answered 403. A website page still answers such a refusal with its not-found page.
+
+- [#3086](https://github.com/nextlyhq/nextly/pull/3086) [`d12dc54`](https://github.com/nextlyhq/nextly/commit/d12dc5430c09ef9f938f25797c590b8b1cef892f) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `renderWidgetCard` from `@nextlyhq/plugin-sdk/testing/admin` now loads in a jsdom test. It reached `nextly/testing`, whose test instance refuses to load where `window` is defined, so a card test under jsdom failed on import. The card helpers it uses are published on their own as `nextly/testing/widget-card`, which loads in a browser environment; `nextly/testing` still exports them.
+
+- [#2894](https://github.com/nextlyhq/nextly/pull/2894) [`da46404`](https://github.com/nextlyhq/nextly/commit/da46404049de75b57dca86e1cddeedc0b3ef0508) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `defineWidget` takes its fields by the names a widget is read by, and startup
+  names every fault of every owner in one message.
+
+  **Breaking for `defineWidget` (`@experimental`).** The fields are renamed, with
+  no old spelling kept:
+  - `data` is now `load`.
+  - `display` is now `view`, which is one of core's views (`"figure"`, `"list"`,
+    `"table"`, `"bars"`, `"series"`) or `{ component: "<module>#<Export>" }`.
+    Today's display names are not view names: `"metric"` is now `"figure"`, and
+    `"timeseries"` is now `"series"`.
+  - `empty.when` is now the top-level `isEmpty`, and a view with its own
+    component must give it. `empty` holds the message and the action.
+  - `example` is now `preview`, a list of named cases, each checked against the
+    widget's data and settings types. A case is written
+    `{ name, data, settings? }`.
+  - `permission` is now `access`.
+  - `sketch` is removed: the add panel draws the view's own sketch.
+
+  A declaration still using an old name is refused at startup, and the message
+  names the field that replaced it.
+
+  **New, all `@experimental`:**
+  - An `icon` field.
+  - `category` is optional, and defaults to "Other".
+  - The `CoreView`, `WidgetView`, `WidgetAccess`, `WidgetPreviewCase` and
+    `WidgetSummary` types, exported from `nextly` and `@nextlyhq/plugin-sdk`.
+
+  **Typed now, judged in a later release:**
+  - `access` as the collections a widget reads, or as a predicate of the person;
+  - `shows`;
+  - `summary`, a label and a count for the dashboard's header.
+
+  Until that release, a declaration using any of these is refused at startup
+  rather than started with the rule ignored.
+
+  **Startup:**
+  - Core's own widgets, every plugin's and the site's go through one
+    registration, so a fault in core's list and a plugin's fault arrive in the
+    same message, and nothing is kept until every check passes.
+  - A long title or description no longer stops startup.
+  - Core's widget list is one module per widget under `core-widgets/`.
+
+  **Core's Note card is declared with `defineWidget`**, as a plugin's widget is.
+  It reads the same to its reader, with one exception: an unwritten note's empty
+  state now reads "Nothing written yet. Write it in the card's settings.", drawn
+  by the card's frame like every other empty card.
+
+- [#2910](https://github.com/nextlyhq/nextly/pull/2910) [`ddd7fea`](https://github.com/nextlyhq/nextly/commit/ddd7fea005595dcc7f7487fea3df18c8aeb44d51) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard widget declared with `defineWidget` now reads its data only through its `load` function, run on the server for the person asking. Its read services read as that person, so two people see what their own access allows. **Breaking:** the `load: { query }` form is removed, along with the `ContentQuery` type the package root exported. A widget still using it is refused at startup with a message saying `load` must be a function. Move the query into a function that reads with the `count` and `find` services it is handed: `load: async ({ settings, services }) => ({ total: await services.count(settings.collection) })`.
+
+  Each card is now decided in order before its data is read. A person who fails the widget's `access` gets the card's "not available" state, and `access` may now be a permission name, `{ collections }` (every collection must be readable by the person, renamed collections included) or a function of the person; a function that throws counts as no access and is logged. A card missing a setting its widget needs draws "Choose <setting> in the card's settings" as its empty state. A widget's `shows` function is now judged per card: when it answers false, the card is left off that person's dashboard and out of the update count, and customise mode shows it marked "Not shown for you right now". A data function that throws, runs past its time budget or answers a value JSON cannot carry fails its own card only, and the cards beside it are still drawn. The log names the plugin, the widget and the reason; the plugin's own error message and stack are logged only in development, since they can hold data.
+
+- [#2903](https://github.com/nextlyhq/nextly/pull/2903) [`4827a40`](https://github.com/nextlyhq/nextly/commit/4827a40af6d90f47c490c92848aa89afca50f115) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A collection's `update`, `delete`, `publish` and `unpublish` rules may return a filter in their declared type, as its `read` rule may: `defineCollection` types the filter by the collection's own fields, so a misspelt field or operator, or a value of the wrong kind, fails to compile. `CollectionAccessControl`'s `update`, `delete`, `publish` and `unpublish` now accept a rule that answers a filter. Code that stores one of those rules as a general rule should type it `AccessControlFunction | boolean`, which every operation still accepts.
+
+- [#2838](https://github.com/nextlyhq/nextly/pull/2838) [`757ee53`](https://github.com/nextlyhq/nextly/commit/757ee53df21e33209d698ec280937f18af9b0f08) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A collection's `update`, `publish` and `unpublish` access rules may answer a filter instead of `true`. A write through the Direct API or a plugin service, by a signed-in user or an API key, then changes an entry only if it matches the filter. An entry outside the filter is left as it was and refused: with a 403 where the caller may read it, and as a missing entry (404) where it may not. The entry is matched under the write's lock, and a write inside the caller's own transaction is matched in that transaction.
+
+  A write that changes an entry's data must leave it matching every filter that judged it. An update that would move the entry out of its filter is refused with a 403 and changes nothing, and so is a publish that would promote a held edit doing the same. A filter on a translated field is matched in the language being written, and an unpublish of every language at once is matched in the default language. An edit held as a pending change on a published entry is refused when it changes a field the update filter names, and is otherwise held and shown to a caller whose update filter matches the entry.
+
+  Over REST, for the bulk and batch writes, for a release's members, and for a publish of every language at once, an update, publish or unpublish rule's filter is still refused, as before.
+
+- [#2972](https://github.com/nextlyhq/nextly/pull/2972) [`5aa5147`](https://github.com/nextlyhq/nextly/commit/5aa5147400b353a104f891942ac49f82d23a9301) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A content write that couldn't expire its cached pages no longer fails silently. The expiry is retried, then handed off to finish outside the request. The response carries a notice that the change is saved and its public pages may show the previous version for a while. Server Actions now let the writer read their own write at once. A release's pages follow each collection's and Single's `revalidate` settings, so an opted-out collection is left alone and extra tags are expired too.
+
+- [#3024](https://github.com/nextlyhq/nextly/pull/3024) [`d98fada`](https://github.com/nextlyhq/nextly/commit/d98fada0d2eded65a69decfd92be89dc3268670f) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A plugin's or the API's yes-or-no question of whether a caller may update, delete, publish or unpublish a collection now answers no when that action's rule answers a filter: `ctx.caller.can(...)` in a plugin route and `nextly.access.check(...)`. Such an answer names no entry and applies no filter. A read under a filter still answers yes. The hints are unchanged, a filter counting as the permission held: the admin's capability cells, a dashboard widget's and an attention item's offer, and giving up a document lock.
+
+- [#2985](https://github.com/nextlyhq/nextly/pull/2985) [`39198ae`](https://github.com/nextlyhq/nextly/commit/39198ae6a970e2e8219a80600e0fbce09f5248ed) Thanks [@faisal-rx](https://github.com/faisal-rx)! - `nextly.access.check` answers with the access decision every route asks. Two answers change. On media, settings and the Email hub, a `manage-` permission now counts as the plain read, create, update and delete it stands for, as every route already counts it, so a role holding only `manage-settings` may update settings by `access.check` too. And for a read, `true` now means the user may read some entries: where a collection's `read` rule answers a filter, the user may read only the entries the filter matches, so read with the user's context (`overrideAccess: false`) rather than as a trusted call, which returns every entry. A write whose rule answers a filter is still refused, and a check that cannot read the user's roles or grants refuses rather than throws.
+
+- [#2639](https://github.com/nextlyhq/nextly/pull/2639) [`86be951`](https://github.com/nextlyhq/nextly/commit/86be951788245067fb5945ca6022709371c42c01) Thanks [@aqib-rx](https://github.com/aqib-rx)! - An access rule on a site whose languages are stored, rather than declared in its configuration, is now told every language the site has. Before, such a rule was told none. A site that declares its languages in its configuration is unchanged.
+
+- [#3022](https://github.com/nextlyhq/nextly/pull/3022) [`3982d12`](https://github.com/nextlyhq/nextly/commit/3982d121d6c334786203b8cb9cdc01593a3e3a55) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The access-control service no longer has a `checkAccess` method. Nothing in Nextly called it any more: every check asks the access decision, and code that asked whether a user may act should ask `nextly.access.check({ userId, operation, resource })`, which answers as the route gate does.
+
+- [#3134](https://github.com/nextlyhq/nextly/pull/3134) [`b667a77`](https://github.com/nextlyhq/nextly/commit/b667a7753fd358386a042f3ecab2413a4a025aad) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Adding a widget to the dashboard now happens in a gallery that shows each widget
+  once, drawn small by its own view, instead of a list grouped by collection.
+
+  Open Add widget in customise mode to search widgets or collections, filter by
+  All, Content, Activity, Trends or Plugins, and pick from up to four suggested
+  pairs, such as "Recent Posts" or "Pages over time". Suggestions follow the
+  collections you saved most in the last 30 days, or the ones with the most
+  entries if you have saved none. A widget that reads a collection opens a short
+  add step in the same panel: choose the collection (it starts on the one you
+  edit most), the period where the widget has one and the width, and see the card
+  previewed before Add to dashboard. A widget that reads no collection is added
+  straight away. Searching a collection's name lists each widget that can read it
+  as a pair, such as "Count · Posts", which adds with that collection chosen.
+  Cards you removed this session are listed first and come back with their
+  settings.
+
+  What the gallery offers is decided on the server, as the person asking, by the
+  new `GET /api/dashboard/gallery`. It leaves out any widget whose own `access`
+  or `shows` refuses them, and any collection they may not read or that is kept
+  off the dashboard.
+
+  Core's Count, Over time, Breakdown and Note widgets now declare a preview case
+  of sample data, which their gallery tiles are drawn from.
+
+- [#2901](https://github.com/nextlyhq/nextly/pull/2901) [`06dd5a0`](https://github.com/nextlyhq/nextly/commit/06dd5a01d480b8bc51778d5ced273431772c45f1) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The admin accepts the plain settings and email permissions. Settings pages are shown on `read-settings` and used on the permission their action names: creating an image size or a user field asks `create-settings`, editing one `update-settings`, and the plugins area any settings change. A role that may only read settings sees General, Image Sizes and User Fields read-only: it may open a user field to see it, and is offered no save, add, edit, delete or reorder it would be refused. A plugin's "Open settings" link is shown only to a caller its settings page lets in. A role still holding `manage-settings`, `manage-email-providers`, `manage-email-templates` or `manage-media` keeps every page it had, since the admin counts each as the plain read, create, update and delete it stands for, as the server does. A plugin that names no settings permission of its own now asks `update-settings` (before, `manage-settings`, which still counts as it).
+
+- [#2819](https://github.com/nextlyhq/nextly/pull/2819) [`a71a6b9`](https://github.com/nextlyhq/nextly/commit/a71a6b95fe6429908ac6c7ad41abfe475bd8e7b8) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The admin asks each request it sends as the server judges that request: the localized list, the editor and quick-edit ask for every language's translation state only where the server lets the user read them all, the list and quick-edit in the default language their reads are sent in, and otherwise show no Languages column or language filter; the version history and its compare pages are offered only to a user who may read the whole history, in every language, and are not offered at all otherwise; Publish all languages warns that languages whose state could not be read may go live too; Publish all languages, a create (sent with no language, so in the default one) and the quick-edit modal's save each follow their own answer from `GET /me/capabilities`. The permission list is asked again when the role assignment it was read under ends. `/me/permissions` answers an API key with the key's own permissions.
+
+- [#2896](https://github.com/nextlyhq/nextly/pull/2896) [`318499c`](https://github.com/nextlyhq/nextly/commit/318499c76f2216e2db6fca7aec122eb1d964a915) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - ---
+
+  The admin's bundle size is now checked on every CI run, so a change that makes it noticeably bigger fails with the size it measured and the budget it broke. The total the package ships stays within 3,500 KB minified; the code every admin page shares stays within 280 KB gzipped; and each page is held to its own measured size plus 10%. A new page has to be measured and pinned when it is added (`pnpm --filter @nextlyhq/admin check:budgets --pin`). Lazily loaded pages now ship in chunks named after their place in the admin, so each can be told apart from build to build.
+
+- [#2859](https://github.com/nextlyhq/nextly/pull/2859) [`c9763fe`](https://github.com/nextlyhq/nextly/commit/c9763fe073d73af003b5837fe920a39bc4e9cd3a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin rail has one Content item in place of Collections and Singles. Its panel switches between the two with a segmented control, and one search finds either kind and marks the other part when it has matches.
+
+- [#2938](https://github.com/nextlyhq/nextly/pull/2938) [`f0ec3fb`](https://github.com/nextlyhq/nextly/commit/f0ec3fb59f96493488d9b21782a34900faabbab7) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - An app scaffolded with `create-nextly-app`, or one it adds Nextly to, renders its admin for each request, never from a cache another user's request filled. Its admin layout renders its shell statically and awaits `connection()` beneath a Suspense boundary, so with Cache Components on the build still prerenders the shell, and nothing the admin reads is shared between users. Adding Nextly to an existing app writes the base template's own admin layout, so it renders the same way as a new project. The plugin template's development app gets the same admin layout.
+
+- [#2850](https://github.com/nextlyhq/nextly/pull/2850) [`fb23a75`](https://github.com/nextlyhq/nextly/commit/fb23a7538776e1d2a592b26db699f4b818d90a51) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin no longer shows an empty page while the server is starting. A signed-in screen says it is loading at once, says the server is starting after a few seconds, and offers Try again after about 45 seconds; if the server cannot be reached, it says so with Try again instead of sending you to the login page. The login and setup pages draw at once and check the session in the background.
+
+- [#2876](https://github.com/nextlyhq/nextly/pull/2876) [`3f1c3bc`](https://github.com/nextlyhq/nextly/commit/3f1c3bcde9ee84bff5513400a26c5905f6a6485a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Admin pages open faster after a hover. Pointing at a link, focusing it with the keyboard or touching it now starts loading that page's code, so the click usually finds it ready. Downloads and links to other sites are left alone. While a page's code is still loading, the spinner appears only after 200 ms, so a fast load no longer flashes it. Screen readers still hear "Loading" straight away. If a page's code fails to load, the error is written to the browser console and a later visit tries again.
+
+- [#3045](https://github.com/nextlyhq/nextly/pull/3045) [`75cd420`](https://github.com/nextlyhq/nextly/commit/75cd4204f60b3c3d051901eb9b3ac16182fafef2) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin's rich-text editor and a release's page load less code: the editor about 80 KB less, minified, and a release's page no longer loads the document history screen's rows to name who did what. Both work and look as before.
+
+- [#2521](https://github.com/nextlyhq/nextly/pull/2521) [`e8c62cf`](https://github.com/nextlyhq/nextly/commit/e8c62cf0d04069f642658ec8f9e7a8be234c898f) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - Admin pages load on demand: opening any screen fetches the shared shell and that screen's chunk instead of every page's, with a loading state while the chunk arrives and a retry when its fetch fails. The first screen no longer downloads the other 58 pages; the finer split adds per-chunk overhead, so the shipped total is slightly larger.
+
+- [#2909](https://github.com/nextlyhq/nextly/pull/2909) [`892f387`](https://github.com/nextlyhq/nextly/commit/892f387bf599f1aa0dac083713e33c576dd05a08) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Every admin screen now names its browser tab, as in "Posts · Golden Shop": the screen, then your site's name, with the item's name first on a screen that shows one, so several admin tabs and their history entries can be told apart.
+
+- [#3064](https://github.com/nextlyhq/nextly/pull/3064) [`b72584f`](https://github.com/nextlyhq/nextly/commit/b72584fa00234c66bfe12140bfc63eccf70d8049) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - On a wide screen, the admin's main column no longer slides sideways when the second sidebar panel opens or closes. Moving between the dashboard and a collection list, the media library, a plugin or settings used to move the whole column 256 px as the panel beside it opened and closed. The panel's column is now held on every screen of the wide layout, empty where the screen has no panel, so the column the reader was reading stays where it was. Screens without a panel, the dashboard among them, are 256 px narrower as a result, and the dashboard's cards wrap to that width; nothing saved changes. An editor that takes the full width still releases the panel's column, and on a phone the panel still opens over the page in the navigation drawer.
+
+- [#2944](https://github.com/nextlyhq/nextly/pull/2944) [`ef8d848`](https://github.com/nextlyhq/nextly/commit/ef8d8489cbacd58864303f5bad7d78117d9ee23a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - On a fresh load, the admin's sidebar and header no longer move while they fill in. The sidebar's icons used to be pushed down as the sections the reader's permissions and content decide arrived, and the header's controls slid sideways when the notification bell joined them. The sidebar now draws its icons only as far as is already decided, so each one that arrives later lands below the ones drawn, and the header draws the account menu at once and the controls beside it together once what decides them is known.
+
+- [#2886](https://github.com/nextlyhq/nextly/pull/2886) [`e670881`](https://github.com/nextlyhq/nextly/commit/e670881fa44c5f4ef7301dcc809517d3d96727bf) Thanks [@faisal-rx](https://github.com/faisal-rx)! - When the server refuses an action, the admin now shows the server's own message as it is, such as "You can't delete this post.", rather than putting "Failed to delete entry:" in front of it. A refused entry list says so in place of the empty state, and a collection read that the server answers with 404 is no longer read again as a Single unless the slug is one.
+
+- [#2897](https://github.com/nextlyhq/nextly/pull/2897) [`1adbe35`](https://github.com/nextlyhq/nextly/commit/1adbe35bd89c843b253a1443eb9f46e5b8ce757f) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin has a "Skip to content" link, the first thing Tab reaches on every page. It moves focus past the rail, the sidebar and the header into the page's main region, so a keyboard user no longer tabs through every collection and Single on each page. It stays hidden until it has focus.
+
+- [#2881](https://github.com/nextlyhq/nextly/pull/2881) [`9f3c012`](https://github.com/nextlyhq/nextly/commit/9f3c012eed9695ee2630bf160931d487fc2bf0cd) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin's stylesheet is now generated from the admin's own code, the shared UI components and the first-party plugin screens, and nothing else in the package. Before, the build scanned every file in the package, prose included: a note or changelog quoting a class with an unfinished value such as `[var(...)]` produced invalid CSS that took down every admin page, and classes quoted in the changelog were shipped in the stylesheet. The stylesheet loses only those quoted classes; nothing the admin draws changes.
+
+- [#2926](https://github.com/nextlyhq/nextly/pull/2926) [`68e9366`](https://github.com/nextlyhq/nextly/commit/68e93669166d2131d17fef66a74a6ec31d9e9835) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget's empty state can now offer the card's own settings as its action: `empty: { action: { label: "Choose a collection", opens: "settings" } }` beside the existing `{ label, link, permission? }`. The card draws it as a button that opens that card's settings sheet with focus on its first field. The button appears only at rest, and only where the reader can change that card's settings, so a settings preview, customise mode, or a card whose settings can't be saved right now shows the message alone. Startup refuses an action that gives both `opens` and a link or permission, any `opens` value other than `"settings"`, and `opens: "settings"` on a widget that declares no settings. Core's Note uses it: an unwritten Note now reads "Nothing written yet." with a "Write a note" button.
+
+- [#2971](https://github.com/nextlyhq/nextly/pull/2971) [`f5b4f3e`](https://github.com/nextlyhq/nextly/commit/f5b4f3e36a9f8805d91b46a444d82f28324c831a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - An unpublished or unknown blocks page answers 404 again when Cache Components is off, which is every app's default. The page factories in `@nextlyhq/blocks-react/next` wrapped their read in a Suspense boundary, so the page's shell streamed before `notFound()` ran and the request answered 200 with the not-found page. They now add the boundary only under Cache Components, where a static shell needs it, and read before the page returns otherwise.
+
+  `nextly/runtime` now exports `cacheComponentsEnabled(value)`, which says whether a value means Cache Components is on: the config's `true`, or the `"true"` Next.js inlines into an app's bundle as `process.env.__NEXT_CACHE_COMPONENTS`.
+
+- [#2948](https://github.com/nextlyhq/nextly/pull/2948) [`0e7928e`](https://github.com/nextlyhq/nextly/commit/0e7928ed7d6204996b77e7a02ca470b9bd3a6bea) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - An upload keeps the alt text it is given. `nextly.media.upload({ file, altText })` stored every file without its alt text, so anything that needs one on a new image had nothing to read. The blog template's demo seed, for one, failed most of its posts, because a post refuses a featured image with no alt text. Alt text set on a file afterwards was never affected.
+
+- [#3127](https://github.com/nextlyhq/nextly/pull/3127) [`2e31455`](https://github.com/nextlyhq/nextly/commit/2e31455a1bb3e27f9549690963a8f9bb6ea995c9) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - **Breaking: image sizes are no longer made or offered.** An uploaded image is now stored as the original and one thumbnail, nothing more. The thumbnail is the whole image fitted inside 480×480, keeping its proportions and never enlarged, instead of a 300×300 centre crop. Moving an item's focus point saves the point and stores no new file.
+
+  What an app loses, and what to use instead:
+  - The sizes defined at **Settings › Image sizes** are no longer cut at upload or when the focus point moves. The screen, its menu entry and the `/admin/api/image-sizes` routes (list, get, create, update, delete, `regeneration-status`, `regenerate`) are removed; a request to one is answered as an unknown route (404).
+  - Media items no longer carry `sizes` in any API: REST, the Direct API (`MediaFile`), server actions, populated relationships and Singles, and `media.*` webhook payloads. The `Media` type `@nextlyhq/admin` exports loses `sizes`.
+  - Removed from `nextly`: `getMediaVariant`, `getSmallestMediaVariant`, `GetMediaVariantOptions` and `MediaLike`. Removed from `nextly/storage`: `generateImageSizes`, `deleteImageSizes`, `ImageSizeConfig`, `GenerateImageSizesOptions`, `UploadFn`, and `ImageProcessor.resizeWithFocalPoint`. Removed from `nextly/schemas` (and the root): the `imageSizes` table.
+  - Instead: give an item's `url` to `next/image`, which resizes it on request (a custom loader can send that to an image CDN); use `thumbnailUrl` for a small preview; and use `focalX` and `focalY` with `object-position` to keep the subject in frame.
+
+  Nothing stored is removed by this release. Items uploaded before it keep their `sizes`, their size files and their square thumbnail, and the `image_sizes` table and its rows stay; none of it is read. Deleting such an item still removes its size files.
+
+- [#2932](https://github.com/nextlyhq/nextly/pull/2932) [`f26504c`](https://github.com/nextlyhq/nextly/commit/f26504cf648899ec35d40dc29e01c67f183a7feb) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `system:attention` answers a new `list` query, the attention digest: each reader's open work, read
+  as that reader at read time, one item per thing waiting. The grouped answer the current Needs
+  attention card reads is unchanged.
+  - Each item carries `id`, `kind` (`stopped`, `overdue` or `plugin`), `label`, `count`, `atLeast`
+    when the count is a floor, `severity`, an admin-relative `link`, and `failed` when it could not
+    be counted (`@experimental`).
+  - Core's kinds are releases that stopped and overdue releases, both critical, each the releases
+    domain's own count, linked to Releases filtered to its reason, and shown only to a reader of
+    releases.
+  - Plugins' attention items (`contributes.dashboard.attention`) now reach the digest as warnings.
+    An item with `permission` shows only to a holder of it, and one with `collections` only to a
+    reader of one of them. Who may see an item is asked within its own budget, and a check that
+    fails or runs out of time hides the item. Its `count` reads only those collections, as the
+    reader, and one the reader cannot read answers empty.
+  - Every item is counted at once, each within its own 10-second budget. One that throws, runs out of
+    time or answers something that is not a count fails alone and is logged with its plugin and id.
+    Counts above 99 read as 99 and a floor. A reader whose access to releases cannot be read is
+    shown neither release kind.
+  - Startup refuses, in the one dashboard fault message, an attention item that breaks its shape,
+    repeats another's id, uses the reserved `core`, `collection` or `single` namespace, names a
+    permission other than in its stored `action-resource` form, or is one of more than 10 from a
+    plugin. An item naming a collection the site does not have is warned about
+    and shows to nobody.
+
+- [#2898](https://github.com/nextlyhq/nextly/pull/2898) [`09f5858`](https://github.com/nextlyhq/nextly/commit/09f5858b8e522a1eda4845210bb7ce75f1403a9e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A cached dashboard is refetched when any widget's Collection setting changes, including one its widget's query does not read: the settings sheet and the workspace still show such a setting, so a change to it no longer leaves the earlier payload in place.
+
+- [#3072](https://github.com/nextlyhq/nextly/pull/3072) [`d1b6d9c`](https://github.com/nextlyhq/nextly/commit/d1b6d9c08522b938e10c41d8aa5297e2e41d2923) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Going Back or Forward from a document with unsaved changes asks before leaving again on an app rendered with Cache Components. There the admin's code arrives after Next's router has started listening for Back, so the router moved to the page Back was going to before the admin was asked, and the changes were lost without a word. Where the browser lets a page cancel Back (it does once the reader has used the page), the admin now cancels it before it moves and asks; where it does not, or where the browser has no Navigation API, it asks as before. Nothing changes for an app without Cache Components, and a Back with nothing unsaved is never touched.
+
+- [#3092](https://github.com/nextlyhq/nextly/pull/3092) [`f538b9c`](https://github.com/nextlyhq/nextly/commit/f538b9cb28e7acc654def96c84725ecbf454c5c9) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Going Back from a document view, such as the Page Builder, to the document's own form now lands on the form on an app rendered with Cache Components. There the view, kept mounted while hidden, wrote the field it was editing onto the form's address as Back showed it again, so Back seemed to do nothing. A view now corrects the field in the address only while the address is still its own.
+
+- [#2928](https://github.com/nextlyhq/nextly/pull/2928) [`f5f5d8d`](https://github.com/nextlyhq/nextly/commit/f5f5d8de1aa7ed30db983afcc8b6641022848312) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A blog category or tag whose slug is `__none__` renders its posts. The blog's archive routes give the build that slug as a placeholder when the site has no archives yet, and its page answered the not-found page on every request too, so a real archive with that slug could never be seen. The placeholder now stops before the database only while `next build` runs.
+
+- [#2906](https://github.com/nextlyhq/nextly/pull/2906) [`f5a4d1b`](https://github.com/nextlyhq/nextly/commit/f5a4d1b2ce0d797225bca76f8ceb6db0efef7820) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The blog template's category and tag pages no longer answer 500 on a site built before it had any categories or tags. Both an unknown archive and one created after the build failed, because Next.js took the archive routes for static when the build rendered none of them. The build now always renders one, so it learns the pages read the request. An unknown archive shows the not-found page, and one added after the build lists its posts, page 2 included.
+
+- [#3069](https://github.com/nextlyhq/nextly/pull/3069) [`e1b87f4`](https://github.com/nextlyhq/nextly/commit/e1b87f4f1d0c926a5b95633400f4e6284ea2a43f) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The blog template lets an author edit and delete only the posts they wrote, while anyone who may publish posts changes every post. A blog scaffolded with the visual approach has no such rule, so its seed gives authors no delete permission on posts.
+
+- [#2925](https://github.com/nextlyhq/nextly/pull/2925) [`a9961b2`](https://github.com/nextlyhq/nextly/commit/a9961b25af06b8e6608a57003a7588b2c4306223) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The blog template's migration creates the `first_published_at` column on its posts, categories, tags and Singles. Without it, a blog scaffolded with the visual approach failed every read of those tables ("no such column first_published_at"), so its pages errored. The migration's `status` columns are now `NOT NULL`, and posts' `content` column is `text` on PostgreSQL and MySQL, as nextly builds them.
+
+  On MySQL the migration failed part way: MySQL has no `CREATE INDEX IF NOT EXISTS`, keys no TEXT column without a length, and refuses a foreign key between tables of different collations. Its indexes are now plain `CREATE INDEX`; the columns that reference a row (`user_ext`'s ids, posts' `author` and `featured_image`, Site Settings' `logo`) and the author `slug` are varchar columns; and its tables take the database's collation, as nextly's own `users` and `media` do. Author slugs stay unique, as on PostgreSQL and SQLite.
+
+  A blog scaffolded with the visual approach before this release keeps the migration it was created with, so it needs the column added once. On PostgreSQL:
+
+  ```sql
+  ALTER TABLE "dc_posts" ADD COLUMN IF NOT EXISTS "first_published_at" timestamp with time zone;
+  ALTER TABLE "dc_categories" ADD COLUMN IF NOT EXISTS "first_published_at" timestamp with time zone;
+  ALTER TABLE "dc_tags" ADD COLUMN IF NOT EXISTS "first_published_at" timestamp with time zone;
+  ALTER TABLE "single_site_settings" ADD COLUMN IF NOT EXISTS "first_published_at" timestamp with time zone;
+  ALTER TABLE "single_navigation" ADD COLUMN IF NOT EXISTS "first_published_at" timestamp with time zone;
+  ALTER TABLE "single_homepage" ADD COLUMN IF NOT EXISTS "first_published_at" timestamp with time zone;
+  ```
+
+  On MySQL:
+
+  ```sql
+  ALTER TABLE `dc_posts` ADD COLUMN `first_published_at` timestamp NULL DEFAULT NULL;
+  ALTER TABLE `dc_categories` ADD COLUMN `first_published_at` timestamp NULL DEFAULT NULL;
+  ALTER TABLE `dc_tags` ADD COLUMN `first_published_at` timestamp NULL DEFAULT NULL;
+  ALTER TABLE `single_site_settings` ADD COLUMN `first_published_at` timestamp NULL DEFAULT NULL;
+  ALTER TABLE `single_navigation` ADD COLUMN `first_published_at` timestamp NULL DEFAULT NULL;
+  ALTER TABLE `single_homepage` ADD COLUMN `first_published_at` timestamp NULL DEFAULT NULL;
+  ```
+
+  On SQLite:
+
+  ```sql
+  ALTER TABLE "dc_posts" ADD COLUMN "first_published_at" INTEGER;
+  ALTER TABLE "dc_categories" ADD COLUMN "first_published_at" INTEGER;
+  ALTER TABLE "dc_tags" ADD COLUMN "first_published_at" INTEGER;
+  ALTER TABLE "single_site_settings" ADD COLUMN "first_published_at" INTEGER;
+  ALTER TABLE "single_navigation" ADD COLUMN "first_published_at" INTEGER;
+  ALTER TABLE "single_homepage" ADD COLUMN "first_published_at" INTEGER;
+  ```
+
+- [#3154](https://github.com/nextlyhq/nextly/pull/3154) [`058c212`](https://github.com/nextlyhq/nextly/commit/058c2121b64d0dc1c7a846ded9557a8e58be7db2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Cache Components and Partial Prefetching are now on in every Nextly app, and Nextly supports only that state.
+  - A project `create-nextly-app` creates sets `cacheComponents: true` and `partialPrefetching: true` in its `next.config`, with Nextly's cache handlers (`cacheHandler`, `cacheMaxMemorySize: 0` and `cacheHandlers.default`), which make the first read after a write show the new version. A `next.config.mjs` defines `require` with `createRequire` to resolve them.
+  - A new blog's `src/nextly/cached-read.ts` is the `"use cache"` read function itself, so its reads go through it from the start. The separate `cached-read.cache-components.txt` is gone.
+  - When `create-nextly-app` adds Nextly to an existing app, it turns both options on where either is off or missing, including in an app an earlier Nextly release turned off, and adds Nextly's cache handlers. Its report names each change. A setting it can't read safely (a spread, a computed value, a wrapper call) leaves the file as it was, and the report prints the exact lines to add. A config with a cache handler of its own keeps it, and the report prints Nextly's handler lines.
+  - The blank template's home page reads the admin's setup status inside a `<Suspense>` boundary, so it prerenders as a static shell under Cache Components.
+  - Nextly warns once at start when Cache Components is off, from the value `instrumentation.ts` passes to `createRegister`, and `withNextly()` warns once when either option is off in the config it wraps. `partialPrefetching` reaches no code while an app runs, so only `withNextly()` can check it. The old warning that Cache Components is unsupported is gone.
+
+  `createRegister(config, { cacheComponents })` is unchanged: keep passing `process.env.__NEXT_CACHE_COMPONENTS` from `instrumentation.ts`.
+
+  **Upgrading an app made by an earlier release**, which has `cacheComponents: false`: run `create-nextly-app` in the app again, or set `cacheComponents: true`, `partialPrefetching: true` and Nextly's cache handlers in `next.config` by hand. A blog also replaces its stub `src/nextly/cached-read.ts` with the read function the caching guide prints. What to set, and why: https://nextlyhq.com/docs/getting-started/installation#cache-components
+
+- [#3129](https://github.com/nextlyhq/nextly/pull/3129) [`6085158`](https://github.com/nextlyhq/nextly/commit/608515882b7f1d8b6ddb90d55c3264f20ee83475) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Under Cache Components, Nextly's cached reads can now go through a `"use cache"` function of the app's own, registered with the new `registerCachedRead` and `runRegisteredRead` from `nextly/runtime`, so a page read right after a write shows the new version with Nextly's cache handlers installed. The blog template ships `src/nextly/cached-read.ts` as a stub that registers nothing while Cache Components is off, and its Cache Components version beside it. A read with `revalidate: false` stays tag-only, and one past its `revalidate` is refreshed in the background. A read outside a request or build, in a script or a background job, runs directly, uncached.
+
+  `withNextly()` and Nextly's start no longer warn that Cache Components is unsupported and should be turned off. Instead, with Cache Components on and no function registered, Nextly warns once at the first cached read, naming the file to add. `create-nextly-app` still writes Cache Components off, now as Nextly's default, and links to how to turn it on. Nothing changes with Cache Components off.
+
+- [#3122](https://github.com/nextlyhq/nextly/pull/3122) [`9f40d47`](https://github.com/nextlyhq/nextly/commit/9f40d47a8ef49a338b2d2023bd2b70842f2fcaf0) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Two cache handlers for `next.config`: `nextly/cache-handler` for `cacheHandler` (with `cacheMaxMemorySize: 0`) and `nextly/cache-handlers` for `cacheHandlers.default`. They keep entries in each instance's memory, at most 50 MB each, least recently used first out. Before serving an entry they ask the cache tag expiry ledger, by key, when its tags last expired, so a write recorded there from another instance or outside a request expires the entry within seconds. An answer is reused for five seconds. An entry older than the ledger keeps an expiry (seven days) is never served.
+
+  The handlers don't read the ledger yet: nextly will hand it to them at startup in a later release. Until then they expire only what their own instance expires, as Next.js's default handlers do.
+
+- [#3170](https://github.com/nextlyhq/nextly/pull/3170) [`21f7246`](https://github.com/nextlyhq/nextly/commit/21f724657f247c0af2a99f78390c6bf30676ae13) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Without nextly's cache handlers, a cached public read in production is now given a revalidate of 30 seconds, so a write from another instance, the CLI or a job shows within a minute of a visit: the first read past the 30 seconds is served the previous version once while it refreshes, and the next is fresh. The app's `"use cache"` read function, as `create-nextly-app` writes it, now expires a timed read at twice its revalidate and never within 5 minutes (`Math.max(revalidate * 2, 300)`, where it was `60`), so it serves no entry older than 5 minutes. Next.js leaves a `"use cache"` entry that expires within 5 minutes out of a static prerender, and a route that must be static (`ensureStatic`) then fails to build. A read with no such function registered is refreshed at 30 seconds but not expired. The warning for this case says it applies to an app that keeps a cache handler of its own too, and links the installation guide.
+
+  Who sees a change: an app without nextly's handlers, including one made by an earlier release with Cache Components off, now refreshes its cached public reads at 30 seconds rather than 60, through `unstable_cache`. Its reads are fresher, at the cost of rebuilding each one about twice as often. The 5-minute expiry concerns only an app that turned Cache Components on by hand without nextly's handlers, since a new app ships the handlers. If your `src/nextly/cached-read.ts` has `Math.max(revalidate * 2, 60)`, change the `60` to `300`.
+
+  The warning for Cache Components or Partial Prefetching being off now goes through nextly's logger, as `cache-components-off` (and `cache-components-unknown` when `createRegister()` isn't told the value), so an app's own logger receives it. A line said while Next.js loads the config, before `instrumentation.ts` has run, waits for the app's logger and goes out when one is installed, when `register()` runs, after ten seconds, or as the process exits, whichever comes first. It no longer repeats the cache handlers, which have a warning of their own.
+
+  `create-nextly-app` no longer writes `require.resolve(...)` handler lines into an ES module `next.config` that declares `require` after its config object, where loading the config would throw. It prints the lines instead, and says to move the declaration. When it keeps an app's own cache handler, its report says what that costs: cached public reads refresh within a minute of a visit.
+
+- [#2797](https://github.com/nextlyhq/nextly/pull/2797) [`8508a09`](https://github.com/nextlyhq/nextly/commit/8508a09575b826db83eb8368fc4de667639bc9df) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The `@experimental` `GET /me/capabilities` answer gives each collection and Single a cell for each request the admin sends whose languages differ from its action's own: `readTranslations` (a read with every language's translation state, such as a localized list or a document with `translation-status`), `readHistory` (the version history of every language), `publishEveryLanguage` (publishing every language at once, the publish rule asked once for each configured language), `createInDefaultLanguage` and `updateInDefaultLanguage` (a create or an update sent with no language, which writes the default one; a Single has no create), and `duplicate` (a copy of a published entry: the source read and the create, in the default language and its fallbacks, and publish too where the collection has a Draft/Published lifecycle, since the copy is created published; a draft never published cannot be copied, whoever asks; collections only). A cell answers for every document of its collection, so where the request depends on the document (`publishEveryLanguage`, `duplicate`) it takes the strict side and never offers what the route might refuse for some document. Each is the answer the route gives that request. `GET /me/permissions` now returns `validUntil`: when the permission list stops holding, the soonest end of a role assignment it was read under, or `null`.
+
+- [#3155](https://github.com/nextlyhq/nextly/pull/3155) [`ad522bb`](https://github.com/nextlyhq/nextly/commit/ad522bbdf58de9340e26ec7aee6f596ddccbbe45) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Keep a cleared card title and an emptied filter, and see a hoisted `var` as a taken name in `nextly generate:widget`.
+  - **A cleared card title stays cleared.** A reader who clears the Title of a card the site's default titles now keeps the automatic title: the layout stores the clearing as an empty `title` (`""`), which the default's own title no longer comes back over. An empty title reads as automatic, as no title does. Rows stored before have no `title` where a reader cleared one, and keep reading as they did.
+  - **Removing a filter's last chip keeps the card unfiltered.** Where a widget's Filter has a default, removing its last chip stores an empty filter (`{}`), as the preview's Clear filters does, so the default no longer filters the card again or comes back as a chip.
+  - **`nextly generate:widget` sees a hoisted `var`.** A `var` inside a top-level `if`, loop, block, `try` or `switch` of `nextly.config.ts` counts as a name already taken, so the command does not add an import that would collide with it. A `var` inside a function, and a block's `let` or `const`, stay in their own scope.
+
+- [#3107](https://github.com/nextlyhq/nextly/pull/3107) [`8a9d59c`](https://github.com/nextlyhq/nextly/commit/8a9d59c7bf8bd599b239096df7cc5b6306f4e4fb) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A card's More settings opens a side panel that shows the card as it will look, beside a dashboard that stays usable.
+  - **The panel is not modal.** The dashboard behind it can still be read and clicked, and clicking it does not close the panel. The panel is 480 to 560 px wide, and full width on a phone.
+  - **A live preview at the top** draws the card at the size tier its real width gives it, scaled down to fit when the card is wider than the panel.
+  - **The settings are grouped into Data, Display and Advanced**, and Advanced starts folded. Each section shows only what the widget declares, and Display always holds the card's title. Each section has its own Reset to defaults link.
+  - **Filters are chips** ("Title is Hello ✕"). A card can have several, joined with AND, and "+ Add filter" adds one. One condition is stored as before; two or more are stored under `and`. The fields offered are still only those of the chosen collection that no read rule can refuse.
+  - **Changing the collection says what it reset**, beside the Collection field: "Changing the collection reset Filter and Sort".
+  - **The preview says "No entries match these filters"**, with Clear filters, when the panel's filters match nothing.
+  - **Done saves and Cancel or Escape discard.** Leaving the page with changes still in the panel asks first, with the admin's usual Save, Discard and Keep editing. While customising, the dashboard's own prompt asks instead, so a leave is asked about once. Its Save keeps an open panel's change in the saved arrangement, as the panel's Done would. If the panel would refuse that change (a title too long, a filter begun and not finished), Save stops and nothing is saved: the panel says what to fix, with focus on it. Discard drops both.
+  - **A filter begun and not finished is refused on Done**, with "Finish this filter, or remove it." Before, it was saved without that filter.
+  - **One panel at a time.** Opening another card's settings closes a panel with nothing unsaved. A panel holding a change asks first, and the other card's panel opens only once the reader has answered.
+  - **A card's automatic title** names its subject and its range ("Posts · last 30 days"), with the widget's name beneath it ("Over time").
+
+  Published additions (all `patch`):
+  - **`section`** on a widget setting: `"data"`, `"display"` or `"advanced"`, accepted by every setting builder, and refused at startup when it is anything else. Unset, a setting over the card's content (Collection, Filter, Sort, Group by, Field) and a date range are drawn under Data, and every other setting under Display. A setting goes under Advanced only when it says so. Core's list cards fold their Density there.
+  - **`title`** on a dashboard placement: the title a reader gives one card. It is trimmed, holds at most 80 characters, and is checked by the same layout write as the rest of the placement. Empty or absent means automatic.
+  - **`MAX_CARD_TITLE_LENGTH`** from `nextly/config`: the bound the layout write applies to that title, so the admin's field uses the same number.
+
+- [#2871](https://github.com/nextlyhq/nextly/pull/2871) [`05d6439`](https://github.com/nextlyhq/nextly/commit/05d643927a4a06449a2388c60a75402348dd5a76) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's charts are drawn by Recharts 3, behind the admin's own chart components, and
+  look as the redesign draws them: an area under a line with its value axis, gridlines and dates,
+  and a dashed rule, a hollow point and a tooltip on the point in view; a chart of groups as rows of
+  name, bar and count. `GroupsChart` and `OverTimeChart` keep their names and props.
+  - The chart engine loads only where a chart is drawn, never in what the admin loads before its
+    first screen, and no published type names it. A new CI check, `check-bundle-boundaries`, holds
+    both.
+  - Every chart's numbers are in a visually hidden table that assistive tech can always reach, in
+    place of the "View as table" disclosure, which hid them until opened.
+  - A chart animates its marks in only when the person has not asked for reduced motion.
+  - A chart of statuses keeps each status's colour on every card. A chart of any other field draws
+    every bar in the first chart colour, where each value used to take a colour hashed from it.
+  - The five chart colours, `--nx-chart-1` to `--nx-chart-5`, are re-tuned so that each pair stays
+    apart for readers with protanopia, deuteranopia or tritanopia, in light and dark, and still
+    clear 3:1 against the card, a bar's track and the tooltip. A theme that sets its own chart
+    colours is unaffected.
+
+- [#2888](https://github.com/nextlyhq/nextly/pull/2888) [`a2eb334`](https://github.com/nextlyhq/nextly/commit/a2eb334ffedf141f7554b9aa43fded353dd03196) Thanks [@faisal-rx](https://github.com/faisal-rx)! - On the roles screen, a role built on a base role now holds only its own permissions. The base's are shown ticked and locked but are never saved onto the role, so they no longer outlast a change to the base. Clear All takes away everything the role holds itself, and a new role built on one base with no permissions of its own is told it needs one before anything is saved.
+
+- [#3005](https://github.com/nextlyhq/nextly/pull/3005) [`eb94c2a`](https://github.com/nextlyhq/nextly/commit/eb94c2a556c7969ca3deed8a4ab5919957957c18) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Every `nextly` command that fails now ends with the same four lines: what happened, why, what to run next, and a link to the page for its error code, under a code of its own (`CONFIG_NOT_FOUND`, `CONFIG_SYNTAX_ERROR`, `SCHEMA_LOCK_HELD`, `DATA_LOSS_CONSENT_REQUIRED` and the others listed at https://nextlyhq.com/docs/cli/errors). It no longer prints an internal envelope such as `[INVALID_INPUT] Failed to load Nextly configuration. | Config loader error | context: {…}`, and a configuration's syntax error is shown once, with its file, line and column. `--verbose` (or `DEBUG=1`) adds the internal context and the stack below those lines. The CLI's codes are separate from the REST API's error codes, which are unchanged; each keeps its meaning in later releases, and the codes the production-migrations guide documents (`MIGRATION_TAMPERED`, `MIGRATION_MISSING`) keep their spelling. The exit code of a failed command is still 1.
+
+- [#2874](https://github.com/nextlyhq/nextly/pull/2874) [`0afea88`](https://github.com/nextlyhq/nextly/commit/0afea8802f6fdb9dcb7bb089c97094adb188c8f5) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The Get started card is compact: twelve columns by four rows by default, and as short as three. It draws the whole steps its rows hold, then "Show N more", which grows the card in place to show every step; "Show less" folds it back, and the card is drawn at its own size again on the next load. Nothing is saved by either.
+
+  A card that is empty, failed or not available to its reader now shows its message centred in the card rather than at its top-left, so a tall card no longer looks unfinished.
+
+- [#2610](https://github.com/nextlyhq/nextly/pull/2610) [`559363f`](https://github.com/nextlyhq/nextly/commit/559363f1cce8abbeefd2845fb6b62a382f4b6d9e) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Removed `ServiceContainer.withTransaction` and `ServiceDispatcher.withTransaction`. Both opened a transaction and then ran their callback on services that used the pooled connection, so nothing they did was atomic, and on a pool of one connection they waited forever. Neither had a caller. Use the database adapter's `transaction()` instead, and hand the work inside it the transaction it is given.
+
+- [#3087](https://github.com/nextlyhq/nextly/pull/3087) [`c61f59e`](https://github.com/nextlyhq/nextly/commit/c61f59ebe7f235aeb200181923910df9b9766f6a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's Recently edited card is replaced by **Continue where you left
+  off**. Its header offers two tabs, as a segmented control: **Mine**, the default, lists the entries and
+  Singles you pinned, in the order you pinned them, then the ones you saved most
+  recently; **Team** lists what other people saved most recently, each with who
+  saved it. Every row shows the collection's icon, the entry's title, "<collection>
+  · edited <time>" and its status (Draft, Published, Changed, Scheduled), opens the
+  entry, and has Pin or Unpin in its "…" menu. A title is read as you may read it
+  now: an entry you can no longer read, or one that was deleted, is left out.
+
+  Removed, with no alias: the `core/recently-edited` widget and the
+  `system:recent-edits` source. A saved dashboard naming `core/recently-edited`
+  keeps an empty place for it until the reader arranges it again; a site config
+  that names it (`defaultLayout`, `hide`, `replace`, `overrides`) is refused at
+  startup and should name `core/continue` instead. The exported `CoreWidgetId`
+  type names `core/continue` in its place. A widget source may now narrow by a
+  `tab` filter (`"mine"` or `"team"`, `@experimental`).
+
+  A card's quick setting that is a choice of exactly two options is now drawn on
+  its header as a segmented control (a radio group: the arrows, Home and End move
+  and choose) rather than a dropdown; a choice of any other number of options
+  keeps the dropdown.
+
+  Pins: a pin whose entry or Single no longer exists is removed when your pins
+  are read and no longer counts toward the limit of 20, and two pins made at the
+  same moment can no longer take a reader past that limit.
+
+- [#2820](https://github.com/nextlyhq/nextly/pull/2820) [`999f3ba`](https://github.com/nextlyhq/nextly/commit/999f3ba2b1b65c92cb7b540eb8eb68226c1963af) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Wherever the document panel holding an entry's or a Single's ID is not on screen (a phone, a tablet, or a collapsed panel), the strip under the editor's header shows the ID with a control to copy it, for a user who may only read the document as for one who may change it. A copy the browser refuses, or a page served without clipboard access, says so and shows the ID to copy by hand.
+
+- [#3171](https://github.com/nextlyhq/nextly/pull/3171) [`52dc872`](https://github.com/nextlyhq/nextly/commit/52dc8725866b77ccd5e89624ac7154c2e727a0f1) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Core's Content, Team, Continue where you left off, Upcoming releases and Team activity cards are now declared with `defineWidget`, like every other core card but Create, and are answered on the server by their own `load`. A widget's permission gate has one spelling, a declaration's `access` (`WidgetAccessGate`): one permission, `{ anyOf }` or `{ allOf }`. A bare list is no longer a gate, and `{ anyOf }` still opens a card for a holder of any one of its permissions. No setting drives a widget's query because of its name: a number setting called `limit`, a select called `dateRange` or `tab`, and a checkbox called `onlyMine` reach a declared widget's `load` like any other setting.
+
+  Removed exports:
+  - `nextly/widget-result`: `WidgetComponentProps`. A widget's component is handed `WidgetProps`.
+  - `nextly/widget-gate`: `WidgetPermissionGate`. A gate is typed `WidgetAccessGate`, from `nextly`. To migrate, import `WidgetAccessGate` from `nextly` in its place, set it as a declared widget's `access`, and write a bare list of permissions (`["a", "b"]`) as `{ anyOf: ["a", "b"] }`.
+
+  The dashboard layout read no longer sends each widget's add-panel group, sub-group, sketch or rank; its `available` list is already in the add panel's order.
+
+- [#3113](https://github.com/nextlyhq/nextly/pull/3113) [`2cd9b2a`](https://github.com/nextlyhq/nextly/commit/2cd9b2af76114635ca431e3059442578d95ccdca) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Core's default dashboard is now the agreed set, in grid order: Set up your project across the row (12 by 2); Needs attention (8 columns) beside Upcoming releases (4); Continue where you left off beside Content (6 each); then the form-builder plugin's New form submissions card, named as optional so a site without the plugin leaves it out with no startup fault, beside Team activity. Each entry states its size, every row sharing one height. The Create card is no longer on the default; it stays in the add panel.
+
+  Continue where you left off and Team activity are offered only to a reader who may read a collection or a Single the dashboard lists, so a reader of no content is no longer shown two cards that could only be empty.
+
+  While only one of Needs attention and Upcoming releases is on show on the default dashboard, the admin draws it across the whole row. The width is drawn, never saved, and a dashboard the reader arranged keeps its own sizes.
+
+  No widget a plugin declares with `defineWidget` is placed on a default dashboard on its own any more. `contributes.dashboard.suggest` is still accepted and checked at startup, places nothing, and is deprecated: the add panel offers the plugin's widgets, and a site that wants one on its default names it in `admin.dashboard.defaultLayout` (`{ widget: "<id>", optional: true }` where the plugin may be absent). Nothing else follows the default's own cards any more, so the site config's `admin.dashboard.suggestions` changes nothing: it is still accepted and checked (`true` or `false`), so a config that sets it keeps starting, and is deprecated; remove it.
+
+  A reader who has saved their dashboard keeps it as saved; a reset returns to the new default.
+
+- [#2963](https://github.com/nextlyhq/nextly/pull/2963) [`25fa563`](https://github.com/nextlyhq/nextly/commit/25fa563fc99c7dcf0724035f67d3621292818558) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget declared with `defineWidget` can load for the size its card is drawn at. A card missing a setting stays readable while the dashboard is customised, and a retired per-collection card is told what replaced it without a guessed name. All of the new API is `@experimental`.
+  - **`size` on `load`'s input**: `{ w, h, tier }`, the card's grid size within
+    the widget's bounds and its tier (`"small"`, `"medium"` or `"large"`), as the
+    admin predicts it from the dashboard's width. `shows` is handed the same
+    size. A card that is resized or crosses a tier runs its `load` again, on its
+    own. A card asked with no tier, such as one judged on the server for a
+    default dashboard, is loaded at its stored size, or its widget's default for
+    a card not yet saved, at `"medium"`. The type is `WidgetLoadSize`, exported
+    from `nextly` and `@nextlyhq/plugin-sdk`.
+  - **`rowsThatFit(size, { density })`** in `nextly` and at the
+    `@nextlyhq/plugin-sdk` root: how many list rows a card of that height draws
+    at `"default"` or `"compact"` density, at most ten, by the formula core's own
+    list cards use.
+  - **Customise mode** no longer dims a card's empty, failed or not-available
+    message: only an answer is dimmed, so the words that say what to do stay at
+    full contrast.
+  - **A retired `collection/…` card** named in a layout write is told the
+    collection to set by its label when exactly one the writer may read made it,
+    and otherwise "the collection this card showed", never a slug read back from
+    its id.
+  - **`Widget.FooterLink`** is the one link a card's footer draws: beside a
+    `Widget.List` with `viewAllHref` it takes the place of "View all" rather
+    than sitting beside it, and in development a second FooterLink in one card
+    is named once in the console.
+  - **A plugin's attention item** reading a declared collection its reader may
+    not read has each read checked first, so a malformed one fails for every
+    reader alike, and only then is answered as an empty collection.
+
+- [#3058](https://github.com/nextlyhq/nextly/pull/3058) [`df95bc7`](https://github.com/nextlyhq/nextly/commit/df95bc7c42a8d3025e0f3ece94cfa8c4742e4603) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Core's Count, Breakdown, Over time and Recent entries cards are declared with `defineWidget`, as Note is: each card's data is answered on the server by its declaration's `load`, through the public read services alone and for the size the card is drawn at, and its admin component draws that data. Each keeps its id, title, description, sizes, settings and what it shows.
+  - **Count** reads its number at every size, what scheduled releases will
+    publish from the medium tier, and on a large card alone the last 30 days as
+    a series over that range and the 30 days before them as a count over the
+    window as long that ends where the series starts.
+  - **Recent entries** asks the rows its height holds at its density, at most
+    its "Number of items", and one more that says more exist.
+  - **Breakdown, Over time and Count's trend** draw "View as table" under their
+    chart: a button that swaps the chart for a table of the same values in the
+    card, closed again with Escape, which hands focus back to the button.
+  - **Each card loads in its own shape** again: a figure, bars, a series or a
+    list, and its add-panel row is sketched the same way.
+  - **Team** stays as it is, and is no longer on the default dashboard: a reader
+    who manages the team adds it from the add panel.
+  - **`overrideWidget()`** now refuses the four moved ids, as it refuses every
+    declared widget; `extendWidget()` still applies to them.
+  - A Filter of no conditions adds nothing to a widget's query, rather than an
+    empty `where`.
+  - **A series over a range** counts, in its last interval, a row MySQL stored
+    rounded across that interval's end within the second it is read in, as a
+    windowed count of the same range does; on MySQL the series' scan bound now
+    keeps that second.
+  - **A windowed `count`** checks the call's own `where` as written before
+    narrowing it to the window, so a malformed filter is refused exactly as it
+    is without a window, never wrapped and run.
+  - **A declared widget's loading skeleton** lays out its rows from its
+    `skeleton`: a list loads as a list's rows, and a table as a table with its
+    heading and columns on a wide card. Recent entries loads as a table.
+  - **A write made outside a request** (a script, a job) no longer retries
+    every pending cache expiry: pending expiries are kept once each and expire
+    at the next write inside a request, and the waiting is logged once.
+
+- [#2549](https://github.com/nextlyhq/nextly/pull/2549) [`ab71b3c`](https://github.com/nextlyhq/nextly/commit/ab71b3c3cb04422540a0923ac4c76a8fc5eb2df0) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A hand-written migration that drops or renames a table and then runs `CREATE TABLE IF NOT EXISTS` under the same name is no longer refused on PostgreSQL when a later statement alters that table.
+
+- [#3184](https://github.com/nextlyhq/nextly/pull/3184) [`e6606c7`](https://github.com/nextlyhq/nextly/commit/e6606c7e28438f5440304b93e2598c3601544b94) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's New button and a card's More settings panel work better with a keyboard and a screen reader. The New menu is a named list of the types you can create, its search is labelled once there are more than ten, focus goes straight to the list so each type is announced as you move through it, the type the arrow keys are on is outlined, and Escape hands focus back to the button. When New starts creating a different type it says so. In More settings, "Changing the collection reset ..." is now reliably announced. The add gallery says its count after Clear only once, and "Resume setup"'s failure message is announced on its own rather than inside the summary line.
+
+- [#3158](https://github.com/nextlyhq/nextly/pull/3158) [`53c6692`](https://github.com/nextlyhq/nextly/commit/53c66920916b9a9949a785e2558d20dd048ab61c) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard is easier to use with a keyboard and a screen reader. The add gallery now says how many widgets it lists when a filter chip is chosen, and after Clear it says the count for the chip still on rather than for every widget. The header's summary line is announced when its counts change, and pressing Refresh leaves focus on the page's heading instead of losing it. The environment badge has an edge you can see in every tone, and Remove in a card's menu meets text contrast in light mode.
+
+- [#2848](https://github.com/nextlyhq/nextly/pull/2848) [`4c17f5b`](https://github.com/nextlyhq/nextly/commit/4c17f5b37f52270969d6d508ca9b878779976e81) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - **Breaking:** a dashboard card's size is now `{ w, h }` on a 12-column grid, with rows of one fixed height (`w` from 1 to 12, `h` from 2 to 12). That is the only way to state a size. `defineWidget` takes `size: { default, min?, max? }` in place of `widths` and `width`, and so do registered and contributed widgets, in place of `defaultSize`, `minSize`, `maxSize`, the allowed and default widths, `defaultHeight` and `size: "half" | "full"`. The site config's `admin.dashboard` takes `w` and `h` on `defaultLayout` cards, and `overrides[id].size` narrows a widget's bounds without ever widening them. A widget's own component is handed its size as `{ w, h, tier }`. `WIDGET_SIZES`, `WIDGET_WIDTHS`, `WIDGET_HEIGHTS` and their types are removed, as are the unused `DEFAULT_COLUMN_COUNT` and `COLUMN_COUNTS`; `GRID_COLUMNS`, `MIN_GRID_ROWS`, `MAX_GRID_ROWS`, `GridSize`, `WidgetSizeDeclaration`, `WidgetSizeBounds` and the size helpers are added.
+
+  **Breaking:** saved dashboards are reset. The stored layout moves to format version 4. A dashboard saved in an earlier version (1, 2 or 3) is read as not saved, so its owner sees the current default dashboard, and the old row is replaced the next time they save anything. Nothing from an earlier layout is carried over.
+
+  The dashboard reflows by its own width, not the window's. At 1,024 px and wider every card is drawn at its `w`. From 640 to 1,023 px a card of 6 columns or fewer is drawn at 6 and a wider one at 12. Below 640 px there is one column. A card keeps its height in every band, and a reader resizes a card's width and height from its menu, within its widget's bounds.
+
+  The admin sidebar no longer draws the previous section's panel for a frame after a navigation, which moved the whole page as it closed.
+
+  In customise mode, a card's Width choices name each width by its share of the row where it is an exact one, "½" with "6 columns" beneath, and always include the widget's own default. The line that shows where a dragged card will land now allows for cards of different heights, as the grid places them. The Get started card is drawn tall enough for every step it shows, eight rows by default, instead of cutting its last steps off.
+
+- [#2908](https://github.com/nextlyhq/nextly/pull/2908) [`ec2bdee`](https://github.com/nextlyhq/nextly/commit/ec2bdeed18bad85617949ab1416394f7f9907759) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A Recent entries card's reader can choose which of the collection's fields its rows show after
+  the title, from a new "Fields on each row" setting.
+  - `settings.fields({ of })` declares a `fields` content setting on a widget (`@experimental`): an
+    ordered choice of up to `MAX_CHOSEN_FIELDS` (3, exported from `nextly/config`) of the named
+    Collection setting's fields. It must work over a Collection setting with `rows: "titled"`, on a
+    widget whose query is a `list`; startup refuses it anywhere else.
+  - A choice must name only fields the reader is offered and a row can print, the rule a Sort or
+    Filter is held to. A field a read rule withholds, or one no row can print (a structured or
+    many-valued field), is never offered, and a stored choice naming one falls back to the card's own
+    fields. A source marks a field no row can print with `presentable: false`.
+  - A Collection setting is applied before the settings that depend on it, whatever order a widget
+    declares them in.
+  - The settings sheet draws Fields as a multi-select of the fields it may offer, never the title,
+    stops at the most a row shows and says so, and resets a stored choice naming a field no longer
+    offered, saying so.
+  - Recent entries leads each row with its collection's initial, shows the chosen fields in the
+    order chosen, and draws its status as a pill on a collection with a lifecycle.
+  - Every content setting's control names a field by its label, or its name made readable, as the
+    card's column headings do, never by its key.
+  - Dates in list and table cards read short ("Today, 9:40 PM", "Yesterday", "Oct 24, 9:40 PM", with
+    the year only when it is not this one), with the full date on hover.
+  - A clearable select's clear button now sits beside the select rather than over its arrow, and can
+    be reached from the keyboard.
+
+- [#2864](https://github.com/nextlyhq/nextly/pull/2864) [`35d09f2`](https://github.com/nextlyhq/nextly/commit/35d09f2329eb3640d9977ff1196e495c0f9a5564) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Every dashboard list draws with one row layout and one list card:
+  - Each row has a leading icon or avatar, a one-line title (cut with "…", the full text on hover and focus), a meta line of up to three fields, a trailing status or time, and a "…" menu named for its row. The whole row links to what it names; a row with nowhere to go is plain text.
+  - A list shows only the whole rows its card holds (3, 5 or 10 by size, at most 10) and never scrolls. When it holds more, one footer says so: "View all (N)" to the full list, or "N more" where there is no list to open. "More exist" is gone.
+  - Large cards draw the same rows as a table, with the same links and order.
+  - List cards gain a Density setting: default or compact rows.
+  - A collection list's answer now carries its total, from the same read, so "View all (N)" names the number the list it opens holds.
+  - Recent activity rows now open the entry or Single they are about, and Upcoming releases rows open their release.
+  - Removed: the unused `RecentEntriesWidget` export. A card's "Number of items" now goes up to 10, the most a list draws.
+
+- [#2940](https://github.com/nextlyhq/nextly/pull/2940) [`62ed111`](https://github.com/nextlyhq/nextly/commit/62ed111b60757090f007ebe07d8ab65f731ae9db) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Two new core tables hold what each reader's dashboard keeps for them. They are additive, created by
+  `nextly migrate`, and by boot where boot applies the core schema. Run `nextly migrate` to create
+  them on an existing site.
+  - `nextly_dashboard_pins`: one row per reader per pinned entry or Single (`user_id`, `target_type`,
+    `target_slug`, `entry_id`, `pinned_at`), unique on the reader and the target. A Single's
+    `entry_id` is empty rather than NULL, so the unique index holds the same on PostgreSQL, MySQL
+    and SQLite.
+  - `nextly_dashboard_preferences`: one short value (at most 255 characters) per reader per key
+    (`user_id`, `preference_key`, `value`, `updated_at`), unique on the reader and the key.
+  - A reader's rows in both are deleted with the reader.
+  - Until the tables exist, a reader has no pins and every preference reads as unset; pinning is
+    refused with a message naming `nextly migrate`. Nothing reads or writes them yet: the dashboard's
+    pins and remembered choices are built on them next.
+
+- [#2817](https://github.com/nextlyhq/nextly/pull/2817) [`8f43634`](https://github.com/nextlyhq/nextly/commit/8f4363442ce77d2016a1d20f5cc6034b02847d7c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The Direct API's `overrideAccess` documentation no longer mentions row-level filters, which no access rule applied.
+
+- [#2949](https://github.com/nextlyhq/nextly/pull/2949) [`83c3e75`](https://github.com/nextlyhq/nextly/commit/83c3e7577ba874c53f8d96074d48d95526cadc3e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Every card of a default dashboard keeps its own identity. A widget a site's `defaultLayout`
+  places more than once names an `id` for each further card (`{ widget, id, settings }`), and
+  startup refuses a repeat without one, or two cards under one id, showing the entry to write. A
+  row following the default keeps each card's removal and settings under that id.
+
+  A declared widget's `shows` is now judged with the settings a reader gave its card, and a save
+  staged before a card's verdict changed is refused as stale, rather than leaving that card out; a
+  save that changes such a setting answers with the token the next save is checked against.
+  An optional `defaultLayout` entry whose widget is not installed no longer counts against the
+  dashboard's limit. `contributes.dashboard.widgets: null` is refused at startup as not a list.
+
+- [#2919](https://github.com/nextlyhq/nextly/pull/2919) [`8e51541`](https://github.com/nextlyhq/nextly/commit/8e51541f55cf5168ffbc84ad8c282db519e04e83) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Each item in the admin sidebar's icon rail is now named for assistive technology. The rail draws an icon alone, so a screen reader announced its buttons with no name. Each link and button now carries the item's label.
+
+- [#3047](https://github.com/nextlyhq/nextly/pull/3047) [`4819fa6`](https://github.com/nextlyhq/nextly/commit/4819fa69d4cc0ce20dec143f10af952e3fcdaef3) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Masking email addresses in a log line now costs time in proportion to its length. A quoted address was read from every double quote with no limit, so a long line of escaped quotes cost its length squared, and text an attacker could put into a log line could hold a production server's CPU for seconds. A quoted local part is now read for at most 64 characters between its quotes: RFC 5321 caps a whole local part, quotes included, at 64.
+
+- [#2968](https://github.com/nextlyhq/nextly/pull/2968) [`a241511`](https://github.com/nextlyhq/nextly/commit/a241511b21a0f3849e90200d2bc114b0be13e1dc) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The Direct API checks email providers, email templates and user fields when a call asks to be checked. With `overrideAccess: false`, each `nextly.emailProviders`, `nextly.emailTemplates` and `nextly.userFields` call now asks what the REST route for the same operation asks, before any work: read, create, update or delete on `email-providers` or `email-templates`, and on `settings` for user fields. Before, such a call read and changed them for any caller. A trusted call, the default, is unchanged.
+
+- [#2922](https://github.com/nextlyhq/nextly/pull/2922) [`a17c744`](https://github.com/nextlyhq/nextly/commit/a17c744a8f29a6bf565350f1a4f5349f7a9c87ba) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The Email hub's Messages, Design and Sending tabs, a plugin's settings, and a webhook delivery each name their own browser tab, so they can be told apart from one another.
+
+- [#2872](https://github.com/nextlyhq/nextly/pull/2872) [`e3e9ff5`](https://github.com/nextlyhq/nextly/commit/e3e9ff58eb44bb9668dc612205b7b512925545b2) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Every module in nextly that read a dialect's tables now reads the loaded dialect's, so a process no longer imports the other two dialects' table definitions through email, webhooks, jobs, API keys, settings, widgets, translations or the boot-time core schema check. Nothing changes in what any API returns.
+
+- [#3146](https://github.com/nextlyhq/nextly/pull/3146) [`d7e8655`](https://github.com/nextlyhq/nextly/commit/d7e8655949c70379740e380c73e4fd7b0da8ba70) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `nextly generate:widget` leaves a config as it was, and prints the import to add, when the widget's name is already taken there: by a declaration of the config's own (`const openOrders = defineCollection(...)`), or by an import that is not the generated named export, such as a default or aliased import of the widget's file, which a `--force` regeneration would otherwise have left pointing at an export that no longer exists. A plugin's admin entry is read the same way before the card's export is added: its own export, however formatted, is kept, and the name exported from another module is left for the author. `--config` must name a file inside the project the command runs in, following links, so another project's config is no longer edited alongside this project's manifest. `--dry-run` says which dependencies a run would add rather than to install ones it has not added. The paths it prints, the test to run among them, use forward slashes on Windows too, as the imports it writes already did. `createTestNextly` puts `DB_DIALECT` and the generated `NEXTLY_SECRET` back when its default SQLite adapter cannot be created, as it does when a boot fails.
+
+- [#3094](https://github.com/nextlyhq/nextly/pull/3094) [`356602d`](https://github.com/nextlyhq/nextly/commit/356602d09f45a5b17f4b13a5b6ca80f617714a1e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard holds a cached layout answer to the width it was read at: a card that hides while empty is drawn without only where every card is drawn at the tier the answer judged it at, so a return visit on a narrower window or another device no longer hides a card that has something to show at its tier. And a dashboard whose every card took itself off it, including a plugin card whose own component reported its answer empty, now says it is empty and offers the way back, instead of drawing nothing.
+
+- [#2856](https://github.com/nextlyhq/nextly/pull/2856) [`bb4647d`](https://github.com/nextlyhq/nextly/commit/bb4647d3e2474e81f4331d055caed4faeb5fd8d2) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A version read now names a field it withheld inside a list by that row's index in the version (`items.1.secret`), not by the list alone (`items.secret`). A read rule that reads its row can allow a field in one row of a repeater or repeatable component and deny it in another, and the old path hid the field in every row. A comparison now hides the field only in the row each version withheld it in, so the other rows' changes to that field still show. The shape of `withheld` is experimental: a client that matched list fields by the row-less path should match the indexed one.
+
+- [#2629](https://github.com/nextlyhq/nextly/pull/2629) [`b4aecd4`](https://github.com/nextlyhq/nextly/commit/b4aecd4dfca6e5daac8cc58f154828567b07858a) Thanks [@aqib-rx](https://github.com/aqib-rx)! - An earlier version in the history panel now marks each field the reader may not read: the field keeps its label, and where its value would be it says "Hidden: you don't have access to this field." beside a lock icon. Until now it showed an empty input, which could not be told apart from a field the version never held. A field is matched by its full path, so a field inside a group is marked as well, and a component withheld whole says so in place of its card. The restore confirmation now says that fields you can't access are not restored and keep their current values. The message after a restore that left fields behind no longer says those fields are no longer in the schema, because a field you may not read or write is left behind too.
+
+- [#2935](https://github.com/nextlyhq/nextly/pull/2935) [`d2af8ec`](https://github.com/nextlyhq/nextly/commit/d2af8ecddf864dc7b34ec700356425527a1e5d4a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Logs now take out a credential recognised by its form wherever it appears, under any field name or inside a message: a JWT, a GitHub, GitLab, npm, Slack or Stripe token, an AWS access key id, a Google OAuth token or a PEM private key, along with the value of a quoted JSON name such as `"access token"` or `"2fa_token"` that is not a plain identifier.
+
+- [#3032](https://github.com/nextlyhq/nextly/pull/3032) [`2e79ba6`](https://github.com/nextlyhq/nextly/commit/2e79ba6c129cfb4ecef7e6271f7ed5b03d42691c) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A log line now hides the value after a quoted name longer than 256 characters that holds spaces,
+  quotes or other escapes, such as `"… access token":"…"` in a JSON body or in a body quoted inside a
+  message.
+
+- [#2861](https://github.com/nextlyhq/nextly/pull/2861) [`558c718`](https://github.com/nextlyhq/nextly/commit/558c718a5ad9d1d25fe65a077ac6213ae15879de) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Nextly's logs no longer contain credentials. Saving or reading a Single, and listing entries, collections, media or users, logged the call's options, and those carry the request: the caller's `Authorization` header (an API key) and session cookie were written to the server log, in production too. Every log writer (service loggers, including one an app passes in; the structured logger; the database and auth loggers) now takes out request, response and headers objects, fields named like a credential (`authorization`, `cookie`, `password`, `token`, `apiKey` and similar), and `Bearer` or `Basic` credentials in text, in every environment. Those log lines now name only the Single, its language or the collection.
+
+  **If you ran an earlier version:** your server logs may hold API keys and session cookies of people who saved or read Singles. Rotate the API keys that were used, sign out existing sessions, and delete or expire old logs where your host allows.
+
+- [#2833](https://github.com/nextlyhq/nextly/pull/2833) [`24e80d6`](https://github.com/nextlyhq/nextly/commit/24e80d6f8d5f339355a4ab3168dc09d079a3cc72) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A role or API key holding `manage-media`, `manage-settings`, `manage-email-providers` or `manage-email-templates` now passes every gate that asks read, create, update or delete on that same resource: a route asking one permission or any of several, `ctx.caller.can`, a dashboard widget's or a document lock's required permission, the schema builder's collection list, and the system-resource reads. The access decision already counted it, but these gates did not, so a holder of `manage-email-providers` was refused a route asking `update-email-providers`. It never counts as publish or unpublish, as any other action, or on any other resource.
+
+- [#2933](https://github.com/nextlyhq/nextly/pull/2933) [`fc94900`](https://github.com/nextlyhq/nextly/commit/fc9490076024916ba6edc9cffc9eb4c7dc19eb1a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The media library now opens an item's details in a panel beside the grid that expands to a full-screen viewer, keeps its controls on one row, fits each image inside its tile (whole when a stored image size shows it whole, otherwise from the light thumbnail), and sets the focus point as one dot on the whole image, which is now saved: a media update used to drop the focus point it was given.
+
+- [#3194](https://github.com/nextlyhq/nextly/pull/3194) [`1878128`](https://github.com/nextlyhq/nextly/commit/1878128ff615a338208c5f5403b2148e51ce32dc) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Media library fixes: Used in never names what a reader cannot open, Undo never claims to restore
+  an item already deleted, and a folder delete never moves or removes an item waiting on its Undo.
+  - `GET /admin/api/media/:id/usage` counts the documents on the page the reader may not open as one
+    number, `meta.hiddenCount`, in place of `meta.hidden`, whose list by collection or Single named
+    them.
+  - An item deleted at once (the delete route, a bulk delete, `nextly.media.delete`) while an earlier
+    delete's Undo was open is answered by that Undo as already deleted, not restored.
+  - Deleting a folder while an item in it is being deleted with Undo is refused (409) even when the
+    delete with Undo started a moment after the folder was checked, with or without its contents, and
+    nothing in the folder is removed or moved. A folder delete waits for, rather than failing with a
+    database deadlock against, a delete with Undo, a file moved into one of its folders, or a folder
+    moved within it; folder moves and folder deletes run one at a time. A file added to one of its
+    folders while it runs is deleted with the contents, never left at the library root.
+  - Switching between All media, Missing alt text and Unused, changing folder, searching or filtering
+    by type clears the selection, so a bulk delete or move acts only on files on screen.
+  - Used in reads only the usage rows of the documents on the page, however many Singles use the item.
+  - A file storage could not remove when a delete with Undo finished stays recorded, and the job that
+    finishes the delete removes it once storage takes it.
+
+- [#3062](https://github.com/nextlyhq/nextly/pull/3062) [`05c865b`](https://github.com/nextlyhq/nextly/commit/05c865b921f5687de5d36136559ad0a8b38c0bcf) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The media library takes files dropped anywhere on the page, into the folder on screen, and lists every upload in a tray with its own progress. Any number of files can be added: three upload at once and the rest wait, where a drop used to stop at ten and send them all together. A file that fails says why and offers Retry without stopping the others, and a file refused before upload (too large, or a type the server does not accept) says so on its row. The tray stays until it is closed, and the admin's toasts appear above it while it is open. The media picker's drop area uses the same queue and tray. The Upload button opens the file chooser directly, and a person who may not upload has neither it nor the drop target.
+
+- [#3187](https://github.com/nextlyhq/nextly/pull/3187) [`83256a3`](https://github.com/nextlyhq/nextly/commit/83256a3b7980cc5668d25fe70c083ea4f38e92d1) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The media library gains views beside its folders, a Used in list, a delete that can be undone, and
+  Replace.
+  - Beside the folders: All media, Missing alt text and Unused, each with its count, and every folder
+    with its own. A view lists its items across every folder, with the same search, filter, sort and
+    paging. Unused lists an item only when no document uses it and no avatar or logo keeps its
+    address. Its list says whether the usage record it read was complete, and the page shows it only
+    when that same answer says so: until `nextly media reindex-usage` has run, or while a rebuild runs
+    during the read, Unused says the record is still being built instead of listing items content
+    may still use.
+  - An item's details say where it is used: each document the person may open, as a link, with its
+    collection or Single, the fields that use the item that the person may read, and the languages
+    when only some do, and how many more they cannot open. A field a read rule withholds from the
+    person is never named. A translation the person cannot read shows neither its fields nor its
+    language. `GET /admin/api/media/:id/usage` answers it a page of documents at a time (`page`, and
+    `limit` up to 50, 20 by default) in the usual list envelope, `meta.total` counting every document
+    using the item; the details and the delete dialog say how many places in all and show the rest
+    with Show more. Until `nextly media reindex-usage` has run, Used in and the delete dialog never
+    say an item is unused. Before `nextly migrate` has created the usage table, it answers no uses,
+    the record not built, rather than failing.
+  - Delete lists where an item is used before asking, then takes it out of every list and count at
+    once and offers Undo for ten seconds, one Undo for a bulk delete. The item, its files, folder and
+    usage stay until the window ends; then it is deleted with its files, by the server even if the
+    person has left the page or the server restarted (a job queued with the delete finishes it through
+    the jobs queue), every item of a large delete included. A server stopped part way through
+    finishing a delete leaves it to be finished, never an item back in the library or files left
+    behind. Up to 1,000 items (`MEDIA_DELETE_LIMIT`, exported from `nextly/config`) are deleted in one
+    request, all of them or none; a larger selection is refused before you confirm.
+    `POST /admin/api/media/deletions` and `/deletions/undo` take a list of ids and need the delete
+    permission. The existing `DELETE` routes still delete at once. A folder holding an item inside its
+    Undo window cannot be deleted, with or without its contents, until that window has passed: the
+    request answers 409, and the folder delete dialog says why.
+  - Undo brings back only what that delete marked, never an item another delete was already
+    removing, and offers it for the whole of those items' own window: an item already waiting keeps
+    its own, earlier deadline, which the answer's `deleteAfter` gives, while `markedDeleteAfter`
+    gives this delete's own. Each item is judged against its own deadline, so an Undo of several
+    items brings back every one still inside its window and lists the rest as already deleted; an
+    Undo after an item's deadline is refused for that item. If a database statement fails part way,
+    the Undo is rolled back and brings back none of them.
+  - Replace file stores a new file under the same item: the same id, name, alt text, caption, folder
+    and usage, with a new address and thumbnail, so every document using it by id (upload fields,
+    block documents, attachments) shows the new file at once. Rich text, a JSON field, a block
+    document or any other value naming the file by its address (`src` or `url`), email-template
+    images, users' avatars and the email and site logos keep showing the previous image until they are
+    edited, so while any does, the old file is kept; the Replace dialog says how many and lists the
+    documents, and Used in marks each. A page that still names a replaced file's old address goes on
+    counting as a use when it is saved again, even while the Replace is finishing. Until
+    `nextly media reindex-usage` has run, the old file is always kept, and the dialog says so. The
+    kept file goes when the item is deleted, by any delete, a folder deleted with its contents
+    included. The focus point and a video's or audio file's duration are cleared.
+    `POST /admin/api/media/:id/replace` answers it, with the upload's own checks, and
+    `GET /admin/api/media/:id/usage?byAddress=true` lists the uses by address, with the avatars and
+    logos keeping it and whether the usage record is built.
+
+  The media usage table, new in this release, records whether each use names the item by its id or
+  by its address, in an `address` column. `nextly migrate` creates the table with it, and adds it to
+  a table created from an unreleased build. A usage record built before the column existed, or before
+  block documents with their own list of items had their addresses recorded too, reads as still
+  being built, which keeps old files on Replace and the Unused view closed, until
+  `nextly media reindex-usage` is run once more.
+
+  The database adapters' `select` now honours its `distinct` option, which it declared and ignored.
+
+- [#2853](https://github.com/nextlyhq/nextly/pull/2853) [`1dc0940`](https://github.com/nextlyhq/nextly/commit/1dc09404a04db360673ed79046bde567d0ebee34) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The media library loads faster. The folder tree asks for a folder's subfolders only when you open it, instead of fetching every folder's subfolders and whole contents on each visit, and the root's contents are no longer downloaded. The file list keeps showing while a page, sort, search or edit refreshes it, and an upload refreshes it once. The Delete folder dialog now counts the folder's files correctly; it always said 0.
+
+- [#3126](https://github.com/nextlyhq/nextly/pull/3126) [`150fef2`](https://github.com/nextlyhq/nextly/commit/150fef20b8019617e59a34c03846ab9f476b9758) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The media library now keeps a record of which media items each document uses, and reads its folder
+  counts and folder contents from the database.
+  - A new core table, `nextly_media_usage`, holds one row per media item used by one field of one
+    document, in one language (`media_id`, `subject_kind`, `subject_slug`, `document_id`,
+    `field_path`, `locale`). It is additive, created by `nextly migrate` like every core table. Run
+    `nextly migrate` to create it on an existing site.
+  - The record is rewritten in the same transaction as every write that changes a collection entry,
+    a Single or an email template: create, update, publish and unpublish, the transaction API and
+    batch writes. It covers upload fields (one id or a list), images, videos and galleries in rich
+    text (by their address), block documents (`assets.mediaIds`), the addresses any other JSON value
+    holds under `src` or `url`, and these inside groups, repeaters and field groups. An address that
+    names an item by its media route (`/api/media/<id>/raw`, as a Page Builder font face does) is read
+    as that item, and one made absolute against the site (`https://site/uploads/a.png`) by its path. A
+    value every language shares is recorded with an empty `locale`; a translated one, under its
+    language, including a language removed in Settings, whose content is kept. A working draft held beside published content is recorded once it is
+    published. A deleted document's rows, every row of a deleted collection or Single, and a deleted
+    media item's rows go with them.
+  - `nextly media reindex-usage` rebuilds the record from the stored content. Run it once after
+    `nextly migrate`: until then, content written before this release is not in the record, and the
+    counts below say so (`usageRecorded: false`). A new site's record is complete from the start. Run it
+    from the project's own folder: from another one, or with a `--config` outside the project, it
+    rebuilds nothing and ends with `MEDIA_REINDEX_OUTSIDE_PROJECT`, as `media orphans --apply` does.
+  - `GET /api/media/counts` answers every folder's item count, the items in no folder, and the counts
+    of all items, images missing alt text and items nothing uses, in one query. An item a user's
+    avatar, the email brand's logo or the site's logos keep is in use: these are stored as the item's
+    address, outside any document, and the count and the `unused` view ask them directly.
+  - The media list takes `view=missing-alt` or `view=unused`.
+  - The media list's and a folder's `type` filter now narrows to the kind each file is shown as:
+    `document` is a PDF, an office file or any text, and `other` is what no kind names. Before, both
+    matched nothing, as each kind was read as the first part of the MIME type.
+  - A folder's contents (`GET /api/media/folders/:id/contents` and `/folders/root/contents`) now
+    come a page at a time, sorted and filtered in the database: `page`, `limit` (at most 100),
+    `search`, `type`, `sortBy` and `sortOrder`, as the media list takes them. The response adds
+    `meta` (`total`, `page`, `limit`, `totalPages`), and `files` holds that page, 24 items unless a
+    `limit` is given. A caller that counted `files` for a folder's size reads `meta.total` instead.
+  - A plugin that writes content through the Direct API is recorded like any writer. One that writes
+    media ids into tables of its own is not.
+
+- [#3066](https://github.com/nextlyhq/nextly/pull/3066) [`8196870`](https://github.com/nextlyhq/nextly/commit/819687040be8acf193d3459f252547b56566c925) Thanks [@aqib-rx](https://github.com/aqib-rx)! - `nextly migrate:create` and `nextly migrate:check` work again in a project nothing else has loaded. Neither connects to the database, and both stopped on an unexpected error ("the tables were read before that dialect was loaded"). The schema they compile now loads its dialect's tables itself.
+
+- [#2911](https://github.com/nextlyhq/nextly/pull/2911) [`21c7e25`](https://github.com/nextlyhq/nextly/commit/21c7e25412179f5409de2ac5979a925a20cb8945) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `nextly migrate`, once it finishes, and `nextly migrate:status` now name every place the registry and the database disagree: a registry row whose table does not exist, a field a registry row records whose column does not exist (such as a plugin's new field whose column was never added), and a collection, single or field group the configuration declares that has no registry row. Both only read, and neither changes its exit code for what it names. `migrate:status --json` carries the findings under a new `registry` key. Nothing at server start makes this comparison, so a deployment that runs neither command does not see it: run `nextly migrate` (or `nextly migrate:status`) where you deploy.
+
+- [#3016](https://github.com/nextlyhq/nextly/pull/3016) [`54b6213`](https://github.com/nextlyhq/nextly/commit/54b6213e53db7fc416da9921f60dca2671c50e21) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - `nextly migrate --step` no longer stops inside a field leaving translation. When the step budget runs out after the move's archive or main file, the run goes on through its shared file and says so, so nothing can write a value into the new shared column between the main file and the copy that fills it. The copy still takes each entry's default-language value, as the Schema Builder and turning translation off do.
+
+- [#3128](https://github.com/nextlyhq/nextly/pull/3128) [`63683a8`](https://github.com/nextlyhq/nextly/commit/63683a8afae9064de900b4bbfc53903128bcac42) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - On MySQL, the first `nextly migrate` after an upgrade that adds a core table no
+  longer fails on foreign keys the site already has ("Duplicate foreign key
+  constraint name"). The core tables are now reconciled without looking at the
+  site's content tables, as on PostgreSQL.
+
+- [#2800](https://github.com/nextlyhq/nextly/pull/2800) [`4220e4d`](https://github.com/nextlyhq/nextly/commit/4220e4dee9fd6e9d39a9077f378ea56a5282f675) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - MySQL's migrate lock is now scoped to the database, so apps sharing a MySQL server no longer block each other's migrations. The lock was a server-wide named lock with one fixed name, so a `nextly migrate` (or a dev boot applying migrations) on one database refused, or waited, while another database on the same server was migrating. While older versions may still be running, a new one also waits while any process holds the old server-wide lock name, so a new process never migrates beside an older one that started first. The other order is not covered: an older process starting after a newer one has taken the new lock will not see it. So during the upgrade, don't run an old and a new `nextly migrate` against the same database at once, and if your app sets `db.runMigrationsOnBoot`, run `nextly migrate` before rolling out replicas that migrate on boot.
+
+  On MySQL, the busy-lock error no longer suggests `--force-unlock`, which has nothing to clear there: it says the lock is released when the other process's connection ends, so wait for it or stop it. When the lock it met is the older, server-wide one, held by an older Nextly perhaps migrating another database on the same server, it says so. PostgreSQL's message is unchanged.
+
+- [#3027](https://github.com/nextlyhq/nextly/pull/3027) [`6cd900a`](https://github.com/nextlyhq/nextly/commit/6cd900ac9f41f56d23ceee04419ccd56e051cea0) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's Needs attention card is now "Needs your attention": a digest of open work waiting for the reader, which leaves the dashboard while nothing is waiting.
+  - One row per item, most urgent first: releases that stopped and overdue releases (critical), then items plugins add (warnings). Each row shows its severity by shape as well as colour, the item's label and count ("Overdue releases · 2", "99+" past the cap), why it is waiting, and one Review.
+  - An item whose count could not be read says "Not all checked" with a Retry, so the card never reads as clear while something went unchecked. Nothing on the card dismisses an item; it leaves when the work is done.
+  - At its new default of 8 by 3 the card draws the items that fit and folds the rest behind "Show N more", which grows the card in place until "Show less". Create, beside it on the default dashboard, is 3 rows tall to match.
+  - The card no longer counts unpublished changes or entries publishing this week: those are the Content table's and Upcoming releases' to show.
+  - It is answered as the caller who asked, so an API key sees only the items its own grant reaches.
+  - A plugin's attention item (`defineAttentionItem`, experimental) may give an optional one-line `reason`, drawn under its label. Startup refuses a reason that is empty or spans lines.
+  - A list row's one action may carry a longer accessible name than its visible label.
+  - The dashboard header's "N things need you" counts the same items the card draws, read from the same digest as the same reader: one number, the card's title count, with "N+" when an item could not be counted or its count is a floor, and its link opens the overdue releases when they are waiting. A plugin's attention items count as items like core's.
+  - A card that hides while empty, and that the layout read found empty, is shown (and announced) once its own answer on the dashboard holds something, rather than staying off until the next visit. One rule judges both (`cardAnswerIsEmpty`, experimental, from `nextly/widget-result`).
+  - `nextly/attention-keys` (experimental): `digestTotal` and `isDrawnAttentionItem` count and test the digest's items for the header and the card alike. `attentionTotalOf`, the total of the grouped answer the previous card drew, is removed: nothing reads that total now; count the digest with `digestTotal` instead.
+
+- [#3088](https://github.com/nextlyhq/nextly/pull/3088) [`e20641e`](https://github.com/nextlyhq/nextly/commit/e20641ef69908f0420c081845c04d41148c6c96e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The form-builder plugin adds a dashboard card, New form submissions, declared
+  with `defineWidget`. It lists the submissions nobody has opened yet, newest
+  first: who sent each one (their name or email, where the form asks for one,
+  with common spellings of a name field such as `firstName`, `first_name` or
+  "Your full name" recognised), the form and the first line of the first text
+  answer, each held to 140 characters, and when, in words that move on while
+  the dashboard stays open and as a date in the admin's timezone from a week
+  on. Opening a row marks that submission read, as the person opening it and
+  only while it is still new; someone who may not update submissions leaves it
+  new. Once it is marked, the dashboard's cards and its header count are asked
+  again, so a dashboard left open behind the new tab stops listing it. The
+  card's title carries how many are new ("New form submissions 3"), the total
+  its header part counts, and no count while none are. A reader of more than
+  1,000 forms has the first 1,000 counted, and both the title and the header
+  say it is a floor ("1000+"). The card's
+  footer leads to every submission. While nothing is new it
+  stays on the dashboard and says "No new submissions", with a link to all of
+  them, to the collection as the site installed it, renamed or not.
+
+  The card reads as the person viewing it, so a submission of a form they may
+  not read is never listed or counted. It is shown to someone who may read the
+  forms and the submissions while at least one form is theirs to read, and its
+  own read, asked for no rows, puts the same count in the dashboard header's
+  summary. Its id, `NEW_SUBMISSIONS_WIDGET_ID` (`form-builder/new-submissions`),
+  is exported for a site's own default layout to name.
+
+  The submissions collection now indexes its `status` and `submittedAt` fields
+  (`idx_dc_form_submissions_status`, `idx_dc_form_submissions_submitted_at`), which
+  the card's read filters and sorts by. A development server adds them on its
+  next start; a production site adds them with its next `nextly migrate:create`
+  and `nextly migrate`. Nothing is dropped or rewritten.
+
+  A submission created through a request (a visitor's, or any HTTP create) is
+  now stored with the server's `submittedAt`, whatever date it sends, so a
+  visitor cannot date a submission into the future to keep it at the top of
+  the card. Such a submission also starts as `new` whatever status it sends
+  (spam detection may still flag it `spam`), so a visitor cannot file one as
+  already read. A create made on the server with no request behind it, such as
+  an import restoring old submissions, keeps the date and the status it names.
+
+  A widget's `summary.count` may now answer `{ count, atLeast }` as well as a
+  number (`WidgetSummaryCount`), and the dashboard header shows a floor as
+  "N+"; a widget answering a plain number is unchanged. `summary.count` is now
+  handed the request's `scope`, as `load` is, and a widget data read's `find`
+  takes a `context` it hands the collection's hooks. The card reads the forms
+  with it so the form-builder's per-form submission count is skipped, and scans
+  the readable forms once per request for the card and the header.
+
+  `@nextlyhq/plugin-sdk` adds two types to its root, `AnyWidget` and
+  `WidgetReadServices`, for a plugin's widget code to be written in, and four
+  parts to its widget kit at `@nextlyhq/plugin-sdk/admin` (experimental, like
+  the rest of the kit): `formatWidgetTime`, a row's time as core's list cards
+  word it; `useWidgetClock`, the minute clock they move it on with;
+  `Widget.useTitleCount`, the frame's hook that shows a count beside a card's
+  title and reads it with the title, as the Needs your attention card shows its
+  items, a floor as "N+"; and `useRefreshDashboard`, which asks the dashboard's
+  cards and header summary again after a widget's own write.
+
+- [#2927](https://github.com/nextlyhq/nextly/pull/2927) [`5d26b05`](https://github.com/nextlyhq/nextly/commit/5d26b05a3944b2e44620e1c2f40a1c46709a080e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - nextly carries no code for Next.js or React releases it does not support, and refuses to start on one.
+  - **The start check.** When nextly starts (`getNextly()`), it checks the installed `next`, `react` and `react-dom` against the supported ranges (`next` ^16.4.1, `react` and `react-dom` ^19.3.0), each on its own. It refuses to start outside them, with a `CONFIGURATION_ERROR` naming each installed version and its range. A package the app does not have, as where the CLI or a test runs, is not judged.
+  - **Next.js APIs are used directly.** The Next.js 14 and 15 fallbacks are gone: `unstable_after`, a synchronous `draftMode()` or `cookies()`, and the checks of whether an export exists. If an API nextly uses is missing at run time, nextly throws a `CONFIGURATION_ERROR` naming the Next.js range it needs. Running outside a Next.js app, where `next` is not installed or there is no request, still works as before.
+  - **`createPreviewRoute`'s `draftMode` and `readPreviewScope`'s `cookies`** must return promises, as Next.js's own do. A synchronous function no longer type-checks; pass `draftMode` and `cookies` from `next/headers`, or make a test's fake `async`.
+  - **`nextly` now names `react` and `react-dom` as peers,** each with the range `^19.3.0`, beside `next`'s `^16.4.1`. Every Next.js app already installs both. These peer ranges are now the one place the supported versions are declared: `nextly`'s start check reads them, and `create-nextly-app` builds them in.
+  - **`CONFIGURATION_ERROR` is a canonical error code** (status 500), with a `NextlyError.configuration()` factory. Every refusal of an app nextly can't work in uses it: a missing `config`, an unsupported Next.js or React, or a Next.js missing an API nextly uses.
+  - **create-nextly-app** no longer reads the app's Next.js version to choose how to write `serverExternalPackages`; it writes the top-level option, which every supported release reads. An app whose config still lists packages under the deprecated `experimental.serverComponentsExternalPackages` is left unchanged. The output says to move those entries into the top-level `serverExternalPackages` list and delete the experimental key, because Next.js copies the old list over the new one.
+
+- [#2880](https://github.com/nextlyhq/nextly/pull/2880) [`15221b2`](https://github.com/nextlyhq/nextly/commit/15221b205f93a88998eb845e5aaedbd8bb84d01f) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - **Next.js 15 and React 18 are no longer supported.** Nextly now supports only Next.js 16.4.1 or later within 16.x, and React and React DOM 19.3.0 or later within 19.x, and every package that names them accepts exactly `next ^16.4.1` and `react`/`react-dom ^19.3.0`.
+
+  To upgrade an app before updating Nextly:
+  - Next.js: `npx @next/codemod@latest upgrade 16.4.2`
+  - React: `npm install react@^19.3.0 react-dom@^19.3.0` (or your package manager's equivalent)
+
+  `create-nextly-app` now writes `next`, `eslint-config-next`, `react` and `react-dom` at the reviewed minor (`~16.4.2`, `~19.3.1`) rather than npm's latest release, and stops before changing an existing app whose installed Next.js, React or React DOM is outside these ranges, naming the installed version and what to change.
+
+- [#2813](https://github.com/nextlyhq/nextly/pull/2813) [`04c2914`](https://github.com/nextlyhq/nextly/commit/04c291435888461aeef019de7aa95d96cc38a489) Thanks [@faisal-rx](https://github.com/faisal-rx)! - `nextly upgrade` now runs in steps, and says it has nothing to do only when no step has work. A new step hashes passwords stored before this release: each password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working, and a value already in a password hasher's format is left alone. Another removes any password a version's snapshot still holds. Both report counts, never values, and `nextly migrate` names `nextly upgrade` while a password stored as written remains.
+
+- [#2945](https://github.com/nextlyhq/nextly/pull/2945) [`4f20aea`](https://github.com/nextlyhq/nextly/commit/4f20aea644b0e569a9d7b40eda532632dea5b279) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard no longer makes a card per collection or per Single. A card about one collection is a core widget (Count, Breakdown, Over time or Recent entries) whose Collection setting names it, so adding a collection adds no widget. A Single's edits show in Recently edited (`core/recently-edited`). **Breaking:**
+  - The `collection/<slug>-<kind>` and `single/<slug>-<kind>` cards are no longer offered, drawn or accepted.
+  - A saved dashboard holding one drops it when it is read, and the next save stores the dashboard without it.
+  - A layout write naming one is refused, and so is `registerWidget` with an id in either namespace, at startup. The message says the card is retired and what replaced it: add Count, Breakdown, Over time or Recent entries and set its Collection to the collection's slug, or, for a Single, that its edits show in Recently edited.
+  - A site config (`dashboard.defaultLayout`, `hide` or `overrides`) naming one is refused at startup, an optional `defaultLayout` card included, naming the id and what replaced it.
+
+- [#3130](https://github.com/nextlyhq/nextly/pull/3130) [`d6b5b63`](https://github.com/nextlyhq/nextly/commit/d6b5b63cd9ee972fc4f3bab4daba052f62bb7857) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A write made inside a transaction no longer runs retention passes from inside it. A pass runs its own statements on the connection pool, outside the transaction and blind to its writes, so the write path now offers none while a transaction is open. Passes run on the next write made outside a transaction, or on the scheduled drain. The cache tag expiry ledger's prune, which runs on every install, was the first pass to show this.
+
+- [#3185](https://github.com/nextlyhq/nextly/pull/3185) [`d870e9e`](https://github.com/nextlyhq/nextly/commit/d870e9ecc90e8d4a954e253c262d8ce3f330b757) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Every dashboard widget, core's own included, is now declared with `defineWidget`, so the older way of writing one as a definition is gone. Each card is answered on the server by its declaration's `load` and asked for by its card. The admin no longer asks a card's own query, a stats card's cells or a custom card's cells through the dashboard batch, and no longer draws the `text`, `actions` and `stats` archetypes, a self-drawn custom card that is handed no data, or a card footer link from the widget. A widget's view is a core view (`figure`, `list`, `table`, `bars`, `series`) or a component of its own (`view: { component }`).
+
+  Removed exports:
+  - `nextly/config`: `WidgetDefinition`. Declare the widget with `defineWidget` (from `nextly` or `@nextlyhq/plugin-sdk`) under a plugin's `contributes.dashboard.widgets` or the site's `admin.dashboard.widgets`. To migrate, move the definition's `title`, `description`, `size`, `settings` and `requiredPermission` onto the declaration (the permission becomes `access`), and replace its `query` with a `load` that returns the card's data.
+  - `nextly/config`: `WidgetAction`. There is no `actions` archetype: draw a card of shortcuts with a component of its own (`view: { component }`). To migrate, move the shortcut list into that component, and hide any shortcut the reader may not use there.
+  - `nextly/config`: `WidgetStatCell`. There is no `stats` archetype: declare one widget per number with `view: "figure"`, or draw several numbers with a component of its own. To migrate, move each cell's count into the card's `load`, and return the numbers as its data.
+  - `nextly/config`: `WidgetQueryCell`. A card no longer asks cells through the batch: its `load` reads everything it draws. To migrate, run each cell's query inside the card's `load` and return the answers together as its data.
+
+  Added export:
+  - `nextly/widget-result`: `PublishedWidget`, a type only. The widget as `/admin-meta/workspace` serves it to the admin, derived from the function the registry publishes every widget through. Never written by a widget author; declare a widget with `defineWidget`.
+
+  A widget no longer carries `serverData`, `sizedQuery`, `dismissible`, `link`, `cells`, `actions`, `content` or a `query` of its own. Every card's "…" menu offers Remove, and a list's "View all" link is drawn by `Widget.List`'s `viewAllHref`.
+
+- [#3002](https://github.com/nextlyhq/nextly/pull/3002) [`3dfc0c7`](https://github.com/nextlyhq/nextly/commit/3dfc0c7672243ade90e23ea40c013d879ea9befa) Thanks [@aqib-rx](https://github.com/aqib-rx)! - One rule now judges a new collection, Single or field-group address, wherever it is set: `nextly.config.ts`, the Visual Schema Builder, the REST schema endpoints, `nextly.fieldGroups.create()`, `nextly migrate:check` and `nextly migrate:create`. Before, these disagreed: the Builder accepted `admin` and refused `team-updates`, configuration did the reverse, and the collection schema endpoint took any 255-character name.
+  - A hyphen is accepted everywhere, and the table is named from the snake_case form (`team-updates` is stored in `dc_team_updates`). A second address with the same snake_case form is refused, naming both: among collections and Singles, and among field groups.
+  - Every road refuses a route or system table Nextly uses (`admin`, `accounts` and others), a system resource for a collection or Single, a reserved SQL word, and an address whose tables would pass the 63-character name limit. New limits for new addresses: 48 characters for a Single and 47 for a field group.
+  - An entity that already exists under an address the rule now refuses keeps working, and `nextly migrate:check` warns about it once. The Direct API's `fieldGroups.update()` no longer re-judges a field group's existing address.
+
+- [#2913](https://github.com/nextlyhq/nextly/pull/2913) [`7c24c38`](https://github.com/nextlyhq/nextly/commit/7c24c383486c50ad8cfff73b1fe2a203f984ccfa) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Deleting data now takes one consent, on every command that does it: `--accept-data-loss` on the command line, or `NEXTLY_ACCEPT_DATA_LOSS` in the environment. It covers the development push and `db:sync` dropping columns, `migrate:down` running a DOWN that loses data, `migrate:fresh`, `prune`, and a full `plugins uninstall`.
+
+  Given alone, it covers every deletion of the run, and the run prints each table and column before deleting it. Given a list (`--accept-data-loss=posts,pages.summary`), it covers only those: a named table covers dropping it, dropping any of its columns and removing its rows, and a named `table.column` covers dropping that column. Anything the list leaves out is refused, by name, and nothing changes. At a terminal with no consent, every deletion is listed, with each table's rows and each column's non-empty values, and the command asks. With no terminal and no consent, it refuses at once, changes nothing, and prints the consent that would cover it, where `migrate:fresh` used to wait for an answer nobody could give. `migrate:fresh` deletes every table, so it takes the consent without a list, and `migrate:down` takes it without a list too while it judges a DOWN as a whole.
+
+  **Earlier consent spellings** keep working for what each covered before, and say they are deprecated, naming the new spelling: `NEXTLY_ALLOW_CODE_FIRST_DROPS` for the development push and `db:sync`, `--allow-data-loss` for `migrate:down`, `--force` for `prune` and for `migrate:fresh`. Each covers only its own command's deletions; anything else in the same run needs the new consent. Once the new consent is given, it alone decides: an earlier spelling still set beside it is named as ignored, so it cannot widen a list.
+
+  **`plugins uninstall --yes` no longer drops tables.** A full uninstall drops the plugin's tables only with the data-loss consent (`--accept-data-loss`, or a list naming its tables); `--keep-data` is unchanged and needs none. A script that uninstalls with `--yes` and no consent now stops, changes nothing, and names the consent that would let it continue.
+
+  `nextly prune` with no consent and no terminal still lists the orphaned tables and drops nothing, and now prints the consent that drops them. Each orphan is listed with the archived translations its removal deletes.
+
+- [#2936](https://github.com/nextlyhq/nextly/pull/2936) [`01d930a`](https://github.com/nextlyhq/nextly/commit/01d930a7323a9e5fa364ec554f884e5da2de8fa9) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Every person with no saved dashboard now gets one default, built from one `defaultLayout`: the site's `admin.dashboard.defaultLayout`, or core's own when the site gives none. A site's default is applied: its cards, in its order, at the sizes it states and with its starting settings. An entry marked `optional: true` is left out without a fault when its widget is not installed.
+
+  After the default's own cards come the plugins' suggestions (`contributes.dashboard.suggest`), in the order the site lists its plugins, unless the site sets `suggestions: false`. Widgets of the older contribution shape are suggested by being declared, ordered by `defaultOrder`, so today's defaults keep their cards. A suggestion never reaches a dashboard someone has saved; the add panel offers it there.
+
+  Each person's default leaves out the cards they may not see, including a declared card whose `access` refuses them or whose `shows` answers no. A first save keeps those cards in the row, so they come back once shown.
+
+  Also in this release:
+  - `contributes.dashboard.widgets` is optional, for a plugin that adds only Needs attention items.
+  - `defineAttentionItem`, `AttentionItem` and `AttentionCount` are exported from `@nextlyhq/plugin-sdk` (experimental), for declaring a plugin's items under `contributes.dashboard.attention`; each reaches the attention digest as a warning.
+  - A list with an empty slot (`[a, , b]`) in `admin.dashboard` or `contributes.dashboard` is refused, naming the list.
+  - Startup's dashboard warnings go through the app's configured logger.
+
+- [#2845](https://github.com/nextlyhq/nextly/pull/2845) [`b94fc6e`](https://github.com/nextlyhq/nextly/commit/b94fc6e7d4a8cf10a1be742ce0a95d43ccce0320) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - **Every dashboard card is drawn in one frame, which draws every state.** (experimental)
+  - **One header, one height.** A card's header is one fixed height in every state, size and mode. It shows the card's subject as its title ("Posts") and the widget's own name beneath it when the two differ ("Count"); a card set to no collection is titled as its widget. The quick control and the card's menu sit at the header's right end, in that order, on every card. The declaration's description is no longer drawn in the header (the add panel still shows it).
+  - **One spacing.** Cards are padded 16 px with 12 px between header and body. The grid puts 16 px between cards, widening to 24 px across (never down) where the dashboard is at least 1,280 px wide.
+  - **The frame draws every state.** Loading, refreshing, empty, error and not-available are drawn the same way on every card, from one `CardState`. A failed answer for a card drawn by its own component is now the frame's error, with Retry, or the one not-available state; the component is not called. A component that reads something more from a good answer (nothing in it, or an answer it cannot read) returns `FrameState` with that state, and the frame draws it.
+  - **No "Updated" line on cards.** Cards no longer say when their data arrived. The dashboard grid marks when the oldest answer it shows arrived (`data-answered-at`) for a page-level indicator.
+  - **Refresh in the card menu.** Every card that asks for data has Refresh in its menu, which asks again for that card alone. The menu stays reachable while the card's settings cannot be saved; only Settings is disabled then.
+  - **`hidesWhenEmpty`** on `defineWidget` (and core's own declarations) takes a card off the dashboard while its answer is empty, rather than drawing the empty state. A failed or not-available card is never hidden, and customise mode still shows it, marked "Hidden while empty".
+
+  **Breaking, with no replacement or deprecation period:**
+  - `chrome` is gone from widget declarations, and a widget that names it is refused at startup ("chrome is not a widget field"). Every card is framed. `WIDGET_CHROME` and `WidgetChrome` are no longer exported from `nextly` or `@nextlyhq/plugin-sdk`.
+  - `CardEmpty`, `CardError`, `CardSkeleton` and `CardUnavailable` are no longer exported from `@nextlyhq/admin` or `@nextlyhq/plugin-sdk/admin`. A widget's component returns `FrameState` instead.
+  - `RecentEntriesWidget` and the standalone `RecentActivity` section (and `RecentActivityProps`) are no longer exported from `@nextlyhq/admin`; the dashboard's own Recent entries and Recent activity cards replace them.
+
+- [#3103](https://github.com/nextlyhq/nextly/pull/3103) [`9900d7e`](https://github.com/nextlyhq/nextly/commit/9900d7eead3fd9e95bee73eaf2b2ee7273bb3652) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A plugin adds dashboard widgets one way: each declared with `defineWidget` under `contributes.dashboard.widgets`, its data read by the widget's `load` as the person asking. **Breaking:**
+  - `contributes.admin.widgets` and `contributes.widgetSources` are no longer fields of a plugin's contributions. Startup refuses a plugin that still carries either, naming the plugin and the key, with the new error code `NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL`. Declare each widget with `defineWidget` under `contributes.dashboard.widgets`, and read its data in its `load` (`services.count`, `find`, `groupBy`, `timeseries`) instead of answering a source.
+  - `nextly` no longer exports `registerWidget`, `overrideWidget`, `extendWidget`, `deregisterWidget` or `registerSource`. Declare a widget with `defineWidget` under `contributes.dashboard.widgets` (a plugin) or `admin.dashboard.widgets` (the site config), and change, replace or hide another widget with the site config's `admin.dashboard.overrides`, `replace` and `hide`.
+  - `@nextlyhq/plugin-sdk` no longer exports `registerWidget` or `registerSource`; declare the widget with `defineWidget` under `contributes.dashboard.widgets`.
+  - `nextly` and `@nextlyhq/plugin-sdk` no longer export the types `PluginWidgetSource`, `PluginSourceResolver` and `PluginManySourceResolver`, the contract `contributes.widgetSources` took. A widget's `load` is typed by `defineWidget`.
+
+- [#2824](https://github.com/nextlyhq/nextly/pull/2824) [`b900812`](https://github.com/nextlyhq/nextly/commit/b900812ce26fbce192823945195b62eb9dbc201a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - nextly's table bundles, per-feature table helpers and core schema now load only the running database dialect's table definitions, where before importing nextly loaded all three dialects'.
+
+  The `schema` export, which held all three dialects' tables, is removed from `nextly` and `nextly/database`. Read tables with `getDialectTables(dialect)` after creating the adapter.
+
+  Four functions now read a loaded dialect's tables, and throw, naming the fix, if called before that dialect is loaded:
+  - `getCoreSchema`, from `nextly` and `nextly/schemas`;
+  - `getStaticRelations`, `getDialectTables` and `getDialectTablesForPush`, from `nextly` and `nextly/database`.
+
+  Creating the adapter loads its dialect, so code that runs after that is unaffected. Code that calls them without an adapter, such as schema tooling, first runs `await loadDialectTables(dialect)`, exported from `nextly`, `nextly/database` and `nextly/schemas`.
+
+  `new ServiceContainer(adapter)`, from `nextly`, reads its adapter's tables when it is constructed. An adapter made by `createAdapter`, or handed to Nextly's config, is unaffected; one built directly from `@nextlyhq/adapter-postgres`, `@nextlyhq/adapter-mysql` or `@nextlyhq/adapter-sqlite` first needs `await loadDialectTables(adapter.getCapabilities().dialect)`, and the constructor's error names that line. `seedPermissions` and `seedSuperAdmin`, from `nextly/database/seeders`, load the dialect of the adapter they are given themselves.
+
+- [#3166](https://github.com/nextlyhq/nextly/pull/3166) [`1be91d5`](https://github.com/nextlyhq/nextly/commit/1be91d5951bb8c4fbc2030aeeda1b5e4d5859b2c) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A return to the dashboard no longer leaves out, for its first frame, a card that needs a permission (Upcoming releases): each new screen asks for your permissions again while the answer it holds keeps counting, so nothing under that card moves.
+
+- [#2892](https://github.com/nextlyhq/nextly/pull/2892) [`7faa40c`](https://github.com/nextlyhq/nextly/commit/7faa40c3693b8444334ce71553d5b8c217b47afb) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Settings and the Email hub are granted by plain permissions. `create-settings`, `update-settings` and `delete-settings`, `update-email-providers` and `update-email-templates` are seeded, and settings create and delete are no longer hidden from the permission list. Each settings and email gate asks the permission its action names, so a role ticked "update settings" can change the general settings, the languages and the sidebar. Image sizes ask their own action on settings rather than `manage-settings`. A schema change (a collection's or a Single's definition) asks all three of create, update and delete on settings. A role holding a `manage-` permission keeps every one of these, since it still counts as the plain four.
+
+- [#2877](https://github.com/nextlyhq/nextly/pull/2877) [`51bba02`](https://github.com/nextlyhq/nextly/commit/51bba0271701ae7fac8626cc2f509eb78ed74b9f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Blocks a plugin contributes now reach the page builder's editor. A plugin declaring blocks names an `editorEntry`, a module exporting the same definitions; `nextly generate:types` imports it in the admin's component map, and the editor offers those blocks in the Add panel and its search, with an inspector, and opens stored pages holding them without a placeholder. A block's own inspector (`editor.component`) is drawn in place of its generated content controls and given `{ node, props, commit, readOnly }` (`BlockInspectorProps` from `@nextlyhq/plugin-sdk/blocks`, experimental). Block code can read the document and window it is drawn in through `useBlockEnvironment()` from the new `@nextlyhq/blocks-react/environment` entry. A block registered in code rather than declared reaches the server only, and development now says so once, naming it.
+
+- [#3014](https://github.com/nextlyhq/nextly/pull/3014) [`7d4131e`](https://github.com/nextlyhq/nextly/commit/7d4131ee6dd7305c5ea23a24931dbceecec81172) Thanks [@faisal-rx](https://github.com/faisal-rx)! - On the roles screen, two permissions a plugin declares under the same name on the same resource are told apart by their action as well, so each switch reads differently, for example "Export (reports, export-csv)". A plugin group's folded level stays on one line beside a long plugin name.
+
+- [#2887](https://github.com/nextlyhq/nextly/pull/2887) [`dbc6d49`](https://github.com/nextlyhq/nextly/commit/dbc6d49213d8292f9fe7e544ab65616e2be26f2a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Opening a plugin's admin page directly, from a bookmark, a refresh or a link, no longer shows "Page Not Found" while the admin loads. The page's address shows a loading state until the plugin pages are known, then the page itself, or a genuine not-found page if no plugin provides it. If the admin's metadata could not be loaded, it says so and offers Try again instead of waiting forever. Other addresses that match nothing still show not found at once.
+
+- [#2869](https://github.com/nextlyhq/nextly/pull/2869) [`8e2a2ff`](https://github.com/nextlyhq/nextly/commit/8e2a2ff2abc40bfb738d21877e1e6d9e46c94327) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The admin no longer offers the built-in Public role where a role is given to a user or an API key, or built on by another role, since the server refuses it there. The roles screen still lists it. Each role the API returns now carries `assignable`, false for the Public role.
+
+- [#2814](https://github.com/nextlyhq/nextly/pull/2814) [`14c115e`](https://github.com/nextlyhq/nextly/commit/14c115ea90de3bd59c1cd33dd69137448a7d019f) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A write that changes only an entry's status, a publish or an unpublish, is now judged by its own permission and code rule alone. Before, it also needed the update permission and update rule, so a role that may publish but not edit could not publish at all. A publish-only caller sends the status alone, `{ "status": "published" }`, and the pending draft, if there is one, goes live with its fields still judged by their own rules. A write that names any other field, even at its current value, needs update too, and without it nothing is written, the status included. This holds over REST, the Direct API, a plugin's services, batch and query updates and Singles; publishing or unpublishing every language needs only its own permission, and the admin's capabilities answer publish the same way. A status-only write to every language (`locale: "*"`) that publishes asks the publish rule once in each language it puts live, as publishing every language does.
+
+- [#2954](https://github.com/nextlyhq/nextly/pull/2954) [`574bc71`](https://github.com/nextlyhq/nextly/commit/574bc71a4d9202819df0784582000bdae8fc7375) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A caller who may publish an entry sees its pending changes, as one who may edit it does. A user who may read and publish an entry, but not change it, now publishes it from the read-only page: Publish on a draft, and Publish changes on a published entry holding an editor's draft. Publish and Unpublish send the status alone, which their own permissions judge, so they go through where a save is refused; Unpublish on the read-only page now works too. The same holds for a Single with a lifecycle. `GET /me/capabilities` answers `publishEveryLanguage` with publish alone on a collection with a Draft/Published lifecycle, so the admin offers Publish all languages to such a user; a Single, and a collection without a lifecycle, still ask update too.
+
+- [#2834](https://github.com/nextlyhq/nextly/pull/2834) [`6682890`](https://github.com/nextlyhq/nextly/commit/6682890a2d5a0047fa0053f111f2791d7fe4d4f2) Thanks [@faisal-rx](https://github.com/faisal-rx)! - On a document a user may change in one language and only read in another, switching languages shows the loading screen while the new language's access is checked, so nothing is shown or offered for it until that is known; the language the user may only read then opens read-only, with the reader's banner.
+
+- [#2804](https://github.com/nextlyhq/nextly/pull/2804) [`50865a1`](https://github.com/nextlyhq/nextly/commit/50865a1589a0c038abcdf7c4164a8c8f700440f4) Thanks [@faisal-rx](https://github.com/faisal-rx)! - An entry or a Single now opens for a user who may read it but not change it, on the same page an editor gets, read-only: a banner says their access lets them view it but not change it, and to ask an admin. Saving, discarding a draft, duplicating, previewing and sharing a preview are not offered, while unpublishing and deleting each still follow their own permission, and history and the id stay. Such a user makes no claim on the document, so nobody is told they are editing it. A custom edit view is handed the same read-only state through `documentLock`.
+
+- [#2958](https://github.com/nextlyhq/nextly/pull/2958) [`ddf8c32`](https://github.com/nextlyhq/nextly/commit/ddf8c329ef43dd4eacc37d390436a890fd6d3e6b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A reader can now pin up to 20 entries and Singles to come back to, from the "Pin to dashboard" item in an entry's or Single's "More actions" menu. Pins are kept per reader on the server (`GET`, `POST` and `DELETE /api/dashboard/pins`), so they follow the reader across devices; an API key cannot pin.
+  - A 21st pin is refused with a message naming the limit; pinning something already pinned is not a 21st.
+  - A pin needs read access to what it names. While a reader may no longer read a pinned entry, it is left out of their pins with no title and no placeholder, and kept, so it returns if their access does.
+  - Deleting an entry (one, several, or by query), a Single or a whole collection deletes every reader's pins of it, in the delete's own transaction.
+  - Before `nextly migrate` creates the pins table, a reader has no pins, a pin is refused naming the command, and deletes work as before: the table's presence is asked before the delete's transaction opens.
+  - The admin's `useDashboardPins` hook and the pin action are ready for the dashboard to draw pins (`@experimental`).
+  - A delete inside a transaction its caller holds asks whether the pins table exists on that transaction's own connection, so it completes on a pool of one connection. `DrizzleAdapter` gains the internal `tableExistsThrough`, the catalogue lookup `tableExists` makes, run on a given executor; `tableExists` answers as before.
+
+- [#3034](https://github.com/nextlyhq/nextly/pull/3034) [`4a250c9`](https://github.com/nextlyhq/nextly/commit/4a250c99e6b96a6ce0ca9a47e5577bc9f21ac504) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - Reads of a translated site take fewer round trips to the database:
+  - A translated entry's detail read takes its translations in the same query as the entry, so
+    one statement does what two did. A site with one language matches its translations with `=`
+    rather than `IN`.
+  - A Single's and a component's registry row are read from the same one-second cache a
+    collection's already is, outside a transaction. Every registry write this process makes clears
+    it at once; a change made by another process is seen within a second.
+  - A Single's or a component's translations table is described once per definition instead of
+    on every read, and a collection's translated read takes its registry row from that cache.
+
+  Every read returns what it returned before.
+
+- [#3040](https://github.com/nextlyhq/nextly/pull/3040) [`b0ddc60`](https://github.com/nextlyhq/nextly/commit/b0ddc60200569db36757d37bd5ed05e603d28532) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Red now means a deletion, and the Schema Builder speaks one plain language.
+  - **`AlertDialogAction` (`@nextlyhq/ui`) is primary by default.** It was red
+    by default, so every dialog that confirmed a save, a publish or a restore
+    looked like data loss unless its caller overrode the colour. It now takes
+    `variant?: "primary" | "destructive"`, defaulting to `"primary"`. If your
+    own dialog confirms a deletion and relied on the red default, pass
+    `variant="destructive"`. The admin's own dialogs that delete data (a
+    field's delete, a removal or a value-losing type change in the save
+    review, a discarded draft, a copy over another language's values, a
+    dashboard reset or replace) pass it.
+  - **The Schema Builder's save review is red only when the save deletes stored
+    values.** The colour now follows the preview's rows: a removed field is
+    always red, and a type change is red when the preview classes it as able to
+    lose values (today it classes every type change so). A change that only
+    needs an answer, or values moving to the translation archive, no longer
+    shows a red save. A save that removes a field always opens the full review,
+    not the short confirmation.
+  - **Field types have one plain name everywhere:** "Rich text" (was
+    "Editor"), "Image or file" (was "Media"), "Link to entries" (was
+    "Relationship"), "Repeating rows" (was "Repeater") and "Field group" (was
+    "Field Group"). Type ids are unchanged; only what a person reads moved.
+    The field settings sheet shows the plain name, not the internal id.
+  - **The Builder names the kind it edits** (collection, Single or field group)
+    in its empty states, titles and messages, and writes titles, labels and
+    buttons in sentence case, the confirming action last.
+
+- [#3008](https://github.com/nextlyhq/nextly/pull/3008) [`ffca213`](https://github.com/nextlyhq/nextly/commit/ffca213a0804b7b7ca7fc31750cee147c42b7f5d) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - Releases gain two experimental operations that each do several things, all
+  of them or none, in one database transaction. A refusal, or a failed write
+  (the last one included), leaves no release, no document and no revision
+  change behind.
+  - Adding several documents to a release at once, each with its action:
+    `nextly.releases.addMembers({ releaseId, members })`, or
+    `POST /api/releases/:id/members/batch`. Each document is checked as adding
+    it alone is checked, and a selection that would take the release past its
+    200 documents is refused whole, saying how many fit. A hard problem in the
+    refusal names its document in `data.problems[].document`. It is how the
+    linked documents an add offers are added.
+  - Scheduling a document in one step:
+    `nextly.releases.scheduleDocument({ into, document, linked, ... })`, or
+    `POST /api/releases/schedule-document`. With `into: "own"` it makes a
+    single-document release, scheduled; with accepted linked documents it makes
+    an ordinary release holding them all. `into: "existing"` adds to an ordinary
+    draft or scheduled release, and `into: "new"` makes a draft release.
+
+  Behaviour change: taking the document out of a single-document release that
+  has not run (draft, scheduled or stopped) now cancels that release through
+  the cancel operation, under its permission (`publish-content-releases`), and
+  keeps it as cancelled. Before, a draft or stopped one was left empty, and
+  the document of a scheduled one could not be taken out. Whoever may create
+  but not publish releases is now refused this, and the release's
+  `can.removeMember` says so. The answer says which happened:
+  `nextly.releases.removeMember` now resolves to `{ releaseCancelled }`
+  instead of nothing, and `DELETE /api/releases/:id/members/:memberId`
+  returns the same field. A removal retried after its answer was lost finds
+  the release already cancelled and is answered as done. The admin's release
+  page asks to confirm cancelling a single-document release when its document
+  is taken out, and says the release was cancelled.
+
+- [#2962](https://github.com/nextlyhq/nextly/pull/2962) [`f457522`](https://github.com/nextlyhq/nextly/commit/f457522941b1c8aa5039e49e998bf33e0f9dc77e) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A release now admits a document where its author's publish or unpublish rule answers a filter that matches it, rather than refusing every document under a rule that answers a filter. Adding a document, switching its action and the readiness check before a run match the document against the rule's filter, as the run's own write does; a document the filter does not match is refused, and a document the author may not read is answered as one that is not there. An API key is judged by its own grants and rules as well as its maker's.
+
+- [#3031](https://github.com/nextlyhq/nextly/pull/3031) [`b7c815d`](https://github.com/nextlyhq/nextly/commit/b7c815d5fbfb8c8ca9b05899640270b708794cb7) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - A release's owner is now told when it misses its time. A release still scheduled more than 10 minutes after its time gives its owner one notice of kind `releases.overdue`, recorded by each `releases:drain` pass before it runs anything, or, for a release published that late, in the transaction that publishes it. The notice says the release missed its time, or that it ran late. Both are keyed on the instant missed, so one miss is one notice, and a pass seen twice tells nobody again.
+
+  Where the site can send email, every new release notice, stopped or overdue, is also emailed to its person, with a key made from the notice's id, and only to an active person who may still read releases, asked again on every attempt. The job that sends the email is recorded in the notice's own transaction, so a notice never stands without it, and retries a send that may succeed later with backoff, as many times as a queued email. The email writes the release's time in the zone it was scheduled in, named, and links to the release only when `NEXT_PUBLIC_APP_URL` is set. `NoticesService` gains `byId`, and the stopped notice keeps the release's zone. A new job type, `releases:notice-email`, is registered.
+
+- [#3017](https://github.com/nextlyhq/nextly/pull/3017) [`f18bcd8`](https://github.com/nextlyhq/nextly/commit/f18bcd878878283a9577cd19ba924c98a5b4a164) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - A release's page now names its documents by title, grouped by collection, and says of each whether it goes live or comes down and whether it is ready, with what is wrong and the way to fix it: open the document, or take it out. A summary says how many are ready ("5 of 6 ready"), and Schedule and Publish now wait while a document would stop the release, or while its documents have not loaded. Documents the reader may not view are counted in their collection ("2 documents you can't view · Posts") and never named. The title and description are edited in place by someone who may rename releases; a document is switched between going live and coming down, or taken out, by someone who may change the release's documents; and Schedule, Publish now, Cancel and Delete are offered as on the releases list, each only to those the server says may take it. Taking the only document out of a single-document release says first that it cancels the release, and is offered only to someone who may cancel releases, as the server's capabilities say. Beside the documents, the page shows the release's owner, time zone and creation date, and its history from the record of content events: who created, renamed, scheduled or ran it, and which documents were added, switched or removed.
+
+- [#3131](https://github.com/nextlyhq/nextly/pull/3131) [`8dda2e9`](https://github.com/nextlyhq/nextly/commit/8dda2e9e6ae2da184d0c5a1b043b6ccba193cf25) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - **Removing the image sizes an earlier release stored.** Items uploaded before image sizes were removed still name their size files in the media table's `sizes` column, and the size definitions are still in the `image_sizes` table. This release adds the way to remove them, in two steps run after it is deployed, and nothing is removed until you run them. Until then your site keeps working, and startup names what is left. Where the note on image sizes says nothing stored is removed, read it as nothing removed automatically: neither that change nor this one removes anything stored, and these commands remove it only when you run them.
+  - `nextly media remove-sizes` lists, as a dry run that changes nothing, every size file items name, which it would remove and which it would keep. `nextly media remove-sizes --apply` **deletes those files from your media storage** and then clears each item's `sizes`, item by item. It never deletes an original or a thumbnail: an item whose thumbnail is one of its sizes keeps that file, as does any size file another item uses, checked again just before each removal so an upload made meanwhile keeps its file. An item is left as it is, named, and the command exits non-zero when the storage fails to delete one of its files with anything but an error saying that file is not there, when its files are on another storage than the one configured now (a URL relative to the site counts as local disk), when a size is recorded by its path alone (which shows no storage, so it is left for you to remove by hand), or when that check cannot be made; running it again picks up where it stopped.
+  - `nextly media remove-sizes --apply --drop` then **drops the `image_sizes` table, with its rows (the size definitions), and the `media.sizes` column**. It drops nothing while any item still names a size file or another table has a foreign key to `image_sizes` (each key is named, and the drop never cascades), and drops each only when the database shows it is what image sizes left; a table of that name that is not shown to be Nextly's is kept and named. `nextly migrate` never drops either, from the command line or at startup.
+  - A new install has neither the column nor the table, `CORE_TABLE_NAMES` (from `nextly/schemas`) no longer lists `image_sizes`, and the `media` table exported from `nextly/schemas` no longer declares `sizes`. The name `sizes` is reserved on the media table: a column an app or a plugin contributes under it is refused.
+
+  **Back up first, and restore both together.** Before `--apply`, back up the database (`pg_dump`, `mysqldump`, or a copy of the SQLite file) and the media storage folder or bucket (for example `cp -R public/uploads …` or `aws s3 sync s3://your-bucket …`), at the same time. To undo the removal, restore the database dump and copy the files back to the same paths; restoring one without the other leaves records and files that disagree. The media storage guide has each step: deploy, dry run, back up, remove, drop, check, restore.
+
+- [#2975](https://github.com/nextlyhq/nextly/pull/2975) [`34980f0`](https://github.com/nextlyhq/nextly/commit/34980f04181f19d9e4641ec3806dbc636d5abb92) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Three more writes to a collection removed from code are refused at their start with `ENTITY_REMOVED_FROM_CODE`, as every other write to one already is: an update or delete by query that matches nothing (the REST `bulkUpdateByQuery` and the Direct API's `update` and `delete` with `where`), which answered success; unpublishing every language when the collection's translation table has no per-language status, which answered that conflict instead; and a batch write in partial mode, which counted each entry's refusal among its failures without its code. Nothing changes for a declared collection.
+
+- [#3041](https://github.com/nextlyhq/nextly/pull/3041) [`e0a5273`](https://github.com/nextlyhq/nextly/commit/e0a527317e6d05e823dc20d688d40d49d5bad2fe) Thanks [@zeshan-rx](https://github.com/zeshan-rx)! - Renaming a collection or Single in the Schema Builder is now quick on a long release record. The rename rewrote each stored JSON value that named the old slug in a statement of its own, inside the rename's transaction: every event in a release's history about one of the entity's documents, every webhook filter listing it. JSON values are now written many rows to a statement, so the number of statements no longer grows with the number of events, on PostgreSQL, MySQL and SQLite alike. The rename now reads, from release history, only the events about a document.
+
+- [#3001](https://github.com/nextlyhq/nextly/pull/3001) [`d2401dd`](https://github.com/nextlyhq/nextly/commit/d2401dde83150446b45fab098e75566c15df6f14) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A new `nextly repair-columns` command reports every column whose type or nullability differs from its field, on the tables Nextly builds from field definitions (collections, Singles, field groups, user fields and their translation tables). Each column is judged against its field as the database last had it applied, read from the newest applied migration snapshot (or, where none records the entity, its registry row): a missing table or column is reported as not migrated, and a change that no migration has applied yet (including an entity or user field no migration has created) as pending, pointing to `migrate:create`. A plugin's column names the plugin, and where it can the report says why a column differs: created before a named release, or by a generator that still creates it. It changes nothing in the database, and it refuses to give a verdict when an applied migration snapshot cannot be read.
+
+- [#2611](https://github.com/nextlyhq/nextly/pull/2611) [`32fc290`](https://github.com/nextlyhq/nextly/commit/32fc29099457c8c6935a3d0a3f80f6bb25d37057) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A translated field marked Required or Unique can now stop being translated in one change, in the Schema Builder (a collection's save and schema dialog, a Single's save and schema dialog, a field group's schema dialog) and through `nextly migrate:create`. Its shared column is created without the setting, filled with the default language's values, and then made required or unique. Before anything runs, the Builder checks that the values can take the setting: an entry with no default-language value refuses Required, and two entries that would end up with the same value refuse Unique. The refusal names the field and how many entries are in the way, never a value, and the schema dialog shows it before Apply. `migrate:create` has no database to check against, so it applies the setting after the copy and before the translated column is dropped, and a value the database refuses leaves everything in place. In a schema dialog, a setting the database refuses leaves the field translated with every language kept, and saving again finishes the change. A Single's schema save records the field without a refused setting, and its next save applies it.
+
+- [#3010](https://github.com/nextlyhq/nextly/pull/3010) [`a4a357c`](https://github.com/nextlyhq/nextly/commit/a4a357c2f25687f69699d35589a46d6c11c17daa) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Each start names the roles still holding a retired manage permission only after its own seeding has run, so a built-in role that seeding converts is no longer named for an upgrade the same start already made. `nextly upgrade` checks scheduled releases once after converting roles, rather than once for each role it converts.
+
+- [#2964](https://github.com/nextlyhq/nextly/pull/2964) [`c35e0d0`](https://github.com/nextlyhq/nextly/commit/c35e0d044bd651d5f05556cd6cdcdeb3bbbd7d8b) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A plugin route whose `requiredPermission` is `manage-media`, `manage-settings`, `manage-email-providers` or `manage-email-templates`, or a `ctx.caller.can("manage", resource)` on one of those four, is answered by the plain read, create, update and delete there together: a caller holding all four passes, one missing any of them is refused, and a role `nextly upgrade` has not yet converted passes as before. Each plugin that asks is warned once, naming the permission to ask instead; ask the plain permission the route needs, such as `update-settings`.
+
+- [#2959](https://github.com/nextlyhq/nextly/pull/2959) [`4634e7c`](https://github.com/nextlyhq/nextly/commit/4634e7c504e57b9a8e96160afd0ca8ef0f6e3eca) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Run `nextly upgrade` after updating. It converts each role holding a retired manage permission (manage-settings, manage-media or manage-email-\*) into the four plain permissions it stands for; until it runs, those roles keep working as before.
+
+  `manage-media`, `manage-settings`, `manage-email-providers` and `manage-email-templates` are retired in favour of the plain read, create, update and delete permissions there. `nextly upgrade` gives each role holding one the plain four on that resource and takes the `manage-` permission off, once. Until a role is converted, each start names it, with the command to run. Setting, creating or updating a role with one of these `manage-` permissions now stores the plain four instead, which gives the same access, and so do role presets and the super-admin seeder at each boot. Removing a retired manage permission from a role removes the four permissions it stands for. `manage-background-jobs` is unchanged.
+
+- [#2987](https://github.com/nextlyhq/nextly/pull/2987) [`7c07a60`](https://github.com/nextlyhq/nextly/commit/7c07a60e4cfdafdc5c0df225fddddc779dea34b9) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Run `nextly upgrade` after updating. Roles that held manage-settings, manage-media or manage-email-\* keep their access only once it has run.
+
+  `manage-media`, `manage-settings`, `manage-email-providers` and `manage-email-templates` are no longer counted anywhere: a role holding one of them, not yet converted by `nextly upgrade`, is refused read, create, update and delete on that resource, by the server and in the admin, until it has run. The four are no longer seeded; an install that has them keeps their rows, so the upgrade can still find the roles holding them, and each start still names those roles. On the roles screen, such a role's media, settings or Email hub row reads No access, with a note to run `nextly upgrade`; saving the role converts it too. `manage-background-jobs` and `manage-permissions` are unchanged.
+
+- [#2891](https://github.com/nextlyhq/nextly/pull/2891) [`833a63f`](https://github.com/nextlyhq/nextly/commit/833a63fbb190a4830c275a3b5581ea9c4688091d) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Internal groundwork for the roles screen's per-collection access levels, with no change to what anyone may do. The admin gains the rows the roles screen will show, one per collection and Single, from the screen's list of entities and the permissions: the level a role's permissions give each row, what setting a level changes (only that row's standard actions; inherited permissions, the row's other actions and every other row are kept), and which levels a role's base roles leave on offer. Nothing uses them yet.
+
+- [#2970](https://github.com/nextlyhq/nextly/pull/2970) [`4e3dc88`](https://github.com/nextlyhq/nextly/commit/4e3dc88d700e8cb2773984485641339e33a3d31b) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The roles screen sets one level per collection and Single: No access, Can view, Can edit or Can publish (a Single has no create or delete, so its Can edit is view and edit). The levels sit side by side on a wide screen and in a select on a phone. Each row's "Each action" switch shows a switch for each of its permissions; a row whose actions match no level reads Custom and is saved exactly as its switches stand. A base role's grants show on the rows they give to, marked "from" the base, and a row offers no level below them. The roles screen now reads its collections and Singles from `GET /roles/screen`; permissions that belong to no collection or Single stay in the grid below, whose Clear All takes away only its own.
+
+- [#2991](https://github.com/nextlyhq/nextly/pull/2991) [`92891bb`](https://github.com/nextlyhq/nextly/commit/92891bb185e208492a4802d99f2e0ce4171189c5) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The roles screen folds each plugin's collections under the plugin's name, closed at first, with one word for what a role holds across them (a level, or Custom). Open, a plugin shows a level row for each of its collections and a switch for each permission it declares of its own, such as the form builder's Export Submissions. A plugin that declares permissions but contributes no collection gets its group too. Those permissions leave the grid below, which keeps the remaining settings permissions.
+
+- [#3012](https://github.com/nextlyhq/nextly/pull/3012) [`69c15e4`](https://github.com/nextlyhq/nextly/commit/69c15e4f521744114f1d0562cfacfb566207980e) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The roles screen sets media, settings, email providers and email templates by level (No access, Can view, Can edit), in a new "Media, settings and email" section beside collections and Singles. A role still holding a retired `manage-` permission on one of them reads Can edit, with a note that `nextly upgrade` converts it into the plain permissions, and saving the role keeps that access. The Settings row says that changing collections and Singles needs Can edit on Settings.
+
+- [#2942](https://github.com/nextlyhq/nextly/pull/2942) [`59a218a`](https://github.com/nextlyhq/nextly/commit/59a218aea2454b0e8f3d5fc97fd49ecc59ae86f1) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Pages built with nextly's route helpers now prerender a static shell under Next.js Cache Components. The blocks page helpers in `@nextlyhq/blocks-react/next` (`createBlocksPage`, `createPublicBlocksPage`, `createSinglePage` and `createPublicSinglePage`) render their page inside a `<Suspense>` boundary, so what a page reads at request time (a preview cookie, an access-enforced read, a path the build did not list) streams in beneath it. Their page components keep the same type. `createContentRoute` and `createSingleRoute` from `nextly/runtime` stay free of React: with Cache Components on, render their page inside a `<Suspense>` of your own, as the routing guide now shows.
+
+  An uncached read now waits for the request with Next.js's `connection()` instead of calling `unstable_noStore()`. Outside a request, in a script or a test, it runs as before.
+
+  `releaseBoundedRevalidate` from `nextly/runtime` takes the same arguments. With Cache Components off, nothing changes. With Cache Components on, it returns the lifetime you pass and reads neither the clock nor the database, so a scheduled release reaches a page cached there only through the cache tags its schedule flushes, not by shortening the page's lifetime. Cache Components stays off by default until a release going live refreshes cached pages under it too. Nextly reads whether Cache Components is on from the value Next.js writes into the code it bundles, so an app that loads `nextly` unbundled, as `serverExternalPackages` does, keeps the release bound.
+
+- [#3117](https://github.com/nextlyhq/nextly/pull/3117) [`1eea1bd`](https://github.com/nextlyhq/nextly/commit/1eea1bde9fbd47511b06a7618eb8cabb4e63f00e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Sample content on the setup card loads at most once at a time for the whole site, and every outcome stays on the card until the person has seen it.
+  - **One load at a time.** The project's sample-content route hands its load to Nextly's runner (`sampleContentPost` from `nextly/database/seeders`), which claims the site's one load in `nextly_meta` before loading anything. A start while another load is unfinished, after somebody loaded or declined, or after a failed load without `{ "confirm": true }` is refused with 409 and loads nothing, on every dialect. No new table: the latest load or decline is one `seed.current` row, claimed by one conditional write (inserted only where none exists, then moved only from the failed load it was read as), so every read of the site's answer is three rows however many loads were tried; `seed.run.<n>` keeps a copy of the last three, and `seed.completedAt` and `seed.skippedAt` keep their meaning. The route answers a load as `{ message, item }` and a refusal or failure in the standard error envelope, with `data.reason`; its confirmation body is read through the bounded byte reader.
+  - **Offered only to someone who can load it.** "Load sample content" is offered only when the route's probe answers 2xx for this person, only while the site holds no entry and nobody has answered. When the site's answer cannot be read, the card offers no load and shows "Add your first entry". The card asks for the site's current answer whenever the dashboard regains focus, and after every answer from the server.
+  - **Every outcome stays.** A probe that fails or refuses withholds only the offer, never a load the site started, so setup never retires over one. A load's progress and outcome survive the card being drawn again, customise mode included. A load that never reported says "A load started at <time> has not finished" and starts nothing else, however long ago it started. A failed load says what failed, with "Add your first entry", and Try again (while the site holds no entry) warns that some content may already be there and loads again only once confirmed. A load whose record failed says exactly that, and its Try again records it without loading again. A check of the other steps that fails while a run is on show is said beside it, with its own Retry. Continue shows the steps as they are now.
+  - **Declining and recording are Nextly's.** `PUT /api/dashboard/setup` takes `sample: "decline"` and `sample: { record }` (internal to the admin), so neither reaches a route that loads. The blog template's `/admin/api/meta/seed-status` declines through the same runner and no longer writes `seed.completedAt`; `GET` also answers the site's answer and its load. Nothing is retried on its own.
+  - **Inside the admin** (none of it published), the `useSeedStatus` hook and `seedApi.runSeed`, `getStatus` and `setSkipped` are replaced by `seedApi.start` and the setup card's own data. A project route older than the runner still loads, as before, without the single-load guarantee: copy the blog template's two routes to get it.
+
+- [#3143](https://github.com/nextlyhq/nextly/pull/3143) [`0ba50cd`](https://github.com/nextlyhq/nextly/commit/0ba50cd3d598b1382a0a8f34bb6119b6dc50aa73) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's setup card no longer fails a request on every load on sites without a sample-content route, and setup can finish there.
+
+- [#3101](https://github.com/nextlyhq/nextly/pull/3101) [`c3e320b`](https://github.com/nextlyhq/nextly/commit/c3e320b8040f3fe6548f29249eabbe25cfb149a1) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The editor's Publish button gains an arrow with "Schedule publish…" and "Add to release…". Schedule publish… asks for a date, a time and a time zone, says back when the document will go live, and refuses a time that has passed. It then makes a release holding only this document, scheduled for that time, in one step that lands whole or not at all. The release shows at once in the scheduled-release banner and in the document panel's Publishing section, which also offers Schedule publish… while the document is not scheduled. For a person who may not create and schedule releases, or publish the document, or who is on a translation, it stays in the menu, held, with the reason. While someone else is editing the document, it and Add to release… are held as Publish is. Where saving publishes at once (a live document with no drafts), the dialog says so rather than promising later saves wait for the release. Add to release… moves from the More menu to the same arrow. Where saving leads instead of publishing, on a published document with no unsaved edits, both stay in the More menu. The release is named after the title as it stands in the editor, saved or not. A release dialog left open by moving to another document no longer reopens on coming back.
+
+- [#2857](https://github.com/nextlyhq/nextly/pull/2857) [`306db44`](https://github.com/nextlyhq/nextly/commit/306db442c8786b74874d718ac01f38493758159c) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The scheduled-release banner is no longer hidden behind the editor's header. On an entry or a Single that is part of a scheduled release, the banner saying so now sits directly under the header, inside the editor, where it can be read and its link followed. Before, the editor's top row slid over it.
+
+- [#3104](https://github.com/nextlyhq/nextly/pull/3104) [`2579766`](https://github.com/nextlyhq/nextly/commit/25797661eaaec2e3cbde5895c0c708897bc069a0) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `MAX_ATTENTION_ITEMS_PER_PLUGIN` is now exported from `nextly` and from `@nextlyhq/plugin-sdk`: the most Needs attention items one plugin may declare, which startup holds every plugin to. It is intended to be stable, so a plugin with a line per collection it reads builds no more than this instead of restating the number; `@nextlyhq/plugin-seo` now reads it from the SDK.
+
+  The SEO plugin's Needs attention lines now share one scan budget for each answer of the Needs attention card, rather than one each: ten large collections read at most one budget's pages between them on a dashboard load, and a line left short of the end says its count is a floor.
+
+- [#3078](https://github.com/nextlyhq/nextly/pull/3078) [`dfa41cb`](https://github.com/nextlyhq/nextly/commit/dfa41cbf66e2e017033413041d8b39c79dfdedcf) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A production boot with `db.runMigrationsOnBoot` now refuses a pending Schema Builder migration file with no snapshot beside it, as `nextly migrate` does, rather than applying it as written.
+
+  A plugin option holding a list named `fields` or `blocks` is recorded in a migration snapshot as it is written. The `access` key of its entries was dropped, as though they were field declarations, so a change to it produced no settings migration and no `SETTINGS_DRIFT`.
+
+  Removing the last hook from a code-first collection or Single no longer reads as a settings change. Code-first hooks are functions, which snapshots do not record, so `nextly migrate:create` wrote a migration for nothing and `nextly migrate:check` failed until it was committed.
+
+- [#3153](https://github.com/nextlyhq/nextly/pull/3153) [`4c0f45e`](https://github.com/nextlyhq/nextly/commit/4c0f45ebdbfc97af37f0a2a92e8596f0bba1feb7) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's setup card stays one row of steps, at its own height, at every width: where the card is too narrow for every step to read in full, its steps scroll sideways inside it rather than wrapping and growing the card, so nothing under it moves as the dashboard loads.
+
+- [#3114](https://github.com/nextlyhq/nextly/pull/3114) [`33265ee`](https://github.com/nextlyhq/nextly/commit/33265ee6198f86c1f295af159e3a781ca133376f) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The setup card's collapse and dismiss sit in its header, beside the card's menu, whether the card is expanded or collapsed. The steps now span the card's full width, and their short hints ("2 of 5 · Open · Skip", "Invite · Skip") read in full on narrow screens. A collapsed card's header is fully visible, so no hidden control can take keyboard focus. A dashboard arranged before the setup card replaced Get started now shows the setup card in the same place, and Customize offers it back while it still applies to you. Reading a reader's setup state now takes one query, and later expanding or collapsing the card on another device is picked up.
+
+- [#3093](https://github.com/nextlyhq/nextly/pull/3093) [`2a2163d`](https://github.com/nextlyhq/nextly/commit/2a2163d7b282e2aa4eb082401b9f09b324ce064e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's setup card is now "Set up your project" (`core/setup`): one compact row of step tiles at full width, offered to super-admins only, that collapses, dismisses and goes away once setup is done.
+  - **The steps**, decided on the server from the site's data, each offered only to a reader who could finish it: start with sample content (where the project's sample-content route lets the reader load it, while nobody has answered and the site holds no entry), create a collection, add a first entry (which opens a new entry of the first collection the reader may create in), fill in your Singles (one step for all of them, "N of M filled in", opening a short list of the Singles) and invite a teammate. Skip is offered on the Singles and Invite steps only, and a skipped step counts as done.
+  - **Not known is not open.** When a registry cannot be listed, or a check fails or runs out of time, the card says it could not check setup and offers Retry, and shows no step as open.
+  - **Per reader, on the server.** Collapsing, dismissing and skipping are kept in the dashboard preferences (`nextly_dashboard_preferences`), so they follow the reader across devices, and never in the layout, so a reader following the default dashboard keeps following it. `GET` and `PUT /api/dashboard/setup` read and change them for the signed-in super-admin (internal to the admin). Until `nextly migrate` creates the preferences table the card is drawn expanded and its changes are not kept.
+  - **Collapsed is one line.** A collapsed setup card is one grid row tall: "Set up your project · N of M done", with Expand and Dismiss. The card frame gains this for any body that collapses itself (`useCardCollapsed`, internal to the admin): the cell spans one row, and the frame keeps the card's title for assistive technology only, with no gap or footer, at rest and never in customise mode. Expanded, the card fits its 12 × 2 size: "N of M done" in the header beside the title (a card body may now report a short phrase there, as well as a count), a thin progress bar and one row of compact tiles. It grows in place only while the reader has the Singles' list open, or where its tiles wrap below 640 px.
+  - **Resume setup.** While a dismissed card has not yet said "You're all set", the dashboard header ends its summary line with "Resume setup", for super-admins; pressing it brings the card back.
+  - **Declining sample content** draws its tile done once the decline is recorded, and the card then asks for its steps again. A decline that fails keeps the step open, says it could not be saved, and Retry declines again.
+  - **"You're all set" once.** When every step the card draws is done or skipped, the card says so once; from the next load it is gone, with no way to resume it. A sample step the project's route refuses the reader is not drawn, so it never holds the card open. The `onboarding:incomplete` condition reads the same answer, with the reader's skips, so it stops holding when their card is done.
+
+  Removed, with no alias or conversion (the old card's shapes are used by no site):
+  - the `core/get-started` widget, its `core#GetStartedCard` component and the layout read's `getStarted` field and `?getStarted=1` read. A saved layout that still names `core/get-started` no longer draws it.
+  - `GET /api/dashboard/onboarding`.
+  - From `nextly` and `nextly/config`: `GET_STARTED_WIDGET_ID`, `GET_STARTED_STEP_KINDS`, `GET_STARTED_SKIPPABLE_KINDS`, `GetStartedAnswer`, `GetStartedStep`, `GetStartedStepKind`, `GetStartedStepStatus`, `ONBOARDING_STEPS`, `isOnboardingStepId`, `OnboardingStepId` and `OnboardingStep`. In their place `nextly/config` exports the setup vocabulary (`SETUP_STEP_KINDS`, `SETUP_SKIPPABLE_KINDS`, `SetupStep`, `SetupAnswer`, `SetupCardData` and their helpers), `@experimental`.
+  - From `@nextlyhq/admin`: `OnboardingChecklist` and `OnboardingChecklistSkeleton`.
+
+- [#2851](https://github.com/nextlyhq/nextly/pull/2851) [`f2bd1e7`](https://github.com/nextlyhq/nextly/commit/f2bd1e7b443567ba72c14f99cd5b35db63e324bf) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A Single created with "Blocks" (or another plugin field) as its answer to "How is this edited?" now gets that field, so its editor shows the Page Builder like a collection entry does. Before, the Single was created with no fields. New collections and Singles also write their starting field to `ui-schema.json`, which used to record them with none.
+
+- [#2646](https://github.com/nextlyhq/nextly/pull/2646) [`9494cb2`](https://github.com/nextlyhq/nextly/commit/9494cb23c03a34cb3cc8943686ce7dd2bf2566de) Thanks [@aqib-rx](https://github.com/aqib-rx)! - On a site whose languages are stored rather than declared in its configuration, restoring a version recorded in one of the site's languages now writes that language's values instead of dropping them. After any change to the language list, cached pages are read again, so a page cached without a time limit no longer keeps serving the previous default language. A request to `/api/languages` with anything after the path now answers not found instead of listing or changing the languages. A site can have at most 200 active languages, the most a reorder can name, so the list can always be reordered.
+
+- [#2981](https://github.com/nextlyhq/nextly/pull/2981) [`40a23d8`](https://github.com/nextlyhq/nextly/commit/40a23d8f182271613a9a9bcb98c3ab346049b9a0) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The admin draws a plugin's detail page and the general settings page from smaller parts. Nothing either page shows or does changes.
+
+- [#2808](https://github.com/nextlyhq/nextly/pull/2808) [`c2ff3da`](https://github.com/nextlyhq/nextly/commit/c2ff3da1307acafca08afa11645aa47dd6afc532) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Super-admin authority is decided in one place: from the roles a lookup finds for the caller.
+  - **A user handed in by server code is judged by the roles they hold.** A `user` handed to the Direct API, or to a service, that names the `super-admin` role (`role` or `roles`) without holding it is now judged like any other signed-in user: by their roles and permissions, at the collection and Single gates and when relationships are populated. A user who holds the role, directly or through an inherited one, passes as before. If your server code hands Nextly a user object, its `role`/`roles` fields no longer grant anything; pass the user's id and let Nextly look them up, or use `overrideAccess: true` for trusted server work.
+  - **A plugin's signed-in person is judged as the person** when relationships are populated, whatever user the read also names.
+  - **The schema journal (`GET /api/schema/journal`) is read by a super-admin's session; an API key is refused.** The admin's notification bell reads it through the session and is unchanged.
+
+- [#2823](https://github.com/nextlyhq/nextly/pull/2823) [`3c05b0a`](https://github.com/nextlyhq/nextly/commit/3c05b0a73f3f4e7117ae79703fa5895b02315aad) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A full-access API key made by an active super-admin now acts with super-admin authority at every way in: it holds every permission, passes every collection and Single access rule and the read rules of related collections, and reads the schema journal. Field rules still apply to it, as they do to a super-admin.
+  - **Only a full-access key, and only while its maker is an active super-admin.** The authority is worked out for each request from the maker's standing, so the key loses it when the maker does (the super-admin role removed or expired, or the account deactivated) and gains it when the maker becomes a super-admin, within the bound the maker's own sessions follow.
+  - **Read-only and role-based keys keep their types' limits**, whoever made them, and pass no access rule a super-admin would pass.
+  - **A plugin route that narrows a key's scope** (`narrowScope`) carries none of this authority: the narrowed scope is judged on its own grants.
+  - **`nextly.access.checkApiKey` returns an optional `actor`** (experimental): the key's own scope, to pass as the Direct API `actor`, so a route that checks a key itself is answered as a request on that key is.
+  - **A key's super-admin authority lasts no longer than the bound a session follows** when its scope is kept past its request; after that the scope is judged on its grants alone.
+  - **What Nextly keeps for a signed-in person still refuses every key**, this one included: granting or taking away super-admin, creating a preview link, and marking a version as seen.
+
+- [#3074](https://github.com/nextlyhq/nextly/pull/3074) [`5126a6e`](https://github.com/nextlyhq/nextly/commit/5126a6ea290a1e57c2eed16f227d23dfc449d60d) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A super-admin's full-access API key now has its authority answered once per request: every check the request makes gives the answer its first check gave, so a request that crosses the moment the authority lapses is no longer refused partway through, for example at a publish after its route admitted it, at a plugin route's write after the route's permission gate, or at each entry of a bulk publish. A request that starts after that moment is refused at its first check, as before.
+
+- [#3097](https://github.com/nextlyhq/nextly/pull/3097) [`287f155`](https://github.com/nextlyhq/nextly/commit/287f1553775e90e6f4d9be289c3a3ac0207603fc) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Super-admins can add a System health card to the dashboard: the running Nextly version, whether migrations are applied, and whether storage is working.
+  - Three lines, always drawn: Version ("Nextly 0.0.2-alpha.66"), Migrations ("Up to date", "N pending" while boot migrations apply, or "Failed") and Storage ("Working", or "Last write failed 5m ago" with a short reason and the adapter). A line the answer did not settle, missing or with a status the admin does not know, reads "Couldn't check", never healthy. Each line leads with its severity by shape as well as colour: a check, a triangle, "!" in a filled circle, or "?" in an outlined circle, named in words for assistive technology.
+  - Migrations read "Failed" when a migration has an apply or a rollback that failed or never finished and nothing has resolved since, the same standing `nextly migrate:status` reads (so a failed `migrate:down` of an applied migration counts), or a collection's last schema change failed or was interrupted (still open ten minutes after it started), with a link to resolve each: the migrations guide, or the collection in the Schema Builder.
+  - Each problem is judged by its own migration's or collection's records, however many newer events the ledger holds.
+  - Each problem also appears in Needs your attention as a critical "System problems" item: a migration's says to run `nextly migrate:status` to see which, and a schema change's or storage's links the Schema Builder's collections or the media library.
+  - Only super-admins are offered the card, may place it or see its problems; nobody else is told it exists.
+  - The storage layer now records its last failed server-side write, an upload, a delete or a bulk delete (when, the adapter's type, and a reason chosen from a fixed set, never the adapter's error message) and clears it on the next successful write. The record is kept per process and in memory: a restart or another instance does not see it.
+
+- [#3105](https://github.com/nextlyhq/nextly/pull/3105) [`05ff350`](https://github.com/nextlyhq/nextly/commit/05ff35098105c525577bc74e2d578273dc88f020) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - System health is more careful about what it confirms:
+  - A migration another process is applying (a CLI, or a second instance during a rolling deployment) reads as pending while its attempt is less than ten minutes old, the same threshold a schema change is judged by, and as failed only once it is older and still unfinished. Before, it read as failed as soon as this process's own boot migrations had settled.
+  - The migrations line reads "Couldn't check" when the answer's schema-change result is missing or malformed, instead of "Up to date": only a schema-change result plus migrations "ok" reads healthy.
+  - The version line reads "Couldn't check" when the answer carries no version, instead of a green "Nextly unknown".
+  - A storage failure's age ("Last write failed 5m ago") now keeps counting while the dashboard stays open, on the same minute clock the other dashboard cards use.
+  - A failed collection schema change followed by a successful retry in the same millisecond is now resolved by the retry on every database: the schema ledger stamps each collection's (and each Single's and component's) schema changes in strictly increasing start times, as it already did for each migration's records.
+
+- [#2608](https://github.com/nextlyhq/nextly/pull/2608) [`ba752fb`](https://github.com/nextlyhq/nextly/commit/ba752fba9353c715f882d1520b3a46ac493aa148) Thanks [@aqib-rx](https://github.com/aqib-rx)! - Taking the live shared values into a pending change now applies to the document the caller was checked against: a Single replaced since is refused as not found, and its pending change is left alone. The same holds for discarding a Single's pending change. Both now read the Single's row and take its lock in one step, so a row replaced while the request waits for that lock is seen as it is rather than as it was read, and neither writes into the document that has gone. A field rule judging whether a value may be taken now sees the whole pending change as taking would leave it, so a rule that reads another field, such as a price writable only while a lock is open, answers for the real document rather than for the taken fields alone. The judgement is repeated whenever a field is left behind, since the document the remaining fields were judged beside changes with it: where the only field that allowed another is itself one the caller may not write, neither is taken, rather than saving the combination the rule refuses.
+
+- [#2587](https://github.com/nextlyhq/nextly/pull/2587) [`4f953ea`](https://github.com/nextlyhq/nextly/commit/4f953ea5dc3b7a5de450b0222ae32485d7612de7) Thanks [@aqib-rx](https://github.com/aqib-rx)! - In the admin, "Take the live values" on a publish refused over out-of-date shared fields now stores the editor's form as it is when the action is taken, with the editor's own Save and never publishing, so edits made after the refusal are no longer lost when the editor reloads, and a document view's pending work is committed first. The editor then shows the live values of the fields taken, keeping its other edits, so publishing again no longer sends the old value and puts it back live. If the take's request fails, the editor still reloads before it can be edited again, so it never keeps values the take may have replaced. The refusal toast is one per document and language, and closes when the editor leaves them. Moving to another language while the take is still running no longer writes the first language's live values into the second one's form: the take stands for the language it named, and the editor reloads to show it. In a quick edit, the action says to open the document instead.
+
+- [#3162](https://github.com/nextlyhq/nextly/pull/3162) [`244b113`](https://github.com/nextlyhq/nextly/commit/244b113c437140679189e22e93168e091ed8fa65) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The admin keeps its own look in a site whose stylesheet styles bare elements.
+
+  The admin renders inside your app's document, so your global CSS is in the cascade with it. A rule such as `h2 { font-size: clamp(1.5rem, 4vw, 2.25rem) }` in a `globals.css` is unlayered, and an unlayered rule beats every rule in a cascade layer whatever their specificity, so it beat the admin's own stylesheet: on an app made from the blog template, every dashboard card title drew at 36px on its 20px line, clipped. The admin's stylesheet now ends with one unlayered rule, `all: revert-layer` on everything inside `.nextly-admin`, weighted to beat any selector made only of element names (`h2`, `body main p`, `button::before`) and nothing that names a class, an attribute, a pseudo-class or an id. Your element rules no longer reach the admin, while your class-based styling of a component you add to it still does. The Page Builder's canvas is the exception, on purpose: it draws your page inside the admin, so your element rules still reach it and it looks like the finished page. In an app without such rules nothing the admin draws changes.
+
+  `@nextlyhq/admin-css` adds the rule in `isolateAdminStylesheet` and exports `hasHostElementShield(css)`, which the admin's build uses to check the stylesheet it ships still carries it after minification.
+
+  The base and blog templates write their focus ring as `html body :where(:focus-visible)`, which weighs two element names. Their pages draw it as before, it still beats a reset such as `button { outline: none }` added later, and it no longer redraws the admin's focused controls with the site's ring and corner.
+
+  **An existing app made from the base or blog template:** in `src/app/globals.css`, change the focus-ring selector `*:focus-visible` to `html body :where(:focus-visible)`, keeping its declarations. The old selector weighs a pseudo-class, which outweighs the admin's rule, so until it changes every focused control in the admin is drawn with your site's ring instead of the admin's own. Your site's pages draw the same either way. Another rule of yours that puts a pseudo-class on a bare element, such as `a:hover`, reaches the admin the same way; writing it as `a:where(:hover)` keeps it off, provided nothing else on your site relies on its weight.
+
+- [#3080](https://github.com/nextlyhq/nextly/pull/3080) [`830dfa4`](https://github.com/nextlyhq/nextly/commit/830dfa443f7b22a881714ba25fc8c1068641d4fe) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin now marks a collection or Single removed from code. While its registry row says your code defines it and `nextly.config.ts` no longer declares it, it stays in the Content navigation, the Singles list and its own screens with a "Removed" mark, and its list and edit screens show a notice naming it, saying it is no longer in the configuration, and giving the next step for where its retirement stands: `nextly migrate:create` and then `nextly migrate` while its tables exist and no migration drops it; `nextly migrate`, naming the file, while a written migration that drops it is not yet applied; and, where an applied migration dropped its main table but its registry row remains, that an earlier release left it part-retired and that `nextly prune` lists what remains. Its entries can still be read, and the admin offers nothing that would change them: no New, Save, Publish, Unpublish, Delete, Duplicate, bulk action, restore or version naming. Publishing every language at once is held as well, and a write the server refuses because the entity was removed from code, such as one sent from a screen opened before the removal, now shows the server's own sentence on every path, publishing every language and discarding a pending change included, and turns that screen read-only without a reload. The collection and Single listings and schema reads (`GET /api/collections`, `/api/collections/{slug}`, `/api/singles`, `/api/singles/{slug}/schema`) add `removedFromCode: true` and `removedFromCodeState` to such an entity; every other entity's response is unchanged. Schema Builder and plugin collections and Singles are never marked.
+
+  **Compatibility:** a site that still edits a collection or Single removed from code is refused from this release, in the admin as in every other entry point. There are two ways out: declare it again in `nextly.config.ts` to keep it, or retire it by running `nextly migrate:create` and then `nextly migrate`.
+
+  **Databases already half-retired:** an earlier release could apply a migration that dropped a removed collection's or Single's table and leave its registry row behind, which `nextly migrate` does not yet clean up. The admin now reports such an entity as part-retired. Until that clean-up is automated, check for one with `nextly migrate:status`, which names a registry row whose table does not exist, and, after taking a backup, remove what remains by hand: its row in `dynamic_collections` or `dynamic_singles`, and the rows that name it in the field-group, translation-archive, version and autosave tables.
+
+- [#3147](https://github.com/nextlyhq/nextly/pull/3147) [`4a727b9`](https://github.com/nextlyhq/nextly/commit/4a727b919adbab13b249423874b2586d3d9d3f87) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `@nextlyhq/admin-css` now exports `isolateAdminStylesheet(css, { prefix })` and `ADMIN_NAME_PREFIX`. The function is the admin stylesheet's whole isolation sequence, in order: every selector scoped under `.nextly-admin`, keyframe names and registered `@property` names prefixed, and then a check that throws if any rule escaped the scope. The admin's own build now calls it, and so can a tool that compiles the admin's source stylesheet itself. The admin's published stylesheet is unchanged, byte for byte.
+
+- [#2952](https://github.com/nextlyhq/nextly/pull/2952) [`b11985d`](https://github.com/nextlyhq/nextly/commit/b11985db74c6878b2bfb6139b78d827b91cfb48d) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The blog template's demo content seeds every post with a featured image, and its author avatars load. Two posts named images the template doesn't ship, so they seeded with none. The avatars pointed at a folder that doesn't exist, so each one was a broken link. Two posts that share an image now each keep their own alt text.
+
+- [#2983](https://github.com/nextlyhq/nextly/pull/2983) [`6cc24ae`](https://github.com/nextlyhq/nextly/commit/6cc24ae5381f218723485c1ee09bb069718182d6) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The blog template builds and serves with Next.js Cache Components and Partial Prefetching on, against an empty database and against seeded content. It still works as before with them off, which is how a new project is created.
+  - The route segment exports Cache Components refuses are gone: `runtime = "nodejs"` from the five Open Graph routes (Node.js is the default), `dynamicParams = true` from the post page (the default), and `dynamic = "force-static"` from the search page (it is static without it).
+  - The post and author pages, like the category and tag pages before them, prerender one placeholder path when the database has none. Cache Components refuses an empty `generateStaticParams`, and the placeholder answers not found.
+  - A post's slug can no longer be `__none__`, the placeholder's: the post page keeps the not-found page the build stored for it. Every other slug is accepted as before.
+  - The footer's year is read inside a cached read, and the RSS feeds no longer carry a `lastBuildDate`, an optional element the posts cannot supply honestly, so no render reads the clock outside a cache. Each item keeps its own `pubDate`.
+  - An unknown category or tag is now decided before the page reads `?page=`. Under Cache Components, the first request for a slug that does not exist gets the not-found page with `noindex`, and every later request gets a 404.
+  - The error pages' "Try again" button calls `retry()`, which fetches the page again, rather than `reset()`, which only re-rendered what had already failed.
+
+- [#2934](https://github.com/nextlyhq/nextly/pull/2934) [`d0a69b2`](https://github.com/nextlyhq/nextly/commit/d0a69b2a6332c14447a87d9134ddcb4b3b72330a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `nextly`'s start check judges the Next.js, React and React DOM of the app a command was pointed at. A plugin's `onInstall` or `onUninstall` run with `nextly --cwd apps/site plugins …` used to read the directory the CLI was started in. From a monorepo root that installs none of them, an unsupported app went unjudged. `registerServices()` takes an optional `appRoot` (default: the process's directory), and `loadConfig()` returns the `projectRoot` it resolved.
+
+- [#2921](https://github.com/nextlyhq/nextly/pull/2921) [`8356d38`](https://github.com/nextlyhq/nextly/commit/8356d388d49997f045a96772796a620fd3d090ad) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - nextly's CLI and every caller that reads a config no longer load all of core's dashboard widgets to check a site's dashboard declaration: core's widget ids are read from a module that imports nothing.
+
+- [#3071](https://github.com/nextlyhq/nextly/pull/3071) [`2c5e7b1`](https://github.com/nextlyhq/nextly/commit/2c5e7b1abc21b91ad10213082a3f8794361fa132) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's Content card is one compact table, `core/content-table`: a row per collection and Single the reader may see, with Entries, Drafts, when it was last updated, and a create button on each row. It takes `core/content`'s place in core's default dashboard.
+  - **Columns:** Name links to the collection's list or the Single; Entries and Drafts are counted as the reader; Updated is the row's last change, with who made it and what they did on hover; and **+** opens a new entry, drawn only where the reader may create. A Single's row says "Single" in place of the counts and offers Edit where the reader may update it, or View where they may only read it. Both decisions are judged in the default language, as the pages they open write; both open the Single, read-only for a reader who may not update. The card's subtitle says how many collections and Singles the reader may see ("8 collections · 5 Singles").
+  - **Updated** and its name come from one change. Where the activity trail holds the row's latest change, a publish or an unpublish on its own included, the card shows that change's instant and who made it ("Published by Ben"). Where the trail holds none, or only one a second or more older than the row's own last update (the row was written since by something the trail did not record), it shows the row's own last update (a collection's newest entry the reader may read, or a Single's document) and names nobody.
+  - **By size:** a medium or large card, the default half-width card among them, draws the table. A narrow medium card, under 450 px wide as on a phone, keeps the table and every column but draws Updated short ("5m") and each row's action smaller: **+** as a smaller icon button named for the entry it creates ("Create Post"), Edit or View in smaller type. Names keep their room, and creating stays on the row. A small card, under 340 px, draws each row's name on its own line with the counts and Updated under it. Every row is the dashboard's list row height, so the rows a card's size holds fill it.
+  - **Drafts** are counted by the collection list's own Draft filter and link to that filtered list, so the number and the list agree. A collection without Draft/Published shows "—". The `/stats` draft figure counts by the same rule.
+  - **Order:** by the instant each row's Updated shows, the most recently updated first, so a save the trail records without moving the live entry's own date (a published entry's working draft) ranks the row as it dates it; with collections that hold no entries last and drawn muted. The card draws as many rows as its size holds and cuts the rest, with no footer: the subtitle says how many there are, the admin has no page listing every collection to link to (`/admin/collections` redirects to one collection's entries), and each row opens its own list or Single.
+  - **Bounded:** the card is asked for the rows it draws, and only those are counted, rather than every collection on the site. To rank them, a load reads the latest update of at most 50 collections and Singles, four at a time, and builds the rows it draws four at a time: every one the activity trail's latest 50 saves name, then the rest by name. On a site with more than 50, the rest are not ranked and do not appear on the card.
+  - **Removed: the `core/content` widget.** The old Content tile card is gone, with no alias or conversion. A layout write naming `core/content` is refused, and a site `defaultLayout` or `hide` naming it no longer finds a widget. A reader whose saved layout already holds it keeps that card's place stored but no longer sees it, and adds Content again from the add panel. Use `core/content-table` instead.
+  - **Removed public export: `CollectionQuickLinks` from `@nextlyhq/admin`.** It was the tile card's body and has no replacement export. `ContentSingleTile`, its Single tile, is deleted too.
+  - **`system:content` rows** no longer carry `published`; they carry `canCreate` and `singularLabel` (a collection's), `canUpdate` (a Single's, decided as a real update is), `updatedAt`, who made that change and `event`, what they did. The answer carries `total`, the number of collections and Singles the reader could be shown, and `totalByKind`, how that divides (`{ collection, single }`).
+  - **New, experimental: `totalByKind` on a list widget result** (`nextly/widget-result`), how `total` divides among the kinds of row a source answers. Optional; a source whose rows are of one kind leaves it out. Where present it must be a plain object of whole counts of at least zero: a declared widget's list or table answer carrying any other is refused, as one with a malformed `total` is, and the admin drops it from an answer.
+  - **Continue where you left off:** the empty Team tab names the trail's span again ("No edits by others in the last 90 days"). The admin's widget answers had been dropping the list's `window`.
+
+- [#3057](https://github.com/nextlyhq/nextly/pull/3057) [`536eeb8`](https://github.com/nextlyhq/nextly/commit/536eeb814e46d4877366891b7e30a8a7d6c1e304) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's header is part of the page: a greeting by the reader's own hour, the project's
+  name as the page's one heading, with the environment `admin.environment` names as a badge beside
+  it, and a live line of what needs the reader ("2 things need you · 1 release tomorrow · 3 new
+  submissions"), each part counted as the reader by its card's own source and linking to that card.
+  "Updated N min ago · Refresh" shows once, in the header, only while the dashboard's data is more
+  than five minutes old. Customize moves into the header. `GET /api/dashboard/summary` answers the
+  line, and a widget's `summary` is now accepted at startup and counted for each card a reader is
+  shown.
+
+- [#3121](https://github.com/nextlyhq/nextly/pull/3121) [`1dddd98`](https://github.com/nextlyhq/nextly/commit/1dddd985cb18033b841645a7eadcce1b5a3b3614) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard loads about 70 KB less on every visit, and every admin page's first load is lighter. A dashboard card's settings panel, which draws its form with the entry editor's fields, now loads when a reader is about to open it, as the pointer comes over or focus reaches the card's menu, its quick popover's More settings or its empty state's button, rather than with the dashboard itself. The upload tray in the media library and the upload drop area loads as it appears, and the code the admin loads before any page draws no longer carries the dashboard's drag-and-drop or every release query. Nothing looks or works differently.
+
+- [#3091](https://github.com/nextlyhq/nextly/pull/3091) [`9ae07bd`](https://github.com/nextlyhq/nextly/commit/9ae07bd07290927dfa25e49bb86250c6cfeea5ca) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard header's summary line stays honest when a read fails: it no
+  longer shows cached counts or "You're all caught up" after a failed refresh,
+  reads again on a schema update, and reports a widget whose card could not be
+  judged, or a layout that could not be read, as unknown rather than as nothing
+  to do. Its links focus the exact card the summary names, and Ctrl/Cmd-click
+  opens the list in a new tab as a link should.
+
+- [#2996](https://github.com/nextlyhq/nextly/pull/2996) [`8f9f87f`](https://github.com/nextlyhq/nextly/commit/8f9f87fa7e2791f226ec989ff930212f8b7acfab) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - In `next dev`, the admin's component map now lists a site widget that a plugin's `setup()` adds
+  to `admin.dashboard`, as the server registers it, so its card draws rather than showing its
+  missing-component error until `nextly generate:types` is run.
+
+- [#3065](https://github.com/nextlyhq/nextly/pull/3065) [`365bf29`](https://github.com/nextlyhq/nextly/commit/365bf2970cb8b94deba86d928cf7a838f7e12118) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The editor's document panel now reads Status, Publishing, Language and Details. Status says where the document stands in the language being edited, as the bar's status does; Publishing names the release the document is scheduled in and when, or says it is not scheduled. The panel and the preview pane share the right side: opening the preview folds the panel, and showing the panel closes the preview. Below 1000px of editor width the panel opens over the fields when asked for, with its own close button, and below 600px it opens as a sheet from the bottom of the screen, with History, the preview and the panel toggle in the document's More menu. The panel toggle is now named "Show document panel" or "Hide document panel".
+
+- [#2924](https://github.com/nextlyhq/nextly/pull/2924) [`fb9e721`](https://github.com/nextlyhq/nextly/commit/fb9e7216e45fd7c8ee2860de730ba2baef90dc13) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The entry and Single editors now show where you are in the admin's top bar, keep their status, save state and actions in one bar that stays at the top as you scroll, list their notices under that bar in one order, and start with a large title, with an entry's URL slug on the line beneath it.
+
+- [#3135](https://github.com/nextlyhq/nextly/pull/3135) [`8d9eadf`](https://github.com/nextlyhq/nextly/commit/8d9eadf1bde48974fb40ed836bccf99d70684039) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - nextly now connects its cache tag expiry ledger when it starts. With `nextly/cache-handler` and `nextly/cache-handlers` installed, a write made outside a request (a job, the CLI, a script) reaches every instance's cached reads within seconds, instead of waiting for the next request on the instance that made it. While the ledger can't be used, for example before `nextly migrate` has added its table, nextly warns once and keeps the expiry for that process's next request, as before.
+
+  The scheduled webhook drain now leaves the ledger prune a share of its time budget when one-purpose secrets or preview links have a backlog, instead of letting those sweeps spend all of it. A `use cache` result with `expire: 0` isn't stored outside development, matching Next.js's own handler, and the incremental handler keeps a bounded record of recent reads during bursts.
+
+- [#2937](https://github.com/nextlyhq/nextly/pull/2937) [`5f91eec`](https://github.com/nextlyhq/nextly/commit/5f91eec0b24b1ee036f2fd264b83c7a850bc2b61) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `nextly generate:types --check` now also fails a component map that checks widget props against
+  a different config file from the one it loaded, or against none, and names both. A map whose
+  declarations hold no widget needs no config import, so a freshly scaffolded project passes as
+  shipped. It accepts components exported under non-ASCII names. `extendWidget` refuses a patch
+  that carries `owner` or `serverData`, even with no value.
+
+- [#3177](https://github.com/nextlyhq/nextly/pull/3177) [`cf31078`](https://github.com/nextlyhq/nextly/commit/cf31078f7695f39edfd9b9df1b39d7b030ffe81b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's New menu now groups its types the way the sidebar does, for
+  every type a person may create rather than only the sidebar's first page of
+  them. A plugin type with no group of its own shares the one Other section with
+  a type grouped as Other, as it does in the sidebar.
+
+- [#3189](https://github.com/nextlyhq/nextly/pull/3189) [`918de83`](https://github.com/nextlyhq/nextly/commit/918de830960b75de59004131b94206afddcb26f0) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard's New menu marks focus in its search on the whole search row, the
+  magnifier included: a rounded frame inside the row in the text colour, clear of
+  the menu's edges. The search field no longer draws a box of its own that ran
+  into the menu's top and right edges.
+
+- [#3138](https://github.com/nextlyhq/nextly/pull/3138) [`34753d2`](https://github.com/nextlyhq/nextly/commit/34753d27b8d3bc4b6fd46e3ee39b082674f3f712) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The older widget shape is removed, with no alias, warning or migration. A widget is declared with `defineWidget` under a plugin's `contributes.dashboard.widgets` or the site's `admin.dashboard.widgets`, names its view with `WidgetView` (one of core's five views, or `{ component }`), and its component is handed `WidgetProps`. Startup still refuses a plugin carrying `contributes.admin.widgets` or `contributes.widgetSources`.
+
+  Removed exports:
+  - `nextly`: `WidgetDefinition`, `WIDGET_ARCHETYPES`, `WidgetArchetype`, `DataWidgetArchetype`, `QuerylessWidgetArchetype`, `CellWidgetArchetype`, `WidgetStatCell`, `WidgetAction`, `WidgetPatch`, `getWidget`, `listWidgets`, `CoreDisplay`, `ComponentDisplay`, `WidgetDisplay`, and the `PluginAdminWidget` family: `PluginAdminWidget`, `PluginAdminCustomWidget`, `PluginAdminDataWidget`, `PluginAdminStatsWidget`, `PluginAdminDeclarativeWidget`, `PluginAdminQuerylessWidget`, `DeclarativeWidgetArchetype`.
+  - `nextly/config`: the `PluginAdminWidget` family and `DeclarativeWidgetArchetype`, `WidgetArchetype`, `DataWidgetArchetype`, `QuerylessWidgetArchetype` and `CellWidgetArchetype`.
+  - `@nextlyhq/plugin-sdk`: `WidgetDefinition`, `WIDGET_ARCHETYPES`, `WidgetArchetype`, `DataWidgetArchetype`, `QuerylessWidgetArchetype`, `WidgetAction`, and the `PluginAdminWidget` family and `DeclarativeWidgetArchetype`.
+  - `@nextlyhq/plugin-sdk/widgets`: `WidgetComponentProps`, `WidgetSlot` and `WidgetQueryBatchResponse`.
+
+  A plugin's admin metadata no longer carries `widgets`, and the add panel lists a plugin's declared widget under that plugin.
+
+- [#3188](https://github.com/nextlyhq/nextly/pull/3188) [`8452c7a`](https://github.com/nextlyhq/nextly/commit/8452c7ace06f955caa0bcb9e5c1932eb9c674063) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin's side rail keeps a visible keyboard focus indicator under forced colors, such as Windows High Contrast, where its focus ring is not drawn.
+
+- [#3183](https://github.com/nextlyhq/nextly/pull/3183) [`cb47059`](https://github.com/nextlyhq/nextly/commit/cb47059007f898e13b293cc26313d41c9e0df959) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The admin's side rail now draws a focus ring on its logo and every entry when reached by keyboard, in light and dark.
+
+  Schedule publish no longer sends a second schedule for a document whose first request is still out after you move to another document and back; the action waits, and says why, until that request finishes.
+
+- [#3025](https://github.com/nextlyhq/nextly/pull/3025) [`ea46340`](https://github.com/nextlyhq/nextly/commit/ea463403790f2ad929f3d2e664d43b8e5006b561) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The roles screen shows the built-in roles as they are. Super-admin says it has every permission, including new collections and plugins, and offers nothing to change. The Public role, which sets what visitors who aren't signed in may do, offers No access and Can view on each row. A write stays reachable through a row's switches, with a warning beside it, and saving it changes only its permissions. A preset is shown read-only, with "Copy to change" opening a new role that starts with the preset's permissions and description. Roles from the API carry `builtIn: "public" | "super-admin"` to tell these two apart.
+
+- [#2882](https://github.com/nextlyhq/nextly/pull/2882) [`e58aa76`](https://github.com/nextlyhq/nextly/commit/e58aa76094d717aacd9f512457f314a6ac874038) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema changes now take one lock per database, the schema lock, renewed while it is held. `nextly migrate` and the boot migrate step, `migrate:down`, `migrate:baseline`, `migrate:resolve`, `upgrade`, plugin install and uninstall, `migrate:field-groups --apply`, `db:sync`, the development push and the Single and field-group Schema Builder saves all hold it for the whole of their work, so none of them runs beside another, and SQLite gains a real lock: a development server and a command-line run on one SQLite file now exclude each other. A run of any length keeps the lock; one that dies lets it lapse within one lease (`db.migrateLockTtlSeconds`, now 120 seconds by default), with nobody clearing it by hand. A command-line run that finds the lock held waits about a minute and then stops without changing anything, naming the command that holds it, when it started and when the lock lapses if that holder has gone; a Schema Builder save is refused at once and asks you to save again once the migration ends; a production start with `runMigrationsOnBoot` refuses to start rather than serve. A command releases the lock however it ends, on an interrupt too.
+
+  While an upgrade is rolled out, the earlier `nextly_migrate_lock` (and MySQL's named migrate lock) and `nextly_field_group_lock` are honoured and held beside the new lock, so a process of an earlier version is still excluded. A path that took no lock in an earlier version cannot see the new one — on SQLite, an earlier `nextly migrate`; on every dialect, a Collection Builder save, `migrate:fresh`, `prune` and the development start's registry sync — so stop processes of earlier versions before the first run of this one.
+
+- [#3073](https://github.com/nextlyhq/nextly/pull/3073) [`9606b7d`](https://github.com/nextlyhq/nextly/commit/9606b7d4aafd4adf99307d93e6001535b3503780) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The SEO plugin's dashboard card is now declared with `defineWidget` under `contributes.dashboard`, as any plugin's widget is. The card, `seo/issues`, draws one bar per kind of issue in the collections the plugin extends, from a `load` that reads through the services bound to the person asking, so the numbers are what that person may see. It is offered to a person who may read every one of those collections. The issue count is also on the Needs attention card, as one line per collection (`seo/issues-<collection>`, "SEO issues in <collection>"): each shows only to a reader of its collection, counts that collection's issues and links to its list, so every line a reader is shown opens. Needs attention lists up to 10 SEO collections, the most lines core takes from one plugin: the first ten configured get a line each, and the card covers all of them.
+
+  A widget's data reads gain one option: `services.find` takes `depth: 0` to return links as their stored ids, unexpanded, where a read naming no depth still expands them as before. `0` is the only depth a read may name. The SEO scan reads at `depth: 0`, so a page's social image is judged by the id it stores: a reader who may not read media is no longer told every page with an image is missing one, and an image whose file is gone counts as present, as it did before.
+
+  A bars card's names now take a column as wide as the longest of them, up to two fifths of the chart, in place of a fixed 80 px one that cut names sharing their first words to the same "Missing me…"; a name still too long ends in "…" and keeps its whole name as its label and its title.
+
+  Removed from `@nextlyhq/plugin-seo`, with nothing in their place: the `plugin:seo/issues` data source and `seoIssuesWidgetSource`, `issueFilter`, `SEO_ISSUES_SOURCE_ID`, `ISSUE_FIELD` and `ISSUE_SCAN_PAGE_SIZE`, and `seoIssuesWidget`, the stats card. The card and the Needs attention line reach the dashboard through `seoPlugin`; `SEO_ISSUES_WIDGET_ID` names the card in a site's `admin.dashboard`.
+
+- [#2960](https://github.com/nextlyhq/nextly/pull/2960) [`863d0d6`](https://github.com/nextlyhq/nextly/commit/863d0d6862d12a1c5fd928cfca3257bfb3c619e0) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A site's `admin.dashboard` `hide`, `replace` and `overrides` now take effect. A hidden widget,
+  a built-in an alternative replaces, and an alternative no `replace` names are offered to nobody
+  and drawn on no dashboard; their saved cards are kept and come back if the config changes. The
+  default places an alternative where the built-in it replaces was. An override's title,
+  description, narrowed sizes and starting settings apply wherever the widget is offered, drawn or
+  answered. Only `widgets` is still checked but not applied, and startup says so.
+
+  A default card's `id` must hold text, as the layout endpoint requires; a reader's stored choice
+  carries only to a card of the same widget; the dashboard's token tells apart any two sets of
+  withheld cards; and a reset staged by a reader with an arranged dashboard is refused when a card
+  of the default it would return to has since changed whether it shows.
+
+- [#2980](https://github.com/nextlyhq/nextly/pull/2980) [`ac9dfb7`](https://github.com/nextlyhq/nextly/commit/ac9dfb759b02de6bb28667fa20fa2dff48ef511c) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The site's dashboard rules now hold across reloads and replacements. A reload checks its config
+  against the widgets as declared, not as the previous boot's overrides narrowed them. A built-in
+  that `replace` puts an alternative in place of keeps each card's own id, place and size (held
+  within the alternative's bounds), dropping only the built-in's settings, so two replaced cards stay
+  two. An override of a Collection setting's starting value reaches the summary the dashboard
+  withholds cards and builds its token from, so every reading names one collection.
+
+- [#2867](https://github.com/nextlyhq/nextly/pull/2867) [`d994f7e`](https://github.com/nextlyhq/nextly/commit/d994f7e7d782f06d302ca8810e8cacb4e8824a6f) Thanks [@aqib-rx](https://github.com/aqib-rx)! - On SQLite, a translated field marked unique is now held unique within each language by a partial index over its value and language, which leaves blank values out. A schema change made in the Schema Builder on a site holding such a field no longer fails while reading the database. The rule it enforces is unchanged.
+
+- [#2578](https://github.com/nextlyhq/nextly/pull/2578) [`817ed45`](https://github.com/nextlyhq/nextly/commit/817ed45299c2ec8fe38e094dfbca1ab655c08527) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A translated field marked unique is now unique within each language. The same value is refused twice in one language, as a duplicate of a shared unique field is (409 `DUPLICATE`), and allowed once in each language. A text value left blank is never a duplicate, and nothing stored changes: the rule is an index on each translations table, keyed on the value with blanks left out, so every read returns what it did before. A translated number, boolean or date has no blank: zero and false are values like any other. Values count as the same exactly as for a shared unique field of that column: on MySQL, under its default case- and accent-insensitive collation, "About" and "about" are one value.
+
+  Every way of declaring the field enforces it. The Schema Builder adds the index when it creates a collection, Single or field group, and adds or drops it when a field becomes or stops being unique. `db:sync`, and the reload under `next dev`, do the same for fields defined in code. `nextly migrate:create` writes a migration that adds or drops it, so production gets it with `nextly migrate`. Until the index is there, each start names the field and what adds it: the commands to run for a field defined in code, or saving the entity in the Schema Builder for one made there.
+
+  Adding the rule is refused before anything changes where it cannot hold:
+  - where a language already holds a value twice, naming the documents in each language but never the value (`TRANSLATED_UNIQUE_OVER_DUPLICATES`). The Schema Builder refuses the save. `db:sync` reports it and leaves that field without its index. `nextly migrate` stops at that migration file before running any of it, so nothing is half-applied, even on MySQL;
+  - on a database server that cannot build the index (`UNIQUE_NOT_ENFORCEABLE_ON_DIALECT`): MariaDB, and MySQL before 8.0.13.
+
+  Give the listed documents different values, or leave one blank, and run it again.
+
+  Before this, a translated unique field was not enforced at all. A field already marked unique and translated gets its index the next time its entity is saved in the Schema Builder, or from the next `db:sync`, or from the next `migrate:create` and `nextly migrate`. Each of these is refused, as above, if a language already holds a value twice.
+
+  The migration files that add or drop these indexes are a new kind, so their header is version 4. An older version of nextly refuses to run them and says to upgrade, rather than running them wrongly.
+
+- [#3056](https://github.com/nextlyhq/nextly/pull/3056) [`4b59d78`](https://github.com/nextlyhq/nextly/commit/4b59d78442641cf2a3364309aa0d51d71c0ecca7) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A translation table dropped while the app is running, by hand or by a tool outside the app, no longer fails the next localized write with a server error. The write is refused with the same "translations are not ready" conflict, naming the command to run, that a table missing at the start gets, and the next write checks the table again.
+
+- [#3193](https://github.com/nextlyhq/nextly/pull/3193) [`bfaf41b`](https://github.com/nextlyhq/nextly/commit/bfaf41ba3ac282420848ceb2ab11ec704dcbca98) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Apps starting together on a new database, or beside `nextly migrate`, all come up: the core schema is set up by one of them while the others wait, and a configured PostgreSQL schema is created once, whatever the database's default isolation level, instead of failing the connections that lose the race to create it.
+
+- [#3186](https://github.com/nextlyhq/nextly/pull/3186) [`3c9e4ee`](https://github.com/nextlyhq/nextly/commit/3c9e4eeaca64f168b54273c834d706d95129e516) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Two `nextly migrate` runs started together on PostgreSQL no longer fail creating the schema lock.
+
+- [#3174](https://github.com/nextlyhq/nextly/pull/3174) [`647aa67`](https://github.com/nextlyhq/nextly/commit/647aa67972c1b398cc5ddd477892d5415414428b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Undo puts a removed card back even when the widgets you can add changed in the meantime, such as when a colleague schedules the site's first release.
+
+- [#2999](https://github.com/nextlyhq/nextly/pull/2999) [`bb80d0c`](https://github.com/nextlyhq/nextly/commit/bb80d0c7047545b32b055e0cbf3d2c13178a9e70) Thanks [@aqib-rx](https://github.com/aqib-rx)! - A read or write of a collection or Single that the database has not been migrated for now says so, instead of answering every request with a 500 "An unexpected error occurred." This covers three cases: a declared field's column is missing, the entity's table is missing, or the running server never registered the entity (for example, a migration added it after the server started). The answer is a 409 with the code `ENTITY_NOT_MIGRATED`. Its message names the collection or Single and `nextly migrate`, and it never carries SQL or the database's own wording. `error.data` carries `reason` (`column`, `table` or `unregistered`), `kind` and `slug`. The field and the table are physical names from the registry, so they are named, in the message and as `field` and `table` in `error.data`, only to trusted server code (`overrideAccess` without `enforceFieldAccess`, as the Direct API calls by default). REST and other callers held to access rules are told the entity only. The server log always has both. This holds on PostgreSQL, MySQL and SQLite, through the REST API and the Direct API.
+
+  The database adapters now refuse a call on a table their schema registry does not hold with the code `NEXTLY_TABLE_NOT_REGISTERED` (exported as `TABLE_NOT_REGISTERED_CODE`, with `tableNotRegisteredError`, from `@nextlyhq/adapter-drizzle/types`). The message still says "not found in schema registry", now names what is missing instead of `setTableResolver()`, and carries the code.
+
+  **Compatibility:** a client that recognised these failures as a 500 `INTERNAL_ERROR` now receives a 409 `ENTITY_NOT_MIGRATED`.
+
+- [#2826](https://github.com/nextlyhq/nextly/pull/2826) [`c0b45eb`](https://github.com/nextlyhq/nextly/commit/c0b45eb13749e6486e59f562cec6f2e4cee231b6) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Removes an internal helper nothing in Nextly called any more. No behaviour changes, and nothing exported from a published entry point is affected.
+
+- [#2889](https://github.com/nextlyhq/nextly/pull/2889) [`6f728f3`](https://github.com/nextlyhq/nextly/commit/6f728f3eed46615eb5bea3318482abb70de72238) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A visitor, a checked call with no signed-in user, is judged by the Public role: it reads, creates, updates or deletes where the Public role holds the permission and the target's rule, if it declares one, answers `true`, and a rule reading the caller's permissions sees the Public role's. Without the permission a visitor is refused as needing sign-in, and a rule that refuses it as not allowed; the status a caller sees is unchanged. A visitor reads published content only, whatever it asks for, and media through the Public role's `read-media`. `createTestNextly` takes `seedPublic: true` to run the boot's seeding, for tests that need the Public role.
+
+- [#2912](https://github.com/nextlyhq/nextly/pull/2912) [`9fc2d47`](https://github.com/nextlyhq/nextly/commit/9fc2d472d92a1b863b3612229d2e282fa88adc20) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A visitor, a request with no session and no key, now reads media through the admin's media routes when the Public role holds `read-media`, as a checked Direct API media read that names nobody now does too. Boot seeding gives the Public role `read-media`. Taken off the Public role, those reads are refused with 401, asking the visitor to sign in, as before. A request whose session or key is not valid is still asked to sign in again, and media writes still need a signed-in caller.
+
+- [#3061](https://github.com/nextlyhq/nextly/pull/3061) [`eb9ae7b`](https://github.com/nextlyhq/nextly/commit/eb9ae7b67af9b53d5ac6fe147d960763e726068b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Page Builder pages are served to visitors again. Since visitors are judged by the Public role, a collection with no read rule is not served to someone who is not signed in: boot grants the Public role a collection's read only where the collection's read rule answers `true`, so a site serving its pages through `createBlocksPage` answered every visitor 404. The plugin's `pages` collection now declares that anyone may read it. A visitor still sees published pages only: a draft page, and the unpublished edit of a published one, stay unseen, whatever the request asks for. Your own collections that visitors read need the same: a read rule that answers `true`, or the read granted to the Public role in the admin's Roles screen.
+
+- [#2899](https://github.com/nextlyhq/nextly/pull/2899) [`2d2a32a`](https://github.com/nextlyhq/nextly/commit/2d2a32a7cfef176c8d28899d55b79801084814f4) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Visitors can use the REST API for what the Public role grants. A request carrying no credential to a collection's entries or a Single is judged by the Public role, as a checked call with no user is: it may list, count and read published content, and create, update or delete an entry, where Public holds the permission and the target's rule, if it declares one, answers `true`. Without the permission it is still asked to sign in (401); a rule that refuses it answers 403. Versions, events, autosaves, bulk writes, duplicating and publishing still need a signed-in caller, as do media routes.
+
+- [#3102](https://github.com/nextlyhq/nextly/pull/3102) [`ace4ac2`](https://github.com/nextlyhq/nextly/commit/ace4ac2053913981b43d2208f90be6ca11a1e6c5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - On the first start after upgrading to a version where visitors are judged by the Public role, Nextly logs once which collections and Singles visitors could read before and can't now: those with no `read` rule, or one answering visitors with a filter, whose read the Public role doesn't hold. To let visitors read one with no `read` rule again, declare `access: { read: () => true }` on it, and the Public role is granted its read at the next start, or grant the Public role its read (`read-<slug>`) on the Roles screen. For one whose rule answers a filter, grant the read: the filter still applies. A rule that refuses visitors, with `false`, `null` or a filter that isn't well formed, is never named. A new install isn't told, and the notice isn't repeated.
+
+  The startup log of what the Public role doesn't hold yet no longer names reads with no `read` rule at every start, since a collection kept private that way is ordinary. It still names reads whose rule answers a filter, writes whose rule answers `true`, and rules that failed when asked.
+
+- [#3081](https://github.com/nextlyhq/nextly/pull/3081) [`b75d1c3`](https://github.com/nextlyhq/nextly/commit/b75d1c307db01b107f7b65ae7b0873974cf69905) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Team activity replaces Recent activity on the dashboard. Each row says who created, saved, published, unpublished or deleted which entry or Single, names its collection by its label, and opens the entry; a deletion is not a link. It shows only events about what the reader may read. `core/recent-activity` is removed with no alias, and the `core#RecentActivity` component is now `core#TeamActivity`. A site's `admin.dashboard` overrides, `hide` or `replace` entries naming `core/recent-activity` should name `core/team-activity` instead. A saved layout that holds a Recent activity card keeps it as a row that is no longer drawn, so a reader who wants the card adds Team activity from the gallery. The rows of `GET /dashboard/activity` and of the `system:activity` source carry an `event`: `"created"`, `"saved"`, `"published"`, `"unpublished"` or `"deleted"`, the closed `ActivityEvent` type now exported from `nextly/widget-result`. Upcoming releases lists the Releases list's Upcoming tab, soonest first, read at the same instant as its stopped and overdue counts so a release is never in both or neither, with each release's entries and whether its checks found it Ready or "N issues", keeps its stopped and overdue line, hides while nothing is scheduled, stopped or overdue, and may be widened to the full row.
+
+- [#2860](https://github.com/nextlyhq/nextly/pull/2860) [`d409789`](https://github.com/nextlyhq/nextly/commit/d4097892576867f1026b1123ee16971c572a8b1b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard card drawn by its own component no longer remounts every time the dashboard re-renders, and one whose component throws now shows its error once instead of locking the page in a render loop ("Maximum update depth exceeded"). Each card is handed the same answer object for as long as its answer is unchanged.
+
+- [#2956](https://github.com/nextlyhq/nextly/pull/2956) [`d55ddf5`](https://github.com/nextlyhq/nextly/commit/d55ddf5043b8c4e4fa829039ef0ce65bcd4921e1) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget declared with `defineWidget` can now read groups and counts over time,
+  choose where it is offered, and gate who sees it on several permissions. All of
+  it is `@experimental`.
+  - **`services.groupBy(collection, { field?, where?, status?, limit? })`** answers
+    `{ buckets }`, the data the `bars` view draws, so `load` can return it as it
+    comes. With no `field`, it groups by the collection's own field: its status
+    when it has drafts, otherwise its first field with choices, as a card's Group
+    by setting does.
+  - **`services.timeseries(collection, { range, dateField?, where?, status? })`**
+    answers `{ points, interval }`, the data the `series` view draws. `range` is
+    `"7d"`, `"30d"`, `"90d"` or `"12m"`, the values `setting.dateRange()` offers;
+    the range picks the interval (a day, a week or a month), and `interval` says
+    which one the points were counted in. Entries are placed by `createdAt` unless
+    `dateField` names another date.
+  - **`status: "published" | "all"`** on `count`, `find`, `groupBy` and
+    `timeseries`. Reads count published entries, as before, unless they ask for
+    `"all"`, which includes drafts. Every read still runs as the person viewing
+    the card, with their read access.
+  - **`offered: "per-collection" | "on-request"`** on `defineWidget`, the same
+    values a registered widget's `offered` takes. A widget offered per collection
+    needs a Collection setting, and startup refuses any other value.
+    `several: false` now holds such a widget to one card: it was dropped before,
+    and an offered widget allows several by default.
+  - **`access`** also takes `{ anyOf: [...] }` (any one of several permissions)
+    and `{ allOf: [...] }` (every entry, each a permission or `{ anyOf }`). These
+    forms decide who is offered the widget, as a single permission name does. A
+    bare list is refused at startup, with a message pointing to `{ anyOf }`. An
+    `access` function may now be async and return any value; only `true` lets
+    the person see the card.
+  - **New types** `WidgetAccessGate`, `WidgetInterval` and `WidgetRange`,
+    exported from `nextly` and `@nextlyhq/plugin-sdk`.
+  - **`Widget.FooterLink`** in `@nextlyhq/plugin-sdk/admin`:
+    `<Widget.FooterLink href label />` draws a link in the card's own footer,
+    where core's cards put "View all". It replaces the widget's own link while
+    it is shown, so the footer still holds only one link.
+
+- [#3011](https://github.com/nextlyhq/nextly/pull/3011) [`a368b29`](https://github.com/nextlyhq/nextly/commit/a368b29970df4aa50e0e64bb7efac9443453ecb6) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget's `load` can read more of what a dashboard card shows, through the same read services, as the person viewing the card. All of it is `@experimental`.
+  - **`count(collection, { window })`** counts the entries whose `dateField`
+    (`createdAt` when absent) falls in a range's window, the one a `timeseries`
+    over that range is drawn across; `previous: true` counts the window as long
+    that ends where that one starts. The type is `WidgetCountWindow`.
+  - **`find(collection, { total: true })`** also answers `total`, how many
+    entries the same read matched, and `atLeast: true` when that is a floor. A
+    `limit` of `0` now answers no rows rather than one, agreeing with
+    `rowsThatFit`, which is `0` for a card too short to hold a row.
+  - **`groupBy`** answers `truncated: true` when groups were left out and
+    `atLeast: true` when its counts are floors.
+  - **`describe(collection)`** answers `{ title?, status, fields }`
+    (`WidgetCollectionDescription`): the field that titles an entry, whether the
+    collection has a draft and published `status`, and each field the viewer may
+    read with its `name`, its `label` (the collection's own, or the field's
+    name made readable as the admin names it, "Created At" for `createdAt`),
+    `type`, `choices`, and `groupable: false` / `presentable: false` where they
+    apply (`WidgetCollectionField`). It is checked as a read of the collection
+    is.
+  - **A `dateField`** for `count`'s window or for `timeseries` must be a date
+    field of the collection that every reader of it may read; any other is
+    refused, the same way for everyone.
+  - **`skeleton`** on `defineWidget` (`"figure"`, `"list"`, `"bars"`,
+    `"series"` or `"table"`, the type `WidgetSkeleton`) is the shape a card
+    loads in and the sketch its add-panel row is drawn with. It is checked at
+    startup like every other field.
+  - **A window that ends now** (a ranged `timeseries`, `count`'s current
+    window, a `since` read with no `until`) now keeps the whole second it is
+    read in. MySQL stores a `DATETIME` to the nearest second, so an entry made
+    just before a read could be stored a moment after it and left out until the
+    clock passed it; it is counted now, with no change to stored values.
+  - **A load's `size`** is held to a site's `overrides` size bounds where they
+    narrow the widget's own, as the admin draws the card.
+  - **The admin** warns once per card, while developing, about a second
+    `Widget.FooterLink` in one card, rather than on every change of their count.
+
+- [#3029](https://github.com/nextlyhq/nextly/pull/3029) [`8dea8a4`](https://github.com/nextlyhq/nextly/commit/8dea8a4b5b87d07169ebfb1d00242bc47bf2b018) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget's settings get the rest of what they were declared to do.
+  - **A setting's own editor** (`@experimental`): any setting builder takes `editor: { component: "<module>#<Export>" }`, drawn in the card's settings sheet in place of the setting's own field. The component is handed `SettingEditorProps` of the setting's value (the value, `onChange`, the card's other settings, and whether the sheet is saving), exported from `nextly` and `@nextlyhq/plugin-sdk`. Editors join the generated admin component map, which holds each one to its setting's value at compile time. A value an editor sets is held to the setting's own rules: the sheet names one that breaks them on Done, and the layout write refuses it (below). An editor is handed `undefined` for a setting with no value. Startup refuses an `editor` that names no component, one component used both as a widget's view and as a setting's editor, and an `editor` on a widget registered with `registerWidget` or contributed through `contributes.admin.widgets`, which says "custom setting editors need a defineWidget declaration" and names the widget and setting.
+  - **The layout write holds a card's changed settings to its widget's declaration**: a value of the wrong kind, outside a number's range, not among a select's options, or a Field naming a field the chosen collection does not offer the reader is refused with a validation error naming the setting. A value stored before its widget narrowed its declaration still saves unchanged.
+  - **A Field setting is checked before the card loads**: a field the chosen collection no longer has, or one its reader may not read, is replaced as the settings sheet replaces it: by the setting's default where the collection offers that field, otherwise left unset, so the card asks for the field again and its `load` never sees the stale value. The collections are read once per batch of cards, and a stored field is kept while the registry cannot be read. The rules are the settings sheet's own, now functions both use (`contentFieldFits`, `unfitContentField`, `startsAtDefault`, `staleValueTakesDefault` and `settingValueProblem` in `nextly/config`).
+  - **Prompts built from a setting's label are written in sentence case** on the server as in the admin: a card missing its Collection answers "No collection chosen yet". `noSettingChosen` and `settingInSentence` are in `nextly/widget-result`.
+  - **A day-only date keeps its day in every time zone.** The date input showed a day saved as UTC midnight as the day before to anyone west of UTC, and saved that earlier day on the next edit. Day, month and time-of-day values are now shown in UTC, the zone they are saved in, wherever the input is used: collection fields, user fields and widget settings. Date-and-time values are still shown in the reader's own zone.
+
+- [#2953](https://github.com/nextlyhq/nextly/pull/2953) [`c6ec2bb`](https://github.com/nextlyhq/nextly/commit/c6ec2bbd4bf1424015179a262b58de9d77617591) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget's settings are now written with the collections' field builders. `setting.text`, `setting.textarea`, `setting.number`, `setting.checkbox`, `setting.select` and `setting.date` take the config the matching collection field takes, less the `name` the setting's key gives, with a `label` required. Beside them are the dashboard's pickers: `setting.collection`, `setting.fieldOf` (a field of the chosen collection), `setting.dateRange`, `setting.filter`, `setting.sort`, `setting.groupBy` and `setting.fields`. `setting` and the collections' `option` are exported from `@nextlyhq/plugin-sdk` and from `nextly`.
+
+  ```ts
+  settings: {
+    currency: setting.select({
+      label: "Currency",
+      options: [option("US dollar", "usd"), option("Euro", "eur")],
+      defaultValue: "usd",
+      quick: true,
+    }),
+    collection: setting.collection({ label: "Collection" }),
+    sortBy: setting.fieldOf({ of: "collection", label: "Sort by" }),
+  }
+  ```
+
+  Breaking, for the experimental widget SDK only: the `widgetSettings` export from `nextly` is removed. Write `setting.number({ label, defaultValue, min, max })` for `widgetSettings.items()`, `setting.dateRange({ label })` for `dateRange()`, `setting.checkbox({ label, defaultValue })` for `toggle()` and `onlyMine()`, and `setting.select({ label, options, defaultValue })` for `select()` and `chartStyle()`. `default` is now `defaultValue`, as on a collection field.
+
+  Startup now refuses a declared setting without a label, and a preview case whose settings name a setting the widget does not declare or a value that setting would refuse. The settings sheet opens a stored value its setting no longer accepts at the default the card falls back to, and a settings fault quoting a value no formatter can print is still reported.
+
+- [#2914](https://github.com/nextlyhq/nextly/pull/2914) [`bca01de`](https://github.com/nextlyhq/nextly/commit/bca01dead5d4eefc9f0c74df422caf0067a0ce56) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget's own view now draws with the kit core's own cards are built from, published from
+  `@nextlyhq/plugin-sdk/admin` (experimental):
+  - `Widget.Figure`: one number, written for the card's size tier and heard in full.
+  - `Widget.List`: rows of a title, up to three fields and an end, with at most one visible action
+    each and no menu, as many as the card's size and the query's `limit` hold, with the shared
+    "View all" footer, which takes the place of the widget's own footer link.
+  - `Widget.Table`: rows across at most three named columns, drawn as a table on a wide card.
+  - `Widget.BarChart` and `Widget.SeriesChart`: the dashboard's charts, with an optional `unit`
+    their tooltips write after each number ("12 orders").
+  - `formatWidgetNumber`, `formatWidgetChange` and `widgetChartColour`, from the server-safe
+    root `@nextlyhq/plugin-sdk`, so server code can call them too. They are `@nextlyhq/ui`'s
+    own formatters and chart colour, and `@nextlyhq/plugin-sdk` now depends on `@nextlyhq/ui`
+    for them. `@nextlyhq/ui/format` gains `chartColour` and `ChartSlot`.
+
+  Every part draws with the theme's tokens only, in light and dark.
+
+  **Breaking, with no alias:** these names are removed from `@nextlyhq/plugin-sdk/admin` and
+  `@nextlyhq/admin`:
+
+  | Removed                                                                                      | Use instead                                                                                                 |
+  | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+  | `CardFigure`                                                                                 | `Widget.Figure`                                                                                             |
+  | `cardNumber`                                                                                 | `formatWidgetNumber`                                                                                        |
+  | `cardChange`                                                                                 | `formatWidgetChange`                                                                                        |
+  | `GroupsChart`, `GroupsChartProps`, `GroupsChartGroup`                                        | `Widget.BarChart`, `WidgetBarChartProps`, `WidgetBarChartGroup`                                             |
+  | `OverTimeChart`, `OverTimeChartProps`, `OverTimeSeries`, `OverTimePoint`, `OverTimeInterval` | `Widget.SeriesChart`, `WidgetSeriesChartProps`, `WidgetSeries`, `WidgetSeriesPoint`, `WidgetSeriesInterval` |
+
+  Each replacement takes the same props as the name it replaces.
+
+- [#3026](https://github.com/nextlyhq/nextly/pull/3026) [`cb68da3`](https://github.com/nextlyhq/nextly/commit/cb68da39aa8c7c8b663887f866cc00155ee23388) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A widget can now be tested without a browser. `runWidgetLoad` from `@nextlyhq/plugin-sdk/testing` runs a widget's `load` against a test instance for the person you name, through the dashboard's own route, so that person's access applies exactly as it does on the dashboard, and answers in the card's own states: `ready` or `empty` with the data, `needs-setting`, `unavailable`, `not-shown` or `error`. `renderWidgetCard` from the new `@nextlyhq/plugin-sdk/testing/admin` entry draws the card in the admin's own frame, for a state you name or for what a load answered, at a size and in a light or dark scheme. Both are experimental. They sit in entries no production entry reaches, and the bundle check now refuses any production source that imports one.
+
+- [#3152](https://github.com/nextlyhq/nextly/pull/3152) [`54d0553`](https://github.com/nextlyhq/nextly/commit/54d05536284613467d4b5ceeb51108d1e1bb982b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The recovery a drift error prints for a database never adopted into the migration history now keeps the separator its migration's path is written with, on every line. On Windows, a path written with forward slashes no longer gets an `rm` line with backslashes under an `mv` line with forward slashes; a path Windows resolved keeps its backslashes, as before.
+
+- [#2870](https://github.com/nextlyhq/nextly/pull/2870) [`275d2a8`](https://github.com/nextlyhq/nextly/commit/275d2a80b885a55766de823a18320912704be8b9) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `withNextly()` now adds the database drivers and adapters to the top-level `outputFileTracingIncludes`, which is where Next.js reads it, instead of under `experimental`. Every build and dev start of an app using it no longer warns that the key is unrecognized and has moved, and an app's own top-level `outputFileTracingIncludes` is kept: Next.js used to replace it with Nextly's list, so files the app asked to trace were left out of its deployment. An app's own entries still under `experimental.outputFileTracingIncludes` are moved to the top level with the rest.
+
+- [#3159](https://github.com/nextlyhq/nextly/pull/3159) [`f7bc915`](https://github.com/nextlyhq/nextly/commit/f7bc91599fc3c0f53afeec1fbf65d77fc7660bae) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Without nextly's cache handlers, cached public reads in production refresh at least once a minute, so writes from another process show within 60 seconds. Install the handlers to keep longer lifetimes. nextly logs one `cache-handlers-not-shared` warning per process while this bound is in force, with the `next.config` lines that install them.
+
+- [#2918](https://github.com/nextlyhq/nextly/pull/2918) [`e994522`](https://github.com/nextlyhq/nextly/commit/e994522ac581976215e4407fdd4f8fe0066d58fc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A collection or Single removed from your configuration is now read-only. While its registry row says your code defines it and `nextly.config.ts` no longer declares it, every write to its entries is refused, through the admin, the REST API, the Direct API, a plugin's content and version-history services, and the release engine: creating, editing, deleting, duplicating, publishing and withdrawing, bulk changes, restoring, naming and pinning versions, autosaves, working drafts and "seen" marks. Nothing about the entry changes, and its entries can still be read while its tables exist. The refusal is a 409 with the code `ENTITY_REMOVED_FROM_CODE`, names the collection or Single, and carries its `kind` and `slug` in `error.data`. Schema Builder and plugin collections and Singles are not affected.
+
+  **Compatibility:** a site that still edits a collection or Single removed from code is refused from this release. There are two ways out: declare it again in `nextly.config.ts` to keep it, or retire it by running `nextly migrate:create` and then `nextly migrate`, which drops its tables.
+
 ## 0.0.2-alpha.72
 
 ### Patch Changes
