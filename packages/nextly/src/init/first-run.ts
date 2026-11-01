@@ -596,6 +596,27 @@ async function runCoreSchemaChecks(
       )
     );
   }
+
+  // The image sizes stored before Nextly stopped making them: the media
+  // table's `sizes` column and the `image_sizes` table, until the operator
+  // removes the size files and drops both with
+  // `nextly media remove-sizes --apply --drop`. Reporting only; a startup
+  // never removes a file or drops either. Presence only, with no count of the
+  // items: counting reads every row, which on a large library would outlast
+  // this check's bound and the notice would never be given. Each is named
+  // only where it is shown to be what image sizes left, as the drop decides.
+  const [{ readRetiredObjects }, { formatRetiredImageSizesNotice }] =
+    await Promise.all([
+      import("../domains/media/retired-image-sizes-store"),
+      import("../domains/media/retired-image-sizes"),
+    ]);
+  const retiredSizes = await readRetiredObjects(
+    adapter.getDrizzle(),
+    adapter.dialect
+  );
+  if (retiredSizes.column || retiredSizes.tableRows !== null) {
+    logger.warn(formatRetiredImageSizesNotice(retiredSizes));
+  }
 }
 
 export async function ensureFirstRunSetup(

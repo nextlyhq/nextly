@@ -55,7 +55,7 @@ export { apiKeys } from "../api-keys/mysql";
 
 export { auditLog, activityLog } from "../audit/mysql";
 
-export { media, mediaFolders, imageSizes } from "../media/mysql";
+export { media, mediaFolders } from "../media/mysql";
 
 export { nextlyMeta } from "../nextly-meta/mysql";
 

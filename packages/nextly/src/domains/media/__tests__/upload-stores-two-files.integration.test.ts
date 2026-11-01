@@ -4,9 +4,9 @@
  * were removed are left exactly as they were.
  *
  * Image sizes are no longer cut at upload, or again when the focus point
- * moves. A size defined at that time is still a row in `image_sizes`, which a
- * service that still cut sizes would find and act on, so every case starts
- * with one. What each adapter stored is read from the storage itself: a real
+ * moves. On a database from before then, a size defined at that time is
+ * still a row in `image_sizes`, which a service that still cut sizes would
+ * find and act on, so every case starts on such a database, with one. What each adapter stored is read from the storage itself: a real
  * folder for local disk, and for S3, Vercel Blob and UploadThing a stand-in
  * that stores and names files exactly as those adapters do.
  *
@@ -27,6 +27,12 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  addRetiredImageSizes,
+  retiredSizesOn,
+  runOn,
+  setRetiredSizes,
+} from "../../../__tests__/helpers/retired-image-sizes";
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
 import { Bucket } from "../../../storage/__tests__/stand-in-bucket";
 import { getMediaStorage } from "../../../storage/storage";
@@ -80,12 +86,9 @@ async function storedRow(
   return rows[0];
 }
 
-/** `sizes` as stored, read as an object whatever form the dialect returns. */
-function sizesOf(row: Record<string, unknown> | undefined): unknown {
-  const sizes = row?.sizes;
-  return typeof sizes === "string"
-    ? (JSON.parse(sizes) as unknown)
-    : (sizes ?? null);
+/** An item's retired `sizes`, read from the column the definitions no longer name. */
+function sizesOf(t: TestNextly, id: string): Promise<unknown> {
+  return retiredSizesOn(t.adapter.getDrizzle(), t.adapter.dialect, id);
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -98,21 +101,11 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
       });
-      // A size defined before image sizes were removed, which a service that
-      // still cut them would find.
-      await t.adapter.insert("image_sizes", {
-        id: "size-card",
-        name: "card",
-        width: 400,
-        height: 300,
-        fit: "cover",
-        quality: 80,
-        format: "webp",
-        isDefault: true,
-        sortOrder: 0,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
+      // A database from before image sizes were removed: the retired column,
+      // and a size definition a service that still cut them would find.
+      await addRetiredImageSizes(t.adapter.dialect, statement =>
+        t.adapter.executeQuery(statement)
+      );
     });
 
     afterAll(async () => {
@@ -158,7 +151,7 @@ describe.each(getConfiguredTestDialects())(
         await readFile(path.join(uploads, thumbnail!))
       ).metadata();
       expect([drawn.width, drawn.height]).toEqual([480, 120]);
-      expect(sizesOf(await storedRow(t, id))).toBeNull();
+      expect(await sizesOf(t, id)).toBeNull();
       expect("sizes" in item).toBe(false);
     });
 
@@ -171,7 +164,7 @@ describe.each(getConfiguredTestDialects())(
         const { id } = await upload();
 
         expect(bucket.files.size).toBe(2);
-        expect(sizesOf(await storedRow(t, id))).toBeNull();
+        expect(await sizesOf(t, id)).toBeNull();
       }
     );
 
@@ -185,7 +178,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await filesIn(uploads)).sort()).toEqual(before);
       const row = await storedRow(t, id);
       expect([row?.focalX, row?.focalY]).toEqual([20, 70]);
-      expect(sizesOf(row)).toBeNull();
+      expect(await sizesOf(t, id)).toBeNull();
     });
 
     it("leaves an earlier item's stored sizes, their files and the size definitions as they were", async () => {
@@ -201,10 +194,10 @@ describe.each(getConfiguredTestDialects())(
       const earlier = {
         card: { url: card.url, path: card.path, width: 400, height: 300 },
       };
-      await t.adapter.update(
-        "media",
-        { sizes: JSON.stringify(earlier) },
-        { and: [{ column: "id", op: "=", value: id }] }
+      await runOn(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect,
+        setRetiredSizes(id, JSON.stringify(earlier))
       );
       const before = (await filesIn(uploads)).sort();
       expect(before).toContain(card.path);
@@ -213,15 +206,14 @@ describe.each(getConfiguredTestDialects())(
       await upload();
       const read = await t.nextly.media.findByID({ id });
 
-      expect(sizesOf(await storedRow(t, id))).toEqual(earlier);
+      expect(await sizesOf(t, id)).toEqual(earlier);
       const after = await filesIn(uploads);
       for (const file of before) expect(after).toContain(file);
       // The upload in between added its own two files and nothing else.
       expect(after).toHaveLength(before.length + 2);
-      const definitions = (await t.adapter.select(
-        "image_sizes",
-        {}
-      )) as unknown[];
+      const definitions = await t.adapter.executeQuery(
+        "SELECT id FROM image_sizes"
+      );
       expect(definitions).toHaveLength(1);
       // Stored, and still not offered.
       expect(read?.altText).toBe("Sea");

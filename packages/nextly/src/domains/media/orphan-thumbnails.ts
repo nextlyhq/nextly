@@ -261,8 +261,11 @@ export type ReferencedNow = (
   paths: readonly string[]
 ) => Promise<ReadonlySet<string> | null>;
 
-/** How many listed files are asked about at once, just before their removal. */
-const RECHECK_BATCH = 50;
+/**
+ * How many listed files are asked about at once, just before their removal:
+ * by this command and by `nextly media remove-sizes`, which asks the same.
+ */
+export const RECHECK_BATCH = 50;
 
 /**
  * Removes each of `orphans` that is still unreferenced just before its

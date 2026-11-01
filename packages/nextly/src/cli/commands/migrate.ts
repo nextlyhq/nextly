@@ -887,6 +887,45 @@ export async function previewMigrate(args: {
       );
     }
   }
+  await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/**
+ * What a real run does with the retired image-sizes column and table: keeps
+ * both, always. `nextly migrate` runs before a new release takes traffic,
+ * while the release before it still reads and writes them, so their drop is
+ * a step of its own once the new release is serving. Said only while the
+ * database has either, read with the helpers that drop decides with.
+ */
+export async function previewRetiredImageSizes(
+  db: unknown,
+  dialect: SupportedDialect,
+  logger: Pick<CommandContext["logger"], "info">
+): Promise<void> {
+  const [{ readRetiredObjects }, { DROP_SIZES_COMMAND, REMOVE_SIZES_COMMAND }] =
+    await Promise.all([
+      import("../../domains/media/retired-image-sizes-store"),
+      import("../../domains/media/retired-image-sizes-constants"),
+    ]);
+  const objects = await readRetiredObjects(db, dialect);
+  // Each named only where the database has it: after a drop that stopped
+  // between the two, the column can be there without the table.
+  const retired = [
+    ...(objects.column ? ["column media.sizes"] : []),
+    ...(objects.tableRows !== null ? ["table image_sizes"] : []),
+  ];
+  if (retired.length > 0) {
+    logger.info(
+      `  • would keep the retired ${retired.join(" and ")}: \`nextly migrate\` never drops ${retired.length === 1 ? "it" : "them"}. Once this release is serving, run \`${REMOVE_SIZES_COMMAND}\`, then \`${DROP_SIZES_COMMAND}\`.`
+    );
+  }
+  // A table of that name not shown to be the retired one is never called
+  // so, and nothing drops it.
+  if (objects.keptTable !== null) {
+    logger.info(
+      `  • would keep the table image_sizes, which is not shown to be the one image sizes left (${objects.keptTable}): nothing drops it.`
+    );
+  }
 }
 
 /**

@@ -48,6 +48,7 @@ import {
   warnUnlocated,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
+import { retiredSizesReader } from "../domains/media/retired-image-sizes-store";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
@@ -971,13 +972,22 @@ export class MediaFolderService extends BaseService {
     // In one order, so two deletes holding overlapping chunks cannot each
     // wait on a row the other holds.
     const ordered = [...mediaIds].sort();
+    // One reader for every chunk: whether the retired `sizes` column is the
+    // one image sizes were stored in is asked once for the delete, not once
+    // per chunk.
+    const readRetiredSizes = retiredSizesReader(this.db, this.dialect);
 
     for (let i = 0; i < ordered.length; i += chunkSize) {
       const chunk = ordered.slice(i, i + chunkSize);
       const inChunk = {
         and: [{ column: "id", op: "IN" as const, value: chunk }],
       };
-      const removed = await this.adapter.transaction(async tx => {
+      // The image sizes items stored before they were removed, from the
+      // retired `sizes` column the Drizzle definition no longer names: read
+      // before the transaction while the database still has the column, so
+      // the chunk's size files go with it. Nothing writes sizes any more.
+      const retiredSizes = await readRetiredSizes(chunk);
+      const deleted = await this.adapter.transaction(async tx => {
         // Locked and read in one statement, the chunk's rows at once.
         const current = await tx.select<StoredMediaRecord>("media", {
           where: inChunk,
@@ -986,6 +996,10 @@ export class MediaFolderService extends BaseService {
         if (current.length > 0) await tx.delete("media", inChunk);
         return current;
       });
+      const removed = deleted.map(record => ({
+        ...record,
+        sizes: retiredSizes.get(record.id) ?? null,
+      }));
       // After the statement, so this only ever names rows that are gone, and
       // inside an enclosing SQLite transaction after that commits. The files
       // another item still refers to are asked for then (filesKeptByOthers).

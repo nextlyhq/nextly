@@ -330,7 +330,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "activity_log",
   "media",
   "media_folders",
-  "image_sizes",
   "nextly_meta",
   // Read by live introspection. Absent here, the table is created and then invisible to every
   // snapshot, so the drift check proposes adding it again on every run.

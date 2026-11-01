@@ -75,7 +75,7 @@ export { apiKeys } from "../api-keys/postgres";
 export { auditLog, activityLog } from "../audit/postgres";
 
 // Media.
-export { media, mediaFolders, imageSizes } from "../media/postgres";
+export { media, mediaFolders } from "../media/postgres";
 
 // Nextly meta.
 export { nextlyMeta } from "../nextly-meta/postgres";

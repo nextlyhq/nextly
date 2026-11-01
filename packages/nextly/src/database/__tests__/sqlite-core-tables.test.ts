@@ -194,7 +194,6 @@ describe("the SQLite bootstrap DDL", () => {
     "nextly_deleted_principals",
     "email_providers",
     "email_templates",
-    "image_sizes",
     "nextly_events",
     // Newly VISIBLE rather than newly missing: the source-text extractor this
     // suite used could not see it, so it was never compared. It is a real gap.
