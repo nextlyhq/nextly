@@ -356,12 +356,24 @@ describe.each(getConfiguredTestDialects())(
             where: { and: [{ column: "id", op: "IN", value: ids }] },
           })
         ).length;
+      const stillStored = async () =>
+        (
+          await Promise.all(
+            files.map(file => getMediaStorage().exists(file.filename, "media"))
+          )
+        ).filter(Boolean).length;
+      // The end state, rows and files both: a delete removes an item's files
+      // after its row, so the last files can still be going once every row
+      // is gone.
       await expect
-        .poll(left, {
-          timeout: PENDING_DELETE_WINDOW_MS + 15_000,
-          interval: 500,
-        })
-        .toBe(0);
+        .poll(
+          async () => ({ rows: await left(), files: await stillStored() }),
+          {
+            timeout: PENDING_DELETE_WINDOW_MS + 15_000,
+            interval: 500,
+          }
+        )
+        .toEqual({ rows: 0, files: 0 });
       const stored = await Promise.all(
         files.map(file => getMediaStorage().exists(file.filename, "media"))
       );
