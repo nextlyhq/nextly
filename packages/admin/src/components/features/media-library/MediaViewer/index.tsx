@@ -29,7 +29,6 @@ import {
   type MediaSave,
 } from "../MediaDetails";
 import { isFocalPointKeyEvent } from "../MediaFocalPoint";
-import { MediaUsedIn, type MediaUsageState } from "../MediaUsedIn";
 
 /**
  * Below Tailwind's `md`, where the layout below stacks the details under the
@@ -41,11 +40,6 @@ export interface MediaViewerProps extends MediaDetailsActionHandlers {
   open: boolean;
   media: Media;
   folderName: string | null;
-  /**
-   * Where the item is used, as the library asked for it. Without it the
-   * details leave the section out.
-   */
-  usage?: MediaUsageState;
   readOnly: boolean;
   onSave: MediaSave;
   onPrevious?: () => void;
@@ -62,7 +56,6 @@ export function MediaViewer({
   onPrevious,
   onNext,
   onClose,
-  usage,
   ...actions
 }: MediaViewerProps): React.JSX.Element {
   const [infoOpen, setInfoOpen] = React.useState(true);
@@ -167,7 +160,6 @@ export function MediaViewer({
                 readOnly={readOnly}
               />
               <MediaFileFacts media={media} folderName={folderName} />
-              {usage && <MediaUsedIn usage={usage} />}
               <MediaDetailsActions media={media} {...actions} />
             </aside>
           )}

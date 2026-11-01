@@ -65,7 +65,7 @@ const MEDIA_BASE = "/admin/api/media";
  * the body into the right shape (bare doc, `{ items, meta }`, `{ message,
  * item }`, or `{ message, ...result }`) using the typed helpers below.
  */
-export async function mediaFetchJson<T>(
+async function mediaFetchJson<T>(
   url: string,
   options?: RequestInit
 ): Promise<T> {
@@ -227,7 +227,6 @@ export async function fetchMedia(
   if (params.folderId) {
     queryParams.set("folderId", params.folderId);
   }
-  if (params.view) queryParams.set("view", params.view);
 
   // Canonical respondList wire shape (spec §5.1):
   // { items, meta: { total, page, limit, totalPages, hasNext, hasPrev } }.
