@@ -24,7 +24,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import { type JSX, useRef, useState } from "react";
+import { type JSX, type RefObject, useRef, useState } from "react";
 
 import { ChevronDown, Plus } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -97,20 +97,67 @@ export interface NewSplitButtonViewProps {
   menu: NewMenu;
 }
 
-/**
- * Each choice only opens a new entry of its type. The type becomes recent when
- * the entry is created (`useCreateEntry`), so opening a form and leaving it
- * changes nothing.
- */
-export function NewSplitButtonView({
-  menu,
-}: NewSplitButtonViewProps): JSX.Element | null {
-  const [open, setOpen] = useState(false);
-  const commandRef = useRef<HTMLDivElement>(null);
-  const primary = menu.primary;
-  // Nothing creatable: no button, rather than one whose every choice refuses.
-  if (!primary) return null;
+/** The popover's name, the caret's name, and what the list and its search are called. */
+const CHOOSE_LABEL = "Choose what to create";
+const LIST_LABEL = "Types to create";
+const SEARCH_LABEL = "Search types to create";
 
+/**
+ * Where the keys are in the list, drawn so it can be seen: the option the arrow keys have reached
+ * is outlined in the foreground colour, the popover's own text colour, so it holds 3:1 against
+ * the popover in both schemes whatever brand colour an installation sets (branding writes its
+ * primary into the ring token, and a primary near the popover's colour would hide a ring-coloured
+ * outline). The shared item removes its outline (`outline-none` sets the outline style to none),
+ * so the style is put back with the width and colour. The shared item's own mark (a 5% tint) is
+ * all but invisible on its own, and its text stays in the foreground colour: the shared item's
+ * primary falls under 4.5:1 on the popover when a brand colour replaces the default primary.
+ */
+const SELECTED_OPTION_CLASS =
+  "data-[selected=true]:outline-solid data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-foreground aria-selected:text-foreground data-[selected=true]:text-foreground";
+
+/**
+ * The search box, focused, outlined as the reached option is, in the foreground colour for the
+ * same reason. The shared input removes its outline too, so the style is put back here as well;
+ * without it a caret is all that marks focus.
+ */
+const SEARCH_FOCUS_CLASS =
+  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground";
+
+/**
+ * What the button says when its main part starts creating another type while it is drawn, as
+ * when the reader's recent types arrive or change: "New button changed to New Page." The type
+ * it is first drawn with says nothing, since the reader meets that as the main part's own name.
+ * Worked out during render (React's pattern for state that follows a prop), so the sentence
+ * arrives with the label it describes.
+ */
+function useMainPartVoice(label: string | null): string {
+  const [voice, setVoice] = useState({ label, said: "" });
+  if (voice.label !== label) {
+    setVoice({
+      label,
+      said:
+        voice.label === null || label === null
+          ? ""
+          : `New button changed to ${label}.`,
+    });
+  }
+  return voice.said;
+}
+
+/**
+ * The list behind the caret: a listbox named for what it holds, its options grouped under
+ * Recent and each section's heading (each group named by its heading), with a labelled search
+ * once there are more than ten types.
+ */
+function NewMenuList({
+  menu,
+  listRef,
+  onChoose,
+}: {
+  menu: NewMenu;
+  listRef: RefObject<HTMLDivElement | null>;
+  onChoose: (collection: ApiCollection) => void;
+}): JSX.Element {
   const item = (group: string, collection: ApiCollection) => (
     <CommandItem
       key={`${group}:${collection.name}`}
@@ -120,17 +167,73 @@ export function NewSplitButtonView({
         collectionDisplayName(collection),
         collection.name,
       ]}
-      onSelect={() => {
-        setOpen(false);
-        navigateTo(createHref(collection));
-      }}
+      onSelect={() => onChoose(collection)}
+      className={SELECTED_OPTION_CLASS}
       data-testid={`dashboard-new-${group}-${collection.name}`}
     >
       {collectionSingularLabel(collection)}
     </CommandItem>
   );
+  return (
+    // The root's `label` is what names the search box (cmdk labels its input with it).
+    <Command label={SEARCH_LABEL} filter={matchesSearch}>
+      {menu.searchable ? (
+        <CommandInput
+          placeholder="Search types"
+          className={SEARCH_FOCUS_CLASS}
+        />
+      ) : null}
+      {/* Focusable, and named: with no search box, focus lands here, on the element that
+        carries `aria-activedescendant`, so each option the arrow keys reach is announced. */}
+      <CommandList
+        ref={listRef}
+        label={LIST_LABEL}
+        className="focus:outline-none"
+      >
+        <CommandEmpty>No type matches.</CommandEmpty>
+        {menu.recent.length > 0 ? (
+          <CommandGroup heading="Recent">
+            {menu.recent.map(collection => item("recent", collection))}
+          </CommandGroup>
+        ) : null}
+        {menu.sections.map(section => (
+          <CommandGroup
+            key={section.id}
+            // The list's own name for the section as well, so a search
+            // that reorders sections tells two of one heading apart.
+            value={section.id}
+            heading={section.label}
+          >
+            {section.collections.map(collection => item("type", collection))}
+          </CommandGroup>
+        ))}
+      </CommandList>
+    </Command>
+  );
+}
 
-  const primaryLabel = `New ${collectionSingularLabel(primary)}`;
+/**
+ * Each choice only opens a new entry of its type. The type becomes recent when
+ * the entry is created (`useCreateEntry`), so opening a form and leaving it
+ * changes nothing.
+ *
+ * Closed by Escape or by a choice, the popover hands focus back to the caret
+ * it opened from (Radix's own return to its trigger); a choice then opens the
+ * create form, which takes the page.
+ */
+export function NewSplitButtonView({
+  menu,
+}: NewSplitButtonViewProps): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const primary = menu.primary;
+  const primaryLabel = primary
+    ? `New ${collectionSingularLabel(primary)}`
+    : null;
+  const said = useMainPartVoice(primaryLabel);
+  // Nothing creatable: no button, rather than one whose every choice refuses.
+  if (!primary) return null;
+
   return (
     // The main part is one fixed width and its label cut short with an
     // ellipsis, so a long type name never widens the header past a narrow
@@ -145,7 +248,7 @@ export function NewSplitButtonView({
       >
         <Link
           href={createHref(primary)}
-          title={primaryLabel}
+          title={primaryLabel ?? undefined}
           data-testid="dashboard-new-primary"
         >
           <Plus aria-hidden className="mr-2 size-4 shrink-0" />
@@ -154,6 +257,15 @@ export function NewSplitButtonView({
           </span>
         </Link>
       </Button>
+      {/* Polite, and drawn from the first render, so the sentence a later change of type puts
+        here is said without moving the reader. */}
+      <span
+        aria-live="polite"
+        className="sr-only"
+        data-testid="dashboard-new-said"
+      >
+        {said}
+      </span>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
@@ -164,7 +276,7 @@ export function NewSplitButtonView({
             // Never narrowed: the label gives way first, so the caret stays
             // whole on the narrowest header.
             className="shrink-0 rounded-l-none border-l-primary-foreground/25"
-            aria-label="Choose what to create"
+            aria-label={CHOOSE_LABEL}
             data-testid="dashboard-new-more"
           >
             <ChevronDown aria-hidden className="size-4" />
@@ -172,50 +284,29 @@ export function NewSplitButtonView({
         </PopoverTrigger>
         <PopoverContent
           align="end"
+          // The popover is a dialog: named, so it is announced as what it is for.
+          aria-label={CHOOSE_LABEL}
           // Held inside the viewport with a gutter on each side, so on a phone
           // the menu neither runs off the screen nor widens the page.
           collisionPadding={16}
           className="w-64 max-w-[calc(100vw_-_2rem)] p-0"
-          // Focus the list itself, so the arrow keys move through it at once
-          // when there is no search box to land in.
+          // With no search box, focus goes to the list itself, the element whose
+          // `aria-activedescendant` names the option the arrow keys reach: on
+          // the root around it, the keys would move a selection nothing says.
           onOpenAutoFocus={event => {
             if (menu.searchable) return;
             event.preventDefault();
-            commandRef.current?.focus();
+            listRef.current?.focus();
           }}
         >
-          <Command
-            ref={commandRef}
-            tabIndex={-1}
-            label="Create"
-            filter={matchesSearch}
-            className="focus:outline-none"
-          >
-            {menu.searchable ? (
-              <CommandInput placeholder="Search types" />
-            ) : null}
-            <CommandList>
-              <CommandEmpty>No type matches.</CommandEmpty>
-              {menu.recent.length > 0 ? (
-                <CommandGroup heading="Recent">
-                  {menu.recent.map(collection => item("recent", collection))}
-                </CommandGroup>
-              ) : null}
-              {menu.sections.map(section => (
-                <CommandGroup
-                  key={section.id}
-                  // The list's own name for the section as well, so a search
-                  // that reorders sections tells two of one heading apart.
-                  value={section.id}
-                  heading={section.label}
-                >
-                  {section.collections.map(collection =>
-                    item("type", collection)
-                  )}
-                </CommandGroup>
-              ))}
-            </CommandList>
-          </Command>
+          <NewMenuList
+            menu={menu}
+            listRef={listRef}
+            onChoose={collection => {
+              setOpen(false);
+              navigateTo(createHref(collection));
+            }}
+          />
         </PopoverContent>
       </Popover>
     </div>
