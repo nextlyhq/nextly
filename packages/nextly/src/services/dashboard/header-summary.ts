@@ -18,6 +18,7 @@
 import type { DashboardSummaryPart } from "../../api/dashboard-summary-types";
 import type { AttentionDigestItem } from "../../domains/widgets/attention/digest-item";
 import { digestTotal } from "../../domains/widgets/attention-keys";
+import type { WidgetSummaryCount } from "../../domains/widgets/declaration/define-widget";
 
 /** One part of the summary line, before it is worded: the wire shape's part. */
 export type HeaderSummaryPart = DashboardSummaryPart;
@@ -97,13 +98,26 @@ function instantOf(value: unknown): number | undefined {
   return Number.isNaN(at) ? undefined : at;
 }
 
-/** A widget's summary part, or nothing to say when its count is none. */
+/**
+ * A widget's summary part, or nothing to say when its count is none. A count
+ * the widget answered as a floor stays one (`atLeast`), as the attention and
+ * releases parts carry theirs.
+ */
 export function widgetPart(
   widget: string,
   card: string,
   label: string,
-  count: number
+  answer: WidgetSummaryCount
 ): PartRead {
+  const { count, atLeast } =
+    typeof answer === "number" ? { count: answer, atLeast: false } : answer;
   if (!Number.isFinite(count) || count <= 0) return null;
-  return { kind: "widget", widget, card, label, count: Math.floor(count) };
+  return {
+    kind: "widget",
+    widget,
+    card,
+    label,
+    count: Math.floor(count),
+    ...(atLeast === true ? { atLeast: true as const } : {}),
+  };
 }
