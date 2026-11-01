@@ -25,6 +25,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 
+import { indexKeptAddresses } from "./address-uses";
 import { recordEmailTemplateUsage } from "./email-template-usage";
 import { lockDocument, MEDIA_USAGE_RECORDED_KEY } from "./media-usage-store";
 
@@ -123,6 +124,10 @@ export async function reindexMediaUsage(
   await adapter.delete(MEDIA_USAGE_TABLE, {
     and: [{ column: "id", op: "IS NOT NULL" }],
   });
+  // Every address a Replace kept a file for, indexed before any document is
+  // read, so content still naming one is recorded as its item's use however
+  // long ago the Replace was.
+  await indexKeptAddresses(adapter);
 
   let documents = 0;
   for (const slug of await deps.collections.slugs()) {

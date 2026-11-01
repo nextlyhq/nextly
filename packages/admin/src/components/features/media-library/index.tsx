@@ -33,6 +33,7 @@ import {
   AlertDialogTitle,
   toast,
 } from "@nextlyhq/ui";
+import { MEDIA_DELETE_LIMIT } from "nextly/config";
 import * as React from "react";
 
 import { Breadcrumbs, Pagination } from "@admin/components/shared";
@@ -173,6 +174,25 @@ function emptyLibraryMessage({
 }
 
 /**
+ * What the Unused view says in place of its list until the counts say the
+ * usage record is built: that they are still loading, that they could not be
+ * read, or that older content is still being recorded.
+ */
+function unusedPendingMessage(counts: {
+  isError: boolean;
+  isFetching: boolean;
+  data?: { usageRecorded: boolean };
+}): string {
+  if (counts.isError) {
+    return "Couldn't check where items are used, so the Unused view can't list them. Reload the page to try again.";
+  }
+  if (counts.isFetching || counts.data === undefined) {
+    return "Still counting where items are used, so the Unused view can't list them yet.";
+  }
+  return "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it.";
+}
+
+/**
  * MediaLibrary component
  *
  * Complete media management interface.
@@ -276,10 +296,18 @@ export function MediaLibrary({
   }, [activeFolderId, view, resetPage]);
 
   // Whether the usage record covers older content, asked only for the Unused
-  // view, which cannot be trusted until it does.
+  // view, which cannot be trusted until it does. Only a current answer saying
+  // it does opens the view: while the counts load or are asked again, and
+  // after they fail, it lists nothing, since the items it would list may
+  // still be used by older content and an earlier answer may no longer hold.
   const usageCounts = useMediaLibraryCounts(view === "unused");
   const unusedPending =
-    view === "unused" && usageCounts.data?.usageRecorded === false;
+    view === "unused" &&
+    !(
+      usageCounts.isSuccess &&
+      !usageCounts.isFetching &&
+      usageCounts.data.usageRecorded === true
+    );
 
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     React.useState(false);
@@ -451,8 +479,11 @@ export function MediaLibrary({
         for (const id of ids) next.delete(id);
         return next;
       });
+      // Undo takes back only what this delete marked: an item an earlier
+      // delete marked stays as that delete left it, with its own Undo.
+      const own = pending.marked;
       const left = Date.parse(pending.deleteAfter) - Date.now();
-      if (!(left > 0)) {
+      if (!(left > 0) || own.length === 0) {
         setAnnouncement(`${label} deleted.`);
         toast(`${label} deleted`);
         return;
@@ -465,7 +496,7 @@ export function MediaLibrary({
         duration: left,
         action: {
           label: "Undo",
-          onClick: () => void handleUndoDelete(ids, label),
+          onClick: () => void handleUndoDelete(own, label),
         },
       });
     },
@@ -480,8 +511,16 @@ export function MediaLibrary({
     );
   }, [deleteWithUndo, mediaToDelete]);
 
+  // A selection larger than one delete may name is refused before the
+  // dialog opens: one request deletes the whole selection or none of it.
   const handleBulkDelete = React.useCallback(() => {
     if (selectedIds.size === 0) return;
+    if (selectedIds.size > MEDIA_DELETE_LIMIT) {
+      toast.error("Too many files to delete at once", {
+        description: `Select at most ${MEDIA_DELETE_LIMIT.toLocaleString()} files to delete together. ${selectedIds.size.toLocaleString()} are selected.`,
+      });
+      return;
+    }
     setIsBulkDeleteDialogOpen(true);
   }, [selectedIds]);
 
@@ -718,7 +757,7 @@ export function MediaLibrary({
       : undefined;
 
   const emptyStateMessage = unusedPending
-    ? "Where older items are used is still being recorded, so the Unused view can't list them yet. Run `nextly media reindex-usage` once to finish it."
+    ? unusedPendingMessage(usageCounts)
     : emptyLibraryMessage({
         filtered: Boolean(debouncedSearch) || typeFilter !== "all",
         canUpload,

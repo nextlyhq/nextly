@@ -511,6 +511,8 @@ describe.each(getConfiguredTestDialects())(
         documentId: id,
         fieldPath: "cover",
         locale: "",
+        // An upload field names the item by its id.
+        address: null,
       });
     });
 
@@ -694,7 +696,7 @@ describe.each(getConfiguredTestDialects())(
 
     const media = () => t.getService("mediaService");
 
-    it("counts every folder's items and each view's in one statement", async () => {
+    it("counts every folder's items and each view's in one statement, beside the record's mark", async () => {
       await t.getService("metaService").set(MEDIA_USAGE_RECORDED_KEY, {
         rebuiltAt: new Date().toISOString(),
       });
@@ -721,7 +723,9 @@ describe.each(getConfiguredTestDialects())(
         t.adapter.getDrizzle = original as typeof t.adapter.getDrizzle;
       }
 
-      expect(statements).toBe(1);
+      // One statement counts the library; the other two read the record's
+      // mark before and after it, by the one reader every caller asks.
+      expect(statements).toBe(3);
       expect(counts).toEqual({
         all: 8,
         // The two images in no folder or the other folder with none, and the
@@ -731,6 +735,48 @@ describe.each(getConfiguredTestDialects())(
         usageRecorded: true,
         root: 2,
         folders: { [FOLDER]: 5, [OTHER]: 1 },
+      });
+    });
+
+    it("reads the record as unbuilt when a rebuild finishes while the library is counted", async () => {
+      const meta = t.getService("metaService");
+      await meta.set(MEDIA_USAGE_RECORDED_KEY, {
+        rebuiltAt: new Date().toISOString(),
+      });
+      // The first read of the mark is answered, and then a rebuild finishes:
+      // the mark is written anew before anything else is read.
+      const original = t.adapter.select.bind(t.adapter);
+      let flipped = false;
+      t.adapter.select = (async (
+        table: string,
+        options?: Parameters<typeof original>[1]
+      ) => {
+        const rows = await original(table, options);
+        if (
+          !flipped &&
+          table === "nextly_meta" &&
+          JSON.stringify(options).includes(MEDIA_USAGE_RECORDED_KEY)
+        ) {
+          flipped = true;
+          await meta.set(MEDIA_USAGE_RECORDED_KEY, {
+            rebuiltAt: new Date(Date.now() + 1_000).toISOString(),
+          });
+        }
+        return rows;
+      }) as typeof t.adapter.select;
+      let counts;
+      try {
+        counts = await media().countLibrary({});
+      } finally {
+        t.adapter.select = original;
+      }
+
+      expect(flipped).toBe(true);
+      expect(counts).toMatchObject({ usageRecorded: false });
+      // POSITIVE CONTROL: with no rebuild meanwhile, the same record reads
+      // as built.
+      expect(await media().countLibrary({})).toMatchObject({
+        usageRecorded: true,
       });
     });
 

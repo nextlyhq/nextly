@@ -64,7 +64,8 @@ export interface MediaUsage {
   heldByAddress: number;
   /**
    * Whether the usage record has been built. Until it has, a Replace keeps
-   * the previous file whatever the record lists.
+   * the previous file whatever the record lists, and an item listing no use
+   * may still be used by older content. False when the answer does not say.
    */
   usageRecorded: boolean;
 }
@@ -72,6 +73,12 @@ export interface MediaUsage {
 /** A delete that can be undone, as the server took it. */
 export interface PendingMediaDelete {
   ids: string[];
+  /**
+   * The items this delete marked itself; the rest of `ids` were already
+   * waiting to be deleted by an earlier one, which this delete never takes
+   * back.
+   */
+  marked: string[];
   /** When the item is deleted for good, as an ISO instant. */
   deleteAfter: string;
 }
@@ -123,20 +130,30 @@ export async function fetchMediaUsage(
       (sum, scope) => sum + scope.count,
       0
     ),
-    // Said only of the uses by address; none, and a built record, otherwise.
+    // Avatars and logos are counted only for the uses by address.
     heldByAddress: body.meta?.heldByAddress ?? 0,
-    usageRecorded: body.meta?.usageRecorded ?? true,
+    // Only an answer saying the record is built is taken as built: an answer
+    // that says nothing of it may come before the record covers older
+    // content, where an item listing no use may still be used.
+    usageRecorded: body.meta?.usageRecorded === true,
   };
 }
 
-/** Delete items so the delete can be undone for a few seconds. */
+/**
+ * Delete items so the delete can be undone for a few seconds: one request,
+ * which the server marks whole or not at all, for any selection up to
+ * `MEDIA_DELETE_LIMIT` (the page refuses a larger one before asking).
+ */
 export function deleteMediaLater(
   ids: readonly string[]
 ): Promise<PendingMediaDelete> {
   return mediaJson<PendingMediaDelete>("/deletions", jsonPost({ ids }));
 }
 
-/** Bring back items deleted inside the window. */
+/**
+ * Bring back items deleted inside the window: one request, which the server
+ * brings back whole or not at all.
+ */
 export function undoMediaDelete(
   ids: readonly string[]
 ): Promise<UndoneMediaDelete> {

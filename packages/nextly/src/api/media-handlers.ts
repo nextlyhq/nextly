@@ -72,6 +72,7 @@ import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
+import { MEDIA_DELETE_LIMIT } from "../domains/media/media-delete-limit";
 import type { PendingMediaDeletes } from "../domains/media/pending-delete";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
@@ -834,9 +835,12 @@ const usageQuerySchema = z.object({
     .transform(value => value === "true"),
 });
 
-/** The ids a delete or its Undo names: one to a hundred items. */
+/**
+ * The ids a delete or its Undo names: one to {@link MEDIA_DELETE_LIMIT}
+ * items, each request marked or brought back whole on one transaction.
+ */
 const deletionBodySchema = z.object({
-  ids: z.array(z.string().min(1)).min(1).max(100),
+  ids: z.array(z.string().min(1)).min(1).max(MEDIA_DELETE_LIMIT),
 });
 
 /** The library reads that finish deletes whose window has ended. */
@@ -863,13 +867,47 @@ async function pendingDeletes(): Promise<PendingMediaDeletes> {
 }
 
 /**
- * Finish the deletes whose window has ended. A read never fails for it: what
- * is left is tried again by the next.
+ * Finish `ids`, a delete's items, at `deadline` (an instant in ms): every one
+ * then due, however many; any not due yet, marked later than the earliest,
+ * at their own deadline by a timer set again. A moment after the deadline,
+ * so the marks are due when it runs. Unref'd: a waiting delete never keeps a
+ * process alive, and the sweep covers one that exits first.
  */
-async function sweepPendingDeletes(): Promise<void> {
+function finishDeletesAt(ids: readonly string[], deadline: number): void {
+  const delay = Math.max(0, deadline - Date.now()) + 500;
+  setTimeout(() => {
+    void (async () => {
+      await sweepPendingDeletes(ids);
+      try {
+        const pending = await pendingDeletes();
+        const next = await pending.nextDeadline(ids);
+        if (next) finishDeletesAt(ids, next.getTime());
+      } catch (error) {
+        getNextlyLogger().warn({
+          kind: "media-delete-sweep-failed",
+          message:
+            "Deleted media items could not be scheduled; the next read finishes them.",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+  }, delay).unref?.();
+}
+
+/**
+ * Finish the deletes whose window has ended: every one of `ids` when a
+ * delete's timer names the items it marked, however many, else one bounded
+ * sweep of any that are due. Never fails its caller: what is left is tried
+ * again by the next library read.
+ */
+async function sweepPendingDeletes(ids?: readonly string[]): Promise<void> {
   try {
     const pending = await pendingDeletes();
-    await pending.finalizeDue();
+    if (ids) {
+      await pending.finalizeMarked(ids);
+    } else {
+      await pending.finalizeDue();
+    }
   } catch (error) {
     getNextlyLogger().warn({
       kind: "media-delete-sweep-failed",
@@ -895,17 +933,13 @@ async function handleDeleteMediaLater(
   );
   const pending = await pendingDeletes();
   const marked = await pending.mark(ids, actor);
-  const { PENDING_DELETE_WINDOW_MS } = await import(
-    "../domains/media/pending-delete"
-  );
-  // A moment after the window, so the marks are due when it runs. Unref'd:
-  // a waiting delete never keeps a process alive, and the sweep covers one
-  // that exits first.
-  setTimeout(() => {
-    void sweepPendingDeletes();
-  }, PENDING_DELETE_WINDOW_MS + 500).unref?.();
+  // From the deadline this delete answers, which a mark already standing
+  // makes earlier than a fresh window; marks due later get a timer of their
+  // own when this one has run.
+  finishDeletesAt(marked.ids, Date.parse(marked.deleteAfter));
   return respondAction("Media deleted.", {
     ids: marked.ids,
+    marked: marked.marked,
     deleteAfter: marked.deleteAfter,
   });
 }
@@ -927,25 +961,23 @@ async function handleUndoDeleteMedia(request: Request): Promise<Response> {
 }
 
 /**
- * What else a Replace keeps the old file for, beside the documents naming
- * the item by address: how many avatars and logos keep its address, and
- * whether the usage record has been built, without which the old file is
- * kept whatever the record lists.
+ * `read()` and whether the usage record it read was complete: built for
+ * content written before it existed, and the same build throughout
+ * (`readWithinOneBuild`). Until it is, a use the record lacks may still be in
+ * some document, so an item listing no use is not known to be unused, and a
+ * Replace keeps the old file whatever the record lists.
  */
-async function addressUseMeta(
-  mediaService: MediaService,
-  address: string | undefined
-): Promise<{ heldByAddress: number; usageRecorded: boolean }> {
-  const { mediaUsagePresent, mediaUsageRecorded } = await import(
+async function readUsageRecord<T>(
+  read: () => Promise<T>
+): Promise<{ value: T; recorded: boolean }> {
+  const { mediaUsagePresent, readWithinOneBuild } = await import(
     "../domains/media/usage/media-usage-store"
   );
   const adapter = getService("adapter");
-  const usageRecorded =
-    (await mediaUsagePresent(adapter)) && (await mediaUsageRecorded(adapter));
-  return {
-    heldByAddress: address ? await mediaService.addressHolderCount(address) : 0,
-    usageRecorded,
-  };
+  if (!(await mediaUsagePresent(adapter))) {
+    return { value: await read(), recorded: false };
+  }
+  return readWithinOneBuild(adapter, read);
 }
 
 /**
@@ -954,9 +986,10 @@ async function addressUseMeta(
  * gated mount, since it names documents: the public mount answers it as an
  * unknown path. Per caller, so it is never cached for another.
  *
- * Asked for the uses by address, it also says what else keeps the old file
- * on a Replace: `meta.heldByAddress` avatars and logos, and
- * `meta.usageRecorded` false while the record is still being built.
+ * `meta.usageRecorded` is false while the record is still being built, when
+ * the list may lack uses in older content. Asked for the uses by address, it
+ * also says what else keeps the old file on a Replace: `meta.heldByAddress`
+ * avatars and logos.
  */
 async function handleMediaUsage(
   request: Request,
@@ -981,11 +1014,28 @@ async function handleMediaUsage(
     usageQuerySchema,
     Object.fromEntries(new URL(request.url).searchParams)
   );
-  const uses = await mediaUsesOf(
-    mediaId,
-    source.bootedMediaUsesSource(getService("adapter"), await readCaller(auth)),
-    { byAddressOnly: byAddress }
+  const caller = await readCaller(auth);
+  // The uses, read within one build of the record, so a rebuild meanwhile
+  // never lets a partial list read as complete.
+  const { value: uses, recorded } = await readUsageRecord(() =>
+    mediaUsesOf(
+      mediaId,
+      source.bootedMediaUsesSource(getService("adapter"), caller),
+      { byAddressOnly: byAddress }
+    )
   );
+  // Said of every answer: whether the record is built. Of the uses by
+  // address, also how many avatars and logos keep the item's address.
+  const recordMeta = {
+    usageRecorded: recorded,
+    ...(byAddress
+      ? {
+          heldByAddress: item.url
+            ? await mediaService.addressHolderCount(item.url)
+            : 0,
+        }
+      : {}),
+  };
   return respondList(
     uses.items,
     {
@@ -996,7 +1046,7 @@ async function handleMediaUsage(
       hasNext: false,
       hasPrev: false,
       ...(uses.hidden.length > 0 ? { hidden: uses.hidden } : {}),
-      ...(byAddress ? await addressUseMeta(mediaService, item.url) : {}),
+      ...recordMeta,
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );

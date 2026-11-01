@@ -485,6 +485,9 @@ export {
   DEFAULT_ALLOWED_MIME_TYPES,
 } from "./services/upload-validation/mime";
 export type { AcceptedFormat } from "./services/upload-validation/mime";
+// The most media items one delete may name: the admin refuses a larger
+// selection before asking, from the number the endpoint enforces.
+export { MEDIA_DELETE_LIMIT } from "./domains/media/media-delete-limit";
 export type { WebFontFormat } from "./services/upload-validation/web-fonts";
 
 // The API-key authorization policy. Exported here so the admin's route guards

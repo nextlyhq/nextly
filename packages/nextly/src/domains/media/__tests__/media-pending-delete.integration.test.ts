@@ -308,6 +308,201 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
+    // First, so no other delete's timer runs while this one is waited for.
+    it("finishes every item of a delete larger than one sweep from that delete's own timer, rows and files", async () => {
+      const files: Array<{ id: string; filename: string }> = [];
+      for (let made = 0; made < 60; made += 1) {
+        const id = await unusedFile();
+        files.push({ id, filename: String((await row(id))?.filename) });
+      }
+      const ids = files.map(file => file.id);
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids },
+      });
+      expect(deleted.status).toBe(200);
+
+      // No library read runs meanwhile: only the delete's timer finishes it.
+      const left = async () =>
+        (
+          await t.adapter.select<Doc>("media", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "IN", value: ids }] },
+          })
+        ).length;
+      await expect
+        .poll(left, {
+          timeout: PENDING_DELETE_WINDOW_MS + 15_000,
+          interval: 500,
+        })
+        .toBe(0);
+      const stored = await Promise.all(
+        files.map(file => getMediaStorage().exists(file.filename, "media"))
+      );
+      expect(stored.filter(Boolean)).toEqual([]);
+    }, 90_000);
+
+    it("finishes a delete of an item already marked by that mark's deadline, not a fresh window", async () => {
+      const file = await unusedFile();
+      // Marked by a delete whose timer went with its process, nine seconds
+      // into its window.
+      await t.adapter.insert("nextly_meta", {
+        key: pendingDeleteKey(file),
+        value: JSON.stringify({}),
+        updated_at: new Date(Date.now() - PENDING_DELETE_WINDOW_MS + 1_000),
+      });
+
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      expect(deleted.status).toBe(200);
+
+      // Well before a fresh window could end, with no library read.
+      await expect
+        .poll(async () => Boolean(await row(file)), {
+          timeout: 5_000,
+          interval: 250,
+        })
+        .toBe(false);
+      // The answer said this delete marked nothing itself.
+      expect(deleted.json).toMatchObject({ ids: [file], marked: [] });
+    }, 30_000);
+
+    it("finishes an item marked later than the earliest at its own deadline", async () => {
+      const standing = await unusedFile();
+      const fresh = await unusedFile();
+      // One item marked nine seconds into its window, by a delete whose
+      // timer went with its process.
+      await t.adapter.insert("nextly_meta", {
+        key: pendingDeleteKey(standing),
+        value: JSON.stringify({}),
+        updated_at: new Date(Date.now() - PENDING_DELETE_WINDOW_MS + 1_000),
+      });
+
+      // Answered with the earlier deadline; the fresh item is due later.
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [standing, fresh] },
+      });
+      expect(deleted.status).toBe(200);
+
+      // No library read: only the delete's timers finish them.
+      await expect
+        .poll(async () => Boolean(await row(standing)), {
+          timeout: 5_000,
+          interval: 250,
+        })
+        .toBe(false);
+      await expect
+        .poll(async () => Boolean(await row(fresh)), {
+          timeout: PENDING_DELETE_WINDOW_MS + 6_000,
+          interval: 500,
+        })
+        .toBe(false);
+    }, 45_000);
+
+    it("says which items a delete marked itself", async () => {
+      const files = [await unusedFile(), await unusedFile()];
+      const first = await api(editor, "POST", ["deletions"], {
+        body: { ids: [files[0]] },
+      });
+      const second = await api(editor, "POST", ["deletions"], {
+        body: { ids: files },
+      });
+      expect(first.json).toMatchObject({ marked: [files[0]] });
+      expect(second.json).toMatchObject({ ids: files, marked: [files[1]] });
+      await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: files },
+      });
+    });
+
+    it("answers a delete of an item already marked with the standing mark's deadline", async () => {
+      const file = await unusedFile();
+      // Whole seconds, which every dialect stores a mark's time in.
+      const first = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const at = (time: Date) =>
+        new PendingMediaDeletes({
+          db: t.adapter,
+          deleteItem: async () => undefined,
+          now: () => time,
+        });
+
+      const marked = await at(first).mark([file]);
+      const again = await at(new Date(first.getTime() + 5_000)).mark([file]);
+
+      const deadline = new Date(
+        first.getTime() + PENDING_DELETE_WINDOW_MS
+      ).toISOString();
+      expect(marked.deleteAfter).toBe(deadline);
+      expect(again.deleteAfter).toBe(deadline);
+      await at(first).undo([file]);
+    });
+
+    it("undoes none of a batch when taking any one of its marks fails", async () => {
+      const files = [
+        await unusedFile(),
+        await unusedFile(),
+        await unusedFile(),
+      ];
+      await api(editor, "POST", ["deletions"], { body: { ids: files } });
+      const failOn = pendingDeleteKey(files[2]!);
+      type Where = Parameters<TestNextly["adapter"]["delete"]>[1];
+      const names = (where: Where) =>
+        JSON.stringify(where).includes(JSON.stringify(failOn));
+      // The adapter, failing the third item's Undo whether it is taken on the
+      // pool or inside a transaction.
+      const failing = {
+        select: t.adapter.select.bind(t.adapter),
+        insert: t.adapter.insert.bind(t.adapter),
+        delete: (table: string, where: Where) =>
+          names(where)
+            ? Promise.reject(new Error("the third Undo is refused"))
+            : t.adapter.delete(table, where),
+        transaction: (work: (tx: object) => Promise<unknown>) =>
+          t.adapter.transaction(tx =>
+            work(
+              new Proxy(tx, {
+                get(target, property, receiver) {
+                  if (property === "delete") {
+                    return (table: string, where: Where) =>
+                      names(where)
+                        ? Promise.reject(new Error("the third Undo is refused"))
+                        : target.delete(table, where);
+                  }
+                  const value: unknown = Reflect.get(
+                    target,
+                    property,
+                    receiver
+                  );
+                  return typeof value === "function"
+                    ? value.bind(target)
+                    : value;
+                },
+              })
+            )
+          ),
+      } as unknown as PendingDeleteDb;
+      const pending = new PendingMediaDeletes({
+        db: failing,
+        deleteItem: async () => undefined,
+      });
+
+      await expect(pending.undo(files)).rejects.toThrow();
+
+      // Every mark still stands, so none of the batch came back.
+      const marks = await t.adapter.select<Doc>("nextly_meta", {
+        where: {
+          and: [
+            { column: "key", op: "IN", value: files.map(pendingDeleteKey) },
+          ],
+        },
+      });
+      expect(marks).toHaveLength(3);
+      // POSITIVE CONTROL: the same Undo, nothing failing, brings all back.
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: files },
+      });
+      expect(undone.json).toMatchObject({ restored: files, gone: [] });
+    });
+
     it("takes a deleted item out of every library read and count at once, and the counts agree with the lists", async () => {
       const image = await usedImage();
       const file = await unusedFile();
@@ -583,5 +778,43 @@ describe.each(getConfiguredTestDialects())(
         (await api(editor, "GET", [], { query: "?limit=100" })).json.items
       ).toContainEqual(expect.objectContaining({ id: file }));
     });
+
+    // Last, so its many items crowd no other test's first page of the list.
+    it("marks a hundred and fifty items in one request, or none when one is missing", async () => {
+      const files: string[] = [];
+      for (let made = 0; made < 150; made += 1) files.push(await unusedFile());
+      const marks = async () =>
+        (
+          await t.adapter.select<Doc>("nextly_meta", {
+            columns: ["key"],
+            where: {
+              and: [
+                {
+                  column: "key",
+                  op: "IN",
+                  value: files.map(pendingDeleteKey),
+                },
+              ],
+            },
+          })
+        ).length;
+
+      const refused = await api(editor, "POST", ["deletions"], {
+        body: { ids: [...files, randomUUID()] },
+      });
+      expect(refused.status).toBe(404);
+      expect(await marks()).toBe(0);
+
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: files },
+      });
+      expect(deleted.status).toBe(200);
+      expect((deleted.json.marked as string[]).length).toBe(150);
+      expect(await marks()).toBe(150);
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: files },
+      });
+      expect((undone.json.restored as string[]).length).toBe(150);
+    }, 90_000);
   }
 );

@@ -282,24 +282,24 @@ export interface MediaCountGroup {
   items: number | string | null;
   missingAlt: number | string | null;
   unused: number | string | null;
-  recorded: number | string | null;
 }
 
 /**
  * The counts from the counting query's groups. A dialect returns a sum as a
  * number or as a string (MySQL's DECIMAL, PostgreSQL's BIGINT), so each is
- * read as a number. A library with no items has nothing to count and nothing
- * to be unused, so its record is complete.
+ * read as a number. `usage` says whether the usage table is there and whether
+ * its record is built (`mediaUsageRecorded`); a library with no items has
+ * nothing to count and nothing to be unused, so its record is complete.
  */
 export function mediaLibraryCountsOf(
   groups: readonly MediaCountGroup[],
-  usagePresent: boolean
+  usage: { present: boolean; recorded: boolean }
 ): MediaLibraryCounts {
   const counts: MediaLibraryCounts = {
     all: 0,
     missingAltText: 0,
-    unused: usagePresent ? 0 : null,
-    usageRecorded: usagePresent,
+    unused: usage.present ? 0 : null,
+    usageRecorded: usage.present && (usage.recorded || groups.length === 0),
     root: 0,
     folders: {},
   };
@@ -313,7 +313,6 @@ function addGroup(counts: MediaLibraryCounts, group: MediaCountGroup): void {
   counts.all += items;
   counts.missingAltText += Number(group.missingAlt ?? 0);
   if (counts.unused !== null) counts.unused += Number(group.unused ?? 0);
-  if (Number(group.recorded ?? 0) !== 1) counts.usageRecorded = false;
   if (typeof group.folderId === "string") {
     counts.folders[group.folderId] = items;
   } else {
