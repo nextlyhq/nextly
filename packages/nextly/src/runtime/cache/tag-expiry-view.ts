@@ -200,7 +200,7 @@ interface TagLookup {
 const THIS_COPY = Symbol("tag expiry view");
 
 /** Whether `lookup` found an expiry that another copy of this module looked up. */
-function isForeignExpiry(lookup: TagLookup | undefined): lookup is TagLookup {
+function isForeignExpiry(lookup: TagLookup | undefined): boolean {
   return (
     lookup !== undefined && lookup.by !== THIS_COPY && lookup.expiredAt > 0
   );
@@ -221,8 +221,9 @@ function expiryKnown(
   known: TagLookup | undefined,
   at: number
 ): number {
-  if (!isForeignExpiry(known)) return known?.expiredAt ?? 0;
-  return Math.max(known.expiredAt, at + TAG_EXPIRY_GRACE_MS + offsetOf(view));
+  const expiredAt = known?.expiredAt ?? 0;
+  if (!isForeignExpiry(known)) return expiredAt;
+  return Math.max(expiredAt, at + TAG_EXPIRY_GRACE_MS + offsetOf(view));
 }
 
 interface ViewState {
