@@ -588,8 +588,7 @@ describe("useWidgetQueries", () => {
     // over the cap is split into partitions that settle separately, so a card
     // whose own request has answered must stop reporting itself busy even while
     // another partition is still running -- otherwise settled numbers stay
-    // dimmed for a reason no reader can see, and the published
-    // `WidgetComponentProps.isFetching` contract is not kept.
+    // dimmed for a reason no reader can see.
     const over = MAX_QUERIES_PER_REQUEST + 1;
     const requests = Array.from({ length: over }, (_, i) => ({
       placementId: `core/${i}`,

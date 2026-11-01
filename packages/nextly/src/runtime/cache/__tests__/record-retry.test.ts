@@ -1,8 +1,9 @@
 /**
  * Tag expiries the ledger refused are retried until it takes them: by one
  * timer that backs off to 30 s, and by the next cached read where a timer may
- * never fire. Said once when retries begin and once when they succeed, never
- * retried for a missing table, and no timer outlives a withdrawn ledger.
+ * never fire. Each refused record is said with its tags; its retries are said
+ * once when they begin and once when they succeed. Never retried for a missing
+ * table, and no timer outlives a withdrawn ledger.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,9 +17,20 @@ import {
   FIRST_RETRY_DELAY_MS,
   holdFailedRecord,
   MAX_RETRY_DELAY_MS,
+  READ_RETRY_WAIT_MS,
+  retryFailedRecordsAtRead,
 } from "../record-retry";
 import type { TagExpiryLedger } from "../tag-expiry-ledger";
-import { publishTagExpiryLedger } from "../tag-expiry-view";
+import {
+  expireTags,
+  isEntryExpired,
+  LEDGER_CALL_TIMEOUT_MS,
+  localNow,
+  publishTagExpiryLedger,
+  refreshTagExpiries,
+  TAG_LOOKUP_TTL_MS,
+} from "../tag-expiry-view";
+import { HANDOFF_TIMEOUT_MS, handOffWithin } from "../next-cache-revalidator";
 import useCacheHandler from "../use-cache-handler";
 
 const warn = vi.fn();
@@ -112,6 +124,290 @@ describe("a record the ledger refused", () => {
     expect(vi.getTimerCount()).toBe(1);
     // The tags are still kept, for the next flush as well.
     expect(takePendingExpiries()).toEqual(["posts"]);
+  });
+
+  it("says each refused record with its tags, a refusal during a retry too, while the retries say only when they begin", async () => {
+    // The first write is refused; its retry's call is held open, and the
+    // second write is refused while that retry is under way.
+    let releaseRetry: (() => void) | undefined;
+    const answers: (() => Promise<never>)[] = [
+      async () => {
+        throw new Error("connection reset");
+      },
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          releaseRetry = () => reject(new Error("connection reset"));
+        }),
+      async () => {
+        throw new Error("connection reset");
+      },
+    ];
+    const record = vi.fn(async () => {
+      const next = answers.shift();
+      if (next) return next();
+      throw new Error("connection reset");
+    });
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+
+    if ((await expireTags(["posts"])) === "failed") holdFailedRecord(["posts"]);
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    expect(releaseRetry, "the retry is under way").toBeDefined();
+    if ((await expireTags(["pages", "home"])) === "failed") {
+      holdFailedRecord(["pages", "home"]);
+    }
+    releaseRetry?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(record).toHaveBeenCalledTimes(3);
+    const failed = warn.mock.calls
+      .map(([entry]) => entry)
+      .filter(entry => entry.kind === "cache-tag-record-failed");
+    expect(failed.map(entry => entry.tags)).toEqual([
+      ["posts"],
+      ["pages", "home"],
+    ]);
+    expect(failed[1].message).toContain("pages, home");
+    expect(
+      warn.mock.calls.filter(
+        ([entry]) => entry.kind === "cache-tag-record-retrying"
+      )
+    ).toHaveLength(1);
+  });
+
+  it("does not hold a cached read past its wait on a retry whose ledger never answers", async () => {
+    let wedged = false;
+    const record = vi.fn(
+      (tags: readonly string[]) =>
+        new Promise<Map<string, number>>((resolve, reject) => {
+          if (!wedged) reject(new Error("connection reset"));
+          else void tags;
+        })
+    );
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    if ((await expireTags(["posts"])) === "failed") holdFailedRecord(["posts"]);
+    // The database now takes connections and never answers, and the timer
+    // has not fired, as in a frozen function: the read makes the retry.
+    wedged = true;
+    vi.setSystemTime(Date.now() + FIRST_RETRY_DELAY_MS);
+
+    let served = false;
+    const waiting = retryFailedRecordsAtRead();
+    expect(waiting, "a retry is due").toBeDefined();
+    void waiting?.then(() => {
+      served = true;
+    });
+    await vi.advanceTimersByTimeAsync(READ_RETRY_WAIT_MS);
+    expect(served, "the read goes on").toBe(true);
+    expect(record).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up on a retry whose ledger never answers, starts no other record until it does, then tries again", async () => {
+    let wedged = false;
+    const stuck: (() => void)[] = [];
+    const record = vi.fn(
+      (_tags: readonly string[]) =>
+        new Promise<Map<string, number>>((_resolve, reject) => {
+          if (!wedged) reject(new Error("connection reset"));
+          else stuck.push(() => reject(new Error("connection reset")));
+        })
+    );
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    if ((await expireTags(["posts"])) === "failed") holdFailedRecord(["posts"]);
+    wedged = true;
+
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    expect(record).toHaveBeenCalledTimes(2);
+    // Given up on at the ledger's bound; the next tries, and another write's
+    // record, start no query while that one still runs.
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    const pages = expireTags(["pages"]);
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(await pages).toBe("failed");
+    holdFailedRecord(["pages"]);
+    await vi.advanceTimersByTimeAsync(4 * FIRST_RETRY_DELAY_MS);
+    expect(record).toHaveBeenCalledTimes(2);
+
+    // Once it answers, the next try asks the ledger again.
+    for (const release of stuck.splice(0)) release();
+    await vi.advanceTimersByTimeAsync(MAX_RETRY_DELAY_MS);
+    expect(record).toHaveBeenCalledTimes(3);
+    expect([...record.mock.calls[2][0]].sort()).toEqual(["pages", "posts"]);
+  });
+
+  it("does not record again a refused expiry whose record landed after it was given up on", async () => {
+    // The record answers a second after the ledger's bound: given up on,
+    // kept for a retry, and then it lands.
+    const rows = new Map<string, number>();
+    const record = vi.fn(
+      (tags: readonly string[]) =>
+        new Promise<Map<string, number>>(resolve => {
+          setTimeout(() => {
+            const at = Date.now() + 1_000;
+            for (const tag of tags) rows.set(tag, at);
+            resolve(new Map(tags.map(tag => [tag, at] as const)));
+          }, LEDGER_CALL_TIMEOUT_MS + 500);
+        })
+    );
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    const recorded = expireTags(["posts"]);
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(await recorded).toBe("failed");
+    holdFailedRecord(["posts"]);
+
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS + 1);
+    expect(rows.has("posts"), "the late record landed").toBe(true);
+    expect(record, "and was not made again").toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]?.[0]).toMatchObject({
+      kind: "cache-tag-record-recovered",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("gives up on a lookup the ledger never answers, refusing what was cached before it and serving what comes after", async () => {
+    publishTagExpiryLedger({
+      record: async tags =>
+        new Map(tags.map(tag => [tag, Date.now()] as const)),
+      // The database takes connections and never answers.
+      expiriesOf: () => new Promise(() => undefined),
+      prune: async () => 0,
+    });
+    const cachedBefore = localNow();
+    vi.advanceTimersByTime(5);
+
+    let answered = false;
+    void refreshTagExpiries(["posts"]).then(() => {
+      answered = true;
+    });
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(answered, "the read is not held").toBe(true);
+    // It may have been about to say the tag expired: what was cached before
+    // is read afresh, and what is cached from now on is served.
+    expect(isEntryExpired(["posts"], cachedBefore)).toBe(true);
+    vi.advanceTimersByTime(5);
+    expect(isEntryExpired(["posts"], localNow())).toBe(false);
+  });
+
+  it("keeps a ledger that never answers to one waiting query of each kind, however many writes, retries and lookups follow", async () => {
+    let records = 0;
+    let lookups = 0;
+    const record = vi.fn(() => {
+      records += 1;
+      return new Promise<Map<string, number>>(() => undefined);
+    });
+    const expiriesOf = vi.fn(() => {
+      lookups += 1;
+      return new Promise<never>(() => undefined);
+    });
+    publishTagExpiryLedger({ record, expiriesOf, prune: async () => 0 });
+
+    // The first record and lookup are given up on, and go on running.
+    const first = expireTags(["t0"]);
+    void refreshTagExpiries(["t0"]);
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(await first).toBe("failed");
+    holdFailedRecord(["t0"]);
+    for (let i = 1; i <= 5; i += 1) {
+      // Each write's record, given at most the ledger's bound.
+      const recorded = expireTags([`t${i}`]);
+      await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+      if ((await recorded) === "failed") holdFailedRecord([`t${i}`]);
+      void refreshTagExpiries([`t${i}`]);
+      vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+      void refreshTagExpiries(["t0"]);
+      await vi.advanceTimersByTimeAsync(MAX_RETRY_DELAY_MS);
+    }
+    expect(records, "records the database was asked to run").toBe(1);
+    expect(lookups, "lookups the database was asked to run").toBe(1);
+  });
+
+  it("does not take an earlier record's late landing for a later refused one", async () => {
+    // The first write's record is given up on; a second write of the same
+    // tag is refused outright; then the first record lands. It read the
+    // database's time before the second write, so it covers nothing of it.
+    let landFirst: (() => void) | undefined;
+    const calls: string[][] = [];
+    const record = vi.fn((tags: readonly string[]) => {
+      calls.push([...tags]);
+      const n = calls.length;
+      if (n === 1) {
+        return new Promise<Map<string, number>>(resolve => {
+          landFirst = () =>
+            resolve(new Map(tags.map(tag => [tag, Date.now()] as const)));
+        });
+      }
+      if (n === 2) return Promise.reject(new Error("connection reset"));
+      return Promise.resolve(
+        new Map(tags.map(tag => [tag, Date.now()] as const))
+      );
+    });
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+
+    const first = expireTags(["posts"]);
+    await vi.advanceTimersByTimeAsync(LEDGER_CALL_TIMEOUT_MS);
+    expect(await first).toBe("failed");
+    holdFailedRecord(["posts"]);
+    landFirst?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await expireTags(["posts"])).toBe("failed");
+    holdFailedRecord(["posts"]);
+
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    expect(calls, "the retry records the second write").toEqual([
+      ["posts"],
+      ["posts"],
+      ["posts"],
+    ]);
+  });
+
+  it("forgets the refusals of tags a later flush recorded, however many there are", async () => {
+    let refusing = true;
+    const record = vi.fn(async (tags: readonly string[]) => {
+      if (refusing) throw new Error("connection reset");
+      return new Map(tags.map(tag => [tag, Date.now()] as const));
+    });
+    publishTagExpiryLedger({
+      record,
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    const refusals = () =>
+      (
+        globalThis as unknown as {
+          __nextly_tag_expiry_view: { refusals: Map<string, unknown> };
+        }
+      ).__nextly_tag_expiry_view.refusals;
+
+    for (let i = 0; i < 50; i += 1) {
+      refusing = true;
+      if ((await expireTags([`t${i}`])) === "failed")
+        holdFailedRecord([`t${i}`]);
+      // The next write's flush takes the kept tags and records them, before
+      // the retry's timer comes round.
+      refusing = false;
+      await expireTags(takePendingExpiries());
+      await vi.advanceTimersByTimeAsync(MAX_RETRY_DELAY_MS);
+    }
+    expect(refusals().size).toBe(0);
   });
 
   it("stops retrying once the ledger has no table: no instance reads expiries until it does", async () => {
@@ -283,5 +579,112 @@ describe("a record the ledger refused", () => {
 
     expect(vi.getTimerCount()).toBe(0);
     expect(takePendingExpiries()).toEqual(["posts"]);
+  });
+
+  it("keeps an entry regenerated since the write fresh while retries fail, and judges the recorded retry by its reading", async () => {
+    const rows = new Map<string, number>();
+    let refusing = true;
+    publishTagExpiryLedger({
+      record: async tags => {
+        if (refusing) throw new Error("connection reset");
+        const at = Date.now() + 1_000;
+        for (const tag of tags) rows.set(tag, at);
+        return new Map(tags.map(tag => [tag, at] as const));
+      },
+      expiriesOf: async tags => ({
+        now: Date.now(),
+        expired: new Map(
+          tags.flatMap(tag => {
+            const at = rows.get(tag);
+            return at === undefined ? [] : [[tag, at] as const];
+          })
+        ),
+      }),
+      prune: async () => 0,
+    });
+    const before = localNow();
+    vi.advanceTimersByTime(5);
+    // The write: expired here, refused by the ledger, kept for a retry.
+    expect(await expireTags(["t"])).toBe("failed");
+    holdFailedRecord(["t"]);
+    vi.advanceTimersByTime(5);
+    // An entry this process regenerated after the write.
+    const regenerated = localNow();
+
+    // Two refused retries: they record nothing and expire nothing here, so
+    // the regenerated entry stays fresh through the outage.
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(2 * FIRST_RETRY_DELAY_MS);
+    expect(isEntryExpired(["t"], regenerated)).toBe(false);
+    expect(isEntryExpired(["t"], before)).toBe(true);
+
+    refusing = false;
+    await vi.advanceTimersByTimeAsync(4 * FIRST_RETRY_DELAY_MS);
+    expect(rows.has("t")).toBe(true);
+    const afterRetry = localNow();
+
+    // The recorded retry is judged by the database's reading it made, as a
+    // write's own record is: another instance may have recorded the same tag
+    // in the same millisecond, and only that reading orders an entry against
+    // it. So the regenerated entry is refused once, here; one begun after the
+    // reading is fresh.
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await refreshTagExpiries(["t"]);
+    expect(isEntryExpired(["t"], regenerated)).toBe(true);
+    expect(isEntryExpired(["t"], afterRetry)).toBe(false);
+  });
+
+  it("waits the first wait again for a refusal kept during an attempt that then succeeded, not the wait it was armed with", async () => {
+    let release: () => void = () => undefined;
+    let calls = 0;
+    const seen: string[][] = [];
+    publishTagExpiryLedger({
+      record: async tags => {
+        calls += 1;
+        seen.push([...tags]);
+        if (calls <= 3) throw new Error("connection reset");
+        if (calls === 4) {
+          await new Promise<void>(resolve => {
+            release = resolve;
+          });
+        }
+        return new Map(tags.map(tag => [tag, Date.now()] as const));
+      },
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    holdFailedRecord(["posts"]);
+    // Three refusals: waits of 1, 2 and 4 s, so the next would be 8 s.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(calls).toBe(4);
+
+    // Refused while the fourth attempt records, armed at 8 s.
+    holdFailedRecord(["pages"]);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+
+    expect(calls).toBe(5);
+    expect(seen[4]).toEqual(["pages"]);
+  });
+
+  it("retries the tags a hand-off that never answered gave back", async () => {
+    const record = ledgerThat(() => "ok");
+    const hanging = { handOff: () => new Promise<void>(() => undefined) };
+    const handing = handOffWithin(
+      hanging,
+      ["posts"],
+      "a write made outside Next.js"
+    );
+    await vi.advanceTimersByTimeAsync(HANDOFF_TIMEOUT_MS);
+    await handing;
+
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect([...record.mock.calls[0][0]]).toEqual(["posts"]);
   });
 });

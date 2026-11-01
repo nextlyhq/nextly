@@ -19,7 +19,13 @@ import type { AdminBranding, PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection, ApiSingle } from "@admin/types/entities";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
-interface CollectionsLandingDeps {
+/**
+ * What the sidebar's "Collections" section is drawn for. Exported so a view
+ * that groups types as the sidebar does (the dashboard's New menu) asks for
+ * the same three things and hands them here, rather than keeping its own copy
+ * of the placement and order.
+ */
+export interface CollectionsLandingDeps {
   /** From `useBranding()` — needed to resolve plugin placement overrides. */
   branding: AdminBranding | undefined;
   /** From `useCurrentUserPermissions().capabilities`. */
@@ -145,7 +151,7 @@ export function searchSidebarSingles(
  * the EXACT order the sidebar would render them.
  */
 export function getSidebarCollectionsForLanding(
-  items: ApiCollection[],
+  items: readonly ApiCollection[],
   deps: CollectionsLandingDeps
 ): ApiCollection[] {
   const visible = items.filter(c =>

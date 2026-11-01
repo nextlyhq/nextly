@@ -130,7 +130,10 @@ export function directMerges(chain, queued) {
  * an actor who can bypass every active ruleset carrying the `merge_queue`
  * rule: one such ruleset with no bypass actors holds the queue for everyone,
  * whatever any other ruleset, or classic branch protection layered under it,
- * lets anyone do. Rulesets that carry no queue rule are not consulted.
+ * lets anyone do. Rulesets that carry no queue rule are not consulted. When
+ * each queue ruleset names someone but no one entry is on all of them, the
+ * answer is unchecked rather than none: entries are teams and roles, whose
+ * members can overlap.
  *
  * Each problem says whether a way around the queue is `known` to exist, or
  * whether it could not be checked. A ruleset read without administration
@@ -163,10 +166,21 @@ export function directPaths(rulesets, branchRules) {
   const key = actor => `${actor.actor_type} ${actor.actor_id ?? ""}`.trim();
   const [first, ...rest] = enforcing;
   const everywhere = first.bypass_actors.filter(actor => rest.every(other => other.bypass_actors.some(candidate => key(candidate) === key(actor))));
-  return everywhere.map(actor => ({
-    text: `${enforcing.map(name).join(" and ")} let ${key(actor)} bypass the merge queue (${actor.bypass_mode})`,
-    known: true,
-  }));
+  if (everywhere.length > 0) {
+    return everywhere.map(actor => ({
+      text: `${enforcing.map(name).join(" and ")} let ${key(actor)} bypass the merge queue (${actor.bypass_mode})`,
+      known: true,
+    }));
+  }
+  // Different entries on each: but an entry is a team, a role or an app, not
+  // a person, so two teams can share a member and a role's holder can sit in
+  // a team. The lists alone cannot show that nobody can bypass every one.
+  return [
+    {
+      text: `${enforcing.map(name).join(" and ")} each let someone bypass the merge queue, and whether one person can bypass them all cannot be read from their lists`,
+      known: false,
+    },
+  ];
 }
 
 /**

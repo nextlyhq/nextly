@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import { navigateTo } from "@admin/lib/navigation";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -27,11 +28,23 @@ const posts = collection("posts", "Post");
 const pages = collection("pages", "Page");
 const authors = collection("authors", "Author");
 
+/** What the sidebar orders by: a reader who reads everything, no pins. */
+const sidebar = {
+  branding: undefined,
+  capabilities: buildCapabilities([], true, {
+    isSuperAdmin: true,
+    validUntil: null,
+    entities: {},
+  }),
+  pinnedCollections: new Set<string>(),
+};
+
+/** The types drawn in the order given, which the sidebar sorts by `order`. */
 function draw(creatable: ApiCollection[], recentSlugs: string[] = []) {
   const menu = newMenu({
-    creatable,
+    creatable: creatable.map((c, order) => ({ ...c, admin: { order } })),
     recentSlugs,
-    sidebarCollections: creatable,
+    ...sidebar,
   });
   return render(<NewSplitButtonView menu={menu} />);
 }
@@ -133,8 +146,8 @@ describe("NewSplitButtonView", () => {
           },
         ],
         recentSlugs: [],
-        sidebarCollections: [],
-        customGroups: [{ slug: "shop", name: "Commerce" }],
+        ...sidebar,
+        branding: { customGroups: [{ slug: "shop", name: "Commerce" }] },
       });
       render(<NewSplitButtonView menu={menu} />);
       await userEvent
@@ -158,5 +171,133 @@ describe("NewSplitButtonView", () => {
   it("draws nothing when nothing is creatable", () => {
     const { container } = draw([]);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+/** Eleven types, past the ten after which the menu offers a search. */
+const ELEVEN = Array.from({ length: 11 }, (_, i) =>
+  collection(`t${i}`, `Type ${String.fromCharCode(65 + i)}`)
+);
+
+/** Opens the menu from the caret by keyboard, as a keyboard reader does. */
+async function openByKeyboard(user: ReturnType<typeof userEvent.setup>) {
+  screen.getByRole("button", { name: "Choose what to create" }).focus();
+  await user.keyboard("{Enter}");
+  return screen.findByRole("dialog");
+}
+
+/** The option the list's `aria-activedescendant` names, the one the keys have reached. */
+function activeOption(list: HTMLElement): HTMLElement | null {
+  const id = list.getAttribute("aria-activedescendant");
+  return id === null ? null : document.getElementById(id);
+}
+
+describe("NewSplitButtonView, as assistive technology meets it", () => {
+  beforeEach(() => vi.mocked(navigateTo).mockClear());
+
+  it("names the main part by what it creates, the caret by what it opens, and the menu's list and groups", async () => {
+    const user = userEvent.setup();
+    const menu = newMenu({
+      creatable: [
+        posts,
+        { ...authors, admin: { isPlugin: true, group: "Commerce" } },
+      ],
+      recentSlugs: ["posts"],
+      ...sidebar,
+    });
+    render(<NewSplitButtonView menu={menu} />);
+    expect(screen.getByRole("link", { name: "New Post" })).toBeVisible();
+    const caret = screen.getByRole("button", { name: "Choose what to create" });
+    expect(caret).toHaveAttribute("aria-expanded", "false");
+    const dialog = await openByKeyboard(user);
+    expect(dialog).toHaveAccessibleName("Choose what to create");
+    expect(caret).toHaveAttribute("aria-expanded", "true");
+    const list = within(dialog).getByRole("listbox", {
+      name: "Types to create",
+    });
+    // Each group named by its heading: Recent, the sidebar's Collections, a plugin's group.
+    for (const [name, options] of [
+      ["Recent", ["Post"]],
+      ["Collections", ["Post"]],
+      ["Commerce", ["Author"]],
+    ] as const) {
+      const group = within(list).getByRole("group", { name });
+      expect(
+        within(group)
+          .getAllByRole("option")
+          .map(option => option.textContent)
+      ).toEqual(options);
+    }
+  });
+
+  it("puts focus on the list itself with ten types or fewer, so each option the keys reach is announced", async () => {
+    const user = userEvent.setup();
+    draw([posts, pages, authors]);
+    const dialog = await openByKeyboard(user);
+    // Found by its role alone: its name is the first test's to judge.
+    const list = within(dialog).getByRole("listbox");
+    // Focus is on the element that names the option the keys reach, not on a role-less box
+    // around it, where the selection moves with nothing said.
+    await waitFor(() => expect(list).toHaveFocus());
+    // The list names, on the focused element, each option the keys reach; the box around it,
+    // with no role, would not be what a screen reader reads from.
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(activeOption(list)).toHaveTextContent("Page"));
+    expect(activeOption(list)).toHaveAttribute("aria-selected", "true");
+    expect(list).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(activeOption(list)).toHaveTextContent("Author"));
+  });
+
+  it("labels the search past ten types, and puts focus in it", async () => {
+    const user = userEvent.setup();
+    draw(ELEVEN);
+    const dialog = await openByKeyboard(user);
+    const search = within(dialog).getByRole("combobox", {
+      name: "Search types to create",
+    });
+    await waitFor(() => expect(search).toHaveFocus());
+  });
+
+  it("hands focus back to the caret when Escape closes the menu", async () => {
+    const user = userEvent.setup();
+    draw([posts, pages, authors]);
+    await openByKeyboard(user);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      screen.getByRole("button", { name: "Choose what to create" })
+    ).toHaveFocus();
+  });
+
+  it("opens the chosen type's form from a search, focus back on the caret while the page is still drawn", async () => {
+    const user = userEvent.setup();
+    draw(ELEVEN);
+    await openByKeyboard(user);
+    await user.keyboard("type k{Enter}");
+    expect(navigateTo).toHaveBeenCalledWith("/admin/collections/t10/create");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      screen.getByRole("button", { name: "Choose what to create" })
+    ).toHaveFocus();
+  });
+
+  it("says the main part's new type when it changes, and nothing for the type it is first drawn with", () => {
+    const menuFor = (recentSlugs: string[]) =>
+      newMenu({
+        creatable: [posts, pages],
+        recentSlugs,
+        ...sidebar,
+      });
+    const view = render(<NewSplitButtonView menu={menuFor(["posts"])} />);
+    const said = screen.getByTestId("dashboard-new-said");
+    expect(said).toHaveAttribute("aria-live", "polite");
+    expect(said.textContent).toBe("");
+
+    view.rerender(<NewSplitButtonView menu={menuFor(["pages"])} />);
+    expect(screen.getByRole("link", { name: "New Page" })).toBeVisible();
+    // The same region, so the change is said rather than arriving in a region of its own.
+    expect(screen.getByTestId("dashboard-new-said")).toBe(said);
+    expect(said.textContent).toBe("New button changed to New Page.");
   });
 });

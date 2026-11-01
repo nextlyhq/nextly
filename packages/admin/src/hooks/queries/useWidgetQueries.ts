@@ -1326,9 +1326,9 @@ export function useWidgetQueries(
    * affected, which is the point of splitting them". Reducing the fetch state
    * with `some` threw that away for the one signal a card renders: a widget
    * whose own partition answered went on reporting itself busy, dimming settled
-   * numbers, until every OTHER partition had answered too. The published
-   * `WidgetComponentProps` says `isFetching` is this card's query, so this is
-   * what makes that true rather than nearly true.
+   * numbers, until every OTHER partition had answered too. A card's frame reads
+   * its own fetch state as this card's question, so this is what makes that
+   * true rather than nearly true.
    */
   const fetchingPlacementIds = new Set<string>();
   partitions.forEach((partition, index) => {

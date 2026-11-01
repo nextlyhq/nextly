@@ -24,8 +24,15 @@ import {
   expectShortTextReadable,
 } from "./support/axe";
 import { leaveReleasesAsTheRunnerWould } from "./support/release-states";
-import { post, publishNow, release, schedule } from "./support/releases-api";
+import {
+  post,
+  publishNow,
+  release,
+  releasesPerDay,
+  schedule,
+} from "./support/releases-api";
 import { LOCK } from "./support/locks";
+import { waitForShellAnswers } from "./support/shell-geometry";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.releases] });
@@ -74,6 +81,44 @@ function shiftDay(day: string, offset: number): string {
 function at(day: string, hour: number, minute = 0): Date {
   return new Date(
     Date.parse(`${day}T00:00:00.000Z`) + (hour * 60 + minute) * 60_000
+  );
+}
+
+/**
+ * The first of the days `first` to `last` of the month `months` ahead that
+ * holds no release in the reader's zone, so that what the test counts there
+ * is its own releases alone.
+ *
+ * The suite shares one database, and a test run again in it, as a retry or
+ * under --repeat-each, finds its earlier run's releases on whichever fixed day
+ * that run used: the day then counts them all. Asked of the calendar read the
+ * grid draws from, which places each release on its day in the zone asked.
+ */
+async function freeDay(
+  page: Page,
+  months: number,
+  first: number,
+  last: number
+): Promise<string> {
+  const from = dayAhead(months, first);
+  const to = dayAhead(months, last);
+  const perDay = await releasesPerDay(page, from, to, READER_ZONE);
+  for (let day = from; day <= to; day = shiftDay(day, 1)) {
+    if (perDay.get(day) === 0) return day;
+  }
+  throw new Error(
+    `Every day from ${from} to ${to} already holds a release in this database.`
+  );
+}
+
+/**
+ * Hold that `instants` all fall on `day` in the reader's zone, by the rule
+ * the calendar places a release with: the test counts them on that day, and
+ * a free day says nothing about a release that lands on its neighbour.
+ */
+function expectOnDay(instants: readonly Date[], day: string): void {
+  expect(instants.map(instant => dayKeyIn(instant, READER_ZONE))).toEqual(
+    instants.map(() => day)
   );
 }
 
@@ -237,17 +282,15 @@ test.describe("the Releases calendar", () => {
     const stamp = `${Date.now()}`;
     const postId = await post(page, `cal-dense-${stamp}`);
     // Seven on one day, more than its three rows hold, an hour apart from
-    // 09:00 UTC, which is the morning of the same day in New York.
-    const day = dayAhead(3, 14);
+    // 09:00 UTC, which is the morning of the same day in New York. The day
+    // holds nothing else, so the counts below are these seven alone.
+    const day = await freeDay(page, 3, 1, 28);
+    const instants = Array.from({ length: 7 }, (_, i) => at(day, 9 + i));
+    expectOnDay(instants, day);
     const titles: string[] = [];
-    for (let i = 0; i < 7; i += 1) {
+    for (const [i, instant] of instants.entries()) {
       const title = `Dense ${String(i + 1).padStart(2, "0")} ${stamp}`;
-      await schedule(
-        page,
-        await release(page, title, postId),
-        at(day, 9 + i),
-        "UTC"
-      );
+      await schedule(page, await release(page, title, postId), instant, "UTC");
       titles.push(title);
     }
 
@@ -347,27 +390,36 @@ test.describe("the Releases calendar", () => {
 
   test("works by keyboard alone, announces today, and passes axe", async ({
     page,
-  }, testInfo) => {
+  }) => {
     test.setTimeout(120_000);
     const stamp = `${Date.now()}`;
     const postId = await post(page, `cal-keys-${stamp}`);
-    // A retry takes the next week's day, so the releases an earlier attempt
-    // left are not on the day this one counts. No other test uses this month.
-    const day = dayAhead(4, 9 + 7 * testInfo.retry);
+    // A day holding nothing else, so its list is these four alone, whatever
+    // an earlier run in this database left. From the 8th to the 21st, so the
+    // day's week and the week below it stay inside its month, where the
+    // arrows below move. No other test uses this month.
+    const day = await freeDay(page, 4, 8, 21);
+    const instants = Array.from({ length: 4 }, (_, i) => at(day, 14 + i));
+    expectOnDay(instants, day);
     const titles: string[] = [];
-    for (let i = 0; i < 4; i += 1) {
+    for (const [i, instant] of instants.entries()) {
       const title = `Keys ${i + 1} ${stamp}`;
-      await schedule(
-        page,
-        await release(page, title, postId),
-        at(day, 14 + i),
-        "UTC"
-      );
+      await schedule(page, await release(page, title, postId), instant, "UTC");
       titles.push(title);
     }
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await gotoAdmin(page, "/releases");
+    // Drawn in full before the first key, as a reader waits to see the page.
+    // A page still drawing replaces what holds focus: the skip link's target
+    // loses it to the document, and Tab starts over from the top. The fuller
+    // the list, the longer it draws, so a database the suite has filled
+    // showed it where a fresh one did not.
+    await waitForShellAnswers(page);
+    await expect(page.getByRole("button", { name: "calendar" })).toBeVisible();
+    await expect(
+      page.getByRole("table", { name: "Upcoming releases" })
+    ).toBeVisible();
 
     // Skip the admin's navigation first, as a keyboard user would: the sidebar
     // lists every collection and Single, so tabbing through it takes as many

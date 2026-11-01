@@ -10,15 +10,14 @@ import {
   type SettingDeclaration,
   type WidgetFilter,
 } from "../declaration/setting-builders";
-import type { WidgetSetting } from "../definition";
 import { MAX_WIDGET_ROWS } from "../query-limits";
 import { WIDGET_TABS, type WidgetTab } from "../sources";
 
 /**
  * A list card's "Number of items", from 1 to the most rows a card draws
  * (`MAX_WIDGET_ROWS`), so the editor never offers rows the card would not draw.
- * Keyed `limit` by every card that declares it, the name the knob that sets a
- * query's rows reads.
+ * Keyed `limit` by every card that declares it; each card's `load` reads it to
+ * size the rows it asks for.
  */
 export const LIST_ITEMS = setting.number({
   label: "Number of items",
@@ -26,19 +25,6 @@ export const LIST_ITEMS = setting.number({
   min: 1,
   max: MAX_WIDGET_ROWS,
 });
-
-/**
- * Recent activity's "Number of items": the one offer every list card makes,
- * under the name `limit`, so it sets the card's query.
- *
- * Held as the public `WidgetSetting` rather than written into the list: the
- * builder's own type carries a value brand only declarations read, which the
- * published list of core's widgets has no name for.
- */
-export const RECENT_ACTIVITY_ITEMS: WidgetSetting = {
-  name: "limit",
-  ...LIST_ITEMS,
-};
 
 /**
  * The most a note holds, in characters (code points). A note is the reader's
@@ -60,7 +46,7 @@ export const NOTE_TEXT = setting.textarea({
 /**
  * Where every list card's Density is drawn: folded under Advanced in the
  * card's settings panel, since how tightly rows are spaced is a preference
- * few readers change. One value for both forms of the setting below.
+ * few readers change.
  */
 const DENSITY_SECTION = "advanced";
 
@@ -77,20 +63,6 @@ export const LIST_DENSITY_SETTING = setting.select({
   defaultValue: "default",
   section: DENSITY_SECTION,
 });
-
-/**
- * The same Density, as a definition lists it. Written out rather than spread
- * from the declaration: a builder's type does not carry the options a select
- * definition must state.
- */
-export const LIST_DENSITY: WidgetSetting = {
-  name: "density",
-  label: LIST_DENSITY_SETTING.label,
-  type: "select",
-  defaultValue: "default",
-  options: [...DENSITY_OPTIONS],
-  section: DENSITY_SECTION,
-};
 
 /** The card's Collection: the collection it reads, set from the group it is added from. */
 export const CARD_COLLECTION = setting.collection({ label: "Collection" });
@@ -160,9 +132,6 @@ export const OVER_TIME_CHART_STYLE = setting.select({
   defaultValue: "line",
 });
 
-/** Continue where you left off's "Number of items", the same offer under the same name. */
-export const CONTINUE_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
-
 /** What each tab is called on the card's header. */
 const TAB_LABELS: Readonly<Record<WidgetTab, string>> = {
   mine: "Mine",
@@ -171,17 +140,15 @@ const TAB_LABELS: Readonly<Record<WidgetTab, string>> = {
 
 /**
  * Continue where you left off's Tab, its one quick setting: the reader's own
- * work (Mine, the default) or other people's (Team). Its source narrows by it
- * (`tab` among its filters), so the knob sets the query's `where`. The values
- * are the Tab filter's own (`WIDGET_TABS`).
+ * work (Mine, the default) or other people's (Team). The card's `load` asks
+ * its source for the tab chosen. The values are the Tab filter's own
+ * (`WIDGET_TABS`).
  */
-export const CONTINUE_TAB: WidgetSetting = {
-  name: "tab",
+export const CONTINUE_TAB = setting.select({
   label: "Show",
-  type: "select",
-  defaultValue: "mine",
   quick: true,
   options: WIDGET_TABS.map(value => ({ label: TAB_LABELS[value], value })),
+  defaultValue: "mine",
   // Drawn with the card's data in its settings panel: it narrows whose work the card reads.
   section: "data",
-};
+});

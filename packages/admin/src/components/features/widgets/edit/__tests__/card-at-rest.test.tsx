@@ -488,6 +488,66 @@ describe("Settings for a card whose widget declares none", () => {
   });
 });
 
+describe("the More settings panel reached through the quick popover at rest", () => {
+  /** Opens Styled's quick popover from its title or from Settings in its menu; its opener. */
+  async function openPopover(user: User, from: "title" | "menu") {
+    if (from === "title") {
+      await user.click(await screen.findByRole("button", { name: "Styled" }));
+    } else {
+      const menu = await openMenu(user, "Styled");
+      await user.click(
+        within(menu).getByRole("menuitem", { name: /Settings/ })
+      );
+    }
+    return screen.findByRole("dialog", { name: "Quick settings for Styled" });
+  }
+
+  /** How the panel is closed: Done keeps a change to the card's title; Cancel and Escape do not. */
+  async function close(user: User, panel: HTMLElement, by: string) {
+    if (by === "Done") {
+      await user.type(within(panel).getByLabelText("Title"), "Mine");
+      await user.click(within(panel).getByRole("button", { name: "Done" }));
+      await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    } else if (by === "Cancel") {
+      await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    } else {
+      await user.keyboard("{Escape}");
+    }
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /settings$/ })).toBeNull()
+    );
+  }
+
+  // The popover has closed by the time the panel does, so focus goes to the control the popover
+  // was opened from: the title it was opened by, or the menu button whose Settings opened it.
+  // Named either way: Done gives the card the title typed in the panel.
+  for (const [from, opener] of [
+    ["title", /^(Styled|Mine)$/],
+    ["menu", /^Card menu for (Styled|Mine)$/],
+  ] as const) {
+    for (const by of ["Done", "Cancel", "Escape"]) {
+      it(`opened from the ${from}, takes focus in, and hands it back to the ${from} on ${by}`, async () => {
+        renderGrid();
+        const user = userEvent.setup();
+        const popover = await openPopover(user, from);
+        await user.click(
+          within(popover).getByRole("button", { name: "More settings" })
+        );
+        const panel = await screen.findByRole("dialog", {
+          name: /^Styled.* settings$/,
+        });
+        await waitFor(() =>
+          expect(panel).toContainElement(document.activeElement as HTMLElement)
+        );
+        await close(user, panel, by);
+        await waitFor(() =>
+          expect(screen.getByRole("button", { name: opener })).toHaveFocus()
+        );
+      });
+    }
+  }
+});
+
 describe("Size at rest on the lone card of the pair, drawn across its row", () => {
   /** Needs attention on a default that pairs it with Upcoming releases, which this reader is not handed. */
   function pairBranding(): AdminBranding {

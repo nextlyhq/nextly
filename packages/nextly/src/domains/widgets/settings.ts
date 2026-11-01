@@ -51,15 +51,12 @@ import { textLength } from "../../shared/text-length";
 import { quote } from "./declaration/quote";
 import type { PublishedContentSource } from "./published-content-source";
 import {
-  isTimeseriesRange,
-  RELATIVE_SPANS,
   whereFieldNames,
   type RelativeSpan,
   type TimeseriesRange,
 } from "./query";
 import {
   getSource,
-  isWidgetTab,
   sourceKindFromId,
   type WidgetSourceFilter,
 } from "./sources";
@@ -1373,22 +1370,6 @@ interface KnobQuery {
 }
 
 /**
- * Whether `setting` sets how many rows a card asks for: a number setting named
- * `limit`. The limit knob drives it, and a widget whose query has a range may
- * not declare it (`rangedLimitSettingProblem`), both by this one test.
- *
- * @experimental While the content widgets are being built.
- */
-export function isLimitSetting(setting: unknown): boolean {
-  return (
-    typeof setting === "object" &&
-    setting !== null &&
-    (setting as { type?: unknown }).type === "number" &&
-    (setting as { name?: unknown }).name === "limit"
-  );
-}
-
-/**
  * A query as settings may leave it: as declared with each knob applied, or,
  * for a titled list set to a collection it cannot title, the same with no
  * source and no fields, which asks nothing.
@@ -1502,14 +1483,6 @@ function withReaderFilter(
   return { ...declared, and: [...joined, filter] };
 }
 
-/** Whether a value is one of the query's window spans. */
-function isRelativeSpan(value: unknown): value is RelativeSpan {
-  return (RELATIVE_SPANS as readonly unknown[]).includes(value);
-}
-
-/** The ops a window bounds: a count, and a timeseries. */
-const WINDOWED_OPS: ReadonlySet<string> = new Set(["count", "timeseries"]);
-
 /**
  * The most fields a list's rows may be set to show after their title: as many
  * as a row's meta line holds, so every field chosen shows at every size, the
@@ -1571,16 +1544,12 @@ export function namedCollection(value: unknown): string | undefined {
  * drives changes nothing the card asks, so registration refuses it rather than
  * drawing a control that does nothing (`CONTENT_SETTING_NOT_DRAWN`).
  *
- * `limit` is matched by NAME as well as type, as it always was: a number
- * setting called `limit` sets how many rows the card asks for, and a number
- * setting of any other name drives nothing. The content kinds are matched by
- * type alone, since each type has one meaning for a query.
+ * Each is matched by the setting's TYPE alone, since each content type has one
+ * meaning for a query. No setting drives a query because of its name: a
+ * declared widget's settings reach its `load`, which reads them as it chooses
+ * (a list card's "Number of items" sizes the rows its load asks for).
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
-  {
-    drives: isLimitSetting,
-    apply: (query, value) => ({ ...query, limit: value as number }),
-  },
   {
     // The collection a card reads becomes its source, replacing the one the
     // widget declared, which is how a widget offered per collection reads the
@@ -1600,31 +1569,6 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
         return { ...query, where: { ...query.where, collection } };
       }
       return readingCollection(query, collection, setting, ctx);
-    },
-  },
-  {
-    // A card's Date range is how far back its read reaches, for a select that
-    // offers only the query's own spans: its value becomes `since` as is, on an
-    // op a window bounds. A select of the same name offering anything else is
-    // the widget's own, and leaves the query as it was declared.
-    //
-    // A chart over a range declares its `range`, and there the value becomes
-    // the range instead, when it is one: a range and a `since` each name a
-    // window, so the declared range is never joined by a `since`.
-    drives: (setting, source) =>
-      setting.type === "select" &&
-      setting.name === "dateRange" &&
-      setting.options.every(option => isRelativeSpan(option.value)) &&
-      readsACollection(source),
-    apply: (query, value) => {
-      if (query.range !== undefined) {
-        return isTimeseriesRange(value) ? { ...query, range: value } : query;
-      }
-      return isRelativeSpan(value) &&
-        query.op !== undefined &&
-        WINDOWED_OPS.has(query.op)
-        ? { ...query, since: value }
-        : query;
     },
   },
   {
@@ -1690,33 +1634,6 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
           field.groupable !== false
       ),
     apply: (query, value) => ({ ...query, groupBy: value as string }),
-  },
-  {
-    // Only mine: the reader's own rows, on a source that narrows by it. The
-    // query says only that it is on; who "mine" is, the source reads from the
-    // caller, so no id travels in it. Matched by NAME as well as type, as
-    // `limit` is, since a checkbox has no meaning of its own for a query.
-    drives: (setting, source) =>
-      setting.type === "checkbox" &&
-      setting.name === "onlyMine" &&
-      narrowsBy(source, "onlyMine"),
-    apply: (query, value) =>
-      value === true
-        ? { ...query, where: { ...query.where, onlyMine: true } }
-        : { ...query },
-  },
-  {
-    // Tab: whose work the card shows, on a source that narrows by it. Matched
-    // by NAME as well as type, as Only mine is; a value that is not one of
-    // the tabs leaves the query as declared, and the source shows its default.
-    drives: (setting, source) =>
-      setting.type === "select" &&
-      setting.name === "tab" &&
-      narrowsBy(source, "tab"),
-    apply: (query, value) =>
-      isWidgetTab(value)
-        ? { ...query, where: { ...query.where, tab: value } }
-        : { ...query },
   },
 ];
 

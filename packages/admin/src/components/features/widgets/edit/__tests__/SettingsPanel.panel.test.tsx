@@ -518,6 +518,28 @@ describe("a change of collection", () => {
     ).toHaveAttribute("role", "status");
   });
 
+  it("says it through a live region in place, empty, before the change", async () => {
+    panel({
+      collection: "posts",
+      where: { views: { greater_than: 5 } },
+      sort: "-views",
+    });
+    // Present before anything was reset: a region that arrives holding its words is not reliably
+    // said, so the one that speaks must already be there, empty.
+    const region = screen.getByTestId("setting-reset-notice-collection");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.textContent).toBe("");
+    await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
+    await userEvent.click(screen.getByRole("option", { name: "Pages" }));
+    await waitFor(() =>
+      expect(region.textContent).toBe(
+        "Changing the collection reset Filter and Sort"
+      )
+    );
+    // The same node: the region was filled, not replaced by a new one.
+    expect(screen.getByTestId("setting-reset-notice-collection")).toBe(region);
+  });
+
   it("says nothing when it reset nothing a reader had chosen", async () => {
     // The control: nothing over the collection was set, so a notice here would name settings
     // that changed nothing.

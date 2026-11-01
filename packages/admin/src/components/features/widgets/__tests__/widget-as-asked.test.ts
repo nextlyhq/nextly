@@ -63,13 +63,16 @@ const continueCard: DashboardWidget = {
 };
 
 describe("a widget as it is asked", () => {
-  it("narrows a filtering source by the reader's Collection and Only mine", () => {
+  it("narrows a filtering source by the reader's Collection, and by no setting's name", () => {
+    // Only mine is a checkbox like any other: no setting drives a query
+    // because of its name, so only the Collection knob, a knob by its type,
+    // narrows the source.
     const asked = widgetAsAsked(recentSaves, {
       collection: "pages",
       onlyMine: true,
     });
     expect(asked.query?.source).toBe("system:saves");
-    expect(asked.query?.where).toEqual({ collection: "pages", onlyMine: true });
+    expect(asked.query?.where).toEqual({ collection: "pages" });
   });
 
   it("asks a source without declared filters by its collection instead", () => {
@@ -91,18 +94,12 @@ describe("a widget as it is asked", () => {
     expect(widgetAsAsked(recentSaves, {}).query?.where).toBeUndefined();
   });
 
-  it("asks Continue for the tab its reader chose, and Mine by default", () => {
-    expect(widgetAsAsked(continueCard, { tab: "team" }).query?.where).toEqual({
-      tab: "team",
-    });
-    // The declared default is applied like a chosen value.
-    expect(widgetAsAsked(continueCard, {}).query?.where).toEqual({
-      tab: "mine",
-    });
-    // A stored value that is not one of its options reads back as the default.
-    expect(
-      widgetAsAsked(continueCard, { tab: "everyone" }).query?.where
-    ).toEqual({ tab: "mine" });
+  it("asks a card with a tab exactly as declared, whatever tab its reader chose", () => {
+    // A select named `tab` drives nothing: no setting drives a query because
+    // of its name. Continue's own tab reaches its declared `load` instead.
+    expect(widgetAsAsked(continueCard, { tab: "team" }).query?.where).toBe(
+      continueCard.query?.where
+    );
   });
 });
 

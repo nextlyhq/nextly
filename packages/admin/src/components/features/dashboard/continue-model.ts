@@ -13,15 +13,15 @@
  * @module components/features/dashboard/continue-model
  */
 
-import type { WidgetResult } from "nextly/widget-result";
+import type { CoreListWidgetData } from "nextly/core-widget-data";
 
 import type { StatusTone } from "@admin/components/features/widgets/frame/row-parts";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import type { PinTarget } from "@admin/hooks/queries/useDashboardPins";
 import { describeActivityActor } from "@admin/lib/dashboard";
 
-/** The list answer, the one shape this card's source gives. */
-type ListResult = Extract<WidgetResult, { op: "list" }>;
+/** The rows the card's `load` read, the one shape this card is drawn from. */
+type ListResult = CoreListWidgetData;
 
 /** The card's two tabs: the reader's own work, or other people's. */
 export type ContinueTab = "mine" | "team";

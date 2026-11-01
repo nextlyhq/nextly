@@ -128,14 +128,10 @@ function branding(
   } as unknown as AdminBranding;
 }
 
-/**
- * Facts for a widget, one card only unless told otherwise. Listed in the add panel's Overview
- * group, as core lists every widget a reader may see under one of its groups.
- */
+/** Facts for a widget, one card only unless told otherwise. */
 function facts(patch: Partial<WidgetLayoutFacts> = {}): WidgetLayoutFacts {
   return {
     allowsSeveral: false,
-    group: "overview",
     ...patch,
   };
 }
@@ -1878,56 +1874,5 @@ describe("an arrangement with nothing left on it", () => {
       within(panel).getByRole("button", { name: "Add back Widget core/b" })
     );
     expect(drawnOrder()).toEqual(["core/b"]);
-  });
-});
-
-describe("a card's rows follow its reader's settings", () => {
-  it("draws the number of items its reader chose, not the declared number", async () => {
-    // Declared at five, set to six by the reader. The batch asks for six and one more; the card
-    // must draw the six it asked for, not slice to the declaration's five and say more exist.
-    // Six grid rows tall, its body holds seven rows, so six is the reader's number and not the
-    // body's.
-    stubDashboardWidth(1200, { cardWidth: 1200 });
-    mockBranding = branding(["acme/posts"], {
-      "acme/posts": {
-        archetype: "list",
-        component: undefined,
-        query: {
-          source: "collection:posts",
-          op: "list",
-          select: ["title"],
-          limit: 5,
-        },
-        settings: [
-          { name: "limit", type: "number", label: "Items", defaultValue: 5 },
-        ],
-      },
-    });
-    layoutResponse = layout([
-      { id: "p1", widgetId: "acme/posts", h: 6, config: { limit: 6 } },
-    ]);
-    api.post.mockResolvedValue({
-      results: [
-        {
-          ok: true,
-          result: {
-            op: "list",
-            items: Array.from({ length: 7 }, (_, i) => ({
-              title: `Post ${i + 1}`,
-            })),
-          },
-        },
-      ],
-    });
-    renderGrid();
-
-    await waitFor(() =>
-      expect(screen.getAllByTestId("entity-row")).toHaveLength(6)
-    );
-    // The latest request: one may leave before the reader's layout is read, asked as declared.
-    const asked = api.post.mock.calls.at(-1)?.[1] as {
-      queries: Array<{ limit?: number }>;
-    };
-    expect(asked.queries[0].limit).toBe(7);
   });
 });

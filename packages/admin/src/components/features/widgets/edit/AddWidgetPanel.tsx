@@ -183,11 +183,7 @@ function usePanelVoice(
   }
   const count = galleryCount(found, query);
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // What the reader narrowed the gallery to, or `null` before they narrowed it this visit.
-  const narrowing =
-    query.trim() === "" && chosenChip === null
-      ? null
-      : `${chosenChip ?? ""}\u0000${query}`;
+  const narrowing = narrowingOf(chosenChip, query);
   // The narrowing last said, or settled by opening a step: never said twice.
   const said = useRef<string | null>(null);
   // Read when the announcement fires, so a later count is said without the count itself being
@@ -221,7 +217,29 @@ function usePanelVoice(
     },
     [utter]
   );
-  return { count, spoken, say };
+  // Clear says the count it brings back itself, so the narrowing it leaves (the chip alone) is
+  // settled as said: the pause after it never says the same count a second time.
+  const sayCleared = useCallback(
+    (sentence: string) => {
+      said.current = narrowingOf(chosenChip, "");
+      say(sentence);
+    },
+    [chosenChip, say]
+  );
+  return { count, spoken, say, sayCleared };
+}
+
+/**
+ * What the reader narrowed the gallery to, by the chip they chose and the search, or `null` when
+ * they narrowed it by neither this visit: the key a count is said for once.
+ */
+function narrowingOf(
+  chosenChip: GalleryChip | null,
+  query: string
+): string | null {
+  return query.trim() === "" && chosenChip === null
+    ? null
+    : `${chosenChip ?? ""}\u0000${query}`;
 }
 
 /** A section of the gallery, under a small heading. */
@@ -1332,7 +1350,7 @@ function useAddGallery({
   // which a cleared search leaves as it was.
   const clear = () => {
     setQuery("");
-    voice.say(`${galleryCount(model.unsearched, "")}.`);
+    voice.sayCleared(`${galleryCount(model.unsearched, "")}.`);
     searchRef.current?.focus();
   };
   return {

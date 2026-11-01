@@ -1,8 +1,9 @@
 /**
  * The knobs on a source that reads across collections and narrows by the
- * filters it declares (`WidgetSource.filters`): Collection and Only mine set a
- * key of the query's `where` there and leave its source alone, and Only mine
- * drives nothing on a source that does not narrow by it.
+ * filters it declares (`WidgetSource.filters`): Collection sets a key of the
+ * query's `where` there and leaves its source alone. A setting named Only mine
+ * or Tab drives nothing, on any source: no setting drives a query because of
+ * its name.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -75,47 +76,7 @@ describe("Collection on a source that narrows by it", () => {
   });
 });
 
-describe("Only mine on a source that narrows by it", () => {
-  it("sets where.onlyMine when on, and nothing when off", () => {
-    expect(asked([onlyMine], { onlyMine: true }).where).toEqual({
-      onlyMine: true,
-    });
-    expect(asked([onlyMine], { onlyMine: false }).where).toBeUndefined();
-    expect(asked([onlyMine], {}).where).toBeUndefined();
-  });
-
-  it("carries both filters together, beside the query's own where", () => {
-    const out = applyWidgetSettings(
-      { ...query, where: { kept: true } },
-      [onlyMine, collection],
-      { onlyMine: true, collection: "pages" },
-      { source: filtering }
-    );
-    expect(out.where).toEqual({
-      kept: true,
-      onlyMine: true,
-      collection: "pages",
-    });
-  });
-
-  it("is not driven on a source that does not narrow by it", () => {
-    // Only Collection declared: Only mine is the widget's own checkbox there,
-    // admitted as any checkbox is, and it sets nothing the card asks.
-    const collectionOnly = {
-      id: "system:saves",
-      filters: ["collection"] as const,
-    };
-    expect(
-      asked([onlyMine], { onlyMine: true }, collectionOnly).where
-    ).toBeUndefined();
-    // Admitted beside Collection where the source declares both.
-    expect(
-      widgetSettingsProblem([onlyMine, collection], false, filtering)
-    ).toBeUndefined();
-  });
-});
-
-describe("Tab on a source that narrows by it", () => {
+describe("a setting named for a filter its source narrows by", () => {
   const tab: AnyWidgetSetting = {
     name: "tab",
     type: "select",
@@ -133,31 +94,40 @@ describe("Tab on a source that narrows by it", () => {
     limit: 5,
   };
 
-  it("sets where.tab to the chosen tab, Mine by default, and keeps the source", () => {
-    const team = applyWidgetSettings(
-      continueQuery,
-      [tab],
-      { tab: "team" },
-      { source: tabbed }
-    );
-    expect(team.source).toBe("system:continue");
-    expect(team.where).toEqual({ tab: "team" });
+  it("drives nothing for Only mine, even on a source that narrows by it", () => {
+    // A declared widget's settings reach its `load`, which asks its source
+    // as it chooses; a checkbox's name sets nothing a card asks.
+    expect(asked([onlyMine], { onlyMine: true }).where).toBeUndefined();
     expect(
-      applyWidgetSettings(continueQuery, [tab], {}, { source: tabbed }).where
-    ).toEqual({ tab: "mine" });
+      applyWidgetSettings(
+        query,
+        [onlyMine],
+        { onlyMine: true },
+        { source: filtering }
+      )
+    ).toBe(query);
   });
 
-  it("is not driven on a source that does not narrow by it", () => {
-    // 🔴 The must-differ case: the same setting over a source declaring no
-    // Tab filter is the widget's own select, and sets nothing it asks.
+  it("drives nothing for Tab, even on a source that narrows by it", () => {
     expect(
       applyWidgetSettings(
         continueQuery,
         [tab],
         { tab: "team" },
-        { source: { id: "system:continue", filters: ["collection"] as const } }
-      ).where
-    ).toBeUndefined();
+        { source: tabbed }
+      )
+    ).toBe(continueQuery);
+  });
+
+  it("still carries Collection beside them, which is a knob by its type", () => {
+    // The control: the knobs that remain still apply on the same source.
+    const out = applyWidgetSettings(
+      { ...query, where: { kept: true } },
+      [onlyMine, collection],
+      { onlyMine: true, collection: "pages" },
+      { source: filtering }
+    );
+    expect(out.where).toEqual({ kept: true, collection: "pages" });
   });
 });
 
@@ -184,15 +154,6 @@ describe("a cells card over a source that narrows by its filters", () => {
       async () => ({ op: "list", items: [] })
     );
   }
-
-  it("refuses an Only mine checkbox its cells would never be asked with", () => {
-    // 🔴 Admitted, the card shows "only mine" on while every cell counts
-    // everyone's rows: the admin asks each cell with no filter metadata.
-    registerEdits();
-    expect(
-      widgetSettingsProblem([onlyMine], false, settingsSourceOf(cellsCard))
-    ).toMatch(/"onlyMine" is applied through its source's filters/);
-  });
 
   it("refuses a Collection setting only a cell source's filter could apply", () => {
     registerEdits();

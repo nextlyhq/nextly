@@ -381,9 +381,10 @@ describe("a declared widget drawn by its own component", () => {
     expect(screen.getByTestId("revenue")).toHaveTextContent("drawn");
   });
 
-  it("leaves a core custom card, which asks its own questions, drawing its own states", () => {
-    // The control: without `serverData` a custom card is self-drawn, handed
-    // its slot, as core's own custom cards are.
+  it("leaves a self-drawn card to its own component, handed its card alone", () => {
+    // The control: without `serverData` a custom card is self-drawn, as
+    // Create, core's one card still written as a definition, is: handed which
+    // card it is and its settings, and no answer, since it asks for none.
     const props: unknown[] = [];
     registerComponent(PATH, (p: unknown) => {
       props.push(p);
@@ -396,6 +397,11 @@ describe("a declared widget drawn by its own component", () => {
       />
     );
     expect(screen.getByText("self drawn")).toBeInTheDocument();
-    expect(props.at(-1)).toHaveProperty("slot", undefined);
+    // Strict, so a key handed as `undefined`, such as a slot, is one too many.
+    expect(props.at(-1)).toStrictEqual({
+      widgetId: declared.id,
+      placementId: declared.id,
+      settings: {},
+    });
   });
 });

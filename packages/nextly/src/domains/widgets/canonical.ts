@@ -13,8 +13,8 @@
  */
 
 import { declaredWidget } from "./declaration/declared-widgets";
+import type { WidgetAccessGate } from "./declaration/define-widget";
 import type { WidgetDefinition } from "./definition";
-import type { WidgetPermissionGate } from "./gate";
 import {
   sizeBounds,
   type WidgetSizeBounds,
@@ -49,7 +49,7 @@ export interface CanonicalWidget {
    * so the admin asks for its cards by card rather than by query.
    */
   serverData?: true;
-  requiredPermission?: WidgetPermissionGate;
+  requiredPermission?: WidgetAccessGate;
   /**
    * The size the declaration states, in grid units, as stated. Read through
    * {@link sizeFacts}, the one place an unstated end is filled in.

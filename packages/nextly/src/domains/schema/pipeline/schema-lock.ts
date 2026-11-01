@@ -60,6 +60,7 @@ import type {
   Pool as CallbackPool,
 } from "mysql2";
 
+import { createTableIfAbsent } from "../../../database/concurrent-create";
 import {
   futureExpression,
   nowExpression,
@@ -351,8 +352,10 @@ async function ensureRow(
   mayCreateTables: boolean
 ): Promise<boolean> {
   if (mayCreateTables) {
+    // Every run creates the table before contending for its row, so runs started together create
+    // it together; see `createTableIfAbsent`.
     for (const statement of getSchemaLockDdl(dialect)) {
-      await adapter.executeQuery(statement);
+      await createTableIfAbsent(adapter, dialect, SCHEMA_LOCK_TABLE, statement);
     }
   }
   try {
@@ -646,8 +649,14 @@ async function takeEarlierMigrateRow(
   mayCreateTables: boolean
 ): Promise<EarlierAttempt> {
   if (mayCreateTables) {
+    // Created before any lock is held, so runs started together create it together.
     for (const statement of getEarlierMigrateLockDdl("postgresql")) {
-      await adapter.executeQuery(statement);
+      await createTableIfAbsent(
+        adapter,
+        "postgresql",
+        EARLIER_MIGRATE_LOCK_TABLE,
+        statement
+      );
     }
   }
   const now = nowExpression("postgresql");

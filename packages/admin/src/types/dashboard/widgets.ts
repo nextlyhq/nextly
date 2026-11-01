@@ -183,43 +183,23 @@ export interface DashboardWidget {
  *
  * Its sizes are not here: they are the widget's own, read from its
  * declaration (`DashboardWidget.size`). What is here is what only the server
- * can answer: whether a second card of the widget may be added, and where the
- * add panel lists it.
+ * can answer: whether a second card of the widget may be added, and what the
+ * add panel shows beside its name. Where the panel lists it, and in what
+ * order, is the layout read's `available`, already in the panel's order.
  */
 export interface WidgetLayoutFacts {
   /** Whether the widget may be placed more than once. */
   allowsSeveral: boolean;
-  /**
-   * Where the add panel lists the widget, as core assigns it. Absent for a
-   * widget the panel does not offer: one already placed is still drawn.
-   */
-  group?: AddPanelGroup;
-  /** The collection a Content widget reads, or the plugin a Plugins one comes from. */
-  subgroup?: string;
   /** The declaration's one line, for its row. */
   description?: string;
   /** The declaration's category: searched, and shown as a label, never a group. */
   category?: string;
-  /** Which sketch draws its row: the widget's archetype. */
-  sketch?: string;
   /**
    * Listed once per collection the reader may read, each row adding a card set to that
    * collection. @experimental
    */
   perCollection?: true;
-  /**
-   * The widget's place in the add panel's order, as core ranks it. Present for every widget the
-   * panel lists, a placed one too, so the panel orders its rows without deciding an order itself.
-   */
-  rank?: number;
 }
-
-/**
- * The add panel's groups as core sends them, in the panel's order. "Removed
- * from your dashboard" is not one: it is the reader's own removed cards, read
- * from the arrangement.
- */
-export type AddPanelGroup = "overview" | "content" | "team" | "plugins";
 
 /**
  * One card in a reader's arrangement. Its position is its index in the list.
