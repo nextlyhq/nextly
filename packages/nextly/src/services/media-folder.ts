@@ -50,8 +50,11 @@ import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  sizeLocatorOf,
   storedPathForLog,
+  warnSizeNotHere,
   warnUnlocated,
+  type StoredFileRemover,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
 import {
@@ -182,9 +185,12 @@ const removeEveryStoredFile: RemoveStoredFiles = async (records, kept) => {
 
 /**
  * Storage a caller hands a cascading folder delete, as the cleanup argument
- * has taken it before: given every stored file of the items removed.
+ * has taken it before: given every stored file of the items removed. Where it
+ * says where it serves a file, as the media storage does, an image size
+ * recorded by URL alone that it serves is among them (`sizeLocatorOf`).
  */
-interface FolderStorageCleanup {
+interface FolderStorageCleanup
+  extends Pick<StoredFileRemover, "getPublicUrl" | "getStorageType"> {
   bulkDelete(
     filePaths: string[],
     collection?: string
@@ -239,9 +245,13 @@ function removalFrom(
   return async (records, kept) => {
     const filePaths: string[] = [];
     for (const record of records) {
-      const { paths, unlocated } = storedFilesOf(record);
+      const { paths, unlocated, notHere } = storedFilesOf(
+        record,
+        sizeLocatorOf(cleanup)
+      );
       filePaths.push(...paths.filter(filePath => !kept.has(filePath)));
       for (const url of unlocated) warnUnlocated(url, record.id);
+      for (const url of notHere) warnSizeNotHere(url, record.id);
     }
     if (filePaths.length === 0) return;
     // The rows are already gone: a storage failure is named, never thrown.
@@ -1094,9 +1104,12 @@ export class MediaFolderService extends BaseService {
       const ids = run.map(record => record.id);
       await this.afterCommit(() => revalidateMedia(ids));
       await this.afterCommit(async () => {
+        // Every file a removal can take, a size recorded by URL alone among
+        // them where the media storage serves it, so each is asked about.
+        const locator = sizeLocatorOf(getMediaStorage());
         const kept = await filesKeptByOthers(
           this.storedFileSearch,
-          run.flatMap(record => storedFilesOf(record).paths),
+          run.flatMap(record => storedFilesOf(record, locator).paths),
           ids
         );
         if (kept) await removeFiles(run, kept);

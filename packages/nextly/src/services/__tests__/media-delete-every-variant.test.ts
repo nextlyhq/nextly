@@ -128,8 +128,8 @@ function setStoredSizes(id: string, sizes: string | null): void {
     .run(sizes, id);
 }
 
-/** An image uploaded, then given the sizes an earlier upload stored. */
-async function uploadPhoto(folderId?: string): Promise<string> {
+/** An image uploaded as one is now: its original and its thumbnail. */
+async function uploadImage(folderId?: string): Promise<string> {
   const file = await image();
   const result = await service.uploadMedia({
     file,
@@ -140,7 +140,12 @@ async function uploadPhoto(folderId?: string): Promise<string> {
     folderId,
   });
   expect(result.success).toBe(true);
-  const id = result.data!.id;
+  return result.data!.id;
+}
+
+/** An image uploaded, then given the sizes an earlier upload stored. */
+async function uploadPhoto(folderId?: string): Promise<string> {
+  const id = await uploadImage(folderId);
   await withStoredSizes(id);
   return id;
 }
@@ -233,6 +238,124 @@ describe("deleting a media item", () => {
     expect(await onDisk()).toHaveLength(8);
 
     await service.deleteMediaBulk(ids);
+
+    expect(await onDisk()).toEqual([]);
+  });
+});
+
+// An earlier release could record a size by its URL alone. Its file is
+// located as `nextly media remove-sizes` locates it: the path its URL shows
+// beside the original's, where the storage configured now serves that path
+// at that URL.
+describe("an image size recorded by its URL alone", () => {
+  /** A size file stored through the media storage, and where it is. */
+  async function sizeFile(): Promise<{ path: string; url: string }> {
+    const buffer = await sharp(await image())
+      .resize(4, 4)
+      .webp()
+      .toBuffer();
+    return getMediaStorage().upload(buffer, {
+      filename: "photo-small.webp",
+      mimeType: "image/webp",
+      collection: "media",
+    });
+  }
+
+  /** Every warning the delete wrote, as one text. */
+  function warned(warn: ReturnType<typeof vi.spyOn>): string {
+    return warn.mock.calls
+      .map(args =>
+        args
+          .map(arg => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+          .join(" ")
+      )
+      .join("\n");
+  }
+
+  it("goes with its item when this storage serves it there", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const small = await sizeFile();
+    setStoredSizes(id, JSON.stringify({ small: { url: small.url } }));
+    expect(await onDisk()).toContain(small.path);
+
+    const result = await service.deleteMedia(id);
+
+    expect(result.success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("stays while another item uses its file", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const other = await uploadImage();
+    const [otherRow] = await db.db
+      .select()
+      .from(db.schema.media)
+      .where(eq(db.schema.media.id, other));
+    // The size's URL names the other item's original.
+    setStoredSizes(id, JSON.stringify({ small: { url: otherRow.url } }));
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(await onDisk()).toContain(otherRow.filename);
+  });
+
+  // The original was stored elsewhere and the item kept its record, so the
+  // size's URL shows a key this storage also has: handed to it, that key
+  // would remove this storage's own file.
+  it("is named by its URL, and nothing removed for it, when another storage serves it", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const collider = await sizeFile();
+    await db.db
+      .update(db.schema.media)
+      .set({
+        filename: "2026/01/elsewhere.png",
+        url: "https://old-bucket.example/2026/01/elsewhere.png",
+        thumbnailUrl: null,
+      })
+      .where(eq(db.schema.media.id, id));
+    const sizeUrl = `https://old-bucket.example/${collider.path}`;
+    setStoredSizes(id, JSON.stringify({ small: { url: sizeUrl } }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await service.deleteMedia(id);
+
+    expect(result.success).toBe(true);
+    expect(await onDisk()).toContain(collider.path);
+    const said = warned(warn);
+    expect(said).toContain(sizeUrl);
+    expect(said).toContain(id);
+  });
+
+  it("is named by its URL when its path cannot be worked out from the record", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const sizeUrl = "https://cdn.example/elsewhere/photo-small.webp";
+    setStoredSizes(id, JSON.stringify({ small: { url: sizeUrl } }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    const said = warned(warn);
+    expect(said).toContain(sizeUrl);
+    expect(said).toContain(id);
+  });
+
+  it("goes with its item when its folder is deleted", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const folder = created.data!.id;
+    const id = await uploadImage(folder);
+    const small = await sizeFile();
+    setStoredSizes(id, JSON.stringify({ small: { url: small.url } }));
+
+    expect((await folders.deleteFolder(folder, true)).success).toBe(true);
 
     expect(await onDisk()).toEqual([]);
   });

@@ -54,6 +54,7 @@ import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  sizeLocatorOf,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
 import { storedSizesOf } from "../domains/media/retired-image-sizes-store";
@@ -1025,9 +1026,11 @@ export class MediaService extends BaseService {
     mediaId: string,
     record: MediaFilesRecord
   ): Promise<boolean> {
+    // The files the removal below takes, a size recorded by URL alone among
+    // them where this storage serves it, so each is asked about first.
     const kept = await filesKeptByOthers(
       this.storedFileSearch,
-      storedFilesOf(record).paths,
+      storedFilesOf(record, sizeLocatorOf(this.storage)).paths,
       [mediaId]
     );
     const ownFilesGone = kept

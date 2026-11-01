@@ -7,6 +7,7 @@ import { isTransientError, withRetry } from "../../storage/retry";
 
 import { canonicalStoredPath } from "./orphan-thumbnails";
 import { RETIRED_SIZES_COLUMN } from "./retired-image-sizes-constants";
+import type { SizeLocator } from "./size-location";
 import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
 
 /**
@@ -14,9 +15,32 @@ import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
  * every delete does it, of one item or of a folder's.
  */
 
-/** The storage surface removal uses: a delete by stored path, per collection. */
+/**
+ * The storage surface removal uses: a delete by stored path, per collection,
+ * and where the storage serves a path and what kind it is, which locate an
+ * image size recorded by its URL alone (`sizeLocatorOf`). The media storage
+ * has all three; a storage without the last two removes no such size.
+ */
 export interface StoredFileRemover {
   delete(filePath: string, collection?: string): Promise<void>;
+  getPublicUrl?(filePath: string, collection?: string): string;
+  getStorageType?(collection?: string): string;
+}
+
+/**
+ * The media collection's place in `storage`, as locating a size asks it, or
+ * undefined when the storage cannot say where it serves a file.
+ */
+export function sizeLocatorOf(
+  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
+): SizeLocator | undefined {
+  const publicUrl = storage.getPublicUrl?.bind(storage);
+  const storageType = storage.getStorageType?.bind(storage);
+  if (!publicUrl || !storageType) return undefined;
+  return {
+    getPublicUrl: filePath => publicUrl(filePath, "media"),
+    getType: () => storageType("media"),
+  };
 }
 
 /**
@@ -83,6 +107,18 @@ export function warnNotRemoved(
 export function warnUnlocated(url: string, mediaId: string): void {
   consoleLogger.warn(
     `[MediaService] Left the thumbnail of media ${mediaId} at ${storedPathForLog(url)}: its stored location could not be worked out from the record.`
+  );
+}
+
+/**
+ * An image size whose record names it by URL alone, and which is not shown to
+ * be a file of the storage configured now: named, by that URL, the one record
+ * of it left once the item is gone, for it to be removed where it is stored.
+ * Nothing was removed in its place.
+ */
+export function warnSizeNotHere(url: string, mediaId: string): void {
+  consoleLogger.warn(
+    `[MediaService] Left an image size of media ${mediaId} at ${storedPathForLog(url)}: its record names it by URL alone, and that URL is not where the media storage configured now serves a file it holds. Remove it from the storage that serves it.`
   );
 }
 
@@ -283,8 +319,12 @@ export async function removeStoredFiles(
   mediaId: string,
   kept: ReadonlySet<string> = new Set()
 ): Promise<boolean> {
-  const { paths, unlocated } = storedFilesOf(record);
+  const { paths, unlocated, notHere } = storedFilesOf(
+    record,
+    sizeLocatorOf(storage)
+  );
   for (const url of unlocated) warnUnlocated(url, mediaId);
+  for (const url of notHere) warnSizeNotHere(url, mediaId);
   const removed = await Promise.all(
     paths
       .filter(filePath => !kept.has(filePath))
