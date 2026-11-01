@@ -42,6 +42,12 @@ let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 let layoutRejects = false;
 
+// The header's New button reads collections and permissions of its own,
+// which this test does not set up; it is a marker here.
+vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
+  NewSplitButton: () => <div data-testid="dashboard-new" />,
+}));
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useAppName: () => "Acme Site",

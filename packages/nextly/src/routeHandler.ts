@@ -55,6 +55,10 @@ import {
 } from "./api/dashboard";
 import { getDashboardGallery } from "./api/dashboard-gallery";
 import {
+  getDashboardNewTypes,
+  postDashboardNewType,
+} from "./api/dashboard-new-types";
+import {
   deleteDashboardPin,
   getDashboardPins,
   postDashboardPin,
@@ -542,6 +546,10 @@ async function handleDashboardRequest(
       return postDashboardPin(req);
     case "deleteDashboardPin":
       return deleteDashboardPin(req);
+    case "getDashboardNewTypes":
+      return getDashboardNewTypes(req);
+    case "postDashboardNewType":
+      return postDashboardNewType(req);
     case "getDashboardSetup":
       return getDashboardSetup(req);
     case "putDashboardSetup":

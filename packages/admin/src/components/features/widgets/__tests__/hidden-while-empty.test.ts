@@ -27,15 +27,16 @@ function answer(
       {
         id: "core/needs-attention",
         widgetId: "core/needs-attention",
-        w: 8,
+        w: 12,
         h: 3,
         removed: false,
       },
+      // A live neighbour on the next row, as on the default dashboard.
       {
-        id: "core/quick-create",
-        widgetId: "core/quick-create",
-        w: 4,
-        h: 3,
+        id: "core/continue",
+        widgetId: "core/continue",
+        w: 6,
+        h: 5,
         removed: false,
       },
     ],

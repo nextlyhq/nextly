@@ -15,6 +15,7 @@ import { ownSeat, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -128,13 +129,9 @@ async function expectTierAt(
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
+// Asserted: a reset that fails names itself here, not as a later spec's stray card.
 test.afterEach(async ({ page }) => {
-  const read = await page.request.get("/admin/api/dashboard/layout");
-  const body = (await read.json()) as Layout;
-  if (body.version === 0) return;
-  await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
+  await resetToDefault(page);
 });
 
 const CASES: Array<[number, number, string]> = [

@@ -54,14 +54,57 @@ const DECLARING_PARTS: Readonly<
 /**
  * Every name `node`, a top-level statement other than an import, declares:
  * `const a = 1`, `const { b, c: [d] } = x`, `export function e() {}`,
- * `type F = 1`.
+ * `type F = 1`, and a `var` its control flow holds (`hoistedVarNames`).
  */
 export function declaredNames(node: unknown): string[] {
+  return [...bindingNames(node), ...hoistedVarNames(node)];
+}
+
+/** The names a declaration or a binding pattern binds. */
+function bindingNames(node: unknown): string[] {
   if (!isNode(node)) return [];
   if (node.type === "Identifier") {
     return typeof node.name === "string" ? [node.name] : [];
   }
-  return (DECLARING_PARTS[node.type]?.(node) ?? []).flatMap(declaredNames);
+  return (DECLARING_PARTS[node.type]?.(node) ?? []).flatMap(bindingNames);
+}
+
+/**
+ * Where each statement that holds others keeps them, as far as a `var` reaches: through blocks,
+ * branches, loops, `try` and `switch`, and never into a function, whose `var` is its own.
+ */
+const HOLDING_PARTS: Readonly<Record<string, (node: SyntaxNode) => unknown[]>> =
+  {
+    BlockStatement: node => listed(node.body),
+    IfStatement: node => [node.consequent, node.alternate],
+    ForStatement: node => [node.init, node.body],
+    ForInStatement: node => [node.left, node.body],
+    ForOfStatement: node => [node.left, node.body],
+    WhileStatement: node => [node.body],
+    DoWhileStatement: node => [node.body],
+    LabeledStatement: node => [node.body],
+    TryStatement: node => [node.block, node.handler, node.finalizer],
+    CatchClause: node => [node.body],
+    SwitchStatement: node => listed(node.cases),
+    SwitchCase: node => listed(node.consequent),
+  };
+
+/**
+ * The names a `var` inside `node`'s control flow declares. A `var` is hoisted to the function or
+ * module around it, so one in a top-level `if`, loop, block, `try` or `switch` is the module's
+ * own, and an import of its name would collide with it; `let` and `const` there stay in their
+ * block, and a function's body is its own scope.
+ */
+function hoistedVarNames(node: unknown): string[] {
+  if (!isNode(node)) return [];
+  const held = HOLDING_PARTS[node.type]?.(node) ?? [];
+  return held.flatMap(each =>
+    isNode(each) && each.type === "VariableDeclaration"
+      ? each.kind === "var"
+        ? bindingNames(each)
+        : []
+      : hoistedVarNames(each)
+  );
 }
 
 /** A name as an import or export specifier writes it: `a`, or `"a"`. */

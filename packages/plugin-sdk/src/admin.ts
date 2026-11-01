@@ -374,8 +374,12 @@ export type {
  *   (rows with one action each), `Widget.Table` (rows across named columns, a
  *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
  *   that take plain data, drawn in the shared chart colours, with an optional
- *   `unit` for their tooltips), and `Widget.FooterLink` (one link drawn in the
- *   card's own footer, where core's cards draw "View all").
+ *   `unit` for their tooltips), `Widget.FooterLink` (one link drawn in the
+ *   card's own footer, where core's cards draw "View all") and
+ *   `Widget.useTitleCount` (a hook: the count it is given is drawn beside the
+ *   card's title and read with it, as the Needs your attention card shows its
+ *   items: a number, a short phrase such as "2 of 5 done", or with `true`
+ *   after it a floor drawn "N+"; `undefined` shows none).
  *
  * The number and change formatters and the chart colour accessor are exported
  * from this package's root, not here: every module of the admin is a client
@@ -386,6 +390,28 @@ export type {
  * outside the card it sits in.
  */
 export { FrameState, Widget } from "@nextlyhq/admin";
+/**
+ * @experimental A row's time as core's list cards word it, and the clock they
+ * move it on with, for a widget's own list:
+ *
+ * - `formatWidgetTime(iso, now)`: "just now", "5m ago", "3h ago", "2d ago",
+ *   and from a week on the date, in the timezone and date format the admin is
+ *   set to, with its year.
+ * - `useWidgetClock()`: the current time, moved on once a minute while the
+ *   card is mounted and stopped when it unmounts, the `now` to word times
+ *   from, so "just now" does not stay "just now".
+ *
+ * Core's own, so a plugin's times read and move as the cards beside it do.
+ */
+export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin";
+/**
+ * @experimental `useRefreshDashboard()`: a function that asks every card on
+ * the dashboard, and the header's summary, again, for a widget whose own
+ * write changes what they answer (a card marking a row done, say). Each card
+ * keeps what it shows until its answer arrives. Core's own reads, so a plugin
+ * names no query of the admin's.
+ */
+export { useRefreshDashboard } from "@nextlyhq/admin";
 export type {
   CardEmptyContent,
   CardState,

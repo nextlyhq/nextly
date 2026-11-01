@@ -60,6 +60,22 @@ describe("the summary line", () => {
         failed: 0,
       })
     ).toEqual(["1+ things need you"]);
+    // A widget's part too, when its count is a floor.
+    expect(
+      texts({
+        parts: [
+          {
+            kind: "widget",
+            widget: "acme/forms",
+            card: "c1",
+            label: "new submissions",
+            count: 1000,
+            atLeast: true,
+          },
+        ],
+        failed: 0,
+      })
+    ).toEqual(["1000+ new submissions"]);
   });
 
   it("puts attention, then releases, then each widget's part, whatever order they came in", () => {

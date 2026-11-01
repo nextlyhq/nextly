@@ -33,7 +33,7 @@ import { useId, useRef } from "react";
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
-import { AxisSection, sizeAxes } from "./CardActionsMenu";
+import { AxisSection, REMOVE_ITEM_CLASS, sizeAxes } from "./CardActionsMenu";
 import { settingsIntent } from "./settings-sheet-code";
 
 export interface CardMenuProps {
@@ -119,9 +119,8 @@ function RemoveItem({
           }
           onRemove();
         }}
-        // The destructive token, highlighted or not: the one item here that takes something away.
         className={cn(
-          "text-destructive data-[highlighted]:text-destructive",
+          REMOVE_ITEM_CLASS,
           refused && "cursor-not-allowed opacity-50"
         )}
         data-testid="card-menu-remove"

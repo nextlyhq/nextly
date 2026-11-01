@@ -760,6 +760,14 @@ export {
   type WidgetTableProps,
 } from "./components/features/widgets/kit";
 export type { WidgetRenderSize } from "nextly/widget-result";
+// A row's time as core's list cards word it ("5m ago", then the date in the
+// admin's timezone and date format), and the clock those cards re-render on,
+// so a widget's own list words and moves its times as theirs do.
+export { formatRelativeTime as formatWidgetTime } from "./lib/dashboard";
+export { useNowTick as useWidgetClock } from "./hooks/useNowTick";
+// Asks the dashboard's cards and header summary again, for a widget whose own
+// write changes what they answer.
+export { useRefreshDashboard } from "./hooks/queries/useRefreshDashboard";
 
 // Constants
 export {

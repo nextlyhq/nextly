@@ -2,12 +2,9 @@
  * Every core widget is declared with `defineWidget`, as a plugin's widget is,
  * and reaches the registry through the same call.
  *
- * 🔴 One of core's widgets is still written as a definition, Create, until it
- * is retired, and it is NAMED below rather than counted: the list can only
- * shrink. A core widget added as a definition fails here, and so does one on
- * the list once it is declared and not taken off it, so the list always says
- * exactly which are left. When it is empty, every entry of core's list is a
- * declaration.
+ * 🔴 None of core's widgets is written as a definition any more: the list
+ * below is empty, and it can only stay so. A core widget added as a definition
+ * fails here, so every entry of core's list is a declaration.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,7 +20,7 @@ import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import { getWidget, widgetSource } from "../registry";
 
 /** Core's widgets still written as definitions, each to be declared. */
-const STILL_DEFINITIONS: readonly string[] = [CORE_WIDGET_ID.quickCreate];
+const STILL_DEFINITIONS: readonly string[] = [];
 
 beforeEach(() => {
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({

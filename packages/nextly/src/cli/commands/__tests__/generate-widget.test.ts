@@ -270,6 +270,42 @@ describe("the registration edit", () => {
     );
   });
 
+  it("counts a var hoisted out of top-level control flow as declared", () => {
+    // A `var` belongs to the module wherever its statement sits outside a function.
+    for (const text of [
+      "if (ready) { var openOrders = 1; }\ndefineConfig({})",
+      "if (ready) {} else { var openOrders = 1; }\ndefineConfig({})",
+      "for (var openOrders of list) {}\ndefineConfig({})",
+      "for (var openOrders = 0; openOrders < 1; openOrders++) {}\ndefineConfig({})",
+      "for (const each of list) { var openOrders = each; }\ndefineConfig({})",
+      "{ var openOrders = 1; }\ndefineConfig({})",
+      "try { var openOrders = 1; } catch { var other = 2; }\ndefineConfig({})",
+      "try {} catch (error) { var openOrders = error; }\ndefineConfig({})",
+      "try {} finally { var openOrders = 1; }\ndefineConfig({})",
+      "switch (kind) { case 1: var openOrders = 1; }\ndefineConfig({})",
+      "while (more) { var openOrders = 1; }\ndefineConfig({})",
+      "outer: { var openOrders = 1; }\ndefineConfig({})",
+    ]) {
+      expect(edit(text), text).toEqual({
+        kind: "manual",
+        instructions: expect.stringContaining(
+          "openOrders is already declared, so it was left as it was."
+        ),
+      });
+    }
+  });
+
+  it("leaves a var inside a nested function, or a block's let, to its own scope", () => {
+    for (const text of [
+      "function load() { if (ready) { var openOrders = 1; } }\ndefineConfig({})",
+      "if (ready) { const load = () => { var openOrders = 1; }; }\ndefineConfig({})",
+      "{ let openOrders = 1; }\ndefineConfig({})",
+      "if (ready) { const openOrders = 1; }\ndefineConfig({})",
+    ]) {
+      expect(after(text), text).toContain(IMPORT);
+    }
+  });
+
   it("reuses only the named import the generated declaration has, never a default or an alias of it", () => {
     for (const binding of [
       "openOrders",

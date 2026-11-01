@@ -187,13 +187,12 @@ describe("core widget definitions", () => {
     expect(content.visibleWhen).toBe("content:present");
   });
 
-  it("offers Create and Upcoming releases each on what it needs", () => {
+  it("offers Upcoming releases on what it needs", () => {
     const shownWhen = (id: string) => {
       const declared = card(id);
       expect(declared.lifecycle, id).toBe("conditional");
       return declared.visibleWhen;
     };
-    expect(shownWhen("core/quick-create")).toBe("create:available");
     expect(shownWhen("core/upcoming-releases")).toBe("releases:present");
     // Its gate stays: the condition is about existence, the gate about access.
     expect(card("core/upcoming-releases").requiredPermission).toBeDefined();
@@ -241,7 +240,6 @@ describe("core widget definitions", () => {
       .map(w => w.id);
     expect(conditional).toEqual([
       "core/content-table",
-      "core/quick-create",
       "core/continue",
       "core/upcoming-releases",
       "core/team-activity",
@@ -448,7 +446,6 @@ describe("the default dashboard", () => {
   const BOUNDS = [
     // Needs attention three rows tall, which holds two items and folds the rest.
     ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
-    ["core/quick-create", [4, 3], [4, 2], [12, 4]],
     // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
     // default.
     ["core/continue", [6, 5], [4, 4], [12, 8]],
@@ -566,9 +563,9 @@ describe("the default dashboard", () => {
     }
   });
 
-  it("is all core registers: the default's cards, the add-only cards, and Create", () => {
+  it("is all core registers: the default's cards and the add-only cards", () => {
     // Nothing else is core's, so no news feed, upsell, quick draft, clock, profile or banner
-    // card exists to be offered. Create is the one card past those two sets.
+    // card exists to be offered. Creating an entry is the header's New button, not a card.
     const expected = [
       // On the default.
       "core/setup",
@@ -585,8 +582,6 @@ describe("the default dashboard", () => {
       "core/note",
       "core/team",
       "core/system-health",
-      // Create.
-      "core/quick-create",
     ].sort();
     expect([...CORE_WIDGET_IDS].sort()).toEqual(expected);
     // The ids the registry is handed: the definitions and the declarations together.
@@ -596,5 +591,19 @@ describe("the default dashboard", () => {
         ...CORE_DECLARATIONS.map(widget => widget.id),
       ].sort()
     ).toEqual(expected);
+  });
+});
+
+describe("the Create card", () => {
+  // Creating an entry is the dashboard header's New button and the command
+  // palette's, so core registers no card for it, under its old id or any.
+  it("is not one of core's widgets, nor on the default dashboard", () => {
+    expect(CORE_WIDGET_IDS).not.toContain("core/quick-create");
+    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain(
+      "core/quick-create"
+    );
+    expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
+      "core/quick-create"
+    );
   });
 });

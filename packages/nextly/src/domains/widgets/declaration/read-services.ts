@@ -111,6 +111,8 @@ interface ReadOptions {
   total?: unknown;
   /** Whether a list answers its links as stored ids. */
   depth?: unknown;
+  /** What a list hands the collection's hooks as their context. */
+  context?: unknown;
   signal?: unknown;
 }
 
@@ -269,6 +271,23 @@ function depthOf(options: unknown): 0 | undefined {
   if (value === undefined || value === 0) return value;
   throw NextlyError.invalidInput({
     message: 'A widget\'s data read names a "depth" other than 0.',
+  });
+}
+
+/**
+ * The context a list hands the collection's hooks: a plain object, copied, or
+ * none. Refused, before anything is checked, when it is anything else.
+ */
+function hookContextOf(
+  options: unknown
+): Readonly<Record<string, unknown>> | undefined {
+  const value = optionOf(options, "context");
+  if (value === undefined) return undefined;
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return { ...(value as Record<string, unknown>) };
+  }
+  throw NextlyError.invalidInput({
+    message: 'A widget\'s data read names a "context" that is not an object.',
   });
 }
 
@@ -501,7 +520,8 @@ function readServices(binding: ReadServiceBinding): WidgetReadServices {
    */
   async function run(
     { signal, slug, ...query }: CheckedRead,
-    depth?: 0
+    depth?: 0,
+    hookContext?: Readonly<Record<string, unknown>>
   ): Promise<WidgetResult> {
     // After the check, never instead of it: see `answersNothing`.
     if (answersNothing?.(slug) === true) {
@@ -515,6 +535,7 @@ function readServices(binding: ReadServiceBinding): WidgetReadServices {
         // A list's depth, handed to the executor as core's own `find` takes
         // it, and only when the call names one.
         ...(depth === 0 ? { depth } : {}),
+        ...(hookContext === undefined ? {} : { hookContext }),
       })
     );
   }
@@ -557,6 +578,7 @@ function readServices(binding: ReadServiceBinding): WidgetReadServices {
     async find(collection, options) {
       const counted = onlyTrue(options, "total");
       const depth = depthOf(options);
+      const hookContext = hookContextOf(options);
       // 🔴 A limit of 0 asks for no rows: what `rowsThatFit` answers for a
       // card whose body holds none, and what that card's frame draws. A query
       // runs at one row at the least, so the read is asked at one, checked as
@@ -574,7 +596,7 @@ function readServices(binding: ReadServiceBinding): WidgetReadServices {
         options
       );
       if (none && !counted) return { items: [] };
-      const answer = await run(checked, depth);
+      const answer = await run(checked, depth, hookContext);
       // As the browser would receive them, so the function may answer them
       // as they are and the card's transport check passes.
       const sent = sentAsJson(

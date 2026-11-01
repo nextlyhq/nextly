@@ -24,6 +24,7 @@ import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { cardHeightPx, sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -66,16 +67,6 @@ async function readLayout(page: Page): Promise<Layout> {
   const read = await page.request.get("/admin/api/dashboard/layout");
   expect(read.ok()).toBe(true);
   return (await read.json()) as Layout;
-}
-
-/** Back to the default dashboard, through the guarded reset a reader uses. */
-async function resetToDefault(page: Page): Promise<void> {
-  const body = await readLayout(page);
-  if (body.version === 0) return;
-  const reset = await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-  expect(reset.status()).toBe(200);
 }
 
 /** Save `placements` as the reader's arrangement; the response, whatever it is. */

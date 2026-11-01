@@ -59,7 +59,6 @@ import { CORE_WIDGET_ID } from "./ids";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
-import { quickCreateWidget } from "./quick-create";
 import { recentEntriesWidget } from "./recent-entries";
 import { setupWidget } from "./setup";
 import { systemHealthWidget } from "./system-health";
@@ -114,9 +113,7 @@ export const CORE_CONDITIONS: Readonly<Record<string, WidgetCondition>> = {
 };
 
 /** Core's widgets still written as definitions: every one not declared. */
-const CORE_WIDGET_LITERALS = [
-  quickCreateWidget,
-] as const satisfies readonly WidgetDefinition[];
+const CORE_WIDGET_LITERALS = [] as const satisfies readonly WidgetDefinition[];
 
 /**
  * Core's widgets still written as definitions, as every reader of a

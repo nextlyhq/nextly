@@ -163,14 +163,14 @@ describe("reading placements", () => {
     ]);
   });
 
-  it("keeps a card's own title trimmed, and drops one with nothing left", () => {
+  it("keeps a card's own title trimmed, and one with nothing left as the reader's clearing", () => {
     const [titled, cleared] = readPlacements([
       placement({ title: "  Drafts to finish  " }),
       placement({ id: "p2", title: "   " }),
     ]);
     expect(titled?.title).toBe("Drafts to finish");
-    // Absent, not "": a cleared title is the automatic one again.
-    expect(cleared).not.toHaveProperty("title");
+    // "", not absent: the reader cleared it, which a default's own title must not undo.
+    expect(cleared?.title).toBe("");
   });
 
   it("refuses a title longer than a card's header holds, counted after trimming and in characters", () => {
@@ -272,6 +272,21 @@ describe("reading a stored row", () => {
       "acme/x",
       "collections/x",
     ]);
+  });
+
+  it("drops a core card retired by id, and keeps its live neighbours", () => {
+    // The Create card's id is retired: creating an entry is the header's New
+    // button. A saved row still holding it reads without it.
+    const row = readRow(
+      JSON.stringify({
+        schemaVersion: LAYOUT_SCHEMA_VERSION,
+        placements: [
+          card("create", "core/quick-create"),
+          card("team", "core/team"),
+        ],
+      })
+    );
+    expect(row.placements.map(p => p.widgetId)).toEqual(["core/team"]);
   });
 
   it("lets a dropped card claim no placement id", () => {
@@ -487,6 +502,32 @@ describe("a row of an earlier format is no saved arrangement", () => {
       each => each.widgetId === "core/b"
     );
     expect(mine).toMatchObject({ title: "Drafts", config: { range: "7d" } });
+  });
+
+  it("keeps a reader's cleared title over a title the default gives the card", () => {
+    const titled = defaults.map(each =>
+      each.widgetId === "core/b" ? { ...each, title: "Site picks" } : each
+    );
+    const cleared = readStoredLayout(
+      serializeLayout([card("mine", "core/b", { title: "  " })], false)
+    );
+    // Cleared, and read again: the reader's empty title, which reads as automatic, not the site's.
+    expect(
+      dismissalsApplied(titled, cleared).find(
+        each => each.widgetId === "core/b"
+      )?.title
+    ).toBe("");
+    // A row from before, which never names a title, keeps following the default's.
+    const before = readStoredLayout(
+      serializeLayout(
+        [card("mine", "core/b", { config: { range: "7d" } })],
+        false
+      )
+    );
+    expect(
+      dismissalsApplied(titled, before).find(each => each.widgetId === "core/b")
+        ?.title
+    ).toBe("Site picks");
   });
 
   it("keeps each card's own choice where the default places one widget twice", () => {

@@ -1,9 +1,9 @@
 /**
- * In production without nextly's cache handlers, a cached public read is kept
- * at most a minute, and nextly says so once. With them, and outside
- * production, the read keeps its lifetime. Whether Next.js serves `"use cache"`
- * through nextly's handler is read from Next.js's own registry, as the
- * installed Next.js fills it.
+ * In production without nextly's cache handlers, a cached public read is
+ * refreshed within a minute of a visit, and nextly says so once. With them,
+ * and outside production, the read keeps its lifetime. Whether Next.js serves
+ * `"use cache"` through nextly's handler is read from Next.js's own registry,
+ * as the installed Next.js fills it.
  */
 import {
   initializeCacheHandlers,
@@ -51,12 +51,13 @@ afterEach(() => {
 });
 
 describe("a cached public read without nextly's cache handlers, in production", () => {
-  it("is kept at most a minute, whatever it asked for", () => {
+  it("is given a revalidate of at most half a minute, whatever it asked for", () => {
     expect(publicReadLifetime(false, false)).toBe(
       UNSHARED_READ_LIFETIME_SECONDS
     );
     expect(publicReadLifetime(300, false)).toBe(UNSHARED_READ_LIFETIME_SECONDS);
-    expect(publicReadLifetime(30, false)).toBe(30);
+    // A shorter one stays as it is.
+    expect(publicReadLifetime(10, false)).toBe(10);
     expect(publicReadLifetime(false, true)).toBe(
       UNSHARED_READ_LIFETIME_SECONDS
     );
@@ -71,6 +72,19 @@ describe("a cached public read without nextly's cache handlers, in production", 
     const message = String(warn.mock.calls[0][0].message);
     expect(message).toContain('require.resolve("nextly/cache-handler")');
     expect(message).toContain('require.resolve("nextly/cache-handlers")');
+    // That these are exactly the settings create-nextly-app writes is held by
+    // its own test, which reads this warning against the config it generates.
+  });
+
+  it("names both causes: no handler installed, or one of the app's own", () => {
+    noteCachedRead(false);
+    const message = String(warn.mock.calls[0][0].message);
+    expect(message).toMatch(
+      /^Nextly's cache handlers don't serve this process/
+    );
+    expect(message).toMatch(
+      /none is installed, or the app keeps a cache handler of its own/
+    );
   });
 
   it("is bounded where cachedFind gives it its lifetime", async () => {

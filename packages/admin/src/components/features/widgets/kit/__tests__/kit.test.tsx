@@ -15,6 +15,7 @@ import { OverTimeChart } from "../../charts/over-time-chart";
 import { CardFigure } from "../../frame/figure";
 import { CARD_FOOTER_LINK_CLASS } from "../../frame/footer-slot";
 import { CardTierContext, rowsDrawn } from "../../frame/tier";
+import { useCardTitleCount } from "../../frame/title-count";
 import { WidgetCard } from "../../WidgetCard";
 import { Widget } from "..";
 import { WidgetFooterLink } from "../footer-link";
@@ -69,7 +70,7 @@ const table = (
 );
 
 describe("the parts of Widget", () => {
-  it("is exactly the six parts, each the component core's own cards use", () => {
+  it("is exactly the seven parts, each the one core's own cards use", () => {
     expect(Object.keys(Widget).sort()).toEqual([
       "BarChart",
       "Figure",
@@ -77,12 +78,59 @@ describe("the parts of Widget", () => {
       "List",
       "SeriesChart",
       "Table",
+      "useTitleCount",
     ]);
     expect(Widget.Figure).toBe(CardFigure);
     expect(Widget.FooterLink).toBe(WidgetFooterLink);
+    expect(Widget.useTitleCount).toBe(useCardTitleCount);
     expect(Widget.BarChart).toBe(GroupsChart);
     expect(Widget.SeriesChart).toBe(OverTimeChart);
     expect(Object.isFrozen(Widget)).toBe(true);
+  });
+});
+
+describe("Widget.useTitleCount", () => {
+  /** A body reporting a count, as a widget's own component does. */
+  function Counted({ count, atLeast }: { count?: number; atLeast?: boolean }) {
+    Widget.useTitleCount(count, atLeast);
+    return <p>Rows</p>;
+  }
+
+  it("draws the count beside the title, read with it", () => {
+    render(
+      <WidgetCard title="Orders">
+        <Counted count={3} />
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-title-count")).toHaveTextContent(
+      "3"
+    );
+    expect(
+      screen.getByRole("region", { name: "Orders, 3 items" })
+    ).toBeInTheDocument();
+  });
+
+  it("draws a floor as N+, read as N or more", () => {
+    render(
+      <WidgetCard title="Orders">
+        <Counted count={1000} atLeast />
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-title-count")).toHaveTextContent(
+      "1000+"
+    );
+    expect(
+      screen.getByRole("region", { name: "Orders, 1000 or more items" })
+    ).toBeInTheDocument();
+  });
+
+  it("draws nothing for no count", () => {
+    render(
+      <WidgetCard title="Orders">
+        <Counted />
+      </WidgetCard>
+    );
+    expect(screen.queryByTestId("widget-card-title-count")).toBeNull();
   });
 });
 
