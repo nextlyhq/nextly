@@ -154,8 +154,17 @@ function alternate(current: string, next: string): string {
  * change's own sentence already said what happened (`acted` is set while it stands), so a batch
  * that came to rest whole would only replace it ("2 of 2 widgets updated" over "Note restored").
  * A failure is still said: it is news the change's sentence could not carry.
+ *
+ * `acted` belongs to ONE outcome: the batch's at the first render at rest after the change was
+ * said. A change that re-asks the batch is settling by then, so that render is where its load
+ * ends; a change that asks nothing, such as a drag, leaves the batch at rest, so it is the
+ * change's own render, whose outcome is the one already spoken. Consumed there whether or not
+ * the outcome is new, so a later outcome no change asked for, such as a card appearing, is said.
+ * Hence an effect after every render, not only those whose sentence changed: the change's own
+ * render changes nothing the sentence is made from.
  */
 function useSettledAnnouncement(
+  settling: boolean,
   next: string | null,
   failed: number,
   acted: RefObject<boolean>,
@@ -165,13 +174,14 @@ function useSettledAnnouncement(
   // rather than state because it must not itself cause a render.
   const spoken = useRef("");
   useEffect(() => {
-    if (!next || next === spoken.current) return;
-    spoken.current = next;
+    if (settling) return;
     const ownChange = acted.current;
     acted.current = false;
+    if (!next || next === spoken.current) return;
+    spoken.current = next;
     if (ownChange && failed === 0) return;
     setAnnouncement(next);
-  }, [next, failed, acted, setAnnouncement]);
+  });
 }
 
 export function useGridAnnouncer(
@@ -180,9 +190,11 @@ export function useGridAnnouncer(
   failed: number
 ): GridAnnouncer {
   const [announcement, setAnnouncement] = useState("");
-  // Set when a reader's own change is said, until the batch that change re-asks has settled.
+  // Set when a reader's own change is said, until the batch is next at rest: the outcome of the
+  // load that change started, or none (see `useSettledAnnouncement`).
   const acted = useRef(false);
   useSettledAnnouncement(
+    settling,
     settledAnnouncement(settling, counted, failed),
     failed,
     acted,
