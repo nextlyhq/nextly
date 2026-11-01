@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import type { Logger } from "../../../shared/types";
 import {
+  errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
   type StoredFileRemover,
@@ -212,18 +213,17 @@ export async function indexKeptAddresses(
   return indexed;
 }
 
-/**
- * Remove the files kept for a deleted item's address uses, except any
- * another item refers to, and the record of them.
- */
-export async function removeKeptFiles(
-  db: DrizzleAdapter,
+/** The statements removing kept files reads and deletes with. */
+type KeptFilesDb = Pick<DrizzleAdapter, "select" | "delete">;
+
+/** One deleted item's kept files and their record, as its record lists them. */
+async function removeRecordedFiles(
+  db: KeptFilesDb,
   storage: StoredFileRemover,
   logger: Logger,
-  mediaId: string
+  mediaId: string,
+  record: ReplacedRecord
 ): Promise<void> {
-  const record = await readReplacedRecord(db, mediaId);
-  if (!record) return;
   const kept = await filesKeptByOthers(
     new StoredFileSearchReader(db, logger).search,
     record.files.map(file => file.path),
@@ -247,4 +247,50 @@ export async function removeKeptFiles(
   await db.delete("nextly_meta", {
     and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
   });
+}
+
+/**
+ * Remove the files kept for deleted items' address uses, except any another
+ * item refers to, and the record of them: the one step every delete runs
+ * once its rows are gone (one item, a bulk delete, the end of an Undo
+ * window, a folder deleted with its contents). The records are read in one
+ * query, so a caller hands it a bounded run of ids. Never fails the delete
+ * that has already committed: what cannot be removed is named in the log.
+ */
+export async function removeKeptFiles(
+  db: KeptFilesDb,
+  storage: StoredFileRemover,
+  logger: Logger,
+  mediaIds: readonly string[]
+): Promise<void> {
+  if (mediaIds.length === 0) return;
+  let rows: Array<Record<string, unknown>>;
+  try {
+    rows = await db.select<Record<string, unknown>>("nextly_meta", {
+      columns: ["key", "value"],
+      where: {
+        and: [{ column: "key", op: "IN", value: mediaIds.map(replacedKey) }],
+      },
+    });
+  } catch (error) {
+    logger.warn("[MediaService] Kept files not removed", {
+      mediaIds,
+      error: errorForLog(error),
+    });
+    return;
+  }
+  for (const row of rows) {
+    const key = typeof row.key === "string" ? row.key : "";
+    const record = replacedRecordOf(row.value);
+    if (!key.startsWith(REPLACED_KEY_PREFIX) || record === null) continue;
+    const mediaId = key.slice(REPLACED_KEY_PREFIX.length);
+    try {
+      await removeRecordedFiles(db, storage, logger, mediaId, record);
+    } catch (error) {
+      logger.warn("[MediaService] Kept files not removed", {
+        mediaId,
+        error: errorForLog(error),
+      });
+    }
+  }
 }

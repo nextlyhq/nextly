@@ -122,7 +122,7 @@ async function keyWith(t: TestNextly, grants: string[]): Promise<string> {
 /** One call to the admin's media routes as the holder of `key`. */
 async function api(
   key: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string[],
   options: { query?: string; body?: unknown } = {}
 ): Promise<{ status: number; json: Doc }> {
@@ -698,6 +698,58 @@ describe.each(getConfiguredTestDialects())(
       expect(marks).toHaveLength(1);
       expect(await freshFinaliser(0).finalizeDue()).toContain(file);
       expect(await row(file)).toBeUndefined();
+    });
+
+    // An item inside its Undo window is hidden from the folder's listing but
+    // is still in it: the folder is not empty, and deleting it must neither
+    // move the item to the library root (its folder going) nor delete it
+    // before its deadline (the folder's contents going).
+    it("refuses to delete a folder holding an item inside its Undo window, with or without its contents", async () => {
+      const own = randomUUID();
+      await t.adapter.insert("media_folders", {
+        id: own,
+        name: "Waiting",
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const file = await unusedFile();
+      await t.adapter.update(
+        "media",
+        { folderId: own },
+        { and: [{ column: "id", op: "=", value: file }] }
+      );
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+      // As the folder's listing shows it: empty.
+      const listed = await api(editor, "GET", ["folders", own, "contents"]);
+      expect(
+        ((listed.json.items ?? listed.json.files) as Doc[]).map(i => i.id)
+      ).toEqual([]);
+
+      const alone = await api(editor, "DELETE", ["folders", own]);
+      const withContents = await api(editor, "DELETE", ["folders", own], {
+        query: "?deleteContents=true",
+      });
+
+      expect(alone.status).toBe(409);
+      expect(withContents.status).toBe(409);
+      const folders = await t.adapter.select<Doc>("media_folders", {
+        where: { and: [{ column: "id", op: "=", value: own }] },
+      });
+      expect(folders).toHaveLength(1);
+      expect(await row(file)).toMatchObject({ folderId: own });
+      // Undo brings it back where it was.
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+      expect(undone.json).toMatchObject({ restored: [file] });
+      expect(await row(file)).toMatchObject({ folderId: own });
+
+      // POSITIVE CONTROL: once its item has gone, the folder deletes.
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+      await freshFinaliser().finalizeMarked([file]);
+      expect(await row(file)).toBeUndefined();
+      expect((await api(editor, "DELETE", ["folders", own])).status).toBe(200);
     });
 
     it("still undoes inside the window", async () => {

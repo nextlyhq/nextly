@@ -510,6 +510,43 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    // A folder deleted with its contents removes each item the way a delete
+    // of that item does, the files a Replace kept for it included.
+    it("removes the kept file and its record when the item's folder is deleted with its contents", async () => {
+      const deleter = await keyWith(t, ["read-media", "delete-media"]);
+      const doomed = randomUUID();
+      await t.adapter.insert("media_folders", {
+        id: doomed,
+        name: "Doomed",
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const item = await replacedWithKeptFile();
+      await t.adapter.update(
+        "media",
+        { folderId: doomed },
+        { and: [{ column: "id", op: "=", value: item.id }] }
+      );
+
+      const path = ["folders", doomed];
+      const res = await createMediaHandlers({ requireAuth: true }).DELETE(
+        new Request(
+          `http://localhost/admin/api/media/${path.join("/")}?deleteContents=true`,
+          {
+            method: "DELETE",
+            headers: { authorization: `Bearer ${deleter}` },
+          }
+        ),
+        { params: Promise.resolve({ path }) }
+      );
+
+      expect(res.status).toBe(200);
+      expect(await row(item.id)).toBeUndefined();
+      expect(await getMediaStorage().exists(item.oldPath, "media")).toBe(false);
+      expect(await readReplacedRecord(t.adapter, item.id)).toBeNull();
+    });
+
     /** Replace `id`'s file, and answer whether its old file is still served. */
     async function oldFileServedAfterReplace(id: string): Promise<boolean> {
       const oldPath = String((await row(id))!.filename);

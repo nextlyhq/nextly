@@ -936,7 +936,7 @@ export class MediaService extends BaseService {
       const { removeKeptFiles } = await import(
         "../domains/media/usage/address-uses"
       );
-      await removeKeptFiles(this.adapter, this.storage, this.logger, mediaId);
+      await removeKeptFiles(this.adapter, this.storage, this.logger, [mediaId]);
     } catch (error) {
       this.logger.warn("[MediaService] Kept files not removed", {
         mediaId,
