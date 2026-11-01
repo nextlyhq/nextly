@@ -288,7 +288,7 @@ export interface MediaCountGroup {
  * The counts from the counting query's groups. A dialect returns a sum as a
  * number or as a string (MySQL's DECIMAL, PostgreSQL's BIGINT), so each is
  * read as a number. `usage` says whether the usage table is there and whether
- * its record is built (`mediaUsageRecorded`); a library with no items has
+ * its record is built (`readWithinOneBuild`); a library with no items has
  * nothing to count and nothing to be unused, so its record is complete.
  */
 export function mediaLibraryCountsOf(

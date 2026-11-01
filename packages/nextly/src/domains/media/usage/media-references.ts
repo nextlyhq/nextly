@@ -11,7 +11,9 @@
  *   - a rich-text value holds the item's address in an image, video or
  *     gallery node's `src`, never its id;
  *   - a block document (the value of a `blocks` field) lists the items it uses
- *     in `assets.mediaIds`, written with it; one that has no list is walked;
+ *     by id in `assets.mediaIds`, written with it, and its nodes are read for
+ *     the addresses they hold under `src` or `url`; one that has no list is
+ *     walked for ids too;
  *     any other JSON value is read for the addresses it holds under `src` or
  *     `url`, as a Page Builder font face holds its file;
  *   - a group, a repeater or a field group holds any of these inside it.
@@ -200,9 +202,12 @@ function blockStringReference(
 
 /**
  * The items a block document uses: its `assets.mediaIds` when it has the
- * list, which is derived on write for exactly this; otherwise every id-shaped
- * string and every `src` or `url` address in its nodes. A node's own `id` is
- * a node's, never an item's, and is passed over.
+ * list, which is derived on write for exactly this, and every `src` or `url`
+ * address in its nodes, which the list does not account for: a node naming a
+ * file by its address goes on showing that file after a Replace, so the use
+ * is recorded as one by address. A document with no list is walked for every
+ * id-shaped string as well. A node's own `id` is a node's, never an item's,
+ * and is passed over.
  */
 function blockDocumentReferences(
   document: Record<string, unknown>,
@@ -216,6 +221,7 @@ function blockDocumentReferences(
         into.push({ fieldPath, mediaId: id });
       }
     }
+    jsonAddressReferences(document.nodes, fieldPath, into);
     return;
   }
   const walk = (value: unknown, key: string | null, inNode: boolean): void => {

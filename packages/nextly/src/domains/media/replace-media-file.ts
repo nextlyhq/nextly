@@ -6,7 +6,9 @@
  * event: the same id, so every document using the item shows the new file at
  * once, and the same name (its extension following the new file), alt text,
  * caption, folder and usage. The focus point is cleared, since it marked a
- * spot on the old picture. Once that has committed, the old files are
+ * spot on the old picture. The same transaction records the old files as
+ * kept for the item, so they are never left unknown whatever follows. Once
+ * that has committed, the old files are taken out of that record and
  * removed, except any another item still refers to, and except while
  * anything names the item by its address, when they are kept for it: a
  * document (`usage/address-uses`), or an avatar or a logo
@@ -41,11 +43,15 @@ import {
 import { revalidateMedia } from "./revalidate-media";
 import { StoredFileSearchReader } from "./stored-file-search";
 import { storedFilesOf } from "./stored-files";
-import { recordKeptFiles } from "./usage/address-uses";
+import {
+  forgetKeptFiles,
+  recordKeptFiles,
+  type ReplacedRecord,
+} from "./usage/address-uses";
 import {
   listIdentifiedMediaUsage,
   mediaUsagePresent,
-  mediaUsageRecorded,
+  readWithinOneBuild,
 } from "./usage/media-usage-store";
 
 /** The new file, as the upload checks have passed it. */
@@ -213,8 +219,10 @@ async function removeNewFiles(
  * document names the item by an address (a usage row with one, as the
  * reference the content made says), or any avatar or logo names it, and,
  * until the usage record has been built, always, since a document the record
- * does not cover yet may name it. Kept, too, when this cannot be asked: a
- * file kept is never a page broken.
+ * does not cover yet may name it. The rows and whether their record was built
+ * are one read (`readWithinOneBuild`), so a rebuild clearing the rows while
+ * the record is read never passes for a complete record that lists no use.
+ * Kept, too, when this cannot be asked: a file kept is never a page broken.
  */
 async function keepsOldFiles(
   deps: ReplaceMediaFileDeps,
@@ -222,21 +230,69 @@ async function keepsOldFiles(
   previous: Media
 ): Promise<boolean> {
   try {
-    const present = await mediaUsagePresent(deps.adapter, deps.logger);
-    const recorded = present && (await mediaUsageRecorded(deps.adapter));
-    const byAddress = present
-      ? (await listIdentifiedMediaUsage(deps.adapter, mediaId)).some(
-          row => row.address !== null
-        )
-      : false;
+    if (!(await mediaUsagePresent(deps.adapter, deps.logger))) return true;
+    const { value: rows, recorded } = await readWithinOneBuild(
+      deps.adapter,
+      () => listIdentifiedMediaUsage(deps.adapter, mediaId)
+    );
+    if (!recorded || rows.some(row => row.address !== null)) return true;
     const held = previous.url ? await deps.addressHolders(previous.url) : 0;
-    return !recorded || byAddress || held > 0;
+    return held > 0;
   } catch (error) {
     deps.logger.warn("[MediaService] Replaced file kept", {
       mediaId,
       error: errorForLog(error),
     });
     return true;
+  }
+}
+
+/** The files `current` had that the replacement does not, by address. */
+function oldFilesOf(
+  current: Media,
+  replacement: StoredReplacement
+): ReplacedRecord["files"] {
+  return storedFilesOf(current)
+    .paths.filter(path => !replacement.paths.includes(path))
+    .map(path => ({ path, url: current.url }));
+}
+
+/**
+ * The old files, once the item points at its new ones: kept while anything
+ * names the item by its address (rich text, an email template's image, an
+ * avatar, a logo), which goes on naming the old file, or while the usage
+ * record cannot yet say; otherwise taken out of the record and removed,
+ * except any another item still refers to. The Replace has committed, so
+ * nothing here fails it: a step that cannot finish leaves the files kept and
+ * recorded as the item's, which its delete removes, and is logged.
+ */
+async function settleOldFiles(
+  deps: ReplaceMediaFileDeps,
+  mediaId: string,
+  previous: Media,
+  replacement: StoredReplacement
+): Promise<void> {
+  const files = oldFilesOf(previous, replacement);
+  try {
+    if (await keepsOldFiles(deps, mediaId, previous)) return;
+    const kept = await filesKeptByOthers(
+      new StoredFileSearchReader(deps.adapter, deps.logger).search,
+      files.map(file => file.path),
+      [mediaId]
+    );
+    if (!kept) return;
+    await forgetKeptFiles(deps.adapter, mediaId, files);
+    await removeStoredFiles(
+      deps.storage,
+      previous,
+      mediaId,
+      new Set([...kept, ...replacement.paths])
+    );
+  } catch (error) {
+    deps.logger.warn("[MediaService] Replaced file kept", {
+      mediaId,
+      error: errorForLog(error),
+    });
   }
 }
 
@@ -274,6 +330,11 @@ export async function replaceMediaFile(
         fields: [],
         actor: actorForWrite(actor, null),
       });
+      // The old files are recorded as kept with the switch itself, so they
+      // are known as the item's (and go when it does) whatever happens after
+      // this commits; they are taken back out once nothing is found to name
+      // them.
+      await recordKeptFiles(tx, mediaId, oldFilesOf(current, replacement));
       return { previous: current, next };
     });
   } catch (error) {
@@ -286,36 +347,6 @@ export async function replaceMediaFile(
   }
 
   await revalidateMedia([mediaId], deps.logger);
-
-  // The old files, now that nothing in this item refers to them: kept while
-  // anything names the item by its address (rich text, an email template's
-  // image, an avatar, a logo), which goes on naming the old file, or while
-  // the usage record cannot yet say; removed, except any another item still
-  // refers to, when nothing does.
-  const { previous, next } = replaced;
-  const oldPaths = storedFilesOf(previous).paths.filter(
-    path => !replacement.paths.includes(path)
-  );
-  if (await keepsOldFiles(deps, mediaId, previous)) {
-    await recordKeptFiles(
-      deps.adapter,
-      mediaId,
-      oldPaths.map(path => ({ path, url: previous.url }))
-    );
-    return next;
-  }
-  const kept = await filesKeptByOthers(
-    new StoredFileSearchReader(deps.adapter, deps.logger).search,
-    oldPaths,
-    [mediaId]
-  );
-  if (kept) {
-    await removeStoredFiles(
-      deps.storage,
-      previous,
-      mediaId,
-      new Set([...kept, ...replacement.paths])
-    );
-  }
-  return next;
+  await settleOldFiles(deps, mediaId, replaced.previous, replacement);
+  return replaced.next;
 }

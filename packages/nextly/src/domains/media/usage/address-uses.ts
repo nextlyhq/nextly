@@ -95,33 +95,70 @@ export async function keptAddresses(
   return new Set(record ? keptAddressesOf(record.files) : []);
 }
 
-/** The statements recording kept files runs, on its own transaction. */
-type KeptFilesDb = Pick<DrizzleAdapter, "transaction">;
+/** The statements a kept-file record is written with: a transaction's. */
+type KeptFilesTx = Pick<DrizzleAdapter, "select" | "delete" | "insert">;
+
+/** Write an item's replaced-file record as `record`, or remove it when empty. */
+async function writeReplacedRecord(
+  tx: KeptFilesTx,
+  mediaId: string,
+  record: ReplacedRecord
+): Promise<void> {
+  await tx.delete("nextly_meta", {
+    and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
+  });
+  if (record.files.length === 0) return;
+  await tx.insert("nextly_meta", {
+    key: replacedKey(mediaId),
+    value: JSON.stringify(record),
+    updated_at: new Date(),
+  });
+}
 
 /**
  * Record that `files` are kept for the item's uses by address, added to what
  * an earlier Replace of the same item kept, and each file's address as one
- * the item is still known by, all on one transaction.
+ * the item is still known by, on `tx`: the Replace's own transaction, so the
+ * item never points at its new file without its old files recorded as its.
  */
 export async function recordKeptFiles(
-  db: KeptFilesDb,
+  tx: KeptFilesTx,
   mediaId: string,
   files: ReplacedRecord["files"]
 ): Promise<void> {
+  if (files.length === 0) return;
+  const earlier = await readReplacedRecord(tx, mediaId);
+  await writeReplacedRecord(tx, mediaId, {
+    files: [...(earlier?.files ?? []), ...files],
+  });
+  await writeKeptAddresses(tx, mediaId, keptAddressesOf(files));
+}
+
+/**
+ * Take `files` back out of the item's record, once a Replace has found
+ * nothing names them, with each address no file left in the record keeps,
+ * all on one transaction. Before their files are removed, so a failure here
+ * leaves the files and the record agreeing that they are kept.
+ */
+export async function forgetKeptFiles(
+  db: Pick<DrizzleAdapter, "transaction">,
+  mediaId: string,
+  files: ReplacedRecord["files"]
+): Promise<void> {
+  if (files.length === 0) return;
+  const same = (a: ReplacedRecord["files"][number]) =>
+    files.some(file => file.path === a.path && file.url === a.url);
   await db.transaction(async tx => {
     const earlier = await readReplacedRecord(tx, mediaId);
-    const record: ReplacedRecord = {
-      files: [...(earlier?.files ?? []), ...files],
-    };
-    await tx.delete("nextly_meta", {
-      and: [{ column: "key", op: "=", value: replacedKey(mediaId) }],
-    });
-    await tx.insert("nextly_meta", {
-      key: replacedKey(mediaId),
-      value: JSON.stringify(record),
-      updated_at: new Date(),
-    });
-    await writeKeptAddresses(tx, mediaId, keptAddressesOf(files));
+    const left = (earlier?.files ?? []).filter(file => !same(file));
+    await writeReplacedRecord(tx, mediaId, { files: left });
+    const stillKept = new Set(keptAddressesOf(left));
+    for (const url of keptAddressesOf(files)) {
+      if (stillKept.has(url)) continue;
+      await tx.delete("nextly_meta", {
+        and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
+      });
+    }
   });
 }
 
