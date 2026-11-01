@@ -361,6 +361,122 @@ describe("an image size recorded by its URL alone", () => {
   });
 });
 
+// An import can copy a record whose size is recorded by its URL alone. The
+// item deleted and the item that stays are read alike, so the size the
+// delete would take is found among the other item's files.
+describe("a size recorded by its URL alone that two items name", () => {
+  /** Two items naming one size file by its URL alone, and that file. */
+  async function sharedSize(
+    folderId?: string
+  ): Promise<{ id: string; copy: string; size: string }> {
+    const id = await uploadImage(folderId);
+    const buffer = await sharp(await image())
+      .resize(4, 4)
+      .webp()
+      .toBuffer();
+    const small = await getMediaStorage().upload(buffer, {
+      filename: "photo-small.webp",
+      mimeType: "image/webp",
+      collection: "media",
+    });
+    setStoredSizes(id, JSON.stringify({ small: { url: small.url } }));
+    return { id, copy: await copyOf(id), size: small.path };
+  }
+
+  it("stays while the other names it, and goes with the last", async () => {
+    onLocalDisk();
+    const { id, copy, size } = await sharedSize();
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+    expect(await onDisk()).toContain(size);
+
+    expect((await service.deleteMedia(copy)).success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("stays when the folder of one is deleted, while the other names it", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const { size } = await sharedSize(created.data!.id);
+
+    expect((await folders.deleteFolder(created.data!.id, true)).success).toBe(
+      true
+    );
+
+    expect(await onDisk()).toContain(size);
+  });
+});
+
+// Whether another item names a file is asked by its key, compared as the
+// storage tells its files apart: S3 keeps `2026//10/x` and `2026/10/x` as
+// two objects, while a custom adapter promises nothing of the kind.
+describe("a file whose key another item spells otherwise", () => {
+  /**
+   * The S3 stand-in, reporting itself as `type`, and its files. Any type but
+   * S3's reads every spelling of a key as one file, as a filesystem-backed
+   * custom adapter would.
+   */
+  function bucketAs(type: string): Map<string, Buffer> {
+    const bucket = new Bucket("s3");
+    const one = (filePath: string) =>
+      type === "s3" ? filePath : filePath.replace(/\/{2,}/g, "/");
+    const adapter = {
+      upload: bucket.upload.bind(bucket),
+      delete: (filePath: string) => bucket.delete(one(filePath)),
+      exists: (filePath: string) => bucket.exists(one(filePath)),
+      getPublicUrl: bucket.getPublicUrl.bind(bucket),
+      getType: () => type,
+    };
+    initializeMediaStorage({
+      plugins: [
+        { name: type, type: "s3", collections: { media: true }, adapter },
+      ],
+    });
+    return bucket.files;
+  }
+
+  /** An item, and a second whose record spells its original otherwise. */
+  async function respelled(): Promise<{ id: string; original: string }> {
+    const id = await uploadImage();
+    const [row] = await db.db
+      .select()
+      .from(db.schema.media)
+      .where(eq(db.schema.media.id, id));
+    const other = row.filename.replace("/", "//");
+    expect(other).not.toBe(row.filename);
+    await db.db.insert(db.schema.media).values({
+      ...row,
+      id: `respelled-${id}`,
+      filename: other,
+      url: getMediaStorage().getPublicUrl(other, "media"),
+      thumbnailUrl: null,
+    });
+    return { id, original: row.filename };
+  }
+
+  it("goes on S3, where the other spelling is another object", async () => {
+    const files = bucketAs("s3");
+    const { id, original } = await respelled();
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(files.has(original)).toBe(false);
+  });
+
+  it("stays on a custom adapter, which may read both spellings as one file", async () => {
+    const files = bucketAs("acme-storage");
+    const { id, original } = await respelled();
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(files.has(original)).toBe(true);
+  });
+});
+
 // Nothing makes a stored path one item's alone: an import can copy a
 // record, and a content-addressed adapter gives one file one key.
 describe("a file another item also refers to", () => {

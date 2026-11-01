@@ -51,6 +51,7 @@ import {
   filesKeptByOthers,
   removeStoredFiles,
   sizeLocatorOf,
+  storageReadingOf,
   storedPathForLog,
   warnSizeNotHere,
   warnUnlocated,
@@ -1106,12 +1107,14 @@ export class MediaFolderService extends BaseService {
       await this.afterCommit(() => revalidateMedia(ids));
       await this.afterCommit(async () => {
         // Every file a removal can take, a size recorded by URL alone among
-        // them where the media storage serves it, so each is asked about.
-        const locator = sizeLocatorOf(getMediaStorage());
+        // them where the media storage serves it, so each is asked about,
+        // with every other item's record read against the same storage.
+        const reading = storageReadingOf(getMediaStorage());
         const kept = await filesKeptByOthers(
           this.storedFileSearch,
-          run.flatMap(record => storedFilesOf(record, locator).paths),
-          ids
+          run.flatMap(record => storedFilesOf(record, reading.locator).paths),
+          ids,
+          reading
         );
         if (kept) await removeFiles(run, kept);
         await this.removeKeptFilesOf(ids);
