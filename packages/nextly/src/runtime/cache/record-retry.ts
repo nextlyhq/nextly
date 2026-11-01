@@ -39,6 +39,10 @@ interface RetryState {
   lastAttemptAt: number;
   /** How many failed records have been kept, so a retry can tell whether more came in while it ran. */
   held: number;
+  /** The tags the attempt under way took from the hold, until it ends. */
+  inFlight: string[];
+  /** Moved on by each withdrawal, so an attempt begun before one changes nothing after it. */
+  generation: number;
 }
 
 // One per process, across module copies, like the hand-off it retries into.
@@ -52,6 +56,8 @@ function state(): RetryState {
     pending: false,
     lastAttemptAt: 0,
     held: 0,
+    inFlight: [],
+    generation: 0,
   };
   return globalForRetry.__nextly_record_retry;
 }
@@ -109,14 +115,24 @@ function retryFailedRecords(): Promise<void> {
 /** One retry of the kept tags. */
 async function attempt(retry: RetryState): Promise<void> {
   retry.lastAttemptAt = Date.now();
+  // This attempt is the try a waiting timer would have made: a read that
+  // comes first takes its place, so the backoff counts from here, once.
+  if (retry.timer !== undefined) clearTimeout(retry.timer);
+  retry.timer = undefined;
   // A record refused while this one runs is not among the tags it takes.
   const heldBefore = retry.held;
+  const generation = retry.generation;
   const tags = takePendingExpiries();
   if (tags.length === 0) {
     finish(retry, heldBefore);
     return;
   }
+  retry.inFlight = tags;
   const outcome = await expireTags(tags);
+  // The ledger was withdrawn meanwhile, which kept these tags again for the
+  // next one: whatever came of this attempt, it settles nothing now.
+  if (retry.generation !== generation) return;
+  retry.inFlight = [];
   if (outcome === "recorded") {
     if (finish(retry, heldBefore)) {
       getNextlyLogger().info({
@@ -186,5 +202,13 @@ function settle(retry: RetryState): void {
 
 /** Stops the timer, when the ledger is withdrawn: the tags stay kept for the next one. */
 export function stopRecordRetry(): void {
-  settle(state());
+  const retry = state();
+  // An attempt under way took its tags from the hold: they are kept again, for
+  // the next ledger, and that attempt's end is left to change nothing.
+  if (retry.inFlight.length > 0) holdForNextFlush(retry.inFlight);
+  retry.inFlight = [];
+  retry.generation += 1;
+  // A later retry starts afresh rather than waiting on the withdrawn one.
+  retry.running = undefined;
+  settle(retry);
 }

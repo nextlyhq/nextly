@@ -214,6 +214,59 @@ describe("a record the ledger refused", () => {
     expect(takePendingExpiries()).toEqual(["posts"]);
   });
 
+  it("keeps the tags an attempt was recording when the ledger is withdrawn, and retries them into the next", async () => {
+    let failOld: () => void = () => undefined;
+    const old: TagExpiryLedger = {
+      record: () =>
+        new Promise((_resolve, reject) => {
+          failOld = () => reject(new Error("connection reset"));
+        }),
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    };
+    publishTagExpiryLedger(old);
+    holdFailedRecord(["posts"]);
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+
+    // Withdrawn while the old ledger is still recording "posts".
+    withdrawTagExpiryLedger();
+    const adapter = {
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      tableExists: async () => true,
+      getDrizzle: () => {
+        throw new Error("connection reset");
+      },
+    } as never;
+    installTagExpiryLedger(adapter);
+    const record = ledgerThat(() => "ok");
+
+    // The new ledger's retry runs while the old attempt still waits.
+    await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect([...record.mock.calls[0][0]]).toEqual(["posts"]);
+
+    // The old attempt fails late, and keeps or arms nothing again.
+    failOld();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(takePendingExpiries()).toEqual([]);
+  });
+
+  it("does not let a waiting timer retry again straight after a read retried in its place", async () => {
+    const record = ledgerThat(() => "refuse");
+    holdFailedRecord(["posts"]);
+    // A frozen function thaws: the clock is past the wait, the timer not run.
+    vi.setSystemTime(Date.now() + FIRST_RETRY_DELAY_MS);
+    await useCacheHandler.refreshTags();
+    expect(record).toHaveBeenCalledTimes(1);
+
+    // The next try waits the doubled backoff, not the overdue timer.
+    await vi.advanceTimersByTimeAsync(2 * FIRST_RETRY_DELAY_MS - 1);
+    expect(record).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(record).toHaveBeenCalledTimes(2);
+  });
+
   it("leaves no timer once the ledger is withdrawn, and keeps the tags for the next one", async () => {
     const adapter = {
       getCapabilities: () => ({ dialect: "sqlite" as const }),
