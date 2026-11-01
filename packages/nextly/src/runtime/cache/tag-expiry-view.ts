@@ -63,6 +63,11 @@ interface LedgerCalls {
   running: Record<LedgerCall, number>;
   stuck: Record<LedgerCall, number>;
   waiting: Record<LedgerCall, (() => void)[]>;
+  /**
+   * Set once another ledger is published: no call waiting here starts after
+   * that, since it would write to or read from the withdrawn ledger.
+   */
+  closed: boolean;
 }
 
 function noLedgerCalls(): LedgerCalls {
@@ -70,7 +75,22 @@ function noLedgerCalls(): LedgerCalls {
     running: { record: 0, lookup: 0 },
     stuck: { record: 0, lookup: 0 },
     waiting: { record: [], lookup: [] },
+    closed: false,
   };
+}
+
+/**
+ * Closes the withdrawn ledger's calls and wakes every call waiting for one of
+ * its slots, which then turns itself away rather than waiting out its bound.
+ * Calls already running end against these counts, which nothing reads again.
+ */
+function closeLedgerCalls(calls: LedgerCalls): void {
+  calls.closed = true;
+  for (const kind of ["record", "lookup"] as const) {
+    const waiting = calls.waiting[kind];
+    calls.waiting[kind] = [];
+    for (const wake of waiting) wake();
+  }
 }
 
 /**
@@ -80,7 +100,8 @@ function noLedgerCalls(): LedgerCalls {
  * holding its connection. So at most {@link MAX_LEDGER_CALLS_IN_FLIGHT} of a
  * kind run at once, counted from their start, and a call waits for a slot
  * within the same bound; and while one given up on is still running, none of
- * its kind is started at all.
+ * its kind is started at all, a call handed a slot included. Nor is one that
+ * waited while its ledger was withdrawn.
  */
 async function withinLedgerBound<T>(
   view: ViewState,
@@ -107,6 +128,10 @@ async function withinLedgerBound<T>(
       const wake = () => woken?.();
       calls.waiting[kind].push(wake);
       const turn = await Promise.race([slot, timedOut]);
+      // Its ledger was withdrawn while it waited: started now, a record would
+      // land in the withdrawn ledger numbered after the current one's
+      // refusals, and pass for their retry. Nothing waits here to pass on to.
+      if (calls.closed) return TURNED_AWAY;
       if (expired || turn === NO_ANSWER) {
         const at = calls.waiting[kind].indexOf(wake);
         if (at >= 0) calls.waiting[kind].splice(at, 1);
@@ -114,7 +139,13 @@ async function withinLedgerBound<T>(
         else wakeNext(calls, kind);
         return TURNED_AWAY;
       }
-      // The slot was handed over with the running count kept.
+      // The slot was handed over with the running count kept. A call given up
+      // on while this one waited closes the gate again: the slot passes on,
+      // and each waiting call in turn is turned away the same way.
+      if (calls.stuck[kind] > 0) {
+        wakeNext(calls, kind);
+        return TURNED_AWAY;
+      }
     } else {
       calls.running[kind] += 1;
     }
@@ -152,7 +183,11 @@ interface TagLookup {
   expiredAt: number;
   /** When the ledger was asked, on this process's clock. */
   askedAt: number;
-  /** The copy of this module that asked; an earlier copy writes none. */
+  /**
+   * The copy of this module whose offset the expiry is judged by: the one
+   * that asked, or that bounded another copy's answer when it could not ask;
+   * an earlier copy writes none.
+   */
   by?: symbol;
 }
 
@@ -163,6 +198,32 @@ interface TagLookup {
  * the bound learned with it, so one another copy looked up is asked again.
  */
 const THIS_COPY = Symbol("tag expiry view");
+
+/** Whether `lookup` found an expiry that another copy of this module looked up. */
+function isForeignExpiry(lookup: TagLookup | undefined): lookup is TagLookup {
+  return (
+    lookup !== undefined && lookup.by !== THIS_COPY && lookup.expiredAt > 0
+  );
+}
+
+/**
+ * The expiry `known` leaves this copy to judge by when the ledger could not
+ * be asked about it, as of `at` on this process's clock. One this copy looked
+ * up is as it was. One another copy looked up was learned with that copy's
+ * offset, which this copy's may exceed, as after a failover, and judged by a
+ * larger offset an entry begun before the expiry looks begun after it. So it
+ * is bounded by when it can have been instead: the row it found was written
+ * before `at`, and set at most {@link TAG_EXPIRY_GRACE_MS} past its write, so
+ * every entry begun before then is refused, whatever offset judges it.
+ */
+function expiryKnown(
+  view: ViewState,
+  known: TagLookup | undefined,
+  at: number
+): number {
+  if (!isForeignExpiry(known)) return known?.expiredAt ?? 0;
+  return Math.max(known.expiredAt, at + TAG_EXPIRY_GRACE_MS + offsetOf(view));
+}
 
 interface ViewState {
   ledger?: TagExpiryLedger;
@@ -263,7 +324,9 @@ export function publishTagExpiryLedger(ledger: TagExpiryLedger | null): void {
   view.lookups.clear();
   view.lowerOffsetMs = undefined;
   // Its calls are its own: one of the withdrawn ledger's, stuck, ends against
-  // that ledger's count, and holds nothing of this one's back.
+  // that ledger's count, and holds nothing of this one's back; and one still
+  // waiting for that ledger's slot is turned away, not started against it.
+  closeLedgerCalls(view.calls);
   view.calls = noLedgerCalls();
 }
 
@@ -358,7 +421,7 @@ export async function refreshTagExpiries(
       now - (lookup?.askedAt ?? -Infinity) >= TAG_LOOKUP_TTL_MS ||
       // An expiry another copy of this module looked up, whose offset this
       // copy has not learned with it: asked again, which tells it.
-      (lookup !== undefined && lookup.by !== THIS_COPY && lookup.expiredAt > 0)
+      isForeignExpiry(lookup)
     ) {
       stale.push(tag);
     }
@@ -385,7 +448,7 @@ export async function refreshTagExpiries(
           for (const tag of stale) {
             view.lookups.set(tag, {
               expiredAt: Math.max(
-                view.lookups.get(tag)?.expiredAt ?? 0,
+                expiryKnown(view, view.lookups.get(tag), givenUpAt),
                 givenUpAt + offsetOf(view)
               ),
               askedAt: givenUpAt,
@@ -409,16 +472,15 @@ export async function refreshTagExpiries(
       } catch (error) {
         warnOnce("the cache tag expiry ledger could not be read", error);
         // Not asked again until the TTL passes, so a ledger that is down is
-        // not read on every request; what was known before is kept.
+        // not read on every request; what was known before is kept, an
+        // expiry another copy looked up bounded so this copy can judge by it.
+        // Left as that copy's, it would be asked again at every read.
         const failedAt = Date.now();
         for (const tag of stale) {
-          const known = view.lookups.get(tag);
           view.lookups.set(tag, {
-            expiredAt: known?.expiredAt ?? 0,
+            expiredAt: expiryKnown(view, view.lookups.get(tag), failedAt),
             askedAt: failedAt,
-            // Kept as whoever learned it: an answer another copy wrote is
-            // still not one this copy can judge by.
-            by: known?.by,
+            by: THIS_COPY,
           });
         }
       } finally {

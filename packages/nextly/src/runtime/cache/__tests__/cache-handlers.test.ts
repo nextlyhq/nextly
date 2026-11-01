@@ -545,6 +545,50 @@ describe("the database's clock, learned from slow lookups", () => {
     expect(expiriesOf).toHaveBeenCalledTimes(2);
   });
 
+  it("asks a failing ledger about an expiry an earlier copy looked up once per TTL, refusing meanwhile what it may expire", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    const expiriesOf = vi.spyOn(ledger, "expiriesOf");
+    publishTagExpiryLedger(ledger);
+    // This copy learns a database clock 30 s ahead.
+    timing.skewMs = 30_000;
+    rows.set("posts", T0 - 60_000);
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(1);
+
+    // An entry begins; the database fails over to a clock matching this
+    // process's, another instance writes, and an earlier copy, still loaded,
+    // writes its answer, unstamped, into the shared lookups. Then the ledger
+    // starts refusing reads.
+    const begun = localNow();
+    const written = Date.now() + 100 + TAG_EXPIRY_GRACE_MS;
+    vi.advanceTimersByTime(200);
+    (
+      globalThis as unknown as {
+        __nextly_tag_expiry_view: {
+          lookups: Map<string, { expiredAt: number; askedAt: number }>;
+        };
+      }
+    ).__nextly_tag_expiry_view.lookups.set("posts", {
+      expiredAt: written,
+      askedAt: Date.now(),
+    });
+    expiriesOf.mockRejectedValue(new Error("connection reset"));
+
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(2);
+    // Within the TTL of the failed read, the ledger is not asked again.
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS / 2);
+    await refreshTagExpiries(["posts"]);
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(2);
+    // Nor is the entry judged fresh by the +30 s learned before the failover.
+    expect(isEntryExpired(["posts"], begun)).toBe(true);
+    // A TTL after the failed read, it is asked again.
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS / 2);
+    await refreshTagExpiries(["posts"]);
+    expect(expiriesOf).toHaveBeenCalledTimes(3);
+  });
+
   it("asks again about an expiry an earlier copy of this module looked up, before judging by it", async () => {
     const { ledger, rows } = slowLedger();
     const expiriesOf = vi.spyOn(ledger, "expiriesOf");
