@@ -48,6 +48,7 @@ import { z } from "zod";
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 
+import { lockMediaItems } from "./lock-media-items";
 import type { MediaFilesRecord } from "./stored-files";
 
 /** How long a deleted item can be brought back: ten seconds. */
@@ -277,9 +278,9 @@ export class PendingMediaDeletes {
     const times = await this.deps.db.transaction(async tx => {
       // Filled afresh on each attempt, should the transaction be retried.
       fresh.length = 0;
-      // Each item's row locked, in one order, so two deletes of the same
+      // Each item's row locked, in the one order, so two deletes of the same
       // items take turns: the second finds the first's marks and keeps them.
-      for (const id of [...wanted].sort()) await tx.lockRow("media", id);
+      await lockMediaItems(tx, wanted);
       const found: Array<Record<string, unknown>> = [];
       const marked: Array<Record<string, unknown>> = [];
       // In runs, so no statement binds more values than any dialect takes.
@@ -403,8 +404,8 @@ export class PendingMediaDeletes {
     const due = this.cutoff();
     const wanted = [...new Set(ids)];
     return await this.deps.db.transaction(async tx => {
-      // In one order, as a delete locks them, so the two take turns.
-      for (const id of [...wanted].sort()) await tx.lockRow("media", id);
+      // In the one order a delete locks them in, so the two take turns.
+      await lockMediaItems(tx, wanted);
       const present = new Set<string>();
       for (let start = 0; start < wanted.length; start += READ_RUN) {
         const found = await tx.select<Record<string, unknown>>("media", {
