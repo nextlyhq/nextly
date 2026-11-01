@@ -8,6 +8,7 @@ import {
   testLogger,
   type TestDb,
 } from "../../__tests__/fixtures/db";
+import { addRetiredImageSizes } from "../../__tests__/helpers/retired-image-sizes";
 import { MediaService } from "../media";
 
 const mockStorageUpload = vi.fn().mockResolvedValue({
@@ -549,9 +550,9 @@ describe("MediaService", () => {
     });
   });
 
-  // Image sizes are no longer made or read. A size defined before then is
-  // still a row in `image_sizes`, and an item stored before then still holds
-  // its `sizes`: neither is used, and neither is touched.
+  // Image sizes are no longer made or read. On a database from before then,
+  // a size defined then is still a row in `image_sizes`, and an item stored
+  // then still holds its `sizes`: neither is used, and neither is touched.
   describe("image sizes", () => {
     const STORED_SIZES = {
       card: { url: "https://test.com/old-card.webp", path: "old-card.webp" },
@@ -560,12 +561,10 @@ describe("MediaService", () => {
     beforeEach(async () => {
       mockGenerateImageSizes.mockClear();
       mockAdapterRead.mockClear();
-      await testDb.db.insert(testDb.schema.imageSizes).values({
-        name: "card",
-        width: 400,
-        height: 300,
-        isDefault: true,
-      });
+      // The retired column and table, as a database from before has them.
+      await addRetiredImageSizes("sqlite", statement =>
+        testDb.sqlite.exec(statement)
+      );
       await testDb.db.insert(testDb.schema.media).values({
         id: "media-with-sizes",
         filename: "old.jpg",
@@ -576,16 +575,24 @@ describe("MediaService", () => {
         height: 600,
         url: "https://test.com/old.jpg",
         thumbnailUrl: "https://test.com/thumb_old.jpg",
-        sizes: JSON.stringify(STORED_SIZES),
         uploadedBy: testUserId,
         uploadedAt: new Date(),
         updatedAt: new Date(),
       });
+      testDb.sqlite
+        .prepare('UPDATE "media" SET "sizes" = ? WHERE "id" = ?')
+        .run(JSON.stringify(STORED_SIZES), "media-with-sizes");
     });
 
+    /** The row as the table holds it, the retired `sizes` included. */
     async function storedRow(id: string) {
-      const rows = await testDb.db.select().from(testDb.schema.media);
-      return rows.find(row => row.id === id);
+      return testDb.sqlite
+        .prepare(
+          'SELECT "focal_x" AS "focalX", "focal_y" AS "focalY", "sizes" FROM "media" WHERE "id" = ?'
+        )
+        .get(id) as
+        | { focalX: number | null; focalY: number | null; sizes: unknown }
+        | undefined;
     }
 
     it("stores an uploaded image's original and one thumbnail, and no sizes", async () => {

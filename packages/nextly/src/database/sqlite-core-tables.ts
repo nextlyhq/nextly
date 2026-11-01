@@ -212,7 +212,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "alt_text" TEXT,
       "focal_x" INTEGER,
       "focal_y" INTEGER,
-      "sizes" TEXT,
       "caption" TEXT,
       "tags" TEXT,
       "folder_id" TEXT REFERENCES "media_folders"("id") ON DELETE SET NULL,

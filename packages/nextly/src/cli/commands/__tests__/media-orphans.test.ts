@@ -26,6 +26,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { retiredSizesColumnDdl } from "../../../__tests__/helpers/retired-image-sizes";
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
 import type {
   IStorageAdapter,
@@ -808,6 +809,9 @@ describe("referencedStoredPaths", () => {
   async function mediaTable() {
     const { createTestDb } = await import("../../../__tests__/fixtures/db");
     const db = await createTestDb();
+    // A database from before image sizes were removed, whose items still
+    // name their size files in the retired `sizes` column.
+    db.sqlite.exec(retiredSizesColumnDdl("sqlite"));
     await db.db.insert(db.schema.users).values({
       id: "user-1",
       email: "user@example.com",
@@ -840,8 +844,13 @@ describe("referencedStoredPaths", () => {
       uploadedAt: new Date(),
       updatedAt: new Date(),
     }));
-    for (const row of rows)
+    const setSizes = db.sqlite.prepare(
+      'UPDATE "media" SET "sizes" = ? WHERE "id" = ?'
+    );
+    for (const { sizes, ...row } of rows) {
       await db.db.insert(db.schema.media).values(row as never);
+      setSizes.run(sizes, row.id);
+    }
 
     return db;
   }
@@ -918,6 +927,8 @@ describe("referencedStoredPaths", () => {
     const select = db.adapter.select.bind(db.adapter);
     let pages = 0;
     const between = {
+      getDrizzle: () => db.adapter.getDrizzle(),
+      dialect: db.adapter.dialect,
       select: async (...args: Parameters<typeof select>) => {
         const rows = await select(...args);
         if (pages++ === 0) {

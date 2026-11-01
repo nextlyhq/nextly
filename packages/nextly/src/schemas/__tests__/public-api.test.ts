@@ -69,6 +69,13 @@ describe("schemas public API", () => {
       expect(schemas).not.toHaveProperty("userPermissionCache");
     });
 
+    it("no longer names the image size definitions", () => {
+      // Image sizes are no longer made, so a new install never creates
+      // `image_sizes`; an existing database keeps it until `nextly migrate`
+      // drops it once no item names a size file.
+      expect(schemas.CORE_TABLE_NAMES).not.toContain("image_sizes");
+    });
+
     it("includes the canonical core tables", () => {
       const required = [
         "users",
@@ -85,7 +92,6 @@ describe("schemas public API", () => {
         "activity_log",
         "media",
         "media_folders",
-        "image_sizes",
         "dynamic_collections",
         "dynamic_singles",
         "dynamic_components",

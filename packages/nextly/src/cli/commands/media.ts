@@ -2,6 +2,7 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { Command } from "commander";
 import { config as loadEnvFile } from "dotenv";
 
@@ -20,6 +21,10 @@ import {
   errorForLog,
   storedPathForLog,
 } from "../../domains/media/remove-stored-files";
+import {
+  retiredSizesReader,
+  type RetiredSizesReader,
+} from "../../domains/media/retired-image-sizes-store";
 import {
   storedFilesOf,
   type MediaFilesRecord,
@@ -47,6 +52,35 @@ import { installRegistryResolver } from "../utils/registry-resolver";
 
 export type { MediaReferences };
 
+/** What counts as a media item referring to a file. */
+interface ReferenceOptions {
+  /**
+   * Whether the size files an item's retired `sizes` names count. They do for
+   * every question but one: `nextly media remove-sizes` removes exactly those
+   * files, so it asks only which a media item uses as an original or a
+   * thumbnail, and leaves the column out.
+   */
+  withRetiredSizes?: boolean;
+  /**
+   * The reader of the retired sizes, shared by scans that run together (a
+   * listing and the rechecks after it), so the column's provenance is asked
+   * once for all of them. One of its own per scan when absent.
+   */
+  retiredSizes?: RetiredSizesReader;
+}
+
+/** The reader a scan reads the retired sizes through, or none when they do not count. */
+function sizesReaderFor(
+  adapter: Pick<DrizzleAdapter, "getDrizzle" | "dialect">,
+  options: ReferenceOptions
+): RetiredSizesReader | undefined {
+  if (options.withRetiredSizes === false) return undefined;
+  return (
+    options.retiredSizes ??
+    retiredSizesReader(adapter.getDrizzle(), adapter.dialect)
+  );
+}
+
 /**
  * Every stored path a media item refers to, read a page of items at a time:
  * the one answer a delete uses for what an item's files are.
@@ -57,11 +91,15 @@ export type { MediaReferences };
  * there, whose thumbnail would read as left behind.
  */
 export async function referencedStoredPaths(
-  adapter: Pick<DrizzleAdapter, "select">
+  adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">,
+  options: ReferenceOptions = {}
 ): Promise<MediaReferences> {
   const referenced = new Set<string>();
   const unlocated: string[] = [];
   const limit = 500;
+  // One reader for every page: whether the column is the retired one is
+  // asked once per scan, not once per page.
+  const readSizes = sizesReaderFor(adapter, options);
   let after: string | undefined;
   for (;;) {
     const rows = await adapter.select<MediaFilesRecord & { id: string }>(
@@ -74,8 +112,15 @@ export async function referencedStoredPaths(
         limit,
       }
     );
+    // The retired `sizes` column is not in the Drizzle definition the select
+    // reads through: an item's size files count as referenced while it has
+    // them, read from the column for as long as the database has it.
+    const sizes =
+      readSizes === undefined
+        ? new Map<string, unknown>()
+        : await readSizes(rows.map(row => row.id));
     for (const row of rows) {
-      const files = storedFilesOf(row);
+      const files = storedFilesOf({ ...row, sizes: sizes.get(row.id) });
       for (const path of files.paths) referenced.add(path);
       unlocated.push(...files.unlocated);
     }
@@ -92,11 +137,20 @@ export async function referencedStoredPaths(
  * a thumbnail whose stored location its record does not show: by a URL
  * under any name, it may refer to any listed file.
  */
-export function referencedNowIn(adapter: DrizzleAdapter): ReferencedNow {
+export function referencedNowIn(
+  adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">,
+  options: ReferenceOptions = {}
+): ReferencedNow {
+  // One reader for every recheck, so the column's provenance is asked once
+  // across them all rather than once per batch.
+  const shared: ReferenceOptions = {
+    ...options,
+    retiredSizes: sizesReaderFor(adapter, options),
+  };
   return async paths => {
     let now: MediaReferences;
     try {
-      now = await referencedStoredPaths(adapter);
+      now = await referencedStoredPaths(adapter, shared);
     } catch (error) {
       console.warn(
         "[media orphans] Could not read what media items refer to:",
@@ -303,8 +357,11 @@ interface ProjectGuard {
   configOutsideProject(configPath: string, cwd: string): CliError;
 }
 
-/** `nextly media orphans --apply`, which removes files. */
-const ORPHANS_APPLY: ProjectGuard = {
+/**
+ * `nextly media orphans --apply` and `nextly media remove-sizes --apply`,
+ * which remove files.
+ */
+const MEDIA_APPLY: ProjectGuard = {
   outsideProject: mediaApplyOutsideProject,
   configOutsideProject: mediaConfigOutsideProject,
 };
@@ -437,6 +494,11 @@ function otherUploaders(
  * upload-time thumbnails deletes before this release left in the media
  * storage, still publicly served. A dry run by default.
  *
+ * `nextly media remove-sizes [--apply] [--drop]`: lists, and with --apply
+ * removes, the image size files items stored before sizes were removed, then
+ * clears each item's sizes; with --drop as well it then drops the column and
+ * the table. A dry run by default.
+ *
  * `nextly media reindex-usage`: rebuilds the record of where each media item
  * is used from the stored content, for an install whose content predates the
  * record and after a restore.
@@ -452,62 +514,80 @@ export function createMediaCommand(): Command {
     )
     .option("--apply", "Remove the thumbnails listed", false)
     .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      let adapter: CLIDatabaseAdapter | null = null;
-      try {
-        // Resolved once, from where the command was run: a relative --cwd
-        // read again after the change would name a folder inside itself.
-        const cwd = path.resolve(context.cwd);
-        const { config } = await projectConfig(
-          cwd,
-          context.configPath,
-          cmdOptions.apply === true ? ORPHANS_APPLY : null,
-          context.logger
-        );
-        const db = databaseEnvOrThrow();
-        const dialect = db.dialect;
-        // A failure here already carries its code: `createCliAdapter` gives it one.
-        adapter = await createCliAdapter({
-          dialect,
-          databaseUrl: db.databaseUrl,
-          logger: context.options.verbose ? context.logger : undefined,
-        });
-        const drizzle = adapter as unknown as DrizzleAdapter;
-        installRegistryResolver(drizzle);
-        // Local disk is where the app keeps it, `public/uploads` in the
-        // project, resolved from --cwd rather than from where this runs.
-        const mediaStorage = initializeMediaStorage({
-          plugins: config.storage,
-          local: { uploadDir: path.resolve(cwd, "public/uploads") },
-        });
-        const storage = mediaStorage.getAdapterForCollection("media");
-        const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
-        const others = otherUploaders(mediaStorage);
-        const code = await mediaOrphans({
-          storage,
-          prefix,
-          exclusive: mediaPlaceIsExclusive(
+      const apply = cmdOptions.apply === true;
+      await runMediaCommand(
+        cmd,
+        apply ? MEDIA_APPLY : null,
+        ({ context, drizzle, mediaStorage }) => {
+          const storage = mediaStorage.getAdapterForCollection("media");
+          const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
+          const others = otherUploaders(mediaStorage);
+          // One reader for the listing and every recheck after it, so the
+          // retired column's provenance is asked once for the whole run.
+          const readSizes = retiredSizesReader(
+            drizzle.getDrizzle(),
+            drizzle.dialect
+          );
+          return mediaOrphans({
+            storage,
             prefix,
-            others.map(other => other.prefix)
-          ),
-          sharedWith: collectionsSharingMediaPlace(prefix, others),
-          referenced: () => referencedStoredPaths(drizzle),
-          referencedNow: referencedNowIn(drizzle),
-          apply: cmdOptions.apply === true,
-          say: line => console.log(line),
-          // The run's failing code is its exit status, so the reason is printed in the error
-          // shape here and the exit below keeps the code `mediaOrphans` answers.
-          fail: error => {
-            printCliError(context.logger, error);
-          },
-        });
-        await adapter.disconnect();
-        process.exit(code);
-      } catch (error) {
-        if (adapter) await adapter.disconnect();
-        exitWithError(context.logger, error);
-      }
+            exclusive: mediaPlaceIsExclusive(
+              prefix,
+              others.map(other => other.prefix)
+            ),
+            sharedWith: collectionsSharingMediaPlace(prefix, others),
+            referenced: () =>
+              referencedStoredPaths(drizzle, { retiredSizes: readSizes }),
+            referencedNow: referencedNowIn(drizzle, {
+              retiredSizes: readSizes,
+            }),
+            apply,
+            say: line => console.log(line),
+            // The run's failing code is its exit status, so the reason is printed in the error
+            // shape here and the exit keeps the code `mediaOrphans` answers.
+            fail: error => {
+              printCliError(context.logger, error);
+            },
+          });
+        }
+      );
     });
+  media
+    .command("remove-sizes")
+    .description(
+      "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply; then drop the sizes column and the image_sizes table with --apply --drop"
+    )
+    .option("--apply", "Remove the size files listed", false)
+    .option(
+      "--drop",
+      "With --apply, once no item names a size file, drop the media table's sizes column and the image_sizes table",
+      false
+    )
+    .action(
+      async (cmdOptions: { apply?: boolean; drop?: boolean }, cmd: Command) => {
+        const apply = cmdOptions.apply === true;
+        await runMediaCommand(
+          cmd,
+          apply ? MEDIA_APPLY : null,
+          ({ drizzle, dialect, mediaStorage }) =>
+            runRemoveSizes({
+              db: drizzle.getDrizzle(),
+              dialect,
+              storage: mediaStorage.getAdapterForCollection("media"),
+              apply,
+              drop: cmdOptions.drop === true,
+              // The question `media orphans` asks just before its removals,
+              // without the retired sizes: those are the files being removed.
+              referencedNow: referencedNowIn(drizzle, {
+                withRetiredSizes: false,
+              }),
+              executeSql: statement => drizzle.executeQuery(statement),
+              dropUnderLock: dropSizesUnderSchemaLock(drizzle),
+              say: line => console.log(line),
+            })
+        );
+      }
+    );
   media
     .command("reindex-usage")
     .description(
@@ -550,6 +630,66 @@ export function createMediaCommand(): Command {
       }
     });
   return media;
+}
+
+/** What a `nextly media` command runs against, once the project is entered. */
+interface MediaCommandRun {
+  context: ReturnType<typeof createContext>;
+  drizzle: DrizzleAdapter;
+  dialect: SupportedDialect;
+  mediaStorage: MediaStorage;
+}
+
+/**
+ * Runs one `nextly media` command against the project: enters it from --cwd
+ * (with a `guard`, refusing from outside it, since the database settings may
+ * then be another project's), connects to its database, sets up its media
+ * storage, and exits with the status `body` answers, disconnecting either way.
+ */
+async function runMediaCommand(
+  cmd: Command,
+  guard: ProjectGuard | null,
+  body: (run: MediaCommandRun) => Promise<number>
+): Promise<void> {
+  const context = createContext(cmd.optsWithGlobals());
+  let adapter: CLIDatabaseAdapter | null = null;
+  try {
+    // Resolved once, from where the command was run: a relative --cwd
+    // read again after the change would name a folder inside itself.
+    const cwd = path.resolve(context.cwd);
+    const { config } = await projectConfig(
+      cwd,
+      context.configPath,
+      guard,
+      context.logger
+    );
+    const db = databaseEnvOrThrow();
+    // A failure here already carries its code: `createCliAdapter` gives it one.
+    adapter = await createCliAdapter({
+      dialect: db.dialect,
+      databaseUrl: db.databaseUrl,
+      logger: context.options.verbose ? context.logger : undefined,
+    });
+    const drizzle = adapter as unknown as DrizzleAdapter;
+    installRegistryResolver(drizzle);
+    // Local disk is where the app keeps it, `public/uploads` in the
+    // project, resolved from --cwd rather than from where this runs.
+    const mediaStorage = initializeMediaStorage({
+      plugins: config.storage,
+      local: { uploadDir: path.resolve(cwd, "public/uploads") },
+    });
+    const code = await body({
+      context,
+      drizzle,
+      dialect: db.dialect,
+      mediaStorage,
+    });
+    await adapter.disconnect();
+    process.exit(code);
+  } catch (error) {
+    if (adapter) await adapter.disconnect();
+    exitWithError(context.logger, error);
+  }
 }
 
 /**
@@ -619,4 +759,110 @@ async function reindexUsageWithServices(
     await destroyRegisteredPlugins();
     clearServices();
   }
+}
+
+/** Runs a drop holding the schema lock, answering the drop's exit status. */
+export type DropUnderLock = (drop: () => Promise<number>) => Promise<number>;
+
+/**
+ * The schema lock as `remove-sizes --apply --drop` holds it: around the
+ * drop's fresh checks and both drops, and not the file removal before them,
+ * which can run long. `nextly migrate` and a Schema Builder change hold the
+ * same lock, so neither reads the media table while its `sizes` column goes,
+ * and nothing comes to depend on the table between the checks and its drop.
+ * A held lock is waited for as `nextly migrate` waits, then the run stops
+ * naming the holder, having dropped nothing.
+ */
+export function dropSizesUnderSchemaLock(
+  adapter: DrizzleAdapter,
+  waitMs?: number
+): DropUnderLock {
+  return async drop => {
+    // Loaded for a drop, not with the command.
+    const [{ withMigrateLock }, { DROP_SIZES_COMMAND }, { NextlyError }] =
+      await Promise.all([
+        import("../../domains/schema/pipeline/locks"),
+        import("../../domains/media/retired-image-sizes-constants"),
+        import("../../errors/nextly-error"),
+      ]);
+    const outcome = await withMigrateLock(adapter, adapter.dialect, drop, {
+      command: DROP_SIZES_COMMAND,
+      mode: "wait",
+      waitMs,
+    });
+    // Only a wait given `isSettled` ends without running, and this one is not.
+    if (!outcome.ran) {
+      throw NextlyError.internal({
+        logContext: { reason: "the sizes drop ended without running" },
+      });
+    }
+    return outcome.value;
+  };
+}
+
+/**
+ * `nextly media remove-sizes [--apply] [--drop]` over a database: says there
+ * is nothing to remove once the column is gone, and otherwise lists, or with
+ * `apply` removes, the size files its items name. With `apply` and `drop`, and
+ * only once that left no item holding sizes, it then drops the column and the
+ * table (`dropRetiredImageSizes`) inside `dropUnderLock`. Returns the exit
+ * status.
+ */
+export async function runRemoveSizes(options: {
+  db: unknown;
+  dialect: SupportedDialect;
+  storage: IStorageAdapter;
+  apply: boolean;
+  drop?: boolean;
+  referencedNow: ReferencedNow;
+  executeSql: (statement: string) => Promise<unknown>;
+  /** Holds the schema lock around the drop (`dropSizesUnderSchemaLock`). */
+  dropUnderLock: DropUnderLock;
+  say: (line: string) => void;
+}): Promise<number> {
+  const { db, dialect, say } = options;
+  const [
+    { dropRetiredImageSizes, readRetiredObjects, sqlRetiredSizesStore },
+    { removeStoredImageSizes },
+  ] = await Promise.all([
+    import("../../domains/media/retired-image-sizes-store"),
+    import("../../domains/media/retired-image-sizes"),
+  ]);
+  const objects = await readRetiredObjects(db, dialect);
+  let code = 0;
+  if (objects.column) {
+    ({ code } = await removeStoredImageSizes({
+      store: sqlRetiredSizesStore(db, dialect),
+      storage: options.storage,
+      objects,
+      apply: options.apply,
+      referencedNow: options.referencedNow,
+      say,
+    }));
+  } else {
+    say(
+      "The media table has no sizes column: no item names an image size file, so there is nothing to remove."
+    );
+  }
+  if (options.drop !== true) return code;
+  if (!options.apply) {
+    say(
+      "--drop drops nothing without --apply; with it, the column and the table go once no item names a size file."
+    );
+    return code;
+  }
+  if (code !== 0) {
+    say(
+      "Dropped nothing: the items above still name size files. Fix what stopped them and run again."
+    );
+    return code;
+  }
+  return options.dropUnderLock(() =>
+    dropRetiredImageSizes({
+      db,
+      dialect,
+      executeSql: options.executeSql,
+      say,
+    })
+  );
 }

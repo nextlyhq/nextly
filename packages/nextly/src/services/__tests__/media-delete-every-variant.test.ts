@@ -46,6 +46,9 @@ let uploads: string;
 
 beforeEach(async () => {
   db = await createTestDb();
+  // A database from before image sizes were removed: a new one has no
+  // `sizes` column, so the column such a database still has is added back.
+  db.sqlite.exec('ALTER TABLE "media" ADD COLUMN "sizes" TEXT');
   await db.db.insert(db.schema.users).values({
     id: "user-1",
     email: "user@example.com",
@@ -115,10 +118,14 @@ async function withStoredSizes(id: string): Promise<void> {
       filename,
     };
   }
-  await db.db
-    .update(db.schema.media)
-    .set({ sizes: JSON.stringify(sizes) })
-    .where(eq(db.schema.media.id, id));
+  setStoredSizes(id, JSON.stringify(sizes));
+}
+
+/** Writes an item's retired `sizes`, which no Drizzle definition names. */
+function setStoredSizes(id: string, sizes: string | null): void {
+  db.sqlite
+    .prepare('UPDATE "media" SET "sizes" = ? WHERE "id" = ?')
+    .run(sizes, id);
 }
 
 /** An image uploaded, then given the sizes an earlier upload stored. */
@@ -149,7 +156,17 @@ async function referencedNow(id: string): Promise<string[]> {
     .select()
     .from(db.schema.media)
     .where(eq(db.schema.media.id, id));
-  return row ? storedFilesOf(row).paths.sort() : [];
+  return row
+    ? storedFilesOf({ ...row, sizes: storedSizesOf(id) }).paths.sort()
+    : [];
+}
+
+/** An item's retired `sizes`, read as the column holds it. */
+function storedSizesOf(id: string): string | null {
+  const row = db.sqlite
+    .prepare('SELECT "sizes" FROM "media" WHERE "id" = ?')
+    .get(id) as { sizes: string | null } | undefined;
+  return row?.sizes ?? null;
 }
 
 /** A second item with the same stored files as `id`, as an import can make. */
@@ -163,6 +180,7 @@ async function copyOf(
     .where(eq(db.schema.media.id, id));
   const copy = `copy-of-${id}`;
   await db.db.insert(db.schema.media).values({ ...row, id: copy, folderId });
+  setStoredSizes(copy, storedSizesOf(id));
   return copy;
 }
 
@@ -288,8 +306,10 @@ describe("a file another item also refers to", () => {
     thumbnailUrl?: string | null;
     sizes?: string | null;
   }): Promise<void> {
+    const { sizes, ...stored } = fields;
+    const id = `other-${randomUUID()}`;
     await db.db.insert(db.schema.media).values({
-      id: `other-${randomUUID()}`,
+      id,
       originalFilename: "other.png",
       mimeType: "image/png",
       size: 1,
@@ -297,26 +317,26 @@ describe("a file another item also refers to", () => {
       height: 1,
       duration: null,
       thumbnailUrl: null,
-      sizes: null,
       altText: null,
       caption: null,
       tags: null,
       uploadedBy: "user-1",
       uploadedAt: new Date(),
       updatedAt: new Date(),
-      ...fields,
+      ...stored,
     });
+    if (sizes !== undefined) setStoredSizes(id, sizes);
   }
 
   /** One of the item's sizes, by its stored path and URL. */
   async function aSizeOf(id: string): Promise<{ path: string; url: string }> {
-    const [row] = await db.db
-      .select()
-      .from(db.schema.media)
-      .where(eq(db.schema.media.id, id));
-    const sizes = (
-      typeof row.sizes === "string" ? JSON.parse(row.sizes) : row.sizes
-    ) as Record<string, { path: string; url: string }>;
+    const row = db.sqlite
+      .prepare('SELECT "sizes" FROM "media" WHERE "id" = ?')
+      .get(id) as { sizes: string };
+    const sizes = JSON.parse(row.sizes) as Record<
+      string,
+      { path: string; url: string }
+    >;
     return Object.values(sizes)[0];
   }
 

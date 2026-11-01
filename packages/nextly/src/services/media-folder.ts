@@ -54,6 +54,7 @@ import {
   warnUnlocated,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
+import { retiredSizesReader } from "../domains/media/retired-image-sizes-store";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
@@ -974,6 +975,14 @@ export class MediaFolderService extends BaseService {
       // cut its Undo short, and moving it would bring it back outside its
       // folder. A mark asked for later waits for these locks and finds its
       // item gone or moved.
+      // The image sizes the items stored before they were removed, from the
+      // retired `sizes` column the Drizzle definition no longer names: read
+      // before the transaction while the database still has the column, so
+      // their size files go with them. Nothing writes sizes any more, so an
+      // item arriving later has none to read.
+      const retiredSizes = deleteContents
+        ? await this.retiredSizesOfSubtree(folderId)
+        : new Map<string, unknown>();
       const removal = await inFolderTreeTransaction(this.adapter, async tx => {
         const folders = await this.subtreeOn(tx, folderId);
         const held = await this.heldMediaOn(tx, folders);
@@ -1003,7 +1012,12 @@ export class MediaFolderService extends BaseService {
             await tx.delete("media", {
               and: [{ column: "id", op: "IN", value: rows.map(row => row.id) }],
             });
-            removed.push(...rows);
+            removed.push(
+              ...rows.map(row => ({
+                ...row,
+                sizes: retiredSizes.get(row.id) ?? null,
+              }))
+            );
           }
         }
         await tx.delete("media_folders", {
@@ -1053,6 +1067,36 @@ export class MediaFolderService extends BaseService {
         message: "Failed to delete folder",
       };
     }
+  }
+
+  /**
+   * The retired `sizes` of every item the folder and the folders under it
+   * hold now, by item, read in runs of a hundred through one reader.
+   */
+  private async retiredSizesOfSubtree(
+    folderId: string
+  ): Promise<Map<string, unknown>> {
+    const { media } = this.tables;
+    const folderIds = [
+      folderId,
+      ...(await this.collectAllSubfolderIds(folderId)),
+    ];
+    const ids: string[] = [];
+    for (const run of this.idRuns(folderIds, 0)) {
+      const rows: Array<{ id: string }> = await this.db
+        .select({ id: media.id })
+        .from(media)
+        .where(inArray(media.folderId, run));
+      ids.push(...rows.map(row => String(row.id)));
+    }
+    const read = retiredSizesReader(this.db, this.dialect);
+    const sizes = new Map<string, unknown>();
+    for (let start = 0; start < ids.length; start += 100) {
+      for (const [id, value] of await read(ids.slice(start, start + 100))) {
+        sizes.set(id, value);
+      }
+    }
+    return sizes;
   }
 
   /**

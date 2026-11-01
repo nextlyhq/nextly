@@ -28,6 +28,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { count, desc, asc, sql } from "drizzle-orm";
 
 import {
@@ -55,6 +56,7 @@ import {
   removeStoredFiles,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
+import { storedSizesOf } from "../domains/media/retired-image-sizes-store";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
@@ -182,6 +184,21 @@ export class MediaService extends BaseService {
   }
 
   /** How this service reads the media rows that may share a file (filesKeptByOthers). */
+  /**
+   * The item's row, locked and re-read inside `tx` so a write sees the
+   * latest committed state, or undefined when a concurrent delete removed it.
+   */
+  private async lockedRow(
+    tx: TransactionContext,
+    mediaId: string
+  ): Promise<StoredMediaRow | undefined> {
+    await lockMediaItems(tx, [mediaId]);
+    const rows = await tx.select<StoredMediaRow>("media", {
+      where: this.whereEq("id", mediaId),
+    });
+    return rows[0];
+  }
+
   private get storedFileSearch(): StoredFileSearch {
     return new StoredFileSearchReader(this.adapter, this.logger).search;
   }
@@ -729,11 +746,7 @@ export class MediaService extends BaseService {
               return null;
             }
           }
-          await lockMediaItems(tx, [mediaId]);
-          const currentRows = await tx.select<StoredMediaRow>("media", {
-            where: this.whereEq("id", mediaId),
-          });
-          const stored = currentRows[0];
+          const stored = await this.lockedRow(tx, mediaId);
           // Lost an update race: the row was deleted after our first read, so
           // record nothing and let the not-found result below stand.
           if (!stored) {
@@ -848,6 +861,24 @@ export class MediaService extends BaseService {
         };
       }
 
+      // The image sizes an item stored before they were removed are in the
+      // retired `sizes` column, which the Drizzle definition no longer names.
+      // Read here, before the delete's transaction, while the database still
+      // has the column, so the delete removes those files too. Nothing writes
+      // sizes any more, so this read cannot go stale in a way that keeps a
+      // file: a run of `nextly media remove-sizes` meanwhile only removes
+      // files this delete would have removed.
+      const retiredSizes = await storedSizesOf(this.db, this.dialect, [
+        mediaId,
+      ]);
+      // The row as its files are removed from: with those sizes, which the
+      // row as read no longer carries. One record for both ways the files go,
+      // here after the commit or by a claimer from what it records.
+      const withRetiredSizes = (row: StoredMediaRow): StoredMediaRow => ({
+        ...row,
+        sizes: retiredSizes.get(mediaId) ?? null,
+      });
+
       // Remove the row and record the outbox event in one transaction FIRST,
       // before touching physical storage. The database is the source of truth,
       // so the row deletion and its durable event commit together; storage
@@ -863,19 +894,16 @@ export class MediaService extends BaseService {
       const deletedRow = await this.adapter.transaction<StoredMediaRow | null>(
         async tx => {
           refused = false;
-          await tx.lockRow("media", mediaId);
-          const currentRows = await tx.select<StoredMediaRow>("media", {
-            where: this.whereEq("id", mediaId),
-          });
-          const current = currentRows[0];
+          const current = await this.lockedRow(tx, mediaId);
           // Lost a delete race: the row is already gone, so record nothing.
           // Only the request that actually removes the row emits media.deleted.
           if (!current) {
             return null;
           }
           // Asked under the row's lock, so it commits with the row's removal
-          // or not at all.
-          if (claim && !(await claim(tx, current))) {
+          // or not at all. Handed the retired sizes too: the claimer records
+          // the files left to remove from this row.
+          if (claim && !(await claim(tx, withRetiredSizes(current)))) {
             refused = true;
             return null;
           }
@@ -932,7 +960,7 @@ export class MediaService extends BaseService {
           message: "Media not found",
         };
       }
-      const mediaData = deletedRow;
+      const mediaData = withRetiredSizes(deletedRow);
 
       // Invalidated here, not after the cleanup below. The row is already gone,
       // so a cached page is already wrong; deferring past storage deletes and
