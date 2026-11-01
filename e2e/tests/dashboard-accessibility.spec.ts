@@ -623,8 +623,9 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
   await expect(menu).toBeHidden();
   await expectVisibleFocus(caret);
 
-  // Opened again: the playground offers more than ten types, so focus is in the search, which
-  // narrows the list to one type, chosen by Enter.
+  // Opened again: the playground offers more than ten types, so focus is in the search. A search
+  // that keeps several types, the arrow key moving to the second, which the search box names as
+  // its active option to a screen reader; Enter creates that type.
   await page.keyboard.press("Enter");
   await expect(menu).toBeVisible();
   const search = menu.getByRole("combobox", { name: "Search types to create" });
@@ -632,18 +633,22 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
     search,
     "the playground's types fit in ten, so the menu offers no search"
   ).toBeFocused();
-  await page.keyboard.type("post");
+  await page.keyboard.type("p");
   const options = menu.getByRole("option");
-  await expect(options.first()).toHaveText("Post");
-  // The key moves the list's active option, which the search box names to a screen reader.
+  await expect.poll(() => options.count()).toBeGreaterThan(1);
   await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("ArrowUp");
+  await expect(search).toHaveAttribute("aria-activedescendant", /.+/);
   const active = await search.getAttribute("aria-activedescendant");
-  expect(active).not.toBeNull();
-  await expect(menu.locator(`[id="${active}"]`)).toHaveText("Post");
+  const reached = menu.locator(`[id="${active}"]`);
+  await expect(reached).toHaveAttribute("aria-selected", "true");
+  const second = await options.nth(1).getAttribute("data-testid");
+  expect(await reached.getAttribute("data-testid")).toBe(second);
+  const slug = (second ?? "").replace(/^dashboard-new-(recent|type)-/, "");
   await page.keyboard.press("Enter");
   // A choice opens the type's create form, which takes the page and its focus.
-  await expect(page).toHaveURL(/\/admin\/collections\/posts\/create$/);
+  await expect(page).toHaveURL(
+    new RegExp(`/admin/collections/${slug}/create$`)
+  );
 });
 
 test("the gallery says how many it lists for the chip and the search that are on", async ({
