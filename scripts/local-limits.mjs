@@ -78,13 +78,30 @@ export const MAX_WORKERS = 4;
 export const TSC_FULL_CHECKERS_GIB = 14;
 
 /**
- * The checkers a `tsc` run uses: 4 on a 16 GB machine, 2 below that, and 1
- * when the test workers are held to one, which is how a constrained machine is
- * asked to run one thing at a time.
+ * Memory from which a `tsc` run gets two checkers rather than one, in GiB.
+ *
+ * On a machine reporting 7.75 GiB, with about 5.4 GiB left beside the rest of
+ * a pre-push (a container held to four cores, eight gigabytes and no swap), two
+ * checkers were killed for memory on every run and one passed, in about a minute
+ * either way. An 8 GB laptop reports 7 to 8 GiB, so it takes one; a 12 GB
+ * machine, two. The cut sits at 10 rather than just above 8 so a machine
+ * between the two keeps the margin one checker gives, since nothing between
+ * them was measured. Below it the test workers are not changed: they fitted at
+ * two on the same machine.
+ */
+export const TSC_TWO_CHECKERS_GIB = 10;
+
+/**
+ * The checkers a `tsc` run uses, by the machine's memory: 4 on a 16 GB
+ * machine, 2 on a 12 GB one, 1 on an 8 GB one; and 1 whenever the test workers
+ * are held to one, which is how a constrained machine is asked to run one thing
+ * at a time. `os.freemem()` is not read here for the reason this module gives
+ * at the top: the same machine would be bounded differently run to run.
  */
 function tscCheckers(totalGiB, overrideWorkers) {
   if (overrideWorkers === 1) return 1;
-  return totalGiB >= TSC_FULL_CHECKERS_GIB ? 4 : 2;
+  if (totalGiB >= TSC_FULL_CHECKERS_GIB) return 4;
+  return totalGiB >= TSC_TWO_CHECKERS_GIB ? 2 : 1;
 }
 
 function clamp(value, low, high) {

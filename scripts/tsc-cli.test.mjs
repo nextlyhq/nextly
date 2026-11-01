@@ -1,5 +1,6 @@
 // How tsc-cli reads the compiler's output, on output whose answer is known, and
 // how it tells a compiler that answered from one that could not be asked.
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,5 +86,82 @@ describe("asking the installed compiler", () => {
       else process.env.NEXTLY_TSC = previous;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Runs `body` with `NEXTLY_TSC` naming a stand-in compiler of `source`, and
+ * `NEXTLY_LOCAL_MAX_WORKERS` at `workers`, restoring both after.
+ */
+function withStandInTsc(source, workers, body) {
+  const dir = mkdtempSync(join(tmpdir(), "tsc-cli-"));
+  const previous = {
+    NEXTLY_TSC: process.env.NEXTLY_TSC,
+    NEXTLY_LOCAL_MAX_WORKERS: process.env.NEXTLY_LOCAL_MAX_WORKERS,
+  };
+  try {
+    writeFileSync(join(dir, "stand-in-tsc.mjs"), source);
+    process.env.NEXTLY_TSC = join(dir, "stand-in-tsc.mjs");
+    process.env.NEXTLY_LOCAL_MAX_WORKERS = workers;
+    return body(dir);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** A compiler that answers with one diagnostic naming the arguments it was given. */
+const ECHO_ARGS =
+  'console.log("error TS9999: " + process.argv.slice(2).join(" "));\nprocess.exit(1);\n';
+
+/** A compiler the kernel stops, as it stops one out of memory. */
+const KILLED = 'process.kill(process.pid, "SIGKILL");\n';
+
+const WRAPPER = join(import.meta.dirname, "tsc.mjs");
+
+describe("the checkers a compiler is run with", () => {
+  // One worker is how a constrained machine is asked for one checker, so the
+  // expected `1` is neither the compiler's own default of 4 nor a fixed value.
+  it("gives a test's compile() this machine's checkers, not the compiler's default", () => {
+    withStandInTsc(ECHO_ARGS, "1", dir => {
+      const [diagnostic] = compile(["a.ts"], dir);
+      expect(diagnostic.message).toMatch(/(^| )--checkers 1( |$)/);
+    });
+  });
+
+  it("gives every check-types run, through tsc.mjs, the same checkers", () => {
+    withStandInTsc(ECHO_ARGS, "1", dir => {
+      const run = spawnSync(process.execPath, [WRAPPER, "--noEmit"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(run.stdout).toMatch(/(^| )--checkers 1( |$)/);
+    });
+  });
+});
+
+describe("a compiler killed by a signal", () => {
+  it("is reported by compile() as a kill, not as a run with no diagnostics", () => {
+    withStandInTsc(KILLED, "1", dir => {
+      expect(() => compile(["a.ts"], dir)).toThrow(
+        /killed by SIGKILL \(out of memory\?\), running 1 type-checking worker/
+      );
+    });
+  });
+
+  it("is reported by tsc.mjs as a kill, and still fails the run", () => {
+    withStandInTsc(KILLED, "1", dir => {
+      const run = spawnSync(process.execPath, [WRAPPER, "--noEmit"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(run.stderr).toMatch(/killed by SIGKILL \(out of memory\?\)/);
+      expect(run.status).toBe(1);
+    });
   });
 });

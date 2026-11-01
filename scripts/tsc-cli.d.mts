@@ -14,6 +14,8 @@ export interface TscDiagnostic {
 }
 
 export function tscEntry(): string;
+export function checkerArgs(limits?: { checkers: number }): string[];
+export function killedMessage(signal: string, checkers: number): string;
 export function tscMajor(): number;
 export function diagnosticsIn(output: string): TscDiagnostic[];
 export function compile(args: readonly string[], cwd: string): TscDiagnostic[];
