@@ -13,7 +13,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { createAdapter } from "../../database/factory";
 import { clearServices } from "../../di/register";
-import { ensureFirstRunSetup } from "../../init/first-run";
+import {
+  ensureFirstRunSetup,
+  firstStartSchemaLock,
+} from "../../init/first-run";
 import type { Logger } from "../../services/shared";
 import type { PluginDefinition } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
@@ -86,7 +89,11 @@ async function seededAdapter(): Promise<
   Awaited<ReturnType<typeof createAdapter>>
 > {
   const adapter = await freshAdapter();
-  await ensureFirstRunSetup({ adapter, logger: silentLogger });
+  await ensureFirstRunSetup({
+    adapter,
+    logger: silentLogger,
+    holdSchemaLock: firstStartSchemaLock(adapter, silentLogger),
+  });
   return adapter;
 }
 

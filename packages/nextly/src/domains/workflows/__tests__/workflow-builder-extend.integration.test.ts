@@ -17,7 +17,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineCollection, fieldGroup, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { clearServices } from "../../../di/register";
-import { ensureFirstRunSetup } from "../../../init/first-run";
+import {
+  ensureFirstRunSetup,
+  firstStartSchemaLock,
+} from "../../../init/first-run";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import {
   seedBuilderCollection,
@@ -108,7 +111,11 @@ async function storedFieldNames(
 describe("a boot refused for its workflows, beside a Builder reconcile (sqlite)", () => {
   it("adds no plugin field to a Builder collection", async () => {
     const adapter = await adapterOnFile();
-    await ensureFirstRunSetup({ adapter, logger: silentLogger });
+    await ensureFirstRunSetup({
+      adapter,
+      logger: silentLogger,
+      holdSchemaLock: firstStartSchemaLock(adapter, silentLogger),
+    });
     await seedBuilderCollection(adapter, {
       slug: "articles",
       fields: [{ name: "body", type: "text", source: "ui" }],
