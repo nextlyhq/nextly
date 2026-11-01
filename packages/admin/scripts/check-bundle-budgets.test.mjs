@@ -20,6 +20,12 @@ import {
 const KB = 1024;
 
 /** A report: a small total, a 250 KB shell, and routes with their own code. */
+/**
+ * A shipped total over the budget, derived from it, so raising the budget
+ * leaves these tests measuring a breach.
+ */
+const OVER_TOTAL_KB = BUDGETS.totalMinifiedKB + 20;
+
 function report(routes, { totalKB = 1000, shellKB = 250 } = {}) {
   return {
     totals: {
@@ -98,19 +104,20 @@ describe("pinRefusal", () => {
 
   it("refuses a dist stamped by another commit", () => {
     expect(
-      pinRefusal({ ...fresh, commit: "bbbbbbb", buildInfo: { commit: "aaaaaaa" } })
+      pinRefusal({
+        ...fresh,
+        commit: "bbbbbbb",
+        buildInfo: { commit: "aaaaaaa" },
+      })
     ).toMatch(/predates|another commit/);
   });
 
   it("refuses while a build input has uncommitted changes: the bytes are not the commit's", () => {
-    expect(pinRefusal(fresh, ["packages/admin/src/pages/dashboard/index.tsx"])).toMatch(
-      /uncommitted.*pages\/dashboard\/index\.tsx/
-    );
+    expect(
+      pinRefusal(fresh, ["packages/admin/src/pages/dashboard/index.tsx"])
+    ).toMatch(/uncommitted.*pages\/dashboard\/index\.tsx/);
   });
 });
-
-/** Twenty KB over whatever the total's budget is, so a raised budget keeps it a breach. */
-const OVER_KB = BUDGETS.totalMinifiedKB + 20;
 
 describe("budgetBreaches", () => {
   it("fails two routes that share a stable name: one pin cannot hold both", () => {
@@ -153,7 +160,10 @@ describe("budgetBreaches", () => {
     expect(budgetBreaches(report([["page.tiny-AAAAAAAA.mjs", 3]]), p)).toEqual(
       []
     );
-    const [breach] = budgetBreaches(report([["page.tiny-AAAAAAAA.mjs", 3.5]]), p);
+    const [breach] = budgetBreaches(
+      report([["page.tiny-AAAAAAAA.mjs", 3.5]]),
+      p
+    );
     expect(breach.kind).toBe("route");
   });
 
@@ -184,10 +194,10 @@ describe("budgetBreaches", () => {
   });
 
   it("fails a shipped total over its budget", () => {
-    const r = report([], { totalKB: OVER_KB });
+    const r = report([], { totalKB: OVER_TOTAL_KB });
     const [breach] = budgetBreaches(r, pins([]));
     expect(breach.kind).toBe("total");
-    expect(breach.measured).toContain(`${OVER_KB}.00 KB`);
+    expect(breach.measured).toContain(`${OVER_TOTAL_KB.toFixed(2)} KB`);
     expect(breach.budget).toContain(`${BUDGETS.totalMinifiedKB}`);
   });
 
@@ -211,10 +221,12 @@ describe("budgetBreaches", () => {
 
 describe("describeBreaches", () => {
   it("renders measured size and budget together on one line", () => {
-    const r = report([], { totalKB: OVER_KB });
+    const r = report([], { totalKB: OVER_TOTAL_KB });
     expect(describeBreaches(budgetBreaches(r, pins([])))).toEqual([
       expect.stringMatching(
-        new RegExp(`total.*${OVER_KB}\\.00 KB minified.*${BUDGETS.totalMinifiedKB} KB minified`)
+        new RegExp(
+          `total.*${OVER_TOTAL_KB}\\.00 KB minified.*${BUDGETS.totalMinifiedKB} KB minified`
+        )
       ),
     ]);
   });

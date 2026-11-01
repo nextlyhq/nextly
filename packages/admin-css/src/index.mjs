@@ -17,4 +17,8 @@ export {
   scopeSelector,
   splitTopLevel,
 } from "./css-scope.mjs";
+export {
+  ADMIN_NAME_PREFIX,
+  isolateAdminStylesheet,
+} from "./admin-stylesheet.mjs";
 export { checkAdminStyles } from "./check-admin-styles.mjs";

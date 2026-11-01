@@ -69,17 +69,19 @@ for (const issue of issues) {
 }
 ```
 
-| Export                                     | What it does                                                                                                                  |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `scopeCss(css, scope?)`                    | Scopes every rule in a stylesheet under `.nextly-admin`                                                                       |
-| `checkAdminStyles({ css })`                | Returns `{ severity, message }[]` for rules that escaped the wrapper, and for hardcoded colors that should be `--nx-*` tokens |
-| `findUnscopedRules(css, scope?)`           | Lists the rules that escaped, for reporting                                                                                   |
-| `scopeSelector(selector, scope?)`          | Scopes one selector                                                                                                           |
-| `isScoped(selector, scope?)`               | Whether one selector is already scoped                                                                                        |
-| `splitTopLevel(selector)`                  | Splits a selector list on top-level commas                                                                                    |
-| `confineVariantClasses(css, scope?)`       | Keeps Tailwind variant classes inside the scope                                                                               |
-| `namespaceInternalProperties(css, prefix)` | Namespaces internal custom properties                                                                                         |
-| `prefixKeyframes(css, prefix)`             | Prefixes `@keyframes` names so they cannot collide                                                                            |
+| Export                                     | What it does                                                                                                                    |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `scopeCss(css, scope?)`                    | Scopes every rule in a stylesheet under `.nextly-admin`                                                                         |
+| `checkAdminStyles({ css })`                | Returns `{ severity, message }[]` for rules that escaped the wrapper, and for hardcoded colors that should be `--nx-*` tokens   |
+| `findUnscopedRules(css, scope?)`           | Lists the rules that escaped, for reporting                                                                                     |
+| `scopeSelector(selector, scope?)`          | Scopes one selector                                                                                                             |
+| `isScoped(selector, scope?)`               | Whether one selector is already scoped                                                                                          |
+| `splitTopLevel(selector)`                  | Splits a selector list on top-level commas                                                                                      |
+| `confineVariantClasses(css, scope?)`       | Keeps Tailwind variant classes inside the scope                                                                                 |
+| `namespaceInternalProperties(css, prefix)` | Namespaces internal custom properties                                                                                           |
+| `prefixKeyframes(css, prefix)`             | Prefixes `@keyframes` names so they cannot collide                                                                              |
+| `isolateAdminStylesheet(css, { prefix? })` | The admin stylesheet's whole sequence: scopes, prefixes keyframes and registered properties, then throws on a rule that escaped |
+| `ADMIN_NAME_PREFIX`                        | The prefix the admin's stylesheet gives those names (`nx-`)                                                                     |
 
 ## Related packages
 

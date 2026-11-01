@@ -253,6 +253,16 @@ const UNANSWERED_RECHECK_MS = 60_000;
  * answer past its end is never counted, however recently it was asked
  * (`askedAt`). Kept per client, so two admins in one page, or two tests, never
  * share a screen.
+ *
+ * 🔴 Asked again, never invalidated. An invalidated answer counts as no answer
+ * until the next arrives (`answerState`): that is right after a change to roles
+ * or permissions (`invalidateCurrentUserAccess`), which says the answer may be
+ * wrong, and wrong for a new screen, which says nothing about it. Invalidated
+ * there, every screen drew its first frames with no permission at all and then
+ * again with the answer: on a return to the dashboard, a card that needs a
+ * permission (Upcoming releases) was left out of the first frame and put back
+ * when the answer arrived, moving every card under it. Asked again instead, as
+ * a regained focus asks, the answer kept counts until the new one replaces it.
  */
 const permissionsScreenOf = new WeakMap<QueryClient, string>();
 
@@ -703,18 +713,20 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   const { data, refetch } = permissionsQuery;
 
   // A new screen asks again, once: the first caller to see its pathname
-  // records it and invalidates the answer, refetching it for every caller
-  // mounted; a caller that finds the pathname recorded asks nothing. The
-  // first screen of all is the query's first fetch, so it only records.
+  // records it and refetches the answer for every caller mounted, the answer
+  // kept counting meanwhile (see `permissionsScreenOf`); a caller that finds
+  // the pathname recorded asks nothing. The first screen of all is the
+  // query's first fetch, so it only records.
   useEffect(() => {
     if (!isPrivateRoute || pathname === "") return;
     const asked = permissionsScreenOf.get(queryClient);
     if (asked === pathname) return;
     permissionsScreenOf.set(queryClient, pathname);
     if (asked === undefined) return;
-    void queryClient.invalidateQueries({
+    void queryClient.refetchQueries({
       queryKey: CURRENT_USER_PERMISSIONS_KEY,
       exact: true,
+      type: "active",
     });
   }, [isPrivateRoute, pathname, queryClient]);
 

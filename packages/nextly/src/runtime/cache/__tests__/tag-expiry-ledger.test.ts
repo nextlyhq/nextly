@@ -60,7 +60,7 @@ describe("the cache tag expiry ledger without its table", () => {
   it("records nothing for no tags, without asking the catalogue", async () => {
     const { adapter } = withoutTheTable();
     const ledger = createTagExpiryLedger(adapter);
-    expect(await ledger.record([])).toBe(true);
+    expect(await ledger.record([])).toEqual(new Map());
     expect(
       (adapter as unknown as { tableExists: ReturnType<typeof vi.fn> })
         .tableExists
