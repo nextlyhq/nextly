@@ -106,6 +106,8 @@ async function bootWarnings(fresh: FreshDatabase): Promise<string[]> {
       executeQuery: async () => undefined,
     },
     logger,
+    // The initialized path never reaches the lock.
+    holdSchemaLock: work => work(),
   });
   return logger.warn.mock.calls.map(([message]) => String(message));
 }
