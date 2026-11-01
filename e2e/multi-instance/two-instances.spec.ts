@@ -30,6 +30,13 @@ import { WRITE_SECRET, type Leg } from "./instances";
  */
 const FRESH_WITHIN_MS = 15_000;
 
+/**
+ * How long after a write the control's entries are first read, and so
+ * filled: the 5 s lookup interval with as much again to spare, so the gap
+ * between the write's expiry and the fill outlasts any lookup's round trip.
+ */
+const FILL_AFTER_WRITE_MS = 11_000;
+
 const LEGS: Leg[] = [
   {
     name: "cache-components-off",
@@ -85,20 +92,34 @@ for (const leg of LEGS) {
       request,
     }) => {
       const { a, b } = running();
-      // An entry the writer filled while its own expiry was still being
-      // recorded is judged against that record once it reads it back, and is
-      // filled again, so it is read past one lookup interval first: what is
-      // checked is that the writer caches again, not that one early entry.
-      await new Promise(resolve => setTimeout(resolve, 6_000));
-      expect(await noteOn(request, a)).toBe("through-a");
-      expect(await noteOn(request, b)).toBe("through-a");
+      // A write of its own, then no reads until well past the lookup
+      // interval, so each instance fills its entry long after the write's
+      // expiry. An entry filled close to an expiry can be judged against it
+      // again whenever a lookup's round trip is slower than that gap, and is
+      // filled again with whatever the database then holds; filled this late,
+      // no lookup is that slow. What is checked is that the writer caches
+      // again, not how one early entry fares.
+      const res = await request.post(`${a.url}/api/note`, {
+        headers: { "x-fixture-secret": WRITE_SECRET },
+        data: { value: "settled" },
+      });
+      expect(res.status()).toBe(200);
+      await new Promise(resolve => setTimeout(resolve, FILL_AFTER_WRITE_MS));
+      // An instance may answer its first read with the old value while it
+      // fills, so each waits for the write.
+      const since = Date.now();
+      await Promise.all(
+        [a, b].map(instance =>
+          servedWithin(request, instance, "settled", since, FRESH_WITHIN_MS)
+        )
+      );
       // The writer included: an instance that kept re-reading the database
       // after its own write would serve this change, and look fresh for the
       // wrong reason in the check after.
       running().writeOutsideRequest("unexpired-after-write", true);
       await new Promise(resolve => setTimeout(resolve, 6_000));
-      expect(await noteOn(request, a)).toBe("through-a");
-      expect(await noteOn(request, b)).toBe("through-a");
+      expect(await noteOn(request, a)).toBe("settled");
+      expect(await noteOn(request, b)).toBe("settled");
     });
 
     test("a write outside any request is served by both instances within the bound", async ({
