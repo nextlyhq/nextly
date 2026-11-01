@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
-import { CORE_WIDGETS } from "../../core-widgets";
 import type { WidgetDefinition } from "../../definition";
 import { widgetGateHolds } from "../../gate";
 import { clearWidgets, getWidget } from "../../registry";
@@ -55,9 +54,16 @@ describe("the one call every owner's widgets come through", () => {
     // 🔴 Core's list was registered on its own before the declarations, so a
     // mistake in it threw alone, and a plugin's fault was a second boot away,
     // with core's cards already kept. Now both arrive in one message.
-    // Core's one definition, and a second beside it under another id.
-    const [first] = CORE_WIDGETS;
-    if (first === undefined) throw new Error("core has a definition");
+    // Core writes no card as a definition now, so two stand in for its list: one given twice, and a
+    // second under another id.
+    const first: WidgetDefinition = {
+      id: "core/first",
+      title: "First",
+      description: "A core card written as a definition.",
+      archetype: "custom",
+      component: "core#First",
+      size: { default: { w: 6, h: 4 } },
+    };
     const second: WidgetDefinition = { ...first, id: "core/second" };
     const message = refused(() =>
       registerDashboardWidgets({

@@ -36,6 +36,18 @@ beforeEach(() => {
     size: { default: { w: 12, h: 2 } },
     dismissible: true,
   });
+  // No core card is written as a definition now either, so a plugin's stands in for one offered on a
+  // condition and not dismissible.
+  registerWidget({
+    id: "acme/offered",
+    title: "Offered",
+    description: "A card offered while there is content, and not dismissible.",
+    archetype: "custom",
+    component: "acme#Offered",
+    size: { default: { w: 6, h: 4 } },
+    lifecycle: "conditional",
+    visibleWhen: "content:present",
+  });
 });
 
 const summaryFor = (id: string) => {
@@ -55,21 +67,21 @@ describe("what the admin is told about dismissal", () => {
     // Absent rather than `false`, matching how every other optional field on
     // the summary travels -- a reader of the payload sees which cards made a
     // claim instead of inferring it from a default.
-    expect(summaryFor("core/quick-create")).not.toHaveProperty("dismissible");
+    expect(summaryFor("acme/offered")).not.toHaveProperty("dismissible");
   });
 
   it("travels beside a lifecycle without being implied by it", () => {
     // 🔴 Neither implies the other, in either direction. A summary that tied
     // them would take a card away for the wrong reason: a card may be
-    // dismissible with no condition, and Content is conditional and not
+    // dismissible with no condition, and one may be conditional and not
     // dismissible.
     const started = summaryFor("acme/welcome");
     expect(started).not.toHaveProperty("visibleWhen");
     expect(started.dismissible).toBe(true);
 
-    // Create, core's one card still written as a definition, offered on a condition.
-    const create = summaryFor("core/quick-create");
-    expect(create.lifecycle).toBe("conditional");
-    expect(create).not.toHaveProperty("dismissible");
+    // A card offered on a condition, and not dismissible.
+    const offered = summaryFor("acme/offered");
+    expect(offered.lifecycle).toBe("conditional");
+    expect(offered).not.toHaveProperty("dismissible");
   });
 });
