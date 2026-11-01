@@ -641,6 +641,98 @@ describe("delete with Undo", () => {
     );
   });
 
+  /** The bulk delete button, for however many are selected, or null. */
+  const bulkDelete = () =>
+    screen.queryByRole("button", { name: /^Delete \d+ selected items?$/ });
+
+  // A selection made in one set must never reach a set that no longer shows
+  // it: a used file selected in All media, deleted from Unused.
+  it("clears the selection when the view changes, so a bulk delete reaches only what is on screen", async () => {
+    renderLibrary();
+    await waitFor(() => tile(1));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select photo-1.jpg" })
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select photo-2.jpg" })
+    );
+    expect(bulkDelete()).toHaveAccessibleName("Delete 2 selected items");
+    // Unused lists only the third.
+    api.fetchMedia.mockResolvedValue({
+      data: [item(3)],
+      meta: {
+        total: 1,
+        page: 1,
+        limit: 24,
+        totalPages: 1,
+        usageRecorded: true,
+      },
+    });
+
+    act(() => setMediaLibraryView("unused"));
+
+    await waitFor(() => tile(3));
+    expect(screen.queryByRole("button", { name: /^photo-1\.jpg/ })).toBeNull();
+    expect(bulkDelete()).toBeNull();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select photo-3.jpg" })
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete 1 selected item" })
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(library.deleteMediaLater).toHaveBeenCalledWith(["m3"])
+    );
+  });
+
+  it("clears the selection when a search lists another set", async () => {
+    renderLibrary();
+    await waitFor(() => tile(1));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select photo-1.jpg" })
+    );
+    expect(bulkDelete()).toHaveAccessibleName("Delete 1 selected item");
+
+    await userEvent.type(screen.getByRole("searchbox"), "photo-2");
+
+    await waitFor(() =>
+      expect(api.fetchMedia).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: "photo-2" })
+      )
+    );
+    await waitFor(() => expect(bulkDelete()).toBeNull());
+  });
+
+  it("keeps the selection across pages of the same set", async () => {
+    // POSITIVE CONTROL for the two above: paging lists the same set.
+    api.fetchMedia.mockImplementation((params: { page: number }) =>
+      Promise.resolve({
+        data: [item(params.page)],
+        meta: { total: 48, page: params.page, limit: 24, totalPages: 2 },
+      })
+    );
+    renderWithProviders(
+      <MediaProvider>
+        <MediaLibrary />
+      </MediaProvider>
+    );
+    await waitFor(() => tile(1));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select photo-1.jpg" })
+    );
+
+    fireEvent.click(
+      within(
+        screen.getByRole("navigation", { name: "Media grid pagination" })
+      ).getByRole("button", { name: /next page/i })
+    );
+
+    await waitFor(() => tile(2));
+    expect(bulkDelete()).toHaveAccessibleName("Delete 1 selected item");
+  });
+
   // An item an earlier delete marked goes at that delete's deadline, which
   // is what `deleteAfter` answers for the whole request. Undo here takes back
   // only this delete's own items, whose window began with this delete.
