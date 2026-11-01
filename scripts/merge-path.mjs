@@ -12,10 +12,15 @@
  *
  * - `select`, on every pull-request run: selection is on only while the
  *   repository variable `NEXTLY_PR_TEST_SELECTION` is `on`, a switch the
- *   repository's owner flips once the last bypass is gone, AND `main`'s rules
- *   (readable without a token) still include the merge queue. A run that cannot
- *   read the rules tests everything; a run that reads them without the queue
- *   tests everything and fails, because the switch is on with nothing behind it.
+ *   repository's owner flips once the last bypass is gone, AND every path to
+ *   `main` is read and found to go through the queue: its rules include the
+ *   merge queue, every ruleset behind them is active with no bypass actors,
+ *   and it has no classic branch protection. A path known to skip the queue
+ *   tests everything and fails, because the switch is on with a way around it;
+ *   anything that could not be read tests everything without failing. Bypass
+ *   actors are readable only with administration rights, so with the
+ *   workflow's own token selection stays off: switching it on takes a
+ *   credential that can read them, as well as the switch.
  * - `tripwire`, on each push to `main` while the switch is on: a queue merge
  *   lands the very commit the queue tested, so every first-parent commit a push
  *   brings must have a passing CI run from the merge queue on its own SHA. One
@@ -51,12 +56,13 @@ function hasMergeQueue(rules) {
  * How one CI run tests its unit lanes: `select` (the affected files and the
  * guards), `shadow` (everything, with the selection computed and reported
  * beside it), or `full` (everything). `guardFailure` is set when the run must
- * fail as well. `rules` is null when they could not be read.
+ * fail as well. `paths` is `directPaths`' answer, or null when main's rules
+ * could not be read.
  *
  * Every undecidable case tests everything: narrowing is the one direction that
  * can let an untested change through, so it needs every condition met.
  */
-export function selectionMode({ event, switchValue, rules }) {
+export function selectionMode({ event, switchValue, paths }) {
   if (event !== "pull_request") {
     return { mode: "full", reason: `a ${event} run tests everything`, guardFailure: null };
   }
@@ -67,17 +73,25 @@ export function selectionMode({ event, switchValue, rules }) {
       guardFailure: null,
     };
   }
-  if (rules === null) {
+  if (paths === null) {
     return { mode: "full", reason: "main's rules could not be read, so whether the queue is the only path is unknown", guardFailure: null };
   }
-  if (!hasMergeQueue(rules)) {
+  const open = paths.filter(problem => problem.known).map(problem => problem.text);
+  if (open.length > 0) {
     return {
       mode: "full",
-      reason: "main has no merge_queue rule",
-      guardFailure: `${SELECTION_SWITCH} is on, but main has no merge_queue rule, so a pull request can merge without the queue's full run. Switch ${SELECTION_SWITCH} off until the queue is the only merge path.`,
+      reason: open.join("; "),
+      guardFailure: `${SELECTION_SWITCH} is on, but a pull request can merge without the queue's full run: ${open.join("; ")}. Switch ${SELECTION_SWITCH} off until the queue is the only merge path.`,
     };
   }
-  return { mode: "select", reason: "selection is on and main merges only through the queue", guardFailure: null };
+  if (paths.length > 0) {
+    return {
+      mode: "full",
+      reason: `whether the queue is the only path could not be confirmed: ${paths.map(problem => problem.text).join("; ")}`,
+      guardFailure: null,
+    };
+  }
+  return { mode: "select", reason: "selection is on and every path to main goes through the queue", guardFailure: null };
 }
 
 /**
@@ -111,29 +125,64 @@ export function directMerges(chain, queued) {
 }
 
 /**
- * What stands between `main` and a merge that skips the queue, from every
- * ruleset that applies to it, each as `GET repos/{repo}/rulesets/{id}` returns
- * it to its reader. Empty means none.
+ * What stands between `main` and a merge that skips the queue: every ruleset
+ * that applies to it, each as `GET repos/{repo}/rulesets/{id}` returns it to
+ * its reader (null where that read failed), and `main` itself as
+ * `GET repos/{repo}/branches/main` returns it, for classic branch protection
+ * (null where that read failed). Empty means none.
  *
- * A ruleset read without admin rights carries no `bypass_actors` at all, which
- * is "could not look", not "nobody", so it is a problem in its own right.
+ * Each problem says whether a way around the queue is `known` to exist, or
+ * whether it could not be checked. A ruleset read without administration
+ * rights carries no `bypass_actors` at all, which is "could not look", not
+ * "nobody". Classic branch protection lets administrators through unless it
+ * is enforced for them, which only an administrator can read, so its presence
+ * alone is a problem that could not be checked.
  */
-export function directPaths(rulesets, branchRules) {
+export function directPaths(rulesets, branchRules, branch) {
   const problems = [];
-  if (!hasMergeQueue(branchRules)) problems.push("main has no merge_queue rule");
+  const known = text => problems.push({ text, known: true });
+  const unchecked = text => problems.push({ text, known: false });
+  if (!hasMergeQueue(branchRules)) known("main has no merge_queue rule");
   for (const ruleset of rulesets) {
+    if (ruleset.unreadable) {
+      unchecked(`ruleset ${ruleset.id} could not be read`);
+      continue;
+    }
     const name = `ruleset ${ruleset.id} (${ruleset.name})`;
-    if (ruleset.enforcement !== "active") problems.push(`${name} is ${ruleset.enforcement}, not active`);
+    if (ruleset.enforcement !== "active") known(`${name} is ${ruleset.enforcement}, not active`);
     if (!Array.isArray(ruleset.bypass_actors)) {
-      problems.push(`${name}'s bypass actors could not be read: run this with an admin's GH_TOKEN`);
+      unchecked(`${name}'s bypass actors could not be read: they need a token with administration read`);
     } else {
       for (const actor of ruleset.bypass_actors) {
         const who = [actor.actor_type, actor.actor_id].filter(part => part !== undefined && part !== null).join(" ");
-        problems.push(`${name} lets ${who} bypass it (${actor.bypass_mode})`);
+        known(`${name} lets ${who} bypass it (${actor.bypass_mode})`);
       }
     }
   }
+  if (branch === null) {
+    unchecked("main's branch protection could not be read");
+  } else if (branch?.protection?.enabled !== false) {
+    unchecked("main has classic branch protection, whose enforcement for administrators is not read here: leave main's rules to its rulesets");
+  }
   return problems;
+}
+
+/**
+ * Every path to `main`, read: its rules, each ruleset behind them, and the
+ * branch itself, as `directPaths` judges them. Null when the rules could not
+ * be read, since without them nothing names the rulesets to read.
+ */
+async function readMergePaths(context, repo) {
+  const branchRules = await allPagesOrNull(`repos/${repo}/rules/branches/main`, context);
+  if (!Array.isArray(branchRules)) return null;
+  const ids = [...new Set(branchRules.map(rule => rule.ruleset_id).filter(id => id !== undefined))];
+  const rulesets = [];
+  for (const id of ids) {
+    const ruleset = await readOrNull(`repos/${repo}/rulesets/${id}`, context);
+    rulesets.push(ruleset ?? { id, unreadable: true });
+  }
+  const branch = await readOrNull(`repos/${repo}/branches/main`, context);
+  return { rulesets, problems: directPaths(rulesets, branchRules, branch) };
 }
 
 /**
@@ -179,8 +228,8 @@ async function select(env, context, repo) {
   const event = env.GITHUB_EVENT_NAME ?? "";
   const switchValue = env[SELECTION_SWITCH] ?? "";
   // Read only when the answer can depend on it, so a push or a queue run asks GitHub nothing.
-  const rules = event === "pull_request" && switchValue === "on" ? await allPagesOrNull(`repos/${repo}/rules/branches/main`, context) : [];
-  const verdict = selectionMode({ event, switchValue, rules });
+  const read = event === "pull_request" && switchValue === "on" ? await readMergePaths(context, repo) : { problems: [] };
+  const verdict = selectionMode({ event, switchValue, paths: read === null ? null : read.problems });
   console.log(`merge-path: ${verdict.mode}, because ${verdict.reason}`);
   setJobVariable(env, MODE_VARIABLE, verdict.mode);
   if (verdict.guardFailure) {
@@ -235,20 +284,14 @@ async function tripwire(env, context, repo, before, after) {
 }
 
 async function enablement(context, repo) {
-  const branchRules = await allPagesOrNull(`repos/${repo}/rules/branches/main`, context);
-  if (!Array.isArray(branchRules)) {
+  const read = await readMergePaths(context, repo);
+  if (read === null) {
     console.log("merge-path enablement: FAIL, main's rules could not be read");
     return 1;
   }
-  const ids = [...new Set(branchRules.map(rule => rule.ruleset_id).filter(id => id !== undefined))];
-  const rulesets = [];
-  for (const id of ids) {
-    const ruleset = await readOrNull(`repos/${repo}/rulesets/${id}`, context);
-    rulesets.push(ruleset ?? { id, name: "unreadable", enforcement: "unknown" });
-  }
-  const problems = directPaths(rulesets, branchRules);
+  const { rulesets, problems } = read;
   console.log(`merge-path enablement: ${problems.length === 0 ? "PASS" : "FAIL"}, ${rulesets.length} ruleset(s) read for main`);
-  for (const problem of problems) console.log(`  - ${problem}`);
+  for (const problem of problems) console.log(`  - ${problem.text}`);
   return problems.length === 0 ? 0 : 1;
 }
 
