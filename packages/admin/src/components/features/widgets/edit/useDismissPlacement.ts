@@ -42,7 +42,10 @@
 import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
-import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
+import {
+  isConflictError,
+  type UseDashboardLayoutResult,
+} from "@admin/hooks/queries/useDashboardLayout";
 import type {
   DashboardLayoutResponse,
   WidgetPlacement,
@@ -143,6 +146,58 @@ function standingInput(stored: DashboardLayoutResponse, change: StandingWrite) {
   };
 }
 
+/** What one standing write is: how it is made of a read, and what follows each outcome. */
+interface StandingAttempt {
+  /** The write, made of the arrangement in `stored`, or none when it no longer applies. */
+  build: (stored: DashboardLayoutResponse) => StandingWrite | undefined;
+  landed: (change: StandingWrite) => void;
+  failed: (error: Error) => void;
+}
+
+/**
+ * Sends the write `attempt` makes of `stored`, and, refused as a conflict, makes it again of the
+ * arrangement read since and sends that, once.
+ *
+ * 🔴 A conflict says the copy the write was made of was stale, not that the change was wrong, and
+ * the reader may have done nothing to cause it: another person scheduling a release, or creating
+ * a collection, moves the widgets this reader may see, and so the scope token, between the read
+ * after a Remove and the Undo that follows it. The server wrote nothing, and the channel has read
+ * the arrangement again before reporting (`useDashboardLayout`), so the same one-card change made
+ * of what is stored now is the remedy the refusal asks for, and it keeps whatever moved, another
+ * tab's arrangement included. Reported instead, the refusal took a removed card away for good:
+ * the notice stayed with its Undo, and every Undo was refused the same way.
+ *
+ * Once, so a server that keeps refusing is reported rather than asked again without end. Never
+ * for another failure: a write that failed without an answer may have landed (`writeLayout`).
+ */
+function sendStanding(
+  layout: UseDashboardLayoutResult,
+  stored: DashboardLayoutResponse,
+  attempt: StandingAttempt,
+  refused?: Error
+): void {
+  const change = attempt.build(stored);
+  if (change === undefined) {
+    // Nothing to send of this read. On the second try, the refusal stands as the answer.
+    if (refused) attempt.failed(refused);
+    return;
+  }
+  // Cleared before the attempt, so a retry that succeeds does not leave an
+  // earlier failure reported.
+  layout.dismiss.reset();
+  layout.dismiss.mutate(standingInput(stored, change), {
+    onSuccess: () => attempt.landed(change),
+    onError: error => {
+      const fresh = layout.cached();
+      if (refused || !isConflictError(error) || fresh === undefined) {
+        attempt.failed(error);
+        return;
+      }
+      sendStanding(layout, fresh, attempt, error);
+    },
+  });
+}
+
 export interface DismissPlacement {
   /** Remove one card now, then offer Undo. */
   dismiss: (placementId: string, title: string) => void;
@@ -168,16 +223,16 @@ export function useDismissPlacement(
   const dismiss = useCallback(
     (placementId: string, title: string) => {
       const stored = layout.layout;
-      // Refused while the stored row is unreadable: the server refuses any
-      // single-card write to it, and the control says why it is unavailable.
-      if (!stored || layout.isUnreadable) return;
-      const removal = removalOf(stored, placementId, layout.isArranged);
-      if (removal === undefined) return;
-      // Cleared before the attempt, so a retry that succeeds does not leave an
-      // earlier failure reported.
-      layout.dismiss.reset();
-      layout.dismiss.mutate(standingInput(stored, removal), {
-        onSuccess: () => {
+      if (!stored) return;
+      sendStanding(layout, stored, {
+        // Refused while the stored row is unreadable: the server refuses any single-card write
+        // to it, and the control says why it is unavailable. Read off the answer the write is
+        // made of, as the layout's `isUnreadable` and `isArranged` are read off its own.
+        build: read =>
+          read.source === "unreadable"
+            ? undefined
+            : removalOf(read, placementId, read.arranged === true),
+        landed: removal => {
           if (!removal.shows(layout)) {
             toast.error(REFRESH_FAILED(title));
             return;
@@ -196,7 +251,7 @@ export function useDismissPlacement(
         },
         // A toast rather than the customise chrome's own error, which a
         // reader who never opened customise mode is not looking at.
-        onError: error =>
+        failed: error =>
           toast.error(`Could not dismiss ${title}: ${error.message}`),
       });
     },
@@ -210,10 +265,9 @@ export function useDismissPlacement(
       const stored = layout.cached() ?? layout.layout;
       if (!stored) return;
       const { placementId, title } = notice;
-      const restoration = restorationOf(stored, notice);
-      layout.dismiss.reset();
-      layout.dismiss.mutate(standingInput(stored, restoration), {
-        onSuccess: () => {
+      sendStanding(layout, stored, {
+        build: read => restorationOf(read, notice),
+        landed: restoration => {
           if (!restoration.shows(layout)) {
             toast.error(REFRESH_FAILED(title));
             return;
@@ -224,7 +278,7 @@ export function useDismissPlacement(
           // that is now back.
           focus.request({ kind: "dismiss", placementId });
         },
-        onError: error =>
+        failed: error =>
           toast.error(`Could not undo removing ${title}: ${error.message}`),
       });
     },

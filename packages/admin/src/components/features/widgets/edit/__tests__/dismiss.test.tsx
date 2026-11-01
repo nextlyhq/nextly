@@ -575,6 +575,152 @@ describe("the notice a dismiss leaves", () => {
   });
 });
 
+describe("a write refused because the dashboard moved since it was read", () => {
+  /** An arranged reader's list, as the reader the card menu's Remove takes a card out of. */
+  const ARRANGED: WidgetPlacement[] = [
+    { id: "p1", widgetId: "core/onboarding", w: 12, h: 3, removed: false },
+    { id: "p2", widgetId: "core/permanent", w: 6, h: 3, removed: false },
+  ];
+
+  /** The server's refusal of a write made of a stale read, as a 409. */
+  function refusal(): Error {
+    return Object.assign(
+      new Error(
+        "The widgets available to you changed since you loaded the dashboard. Reload and try again."
+      ),
+      { status: 409 }
+    );
+  }
+
+  /** What another person's change does to this reader's dashboard: a new scope token, no write. */
+  function widgetsMoveElsewhere(): void {
+    layoutResponse = {
+      ...(layoutResponse as DashboardLayoutResponse),
+      scope: "tok-after",
+    };
+  }
+
+  beforeEach(() => {
+    layoutResponse = layout({ arranged: true, placements: ARRANGED });
+    /*
+     * 🔴 The stand-in GUARDS, as the server does: a write carrying a version or a scope the
+     * stored row no longer has is refused and changes nothing. A stand-in that applied every
+     * write would accept a retry sent with the refused guards, and pass a client that never read
+     * the dashboard again.
+     */
+    api.put.mockImplementation((_path: string, body: unknown) => {
+      const sent = body as {
+        placements: WidgetPlacement[];
+        version: number;
+        scope: string;
+      };
+      const now = layoutResponse as DashboardLayoutResponse;
+      if (sent.version !== now.version || sent.scope !== now.scope) {
+        return Promise.reject(refusal());
+      }
+      layoutResponse = {
+        ...now,
+        placements: sent.placements,
+        version: now.version + 1,
+      };
+      return Promise.resolve({ message: "ok", item: {} });
+    });
+  });
+
+  it("Undo still puts the card back when the widgets moved after the Remove", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+    const undo = await screen.findByTestId("removal-notice-undo");
+    widgetsMoveElsewhere();
+    await user.click(undo);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("widget-cell-core/onboarding")
+      ).toBeInTheDocument()
+    );
+    // Refused once under the guards read before the change, then sent under those read since.
+    expect(api.put).toHaveBeenCalledTimes(3);
+    expect(api.put.mock.calls[1][1]).toMatchObject({
+      version: 8,
+      scope: "tok",
+    });
+    expect(api.put.mock.calls[2][1]).toEqual({
+      placements: ARRANGED,
+      version: 8,
+      scope: "tok-after",
+      arranged: true,
+    });
+    expect(live()).toHaveTextContent("Set up your project restored.");
+    expect(screen.queryByTestId("removal-notice")).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("Remove still takes the card off when the widgets moved since the dashboard was read", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await screen.findByRole("button", {
+      name: "Card menu for Set up your project",
+    });
+    widgetsMoveElsewhere();
+    await removeFromMenu(user);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("removal-notice")).toHaveTextContent(
+        "Set up your project removed."
+      )
+    );
+    expect(screen.queryByTestId("widget-cell-core/onboarding")).toBeNull();
+    expect(api.put).toHaveBeenCalledTimes(2);
+    expect(api.put.mock.calls[1][1]).toEqual({
+      placements: [ARRANGED[1]],
+      version: 7,
+      scope: "tok-after",
+      arranged: true,
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("reports a second refusal rather than sending again", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+    const undo = await screen.findByTestId("removal-notice-undo");
+    api.put.mockImplementation(() => Promise.reject(refusal()));
+    await user.click(undo);
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Could not undo removing Set up your project: The widgets available to you changed since you loaded the dashboard. Reload and try again."
+      )
+    );
+    // The Remove, then Undo twice: the first refusal and the one retry.
+    expect(api.put).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("removal-notice")).toBeInTheDocument();
+  });
+
+  it("sends nothing again after a failure that is not a conflict", async () => {
+    // A write that failed without the server's refusal may have landed, and a second one would
+    // be sent under guards it already moved.
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user);
+    const undo = await screen.findByTestId("removal-notice-undo");
+    api.put.mockImplementation(() =>
+      Promise.reject(Object.assign(new Error("Bad gateway"), { status: 502 }))
+    );
+    await user.click(undo);
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Could not undo removing Set up your project: Bad gateway"
+      )
+    );
+    expect(api.put).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("while the stored dashboard cannot be read", () => {
   it("keeps Remove in the menu, unavailable, saying why", async () => {
     layoutResponse = layout({ source: "unreadable" });

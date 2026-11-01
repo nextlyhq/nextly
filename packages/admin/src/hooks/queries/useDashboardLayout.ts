@@ -391,8 +391,20 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
    * with. Every dismissal builds a whole-layout snapshot from the cached
    * version, so two in flight at once carry the same guard and the server can
    * only honour one.
+   *
+   * A write refused as a conflict reads the layout again before it reports,
+   * RETURNED for the reason `onSuccess` returns its invalidation: the channel
+   * stays pending through the re-read, so nothing else is sent against the
+   * refused guards, and a `mutate` callback finds the cache holding the
+   * guards a second attempt must carry (`useDismissPlacement`). Without it the
+   * cache kept the refused guards, and every later attempt was refused the
+   * same way until the page was reloaded.
    */
-  const dismiss = useMutation(writeLayout);
+  const dismiss = useMutation({
+    ...writeLayout,
+    onError: (error: Error) =>
+      isConflictError(error) ? invalidate() : undefined,
+  });
 
   // A card's settings changed outside customise mode: the same request again,
   // on its own channel, for the reasons `dismiss` has its own.
