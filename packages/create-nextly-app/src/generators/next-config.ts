@@ -15,6 +15,7 @@ import type {
   TSNonNullExpression,
   TSSatisfiesExpression,
   TSTypeAssertion,
+  VariableDeclarator,
 } from "@babel/types";
 import fs from "fs-extra";
 
@@ -1062,18 +1063,22 @@ function importsRequire(statement: Statement): boolean {
   );
 }
 
-/** Whether `statement` declares a variable named `require`, exported or not. */
-function declaresRequireVariable(statement: Statement): boolean {
+/** The declarators in `statement` that name a variable `require`, exported or not. */
+function requireDeclarators(statement: Statement): VariableDeclarator[] {
   const declaration =
     statement.type === "ExportNamedDeclaration"
       ? statement.declaration
       : statement;
-  return (
-    declaration?.type === "VariableDeclaration" &&
-    declaration.declarations.some(declarator =>
-      isNamed(declarator.id, "require")
-    )
-  );
+  return declaration?.type === "VariableDeclaration"
+    ? declaration.declarations.filter(declarator =>
+        isNamed(declarator.id, "require")
+      )
+    : [];
+}
+
+/** Whether `statement` declares a variable named `require`, exported or not. */
+function declaresRequireVariable(statement: Statement): boolean {
+  return requireDeclarators(statement).length > 0;
 }
 
 /**
@@ -1084,10 +1089,13 @@ function declaresRequireVariable(statement: Statement): boolean {
  */
 function declaresRequireAfter(body: Statement[], at: number): boolean {
   if (body.some(importsRequire)) return false;
-  const declarations = body.filter(declaresRequireVariable);
+  // By each declarator rather than its statement: in
+  // `const nextConfig = {...}, require = createRequire(...)` the statement
+  // starts before the object, but `require` is initialised after it.
+  const declarators = body.flatMap(requireDeclarators);
   return (
-    declarations.length > 0 &&
-    declarations.every(statement => (statement.start ?? 0) >= at)
+    declarators.length > 0 &&
+    declarators.every(declarator => (declarator.start ?? 0) >= at)
   );
 }
 
