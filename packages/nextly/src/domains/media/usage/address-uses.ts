@@ -223,12 +223,9 @@ export async function indexKeptAddresses(
   return indexed;
 }
 
-/** The statements removing kept files reads and deletes with. */
-type KeptFilesDb = Pick<DrizzleAdapter, "select" | "delete">;
-
 /** One deleted item's kept files and their record, as its record lists them. */
 async function removeRecordedFiles(
-  db: KeptFilesDb,
+  db: DrizzleAdapter,
   storage: StoredFileRemover,
   logger: Logger,
   mediaId: string,
@@ -268,7 +265,7 @@ async function removeRecordedFiles(
  * that has already committed: what cannot be removed is named in the log.
  */
 export async function removeKeptFiles(
-  db: KeptFilesDb,
+  db: DrizzleAdapter,
   storage: StoredFileRemover,
   logger: Logger,
   mediaIds: readonly string[]

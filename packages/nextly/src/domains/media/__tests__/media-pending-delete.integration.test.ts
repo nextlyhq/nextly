@@ -29,6 +29,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { defineCollection, text, upload } from "../../../config";
+import { container } from "../../../di/container";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -42,6 +43,7 @@ import {
   pdfDocument,
 } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { getMediaStorage } from "../../../storage/storage";
+import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobNow } from "../../jobs/jobs-runner";
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
 import { MEDIA_FINALIZE_DELETES_JOB } from "../finalize-deletes-job";
@@ -376,7 +378,7 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(jobs).toHaveLength(1);
       const jobId = String(jobs[0]!.id);
-      const registry = t.getService("jobRegistry");
+      const registry = container.get<JobRegistry>("jobRegistry");
 
       // Before the deadline the job is not due, and the item stays.
       const early = await runJobNow(t.adapter, registry, jobId, {
@@ -429,7 +431,7 @@ describe.each(getConfiguredTestDialects())(
 
       const run = await runJobNow(
         t.adapter,
-        t.getService("jobRegistry"),
+        container.get<JobRegistry>("jobRegistry"),
         String(job?.id),
         { now: () => new Date(deadline + 1_000) }
       );
