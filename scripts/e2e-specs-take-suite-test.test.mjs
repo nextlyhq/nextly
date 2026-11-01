@@ -46,6 +46,8 @@ const VISIBLE_TEST = "e2e/tests/support/visible.ts";
 const RAW_TEST_ALLOWED = {
   "e2e/multi-instance/two-instances.spec.ts":
     "drives two app instances over HTTP only, through request contexts; it opens no page",
+  "e2e/multi-instance/no-shared-handlers.spec.ts":
+    "drives two app instances without the shared cache handlers over HTTP only, through request contexts; it opens no page",
   "e2e/dev-reload/schema-edit.spec.ts":
     "edits a schema file and reads the dev server's answers over HTTP; it opens no page",
   "e2e/tests/canvas/dwelling-canvas.test.ts":

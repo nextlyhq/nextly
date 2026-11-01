@@ -133,7 +133,17 @@ h3 {
    Accessibility & Micro-interactions
    =============================================================== */
 
-*:focus-visible {
+/* Weighed as two element names, the pseudo-class inside `:where()` counting
+   for nothing. That is enough to keep the ring over a reset added later, such
+   as `button { outline: none }`, and on this site's pages it draws as
+   `*:focus-visible` did, since no other rule here sets these properties on a
+   focused element. The admin at /admin renders in this same document and
+   reverts a site's rules made of element names only; with the pseudo-class
+   counted, this rule would outweigh that and redraw every focused control in
+   the admin with this ring and corner. The trade: a class-based reset, such as
+   `.btn { outline: none }`, outweighs this ring wherever it is written; give
+   such a rule a `:focus-visible` style of its own. */
+html body :where(:focus-visible) {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
