@@ -13,9 +13,9 @@
  * - `select`, on every pull-request run: selection is on only while the
  *   repository variable `NEXTLY_PR_TEST_SELECTION` is `on`, a switch the
  *   repository's owner flips once the last bypass is gone, AND every path to
- *   `main` is read and found to go through the queue: its rules include the
- *   merge queue, every ruleset behind them is active with no bypass actors,
- *   and it has no classic branch protection. A path known to skip the queue
+ *   `main` is read and found to go through the queue: an active ruleset puts
+ *   the merge queue on it with no bypass actors, or no actor may bypass every
+ *   ruleset that does (`directPaths`). A path known to skip the queue
  *   tests everything and fails, because the switch is on with a way around it;
  *   anything that could not be read tests everything without failing. Bypass
  *   actors are readable only with administration rights, so with the
@@ -46,11 +46,6 @@ import { githubJson } from "./github-api.mjs";
 
 /** The repository variable that switches pull-request selection on. Only `on` does. */
 export const SELECTION_SWITCH = "NEXTLY_PR_TEST_SELECTION";
-
-/** Whether a branch's rules, as `GET repos/{repo}/rules/branches/{branch}` returns them, include the merge queue. */
-function hasMergeQueue(rules) {
-  return Array.isArray(rules) && rules.some(rule => rule?.type === "merge_queue");
-}
 
 /**
  * How one CI run tests its unit lanes: `select` (the affected files and the
@@ -125,52 +120,59 @@ export function directMerges(chain, queued) {
 }
 
 /**
- * What stands between `main` and a merge that skips the queue: every ruleset
- * that applies to it, each as `GET repos/{repo}/rulesets/{id}` returns it to
- * its reader (null where that read failed), and `main` itself as
- * `GET repos/{repo}/branches/main` returns it, for classic branch protection
- * (null where that read failed). Empty means none.
+ * What stands between `main` and a merge that skips the queue, judged from the
+ * rulesets that put the merge queue on it: every ruleset behind `main`'s rules,
+ * each as `GET repos/{repo}/rulesets/{id}` returns it to its reader (or
+ * `{ id, unreadable: true }` where that read failed). Empty means none.
+ *
+ * GitHub enforces every ruleset that applies, and a bypass actor bypasses only
+ * the rules of the ruleset that names them. So a merge skips the queue only for
+ * an actor who can bypass every active ruleset carrying the `merge_queue`
+ * rule: one such ruleset with no bypass actors holds the queue for everyone,
+ * whatever any other ruleset, or classic branch protection layered under it,
+ * lets anyone do. Rulesets that carry no queue rule are not consulted.
  *
  * Each problem says whether a way around the queue is `known` to exist, or
  * whether it could not be checked. A ruleset read without administration
  * rights carries no `bypass_actors` at all, which is "could not look", not
- * "nobody". Classic branch protection lets administrators through unless it
- * is enforced for them, which only an administrator can read, so its presence
- * alone is a problem that could not be checked.
+ * "nobody".
  */
-export function directPaths(rulesets, branchRules, branch) {
-  const problems = [];
-  const known = text => problems.push({ text, known: true });
-  const unchecked = text => problems.push({ text, known: false });
-  if (!hasMergeQueue(branchRules)) known("main has no merge_queue rule");
-  for (const ruleset of rulesets) {
-    if (ruleset.unreadable) {
-      unchecked(`ruleset ${ruleset.id} could not be read`);
-      continue;
-    }
-    const name = `ruleset ${ruleset.id} (${ruleset.name})`;
-    if (ruleset.enforcement !== "active") known(`${name} is ${ruleset.enforcement}, not active`);
-    if (!Array.isArray(ruleset.bypass_actors)) {
-      unchecked(`${name}'s bypass actors could not be read: they need a token with administration read`);
-    } else {
-      for (const actor of ruleset.bypass_actors) {
-        const who = [actor.actor_type, actor.actor_id].filter(part => part !== undefined && part !== null).join(" ");
-        known(`${name} lets ${who} bypass it (${actor.bypass_mode})`);
-      }
-    }
+export function directPaths(rulesets, branchRules) {
+  const queueIds = new Set(
+    (Array.isArray(branchRules) ? branchRules : []).filter(rule => rule?.type === "merge_queue").map(rule => rule.ruleset_id)
+  );
+  const queueRulesets = rulesets.filter(ruleset => queueIds.has(ruleset.id));
+  const unreadable = queueRulesets.filter(ruleset => ruleset.unreadable || (ruleset.enforcement === "active" && !Array.isArray(ruleset.bypass_actors)));
+  const enforcing = queueRulesets.filter(ruleset => !ruleset.unreadable && ruleset.enforcement === "active" && Array.isArray(ruleset.bypass_actors));
+  const name = ruleset => `ruleset ${ruleset.id}${ruleset.name ? ` (${ruleset.name})` : ""}`;
+
+  // One active queue ruleset nobody may bypass holds the queue on its own.
+  if (enforcing.some(ruleset => ruleset.bypass_actors.length === 0)) return [];
+  if (unreadable.length > 0) {
+    return unreadable.map(ruleset => ({
+      text: ruleset.unreadable
+        ? `${name(ruleset)}, which carries the merge queue, could not be read`
+        : `${name(ruleset)}'s bypass actors could not be read: they need a token with administration read`,
+      known: false,
+    }));
   }
-  if (branch === null) {
-    unchecked("main's branch protection could not be read");
-  } else if (branch?.protection?.enabled !== false) {
-    unchecked("main has classic branch protection, whose enforcement for administrators is not read here: leave main's rules to its rulesets");
+  if (enforcing.length === 0) {
+    return [{ text: "no active ruleset puts the merge queue on main", known: true }];
   }
-  return problems;
+  // Every queue ruleset names someone: the path is whoever every one of them names.
+  const key = actor => `${actor.actor_type} ${actor.actor_id ?? ""}`.trim();
+  const [first, ...rest] = enforcing;
+  const everywhere = first.bypass_actors.filter(actor => rest.every(other => other.bypass_actors.some(candidate => key(candidate) === key(actor))));
+  return everywhere.map(actor => ({
+    text: `${enforcing.map(name).join(" and ")} let ${key(actor)} bypass the merge queue (${actor.bypass_mode})`,
+    known: true,
+  }));
 }
 
 /**
- * Every path to `main`, read: its rules, each ruleset behind them, and the
- * branch itself, as `directPaths` judges them. Null when the rules could not
- * be read, since without them nothing names the rulesets to read.
+ * Every path to `main`, read: its rules and each ruleset behind them, as
+ * `directPaths` judges them. Null when the rules could not be read, since
+ * without them nothing names the rulesets to read.
  */
 async function readMergePaths(context, repo) {
   const branchRules = await allPagesOrNull(`repos/${repo}/rules/branches/main`, context);
@@ -181,8 +183,7 @@ async function readMergePaths(context, repo) {
     const ruleset = await readOrNull(`repos/${repo}/rulesets/${id}`, context);
     rulesets.push(ruleset ?? { id, unreadable: true });
   }
-  const branch = await readOrNull(`repos/${repo}/branches/main`, context);
-  return { rulesets, problems: directPaths(rulesets, branchRules, branch) };
+  return { rulesets, problems: directPaths(rulesets, branchRules) };
 }
 
 /**

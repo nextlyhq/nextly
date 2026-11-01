@@ -515,10 +515,11 @@ jobs:
       # Test step runs whenever it is not exactly `select`, so this step failing
       # or never running costs nothing but the narrowing. It fails, after
       # setting `full`, when the switch is on while a path to `main` skips the
-      # queue: no merge queue, an inactive ruleset or a bypass actor. Whatever
-      # it cannot read tests everything without failing, and a workflow's own
-      # token cannot read a ruleset's bypass actors, so with this token
-      # selection stays off whatever the switch says.
+      # queue: no active ruleset puts the merge queue on it, or someone may
+      # bypass every one that does. Whatever it cannot read tests everything
+      # without failing, and a workflow's own token cannot read a ruleset's
+      # bypass actors, so with this token selection stays off whatever the
+      # switch says.
       - name: Decide how this run tests its units
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:

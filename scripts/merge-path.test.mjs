@@ -90,47 +90,61 @@ describe("directMerges", () => {
 });
 
 describe("directPaths", () => {
-  const ruleset = { id: 7, name: "protect-main", enforcement: "active" };
-  /** `main` as `GET branches/main` returns it with no classic branch protection. */
-  const unprotected = { protection: { enabled: false } };
+  const queue = { id: 1, name: "protect-main", enforcement: "active", bypass_actors: [] };
+  const signing = { id: 2, name: "signed-commits", enforcement: "active", bypass_actors: [] };
+  const rules = [{ type: "pull_request", ruleset_id: 1 }, { type: "merge_queue", ruleset_id: 1 }, { type: "required_signatures", ruleset_id: 2 }];
+  const releaseBot = { actor_type: "Integration", actor_id: 9, bypass_mode: "always" };
+  const team = { actor_type: "Team", actor_id: 42, bypass_mode: "pull_request" };
 
-  it("finds none for an active ruleset with no bypass actors, the queue, and no classic protection", () => {
-    expect(directPaths([{ ...ruleset, bypass_actors: [] }], queueRules, unprotected)).toEqual([]);
+  it("finds none for an active queue ruleset with no bypass actors", () => {
+    expect(directPaths([queue, signing], rules)).toEqual([]);
   });
 
-  it("names each bypass actor as a known way around the queue", () => {
-    const problems = directPaths(
-      [{ ...ruleset, bypass_actors: [{ actor_type: "Team", actor_id: 42, bypass_mode: "pull_request" }] }],
-      queueRules,
-      unprotected
-    );
-    expect(problems).toEqual([{ text: "ruleset 7 (protect-main) lets Team 42 bypass it (pull_request)", known: true }]);
+  it("ignores a bypass actor on a ruleset that does not carry the merge queue", () => {
+    // Bypassing the signing rules leaves the queue ruleset's rules in force.
+    expect(directPaths([queue, { ...signing, bypass_actors: [releaseBot] }], rules)).toEqual([]);
   });
 
-  it("treats bypass actors it could not read as unchecked, not as none", () => {
-    expect(directPaths([ruleset], queueRules, unprotected)).toEqual([{ text: expect.stringContaining("could not be read"), known: false }]);
+  it("does not read the bypass actors of a ruleset that does not carry the merge queue", () => {
+    expect(directPaths([queue, { ...signing, bypass_actors: null }], rules)).toEqual([]);
+    expect(directPaths([queue, { id: 2, unreadable: true }], rules)).toEqual([]);
   });
 
-  it("treats a ruleset it could not read as unchecked", () => {
-    expect(directPaths([{ id: 7, unreadable: true }], queueRules, unprotected)).toEqual([{ text: "ruleset 7 could not be read", known: false }]);
-  });
-
-  it("reports a ruleset that is not active, and a main without the queue, as known", () => {
-    const problems = directPaths([{ ...ruleset, enforcement: "evaluate", bypass_actors: [] }], [{ type: "pull_request" }], unprotected);
-    expect(problems).toEqual([
-      { text: "main has no merge_queue rule", known: true },
-      { text: "ruleset 7 (protect-main) is evaluate, not active", known: true },
+  it("names a bypass actor on the queue ruleset itself as a known way around the queue", () => {
+    expect(directPaths([{ ...queue, bypass_actors: [team] }, signing], rules)).toEqual([
+      { text: "ruleset 1 (protect-main) let Team 42 bypass the merge queue (pull_request)", known: true },
     ]);
   });
 
-  it("treats classic branch protection, and a branch it could not read, as unchecked", () => {
-    const clean = [{ ...ruleset, bypass_actors: [] }];
-    expect(directPaths(clean, queueRules, { protection: { enabled: true } })).toEqual([
-      { text: expect.stringContaining("classic branch protection"), known: false },
+  it("holds the queue through any one queue ruleset nobody may bypass, whatever another lets through", () => {
+    const second = { id: 3, name: "queue-too", enforcement: "active", bypass_actors: [team] };
+    const both = [...rules, { type: "merge_queue", ruleset_id: 3 }];
+    expect(directPaths([queue, second], both)).toEqual([]);
+  });
+
+  it("names only an actor every queue ruleset lets through, when each names someone", () => {
+    const both = [...rules, { type: "merge_queue", ruleset_id: 3 }];
+    const otherQueue = { id: 3, name: "queue-too", enforcement: "active" };
+    expect(directPaths([{ ...queue, bypass_actors: [team] }, { ...otherQueue, bypass_actors: [releaseBot] }], both)).toEqual([]);
+    expect(directPaths([{ ...queue, bypass_actors: [team, releaseBot] }, { ...otherQueue, bypass_actors: [releaseBot] }], both)).toEqual([
+      { text: "ruleset 1 (protect-main) and ruleset 3 (queue-too) let Integration 9 bypass the merge queue (always)", known: true },
     ]);
-    expect(directPaths(clean, queueRules, null)).toEqual([{ text: "main's branch protection could not be read", known: false }]);
-    // A branch whose answer says nothing about protection is not taken as unprotected.
-    expect(directPaths(clean, queueRules, {})).toEqual([{ text: expect.stringContaining("classic branch protection"), known: false }]);
+  });
+
+  it("treats a queue ruleset whose bypass actors, or whose whole answer, could not be read as unchecked, not as none", () => {
+    expect(directPaths([{ ...queue, bypass_actors: null }], rules)).toEqual([
+      { text: expect.stringContaining("bypass actors could not be read"), known: false },
+    ]);
+    expect(directPaths([{ id: 1, unreadable: true }], rules)).toEqual([{ text: expect.stringContaining("could not be read"), known: false }]);
+  });
+
+  it("knows the queue is missing when no active ruleset carries it", () => {
+    expect(directPaths([signing], [{ type: "required_signatures", ruleset_id: 2 }])).toEqual([
+      { text: "no active ruleset puts the merge queue on main", known: true },
+    ]);
+    expect(directPaths([{ ...queue, enforcement: "evaluate" }], rules)).toEqual([
+      { text: "no active ruleset puts the merge queue on main", known: true },
+    ]);
   });
 });
 
@@ -151,11 +165,10 @@ function api(routes) {
 
 /** The routes a selecting run reads, for one ruleset (id 1) behind main's rules. */
 const ruleset1 = `repos/${REPO}/rulesets/1`;
-const branchMain = `repos/${REPO}/branches/main`;
+const ruleset2 = `repos/${REPO}/rulesets/2`;
 const clearPaths = {
   [rulesPage(1)]: queueRules,
   [ruleset1]: { id: 1, name: "protect-main", enforcement: "active", bypass_actors: [] },
-  [branchMain]: { protection: { enabled: false } },
 };
 const selectEnv = output => ({ GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: "pull_request", [SELECTION_SWITCH]: "on", GITHUB_ENV: output });
 const outputFile = () => join(mkdtempSync(join(tmpdir(), "merge-path-")), "out");
@@ -190,7 +203,7 @@ describe("main", () => {
     const { code, mode, printed } = await runSelect({ ...clearPaths, [ruleset1]: bypassed });
     expect(code).toBe(1);
     expect(mode).toBe(`${MODE_VARIABLE}=full\n`);
-    expect(printed).toContain("lets RepositoryRole 5 bypass it (always)");
+    expect(printed).toContain("let RepositoryRole 5 bypass the merge queue (always)");
   });
 
   it("tests everything, without failing, when it cannot read the bypass actors, as a workflow's own token cannot", async () => {
@@ -200,16 +213,21 @@ describe("main", () => {
     expect(printed).toContain("could not be confirmed");
   });
 
-  it("tests everything, without failing, when the ruleset or main itself cannot be read, or main has classic protection", async () => {
-    for (const routes of [
-      { ...clearPaths, [ruleset1]: undefined },
-      { ...clearPaths, [branchMain]: undefined },
-      { ...clearPaths, [branchMain]: { protection: { enabled: true } } },
-    ]) {
-      const { code, mode } = await runSelect(routes);
-      expect(code).toBe(0);
-      expect(mode).toBe(`${MODE_VARIABLE}=full\n`);
-    }
+  it("tests everything, without failing, when the queue ruleset cannot be read", async () => {
+    const { code, mode } = await runSelect({ ...clearPaths, [ruleset1]: undefined });
+    expect(code).toBe(0);
+    expect(mode).toBe(`${MODE_VARIABLE}=full\n`);
+  });
+
+  it("still selects when another ruleset, layered over the queue's, lets someone bypass it", async () => {
+    const routes = {
+      ...clearPaths,
+      [rulesPage(1)]: [...queueRules, { type: "required_signatures", ruleset_id: 2 }],
+      [ruleset2]: { id: 2, name: "signed-commits", enforcement: "active", bypass_actors: [{ actor_type: "Integration", actor_id: 9, bypass_mode: "always" }] },
+    };
+    const { code, mode } = await runSelect(routes);
+    expect(code).toBe(0);
+    expect(mode).toBe(`${MODE_VARIABLE}=select\n`);
   });
 
   it("reads every page of main's rules, so a merge queue on a later page still counts", async () => {
