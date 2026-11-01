@@ -13,6 +13,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { resetToDefault } from "./support/dashboard-layout";
 import { defaultSizeOf } from "./support/dashboard-sizes";
 import { test } from "./support/test";
 import { LOCK } from "./support/locks";
@@ -57,16 +58,6 @@ async function placeSlowCard(page: Page): Promise<void> {
   expect(write.ok()).toBe(true);
 }
 
-/** Drops the saved layout, so the specs sharing the server see core's default again. */
-async function dropSavedLayout(page: Page): Promise<void> {
-  const read = await page.request.get(LAYOUT);
-  const body = (await read.json()) as Layout;
-  if (body.version === 0) return;
-  await page.request.delete(
-    `${LAYOUT}?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-}
-
 /** How long the fixture's card takes to answer, in milliseconds; 0 answers at once. */
 async function holdSlowCard(page: Page, ms: number): Promise<void> {
   const res = await page.request.post("/api/e2e/slow-widget", {
@@ -91,7 +82,7 @@ async function cardStates(page: Page): Promise<Record<string, string>> {
 
 test.afterEach(async ({ page }) => {
   await holdSlowCard(page, 0);
-  await dropSavedLayout(page);
+  await resetToDefault(page);
 });
 
 test("every other card is drawn while a slow one is still waiting, and the slow one arrives on its own", async ({

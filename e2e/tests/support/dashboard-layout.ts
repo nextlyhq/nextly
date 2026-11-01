@@ -1,3 +1,8 @@
+import { expect, type Page } from "@playwright/test";
+
+/** The dashboard's layout route, read, written and reset by the specs that place cards. */
+const LAYOUT_PATH = "/admin/api/dashboard/layout";
+
 /**
  * Which requests are the dashboard's layout read, for a spec that passes it through changed.
  *
@@ -10,4 +15,23 @@ export function isLayoutRead(url: URL): boolean {
     url.pathname.endsWith("/dashboard/layout") &&
     [...url.searchParams.keys()].every(key => key === "width")
   );
+}
+
+/**
+ * Back to the default dashboard, through the guarded reset a reader uses: the saved layout is
+ * dropped at the version just read. A reset that does not land fails the test that made the
+ * layout, with the server's answer, rather than passing in silence and leaving that layout to
+ * every spec after it on the same server. `origin` is for a spec whose app runs on a server of
+ * its own; the suite's server is the default.
+ */
+export async function resetToDefault(page: Page, origin = ""): Promise<void> {
+  const read = await page.request.get(`${origin}${LAYOUT_PATH}`);
+  expect(read.ok(), await read.text()).toBe(true);
+  const body = (await read.json()) as { version: number; scope: string };
+  // Version 0 is no saved layout: the reader already sees the default.
+  if (body.version === 0) return;
+  const reset = await page.request.delete(
+    `${origin}${LAYOUT_PATH}?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
+  );
+  expect(reset.status(), await reset.text()).toBe(200);
 }
