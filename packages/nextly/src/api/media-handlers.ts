@@ -93,6 +93,7 @@ import {
 } from "../types/media";
 
 import { executeBulkDelete } from "./media-bulk";
+import { listMediaOptionsFrom, mediaListResponse } from "./media-list";
 import { handleServeMediaBytes } from "./media-raw";
 import { readJsonBody } from "./read-json-body";
 import {
@@ -454,44 +455,16 @@ async function handleListMedia(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const context = createRequestContext();
 
-  const folderIdParam = searchParams.get("folderId");
   const options: ListMediaOptions = {
-    page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-    limit: searchParams.get("limit") ? Number(searchParams.get("limit")) : 24,
-    search: searchParams.get("search") || undefined,
-    type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
-    folderId: folderIdParam === "root" ? "root" : folderIdParam || undefined,
+    ...listMediaOptionsFrom(searchParams),
     view: parseAtBoundary(
       mediaViewSchema.optional(),
       searchParams.get("view") ?? undefined
     ),
-    sortBy:
-      (searchParams.get("sortBy") as ListMediaOptions["sortBy"]) ||
-      "uploadedAt",
-    sortOrder:
-      (searchParams.get("sortOrder") as ListMediaOptions["sortOrder"]) ||
-      "desc",
   };
 
   const result = await mediaService.listMedia(options, context);
-
-  const page = options.page ?? 1;
-  const limit = Math.max(1, options.limit ?? 24);
-  const total = result.pagination.total;
-  const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
-  return respondList(result.data, {
-    total,
-    page,
-    limit,
-    totalPages,
-    hasNext: page < totalPages,
-    hasPrev: page > 1,
-    // Unused's alone: whether the usage record its page was read from was
-    // complete, which is what the admin lists that view on.
-    ...(result.usageRecorded === undefined
-      ? {}
-      : { usageRecorded: result.usageRecorded }),
-  });
+  return mediaListResponse(result, options);
 }
 
 /** The file a request sends as `file`, checked against the upload schema. */
