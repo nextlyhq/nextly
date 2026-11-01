@@ -33,7 +33,9 @@ export const ADD_PANEL_GROUPS = [
   "plugins",
 ] as const;
 
-export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
+// Read here alone, now that the layout read sends no group: where a widget is
+// listed only orders `available`.
+type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
 
 /**
  * Each built-in's group. Keyed by every core id, so a built-in added to core

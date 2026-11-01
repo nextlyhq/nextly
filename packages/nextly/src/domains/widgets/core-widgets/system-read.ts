@@ -67,9 +67,9 @@ export function provideCoreSourceRead(read: CoreSourceRead): void {
 /**
  * `query`'s answer from the `system:` source it names, as the card's caller,
  * held to the op it asked (`answerAsAsked`), as the batch holds a resolver's
- * answer.
+ * answer. Read through `readCoreList`, the one shape core's cards ask for.
  */
-export async function readCoreSource(
+async function readCoreSource(
   query: WidgetQuery,
   { services, signal, now }: CardReadInput
 ): Promise<WidgetResult> {
