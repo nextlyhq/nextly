@@ -30,9 +30,8 @@
  * loudly, since nothing clears the store between two registrations in one pass.
  *
  * Registered rather than special-cased into `publishableWidgets`, so they are
- * ordinary rows a plugin can `extendWidget` or `overrideWidget` like any other.
- * Core going through the same door as a plugin is the whole reason the door is
- * worth trusting.
+ * ordinary rows like a plugin's. Core going through the same door as a plugin
+ * is the whole reason the door is worth trusting.
  *
  * @module di/registrations/register-widgets
  */
@@ -48,7 +47,6 @@ import {
   CORE_CONDITIONS,
   CORE_DECLARATIONS,
   CORE_WIDGET_IDS,
-  CORE_WIDGETS,
 } from "../../domains/widgets/core-widgets";
 import { provideCoreSourceRead } from "../../domains/widgets/core-widgets/system-read";
 import { setAdminComponentPlugins } from "../../domains/widgets/declaration/component-map-store";
@@ -161,8 +159,8 @@ export function resetWidgetRegistries(
   // the batch makes, so the widget list imports none of those services.
   provideCoreSourceRead(readSystemSourceAsCard);
 
-  // Every widget, through the one call: core's own list, the plugins' widgets
-  // declared with `defineWidget()`, and the site's. Each is checked together
+  // Every widget, through the one call: core's own declarations, the plugins'
+  // widgets declared with `defineWidget()`, and the site's. Each is checked together
   // with everything that names one (the site config's dashboard, the plugins'
   // `suggest` lists and alternatives), and startup stops on any fault of any owner,
   // all of them reported at once, before any widget is kept. Each
@@ -174,7 +172,6 @@ export function resetWidgetRegistries(
   const dashboards = pluginDashboardSnapshots(plugins);
   const site = siteDashboardSnapshot(dashboard);
   registerDashboardWidgets({
-    core: CORE_WIDGETS,
     // Core's own declarations first, through the same checks as a plugin's,
     // so a plugin claiming one of their ids is the one named.
     groups: [

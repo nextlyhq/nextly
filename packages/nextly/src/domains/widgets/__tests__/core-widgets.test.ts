@@ -15,8 +15,9 @@ import * as loggerModule from "../../../observability/logger";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { publishedWidgetDefinition } from "../../../plugins/test-widget-card";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
-import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
+import { CORE_DECLARATIONS } from "../core-widgets";
 import { teamWidget } from "../core-widgets/team";
+import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
   requiredPermissionSlugs,
@@ -37,7 +38,7 @@ beforeEach(() => {
     error: vi.fn(),
     debug: vi.fn(),
   } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
-  // Every core widget as core publishes it, declarations and definitions alike: what the add
+  // Every core widget as core publishes it from its declaration: what the add
   // panel, the layout and the admin read.
   resetWidgetRegistries([]);
 });
@@ -46,7 +47,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A core widget as core publishes it, whether it is declared or still a definition. */
+/** A core widget as core publishes it from its declaration. */
 function card(id: string): WidgetDefinition {
   const found = getWidget(id);
   // Resolved through a lookup that REFUSES rather than through `!`, so a
@@ -59,25 +60,35 @@ function card(id: string): WidgetDefinition {
 /** Every core widget as core publishes it, in core's order. */
 const published = () => CORE_WIDGET_IDS.map(card);
 
-/** A core widget's declared size, whether it is a definition or a declaration. */
+/** A core widget's size as its declaration states it. */
 function sizeOf(id: string) {
   const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
-  return declared === undefined ? card(id).size : declared.size;
+  // Refused by name, as `card` refuses, so a missing declaration is not read
+  // as a widget that states no size.
+  if (declared === undefined) throw new Error(`no core declaration "${id}"`);
+  return declared.size;
 }
+
+/**
+ * Whether core keeps a declaration for this widget, under core: what answers
+ * its cards on the server, so what makes it a widget whose data core builds.
+ */
+const keptByCore = (id: string) => declaredWidget(id)?.owner === CORE_OWNER;
 
 describe("core widget definitions", () => {
   /*
-   * Every card goes through the same door a plugin's does. Core's list is a
-   * hand-written literal that no caller validates on the way in -- boot calls
-   * `registerWidget`, which validates, but a definition that would be REFUSED
-   * there fails at boot rather than in a test naming the field.
+   * Every card goes through the same door a plugin's does: what core publishes
+   * from each declaration is held to the registry's own rules, so a published
+   * shape core got wrong fails here naming the widget and the field, rather
+   * than only at boot.
    */
-  it.each(CORE_WIDGETS.map(widget => [widget.id, widget] as const))(
-    "%s is a valid definition",
-    (_id, widget) => {
+  it.each(CORE_WIDGET_IDS.map(id => [id] as const))(
+    "%s is published as a valid definition, kept as core's declaration",
+    id => {
       // An assertion function: it THROWS with a named reason and returns
       // nothing, so the absence of a throw is the whole result.
-      expect(() => validateWidgetDefinition(widget)).not.toThrow();
+      expect(() => validateWidgetDefinition(card(id))).not.toThrow();
+      expect(keptByCore(id)).toBe(true);
     }
   );
 
@@ -154,7 +165,6 @@ describe("core widget definitions", () => {
     // never a condition or the frame's dismissal.
     expect(card?.shows).toBeTypeOf("function");
     expect(card).not.toHaveProperty("lifecycle");
-    expect(card).not.toHaveProperty("dismissible");
     expect(card?.size).toEqual({
       default: { w: 12, h: 2 },
       min: { w: 12, h: 2 },
@@ -170,10 +180,7 @@ describe("core widget definitions", () => {
   });
 
   it("no longer declares the old Get started card, or the cards it replaced", () => {
-    const ids = [
-      ...CORE_WIDGETS.map(w => w.id),
-      ...CORE_DECLARATIONS.map(w => w.id),
-    ];
+    const ids = CORE_DECLARATIONS.map(w => w.id);
     expect(ids).not.toContain("core/get-started");
     expect(ids).not.toContain("core/seed-demo-content");
     expect(ids).not.toContain("core/onboarding-checklist");
@@ -261,8 +268,9 @@ describe("core widget definitions", () => {
     // The same constant, not an equal copy: the declaration and the resolver
     // cannot come to name different grants.
     expect(teamWidget.access).toBe(TEAM_GATE);
-    // Its data is its `load`'s, so it asks no query of its own.
-    expect(card("core/team").query).toBeUndefined();
+    // Its data is its `load`'s, so it is published with no query of its own.
+    expect(card("core/team")).not.toHaveProperty("query");
+    expect(keptByCore("core/team")).toBe(true);
   });
 });
 
@@ -347,9 +355,10 @@ describe("the content card", () => {
     expect(card("core/content-table")).toMatchObject({
       archetype: "custom",
       component: "core#ContentTable",
-      serverData: true,
     });
-    expect(card("core/content-table").query).toBeUndefined();
+    // Answered from core's declaration, so it is published with no query.
+    expect(keptByCore("core/content-table")).toBe(true);
+    expect(card("core/content-table")).not.toHaveProperty("query");
   });
 });
 
@@ -392,8 +401,8 @@ describe("the team activity card", () => {
     expect(card("core/team-activity")).toMatchObject({
       archetype: "custom",
       component: "core#TeamActivity",
-      serverData: true,
     });
+    expect(keptByCore("core/team-activity")).toBe(true);
     expect(
       card("core/team-activity").settings?.find(s => s.name === "limit")
     ).toMatchObject({ type: "number", min: 1, max: MAX_WIDGET_ROWS });
@@ -584,13 +593,8 @@ describe("the default dashboard", () => {
       "core/system-health",
     ].sort();
     expect([...CORE_WIDGET_IDS].sort()).toEqual(expected);
-    // The ids the registry is handed: the definitions and the declarations together.
-    expect(
-      [
-        ...CORE_WIDGETS.map(widget => widget.id),
-        ...CORE_DECLARATIONS.map(widget => widget.id),
-      ].sort()
-    ).toEqual(expected);
+    // The ids the registry is handed: core's declarations.
+    expect(CORE_DECLARATIONS.map(widget => widget.id).sort()).toEqual(expected);
   });
 });
 
@@ -599,7 +603,7 @@ describe("the Create card", () => {
   // palette's, so core registers no card for it, under its old id or any.
   it("is not one of core's widgets, nor on the default dashboard", () => {
     expect(CORE_WIDGET_IDS).not.toContain("core/quick-create");
-    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain(
+    expect(CORE_DECLARATIONS.map(widget => widget.id)).not.toContain(
       "core/quick-create"
     );
     expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(

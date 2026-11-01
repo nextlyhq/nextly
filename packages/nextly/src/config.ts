@@ -262,17 +262,10 @@ export type {
 // is exactly the weight this entry point exists to keep out of a
 // `nextly.config.ts`.
 //
-// `WidgetDefinition` is here for the admin alone: `/api/admin-meta/workspace`
-// serializes the registry verbatim, so the admin reads exactly this shape off
-// the wire and restating it there would be one contract declared twice. A
-// widget is declared with `defineWidget`, never written as one.
-export type {
-  WidgetDefinition,
-  WidgetSetting,
-  WidgetAction,
-  WidgetStatCell,
-  WidgetQueryCell,
-} from "./domains/widgets/definition";
+// A widget is declared with `defineWidget`, never written as the shape the
+// registry publishes, so that shape has no name here: the admin reads it as
+// `nextly/testing/widget-card`'s `publishedWidgetDefinition` answers it.
+export type { WidgetSetting } from "./domains/widgets/definition";
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
 // module that builds it into a `nextly.config.ts`.
@@ -283,7 +276,7 @@ export {
   startsAtDefault,
   unfitContentField,
 } from "./domains/widgets/published-content-source";
-// The lifecycle pair `WidgetDefinition` names. A
+// The lifecycle pair a published widget carries. A
 // leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
 // and without it the two fields have types no config author can write down.
 export {

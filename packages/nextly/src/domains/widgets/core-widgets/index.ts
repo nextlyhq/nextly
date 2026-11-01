@@ -1,11 +1,10 @@
 /**
  * Core's own dashboard cards, as widgets.
  *
- * Every one but Create is declared with `defineWidget`, as a plugin declares
- * its own, and reaches the registry through the same call as everyone's
- * declarations (`registerDashboardWidgets`), under core: each card's data is
- * answered on the server by its declaration's `load`, as the person asking.
- * Create is still written as a definition until it is retired. Which of them
+ * Every one is declared with `defineWidget`, as a plugin declares its own,
+ * and reaches the registry through the same call as everyone's declarations
+ * (`registerDashboardWidgets`), under core: each card's data is answered on
+ * the server by its declaration's `load`, as the person asking. Which of them
  * the default dashboard holds, and in what order, is `CORE_DEFAULT_LAYOUT` in
  * `./ids`, written as a site writes its own `defaultLayout`.
  *
@@ -48,7 +47,6 @@
  * @module domains/widgets/core-widgets
  */
 
-import type { WidgetDefinition } from "../definition";
 import type { WidgetCondition } from "../lifecycle";
 
 import { breakdownWidget } from "./breakdown";
@@ -111,20 +109,6 @@ export const CORE_CONDITIONS: Readonly<Record<string, WidgetCondition>> = {
   // site that has never made one; beside its gate, which is about access.
   [CORE_WIDGET_ID.upcomingReleases]: "releases:present",
 };
-
-/** Core's widgets still written as definitions: every one not declared. */
-const CORE_WIDGET_LITERALS = [] as const satisfies readonly WidgetDefinition[];
-
-/**
- * Core's widgets still written as definitions, as every reader of a
- * definition sees them.
- *
- * The same array as `CORE_WIDGET_LITERALS`, typed as definitions: callers
- * read optional fields (`requiredPermission`, `lifecycle`) that a literal type
- * would only have on the entries that set them. NOT every core widget: read
- * core's ids from `CORE_WIDGET_IDS`.
- */
-export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
 
 // Core's widget ids, and their order, live in `./ids`, which imports nothing:
 // re-exported for the readers that load the widgets anyway.

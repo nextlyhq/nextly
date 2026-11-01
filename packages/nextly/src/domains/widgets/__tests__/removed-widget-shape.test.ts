@@ -79,6 +79,31 @@ const REMOVED = [
   "rangedLimitSettingProblem",
   "RECENT_ACTIVITY_ITEMS",
   "CONTINUE_ITEMS",
+  // The text, actions and stats archetypes' vocabulary, and the cells a stats
+  // or custom card asked through the batch: every card is declared and asked
+  // by its card, so none of these has a reader.
+  "WidgetAction",
+  "WidgetStatCell",
+  "WidgetQueryCell",
+  "WIDGET_CELL_TIERS",
+  "WIDGET_CELL_CONDITIONS",
+  "WidgetCellTier",
+  "WidgetCellCondition",
+  "MAX_STAT_CELLS",
+  "MAX_TEXT_CONTENT",
+  "statCellProblem",
+  "CellWidgetArchetype",
+  "QuerylessWidgetArchetype",
+  "CellSlotLookup",
+  // The definition path: core's list of definitions, the doors that replaced
+  // or patched a registered definition, and the door that admitted a declared
+  // one beside them.
+  "CORE_WIDGETS",
+  "CORE_WIDGET_LITERALS",
+  "overrideWidget",
+  "extendWidget",
+  "WidgetPatch",
+  "registerDeclaredDefinition",
 ];
 
 const PATTERN = new RegExp(`\\b(${REMOVED.join("|")})\\b`);
@@ -90,6 +115,8 @@ const PATTERN = new RegExp(`\\b(${REMOVED.join("|")})\\b`);
 const ABSENCE_TESTS = [
   "packages/nextly/src/__tests__/export-contract.test.ts",
   "packages/plugin-sdk/src/plugin-surface.test.ts",
+  // Holds the SDK's root to publishing none of the removed doors.
+  "packages/plugin-sdk/src/index.test.ts",
 ];
 
 /** Where source lives: each package's `src`, the playground's, the templates and e2e. */
@@ -151,11 +178,21 @@ const CHROME_FIELD = /\bchrome\??:[ \t]*\S|["']chrome["']|\.chrome\b/;
 const NAME_MATCHED_KNOB =
   /\bname\s*===\s*["'](limit|dateRange|onlyMine|tab)["']/;
 
-/** The widget domain's own source, and the admin's widget code. */
+/** The widget domain's own source, and the admin's widget code and types. */
 const WIDGET_CODE = [
   join(REPO, "packages", "nextly", "src", "domains", "widgets"),
   join(REPO, "packages", "admin", "src", "components", "features", "widgets"),
+  join(REPO, "packages", "admin", "src", "types", "dashboard"),
 ];
+
+/**
+ * The flags a widget no longer carries, as code spells a property (written,
+ * named as a string, or read), as `CHROME_FIELD` reads `chrome`: core builds
+ * every card's data from its declaration, so `serverData` marks nothing, and
+ * no card asks its own list query sized (`sizedQuery`).
+ */
+const OLD_FLAG_FIELD =
+  /\b(serverData|sizedQuery)\??:[ \t]*\S|["'](serverData|sizedQuery)["']|\.(serverData|sizedQuery)\b/;
 
 /** Each file whose text `pattern` matches, with what it matched. */
 function matching(files: readonly string[], pattern: RegExp): string[] {
@@ -191,6 +228,16 @@ describe("the older widget shape", () => {
     expect(matching(files, CHROME_FIELD)).toEqual([]);
   });
 
+  it("leaves no serverData or sizedQuery flag in the widget domain or the admin's widget code", () => {
+    const files = WIDGET_CODE.flatMap(root => sources(root));
+    // The scan reaches the code it guards: the published shape, the card's
+    // outcome and the admin's widget type.
+    expect(files.some(file => file.endsWith("definition.ts"))).toBe(true);
+    expect(files.some(file => file.endsWith("outcome.ts"))).toBe(true);
+    expect(files.some(file => file.endsWith("widgets.ts"))).toBe(true);
+    expect(matching(files, OLD_FLAG_FIELD)).toEqual([]);
+  });
+
   it("leaves no setting matched by its name to drive a query", () => {
     const files = sources(WIDGET_CODE[0]).filter(
       file =>
@@ -208,6 +255,12 @@ describe("the older widget shape", () => {
     expect(CHROME_FIELD.test("widget.chrome")).toBe(true);
     expect(CHROME_FIELD.test('Object.hasOwn(widget, "chrome")')).toBe(true);
     expect(CHROME_FIELD.test(" * its data and its chrome:\n")).toBe(false);
+    expect(OLD_FLAG_FIELD.test("{ serverData: true }")).toBe(true);
+    expect(OLD_FLAG_FIELD.test("widget.sizedQuery")).toBe(true);
+    expect(OLD_FLAG_FIELD.test('"serverData"')).toBe(true);
+    expect(
+      OLD_FLAG_FIELD.test(" * whose data core builds on the server\n")
+    ).toBe(false);
     expect(NAME_MATCHED_KNOB.test('setting.name === "onlyMine"')).toBe(true);
     expect(NAME_MATCHED_KNOB.test('setting.type === "number"')).toBe(false);
   });

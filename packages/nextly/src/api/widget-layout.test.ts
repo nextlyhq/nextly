@@ -96,6 +96,7 @@ import {
 import { collectionSettingsToken } from "../domains/widgets/collection-cards";
 import {
   clearDeclaredWidgets,
+  declaredWidget,
   registerDashboardWidgets,
 } from "../domains/widgets/declaration/declared-widgets";
 import { defineWidget } from "../domains/widgets/declaration/define-widget";
@@ -307,7 +308,9 @@ const REGISTERED_DEFAULT: DefaultLayoutPlan = {
       .filter(
         widget =>
           !core.has(widget.id) &&
-          widget.serverData !== true &&
+          // A widget a case declares is left to its `defaultLayout`, as a
+          // plugin's declared widget is placed only by what names it.
+          declaredWidget(widget.id) === undefined &&
           widget.offered === undefined
       )
       .sort((a, b) =>
@@ -1507,28 +1510,26 @@ describe("PUT /api/dashboard/layout", () => {
     expect(saved).toBeUndefined();
   });
 
-  it("refuses a write once the reader has gained a SHORTCUT'S permission, with the cards unchanged", async () => {
+  it("refuses a write once the reader has gained an empty-state ACTION'S permission, with the cards unchanged", async () => {
     // 🔴 The token is also what tells the admin its workspace payload is
-    // stale, and that payload withholds the shortcuts a reader may not see. A
-    // token of the ids alone stood still here -- the cards are the same
-    // cards -- so the newly permitted shortcut stayed withheld until some
+    // stale, and that payload withholds the empty-state action a reader may
+    // not take. A token of the ids alone stood still here -- the cards are the
+    // same cards -- so the newly permitted action stayed withheld until some
     // unrelated refresh. The view IS stale, and the guard says so.
     registerWidget(
       widget({
         id: "core/tools",
-        archetype: "actions",
-        component: undefined,
-        actions: [
-          { label: "Search", href: "/admin/search" },
-          {
+        empty: {
+          message: "Nothing to publish",
+          action: {
             label: "Publish",
-            href: "/admin/publish",
+            link: "/admin/publish",
             requiredPermission: "publish-notes",
           },
-        ],
+        },
       })
     );
-    // The client read while the shortcut's grant was absent...
+    // The client read while the action's grant was absent...
     const before = scopeFor(["core/tools"]);
     // ...and holds it by the time the write arrives.
     callerHoldsPermission.mockResolvedValue(true);
@@ -1563,11 +1564,13 @@ describe("PUT /api/dashboard/layout", () => {
     registerWidget(
       widget({
         id: "core/tools",
-        archetype: "actions",
-        component: undefined,
-        actions: [
-          { label: "Publish", href: "/x", requiredPermission: "publish-notes" },
-        ],
+        empty: {
+          action: {
+            label: "Publish",
+            link: "/x",
+            requiredPermission: "publish-notes",
+          },
+        },
       })
     );
     const first = await bodyOf(await getWidgetLayout(getReq()));
@@ -2133,7 +2136,7 @@ describe("a row of an earlier format", () => {
   ];
 
   beforeEach(() => {
-    registerWidget(widget({ id: STARTED, defaultOrder: 0, dismissible: true }));
+    registerWidget(widget({ id: STARTED, defaultOrder: 0 }));
     registerWidget(widget({ id: "core/upcoming-releases", defaultOrder: 10 }));
     stored = { version: 7, layout: EARLIER };
   });
@@ -2728,7 +2731,6 @@ describe("a card's note", () => {
         archetype: "metric",
         component: undefined,
         size: { default: { w: 12, h: 3 } },
-        query: { source: "collection:posts", op: "count" },
         settings: [{ name: "source", label: "Collection", type: "collection" }],
       })
     );

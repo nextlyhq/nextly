@@ -26,6 +26,7 @@ import {
   resolveCardSettings,
   unsetSetting,
 } from "../declaration/card-settings";
+import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import type {
   WidgetCollectionDescription,
   WidgetLoadSize,
@@ -193,8 +194,9 @@ describe("core's declared cards", () => {
     for (const widget of declared) {
       expect(getWidget(widget.id), widget.id).toMatchObject({
         archetype: "custom",
-        serverData: true,
       });
+      // Answered on the server from the declaration core keeps for it.
+      expect(declaredWidget(widget.id)?.owner, widget.id).toBe(CORE_OWNER);
     }
   });
 

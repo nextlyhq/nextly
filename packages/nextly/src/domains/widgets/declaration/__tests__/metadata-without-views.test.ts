@@ -24,7 +24,7 @@ import { resetWidgetRegistries } from "../../../../di/registrations/register-wid
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
-import { CORE_WIDGETS } from "../../core-widgets";
+import { CORE_WIDGET_IDS } from "../../core-widgets";
 import { getWidget, listWidgets } from "../../registry";
 import { dashboard, widgets } from "./plugin/widgets";
 
@@ -61,7 +61,7 @@ describe("a widget's metadata", () => {
     }
     expect(imported).toEqual([]);
     const listed = new Set(listWidgets().map(widget => widget.id));
-    for (const { id } of [...CORE_WIDGETS, ...widgets]) {
+    for (const id of [...CORE_WIDGET_IDS, ...widgets.map(w => w.id)]) {
       expect(listed.has(id), id).toBe(true);
     }
     // What the add panel shows, read from the registry alone.

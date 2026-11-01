@@ -30,8 +30,8 @@ import {
   bindReadServices,
   type ReadAheadSide,
 } from "../domains/widgets/declaration/read-services";
-import { WIDGET_CELL_TIERS } from "../domains/widgets/definition";
 import {
+  CARD_TIERS,
   clampSize,
   GRID_COLUMNS,
   isGridSize,
@@ -80,7 +80,7 @@ import {
 const CARD_SIZE = z.strictObject({
   w: z.number().int().min(1).max(GRID_COLUMNS),
   h: z.number().int().min(MIN_GRID_ROWS).max(MAX_GRID_ROWS),
-  tier: z.enum(WIDGET_CELL_TIERS),
+  tier: z.enum(CARD_TIERS),
 });
 
 /** A card's size as an entry carries it, once read. */

@@ -81,8 +81,9 @@ describe("a widget's published definition", () => {
       id: "acme/notes",
       archetype: "custom",
       component: "@acme/notes/admin#NotesCard",
-      serverData: true,
     });
+    // Data only: its card is answered on the server, so no query or code rides with it.
+    expect(definition).not.toHaveProperty("query");
     expect(definition).not.toHaveProperty("load");
     expect(definition).not.toHaveProperty("isEmpty");
   });

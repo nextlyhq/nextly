@@ -52,14 +52,13 @@ function register(id: string, patch: Record<string, unknown> = {}): void {
   const definition = {
     id,
     title: id,
-    archetype: "text",
+    archetype: "metric",
     size: { default: { w: 4, h: 3 } },
-    content: `notes for ${id}`,
     ...patch,
   };
   // A key set to `undefined` is one JSON drops, and a registration carrying
-  // one is not one the admin may receive -- so a patch that unsets the base
-  // fixture's `content` removes the key rather than voiding it.
+  // one is not one the admin may receive -- so a patch that unsets a key
+  // removes it rather than voiding it.
   registerWidget(
     withoutUndefined(definition) as Parameters<typeof registerWidget>[0]
   );
@@ -184,9 +183,6 @@ describe("widgetAudience", () => {
     // and gate stays as it was.
     const pinned = (name: string) =>
       register("acme/pinned", {
-        archetype: "metric",
-        content: undefined,
-        query: { source: "collection:posts", op: "count" },
         settings: [{ name, type: "collection", label: "Collection" }],
       });
     registerSource(source("posts"));
@@ -215,40 +211,20 @@ describe("widgetAudience", () => {
   });
 
   it("answers for the gates INSIDE a visible declaration", async () => {
-    // 🔴 An `actions` widget's shortcuts each carry a gate of their own, and
-    // a shortcut is a label and an href. The card's gate alone let the whole
-    // list ship and left the browser to hide the protected ones -- readable
-    // from the payload regardless. The verdicts here are what the payload
-    // withholds them with, resolved for the actions each declares.
-    register("app/shortcuts", {
-      archetype: "actions",
-      content: undefined,
-      actions: [
-        { label: "Open", href: "/admin/open" },
-        {
-          label: "Publish",
-          href: "/admin/publish",
-          requiredPermission: "publish-notes",
-        },
-        {
-          label: "Purge",
-          href: "/admin/purge",
-          requiredPermission: "purge-notes",
-        },
-      ],
+    // 🔴 A declared widget's empty-state action carries a gate of its own,
+    // and the action is a label and a link. The card's gate alone would let
+    // it ship and leave the browser to hide it -- readable from the payload
+    // regardless. The verdicts here are what the payload withholds it with,
+    // resolved for the action each declares.
+    const emptyAction = (requiredPermission: string) => ({
+      empty: {
+        message: "Nothing yet",
+        action: { label: "Act", link: "/admin/act", requiredPermission },
+      },
     });
-    register("acme/links", {
-      archetype: "actions",
-      content: undefined,
-      actions: [
-        { label: "Open", href: "/admin/open" },
-        {
-          label: "Export",
-          href: "/admin/export",
-          requiredPermission: "export-notes",
-        },
-      ],
-    });
+    register("app/publish", emptyAction("publish-notes"));
+    register("app/purge", emptyAction("purge-notes"));
+    register("acme/export", emptyAction("export-notes"));
     reader(["publish-notes", "export-notes"]);
 
     const audience = await widgetAudience(CALLER);
@@ -265,15 +241,17 @@ describe("widgetAudience", () => {
   });
 
   it("does not resolve the gates inside a card the reader cannot see", async () => {
-    // A withheld card ships no actions to gate, and asking about its inner
-    // gates would be a permission check for a decision nobody will take.
+    // A withheld card ships no action to gate, and asking about its inner
+    // gate would be a permission check for a decision nobody will take.
     register("app/secrets", {
-      archetype: "actions",
-      content: undefined,
       requiredPermission: "read-secrets",
-      actions: [
-        { label: "Rotate", href: "/x", requiredPermission: "rotate-secrets" },
-      ],
+      empty: {
+        action: {
+          label: "Rotate",
+          link: "/x",
+          requiredPermission: "rotate-secrets",
+        },
+      },
     });
     reader([]);
 

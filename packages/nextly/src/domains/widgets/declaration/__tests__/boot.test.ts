@@ -64,12 +64,10 @@ describe("startup with plugins that declare widgets", () => {
     expect(declaredWidget("acme/revenue")?.owner).toBe('plugin "@acme/shop"');
     expect(declaredWidget("acme/orders-by-state")).toBeDefined();
     // Published as they are kept: the admin is offered each one, with its data built on the
-    // server from the declaration only core holds, so the definition carries neither.
+    // server from the declaration only core holds, so the definition carries no query and no
+    // data function.
     const published = getWidget("acme/orders-by-state");
-    expect(published).toMatchObject({
-      id: "acme/orders-by-state",
-      serverData: true,
-    });
+    expect(published).toMatchObject({ id: "acme/orders-by-state" });
     expect(published).not.toHaveProperty("query");
     expect(published).not.toHaveProperty("data");
     expect(widgetSource("acme/orders-by-state")).toBe('plugin "@acme/shop"');
