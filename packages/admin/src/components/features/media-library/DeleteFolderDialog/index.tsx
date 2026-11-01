@@ -136,9 +136,12 @@ export function DeleteFolderDialog({
         </AlertDialogHeader>
         {refusal && (
           <Alert variant="destructive" role="alert">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Couldn&apos;t delete the folder</AlertTitle>
-            <AlertDescription>{refusal}</AlertDescription>
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {/* The title above the reason, beside the icon. */}
+            <div className="flex min-w-0 flex-col gap-1">
+              <AlertTitle>Couldn&apos;t delete the folder</AlertTitle>
+              <AlertDescription>{refusal}</AlertDescription>
+            </div>
           </Alert>
         )}
         <AlertDialogFooter>
