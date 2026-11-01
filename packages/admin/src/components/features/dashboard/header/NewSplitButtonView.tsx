@@ -113,6 +113,14 @@ const SELECTED_OPTION_CLASS =
   "data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-ring aria-selected:text-foreground data-[selected=true]:text-foreground";
 
 /**
+ * The search box, focused, outlined in the same ring colour as the reached option. The shared
+ * input removes its outline (`outline-none` sets the outline style to none), so the style is put
+ * back as well as the width and colour; without it a caret is all that marks focus.
+ */
+const SEARCH_FOCUS_CLASS =
+  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
+
+/**
  * What the button says when its main part starts creating another type while it is drawn, as
  * when the reader's recent types arrive or change: "New button changed to New Page." The type
  * it is first drawn with says nothing, since the reader meets that as the main part's own name.
@@ -166,7 +174,12 @@ function NewMenuList({
   return (
     // The root's `label` is what names the search box (cmdk labels its input with it).
     <Command label={SEARCH_LABEL} filter={matchesSearch}>
-      {menu.searchable ? <CommandInput placeholder="Search types" /> : null}
+      {menu.searchable ? (
+        <CommandInput
+          placeholder="Search types"
+          className={SEARCH_FOCUS_CLASS}
+        />
+      ) : null}
       {/* Focusable, and named: with no search box, focus lands here, on the element that
         carries `aria-activedescendant`, so each option the arrow keys reach is announced. */}
       <CommandList

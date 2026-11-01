@@ -632,6 +632,8 @@ test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus
     search,
     "the playground's types fit in ten, so the menu offers no search"
   ).toBeFocused();
+  // Focus in the search is drawn, not only a caret: the shared input removes its outline.
+  await expectVisibleFocus(search);
   await page.keyboard.type("p");
   const options = menu.getByRole("option");
   await expect.poll(() => options.count()).toBeGreaterThan(1);
