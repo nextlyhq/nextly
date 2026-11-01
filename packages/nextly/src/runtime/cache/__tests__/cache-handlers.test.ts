@@ -20,6 +20,7 @@ import {
   expireTags,
   isEntryExpired,
   localNow,
+  OFFSET_READING_MAX_AGE_MS,
   publishTagExpiryLedger,
   refreshTagExpiries,
   TAG_LOOKUP_TTL_MS,
@@ -76,6 +77,10 @@ beforeEach(() => {
     .__nextly_cache_entries;
   delete (globalThis as { __nextly_cache_reads?: unknown })
     .__nextly_cache_reads;
+  // A case that overflowed the remembered reads would otherwise date every
+  // later case's fills from the overflow.
+  delete (globalThis as { __nextly_cache_reads_overflowed_at?: unknown })
+    .__nextly_cache_reads_overflowed_at;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -396,6 +401,109 @@ describe("the incremental cache handler", () => {
     expect(warn.mock.calls[0][0]).toMatchObject({
       kind: "cache-tag-ledger-unreachable",
     });
+  });
+});
+
+/**
+ * A ledger whose lookups take time: each waits `queuedMs` before its statement
+ * reads the database's clock (a connection the pool was slow to give), then
+ * `repliedMs` before its answer arrives (a busy event loop). The clock runs
+ * `skewMs` ahead of this process's, and may be moved, as a failover can.
+ */
+function slowLedger() {
+  const rows = new Map<string, number>();
+  const timing = { queuedMs: 0, repliedMs: 0, skewMs: 0 };
+  // No timer for no wait: the clock only moves when a test advances it.
+  const wait = (ms: number) =>
+    ms === 0
+      ? Promise.resolve()
+      : new Promise<void>(resolve => {
+          setTimeout(resolve, ms);
+        });
+  const ledger: TagExpiryLedger = {
+    record: async () => false,
+    expiriesOf: async tags => {
+      await wait(timing.queuedMs);
+      const now = Date.now() + timing.skewMs;
+      const expired = new Map(
+        tags.flatMap(tag => {
+          const at = rows.get(tag);
+          return at === undefined ? [] : [[tag, at] as const];
+        })
+      );
+      await wait(timing.repliedMs);
+      return { now: expired.size > 0 ? now : undefined, expired };
+    },
+    prune: async () => 0,
+  };
+  return { ledger, rows, timing };
+}
+
+/** Reads `key`, letting `ms` pass while its lookup is under way. */
+async function getAfter(handler: IncrementalHandler, key: string, ms: number) {
+  const read = handler.get(key);
+  await vi.advanceTimersByTimeAsync(ms);
+  return read;
+}
+
+describe("the database's clock, learned from slow lookups", () => {
+  it("refuses an entry begun before another instance's write, however long the lookup's statement waited", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    // Another instance writes 100 ms after the entry began.
+    rows.set("posts", T0 + 100 + TAG_EXPIRY_GRACE_MS);
+    vi.advanceTimersByTime(200);
+
+    // The statement waits 10 s for a connection, then answers at once: its
+    // reading is 10 s after the read began, which the midpoint of the round
+    // trip would take for a database clock 5 s ahead of this process's.
+    timing.queuedMs = 10_000;
+    expect(await getAfter(handler, "k", 10_000)).toBeNull();
+  });
+
+  it("keeps the tightest reading of the clock over a slower one", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    // A quick lookup learns the clock exactly.
+    rows.set("posts", T0 - 10_000);
+    await handler.set("warm", page(0), { tags: ["posts"] });
+    expect(await getAfter(handler, "warm", 0)).not.toBeNull();
+
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    await handler.set("k", page(1), { tags: ["posts"] });
+    const begun = Date.now();
+    // Another instance's expiry from 3 s before the entry began.
+    rows.set("posts", begun - 3_000);
+    // This lookup's answer takes 10 s to arrive: judged by it, the entry
+    // could have begun up to 10 s earlier than it did, before that expiry.
+    timing.repliedMs = 10_000;
+    expect(await getAfter(handler, "k", 10_000)).not.toBeNull();
+  });
+
+  it("learns a clock that moved once the tightest reading is a minute old", async () => {
+    const { ledger, rows, timing } = slowLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    // A quick lookup learns a database clock 30 s ahead.
+    timing.skewMs = 30_000;
+    rows.set("posts", T0 - 60_000);
+    await handler.set("warm", page(0), { tags: ["posts"] });
+    expect(await getAfter(handler, "warm", 0)).not.toBeNull();
+
+    // The database fails over to a host whose clock matches this process's.
+    vi.advanceTimersByTime(OFFSET_READING_MAX_AGE_MS);
+    timing.skewMs = 0;
+    await handler.set("k", page(1), { tags: ["posts"] });
+    rows.set("posts", Date.now() + 100 + TAG_EXPIRY_GRACE_MS);
+    vi.advanceTimersByTime(200);
+
+    // A slower lookup than the first: still the one to learn from, since the
+    // first is a minute old, and the entry begun before the write is refused.
+    timing.repliedMs = 2_000;
+    expect(await getAfter(handler, "k", 2_000)).toBeNull();
   });
 });
 

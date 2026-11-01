@@ -53,8 +53,18 @@ interface ViewState {
    * cleared its registry rows at once).
    */
   mine: Map<string, number>;
-  /** The database's clock less this process's, as of the last read that told it. */
+  /**
+   * The database's clock less this process's, at least: a read's statement ran
+   * somewhere between its start and its answer, so the database's time it
+   * reported, less the answer's local time, is a lower bound. Judged by it, an
+   * entry looks no later than it began, so none begun before an expiry passes
+   * for one begun after it; a looser bound costs a rebuild, never a stale read.
+   */
   offsetMs: number;
+  /** How long the read `offsetMs` came from took, the bound's slack; Infinity before one. */
+  offsetRttMs: number;
+  /** When that read answered, on this process's clock. */
+  offsetAt: number;
   /** When stale answers were last dropped, on this process's clock. */
   sweptAt: number;
   /** The last time `localNow` gave, so the next is strictly later. */
@@ -62,11 +72,21 @@ interface ViewState {
   warned: boolean;
 }
 
+/**
+ * How long the tightest reading of the database's offset is kept over a looser
+ * later one. The two clocks drift by far less than a lookup's round trip in a
+ * minute, so a reading that old is replaced by the next, however slow.
+ */
+export const OFFSET_READING_MAX_AGE_MS = 60_000;
+
 const globalForView = globalThis as unknown as {
-  // A copy of this module from before `mine` was kept may have made it.
-  __nextly_tag_expiry_view?: Omit<ViewState, "mine"> & {
-    mine?: ViewState["mine"];
-  };
+  // A copy of this module from before `mine`, or the offset's slack, was kept
+  // may have made it.
+  __nextly_tag_expiry_view?: Omit<
+    ViewState,
+    "mine" | "offsetRttMs" | "offsetAt"
+  > &
+    Partial<Pick<ViewState, "mine" | "offsetRttMs" | "offsetAt">>;
 };
 
 function state(): ViewState {
@@ -76,6 +96,8 @@ function state(): ViewState {
     own: new Map(),
     mine: new Map(),
     offsetMs: 0,
+    offsetRttMs: Infinity,
+    offsetAt: -Infinity,
     sweptAt: 0,
     lastLocal: 0,
     warned: false,
@@ -83,15 +105,21 @@ function state(): ViewState {
   const view = globalForView.__nextly_tag_expiry_view;
   // A bundled or hot-reloaded copy keeps the state an older copy made, which
   // has no `mine`: given one here, the first record would otherwise throw.
-  return Object.assign(view, { mine: view.mine ?? new Map() });
+  return Object.assign(view, {
+    mine: view.mine ?? new Map(),
+    offsetRttMs: view.offsetRttMs ?? Infinity,
+    offsetAt: view.offsetAt ?? -Infinity,
+  });
 }
 
 /** Publishes the ledger the handlers read and record into; `null` withdraws it. */
 export function publishTagExpiryLedger(ledger: TagExpiryLedger | null): void {
   const view = state();
   view.ledger = ledger ?? undefined;
-  // A new ledger is asked afresh about every tag.
+  // A new ledger is asked afresh about every tag, and its database's clock
+  // is learned afresh: the next reading of it replaces the one kept.
   view.lookups.clear();
+  view.offsetRttMs = Infinity;
 }
 
 /** Warns once, through nextly's logger, that the ledger could not be used. */
@@ -178,9 +206,19 @@ export async function refreshTagExpiries(
       try {
         const answer = await ledger.expiriesOf(stale);
         const finishedAt = Date.now();
-        // A read that found no rows carries no clock to learn from.
-        if (answer?.now !== undefined) {
-          view.offsetMs = answer.now - (startedAt + finishedAt) / 2;
+        // A read that found no rows carries no clock to learn from. One that
+        // took longer than the reading kept is a looser bound, so it replaces
+        // that reading only once the reading is old enough for the clocks to
+        // have drifted.
+        const rttMs = finishedAt - startedAt;
+        if (
+          answer?.now !== undefined &&
+          (rttMs <= view.offsetRttMs ||
+            finishedAt - view.offsetAt >= OFFSET_READING_MAX_AGE_MS)
+        ) {
+          view.offsetMs = answer.now - finishedAt;
+          view.offsetRttMs = rttMs;
+          view.offsetAt = finishedAt;
         }
         for (const tag of stale) {
           view.lookups.set(tag, {
