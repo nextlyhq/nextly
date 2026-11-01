@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Apps starting together on a new database, or beside `nextly migrate`, all come up: the core schema is set up by one of them while the others wait, and a configured PostgreSQL schema is created once instead of failing the connections that lose the race to create it.
+Apps starting together on a new database, or beside `nextly migrate`, all come up: the core schema is set up by one of them while the others wait, and a configured PostgreSQL schema is created once, whatever the database's default isolation level, instead of failing the connections that lose the race to create it.

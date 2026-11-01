@@ -37,11 +37,39 @@ describe.skipIf(!TEST_DB_URL)(
     });
 
     it("every adapter connects, and the schema is created once", async () => {
+      await connectTogetherEachRound(TEST_DB_URL);
+    }, 60_000);
+
+    // A database or role whose default isolation is stricter than read
+    // committed fixes a transaction's snapshot at its first statement, the
+    // lock wait, so a lookup after the wait could not see the schema the
+    // first process committed meanwhile. The creation pins its own level.
+    it("every adapter connects when the session default is serializable", async () => {
+      const url = withSessionOption(
+        TEST_DB_URL,
+        "default_transaction_isolation=serializable"
+      );
+      // The setting reaches the session, or this case would only repeat the
+      // one above.
+      const probe = new pg.Client({ connectionString: url });
+      await probe.connect();
+      try {
+        const { rows } = await probe.query<{ level: string }>(
+          "SELECT current_setting('default_transaction_isolation') AS level"
+        );
+        expect(rows[0]?.level).toBe("serializable");
+      } finally {
+        await probe.end();
+      }
+      await connectTogetherEachRound(url);
+    }, 60_000);
+
+    async function connectTogetherEachRound(url: string | undefined) {
       for (let round = 1; round <= ROUNDS; round++) {
         await admin.query(`DROP SCHEMA IF EXISTS ${SCHEMA}`);
         const adapters = Array.from(
           { length: PROCESSES },
-          () => new PostgresAdapter({ url: TEST_DB_URL, schema: SCHEMA })
+          () => new PostgresAdapter({ url, schema: SCHEMA })
         );
         try {
           const results = await Promise.allSettled(
@@ -60,6 +88,16 @@ describe.skipIf(!TEST_DB_URL)(
         );
         expect(rows).toHaveLength(1);
       }
-    }, 60_000);
+    }
   }
 );
+
+/**
+ * The URL with a server setting every session it opens starts with, as a
+ * database's or role's own default would set it.
+ */
+function withSessionOption(url: string | undefined, setting: string): string {
+  const parsed = new URL(url ?? "");
+  parsed.searchParams.set("options", `-c ${setting}`);
+  return parsed.toString();
+}

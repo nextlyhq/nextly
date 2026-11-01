@@ -211,7 +211,11 @@ const PG_ERROR_CODES: Record<string, DatabaseErrorKind> = {
  * check, and the second to commit fails with a unique violation on
  * `pg_namespace_nspname_index`, which fails its connect. The transaction-scoped
  * lock makes the second wait for the first to commit, and its lookup, a new
- * statement with a new snapshot, then finds the schema. Released by the commit
+ * statement with a new snapshot, then finds the schema. The transaction is
+ * read committed whatever the database's or role's default: at repeatable
+ * read or serializable the snapshot is fixed by the first statement, the lock
+ * wait, so the lookup would miss the schema and the CREATE that followed would
+ * ask for the database privilege the first paragraph avoids. Released by the commit
  * or rollback, so it never outlives this one connection's transaction, and a
  * transaction-mode pooler keeps all of it on one server connection.
  */
@@ -221,7 +225,7 @@ async function ensureSchemaExists(
 ): Promise<void> {
   const name = assertSchemaName(schema);
   if (await schemaExists(client, name)) return;
-  await client.query("BEGIN");
+  await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
   try {
     await client.query(
       "SELECT pg_advisory_xact_lock(hashtext('nextly:create-schema'), hashtext($1))",
