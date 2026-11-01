@@ -249,7 +249,7 @@ async function expectVisibleFocus(
   await expect(target).toBeFocused();
   const rest =
     twin === undefined ? undefined : await twin.evaluate(drawnColours);
-  let seen = "";
+  // Polled as the strongest indicator's contrast, so a failure prints the ratio it measured.
   await expect
     .poll(
       async () => {
@@ -262,14 +262,13 @@ async function expectVisibleFocus(
             ? [border]
             : [];
         const ratio = strongest([...marks, ...changedBorder], drawn.backdrop);
-        seen = `${ratio.toFixed(2)}:1 against rgb(${drawn.backdrop.map(Math.round).join(",")})`;
-        return ratio >= 3;
+        return Math.round(ratio * 100) / 100;
       },
       {
-        message: `${String(target)} has focus but draws no indicator at 3:1 (strongest ${seen})`,
+        message: `${String(target)} has focus but draws no indicator at 3:1 against what is behind it`,
       }
     )
-    .toBe(true);
+    .toBeGreaterThanOrEqual(3);
 }
 
 /** Whether focus is anywhere inside `within`. */
