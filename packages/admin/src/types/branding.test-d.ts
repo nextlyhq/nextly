@@ -1,4 +1,4 @@
-import type { publishedWidgetDefinition } from "nextly/testing/widget-card";
+import type { PublishedWidget } from "nextly/widget-result";
 import { expectTypeOf } from "vitest";
 
 import type {
@@ -37,12 +37,10 @@ expectTypeOf<NonNullable<PluginMetadata["settings"]>>().toMatchTypeOf<{
 }>();
 
 // Widget metadata. A widget reaches the admin only through the registry, so the
-// admin's view of it is DERIVED from what the registry publishes each widget as
-// (`publishedWidgetDefinition`) rather than restated, and a plugin's own
+// admin's view of it is core's wire type for what the registry publishes each
+// widget as (`PublishedWidget`) rather than a restatement, and a plugin's own
 // metadata carries none.
-expectTypeOf<RegisteredWidgetMeta>().toEqualTypeOf<
-  ReturnType<typeof publishedWidgetDefinition>
->();
+expectTypeOf<RegisteredWidgetMeta>().toEqualTypeOf<PublishedWidget>();
 // Every card is answered on the server from its declaration's `load`, so a
 // published widget carries no query, cells, actions or text of its own for the
 // admin to ask or draw: none of the fields that described that is published.

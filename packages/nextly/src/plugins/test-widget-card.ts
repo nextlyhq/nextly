@@ -19,8 +19,7 @@ import type {
   WidgetData,
 } from "../domains/widgets/declaration/define-widget";
 import { displayOfView } from "../domains/widgets/declaration/displays";
-import type { WidgetDefinition } from "../domains/widgets/definition";
-import type { WidgetSlot } from "../domains/widgets/result";
+import type { PublishedWidget, WidgetSlot } from "../domains/widgets/result";
 import { UNAVAILABLE_SOURCE_MESSAGE } from "../domains/widgets/sources";
 
 /**
@@ -37,15 +36,16 @@ export type WidgetLoadResult<W> =
   | { state: "error"; error: string };
 
 /**
- * A widget as the registry publishes it to the admin: what a test draws its
- * card from, so the card is described exactly as the dashboard describes it.
+ * A widget as the registry publishes it to the admin (`PublishedWidget`): what a
+ * test draws its card from, so the card is described exactly as the dashboard
+ * describes it.
  *
  * @internal For the SDK's test helpers; not a runtime API.
  */
 export function publishedWidgetDefinition(
   widget: AnyWidget,
   owner = 'plugin "test"'
-): WidgetDefinition {
+): PublishedWidget {
   return toDefinition(
     widget as unknown as Parameters<typeof toDefinition>[0],
     owner

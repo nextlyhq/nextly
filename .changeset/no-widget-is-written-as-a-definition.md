@@ -38,4 +38,8 @@ Removed exports:
 - `nextly/config`: `WidgetStatCell`. There is no `stats` archetype: declare one widget per number with `view: "figure"`, or draw several numbers with a component of its own. To migrate, move each cell's count into the card's `load`, and return the numbers as its data.
 - `nextly/config`: `WidgetQueryCell`. A card no longer asks cells through the batch: its `load` reads everything it draws. To migrate, run each cell's query inside the card's `load` and return the answers together as its data.
 
+Added export:
+
+- `nextly/widget-result`: `PublishedWidget`, a type only. The widget as `/admin-meta/workspace` serves it to the admin, derived from the function the registry publishes every widget through. Never written by a widget author; declare a widget with `defineWidget`.
+
 A widget no longer carries `serverData`, `sizedQuery`, `dismissible`, `link`, `cells`, `actions`, `content` or a `query` of its own. Every card's "…" menu offers Remove, and a list's "View all" link is drawn by `Widget.List`'s `viewAllHref`.

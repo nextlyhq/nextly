@@ -4,9 +4,8 @@ import type {
   FieldSurface,
   FieldTypeCategory,
 } from "nextly/field-catalog";
-// The function the registry builds each published widget with; read for its
-// return type only, so this import carries no runtime code.
-import type { publishedWidgetDefinition } from "nextly/testing/widget-card";
+// The widget as the workspace payload serves it, a type only.
+import type { PublishedWidget } from "nextly/widget-result";
 
 export interface ResolvedBrandingColors {
   primary?: string;
@@ -66,14 +65,12 @@ export interface PluginPageMeta {
  * receives is the declaration's published description: its title, archetype,
  * size, settings and the rest, and never a query of its own.
  *
- * The registry publishes exactly what `publishedWidgetDefinition` returns, so
- * the type is DERIVED from that function rather than restated: the wire
- * contract then has one declaration, and a field the server stops publishing
- * leaves this type with it. It is read from `nextly/testing/widget-card`
- * because that entry is a published, client-safe subpath already; this
- * package's tsconfig maps it to its source, as it does `nextly/widget-result`.
+ * It is core's `PublishedWidget`, the wire type `nextly/widget-result` derives
+ * from the function the registry publishes every widget through, rather than a
+ * shape restated here: the contract then has one declaration, and a field the
+ * server stops publishing leaves this type with it.
  */
-export type RegisteredWidgetMeta = ReturnType<typeof publishedWidgetDefinition>;
+export type RegisteredWidgetMeta = PublishedWidget;
 
 /**
  * A plugin's public client configuration, served before a session exists.

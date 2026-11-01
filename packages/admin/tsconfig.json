@@ -34,13 +34,6 @@
       // Same reason again: the wire shapes a widget query answers with, whose
       // `types` and `import` conditions point at different built paths.
       "nextly/widget-result": ["../nextly/src/domains/widgets/result.ts"],
-      // Same reason: the function the registry builds each published widget
-      // with, whose return type is the admin's one name for a published
-      // widget (`RegisteredWidgetMeta`). Its graph is core's widget
-      // declarations, which use none of the `@nextly/*` aliases.
-      "nextly/testing/widget-card": [
-        "../nextly/src/plugins/test-widget-card.ts"
-      ],
       // Same reason: the translation states the worklist asks the server for.
       "nextly/translation-filter-states": [
         "../nextly/src/domains/i18n/translation-filter-states.ts"
