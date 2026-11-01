@@ -9,7 +9,7 @@
 // answer, and a failed run that printed none could not be asked.
 //
 // `NEXTLY_TSC` names another `tsc` entry script to run these checks with, such
-// as TypeScript 7's while the repository still installs 5.x.
+// as a 5.x compiler's, to compare the two.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -37,9 +37,18 @@ export function tscEntry() {
  * compiler takes its own default of four, its 5.5 GB setting on nextly, which a
  * test once started beside two test workers on an 8 GB machine.
  *
+ * Only TypeScript 7 has the option: a 5.x compiler named by `NEXTLY_TSC`
+ * refuses it (TS5023) and checks nothing, so below 7 there is none to give,
+ * and 5.x checks on one thread anyway.
+ *
  * @param {{ checkers: number }} [limits]
+ * @param {number} [compilerMajor] the major version of the `tsc` that runs
  */
-export function checkerArgs(limits = localLimits()) {
+export function checkerArgs(
+  limits = localLimits(),
+  compilerMajor = tscMajor()
+) {
+  if (compilerMajor < 7) return [];
   return ["--checkers", String(limits.checkers)];
 }
 

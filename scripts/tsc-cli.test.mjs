@@ -7,7 +7,18 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { compile, diagnosticsIn, tscMajor } from "./tsc-cli.mjs";
+import { checkerArgs, compile, diagnosticsIn, tscMajor } from "./tsc-cli.mjs";
+
+describe("the checkers a compiler is given", () => {
+  it("gives TypeScript 7 and later this machine's number", () => {
+    expect(checkerArgs({ checkers: 2 }, 7)).toEqual(["--checkers", "2"]);
+    expect(checkerArgs({ checkers: 1 }, 8)).toEqual(["--checkers", "1"]);
+  });
+
+  it("gives a 5.x compiler none, since it refuses the option and checks nothing", () => {
+    expect(checkerArgs({ checkers: 2 }, 5)).toEqual([]);
+  });
+});
 
 describe("reading --pretty false output", () => {
   it("reads each diagnostic's file, position, code and message, with its continuation lines", () => {
@@ -113,12 +124,25 @@ function withStandInTsc(source, workers, body) {
   }
 }
 
+/**
+ * How a stand-in answers `tsc -v`, which is asked before its checkers are
+ * chosen: as the given major version does, so it is run as that compiler.
+ */
+const answersVersion = major =>
+  `if (process.argv[2] === "-v") { console.log("Version ${major}.0.0"); process.exit(0); }\n`;
+
 /** A compiler that answers with one diagnostic naming the arguments it was given. */
 const ECHO_ARGS =
+  answersVersion(7) +
+  'console.log("error TS9999: " + process.argv.slice(2).join(" "));\nprocess.exit(1);\n';
+
+/** The same, as a 5.x compiler. */
+const ECHO_ARGS_5 =
+  answersVersion(5) +
   'console.log("error TS9999: " + process.argv.slice(2).join(" "));\nprocess.exit(1);\n';
 
 /** A compiler the kernel stops, as it stops one out of memory. */
-const KILLED = 'process.kill(process.pid, "SIGKILL");\n';
+const KILLED = answersVersion(7) + 'process.kill(process.pid, "SIGKILL");\n';
 
 const WRAPPER = join(import.meta.dirname, "tsc.mjs");
 
@@ -140,6 +164,18 @@ describe("the checkers a compiler is run with", () => {
         env: process.env,
       });
       expect(run.stdout).toMatch(/(^| )--checkers 1( |$)/);
+    });
+  });
+
+  it("gives a 5.x compiler run through tsc.mjs no checkers, which it would refuse", () => {
+    withStandInTsc(ECHO_ARGS_5, "1", dir => {
+      const run = spawnSync(process.execPath, [WRAPPER, "--noEmit"], {
+        cwd: dir,
+        encoding: "utf8",
+        env: process.env,
+      });
+      expect(run.stdout).toContain("error TS9999: --noEmit");
+      expect(run.stdout).not.toContain("--checkers");
     });
   });
 });
