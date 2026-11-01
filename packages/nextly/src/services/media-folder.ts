@@ -991,8 +991,9 @@ export class MediaFolderService extends BaseService {
       // Whether the media table still has the retired `sizes` column, which
       // the Drizzle definition no longer names, asked of the catalogue
       // before the transaction. The sizes themselves are read inside it, for
-      // the rows as they are under their locks (`retiredSizesOnTransaction`): an item
-      // moved into the folder after this ask is deleted with its size files.
+      // the rows as they are under their locks
+      // (`retiredSizesOnTransaction`): an item moved into the folder after
+      // this ask is deleted with its size files.
       const sizesColumn =
         deleteContents && (await hasRetiredSizesColumn(this.db, this.dialect));
       const removal = await inFolderTreeTransaction(this.adapter, async tx => {
