@@ -145,53 +145,66 @@ export function WelcomeHeader(): JSX.Element {
           onRefresh={() => chrome?.refresh()}
         />
       </div>
-      {/* The header's actions, Customize then New, as the approved design
-          places them; both give way to customise mode's own bar. The group
-          may narrow to the header's width (New's label then cuts short), so
-          it never widens a phone's page. */}
-      <div className="flex min-w-0 max-w-full items-center gap-2">
-        {chrome === null || chrome.awaitingArrangement ? (
-          // Until the grid knows whether this reader may customise (it has
-          // not published, or their arrangement is still on its way),
-          // Customize's place is held, unseen and out of reach, so New is
-          // drawn from the first paint where it stays instead of moving over
-          // when Customize arrives.
+      <HeaderActions chrome={chrome} />
+    </header>
+  );
+}
+
+/**
+ * The header's actions, Customize then New, as the approved design places
+ * them; both give way to customise mode's own bar. The group may narrow to the
+ * header's width (New's label then cuts short), so it never widens a phone's
+ * page. What the grid's chrome says decides whether Customize is offered, held
+ * or absent.
+ */
+function HeaderActions({
+  chrome,
+}: {
+  chrome: ReturnType<typeof useDashboardChrome>;
+}): JSX.Element {
+  return (
+    <div className="flex min-w-0 max-w-full items-center gap-2">
+      {chrome === null || chrome.awaitingArrangement ? (
+        // Until the grid knows whether this reader may customise (it has
+        // not published, or their arrangement is still on its way),
+        // Customize's place is held, unseen and out of reach, so New is
+        // drawn from the first paint where it stays instead of moving over
+        // when Customize arrives.
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-hidden="true"
+          tabIndex={-1}
+          inert
+          className="invisible"
+          data-testid="dashboard-edit-reserve"
+        >
+          Customize
+        </Button>
+      ) : chrome.customizable && !chrome.editing ? (
+        <div className="flex gap-2" data-testid="dashboard-edit-offer">
           <Button
+            ref={chrome.customizeRef}
             type="button"
             variant="outline"
             size="sm"
-            aria-hidden="true"
-            tabIndex={-1}
-            inert
-            className="invisible"
-            data-testid="dashboard-edit-reserve"
+            onClick={chrome.begin}
+            // 🔴 Beginning an edit is not itself a write, and it still has to
+            // wait for one: the draft is seeded with the version it will be
+            // saved against, so one opened while a write settles would carry a
+            // guard about to go stale.
+            disabled={chrome.writing}
+            data-testid="dashboard-edit-begin"
           >
+            {/* "Customize", the word every message about this mode uses: the
+              unreadable-layout notice tells the reader to save "from
+              Customize", so the control has to be called that. */}
             Customize
           </Button>
-        ) : chrome.customizable && !chrome.editing ? (
-          <div className="flex gap-2" data-testid="dashboard-edit-offer">
-            <Button
-              ref={chrome.customizeRef}
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={chrome.begin}
-              // 🔴 Beginning an edit is not itself a write, and it still has to
-              // wait for one: the draft is seeded with the version it will be
-              // saved against, so one opened while a write settles would carry a
-              // guard about to go stale.
-              disabled={chrome.writing}
-              data-testid="dashboard-edit-begin"
-            >
-              {/* "Customize", the word every message about this mode uses: the
-                  unreadable-layout notice tells the reader to save "from
-                  Customize", so the control has to be called that. */}
-              Customize
-            </Button>
-          </div>
-        ) : null}
-        {chrome?.editing ? null : <NewSplitButton />}
-      </div>
-    </header>
+        </div>
+      ) : null}
+      {chrome?.editing ? null : <NewSplitButton />}
+    </div>
   );
 }
