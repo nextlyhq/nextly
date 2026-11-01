@@ -1,10 +1,10 @@
 /**
- * A list card that grows keeps its old answer on screen while the answer for its new size loads,
- * and draws that answer by the size it was fetched at.
+ * A list card that grows, or changes density, keeps its old answer on screen while the answer for
+ * its new size or density loads, and draws that answer by the size and density it was fetched at.
  *
  * A size-aware `load` reads one row more than the card draws, the sign that more exist. Drawn by
- * the card's new, larger size, that one more would read as one more row until the new answer
- * arrived; drawn by the size it was fetched at, it stays the sign it is.
+ * the card's new, larger size, or its new, denser rows, that one more would read as one more row
+ * until the new answer arrived; drawn by what it was fetched at, it stays the sign it is.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -51,7 +51,10 @@ const api = vi.mocked(protectedApi);
 
 const RECENT = "core/recent";
 
-/** A declared list card, half the row wide, three rows high and resizable up to six. */
+/**
+ * A declared list card, half the row wide, three rows high and resizable up to six, whose
+ * density is a quick setting, default unless the reader chooses compact.
+ */
 const branding = {
   widgets: [
     {
@@ -63,6 +66,19 @@ const branding = {
         min: { w: 3, h: 2 },
         max: { w: 12, h: 6 },
       },
+      settings: [
+        {
+          name: "density",
+          type: "select",
+          label: "Density",
+          quick: true,
+          defaultValue: "default",
+          options: [
+            { label: "Default", value: "default" },
+            { label: "Compact", value: "compact" },
+          ],
+        },
+      ],
     },
   ],
 } as unknown as AdminBranding;
@@ -198,6 +214,70 @@ describe("a list card that grows while its old answer is on screen", () => {
     );
     // The card is drawn at its new height, so the count below is the grown card's.
     expect(cell.style.gridRow).toBe("span 6 / span 6");
+    expect(within(cell).getAllByTestId("entity-row")).toHaveLength(before);
+    expect(within(cell).queryByText(`Entry ${before + 1}`)).toBeNull();
+  });
+
+  it("draws that answer by the density it was fetched at, so its one row more is never drawn", async () => {
+    // Asked at the default density; once the reader chooses compact, the card's ask for its new
+    // density stays on its way, so the card keeps the answer it had.
+    api.post.mockImplementation((_url, body) => {
+      if (api.put.mock.calls.length > 0) return new Promise(() => {});
+      const queries = (body as { queries: { size?: AskedSize }[] }).queries;
+      return Promise.resolve({
+        results: queries.map(query => ({
+          ok: true,
+          result: {
+            op: "list",
+            items: Array.from(
+              {
+                length: (query.size === undefined ? 5 : rowsAt(query.size)) + 1,
+              },
+              (_, index) => ({ title: `Entry ${index + 1}` })
+            ),
+          },
+        })),
+      });
+    });
+    renderGrid();
+    const user = userEvent.setup();
+    const cell = await screen.findByTestId(`widget-cell-${RECENT}`);
+    await waitFor(() =>
+      expect(within(cell).getAllByTestId("entity-row").length).toBeGreaterThan(
+        0
+      )
+    );
+    const [first] = askedSizes();
+    if (first === undefined) throw new Error("the card was asked with no size");
+    const before = rowsAt(first);
+    expect(within(cell).getAllByTestId("entity-row")).toHaveLength(before);
+
+    // Compact rows are shorter: the same card has room for every row the answer on screen holds,
+    // the one more included, so drawn by its new density that one more would be a row.
+    expect(
+      rowsDrawn({ tier: first.tier, h: first.h }, undefined, "compact")
+    ).toBeGreaterThanOrEqual(before + 1);
+    const asksBefore = api.post.mock.calls.length;
+    await user.click(await screen.findByRole("button", { name: "Recent" }));
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Recent",
+    });
+    await user.click(
+      within(popover).getByRole("combobox", { name: "Density" })
+    );
+    await user.click(await screen.findByRole("option", { name: "Compact" }));
+
+    // Saved, and the card asked again for its new density, that answer still on its way: the
+    // card keeps the one it had, drawn by the density it was fetched at.
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      (
+        api.put.mock.calls[0]?.[1] as { placements: WidgetPlacement[] }
+      ).placements.find(placement => placement.id === PLACED.id)?.config
+    ).toEqual({ density: "compact" });
+    await waitFor(() =>
+      expect(api.post.mock.calls.length).toBeGreaterThan(asksBefore)
+    );
     expect(within(cell).getAllByTestId("entity-row")).toHaveLength(before);
     expect(within(cell).queryByText(`Entry ${before + 1}`)).toBeNull();
   });

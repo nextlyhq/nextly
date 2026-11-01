@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   appliedKey,
+  askedIn,
   sentEntry,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
@@ -268,6 +269,32 @@ describe("what a card's answer is filed under", () => {
       size: { w: 4, h: 3, tier: "small" },
     });
     expect(small.card).toEqual({ widget: "acme/orders", card: "c-1" });
+  });
+
+  it("reads back the size and the settings it was asked with, from the key it is filed under", () => {
+    const cardSize = { w: 6, h: 3, tier: "medium" as const };
+    // Asked for by its id: the stored settings it is filed under.
+    expect(
+      askedIn(
+        appliedKey({ ...stored, config: { density: "compact" }, cardSize })
+      )
+    ).toEqual({ size: cardSize, settings: { density: "compact" } });
+    // Asked with the settings it is drawn with: those, not the stored ones beside them.
+    expect(
+      askedIn(
+        appliedKey({
+          placementId: "c-1",
+          card: { widget: "acme/orders", settings: { density: "default" } },
+          config: { density: "compact" },
+          cardSize,
+        })
+      )
+    ).toEqual({ size: cardSize, settings: { density: "default" } });
+    // Asked with neither a size nor settings: nothing to read back.
+    expect(
+      askedIn(appliedKey({ placementId: "c-1", card: stored.card }))
+    ).toEqual({});
+    expect(askedIn(undefined)).toBeUndefined();
   });
 
   it("never reads a preview as the stored card, even with the same settings", () => {

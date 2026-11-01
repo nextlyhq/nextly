@@ -12,19 +12,19 @@
  * A card is also asked again on its own, quietly, when it now asks a different question than its
  * answer was fetched with: it was resized or crossed a tier, or its settings changed. It keeps
  * what it shows until the new answer arrives, and no other card is asked. While it does, it says
- * the size the answer it shows was fetched at (`fetchedSizeFor`), so that answer is drawn by the
- * rows it was asked for, not by the card's new size.
+ * what the answer it shows was asked with (`fetchedAskFor`): its size and settings, so that
+ * answer is drawn by the rows it was asked for, not by the card's new size or density.
  *
  * @module components/features/widgets/useCardRetries
  */
 
-import type { WidgetRenderSize } from "nextly/widget-result";
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 
 import {
   appliedKey,
-  sizeAskedIn,
+  askedIn,
   useWidgetQueries,
+  type AskedWith,
   type UseWidgetQueriesResult,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
@@ -246,12 +246,12 @@ export interface CardRetries {
    */
   fetchingPlacementIds: ReadonlySet<string>;
   /**
-   * The size the answer this card shows was fetched at: its own re-ask's once that has answered,
-   * else the batch's. A card asked again quietly for a new size keeps its old answer on screen,
-   * and that answer holds only the rows its old size asked for, and the one more that says more
-   * exist; drawn at the new size, that one more would read as a row.
+   * What the answer this card shows was asked with, its size and settings: its own re-ask's once
+   * that has answered, else the batch's. A card asked again quietly for a new size or density
+   * keeps its old answer on screen, and that answer holds only the rows it was asked for, and the
+   * one more that says more exist; drawn by the new ones, that one more would read as a row.
    */
-  fetchedSizeFor: (placementId: string) => WidgetRenderSize | undefined;
+  fetchedAskFor: (placementId: string) => AskedWith | undefined;
 }
 
 export function useCardRetries(
@@ -342,14 +342,12 @@ export function useCardRetries(
     [state.inFlight]
   );
 
-  // A settled re-ask's answer is shown in place of the batch's, so its size is the one shown; a
-  // quiet re-ask still in flight shows the answer it had. Read from what each was asked with.
-  const fetchedSizeFor = useCallback(
+  // A settled re-ask's answer is shown in place of the batch's, so what it was asked with is
+  // what the card shows; a quiet re-ask still in flight shows the answer it had.
+  const fetchedAskFor = useCallback(
     (placementId: string) => {
       const settled = state.settled.get(placementId);
-      return sizeAskedIn(
-        settled ? settled.applied : batchAppliedFor(placementId)
-      );
+      return askedIn(settled ? settled.applied : batchAppliedFor(placementId));
     },
     [state.settled, batchAppliedFor]
   );
@@ -361,7 +359,7 @@ export function useCardRetries(
     answeredAtFor,
     grow,
     fetchingPlacementIds,
-    fetchedSizeFor,
+    fetchedAskFor,
   };
 }
 

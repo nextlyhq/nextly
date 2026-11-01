@@ -123,29 +123,59 @@ export function appliedKey(request: WidgetQueryRequest): string {
   });
 }
 
+/** What an answer was asked with, as far as drawing it needs: its size and its settings. */
+export interface AskedWith {
+  /** The size it was asked at; absent for an answer asked with no size. */
+  size?: WidgetRenderSize;
+  /**
+   * The settings it was asked with: those sent with the card, or the stored ones a card asked
+   * for by its id was filed under. Absent where it was asked with neither.
+   */
+  settings?: Record<string, unknown>;
+}
+
 /**
- * The size an answer was asked at, read back from what it is filed as asked with (`appliedKey`):
- * `undefined` for no answer, or for one asked with no size.
+ * What an answer was asked with, read back from what it is filed as asked with (`appliedKey`):
+ * `undefined` for no answer.
  *
- * Read from the key rather than kept beside it, so the size a held answer is drawn by and the
- * question a card's new size is judged against are one record, and cannot disagree.
+ * Read from the key rather than kept beside it, so what a held answer is drawn by and the
+ * question a card's new size or settings is judged against are one record, and cannot disagree.
  */
-export function sizeAskedIn(
-  applied: string | undefined
-): WidgetRenderSize | undefined {
+export function askedIn(applied: string | undefined): AskedWith | undefined {
   if (applied === undefined) return undefined;
   const asked: unknown = JSON.parse(applied);
-  const size =
-    typeof asked === "object" && asked !== null && "size" in asked
-      ? asked.size
-      : undefined;
-  if (!Array.isArray(size)) return undefined;
-  const [w, h, tier]: unknown[] = size;
+  if (typeof asked !== "object" || asked === null) return undefined;
+  const size = "size" in asked ? sizeOf(asked.size) : undefined;
+  const card = "card" in asked ? asked.card : undefined;
+  const settings =
+    recordOf(
+      typeof card === "object" && card !== null && "settings" in card
+        ? card.settings
+        : undefined
+    ) ?? recordOf("config" in asked ? asked.config : undefined);
+  return {
+    ...(size === undefined ? {} : { size }),
+    ...(settings === undefined ? {} : { settings }),
+  };
+}
+
+/** A size as `appliedKey` writes it, its three numbers in order, or `undefined` for none. */
+function sizeOf(value: unknown): WidgetRenderSize | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const [w, h, tier]: unknown[] = value;
   return typeof w === "number" &&
     typeof h === "number" &&
     (tier === "small" || tier === "medium" || tier === "large")
     ? { w, h, tier }
     : undefined;
+}
+
+/** Settings as `appliedKey` writes them, a plain object, or `undefined` for none. */
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return Object.fromEntries(Object.entries(value));
 }
 
 /** What one request sends as its entry of the batch: its card with the size it is drawn at. */

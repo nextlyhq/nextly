@@ -16,11 +16,11 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { WidgetRenderSize } from "nextly/widget-result";
 import { useEffect, useMemo } from "react";
 
 import {
   useWidgetQueries,
+  type AskedWith,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import type {
@@ -87,10 +87,10 @@ export interface WidgetBatch {
   /** When one card's own answer arrived: its own retry's, or its own request's in the batch. */
   answeredAtFor: (placementId: string) => Date | null;
   /**
-   * The size the answer one card shows was fetched at (`useCardRetries`), which a card that grew
-   * draws that answer by until the answer for its new size arrives.
+   * What the answer one card shows was asked with (`useCardRetries`), its size and settings,
+   * which a card that grew or changed density draws that answer by until its new one arrives.
    */
-  fetchedSizeFor: (placementId: string) => WidgetRenderSize | undefined;
+  fetchedAskFor: (placementId: string) => AskedWith | undefined;
   /** Ask every card again, as the batch does on window focus. */
   refresh: () => void;
 }
@@ -236,7 +236,7 @@ export function useWidgetBatch(
     retry,
     updatedAtFor,
     answeredAtFor: retries.answeredAtFor,
-    fetchedSizeFor: retries.fetchedSizeFor,
+    fetchedAskFor: retries.fetchedAskFor,
     refresh: () => void batch.refetch(),
   };
 }
