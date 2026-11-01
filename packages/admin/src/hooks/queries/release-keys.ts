@@ -13,6 +13,7 @@
 
 import type {
   ReleaseCalendarParams,
+  ReleaseDocumentRef,
   ReleaseListParams,
 } from "@admin/types/releases";
 
@@ -49,6 +50,22 @@ export const releaseKeys = {
     ids: string
   ): readonly ["releases", "documents", string, string, string, string] =>
     ["releases", "documents", id, scopeKind, scopeSlug, ids] as const,
+  /**
+   * A MUTATION key, for scheduling one document: every send for it runs under
+   * this key, so whether one is still out is read from the mutation cache by
+   * the whole page, and not only by the dialog that sent it, which a move to
+   * another document and back replaces.
+   */
+  scheduling: (
+    document: ReleaseDocumentRef
+  ): readonly ["releases", "scheduling", string, string, string] =>
+    [
+      "releases",
+      "scheduling",
+      document.scopeKind,
+      document.scopeSlug,
+      document.entryId,
+    ] as const,
   readiness: (
     ids: readonly string[],
     listReadAt: number

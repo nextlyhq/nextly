@@ -15,6 +15,9 @@
  * - `["releases", "history", id]` — its history, newest first
  * - `["releases", "documents", id, scope]` — its documents' titles
  *
+ * And one mutation key: `["releases", "scheduling", kind, slug, id]`, which
+ * every request to schedule that one document runs under.
+ *
  * ## Why every mutation invalidates the LIST as well as the detail
  *
  * A release's list row shows its state and instant, and scheduling changes
@@ -80,6 +83,7 @@ import {
   type ReleaseCalendarParams,
   type ReleaseCalendarRead,
   type ReleaseDocumentInfo,
+  type ReleaseDocumentRef,
   type ReleaseKind,
   type ReleaseListParams,
   type ReleaseListTab,
@@ -506,7 +510,9 @@ export function useScheduleRelease(id: string): UseMutationResult<
  * document, and the document's banner and Publishing section are where the
  * editor looks to find out, so they must not keep the answer from before.
  */
-export function useScheduleDocument(): UseMutationResult<
+export function useScheduleDocument(
+  document: ReleaseDocumentRef
+): UseMutationResult<
   ScheduleDocumentResponse,
   Error,
   ScheduleDocumentPayload,
@@ -515,6 +521,8 @@ export function useScheduleDocument(): UseMutationResult<
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
+    // Read by `useSchedulingInFlight`, which holds the action while it is out.
+    mutationKey: releaseKeys.scheduling(document),
     mutationFn: (payload: ScheduleDocumentPayload) => scheduleDocument(payload),
     onSettled: result => refresh(result?.item.release.id),
     onSuccess: result => {
