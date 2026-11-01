@@ -9,9 +9,9 @@
  *
  * @module runtime/cache/incremental-cache-handler
  */
-import { holdForNextFlush } from "../../revalidation/expiry-handoff";
 
 import { sharedEntries } from "./bounded-entries";
+import { holdFailedRecord, retryFailedRecordsAtRead } from "./record-retry";
 import { markIncrementalHandlerInUse } from "./shared-handlers";
 import {
   expireTags,
@@ -161,6 +161,9 @@ export default class NextlyIncrementalCacheHandler {
     cacheControl?: unknown;
   } | null> {
     rememberRead(key);
+    // Where a timer may never fire, a read retries what the ledger refused.
+    const retrying = retryFailedRecordsAtRead();
+    if (retrying !== undefined) await retrying;
     const stored = entries().get(key);
     if (stored === undefined) return null;
     const tags = [
@@ -207,10 +210,10 @@ export default class NextlyIncrementalCacheHandler {
 
   async revalidateTag(tags: string | string[]): Promise<void> {
     const expired = Array.isArray(tags) ? tags : [tags];
-    // A refused record is retried by the next flush. No table is not: every
-    // request would expire the tags again, and until the migration runs no
-    // instance shares expiries to miss.
-    if ((await expireTags(expired)) === "failed") holdForNextFlush(expired);
+    // A refused record is retried, by the next flush and by a timer. No table
+    // is not: every request would expire the tags again, and until the
+    // migration runs no instance shares expiries to miss.
+    if ((await expireTags(expired)) === "failed") holdFailedRecord(expired);
   }
 
   // No `resetRequestCache`: this handler keeps no per-request state, and
