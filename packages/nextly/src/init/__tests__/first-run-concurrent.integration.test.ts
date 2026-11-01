@@ -34,9 +34,9 @@ const PROCESSES = 8;
 /** Rounds, each on a database of its own. */
 const ROUNDS = 3;
 
-const SERVER_DIALECTS = availableDialects().filter(
-  (dialect): dialect is "postgresql" | "mysql" => dialect !== "sqlite"
-);
+/** The servers this run can reach; each one not set up is skipped, never failed. */
+const AVAILABLE = new Set(availableDialects());
+const SERVER_DIALECTS = ["postgresql", "mysql"] as const;
 
 /** What one process's first start reported, beside its result. */
 interface Start {
@@ -84,41 +84,48 @@ function coreTableNames(dialect: "postgresql" | "mysql"): string[] {
 describe.each(SERVER_DIALECTS)(
   "first start on a new database (%s)",
   dialect => {
-    it("every process starting at once comes up, and one of them sets up every core table", async () => {
-      await loadDialectTables(dialect);
-      for (let round = 1; round <= ROUNDS; round++) {
-        const scratch = await createScratchDatabase(dialect, "first_run_race");
-        const adapters: DrizzleAdapter[] = [];
-        try {
-          for (let i = 0; i < PROCESSES; i++) {
-            adapters.push(await connect(dialect, scratch.url));
+    it.skipIf(!AVAILABLE.has(dialect))(
+      "every process starting at once comes up, and one of them sets up every core table",
+      async () => {
+        await loadDialectTables(dialect);
+        for (let round = 1; round <= ROUNDS; round++) {
+          const scratch = await createScratchDatabase(
+            dialect,
+            "first_run_race"
+          );
+          const adapters: DrizzleAdapter[] = [];
+          try {
+            for (let i = 0; i < PROCESSES; i++) {
+              adapters.push(await connect(dialect, scratch.url));
+            }
+            const starts = await Promise.all(adapters.map(firstStart));
+
+            const failures = starts.flatMap(start => start.errors);
+            expect(failures, `round ${round}`).toEqual([]);
+            expect(
+              starts.map(start => start.result.ranSetup).filter(Boolean),
+              `round ${round}: exactly one process sets up`
+            ).toHaveLength(1);
+            expect(
+              starts
+                .map(start => start.result)
+                .filter(result => !result.ranSetup)
+                .map(result => (result.ranSetup ? null : result.reason)),
+              `round ${round}: the rest find it set up`
+            ).toEqual(Array(PROCESSES - 1).fill("already_initialized"));
+
+            const live = new Set(await adapters[0].listTables());
+            expect(
+              coreTableNames(dialect).filter(name => !live.has(name)),
+              `round ${round}: core tables missing`
+            ).toEqual([]);
+          } finally {
+            for (const adapter of adapters) await adapter.disconnect();
+            await scratch.drop();
           }
-          const starts = await Promise.all(adapters.map(firstStart));
-
-          const failures = starts.flatMap(start => start.errors);
-          expect(failures, `round ${round}`).toEqual([]);
-          expect(
-            starts.map(start => start.result.ranSetup).filter(Boolean),
-            `round ${round}: exactly one process sets up`
-          ).toHaveLength(1);
-          expect(
-            starts
-              .map(start => start.result)
-              .filter(result => !result.ranSetup)
-              .map(result => (result.ranSetup ? null : result.reason)),
-            `round ${round}: the rest find it set up`
-          ).toEqual(Array(PROCESSES - 1).fill("already_initialized"));
-
-          const live = new Set(await adapters[0].listTables());
-          expect(
-            coreTableNames(dialect).filter(name => !live.has(name)),
-            `round ${round}: core tables missing`
-          ).toEqual([]);
-        } finally {
-          for (const adapter of adapters) await adapter.disconnect();
-          await scratch.drop();
         }
-      }
-    }, 180_000);
+      },
+      180_000
+    );
   }
 );
