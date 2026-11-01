@@ -114,14 +114,15 @@ async function keyWith(t: TestNextly, grants: string[]): Promise<string> {
   return key;
 }
 
-/** `GET /admin/api/media/:id/usage` as the holder of `key`. */
+/** `GET /admin/api/media/:id/usage`, with `query`, as the holder of `key`. */
 async function usageOf(
   key: string,
-  mediaId: string
+  mediaId: string,
+  query = ""
 ): Promise<{ status: number; json: Doc }> {
   const path = [mediaId, "usage"];
   const res = await createMediaHandlers({ requireAuth: true }).GET(
-    new Request(`http://localhost/admin/api/media/${path.join("/")}`, {
+    new Request(`http://localhost/admin/api/media/${path.join("/")}${query}`, {
       headers: { authorization: `Bearer ${key}` },
     }),
     { params: Promise.resolve({ path }) }
@@ -485,6 +486,74 @@ describe.each(getConfiguredTestDialects())(
       ]);
       // Nothing of the refused translation is sent.
       expect(JSON.stringify(body)).not.toContain(spanishGuide);
+    });
+
+    it("names the documents a page at a time, counting every one across the pages", async () => {
+      const shared = randomUUID();
+      await t.adapter.insert("media", {
+        id: shared,
+        filename: `2026/11/${shared}.png`,
+        originalFilename: "shared.png",
+        mimeType: "image/png",
+        size: 1,
+        url: `/uploads/2026/11/${shared}.png`,
+        uploadedAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const handler = t.getService("collectionsHandler");
+      const posts: string[] = [];
+      for (let made = 0; made < 5; made += 1) {
+        const created = await handler.createEntry(
+          { collectionName: "usesposts", overrideAccess: true, locale: "en" },
+          { title: `Shared ${made}`, cover: shared }
+        );
+        posts.push(String((created.data as { id?: unknown }).id));
+      }
+      for (let made = 0; made < 2; made += 1) {
+        await handler.createEntry(
+          { collectionName: "usessecrets", overrideAccess: true },
+          { title: `Hidden ${made}`, image: shared }
+        );
+      }
+      const reader = await keyWith(t, ["read-media", "read-usesposts"]);
+
+      const told: string[] = [];
+      let hidden = 0;
+      for (let page = 1; ; page += 1) {
+        const { status, json } = await usageOf(
+          reader,
+          shared,
+          `?page=${page}&limit=3`
+        );
+        expect(status).toBe(200);
+        const meta = json.meta as Doc & { hidden?: Array<{ count: number }> };
+        expect(meta).toMatchObject({
+          total: 7,
+          page,
+          limit: 3,
+          totalPages: 3,
+          hasPrev: page > 1,
+        });
+        const items = json.items as Array<{ documentId: string }>;
+        const counted = (meta.hidden ?? []).reduce(
+          (sum, scope) => sum + scope.count,
+          0
+        );
+        // Each page holds three documents, the last one what is left.
+        expect(items.length + counted).toBe(page < 3 ? 3 : 1);
+        told.push(...items.map(item => item.documentId));
+        hidden += counted;
+        if (!meta.hasNext) break;
+      }
+
+      expect(told.sort()).toEqual([...posts].sort());
+      expect(hidden).toBe(2);
+    });
+
+    it("refuses a page larger than the most one page names", async () => {
+      const reader = await keyWith(t, ["read-media"]);
+      expect((await usageOf(reader, ITEM.id, "?limit=51")).status).toBe(400);
+      expect((await usageOf(reader, ITEM.id, "?page=0")).status).toBe(400);
     });
 
     it("refuses a caller who may not read media, and answers an unknown item as not found", async () => {

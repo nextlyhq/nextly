@@ -1589,9 +1589,14 @@ export abstract class DrizzleAdapter {
         const projection = options?.columns?.length
           ? this.buildColumnProjection(tableObj, options.columns)
           : undefined;
+        // `distinct` asks for each row once: SELECT DISTINCT, over the
+        // projection when there is one, which every dialect's builder has.
+        const selecting = options?.distinct
+          ? db.selectDistinct.bind(db)
+          : db.select.bind(db);
         let query = projection
-          ? db.select(projection).from(tableObj)
-          : db.select().from(tableObj);
+          ? selecting(projection).from(tableObj)
+          : selecting().from(tableObj);
 
         if (options?.where) {
           const whereCondition = buildDrizzleWhere(

@@ -16,7 +16,12 @@
  * @module domains/media/usage/media-usage-store
  */
 
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type {
+  TransactionContext,
+  WhereClause,
+  WhereCondition,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import {
   MEDIA_USAGE_FIELD_PATH_LENGTH,
@@ -472,36 +477,28 @@ export interface IdentifiedUsageRow extends MediaUsageRow {
   id: string;
 }
 
-/**
- * Every row of the record for one media item, ids included: one query on
- * the item's index, reading no content table. Ordered so one document's
- * rows are together.
- */
-export async function listIdentifiedMediaUsage(
-  db: Pick<UsageDb, "select">,
-  mediaId: string
-): Promise<IdentifiedUsageRow[]> {
-  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
-    columns: [
-      "id",
-      "mediaId",
-      "subjectKind",
-      "subjectSlug",
-      "documentId",
-      "fieldPath",
-      "locale",
-      "address",
-    ],
-    where: { and: [{ column: "mediaId", op: "=", value: mediaId }] },
-    orderBy: [
-      { column: "subjectKind", direction: "asc" },
-      { column: "subjectSlug", direction: "asc" },
-      { column: "documentId", direction: "asc" },
-      { column: "fieldPath", direction: "asc" },
-      { column: "locale", direction: "asc" },
-    ],
-  });
-  return rows.map(row => ({
+/** The columns a row of the record is read with. */
+const USAGE_ROW_COLUMNS = [
+  "id",
+  "mediaId",
+  "subjectKind",
+  "subjectSlug",
+  "documentId",
+  "fieldPath",
+  "locale",
+  "address",
+];
+
+/** The order a document's rows are read in: one document's together. */
+const DOCUMENT_ORDER: Array<{ column: string; direction: "asc" }> = [
+  { column: "subjectKind", direction: "asc" },
+  { column: "subjectSlug", direction: "asc" },
+  { column: "documentId", direction: "asc" },
+];
+
+/** One row as the adapter read it. */
+function identifiedRowOf(row: Record<string, unknown>): IdentifiedUsageRow {
+  return {
     id: columnOf(row, "id", "id"),
     mediaId: columnOf(row, "mediaId", "media_id"),
     subjectKind: columnOf(
@@ -514,7 +511,130 @@ export async function listIdentifiedMediaUsage(
     fieldPath: columnOf(row, "fieldPath", "field_path"),
     locale: columnOf(row, "locale", "locale"),
     address: typeof row.address === "string" ? row.address : null,
-  }));
+  };
+}
+
+/**
+ * Every row of the record for one media item, ids included: one query on
+ * the item's index, reading no content table. Ordered so one document's
+ * rows are together.
+ */
+async function listIdentifiedMediaUsage(
+  db: Pick<UsageDb, "select">,
+  mediaId: string
+): Promise<IdentifiedUsageRow[]> {
+  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
+    columns: USAGE_ROW_COLUMNS,
+    where: { and: [{ column: "mediaId", op: "=", value: mediaId }] },
+    orderBy: [
+      ...DOCUMENT_ORDER,
+      { column: "fieldPath", direction: "asc" },
+      { column: "locale", direction: "asc" },
+    ],
+  });
+  return rows.map(identifiedRowOf);
+}
+
+/**
+ * Whether any document names the item by an address, as the record has it:
+ * one row looked for on the item's index.
+ */
+export async function usedByAddress(
+  db: Pick<UsageDb, "select">,
+  mediaId: string
+): Promise<boolean> {
+  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
+    columns: ["id"],
+    where: {
+      and: [
+        { column: "mediaId", op: "=", value: mediaId },
+        { column: "address", op: "IS NOT NULL" },
+      ],
+    },
+    limit: 1,
+  });
+  return rows.length > 0;
+}
+
+/** Which of an item's uses a page reads, and where it starts. */
+export interface MediaUsagePageQuery {
+  /** Only the documents naming the item by its address, by those uses. */
+  byAddressOnly: boolean;
+  /** The documents before this page, in the record's order. */
+  offset: number;
+  /** The most documents on the page. */
+  limit: number;
+}
+
+/**
+ * One page of the documents using an item, from the record alone: how many
+ * documents use it, counted in the database, and every row of the page's
+ * documents, which are `limit` of them in the record's order. Three bounded
+ * queries on the item's index, however many documents use it.
+ */
+export async function listMediaUsagePage(
+  db: Pick<DrizzleAdapter, "select" | "count">,
+  mediaId: string,
+  query: MediaUsagePageQuery
+): Promise<{ rows: IdentifiedUsageRow[]; total: number }> {
+  const conditions: WhereCondition[] = [
+    { column: "mediaId", op: "=", value: mediaId },
+    ...(query.byAddressOnly
+      ? [{ column: "address", op: "IS NOT NULL" as const }]
+      : []),
+  ];
+  const item: WhereClause = { and: conditions };
+  const total = await db.count(MEDIA_USAGE_TABLE, {
+    where: item,
+    distinctOn: ["subjectKind", "subjectSlug", "documentId"],
+  });
+  const documents = await db.select<Record<string, unknown>>(
+    MEDIA_USAGE_TABLE,
+    {
+      columns: ["subjectKind", "subjectSlug", "documentId"],
+      distinct: true,
+      where: item,
+      orderBy: DOCUMENT_ORDER,
+      limit: query.limit,
+      offset: query.offset,
+    }
+  );
+  if (documents.length === 0) return { rows: [], total };
+  const keyOf = (row: Record<string, unknown>) =>
+    JSON.stringify([
+      columnOf(row, "subjectKind", "subject_kind"),
+      columnOf(row, "subjectSlug", "subject_slug"),
+      columnOf(row, "documentId", "document_id"),
+    ]);
+  const onPage = new Set(documents.map(keyOf));
+  // The page's documents' rows, by their ids; an id another kind or slug
+  // shares is read with them and left out here.
+  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
+    columns: USAGE_ROW_COLUMNS,
+    where: {
+      and: [
+        ...conditions,
+        {
+          column: "documentId",
+          op: "IN",
+          value: [
+            ...new Set(
+              documents.map(row => columnOf(row, "documentId", "document_id"))
+            ),
+          ],
+        },
+      ],
+    },
+    orderBy: [
+      ...DOCUMENT_ORDER,
+      { column: "fieldPath", direction: "asc" },
+      { column: "locale", direction: "asc" },
+    ],
+  });
+  return {
+    rows: rows.filter(row => onPage.has(keyOf(row))).map(identifiedRowOf),
+    total,
+  };
 }
 
 /**

@@ -50,9 +50,9 @@ import {
   type ReplacedRecord,
 } from "./usage/address-uses";
 import {
-  listIdentifiedMediaUsage,
   mediaUsagePresent,
   readWithinOneBuild,
+  usedByAddress,
 } from "./usage/media-usage-store";
 
 /** The new file, as the upload checks have passed it. */
@@ -235,19 +235,19 @@ async function keptOutsideTheRecord(
  * Whether a document may still name the item by an address, on `db`: while
  * any usage row names it by one (as the reference the content made says),
  * and, until the usage record has been built, always, since a document the
- * record does not cover yet may name it. The rows and whether their record
- * was built are one read (`readWithinOneBuild`), so a rebuild clearing the
- * rows while the record is read never passes for a complete record that
- * lists no use.
+ * record does not cover yet may name it. The row and whether its record was
+ * built are one read (`readWithinOneBuild`), so a rebuild clearing the rows
+ * while the record is read never passes for a complete record that lists no
+ * use.
  */
 async function namedByAddress(
   db: Pick<TransactionContext, "select">,
   mediaId: string
 ): Promise<boolean> {
-  const { value: rows, recorded } = await readWithinOneBuild(db, () =>
-    listIdentifiedMediaUsage(db, mediaId)
+  const { value: named, recorded } = await readWithinOneBuild(db, () =>
+    usedByAddress(db, mediaId)
   );
-  return !recorded || rows.some(row => row.address !== null);
+  return !recorded || named;
 }
 
 /** The files `current` had that the replacement does not, by address. */

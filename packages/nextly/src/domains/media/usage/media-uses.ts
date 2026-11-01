@@ -4,8 +4,9 @@
  * with the fields that use it and the languages that do when only some do,
  * and a count of the documents they may not read, never named.
  *
- * The documents come from the usage record alone (`listMediaUsage`), one
- * query on the item's index. Which of them the reader may read, and what each
+ * The documents come from the usage record alone, a page of them at a time
+ * (`listMediaUsagePage`), bounded queries on the item's index. Which of the
+ * page's documents the reader may read, and what each
  * is called, is asked of the ordinary read path as the reader
  * (`readableHeadings`) for collection entries and Singles, and of the
  * `read-email-templates` grant for email templates, in each language whose
@@ -15,7 +16,11 @@
  * @module domains/media/usage/media-uses
  */
 
-import type { IdentifiedUsageRow, UsageSubjectKind } from "./media-usage-store";
+import type {
+  IdentifiedUsageRow,
+  MediaUsagePageQuery,
+  UsageSubjectKind,
+} from "./media-usage-store";
 
 /** One field of a document that uses the item. */
 export interface MediaUseField {
@@ -67,11 +72,19 @@ export interface HiddenMediaUses {
   count: number;
 }
 
-/** Every document using the item that the reader may read, and how many more. */
+/**
+ * A page of the documents using the item: those the reader may read, and how
+ * many more on the page they may not, and how many documents use it in all.
+ */
 export interface MediaUses {
   items: MediaUse[];
-  /** The documents using the item that the reader may not read, by scope. */
+  /** The page's documents the reader may not read, by scope. */
   hidden: HiddenMediaUses[];
+  /**
+   * How many documents use the item, readable or not: what every page's
+   * `items` and `hidden` add up to, so it tells no more than they do.
+   */
+  total: number;
 }
 
 /** What the reader is told of one document, when they may read it. */
@@ -108,8 +121,14 @@ export interface MediaUseRead extends MediaUseDocument {
 
 /** What answering needs: the record, and the reader's view of documents. */
 export interface MediaUsesSource {
-  /** Every row of the record for the item, with its id. */
-  rows(mediaId: string): Promise<IdentifiedUsageRow[]>;
+  /**
+   * One page of the item's documents: every row of each, and how many
+   * documents use the item in all.
+   */
+  page(
+    mediaId: string,
+    query: MediaUsagePageQuery
+  ): Promise<{ rows: IdentifiedUsageRow[]; total: number }>;
   /**
    * The addresses whose files a Replace kept for the item: a use naming one
    * still shows the previous file. None for an item never replaced.
@@ -289,26 +308,36 @@ function toldOf(
   };
 }
 
-/** Which uses to tell: every one, or only those naming the item by address. */
+/**
+ * Which uses to tell, a page at a time: every one, or only those naming the
+ * item by address, `limit` documents from page `page` (from 1).
+ */
 export interface MediaUsesQuery {
   byAddressOnly?: boolean;
+  page: number;
+  limit: number;
 }
 
-/** Where `mediaId` is used, as the reader may be told it. */
+/**
+ * Where `mediaId` is used, as the reader may be told it: one page of the
+ * documents using it, so what is read and asked of the read path is bounded
+ * by the page however many documents use it.
+ */
 export async function mediaUsesOf(
   mediaId: string,
   source: MediaUsesSource,
-  query: MediaUsesQuery = {}
+  query: MediaUsesQuery
 ): Promise<MediaUses> {
-  const rows = await source.rows(mediaId);
-  const told = query.byAddressOnly
-    ? rows.filter(row => row.address !== null)
-    : rows;
-  const kept = told.some(row => row.address !== null)
+  const { rows, total } = await source.page(mediaId, {
+    byAddressOnly: query.byAddressOnly === true,
+    offset: (query.page - 1) * query.limit,
+    limit: query.limit,
+  });
+  const kept = rows.some(row => row.address !== null)
     ? await source.keptAddresses(mediaId)
     : new Set<string>();
-  const documents = gathered(told, kept);
-  if (documents.length === 0) return { items: [], hidden: [] };
+  const documents = gathered(rows, kept);
+  if (documents.length === 0) return { items: [], hidden: [], total };
   const languages = documents.some(doc => doc.kind !== "email-template")
     ? await source.languages()
     : [];
@@ -333,5 +362,5 @@ export async function mediaUsesOf(
     counted.count += 1;
     hidden.set(scope, counted);
   }
-  return { items, hidden: [...hidden.values()] };
+  return { items, hidden: [...hidden.values()], total };
 }
