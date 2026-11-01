@@ -1,10 +1,12 @@
 /**
  * The dashboard held to WCAG 2.2 AA across its surfaces (dashboard-experience R-23): an axe scan
  * of the whole page at rest, in customise mode, with the add gallery open, at its add step and
- * with a card's quick popover open, in light and in dark; a keyboard-only visit that adds a
- * collection widget through its add step, changes its quick setting and saves, with focus back
- * on the control that opened each menu, panel and popover as it closes; and the gallery's count,
- * said for the chip and the search that are on.
+ * with a card's quick popover open, with its More settings panel open, and the header with its
+ * New menu open, in light and in dark; a keyboard-only visit that adds a collection widget
+ * through its add step, changes its quick setting and saves, then retitles the card from its More
+ * settings panel, with focus back on the control that opened each menu, panel and popover as it
+ * closes, drawn with a ring that can be seen (3:1 against what is behind it); the New menu by
+ * keyboard; and the gallery's count, said for the chip and the search that are on.
  *
  * Each surface's own spec scans it alone (`dashboard-gallery`, `dashboard-customise`,
  * `dashboard-header`). This one walks them as one reader does, so a defect that shows only once
@@ -17,7 +19,11 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { contrastRatio, gotoAdmin, type Theme } from "./support/admin";
-import { scanAxe, settleTransitions } from "./support/axe-scan.mjs";
+import {
+  emptyScanReason,
+  scanAxe,
+  settleTransitions,
+} from "./support/axe-scan.mjs";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -35,6 +41,7 @@ interface LayoutRead {
     widgetId: string;
     removed?: boolean;
     config?: Record<string, unknown>;
+    title?: string;
   }>;
 }
 
@@ -95,10 +102,7 @@ async function scan(page: Page, surface: string): Promise<void> {
       )
   );
   const { results, findings } = await scanAxe(page);
-  expect(
-    results.passes.length,
-    `${surface}: axe reported no passing rules, so it scanned nothing`
-  ).toBeGreaterThan(10);
+  expect(emptyScanReason(results), surface).toBeNull();
   expect
     .soft(
       findings,
@@ -138,23 +142,105 @@ async function tabTo(
   );
 }
 
-/** The styles a focus indicator is drawn with. */
-function indicatorOf(node: Element) {
+/** A colour resolved to plain RGB, composited over what is behind it. */
+type Rgb = [number, number, number];
+
+/**
+ * The colours an element is drawn with where its edge and its focus indicator are, each resolved
+ * by painting it (alpha included) and composited over the backdrop: the backgrounds of the
+ * nearest ancestors, composited until one is opaque (a page's canvas is white). Its border, its
+ * outline, and each ring its box shadow draws (a layer with a spread; a soft shadow has none).
+ * Read from the computed style, so a utility missing from the built stylesheet reads as drawn
+ * nothing, whatever the class list says.
+ */
+function drawnColours(node: Element) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) throw new Error("no 2d context");
+  type Rgba = [number, number, number, number];
+  const rgba = (color: string): Rgba => {
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+    return [r, g, b, a / 255];
+  };
+  const over = (top: Rgba, under: Rgb): Rgb =>
+    [0, 1, 2].map(i => top[i] * top[3] + under[i] * (1 - top[3])) as Rgb;
+  const layers: Rgba[] = [];
+  for (let at = node.parentElement; at !== null; at = at.parentElement) {
+    const layer = rgba(getComputedStyle(at).backgroundColor);
+    if (layer[3] === 0) continue;
+    layers.push(layer);
+    if (layer[3] === 1) break;
+  }
+  let backdrop: Rgb = [255, 255, 255];
+  for (const layer of layers.reverse()) backdrop = over(layer, backdrop);
   const style = getComputedStyle(node);
+  // Each shadow layer: its colour, then its lengths; split on the commas between layers only.
+  const rings =
+    style.boxShadow === "none"
+      ? []
+      : style.boxShadow
+          .split(/,(?![^(]*\))/)
+          .map(layer => {
+            const color =
+              /^\s*([a-z-]+\([^)]*\)|#[0-9a-f]+|[a-z]+)/i.exec(layer)?.[1] ??
+              "";
+            const lengths =
+              layer
+                .slice(layer.indexOf(color) + color.length)
+                .match(/-?[\d.]+px/g) ?? [];
+            return { color, spread: Number.parseFloat(lengths[3] ?? "0") };
+          })
+          .filter(layer => layer.color !== "" && layer.spread > 0)
+          .map(layer => over(rgba(layer.color), backdrop));
+  const line = (kind: "border-top" | "outline") => ({
+    style: style.getPropertyValue(`${kind}-style`),
+    width: Number.parseFloat(style.getPropertyValue(`${kind}-width`)),
+    color: over(rgba(style.getPropertyValue(`${kind}-color`)), backdrop),
+  });
   return {
-    outline:
-      style.outlineStyle !== "none" &&
-      Number.parseFloat(style.outlineWidth) > 0,
-    boxShadow: style.boxShadow,
-    borderColor: style.borderColor,
+    backdrop,
+    border: line("border-top"),
+    outline: line("outline"),
+    rings,
   };
 }
 
 /**
- * `target` holds focus and draws an indicator for it (WCAG 2.4.7): an outline, or the ring the
- * admin draws as a box shadow. A control that marks focus by its border instead (a select's
- * trigger) is judged against `twin`, an unfocused control of the same kind beside it: its border
- * or ring must differ. Polled, since an indicator can ease in.
+ * The colours of every focus indicator `node` draws, each against what is behind it: an outline
+ * with a width, each ring of its box shadow, and its border.
+ */
+function indicatorsOf(drawn: ReturnType<typeof drawnColours>) {
+  const outline =
+    drawn.outline.style !== "none" && drawn.outline.width > 0
+      ? [drawn.outline.color]
+      : [];
+  return {
+    marks: [...outline, ...drawn.rings],
+    border:
+      drawn.border.style !== "none" && drawn.border.width > 0
+        ? drawn.border.color
+        : null,
+  };
+}
+
+/** The strongest contrast among `colours` against `backdrop`, 1 when there are none. */
+function strongest(colours: Rgb[], backdrop: Rgb): number {
+  return Math.max(1, ...colours.map(color => contrastRatio(color, backdrop)));
+}
+
+/**
+ * `target` holds focus and draws an indicator a reader can SEE (WCAG 2.4.7, measured as 1.4.11's
+ * 3:1): an outline, or the ring the admin draws as a box shadow, at least 3:1 against what is
+ * behind the control. A control that marks focus by its border instead (a select's trigger) is
+ * judged against `twin`, an unfocused control of the same kind beside it: its border must have
+ * changed, and the changed border must hold 3:1. An indicator drawn in the surface's own colour,
+ * or one too faint to tell apart, fails, as a style that is merely not "none" would not. Polled,
+ * since an indicator can ease in.
  */
 async function expectVisibleFocus(
   target: Locator,
@@ -162,20 +248,26 @@ async function expectVisibleFocus(
 ): Promise<void> {
   await expect(target).toBeFocused();
   const rest =
-    twin === undefined ? undefined : await twin.evaluate(indicatorOf);
+    twin === undefined ? undefined : await twin.evaluate(drawnColours);
+  let seen = "";
   await expect
     .poll(
       async () => {
-        const drawn = await target.evaluate(indicatorOf);
-        if (drawn.outline || (rest === undefined && drawn.boxShadow !== "none"))
-          return true;
-        return (
+        const drawn = await target.evaluate(drawnColours);
+        const { marks, border } = indicatorsOf(drawn);
+        const changedBorder =
           rest !== undefined &&
-          (drawn.borderColor !== rest.borderColor ||
-            drawn.boxShadow !== rest.boxShadow)
-        );
+          border !== null &&
+          border.some((v, i) => Math.abs(v - rest.border.color[i]) > 1)
+            ? [border]
+            : [];
+        const ratio = strongest([...marks, ...changedBorder], drawn.backdrop);
+        seen = `${ratio.toFixed(2)}:1 against rgb(${drawn.backdrop.map(Math.round).join(",")})`;
+        return ratio >= 3;
       },
-      { message: `${String(target)} has focus but draws no indicator` }
+      {
+        message: `${String(target)} has focus but draws no indicator at 3:1 (strongest ${seen})`,
+      }
     )
     .toBe(true);
 }
@@ -204,7 +296,7 @@ async function placeOverTime(page: Page): Promise<string> {
 }
 
 for (const theme of ["light", "dark"] as Theme[]) {
-  test(`every surface passes axe (${theme}): at rest, customising, the gallery, its add step, the quick popover`, async ({
+  test(`every surface passes axe (${theme}): at rest, customising, the gallery, its add step, the quick popover, More settings`, async ({
     page,
   }) => {
     await gotoAdmin(page, "/", theme);
@@ -220,8 +312,15 @@ for (const theme of ["light", "dark"] as Theme[]) {
     const popover = page.getByTestId("card-quick-popover");
     await expect(popover).toBeVisible();
     await scan(page, "quick popover at rest");
-    await page.keyboard.press("Escape");
-    await expect(popover).toBeHidden();
+
+    // Its More settings panel, opened from the popover, beside the dashboard it changes.
+    await popover.getByRole("button", { name: "More settings" }).click();
+    const settings = page.getByRole("dialog", { name: /settings$/ });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByLabel("Title", { exact: true })).toBeVisible();
+    await scan(page, "More settings panel");
+    await settings.getByRole("button", { name: "Cancel" }).click();
+    await expect(settings).toBeHidden();
 
     // The card's menu at rest.
     await cell.getByTestId("card-menu").click();
@@ -275,55 +374,17 @@ for (const theme of ["light", "dark"] as Theme[]) {
  */
 async function expectEdgeContrast(badge: Locator, label: string) {
   await settleTransitions(badge.page());
-  const edge = await badge.evaluate(node => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 1;
-    canvas.height = 1;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) throw new Error("no 2d context");
-    const rgba = (color: string): [number, number, number, number] => {
-      ctx.clearRect(0, 0, 1, 1);
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, 1, 1);
-      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
-      return [r, g, b, a / 255];
-    };
-    const over = (
-      top: [number, number, number, number],
-      under: [number, number, number]
-    ): [number, number, number] =>
-      [0, 1, 2].map(i => top[i] * top[3] + under[i] * (1 - top[3])) as [
-        number,
-        number,
-        number,
-      ];
-    const layers: Array<[number, number, number, number]> = [];
-    for (let at = node.parentElement; at !== null; at = at.parentElement) {
-      const layer = rgba(getComputedStyle(at).backgroundColor);
-      if (layer[3] === 0) continue;
-      layers.push(layer);
-      if (layer[3] === 1) break;
-    }
-    // Nothing opaque above it: the canvas of a page is white.
-    let backdrop: [number, number, number] = [255, 255, 255];
-    for (const layer of layers.reverse()) backdrop = over(layer, backdrop);
-    const style = getComputedStyle(node);
-    return {
-      style: style.borderTopStyle,
-      width: Number.parseFloat(style.borderTopWidth),
-      border: over(rgba(style.borderTopColor), backdrop),
-      backdrop,
-    };
-  });
+  const drawn = await badge.evaluate(drawnColours);
+  const edge = drawn.border;
   expect(edge.style, `${label}: the badge draws no border`).not.toBe("none");
   expect(
     edge.width,
     `${label}: the badge's border has no width`
   ).toBeGreaterThan(0);
-  const ratio = contrastRatio(edge.border, edge.backdrop);
+  const ratio = contrastRatio(edge.color, drawn.backdrop);
   expect(
     ratio,
-    `${label}: edge rgb(${edge.border.map(Math.round).join(",")}) on rgb(${edge.backdrop.map(Math.round).join(",")}) is ${ratio.toFixed(2)}:1`
+    `${label}: edge rgb(${edge.color.map(Math.round).join(",")}) on rgb(${drawn.backdrop.map(Math.round).join(",")}) is ${ratio.toFixed(2)}:1`
   ).toBeGreaterThanOrEqual(3);
 }
 
@@ -493,6 +554,96 @@ test("a keyboard alone adds a collection card through its add step, changes its 
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expectVisibleFocus(menu);
+
+  // More settings, from the popover the title opens: focus into the sheet, the card retitled
+  // there, Done, and focus back on the title the popover was opened from.
+  await tabTo(page, title);
+  await page.keyboard.press("Enter");
+  await expect(popover).toBeVisible();
+  await tabTo(page, popover.getByRole("button", { name: "More settings" }));
+  await page.keyboard.press("Enter");
+  await expect(popover).toBeHidden();
+  const sheet = page.getByRole("dialog", { name: /settings$/ });
+  await expect(sheet).toBeVisible();
+  await expect.poll(() => focusIsIn(sheet)).toBe(true);
+  const ownTitle = sheet.getByLabel("Title", { exact: true });
+  await tabTo(page, ownTitle);
+  await page.keyboard.type("Keyboard card");
+  await tabTo(page, sheet.getByRole("button", { name: "Done" }));
+  await page.keyboard.press("Enter");
+  await expect(sheet).toBeHidden();
+  await expectVisibleFocus(title);
+  await expect(title).toHaveText(/Keyboard card/);
+  await expect
+    .poll(
+      async () =>
+        (await readLayout(page)).placements.find(p => p.id === placementId)
+          ?.title
+    )
+    .toBe("Keyboard card");
+});
+
+/** The header's New split button: its caret, and the popover the caret opens. */
+const newCaret = (page: Page) =>
+  page.getByRole("button", { name: "Choose what to create" });
+const newMenuOf = (page: Page) =>
+  page.getByRole("dialog", { name: "Choose what to create" });
+
+for (const theme of ["light", "dark"] as Theme[]) {
+  test(`the header and its New menu pass axe (${theme})`, async ({ page }) => {
+    await dashboardAtRest(page, theme);
+    await expect(page.getByTestId("dashboard-new-primary")).toBeVisible();
+    await scan(page, "header at rest");
+    await newCaret(page).click();
+    const menu = newMenuOf(page);
+    await expect(
+      menu.getByRole("listbox", { name: "Types to create" })
+    ).toBeVisible();
+    await scan(page, "New menu open");
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+  });
+}
+
+test("the New menu by keyboard: caret, search, a type chosen; Escape hands focus back to the caret", async ({
+  page,
+}) => {
+  await dashboardAtRest(page, "light");
+  const caret = newCaret(page);
+  const primary = page.getByTestId("dashboard-new-primary");
+  await expect(primary).toHaveAccessibleName(/^New .+/);
+
+  // Opened from the caret by Enter, closed by Escape: focus back on the caret, with a ring.
+  await tabTo(page, caret);
+  await page.keyboard.press("Enter");
+  const menu = newMenuOf(page);
+  await expect(menu).toBeVisible();
+  await expect(caret).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expectVisibleFocus(caret);
+
+  // Opened again: the playground offers more than ten types, so focus is in the search, which
+  // narrows the list to one type, chosen by Enter.
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeVisible();
+  const search = menu.getByRole("combobox", { name: "Search types to create" });
+  await expect(
+    search,
+    "the playground's types fit in ten, so the menu offers no search"
+  ).toBeFocused();
+  await page.keyboard.type("post");
+  const options = menu.getByRole("option");
+  await expect(options.first()).toHaveText("Post");
+  // The key moves the list's active option, which the search box names to a screen reader.
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowUp");
+  const active = await search.getAttribute("aria-activedescendant");
+  expect(active).not.toBeNull();
+  await expect(menu.locator(`[id="${active}"]`)).toHaveText("Post");
+  await page.keyboard.press("Enter");
+  // A choice opens the type's create form, which takes the page and its focus.
+  await expect(page).toHaveURL(/\/admin\/collections\/posts\/create$/);
 });
 
 test("the gallery says how many it lists for the chip and the search that are on", async ({
