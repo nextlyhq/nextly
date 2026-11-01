@@ -40,8 +40,11 @@ export const BUDGETS = {
   // lazy chunk (9.7 KB). Their owners are asked to trim, so this comes back
   // down. Raised to 3,580 KB when the card settings panel (panel, preview,
   // sections, about 16 KB) took the shipped total from about 3,555 to
-  // 3,572 KB.
-  totalMinifiedKB: 3580,
+  // 3,572 KB. That 3,572 was measured on a base without the media library's
+  // views, Used in and Replace, which merged minutes before it: main stood
+  // at 3,582 KB from then on. Raised to 3,600 KB when those (+11.7 KB) and
+  // the setup card (+1.7 KB) took it to 3,584 KB.
+  totalMinifiedKB: 3600,
   // Spec R-3: the shared shell, measured at 259 KB gzipped on 2026-10-27.
   shellGzipKB: 280,
   // Spec R-3: each route's own code may grow this share above its pin...
@@ -51,7 +54,9 @@ export const BUDGETS = {
   routeFloorKB: 2,
 };
 
-const PINS_FILE = fileURLToPath(new URL("./route-budgets.json", import.meta.url));
+const PINS_FILE = fileURLToPath(
+  new URL("./route-budgets.json", import.meta.url)
+);
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
@@ -104,7 +109,11 @@ export function pinsFrom(report) {
   )) {
     routes[routeKey(route.root)] = route.beyondShell.gzippedBytes;
   }
-  return { measuredAt: report.commit ?? null, date: report.date ?? null, routes };
+  return {
+    measuredAt: report.commit ?? null,
+    date: report.date ?? null,
+    routes,
+  };
 }
 
 /**
@@ -138,8 +147,19 @@ function uncommittedBuildInputs() {
   try {
     return execFileSync(
       "git",
-      ["status", "--porcelain", "--", "src", "tsdown.config.ts", "package.json"],
-      { cwd: PACKAGE_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      [
+        "status",
+        "--porcelain",
+        "--",
+        "src",
+        "tsdown.config.ts",
+        "package.json",
+      ],
+      {
+        cwd: PACKAGE_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }
     )
       .split("\n")
       .filter(Boolean)
@@ -182,7 +202,8 @@ export function budgetBreaches(report, pins, budgets = BUDGETS) {
       kind: "duplicate",
       name: `route ${key}`,
       measured: "several routes under this one name",
-      budget: "one pin per route: give each a path-based chunk name in tsdown.config.ts",
+      budget:
+        "one pin per route: give each a path-based chunk name in tsdown.config.ts",
     });
   }
 
@@ -190,14 +211,17 @@ export function budgetBreaches(report, pins, budgets = BUDGETS) {
     const key = routeKey(route.root);
     if (shared.has(key)) continue;
     // Own entries only: a key inherited from Object.prototype is no pin.
-    const pinned = Object.hasOwn(pins.routes, key) ? pins.routes[key] : undefined;
+    const pinned = Object.hasOwn(pins.routes, key)
+      ? pins.routes[key]
+      : undefined;
     const measured = `${formatKB(route.beyondShell.gzippedBytes)} KB gzipped of its own`;
     if (pinned === undefined) {
       breaches.push({
         kind: "unpinned",
         name: `route ${key}`,
         measured,
-        budget: "none pinned: run check:budgets --pin and commit route-budgets.json",
+        budget:
+          "none pinned: run check:budgets --pin and commit route-budgets.json",
       });
       continue;
     }
