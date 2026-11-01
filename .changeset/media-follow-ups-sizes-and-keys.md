@@ -34,10 +34,12 @@ Media fixes for libraries upgraded from before image sizes were removed, and the
 - A folder deleted with its contents removes the size files of every item it deletes, an item moved
   into the folder as the delete began included.
 - Deleting an item removes a size recorded by its URL alone where the media storage configured now
-  serves it there, and names any other in the log by its URL, rather than leaving it unnamed.
-- `nextly media remove-sizes` and the check `nextly media orphans` makes before each batch compare
-  stored keys exactly on a storage that keeps them as written (S3 and other object storage), so a
-  size whose key differs from another file's only in spelling (`media//x.webp`) is removed rather
-  than kept with nothing naming it. Local disk and Vercel Blob still read both spellings as one.
+  serves it there, and names any other in the log by its URL, rather than leaving it unnamed. Such a
+  size stays while another item still names it.
+- `nextly media remove-sizes`, the check `nextly media orphans` makes before each batch, and a
+  delete's check for files another item uses compare stored keys exactly on S3 and UploadThing,
+  which keep them as written, so a file whose key differs from another's only in spelling
+  (`media//x.webp`) is removed rather than kept with nothing naming it. Every other storage, a
+  custom adapter included, still reads both spellings as one file.
 - A bulk delete or move dialog closes when the library's folder, view, search or type changes,
   rather than staying open over the cleared selection.
