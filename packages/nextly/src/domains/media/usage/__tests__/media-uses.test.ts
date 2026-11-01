@@ -222,7 +222,7 @@ describe("mediaUsesOf", () => {
           ],
         },
       ],
-      hidden: [],
+      hidden: 0,
       // Three documents use it, every one on this page.
       total: 3,
     });
@@ -244,12 +244,12 @@ describe("mediaUsesOf", () => {
     const answer = await mediaUsesOf(ITEM, read);
 
     expect(answer.items.map(item => item.documentId)).toEqual(["p1"]);
-    // Two secrets, each counted once however many fields use the item.
-    expect(answer.hidden).toEqual([
-      { scopeKind: "collection", scopeSlug: "secrets", count: 2 },
-      { scopeKind: "email-template", scopeSlug: "", count: 1 },
-    ]);
+    // Two secrets and a template, each counted once however many fields
+    // use the item, in one count naming none of their collections.
+    expect(answer.hidden).toBe(3);
     expect(JSON.stringify(answer)).not.toContain("s1");
+    expect(JSON.stringify(answer)).not.toContain("secrets");
+    expect(JSON.stringify(answer)).not.toContain("email-template");
     // Every document is asked about once in each language its rows name,
     // and for a shared value in the default one and every language, all in
     // one call.
@@ -321,16 +321,14 @@ describe("mediaUsesOf", () => {
     ]);
     expect(JSON.stringify(answer)).not.toContain("secretImage");
     expect(JSON.stringify(answer)).not.toContain("notes");
-    expect(answer.hidden).toEqual([
-      { scopeKind: "collection", scopeSlug: "posts", count: 1 },
-    ]);
+    expect(answer.hidden).toBe(1);
   });
 
   it("asks nothing about readers when nothing uses the item", async () => {
     const read = source([], []);
     expect(await mediaUsesOf(ITEM, read)).toEqual({
       items: [],
-      hidden: [],
+      hidden: 0,
       total: 0,
     });
     expect(read.asked).toEqual([]);
@@ -435,9 +433,7 @@ describe("mediaUsesOf", () => {
         ],
       },
     ]);
-    expect(answer.hidden).toEqual([
-      { scopeKind: "collection", scopeSlug: "posts", count: 1 },
-    ]);
+    expect(answer.hidden).toBe(1);
     expect(JSON.stringify(answer)).not.toContain("summary");
   });
 
@@ -504,7 +500,7 @@ describe("mediaUsesOf", () => {
         ],
       },
     ]);
-    expect(answer.hidden).toEqual([]);
+    expect(answer.hidden).toBe(0);
   });
 
   it("tells no use in a language the site no longer has", async () => {
@@ -519,9 +515,7 @@ describe("mediaUsesOf", () => {
     );
 
     expect(answer.items).toEqual([]);
-    expect(answer.hidden).toEqual([
-      { scopeKind: "collection", scopeSlug: "posts", count: 1 },
-    ]);
+    expect(answer.hidden).toBe(1);
   });
 
   it("tells only the uses naming the item by address when asked, counting the unreadable ones", async () => {
@@ -541,9 +535,7 @@ describe("mediaUsesOf", () => {
     expect(answer.items.map(item => [item.kind, item.documentId])).toEqual([
       ["email-template", "t1"],
     ]);
-    expect(answer.hidden).toEqual([
-      { scopeKind: "collection", scopeSlug: "secrets", count: 1 },
-    ]);
+    expect(answer.hidden).toBe(1);
   });
 
   it("reads and asks about one page of the documents, and counts them all", async () => {
@@ -566,9 +558,7 @@ describe("mediaUsesOf", () => {
     // the third never read.
     expect(one.total).toBe(3);
     expect(one.items.map(item => item.documentId)).toEqual(["p1"]);
-    expect(one.hidden).toEqual([
-      { scopeKind: "collection", scopeSlug: "secrets", count: 1 },
-    ]);
+    expect(one.hidden).toBe(1);
     expect(
       first.asked
         .flat()
@@ -582,6 +572,6 @@ describe("mediaUsesOf", () => {
     });
     expect(two.total).toBe(3);
     expect(two.items.map(item => item.documentId)).toEqual(["t1"]);
-    expect(two.hidden).toEqual([]);
+    expect(two.hidden).toBe(0);
   });
 });

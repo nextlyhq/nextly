@@ -25,7 +25,7 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { defineCollection, text, upload } from "../../../config";
@@ -38,6 +38,8 @@ import {
 } from "../../../plugins/test-nextly";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { ServiceContainer } from "../../../services/index";
+import { MediaService as LegacyMediaService } from "../../../services/media";
+import { MediaFolderService } from "../../../services/media-folder";
 import {
   PNG_1X1,
   pdfDocument,
@@ -354,12 +356,24 @@ describe.each(getConfiguredTestDialects())(
             where: { and: [{ column: "id", op: "IN", value: ids }] },
           })
         ).length;
+      const stillStored = async () =>
+        (
+          await Promise.all(
+            files.map(file => getMediaStorage().exists(file.filename, "media"))
+          )
+        ).filter(Boolean).length;
+      // The end state, rows and files both: a delete removes an item's files
+      // after its row, so the last files can still be going once every row
+      // is gone.
       await expect
-        .poll(left, {
-          timeout: PENDING_DELETE_WINDOW_MS + 15_000,
-          interval: 500,
-        })
-        .toBe(0);
+        .poll(
+          async () => ({ rows: await left(), files: await stillStored() }),
+          {
+            timeout: PENDING_DELETE_WINDOW_MS + 15_000,
+            interval: 500,
+          }
+        )
+        .toEqual({ rows: 0, files: 0 });
       const stored = await Promise.all(
         files.map(file => getMediaStorage().exists(file.filename, "media"))
       );
@@ -564,6 +578,47 @@ describe.each(getConfiguredTestDialects())(
         where: { and: [{ column: "id", op: "=", value: jobId }] },
       });
       expect(settled?.state).toBe("done");
+    });
+
+    // Storage that refuses a delete leaves a file behind: the record of it
+    // must stay, so the job tries again rather than forgetting the file.
+    it("keeps the record of a file storage could not remove, and the job removes it once it can", async () => {
+      const file = await unusedFile();
+      const filename = String((await row(file))?.filename);
+      const deleted = await api(editor, "POST", ["deletions"], {
+        body: { ids: [file] },
+      });
+      const { jobId, deadline } = await queuedJob(file, deleted);
+      const storage = getMediaStorage();
+      const refusing = vi
+        .spyOn(storage, "delete")
+        .mockRejectedValue(new Error("the bucket refused the delete"));
+      try {
+        const finished = await new PendingMediaDeletes({
+          ...mediaDeletes(),
+          now: () => new Date(deadline + 1_000),
+        }).finalizeMarked([file]);
+
+        expect(finished).toEqual([file]);
+        expect(refusing).toHaveBeenCalled();
+      } finally {
+        refusing.mockRestore();
+      }
+      expect(await row(file)).toBeUndefined();
+      expect(await storage.exists(filename, "media")).toBe(true);
+      expect(await deleteRecords(file)).toEqual([removingKey(file)]);
+
+      // The job, run once storage takes deletes again, removes the file.
+      const run = await runJobNow(
+        t.adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        jobId,
+        { now: () => new Date(deadline + 2_000) }
+      );
+
+      expect(run.claimed).toBe(1);
+      expect(await storage.exists(filename, "media")).toBe(false);
+      expect(await deleteRecords(file)).toEqual([]);
     });
 
     it("lets a job delivered again after its delete finished do nothing", async () => {
@@ -1053,6 +1108,641 @@ describe.each(getConfiguredTestDialects())(
       await freshFinaliser().finalizeMarked([file]);
       expect(await row(file)).toBeUndefined();
       expect((await api(editor, "DELETE", ["folders", own])).status).toBe(200);
+    });
+
+    /** A fresh folder holding one fresh unused file: their ids. */
+    async function folderWithFile(): Promise<{ folder: string; file: string }> {
+      const { folder, files } = await folderWithFiles(1);
+      return { folder, file: files[0] };
+    }
+
+    async function folderExists(id: string): Promise<boolean> {
+      const rows = await t.adapter.select<Doc>("media_folders", {
+        where: { and: [{ column: "id", op: "=", value: id }] },
+      });
+      return rows.length === 1;
+    }
+
+    type FolderChecks = Record<
+      "holdsPendingDeletes" | "refuseUndeletableFolder",
+      (...args: unknown[]) => Promise<unknown>
+    >;
+
+    /**
+     * Run `between` once, the next time a folder delete has made `check`
+     * (one of its checks before it changes anything), right after the check
+     * has answered: a deterministic point inside the delete.
+     */
+    function onceAfter(
+      check: keyof FolderChecks,
+      between: () => Promise<void>
+    ): void {
+      const prototype = MediaFolderService.prototype as unknown as FolderChecks;
+      const original = prototype[check];
+      vi.spyOn(prototype, check).mockImplementationOnce(async function (
+        this: unknown,
+        ...args: unknown[]
+      ) {
+        const answer = await original.apply(this, args);
+        await between();
+        return answer;
+      });
+    }
+
+    // A delete that can be undone commits its mark after the folder delete
+    // has looked for marks: the folder delete must still neither move the
+    // item to the root (the folder going) nor delete it before its deadline
+    // (the contents going).
+    it("refuses a folder delete when an item in it is marked after the folder was checked, with or without its contents", async () => {
+      for (const deleteContents of [false, true]) {
+        const { folder, file } = await folderWithFile();
+        // Marked once the check for marks has answered that there are none,
+        // and before the listing of the folder's contents, which then shows
+        // it empty.
+        onceAfter("holdsPendingDeletes", async () => {
+          const marked = await api(editor, "POST", ["deletions"], {
+            body: { ids: [file] },
+          });
+          expect(marked.status).toBe(200);
+        });
+
+        const answer = await api(editor, "DELETE", ["folders", folder], {
+          query: deleteContents ? "?deleteContents=true" : "",
+        });
+
+        expect(answer.status).toBe(409);
+        expect(await folderExists(folder)).toBe(true);
+        expect(await row(file)).toMatchObject({ folderId: folder });
+        // Undo brings it back where it was.
+        const undone = await api(editor, "POST", ["deletions", "undo"], {
+          body: { ids: [file] },
+        });
+        expect(undone.json).toMatchObject({ restored: [file], gone: [] });
+        expect(await row(file)).toMatchObject({ folderId: folder });
+        // POSITIVE CONTROL: with nothing marked, the same delete goes.
+        const again = await api(editor, "DELETE", ["folders", folder], {
+          query: "?deleteContents=true",
+        });
+        expect(again.status).toBe(200);
+        expect(await folderExists(folder)).toBe(false);
+      }
+    });
+
+    // A mark whose transaction is still open when the folder delete starts:
+    // it holds the item's row lock, and the folder delete, past its checks,
+    // must wait for it and then see the mark. SQLite runs one writer at a
+    // time, so no delete can start while the mark's transaction is open.
+    it.skipIf(dialect === "sqlite")(
+      "waits for a mark still being written, then refuses the folder delete with its contents",
+      async () => {
+        const { folder, file } = await folderWithFile();
+        let entered!: () => void;
+        const inMark = new Promise<void>(resolve => (entered = resolve));
+        let release!: () => void;
+        const released = new Promise<void>(resolve => (release = resolve));
+        // The mark's transaction, held open once its row lock is taken and
+        // its mark written.
+        const marking = new PendingMediaDeletes({
+          ...mediaDeletes(),
+          schedule: async () => {
+            entered();
+            await released;
+          },
+        }).mark([file]);
+        await inMark;
+        let checked!: () => void;
+        const pastChecks = new Promise<void>(resolve => (checked = resolve));
+        onceAfter("refuseUndeletableFolder", async () => checked());
+
+        const deleting = api(editor, "DELETE", ["folders", folder], {
+          query: "?deleteContents=true",
+        });
+        // The folder delete has found no mark, since none is committed; only
+        // then does the mark commit.
+        await pastChecks;
+        release();
+        await marking;
+        const answer = await deleting;
+
+        expect(answer.status).toBe(409);
+        expect(await folderExists(folder)).toBe(true);
+        expect(await row(file)).toMatchObject({ folderId: folder });
+        const undone = await api(editor, "POST", ["deletions", "undo"], {
+          body: { ids: [file] },
+        });
+        expect(undone.json).toMatchObject({ restored: [file], gone: [] });
+      }
+    );
+
+    /** A fresh folder holding `count` fresh unused files: their ids. */
+    async function folderWithFiles(
+      count: number,
+      parentId: string | null = null
+    ): Promise<{ folder: string; files: string[] }> {
+      const folder = randomUUID();
+      await t.adapter.insert("media_folders", {
+        id: folder,
+        name: `Raced ${folder.slice(0, 6)}`,
+        parentId,
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const files: string[] = [];
+      for (let made = 0; made < count; made += 1) {
+        const file = await unusedFile();
+        await t.adapter.update(
+          "media",
+          { folderId: folder },
+          { and: [{ column: "id", op: "=", value: file }] }
+        );
+        files.push(file);
+      }
+      return { folder, files };
+    }
+
+    // A delete with its contents is all or nothing: a mark landing after
+    // the folder was checked, before any item went, refuses it whole.
+    it("refuses a folder delete with its contents when an item is marked after the check, removing and moving nothing", async () => {
+      const { folder, files } = await folderWithFiles(2);
+      const { folder: under, files: underFiles } = await folderWithFiles(
+        1,
+        folder
+      );
+      const [marked] = files;
+      onceAfter("refuseUndeletableFolder", async () => {
+        const answer = await api(editor, "POST", ["deletions"], {
+          body: { ids: [marked] },
+        });
+        expect(answer.status).toBe(200);
+      });
+
+      const answer = await api(editor, "DELETE", ["folders", folder], {
+        query: "?deleteContents=true",
+      });
+
+      expect(answer.status).toBe(409);
+      expect(await folderExists(folder)).toBe(true);
+      expect(await folderExists(under)).toBe(true);
+      for (const file of files) {
+        expect(await row(file)).toMatchObject({ folderId: folder });
+        expect(await filesOf(file)).toEqual([true]);
+      }
+      expect(await row(underFiles[0])).toMatchObject({ folderId: under });
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [marked] },
+      });
+      expect(undone.json).toMatchObject({ restored: [marked], gone: [] });
+      // POSITIVE CONTROL: with nothing marked, the same delete takes all.
+      const again = await api(editor, "DELETE", ["folders", folder], {
+        query: "?deleteContents=true",
+      });
+      expect(again.status).toBe(200);
+      for (const file of [...files, ...underFiles]) {
+        expect(await row(file)).toBeUndefined();
+      }
+    });
+
+    // A delete that can be undone and a folder delete over the same items,
+    // at once: both lock the items in one order, so one waits for the other
+    // and each answers as if it had run alone, never a deadlock.
+    it("settles a delete of several items racing their folder's delete on one outcome, every round", async () => {
+      for (let round = 0; round < 8; round += 1) {
+        const { folder, files } = await folderWithFiles(5);
+        const [marking, deleting] = await Promise.all([
+          api(editor, "POST", ["deletions"], { body: { ids: files } }),
+          api(editor, "DELETE", ["folders", folder], {
+            query: "?deleteContents=true",
+          }),
+        ]);
+        const outcome = [marking.status, deleting.status];
+        // The folder first: its items are gone, and the delete finds none.
+        // The marks first: the folder waits for their Undo.
+        expect([
+          [404, 200],
+          [200, 409],
+        ]).toContainEqual(outcome);
+        if (deleting.status === 200) {
+          for (const file of files) expect(await row(file)).toBeUndefined();
+        } else {
+          for (const file of files) {
+            expect(await row(file)).toMatchObject({ folderId: folder });
+          }
+          await api(editor, "POST", ["deletions", "undo"], {
+            body: { ids: files },
+          });
+        }
+      }
+    });
+
+    // The interleaving that deadlocks two orders: the delete that can be
+    // undone holds its first item's lock, and the folder delete starts
+    // locking the same items. Taken in one order, the folder delete waits
+    // for that first item and the delete finishes; taken in another, each
+    // holds a row the other waits for.
+    it.skipIf(dialect === "sqlite")(
+      "lets a folder delete wait behind a delete holding the first of their items, without a deadlock",
+      async () => {
+        const { folder, files } = await folderWithFiles(5);
+        type Tx = Parameters<
+          Parameters<TestNextly["adapter"]["transaction"]>[0]
+        >[0];
+        const transaction = t.adapter.transaction.bind(t.adapter);
+        let holdsFirst!: () => void;
+        const firstHeld = new Promise<void>(resolve => (holdsFirst = resolve));
+        let folderLocking!: () => void;
+        const folderStarted = new Promise<void>(
+          resolve => (folderLocking = resolve)
+        );
+        // The delete's transaction, paused once it holds its first lock.
+        let locked = 0;
+        const pausing = {
+          ...mediaDeletes(),
+          db: {
+            select: t.adapter.select.bind(t.adapter),
+            insert: t.adapter.insert.bind(t.adapter),
+            delete: t.adapter.delete.bind(t.adapter),
+            transaction: (work: (tx: Tx) => Promise<unknown>) =>
+              transaction(tx =>
+                work(
+                  new Proxy(tx, {
+                    get(target, property, receiver) {
+                      if (property === "lockRow") {
+                        return async (table: string, id: string) => {
+                          await target.lockRow(table, id);
+                          locked += 1;
+                          if (locked === 1) {
+                            holdsFirst();
+                            await folderStarted;
+                          }
+                        };
+                      }
+                      const value: unknown = Reflect.get(
+                        target,
+                        property,
+                        receiver
+                      );
+                      return typeof value === "function"
+                        ? value.bind(target)
+                        : value;
+                    },
+                  })
+                )
+              ),
+          } as unknown as PendingDeleteDb,
+        };
+        const marking = new PendingMediaDeletes(pausing).mark(files);
+        await firstHeld;
+        // The folder delete's transactions, telling when one first locks a
+        // media row, by `lockRow` or by a locking read.
+        const watched = vi.spyOn(t.adapter, "transaction").mockImplementation(((
+          work: (tx: Tx) => Promise<unknown>
+        ) =>
+          transaction(tx =>
+            work(
+              new Proxy(tx, {
+                get(target, property, receiver) {
+                  if (property === "lockRow") {
+                    return (table: string, id: string) => {
+                      if (table === "media") folderLocking();
+                      return target.lockRow(table, id);
+                    };
+                  }
+                  if (property === "select") {
+                    return (
+                      table: string,
+                      options?: { forUpdate?: boolean }
+                    ) => {
+                      if (table === "media" && options?.forUpdate) {
+                        folderLocking();
+                      }
+                      return target.select(table, options);
+                    };
+                  }
+                  const value: unknown = Reflect.get(
+                    target,
+                    property,
+                    receiver
+                  );
+                  return typeof value === "function"
+                    ? value.bind(target)
+                    : value;
+                },
+              })
+            )
+          )) as TestNextly["adapter"]["transaction"]);
+        try {
+          const [marked, deleting] = await Promise.allSettled([
+            marking,
+            api(editor, "DELETE", ["folders", folder], {
+              query: "?deleteContents=true",
+            }),
+          ]);
+
+          // The delete went first and finished; the folder waited for it.
+          expect(marked.status).toBe("fulfilled");
+          expect(deleting).toMatchObject({
+            status: "fulfilled",
+            value: { status: 409 },
+          });
+        } finally {
+          watched.mockRestore();
+        }
+        for (const file of files) {
+          expect(await row(file)).toMatchObject({ folderId: folder });
+        }
+        await api(editor, "POST", ["deletions", "undo"], {
+          body: { ids: files },
+        });
+      }
+    );
+
+    /**
+     * The test adapter with every transaction's `lockRow` going through
+     * `onLock`, for a service built over it alone.
+     */
+    function lockingThrough(
+      onLock: (
+        tx: { lockRow(table: string, id: string): Promise<void> },
+        table: string,
+        id: string
+      ) => Promise<void>
+    ): TestNextly["adapter"] {
+      type Tx = Parameters<
+        Parameters<TestNextly["adapter"]["transaction"]>[0]
+      >[0];
+      const forward = <T extends object>(target: T, property: PropertyKey) => {
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      };
+      return new Proxy(t.adapter, {
+        get(adapter, property) {
+          if (property !== "transaction") return forward(adapter, property);
+          return (work: (tx: Tx) => Promise<unknown>, ...rest: unknown[]) =>
+            (
+              adapter.transaction as (
+                work: (tx: Tx) => Promise<unknown>,
+                ...rest: unknown[]
+              ) => Promise<unknown>
+            )(
+              tx =>
+                work(
+                  new Proxy(tx, {
+                    get(target, name) {
+                      if (name === "lockRow") {
+                        return (table: string, id: string) =>
+                          onLock(target, table, id);
+                      }
+                      return forward(target, name);
+                    },
+                  })
+                ),
+              ...rest
+            );
+        },
+      });
+    }
+
+    // A move between two folders of a folder being deleted writes the item's
+    // `folder_id`, whose foreign-key check locks the destination folder. The
+    // move holds the first row it locks while the folder delete reaches
+    // that same row: in the one order (folders, then media) the delete
+    // waits for the move and then removes the moved item; in another, each
+    // would hold a row the other waits for.
+    it.skipIf(dialect === "sqlite")(
+      "lets a move between two folders of a folder being deleted take turns with the delete, never a deadlock",
+      async () => {
+        // Both ways an item is moved: the media update (the move route, a
+        // folder change through the API) and the folder service's own move.
+        for (const way of ["update", "folder service"] as const) {
+          const { folder: parent } = await folderWithFiles(0);
+          const {
+            folder: from,
+            files: [item],
+          } = await folderWithFiles(1, parent);
+          const { folder: to } = await folderWithFiles(0, parent);
+          let moveHolds: { table: string; id: string } | null = null;
+          let held!: () => void;
+          const holding = new Promise<void>(resolve => (held = resolve));
+          let asked!: () => void;
+          const deleteAsks = new Promise<void>(resolve => (asked = resolve));
+          // The move, paused once it holds its first lock.
+          const moverAdapter = lockingThrough(async (tx, table, id) => {
+            await tx.lockRow(table, id);
+            if (moveHolds === null) {
+              moveHolds = { table, id };
+              held();
+              await deleteAsks;
+            }
+          });
+          // The folder delete, letting the move go on once it asks for the
+          // row the move holds.
+          const deleter = new MediaFolderService(
+            lockingThrough(async (tx, table, id) => {
+              const holds = moveHolds as { table: string; id: string } | null;
+              if (holds && holds.table === table && holds.id === id) asked();
+              await tx.lockRow(table, id);
+            }),
+            console as never
+          );
+
+          const moving =
+            way === "update"
+              ? new LegacyMediaService(
+                  moverAdapter,
+                  console as never
+                ).updateMedia(item, { folderId: to })
+              : new MediaFolderService(
+                  moverAdapter,
+                  console as never
+                ).moveMediaToFolder(item, to);
+          await holding;
+          const [moved, deleted] = await Promise.all([
+            moving,
+            deleter.deleteFolder(parent, true),
+          ]);
+
+          expect(moved, way).toMatchObject({ success: true });
+          expect(deleted, way).toMatchObject({
+            success: true,
+            deletedMedia: 1,
+          });
+          expect(await row(item)).toBeUndefined();
+          for (const folder of [parent, from, to]) {
+            expect(await folderExists(folder)).toBe(false);
+          }
+        }
+      }
+    );
+
+    /** A fresh folder with this id under `parentId`. */
+    async function folderAt(id: string, parentId: string | null) {
+      await t.adapter.insert("media_folders", {
+        id,
+        name: `Tree ${id.slice(0, 6)}`,
+        parentId,
+        createdBy: await seedPlainAuthor(t),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    /**
+     * How many other sessions on this test's database are held in a
+     * statement now: on PostgreSQL, waiting for a lock; on MySQL, where a
+     * locking read of a key can wait before InnoDB lists its transaction,
+     * running one statement for a second or more.
+     */
+    async function sessionsWaitingForLocks(): Promise<number> {
+      const [counted] = await t.adapter.executeQuery<{ n: unknown }>(
+        dialect === "mysql"
+          ? "SELECT count(*) AS n FROM information_schema.processlist WHERE db = DATABASE() AND command = 'Query' AND id <> CONNECTION_ID() AND time >= 1"
+          : "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+      );
+      return Number(counted?.n ?? 0);
+    }
+
+    /**
+     * A folder service whose transactions pause at one folder lock: before
+     * taking it, or once it is taken, until `release` is called.
+     */
+    function pausingAtFolder(
+      folderId: string,
+      when: "before" | "after"
+    ): {
+      service: MediaFolderService;
+      paused: Promise<void>;
+      release: () => void;
+    } {
+      let reached!: () => void;
+      const paused = new Promise<void>(resolve => (reached = resolve));
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let done = false;
+      const service = new MediaFolderService(
+        lockingThrough(async (tx, table, id) => {
+          const here = !done && table === "media_folders" && id === folderId;
+          if (here && when === "before") {
+            done = true;
+            reached();
+            await released;
+          }
+          await tx.lockRow(table, id);
+          if (here && when === "after") {
+            done = true;
+            reached();
+            await released;
+          }
+        }),
+        console as never
+      );
+      return { service, paused, release };
+    }
+
+    // A folder moved under another inside a folder being deleted: the move
+    // writes the moved folder's row and its foreign-key check locks the new
+    // parent, the order opposite to the delete's when the new parent sorts
+    // first. Hierarchy changes take the folder tree's lock first, so the
+    // move waits for the delete and then finds its folder gone.
+    it.skipIf(dialect === "sqlite")(
+      "lets a folder moved under another inside a folder being deleted wait for the delete, never a deadlock",
+      async () => {
+        const parent = randomUUID();
+        const [under, moved] = [randomUUID(), randomUUID()].sort();
+        await folderAt(parent, null);
+        await folderAt(under, parent);
+        await folderAt(moved, parent);
+        // The delete holds the parent and the folder sorting first.
+        const deleting = pausingAtFolder(under, "after");
+        const deleted = deleting.service.deleteFolder(parent, true);
+        await deleting.paused;
+        const moving = new MediaFolderService(
+          t.adapter,
+          console as never
+        ).updateFolder(moved, { parentId: under });
+        // Released only once the move is waiting for a lock.
+        await expect
+          .poll(sessionsWaitingForLocks, { timeout: 10_000, interval: 50 })
+          .toBeGreaterThan(0);
+        deleting.release();
+
+        const [movedAnswer, deletedAnswer] = await Promise.all([
+          moving,
+          deleted,
+        ]);
+
+        expect(deletedAnswer).toMatchObject({ success: true });
+        expect(movedAnswer).toMatchObject({
+          success: false,
+          statusCode: 404,
+        });
+        for (const folder of [parent, under, moved]) {
+          expect(await folderExists(folder)).toBe(false);
+        }
+      }
+    );
+
+    // A file uploaded into a folder of the subtree the delete has not
+    // locked yet, committed while the delete waits: the delete must read it
+    // as committed then and remove it with the contents, never leave it
+    // moved to the library root by the folder's removal.
+    it.skipIf(dialect === "sqlite")(
+      "removes a file uploaded into a folder of the subtree while the delete waits to lock it",
+      async () => {
+        const parent = randomUUID();
+        const child = randomUUID();
+        await folderAt(parent, null);
+        await folderAt(child, parent);
+        const deleting = pausingAtFolder(child, "before");
+        const deleted = deleting.service.deleteFolder(parent, true);
+        await deleting.paused;
+        const late = await unusedFile();
+        await t.adapter.update(
+          "media",
+          { folderId: child },
+          { and: [{ column: "id", op: "=", value: late }] }
+        );
+        deleting.release();
+
+        expect(await deleted).toMatchObject({ success: true, deletedMedia: 1 });
+        expect(await row(late)).toBeUndefined();
+        expect(await folderExists(child)).toBe(false);
+      }
+    );
+
+    // An item deleted at once (the ordinary delete route) inside another
+    // delete's Undo window is gone for good: Undo must say so.
+    it("answers an item deleted at once inside its Undo window as gone, never restored", async () => {
+      const file = await unusedFile();
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+
+      const removed = await api(editor, "DELETE", [file]);
+
+      expect(removed.status).toBe(200);
+      // The delete took the mark with the row.
+      expect(await deleteRecords(file)).toEqual([]);
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+      expect(undone.json).toMatchObject({ restored: [], gone: [file] });
+      expect(await row(file)).toBeUndefined();
+    });
+
+    it("answers an item whose row went another way inside its Undo window as gone, and takes its mark", async () => {
+      const file = await unusedFile();
+      await api(editor, "POST", ["deletions"], { body: { ids: [file] } });
+      // Removed by no media delete at all, so its mark is left behind.
+      await t.adapter.delete("media", {
+        and: [{ column: "id", op: "=", value: file }],
+      });
+      expect(await deleteRecords(file)).toEqual([pendingDeleteKey(file)]);
+
+      const undone = await api(editor, "POST", ["deletions", "undo"], {
+        body: { ids: [file] },
+      });
+
+      expect(undone.json).toMatchObject({ restored: [], gone: [file] });
+      expect(await deleteRecords(file)).toEqual([]);
     });
 
     // MySQL and SQLite keep a mark's time to the second. The deadline a

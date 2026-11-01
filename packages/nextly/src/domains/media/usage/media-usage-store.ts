@@ -567,13 +567,73 @@ export interface MediaUsagePageQuery {
 }
 
 /**
+ * The page's documents as conditions on their full key, kind, slug and id,
+ * gathered by kind and slug, each group's ids in runs one statement may bind
+ * alongside `reserved` values of its own (`maxParamsPerQuery`): the rows of
+ * those documents and no other's, so a Single, whose id is always "", never
+ * brings in the rows of every other Single using the item.
+ */
+function documentKeyRuns(
+  documents: ReadonlyArray<Record<string, unknown>>,
+  maxParams: number,
+  reserved: number
+): WhereClause[][] {
+  const groups = new Map<
+    string,
+    { kind: string; slug: string; ids: string[] }
+  >();
+  for (const row of documents) {
+    const kind = columnOf(row, "subjectKind", "subject_kind");
+    const slug = columnOf(row, "subjectSlug", "subject_slug");
+    const scope = JSON.stringify([kind, slug]);
+    const group = groups.get(scope) ?? { kind, slug, ids: [] };
+    group.ids.push(columnOf(row, "documentId", "document_id"));
+    groups.set(scope, group);
+  }
+  // A document's kind and slug bind two values beside its id.
+  const room = Number.isFinite(maxParams)
+    ? Math.max(3, Math.floor(maxParams) - reserved)
+    : Number.MAX_SAFE_INTEGER;
+  const runs: WhereClause[][] = [];
+  let run: WhereClause[] = [];
+  let used = 0;
+  for (const { kind, slug, ids } of groups.values()) {
+    for (let start = 0; start < ids.length; ) {
+      if (room - used < 3) {
+        runs.push(run);
+        run = [];
+        used = 0;
+      }
+      const take = Math.min(ids.length - start, room - used - 2);
+      run.push({
+        and: [
+          { column: "subjectKind", op: "=", value: kind },
+          { column: "subjectSlug", op: "=", value: slug },
+          {
+            column: "documentId",
+            op: "IN",
+            value: ids.slice(start, start + take),
+          },
+        ],
+      });
+      used += take + 2;
+      start += take;
+    }
+  }
+  if (run.length > 0) runs.push(run);
+  return runs;
+}
+
+/**
  * One page of the documents using an item, from the record alone: how many
  * documents use it, counted in the database, and every row of the page's
- * documents, which are `limit` of them in the record's order. Three bounded
- * queries on the item's index, however many documents use it.
+ * documents, which are `limit` of them in the record's order. Bounded
+ * queries on the item's index, however many documents use it: the count,
+ * the page's documents, and their rows by each document's full key, one
+ * query unless the page binds more values than the dialect takes in one.
  */
 export async function listMediaUsagePage(
-  db: Pick<DrizzleAdapter, "select" | "count">,
+  db: Pick<DrizzleAdapter, "select" | "count" | "getCapabilities">,
   mediaId: string,
   query: MediaUsagePageQuery
 ): Promise<{ rows: IdentifiedUsageRow[]; total: number }> {
@@ -600,41 +660,27 @@ export async function listMediaUsagePage(
     }
   );
   if (documents.length === 0) return { rows: [], total };
-  const keyOf = (row: Record<string, unknown>) =>
-    JSON.stringify([
-      columnOf(row, "subjectKind", "subject_kind"),
-      columnOf(row, "subjectSlug", "subject_slug"),
-      columnOf(row, "documentId", "document_id"),
-    ]);
-  const onPage = new Set(documents.map(keyOf));
-  // The page's documents' rows, by their ids; an id another kind or slug
-  // shares is read with them and left out here.
-  const rows = await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
-    columns: USAGE_ROW_COLUMNS,
-    where: {
-      and: [
-        ...conditions,
-        {
-          column: "documentId",
-          op: "IN",
-          value: [
-            ...new Set(
-              documents.map(row => columnOf(row, "documentId", "document_id"))
-            ),
-          ],
-        },
-      ],
-    },
-    orderBy: [
-      ...DOCUMENT_ORDER,
-      { column: "fieldPath", direction: "asc" },
-      { column: "locale", direction: "asc" },
-    ],
-  });
-  return {
-    rows: rows.filter(row => onPage.has(keyOf(row))).map(identifiedRowOf),
-    total,
-  };
+  // The item's own conditions bind its id, and its address test none.
+  const runs = documentKeyRuns(
+    documents,
+    db.getCapabilities().maxParamsPerQuery,
+    1
+  );
+  const rows: Array<Record<string, unknown>> = [];
+  for (const keys of runs) {
+    rows.push(
+      ...(await db.select<Record<string, unknown>>(MEDIA_USAGE_TABLE, {
+        columns: USAGE_ROW_COLUMNS,
+        where: { and: [...conditions, { or: keys }] },
+        orderBy: [
+          ...DOCUMENT_ORDER,
+          { column: "fieldPath", direction: "asc" },
+          { column: "locale", direction: "asc" },
+        ],
+      }))
+    );
+  }
+  return { rows: rows.map(identifiedRowOf), total };
 }
 
 /**

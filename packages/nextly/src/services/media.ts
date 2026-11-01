@@ -41,6 +41,10 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import {
+  lockMediaFolders,
+  lockMediaItems,
+} from "../domains/media/lock-media-items";
 import type {
   MediaLibraryCounts,
   UnusedSources,
@@ -188,7 +192,7 @@ export class MediaService extends BaseService {
     tx: TransactionContext,
     mediaId: string
   ): Promise<StoredMediaRow | undefined> {
-    await tx.lockRow("media", mediaId);
+    await lockMediaItems(tx, [mediaId]);
     const rows = await tx.select<StoredMediaRow>("media", {
       where: this.whereEq("id", mediaId),
     });
@@ -721,8 +725,27 @@ export class MediaService extends BaseService {
       // our first read is not shipped stale. The transaction returns the
       // post-update document (or null when the row is already gone).
       let recorded = false;
+      let folderGone = false;
       const updatedRow = await this.adapter.transaction<Media | null>(
         async tx => {
+          folderGone = false;
+          // A move into a folder locks the folder before the item, the one
+          // order (`lockMediaFolders`): the write's foreign-key check locks
+          // the folder too, and taken after the item it would deadlock with
+          // a folder delete holding the folder and waiting for the item. A
+          // folder gone meanwhile is not found.
+          const destination = updateData.folderId;
+          if (typeof destination === "string") {
+            await lockMediaFolders(tx, [destination]);
+            const [folder] = await tx.select("media_folders", {
+              columns: ["id"],
+              where: this.whereEq("id", destination),
+            });
+            if (!folder) {
+              folderGone = true;
+              return null;
+            }
+          }
           const stored = await this.lockedRow(tx, mediaId);
           // Lost an update race: the row was deleted after our first read, so
           // record nothing and let the not-found result below stand.
@@ -762,7 +785,7 @@ export class MediaService extends BaseService {
           success: false,
           statusCode: 404,
           code: "NOT_FOUND",
-          message: "Media not found",
+          message: folderGone ? "Folder not found" : "Media not found",
           data: null,
         };
       }
@@ -886,6 +909,20 @@ export class MediaService extends BaseService {
           }
 
           await tx.delete("media", this.whereEq("id", mediaId));
+          // A delete that is not the end of an Undo window takes any mark
+          // an earlier delete left on the item, with its row, so an Undo
+          // still inside that window finds the item gone rather than
+          // reporting it restored.
+          if (!claim) {
+            const { pendingDeleteKey } = await import(
+              "../domains/media/pending-delete"
+            );
+            await tx.delete("nextly_meta", {
+              and: [
+                { column: "key", op: "=", value: pendingDeleteKey(mediaId) },
+              ],
+            });
+          }
 
           // The removed row's final state ships as `data`, without its stored
           // `sizes`; there is no post-delete state, so `previous` is null
@@ -981,7 +1018,8 @@ export class MediaService extends BaseService {
    * Removing a file already gone is no failure, so running this again
    * finishes what an interrupted run left. Answers whether it could finish:
    * `false` when what to keep, or what a Replace kept, could not be read,
-   * and nothing unasked was removed. Never throws: the delete has committed.
+   * and nothing unasked was removed, or when a file could not be removed.
+   * Never throws: the delete has committed.
    */
   async removeFilesOfDeleted(
     mediaId: string,
@@ -992,9 +1030,11 @@ export class MediaService extends BaseService {
       storedFilesOf(record).paths,
       [mediaId]
     );
-    if (kept) await removeStoredFiles(this.storage, record, mediaId, kept);
+    const ownFilesGone = kept
+      ? await removeStoredFiles(this.storage, record, mediaId, kept)
+      : false;
     const keptFilesGone = await this.removeKeptFilesOf(mediaId);
-    return kept !== null && keptFilesGone;
+    return ownFilesGone && keptFilesGone;
   }
 
   /**

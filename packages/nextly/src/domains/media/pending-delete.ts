@@ -48,6 +48,7 @@ import { z } from "zod";
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 
+import { lockMediaItems } from "./lock-media-items";
 import type { MediaFilesRecord } from "./stored-files";
 
 /** How long a deleted item can be brought back: ten seconds. */
@@ -277,9 +278,9 @@ export class PendingMediaDeletes {
     const times = await this.deps.db.transaction(async tx => {
       // Filled afresh on each attempt, should the transaction be retried.
       fresh.length = 0;
-      // Each item's row locked, in one order, so two deletes of the same
+      // Each item's row locked, in the one order, so two deletes of the same
       // items take turns: the second finds the first's marks and keeps them.
-      for (const id of [...wanted].sort()) await tx.lockRow("media", id);
+      await lockMediaItems(tx, wanted);
       const found: Array<Record<string, unknown>> = [];
       const marked: Array<Record<string, unknown>> = [];
       // In runs, so no statement binds more values than any dialect takes.
@@ -380,12 +381,17 @@ export class PendingMediaDeletes {
   }
 
   /**
-   * Bring the items back: each whose mark is still there and whose window
-   * has not ended loses it, in the one statement that also decides it. So an
-   * Undo racing the finaliser either takes the mark (and the item stays) or
-   * finds it taken (and the item is gone), and one arriving after the
-   * deadline is refused even before any finaliser has run: the mark stays
-   * for the finaliser, which owns the item from then on.
+   * Bring the items back: each whose row is still there, and whose mark is
+   * still there and whose window has not ended, loses its mark, in the one
+   * statement that also decides it. So an Undo racing the finaliser either
+   * takes the mark (and the item stays) or finds it taken (and the item is
+   * gone), and one arriving after the deadline is refused even before any
+   * finaliser has run: the mark stays for the finaliser, which owns the item
+   * from then on.
+   *
+   * The row is read under its lock, the one every delete of it takes, so an
+   * item an immediate delete removed inside the window is answered as
+   * `gone`, never as restored, and what is left of its mark is taken.
    *
    * Each item is judged against its own deadline, so a batch whose marks
    * have different deadlines comes back in part: every item still inside its
@@ -396,15 +402,41 @@ export class PendingMediaDeletes {
    */
   async undo(ids: readonly string[]): Promise<UndoneDeletion> {
     const due = this.cutoff();
+    const wanted = [...new Set(ids)];
     return await this.deps.db.transaction(async tx => {
+      // In the one order a delete locks them in, so the two take turns.
+      await lockMediaItems(tx, wanted);
+      const present = new Set<string>();
+      for (let start = 0; start < wanted.length; start += READ_RUN) {
+        const found = await tx.select<Record<string, unknown>>("media", {
+          columns: ["id"],
+          where: {
+            and: [
+              {
+                column: "id",
+                op: "IN",
+                value: wanted.slice(start, start + READ_RUN),
+              },
+            ],
+          },
+        });
+        for (const row of found) present.add(String(row.id));
+      }
       const restored: string[] = [];
       const gone: string[] = [];
-      for (const id of new Set(ids)) {
+      for (const id of wanted) {
+        const mark = {
+          column: "key",
+          op: "=" as const,
+          value: pendingDeleteKey(id),
+        };
+        if (!present.has(id)) {
+          await tx.delete(META_TABLE, { and: [mark] });
+          gone.push(id);
+          continue;
+        }
         const removed = await tx.delete(META_TABLE, {
-          and: [
-            { column: "key", op: "=", value: pendingDeleteKey(id) },
-            { column: "updatedAt", op: ">", value: due },
-          ],
+          and: [mark, { column: "updatedAt", op: ">", value: due }],
         });
         (removed > 0 ? restored : gone).push(id);
       }

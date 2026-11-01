@@ -357,6 +357,24 @@ export function MediaLibrary({
     return () => clearTimeout(timer);
   }, [search, debouncedSearch, resetPage]);
 
+  // The selection holds only items of the set on screen: a change of
+  // folder, view, search or type lists another set, so it starts empty, and
+  // a bulk action never reaches an item no longer shown (a used file
+  // selected in All media, acted on from Unused). Paging and sorting list
+  // the same set, so the selection is kept across them. Cleared as the new
+  // set renders, never a frame later.
+  const selectionScope = JSON.stringify([
+    activeFolderId,
+    view,
+    debouncedSearch,
+    typeFilter,
+  ]);
+  const [selectedScope, setSelectedScope] = React.useState(selectionScope);
+  if (selectedScope !== selectionScope) {
+    setSelectedScope(selectionScope);
+    setSelectedIds(new Set());
+  }
+
   // Build query params. Local React state name `pageSize` (admin-
   // internal) maps to canonical wire field `limit`.
   const queryParams: MediaParams = {

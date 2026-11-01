@@ -23,7 +23,7 @@ describe("fetchMediaUsage", () => {
     fetchJson.mockResolvedValue({
       items: [],
       meta: {
-        hidden: [{ count: 2 }],
+        hiddenCount: 2,
         heldByAddress: 3,
         usageRecorded: false,
       },
@@ -60,7 +60,7 @@ describe("fetchMediaUsage", () => {
   it("asks for a later page, and reads how many documents there are in all", async () => {
     fetchJson.mockResolvedValue({
       items: [],
-      meta: { total: 45, hasNext: true, hidden: [{ count: 1 }] },
+      meta: { total: 45, hasNext: true, hiddenCount: 1 },
     });
 
     const usage = await fetchMediaUsage("m1", { byAddress: true, page: 2 });

@@ -262,8 +262,9 @@ export async function indexKeptAddresses(
 
 /**
  * One deleted item's kept files and their record, as its record lists them.
- * The record stays when what another item refers to could not be asked, so
- * none of the files is forgotten while it may still be stored.
+ * The record stays when what another item refers to could not be asked, or
+ * a file could not be removed, so none of the files is forgotten while it
+ * may still be stored.
  */
 async function removeRecordedFiles(
   db: DrizzleAdapter,
@@ -278,14 +279,20 @@ async function removeRecordedFiles(
     [mediaId]
   );
   if (!kept) return false;
+  let removed = true;
   for (const file of record.files) {
-    await removeStoredFiles(
-      storage,
-      { filename: file.path, url: file.url },
-      mediaId,
-      kept
-    );
+    if (
+      !(await removeStoredFiles(
+        storage,
+        { filename: file.path, url: file.url },
+        mediaId,
+        kept
+      ))
+    ) {
+      removed = false;
+    }
   }
+  if (!removed) return false;
   for (const url of keptAddressesOf(record.files)) {
     await db.delete("nextly_meta", {
       and: [{ column: "key", op: "=", value: keptAddressKey(url) }],
