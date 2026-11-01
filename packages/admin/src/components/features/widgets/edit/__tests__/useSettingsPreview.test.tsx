@@ -55,8 +55,15 @@ const SHOWN: WidgetSlot = {
   result: { op: "list", items: [{ title: "shown" }] },
 };
 
-/** A card ask as the preview sends it: its widget, with the settings it is drawn with. */
-type SentAsk = { widget: string; settings?: Record<string, unknown> };
+/**
+ * A card ask as the preview sends it: its widget, with the settings it is drawn with, and the
+ * size it is drawn at where that is known.
+ */
+type SentAsk = {
+  widget: string;
+  settings?: Record<string, unknown>;
+  size?: { w: number; h: number; tier: string };
+};
 
 /** The cards each request asked for, in order. */
 const sent = () =>
@@ -88,10 +95,13 @@ function preview(
   {
     widget = WIDGET,
     size,
+    tier,
   }: {
     widget?: DashboardWidget;
     /** The size the card is drawn at on the dashboard. */
     size?: { w: number; h: number };
+    /** The tier the card is drawn at, from its width on the dashboard. */
+    tier?: "small" | "medium" | "large";
   } = {}
 ) {
   return renderHook(
@@ -103,6 +113,7 @@ function preview(
         draft,
         shown: { slot: SHOWN, updatedAt: null, isFetching: false },
         ...(size === undefined ? {} : { size }),
+        ...(tier === undefined ? {} : { tier }),
       }),
     { wrapper, initialProps: { draft: initialDraft } }
   );
@@ -145,6 +156,32 @@ describe("the settings sheet's preview", () => {
       collection: "tags",
     });
   });
+
+  // A size-aware `load` reads the size it is handed to choose how many rows to fetch, so the
+  // preview's question carries the card's own size and tier, not its widget's default; two
+  // sizes, so a size fixed in the request cannot pass both.
+  it.each([
+    { size: { w: 4, h: 4 }, tier: "medium" as const },
+    { size: { w: 12, h: 2 }, tier: "large" as const },
+  ])(
+    "asks a changed question at the card's own size, $size.w by $size.h at $tier",
+    async ({ size, tier }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const { rerender } = preview({}, { size, tier });
+      rerender({ draft: { collection: "pages" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await waitFor(() => expect(sent()).toHaveLength(1));
+      expect(sent()[0]).toEqual([
+        {
+          widget: "core/recent",
+          settings: { collection: "pages" },
+          size: { ...size, tier },
+        },
+      ]);
+    }
+  );
 
   it("asks again when only the density changes, which its `load` reads too", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

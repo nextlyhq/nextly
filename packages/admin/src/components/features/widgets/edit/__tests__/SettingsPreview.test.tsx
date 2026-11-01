@@ -7,7 +7,7 @@
  * measured itself would read its tier from.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -126,6 +126,18 @@ describe("the preview's size", () => {
     const { box, tier } = preview({ w: 3, cardWidth: 300 });
     expect(tier).toBe("small");
     expect(box).toHaveAttribute("data-scale", "1");
+  });
+  it("asks a changed question at the size and the tier it draws the card at", async () => {
+    // 🔴 The tier is the one the card's real width gives it, large, not the panel's medium: what
+    // the widget's `load` is handed is the size the preview shows.
+    preview({ w: 12, cardWidth: 1200, draft: { collection: "posts" } });
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
+    const [, body] = vi.mocked(protectedApi.post).mock.calls[0] ?? [];
+    expect((body as { queries: unknown[] }).queries).toEqual([
+      expect.objectContaining({ size: { w: 12, h: 4, tier: "large" } }),
+    ]);
   });
 });
 

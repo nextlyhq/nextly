@@ -193,6 +193,8 @@ export function SettingsPreview(props: {
     shown: props.shown,
     ownTitle: props.ownTitle,
     size,
+    // The tier the preview is drawn at, so its question is asked at the size it shows.
+    ...(tier === undefined ? {} : { tier }),
   });
   const { roomRef, scale } = usePreviewScale(cardWidth);
   const height = cardHeightPx(size.h);

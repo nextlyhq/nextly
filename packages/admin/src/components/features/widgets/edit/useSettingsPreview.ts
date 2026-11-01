@@ -17,6 +17,7 @@
  * @module components/features/widgets/edit/useSettingsPreview
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import { useMemo } from "react";
 
@@ -59,14 +60,28 @@ export interface SettingsPreview {
  * The preview's own question for the values the sheet holds: the card as its own card, asked
  * with the draft settings, never the stored card's ask, so its answer is never filed as the
  * stored card's.
+ *
+ * With the size the card is drawn at, where its size and tier are known, as the dashboard asks
+ * its cards (`cardAskFor`): the widget's `load` is handed it, so a size-aware load answers for
+ * the rows the preview draws rather than for its widget's default size.
  */
 function previewRequests(
   widget: DashboardWidget,
   previewId: string,
-  draft: Record<string, unknown>
+  draft: Record<string, unknown>,
+  size: GridSize | undefined,
+  tier: SizeTier | undefined
 ): WidgetQueryRequest[] {
+  const cardSize =
+    size === undefined || tier === undefined
+      ? {}
+      : { cardSize: { w: size.w, h: size.h, tier } };
   return [
-    { placementId: previewId, card: { widget: widget.id, settings: draft } },
+    {
+      placementId: previewId,
+      card: { widget: widget.id, settings: draft },
+      ...cardSize,
+    },
   ];
 }
 
@@ -102,6 +117,8 @@ export function useSettingsPreview(args: {
   ownTitle?: string;
   /** The size the card is drawn at on the dashboard, held to its widget's bounds. */
   size?: GridSize;
+  /** The tier the card is drawn at, from its width on the dashboard, when that is known. */
+  tier?: SizeTier;
 }): SettingsPreview {
   const { widget, placementId, stored, draft, shown } = args;
   const previewId = `${placementId}:preview`;
@@ -138,13 +155,24 @@ export function useSettingsPreview(args: {
     size: args.size,
   });
 
-  // The settled settings themselves are the request's card, so each new question is a new one.
+  // The settled settings themselves are the request's card, so each new question is a new one;
+  // asked at the card's size and tier, which its widget's `load` reads.
+  // Keyed on the size's numbers, not its object, which the caller may build anew each render.
+  const { tier } = args;
+  const w = args.size?.w;
+  const h = args.size?.h;
   const requests = useMemo<WidgetQueryRequest[]>(
     () =>
       sameQuestion || settled !== asking
         ? []
-        : previewRequests(widget, previewId, draft),
-    [sameQuestion, settled, asking, previewId, widget, draft]
+        : previewRequests(
+            widget,
+            previewId,
+            draft,
+            w === undefined || h === undefined ? undefined : { w, h },
+            tier
+          ),
+    [sameQuestion, settled, asking, previewId, widget, draft, w, h, tier]
   );
   const asked = useWidgetQueries(requests);
   const ready = settled === asking;
