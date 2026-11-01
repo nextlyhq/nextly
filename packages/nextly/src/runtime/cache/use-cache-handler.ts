@@ -8,9 +8,9 @@
  *
  * @module runtime/cache/use-cache-handler
  */
-import { holdForNextFlush } from "../../revalidation/expiry-handoff";
 
 import { sharedEntries } from "./bounded-entries";
+import { holdFailedRecord, retryFailedRecordsAtRead } from "./record-retry";
 import { USE_CACHE_HANDLER_BRAND } from "./shared-handlers";
 import {
   expireTags,
@@ -109,9 +109,13 @@ const useCacheHandler = {
     return write;
   },
 
-  // Nothing to do once per request: the ledger is asked about the tags each
-  // read carries, when that read is made.
-  async refreshTags(): Promise<void> {},
+  // Once per request: what the ledger refused is retried here too, where a
+  // timer may never fire (a frozen serverless function). The ledger is asked
+  // about the tags each read carries when that read is made.
+  async refreshTags(): Promise<void> {
+    const retrying = retryFailedRecordsAtRead();
+    if (retrying !== undefined) await retrying;
+  },
 
   async getExpiration(tags: string[]): Promise<number> {
     await refreshTagExpiries(tags);
@@ -123,7 +127,7 @@ const useCacheHandler = {
   async updateTags(tags: string[]): Promise<void> {
     // A refused record is retried by the next flush; no table is not, as in
     // the incremental handler.
-    if ((await expireTags(tags)) === "failed") holdForNextFlush(tags);
+    if ((await expireTags(tags)) === "failed") holdFailedRecord(tags);
   },
 };
 
