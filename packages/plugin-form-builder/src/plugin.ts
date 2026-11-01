@@ -47,6 +47,10 @@ import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
 import { normalizeRedirectRelationships } from "./utils/redirect-target";
+import {
+  SCHEMA_ONLY_CONTEXT,
+  SCHEMA_ONLY_READ,
+} from "./utils/schema-only-read";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -1034,7 +1038,11 @@ export async function prepareSubmissionForWrite(
     });
   }
 
-  ctx.data = { ...submission, data: prepared.data };
+  ctx.data = {
+    ...submission,
+    data: prepared.data,
+    ...startingStatus(ctx, marks),
+  };
   if (spam) {
     // Flagged, never dropped: a false positive stays reviewable in the Spam
     // view and recoverable through "Not spam". Written here rather than trusted
@@ -1047,6 +1055,28 @@ export async function prepareSubmissionForWrite(
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
   return ctx.data;
+}
+
+/**
+ * The status a submission a request created starts with: `new`, whatever the
+ * request named, before the spam verdict may make it `spam`. The collection
+ * grants public create and nothing restricts `status`, so a visitor posting
+ * `read` or `archived` would otherwise file their submission where nobody
+ * looks for one that was never opened.
+ *
+ * A create no request produced (an import, a seed, a job) keeps the status it
+ * names, and so does this plugin's own handler storing content spam as
+ * evidence (`keepAsEvidence`), which chose that status itself. An update is
+ * left as it is.
+ */
+function startingStatus(
+  ctx: { operation?: string; req?: { http?: unknown } },
+  marks: SubmissionOriginMarks | undefined
+): { status?: "new" } {
+  const requestCreate = ctx.operation === "create" && ctx.req?.http;
+  return requestCreate && marks?.keepAsEvidence !== true
+    ? { status: "new" }
+    : {};
 }
 
 /**
@@ -1396,12 +1426,6 @@ export async function injectSubmissionCount(
   );
 }
 
-/**
- * Tells the form's `afterRead` hook that this read wants the schema and nothing
- * else, so it can skip work whose only purpose is to be displayed.
- */
-const SCHEMA_ONLY_READ = "formBuilder.schemaOnlyRead";
-
 export async function fetchParentForm(
   formsSlug: string,
   formId: string,
@@ -1434,7 +1458,7 @@ export async function fetchParentForm(
     const form = await nextly.services.collections.findEntryById(
       formsSlug,
       formId,
-      { as: "system", context: { [SCHEMA_ONLY_READ]: true } }
+      { as: "system", context: { ...SCHEMA_ONLY_CONTEXT } }
     );
     return form;
   } catch (err) {

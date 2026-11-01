@@ -22,6 +22,8 @@ const TIMING =
   "known, timing-dependent: a schema probe on another connection, made only when the first check of the run happens inside a transaction; unwitnessed, since a run where it does not happen would report it fixed";
 const REGISTRY =
   "known, timing-dependent: the collection and Single registry cache is filled on another connection inside whichever write first needs it, which test order decides, so it is listed for any opener; the fix fills the cache before the transaction opens, or inside it";
+const LEDGER =
+  "known: a write's cache tag expiry, recorded through the ledger after the write itself committed on another connection (the createEntry checkout above, a CALLER escape). Recorded inside the caller's transaction, a rollback would drop the expiry and keep the content; these go when createEntry joins the caller's transaction";
 const PLUGIN =
   "known: a statement in a plugin's transaction runs on another connection";
 
@@ -123,6 +125,13 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
+    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_cache_tag_expiries",
+    witness:
+      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
+    reason: LEDGER,
+  },
+  {
+    dialect: "mysql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
@@ -130,10 +139,24 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
+    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_cache_tag_expiries",
+    witness:
+      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
+    reason: LEDGER,
+  },
+  {
+    dialect: "mysql",
     key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry \u00b7 checkout",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/dashboard/table-presence.ts#<anonymous> \u00b7 select tables",
+    witness:
+      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
+    reason: LEDGER,
   },
   {
     dialect: "mysql",
@@ -224,6 +247,20 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
+    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_cache_tag_expiries",
+    witness:
+      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
+    reason: LEDGER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select clock_timestamp",
+    witness:
+      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
+    reason: LEDGER,
+  },
+  {
+    dialect: "postgresql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
@@ -235,6 +272,13 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/dashboard/table-presence.ts#<anonymous> \u00b7 select tables",
+    witness:
+      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
+    reason: LEDGER,
   },
   {
     dialect: "postgresql",

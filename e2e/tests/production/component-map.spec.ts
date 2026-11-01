@@ -9,12 +9,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
+
+import { test } from "../support/visible";
 
 import {
   pnpmInvocation,

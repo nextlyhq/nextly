@@ -234,6 +234,30 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * How many records outside content keep `address`: users' avatars, the
+   * email brand's logo and the site's logos, asked as the `unused` view asks
+   * them (`mediaAddressHolders`). A Replace keeps the old file while any
+   * does, since each goes on naming that address. Asked on the pool.
+   */
+  async addressHolderCount(address: string): Promise<number> {
+    // Loaded when it is asked, not with the service.
+    const [{ mediaAddressHolders }, { holderKeeps }] = await Promise.all([
+      import("../domains/media/media-address-holders"),
+      import("../domains/media/media-library-query"),
+    ]);
+    const dialect = this.adapter.getCapabilities().dialect;
+    let held = 0;
+    for (const holder of await mediaAddressHolders(this.adapter, this.tables)) {
+      const [row] = await this.db
+        .select({ value: count() })
+        .from(holder.table)
+        .where(holderKeeps(holder, address, dialect));
+      held += Number(row?.value ?? 0);
+    }
+    return held;
+  }
+
+  /**
    * The sidebar's counts, in one query: every folder's items (and the items
    * in no folder), and each view's. Grouped by folder, with each view's
    * condition summed inside the group, so the whole library is read once
@@ -249,7 +273,7 @@ export class MediaService extends BaseService {
     const unused = await this.unusedSources();
     // Loaded when the library is read, not with the service.
     const [
-      { mediaLibraryCountsOf, missingAltText, unusedItem },
+      { mediaLibraryCountsOf, missingAltText, notPendingDelete, unusedItem },
       { MEDIA_USAGE_RECORDED_KEY },
     ] = await Promise.all([
       import("../domains/media/media-library-query"),
@@ -274,6 +298,8 @@ export class MediaService extends BaseService {
       })
       .from(media)
       .leftJoin(nextlyMeta, eq(nextlyMeta.key, MEDIA_USAGE_RECORDED_KEY))
+      // Never an item deleted inside the Undo window, as every library read.
+      .where(notPendingDelete(media))
       .groupBy(media.folderId);
     return mediaLibraryCountsOf(groups, unused !== null);
   }
@@ -844,6 +870,7 @@ export class MediaService extends BaseService {
         );
         if (kept)
           await removeStoredFiles(this.storage, mediaData, mediaId, kept);
+        await this.removeKeptFilesOf(mediaId);
       });
 
       // The delete committed a media.deleted outbox row; drain and prune it
@@ -865,6 +892,28 @@ export class MediaService extends BaseService {
         code: "INTERNAL_ERROR",
         message: "Failed to delete media",
       };
+    }
+  }
+
+  /**
+   * The files a Replace kept for pages naming a deleted item's old address,
+   * and the record of them. Here, in the delete every other one goes
+   * through (one item, a bulk delete, the end of an Undo window), so none of
+   * them leaves the kept files behind. Never fails the committed delete: a
+   * file that cannot go is named in the log, as the item's own files are.
+   */
+  private async removeKeptFilesOf(mediaId: string): Promise<void> {
+    try {
+      // Loaded when an item is deleted, not with the service.
+      const { removeKeptFiles } = await import(
+        "../domains/media/usage/address-uses"
+      );
+      await removeKeptFiles(this.adapter, this.storage, this.logger, mediaId);
+    } catch (error) {
+      this.logger.warn("[MediaService] Kept files not removed", {
+        mediaId,
+        error: errorForLog(error),
+      });
     }
   }
 

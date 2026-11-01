@@ -11,12 +11,7 @@
  * by name rather than having its cards silently absent.
  *
  * The keys are read here, from the value as plain JavaScript hands it over,
- * and nowhere else: the startup refusal and every reader that still looks at
- * the keys ask this module, so they cannot disagree about what a plugin
- * carries.
- *
- * Imports nothing beyond the error type, so the component-map generator and
- * the source fold can read the keys without loading the widget validator.
+ * and nowhere else: nothing in Nextly reads what a plugin holds under them.
  *
  * @module plugins/removed-widget-keys
  */
@@ -35,39 +30,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
 /**
- * Where `plugin` declares `contributes.<key>`: the object the key is an own
- * property of (`contributes` for `widgetSources`, `contributes.admin` for
- * `admin.widgets`) and the property's name, or `undefined` when the plugin
- * declares no such key.
+ * Whether `plugin` declares `contributes.<key>`: an own property of
+ * `contributes` for `widgetSources`, of `contributes.admin` for
+ * `admin.widgets`.
  *
  * Presence is asked apart from the value, because a key written as
  * `undefined` is declared all the same and reads exactly like an absent one.
- * The startup refusal and every reader ask this one question, so a reader
- * never sees a value the refusal would not have named.
  */
-function declaredKey(
-  plugin: PluginDefinition,
-  key: RemovedWidgetKey
-): { holder: Record<string, unknown>; name: string } | undefined {
+function declaresKey(plugin: PluginDefinition, key: RemovedWidgetKey): boolean {
   const contributes: unknown = plugin.contributes;
-  if (!isRecord(contributes)) return undefined;
+  if (!isRecord(contributes)) return false;
   const holder = key === "widgetSources" ? contributes : contributes.admin;
   const name = key === "widgetSources" ? "widgetSources" : "widgets";
-  return isRecord(holder) && Object.hasOwn(holder, name)
-    ? { holder, name }
-    : undefined;
-}
-
-/**
- * What `plugin` carries under `contributes.<key>`, or `undefined` when it
- * declares nothing there.
- */
-export function carriedRemovedKey(
-  plugin: PluginDefinition,
-  key: RemovedWidgetKey
-): unknown {
-  const found = declaredKey(plugin, key);
-  return found === undefined ? undefined : found.holder[found.name];
+  return isRecord(holder) && Object.hasOwn(holder, name);
 }
 
 /**
@@ -106,7 +81,7 @@ export function assertNoRemovedWidgetKeys(
 ): void {
   for (const plugin of plugins) {
     for (const key of REMOVED_WIDGET_KEYS) {
-      if (declaredKey(plugin, key) !== undefined) {
+      if (declaresKey(plugin, key)) {
         throw removedWidgetKeyError(plugin.name, key);
       }
     }

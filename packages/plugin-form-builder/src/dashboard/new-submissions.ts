@@ -14,7 +14,9 @@
  * @module dashboard/new-submissions
  */
 
-import type { WidgetReadServices } from "@nextlyhq/plugin-sdk";
+import type { WidgetReadServices, WidgetScope } from "@nextlyhq/plugin-sdk";
+
+import { SCHEMA_ONLY_CONTEXT } from "../utils/schema-only-read";
 
 /** The widget's id, the one core's default names. */
 export const NEW_SUBMISSIONS_WIDGET_ID = "form-builder/new-submissions";
@@ -65,6 +67,12 @@ export interface NewSubmissionsRead {
   signal?: AbortSignal;
   /** The submissions slug the admin knows them by: the site's, where it renamed it. */
   submissionsPath: string;
+  /**
+   * The work this reader's request shares (a `load`'s or a summary's
+   * `scope`): the forms they may read are scanned once in it, however many
+   * of the card's reads ask.
+   */
+  scope?: WidgetScope;
 }
 
 /** The status a submission arrives with, and keeps until someone opens it. */
@@ -151,6 +159,9 @@ async function formIdPage(
     limit: page.limit,
     select: ["id"],
     status: "all",
+    // Ids are all this needs: the forms' `afterRead` count of each form's
+    // submissions would be a query per form, up to a thousand a scan.
+    context: SCHEMA_ONLY_CONTEXT,
     ...(page.signal === undefined ? {} : { signal: page.signal }),
   });
   return items.flatMap(item => (typeof item.id === "string" ? [item.id] : []));
@@ -183,6 +194,22 @@ export async function readableFormIds(
   return { ids, complete: beyond.length === 0 };
 }
 
+/**
+ * The forms the reader may read, scanned once in `scope` where one is given:
+ * the card's data and the header's count, answered in one request, share one
+ * scan. Keyed by the forms collection, so a site that renamed it scans its own.
+ */
+function readableFormsOnce(
+  services: Pick<WidgetReadServices, "find">,
+  forms: string,
+  read: Pick<NewSubmissionsRead, "scope" | "signal">
+): Promise<ReadableForms> {
+  const scan = () => readableFormIds(services, forms, read.signal);
+  return read.scope === undefined
+    ? scan()
+    : read.scope.getOrCompute(`readable-forms:${forms}`, scan);
+}
+
 /** The new submissions of the forms named: what the card lists and the header counts. */
 function newSubmissionsWhere(formIds: readonly string[]): {
   status: { equals: string };
@@ -204,11 +231,7 @@ export async function readNewSubmissions(
   const signal = read.signal === undefined ? {} : { signal: read.signal };
   const allHref = `${ADMIN_ROOT}/collections/${read.submissionsPath}`;
   const collection = read.submissionsPath;
-  const readable = await readableFormIds(
-    services,
-    collections.forms,
-    read.signal
-  );
+  const readable = await readableFormsOnce(services, collections.forms, read);
   if (readable.ids.length === 0) {
     return { items: [], total: 0, allHref, collection };
   }
@@ -256,6 +279,8 @@ async function formsOf(
     limit: ids.length,
     select: FORM_FIELDS,
     status: "all",
+    // The rows draw a form's name and fields, never its submission count.
+    context: SCHEMA_ONLY_CONTEXT,
     ...signal,
   });
   return new Map(

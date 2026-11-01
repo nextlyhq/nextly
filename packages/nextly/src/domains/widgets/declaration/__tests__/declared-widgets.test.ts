@@ -15,7 +15,6 @@ import {
   clearDeclaredWidgets,
   declaredWidget,
   registerDashboardWidgets,
-  resetLegacyIdWarnings,
 } from "../declared-widgets";
 import { defineWidget } from "../define-widget";
 import { ordersByState, recentOrders, revenue } from "./plugin/widgets";
@@ -27,7 +26,6 @@ let warn: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   clearWidgets();
   clearDeclaredWidgets();
-  resetLegacyIdWarnings();
   warn = vi.fn();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn,
@@ -456,14 +454,13 @@ describe("registering declared widgets", () => {
 });
 
 describe("declarations plain JavaScript can hand over", () => {
-  it("reports an entry that is not an object with the other faults, beside old-shape ids", () => {
+  it("reports an entry that is not an object with the other faults", () => {
     let thrown: unknown;
     try {
       registerDashboardWidgets({
         groups: [
           { owner: SHOP, declarations: [null, { ...revenue, title: "" }] },
         ],
-        legacy: [{ owner: 'plugin "@old/stats"', ids: ["old/x"] }],
       });
     } catch (error) {
       thrown = error;
@@ -490,58 +487,6 @@ describe("declarations plain JavaScript can hand over", () => {
       "acme/recent-orders"
     );
     expect(declaredWidget("core/recent-orders")).toBeUndefined();
-  });
-});
-
-describe("widgets in today's shape", () => {
-  it("stop startup when a declared widget takes an id one of them uses", () => {
-    expect(() =>
-      registerDashboardWidgets({
-        groups: [{ owner: SHOP, declarations: [ordersByState] }],
-        legacy: [
-          { owner: 'plugin "@old/stats"', ids: ["acme/orders-by-state"] },
-        ],
-      })
-    ).toThrow(NextlyError);
-    try {
-      registerDashboardWidgets({
-        groups: [{ owner: SHOP, declarations: [ordersByState] }],
-        legacy: [
-          { owner: 'plugin "@old/stats"', ids: ["acme/orders-by-state"] },
-        ],
-      });
-    } catch (error) {
-      expect((error as NextlyError).logMessage).toContain(
-        'id "acme/orders-by-state" is already used by plugin "@old/stats", which declares it in the old shape'
-      );
-    }
-  });
-
-  it("keep today's rule between themselves, the first winning, with one warning per id", () => {
-    const legacy = [
-      { owner: 'plugin "@one/a"', ids: ["shared/card"] },
-      { owner: 'plugin "@two/b"', ids: ["shared/card"] },
-    ];
-    expect(() =>
-      registerDashboardWidgets({ groups: [], legacy: legacy })
-    ).not.toThrow();
-    registerDashboardWidgets({ groups: [], legacy: legacy });
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toMatchObject({
-      kind: "widget-id-shared-old-shape",
-      widget: "shared/card",
-      plugins: ['plugin "@one/a"', 'plugin "@two/b"'],
-    });
-  });
-
-  it("may use a namespace the new shape reserves", () => {
-    expect(() =>
-      registerDashboardWidgets({
-        groups: [],
-        legacy: [{ owner: SHOP, ids: ["core/acme-card"] }],
-      })
-    ).not.toThrow();
-    expect(warn).not.toHaveBeenCalled();
   });
 });
 

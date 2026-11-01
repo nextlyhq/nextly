@@ -4,7 +4,6 @@ import { Badge } from "@nextlyhq/ui";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense } from "react";
 
-import { sizeName } from "@admin/components/features/widgets/sizes";
 import {
   BookOpen,
   ExternalLink,
@@ -570,18 +569,6 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
         primary: page.path,
         secondary: page.requiredPermission
           ? `requires ${page.requiredPermission}`
-          : undefined,
-      })),
-    },
-    {
-      key: "widgets",
-      label: "Dashboard widgets",
-      icon: LayoutDashboard,
-      items: (plugin.widgets ?? []).map(widget => ({
-        primary: widget.id,
-        // The size a new card starts at, named as the card menu names it.
-        secondary: widget.size
-          ? `starts at ${sizeName(widget.size.default)}`
           : undefined,
       })),
     },

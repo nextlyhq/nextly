@@ -34,17 +34,34 @@ interface FindOptions {
 
 const COLLECTIONS = { forms: "forms", submissions: "form-submissions" };
 
+/** Work shared under a key, as a request's widget scope shares it: each key computed once. */
+interface OneScope {
+  getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T>;
+}
+
+function oneScope(): OneScope {
+  const kept = new Map<string, Promise<unknown>>();
+  return {
+    getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T> {
+      if (!kept.has(key)) kept.set(key, compute());
+      return kept.get(key) as Promise<T>;
+    },
+  };
+}
+
 /** The widget as the plugin contributes it, with the two functions run here. */
 function contributedWidget(): {
   load: (input: {
     services: ReturnType<typeof services>;
     size: { w: number; h: number; tier: "medium" };
     signal: AbortSignal;
+    scope?: OneScope;
   }) => Promise<NewSubmissionsData>;
   summary: {
     count: (input: {
       services: ReturnType<typeof services>;
       signal: AbortSignal;
+      scope?: OneScope;
     }) => Promise<number | { count: number; atLeast?: boolean }>;
   };
 } {
@@ -382,6 +399,33 @@ describe("the card's read", () => {
     expect(counted).toEqual(
       listed.map(call => ({ ...call, options: { ...call.options, limit: 0 } }))
     );
+  });
+
+  it("scans the readable forms once for the card and the header answered in one request", async () => {
+    const widget = contributedWidget();
+    const signal = new AbortController().signal;
+    const reads = services({ forms, submissions });
+    const scope = oneScope();
+    const data = await widget.load({
+      services: reads,
+      size: { w: 6, h: 8, tier: "medium" },
+      signal,
+      scope,
+    });
+    const count = await widget.summary.count({
+      services: reads,
+      signal,
+      scope,
+    });
+    expect(count).toEqual({ count: data.total, atLeast: false });
+    // One page of ids, three forms: one scan between the two of them.
+    const scans = reads.calls.filter(
+      call =>
+        call.collection === COLLECTIONS.forms &&
+        call.options.select?.length === 1 &&
+        call.options.select[0] === "id"
+    );
+    expect(scans).toHaveLength(1);
   });
 
   it("has a total and no rows on a card too short to draw one", async () => {

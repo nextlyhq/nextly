@@ -191,6 +191,15 @@ export interface WidgetReadServices {
        * @experimental
        */
       depth?: 0;
+      /**
+       * Handed to the collection's hooks as their `context`, as core's own
+       * read takes it: for a hook that does work only a display needs, such
+       * as a computed count, to see that this read does not need it and skip
+       * it. Plain values only; it decides nothing about who may read what.
+       *
+       * @experimental
+       */
+      context?: Readonly<Record<string, unknown>>;
       signal?: AbortSignal;
     }
   ): Promise<{
@@ -419,8 +428,16 @@ export type WidgetSummaryCount =
  */
 export interface WidgetSummary {
   label: string;
+  /**
+   * Handed `scope` as a `load` is, so a scan the card's data and the count
+   * both need can be asked for under one key and run once where both are
+   * answered together.
+   */
   count: (
-    input: Pick<WidgetDataInput<unknown>, "user" | "signal" | "services">
+    input: Pick<
+      WidgetDataInput<unknown>,
+      "user" | "signal" | "services" | "scope"
+    >
   ) => Promise<WidgetSummaryCount>;
 }
 

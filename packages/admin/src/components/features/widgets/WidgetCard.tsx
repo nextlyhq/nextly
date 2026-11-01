@@ -182,10 +182,10 @@ export interface WidgetCardProps {
    */
   hiddenWhileEmpty?: boolean;
   /**
-   * The widget hides while empty and the layout read cannot answer it ahead (a widget of the
-   * `registerWidget` or `contributes.admin.widgets` channel, named by the layout's
-   * `hiddenWhenAnswerEmpty`), so the card is taken off the dashboard while its own answer is
-   * empty, as it is drawn; customise mode still shows it, marked.
+   * The widget hides while empty and the layout read cannot answer it ahead (one whose data a
+   * query asks rather than a `load`, named by the layout's `hiddenWhenAnswerEmpty`), so the card
+   * is taken off the dashboard while its own answer is empty, as it is drawn; customise mode
+   * still shows it, marked.
    */
   hidesWhenAnswerEmpty?: boolean;
   /**

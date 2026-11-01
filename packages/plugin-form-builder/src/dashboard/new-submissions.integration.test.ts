@@ -339,22 +339,43 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** Saves the reader's dashboard with the card placed, as the admin does. */
+    /**
+     * Saves the reader's dashboard with the card on it, as the admin does:
+     * as it stands where core's default already places the card, which it
+     * names wherever the plugin is installed, and with the card added where it
+     * does not (a reader who removed it, or a site without the plugin).
+     */
     async function place(cookie: string): Promise<Response> {
       const layout = await layoutOf(cookie);
+      const onIt = layout.placements.some(
+        placement => placement.widgetId === NEW_SUBMISSIONS_WIDGET_ID
+      );
       return call("PUT", ["dashboard", "layout"], cookie, {
         placements: [
           ...layout.placements,
-          {
-            id: "submissions-card",
-            widgetId: NEW_SUBMISSIONS_WIDGET_ID,
-            w: 6,
-            h: 3,
-            removed: false,
-          },
+          ...(onIt
+            ? []
+            : [
+                {
+                  id: "submissions-card",
+                  widgetId: NEW_SUBMISSIONS_WIDGET_ID,
+                  w: 6,
+                  h: 3,
+                  removed: false,
+                },
+              ]),
         ],
         version: layout.version,
         scope: layout.scope,
       });
+    }
+
+    /** The id of the card of this widget on the reader's dashboard. */
+    async function cardIdOf(cookie: string): Promise<string | undefined> {
+      const { placements } = await layoutOf(cookie);
+      return placements.find(
+        placement => placement.widgetId === NEW_SUBMISSIONS_WIDGET_ID
+      )?.id;
     }
 
     /** The header's part for the card, or `undefined` when it has none. */
@@ -558,6 +579,64 @@ describe.each(getConfiguredTestDialects())(
       expect(at).toBeLessThanOrEqual(Date.now() + 1000);
     });
 
+    it("starts a visitor's submission as new, whatever status it names", async () => {
+      const { t } = await boot(true, undefined, true);
+      const contact = await form(t, "contact", "Contact", [
+        { type: "text", name: "comment", label: "Comment" },
+      ]);
+      const created = await visitorCreate({
+        form: contact,
+        data: { comment: "Hello" },
+        status: "read",
+      });
+      expect(created.status, await created.clone().text()).toBeLessThan(300);
+      const { item } = (await created.json()) as { item: { id: string } };
+      expect(await statusOf(t, item.id)).toBe("new");
+    });
+
+    it("keeps the status a server-side create names, as an import of archived submissions does", async () => {
+      const { t } = await boot(true);
+      const contact = await form(t, "contact", "Contact", [
+        { type: "text", name: "comment", label: "Comment" },
+      ]);
+      const id = await submit(
+        t,
+        contact,
+        { comment: "From the old site" },
+        "2024-03-01T09:00:00.000Z",
+        "archived"
+      );
+      expect(await statusOf(t, id)).toBe("archived");
+    });
+
+    it("reads the forms for the card and the header without counting each form's submissions", async () => {
+      const { t, fb, owner } = await boot(true);
+      await seed(t);
+      // Every forms read the card and the header make, by the context the
+      // forms' `afterRead` count reads: schema-only reads skip that count.
+      const contexts: unknown[] = [];
+      t.hooks.register("afterRead", "forms", (context: unknown) => {
+        const { context: shared } = context as {
+          context?: Record<string, unknown>;
+        };
+        contexts.push(shared?.["formBuilder.schemaOnlyRead"]);
+      });
+      const cookie = await sessionOf(t, owner);
+      expect((await place(cookie)).status).toBe(200);
+      contexts.length = 0;
+
+      const card = await runWidgetLoad(t, cardOf(fb.plugin), {
+        as: { id: owner },
+        size: TALL,
+      });
+      expect((card as { data: CardData }).data.total).toBe(3);
+      expect(await headerPart(cookie)).toMatchObject({ count: 3 });
+      // The scans, and the read of the forms the rows draw, all happened, and
+      // none of them asked for the count.
+      expect(contexts.length).toBeGreaterThan(0);
+      expect(contexts.every(flag => flag === true)).toBe(true);
+    });
+
     it("keeps the date a server-side create names, as an import restoring old submissions does", async () => {
       const { t } = await boot(true);
       const contact = await form(t, "contact", "Contact", [
@@ -676,10 +755,12 @@ describe.each(getConfiguredTestDialects())(
         expect(placed.status, await placed.clone().text()).toBe(200);
         const card = await runWidgetLoad(t, cardOf(fb.plugin), { as: { id } });
         expect((card as { data: CardData }).data.total).toBe(expected);
+        const cardId = await cardIdOf(cookie);
+        expect(cardId).toBeDefined();
         expect(await headerPart(cookie)).toEqual({
           kind: "widget",
           widget: NEW_SUBMISSIONS_WIDGET_ID,
-          card: "submissions-card",
+          card: cardId,
           label: "new submissions",
           count: expected,
         });
@@ -699,14 +780,17 @@ describe.each(getConfiguredTestDialects())(
       expect(await headerPart(cookie)).toBeUndefined();
     });
 
-    it("is offered with the plugin, the control for the case above", async () => {
+    it("is on the default dashboard with the plugin, the control for the case above", async () => {
       const { owner } = await boot(true);
       const cookie = await sessionOf(current!, owner);
       await seed(current!);
 
+      // Core's default names the card wherever the plugin is installed.
       const layout = await layoutOf(cookie);
       expect(Object.keys(layout.widgets)).toContain(NEW_SUBMISSIONS_WIDGET_ID);
-      expect(layout.available).toContain(NEW_SUBMISSIONS_WIDGET_ID);
+      expect(layout.placements.map(placement => placement.widgetId)).toContain(
+        NEW_SUBMISSIONS_WIDGET_ID
+      );
       expect((await place(cookie)).status).toBe(200);
       expect(await headerPart(cookie)).toMatchObject({ count: 3 });
     });

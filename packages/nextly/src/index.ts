@@ -610,13 +610,6 @@ export {
   type JsonValue,
   type PluginAdminContributions,
   type PluginAdminPage,
-  type PluginAdminWidget,
-  type PluginAdminCustomWidget,
-  type PluginAdminDataWidget,
-  type PluginAdminStatsWidget,
-  type PluginAdminDeclarativeWidget,
-  type PluginAdminQuerylessWidget,
-  type DeclarativeWidgetArchetype,
   type PluginCollectionView,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
@@ -652,8 +645,6 @@ export {
   type AnyWidget,
   type AttentionCount,
   type AttentionItem,
-  type ComponentDisplay,
-  type CoreDisplay,
   type CoreView,
   type AdminDashboardConfig,
   type CoreWidgetId,
@@ -673,7 +664,6 @@ export {
   type WidgetCountWindow,
   type WidgetData,
   type WidgetDataInput,
-  type WidgetDisplay,
   type WidgetEmpty,
   type WidgetFilter,
   // A series' interval and range.
@@ -704,21 +694,19 @@ export type {
   WidgetsOf,
 } from "./plugins/declared-widgets";
 
-// The widget domain's public surface: reads of the registry every core and
-// plugin-contributed widget shares, the source registry a query names, and
-// the validated query shape itself.
+// The widget domain's public surface: the grid's size vocabulary, the
+// source registry a query names, and the validated query shape itself.
 // Nothing here adds, changes or removes a widget or a source. A widget reaches
 // the registry only from a plugin's `contributes.dashboard.widgets`, the site
 // config's `admin.dashboard.widgets`, or core's own list, all through one
-// internal call; the registry's writers stay internal to the widgets domain.
-// Every contract a published shape NAMES is published beside it. There is no
-// `nextly/widgets` subpath, so this is the only place a plugin author can
-// reach them, and a public property whose type has no public name can be
-// inferred but never annotated: `WidgetDefinition.size` is a
+// internal call; the registry and its writers stay internal to the widgets
+// domain. Every contract a published shape NAMES is published beside it.
+// There is no `nextly/widgets` subpath, so this is the only place a plugin
+// author can reach them, and a public property whose type has no public name
+// can be inferred but never annotated: a declaration's `size` is a
 // `WidgetSizeDeclaration` of `GridSize`s, and `WidgetSource` is built out of
 // `WidgetSourceField`, `WidgetSourceKind` and `WidgetOp`.
 export {
-  WIDGET_ARCHETYPES,
   GRID_COLUMNS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
@@ -727,31 +715,21 @@ export {
   WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
-  getWidget,
-  listWidgets,
   listSources,
   validateWidgetQuery,
   MAX_WIDGET_LIMIT,
-  type WidgetDefinition,
-  type WidgetAction,
   type WidgetSetting,
-  type WidgetStatCell,
   type WidgetQuery,
   type WidgetQuerySpec,
   type GridSize,
   type WidgetSizeDeclaration,
   type WidgetSizeBounds,
-  type WidgetArchetype,
-  type DataWidgetArchetype,
-  type QuerylessWidgetArchetype,
-  type CellWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
   type WidgetFieldChoice,
   type WidgetSourceFieldType,
   type WidgetSourceKind,
   type WidgetOp,
-  type WidgetPatch,
   type TimeseriesInterval,
   type WidgetLifecycle,
   type WidgetCondition,

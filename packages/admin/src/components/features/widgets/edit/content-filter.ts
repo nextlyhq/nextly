@@ -8,9 +8,11 @@
  * reads it as part of a query; this is the one translation between the two,
  * in both directions, so an edit read back shows what was saved.
  *
- * One condition: the sheet edits a single row, and a stored filter of any
- * other shape reads as none, so a person sees an empty row rather than a row
- * that misstates what the card is filtering on.
+ * Several conditions, each one chip, joined with AND: one is stored as its
+ * own `where`, two or more under `and`. A stored filter the chips cannot show
+ * (an `or`, or an operator the row has no name for) reads as none, so a
+ * person is told so rather than shown chips that misstate what the card is
+ * filtering on.
  */
 import {
   operatorsForType,
@@ -206,4 +208,100 @@ function readComparison(op: string, value: unknown): ReadTest | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The conditions a stored Filter reads as, one per chip: `[]` for none, and
+ * `undefined` when a part of it is not one condition the chips can show.
+ *
+ * Read from the shapes a Filter is written in (one condition, or several
+ * under `and`) and from one condition per field written side by side, which a
+ * query also reads as AND.
+ */
+export function whereToConditions(
+  where: unknown,
+  typeOf: (field: string) => string | undefined
+): ConditionValue[] | undefined {
+  if (where === undefined || where === "") return [];
+  if (!isRecord(where)) return undefined;
+  const keys = Object.keys(where);
+  if (keys.length === 0) return [];
+  const branches: unknown[] =
+    keys.length === 1 && Array.isArray(where.and)
+      ? where.and
+      : Object.entries(where).map(([field, test]) => ({ [field]: test }));
+  const read = branches.map(branch => whereToCondition(branch, typeOf));
+  return read.every(
+    (condition): condition is ConditionValue => condition !== undefined
+  )
+    ? read
+    : undefined;
+}
+
+/**
+ * The `where` a list of chips writes, or `undefined` when none is complete:
+ * one condition as itself, so a single chip is stored as the one condition
+ * always was, and two or more joined under `and`. An incomplete chip writes
+ * nothing, so the card keeps reading every row it allows until it is.
+ */
+export function conditionsToWhere(
+  conditions: readonly (ConditionValue | undefined)[]
+): Record<string, unknown> | undefined {
+  const written = conditions.flatMap(condition => {
+    const where = conditionToWhere(condition);
+    return where === undefined ? [] : [where];
+  });
+  if (written.length === 0) return undefined;
+  return written.length === 1 ? written[0] : { and: written };
+}
+
+/**
+ * Every field a stored Filter names, in each of its branches: what decides
+ * whether the Filter still fits the collection it is over.
+ */
+export function filterFieldNames(where: unknown): string[] {
+  if (!isRecord(where)) return [];
+  return Object.entries(where).flatMap(([key, value]) =>
+    (key === "and" || key === "or") && Array.isArray(value)
+      ? value.flatMap(filterFieldNames)
+      : [key]
+  );
+}
+
+/** How a chip says each operator: "Status is Draft", where the row says "equals". */
+const CHIP_OPERATOR: Partial<Record<ConditionOperatorName, string>> = {
+  equals: "is",
+  notEquals: "is not",
+  contains: "contains",
+  greaterThan: "is more than",
+  lessThan: "is less than",
+  greaterThanOrEqual: "is at least",
+  lessThanOrEqual: "is at most",
+  before: "is before",
+  after: "is after",
+  between: "is between",
+  isEmpty: "is empty",
+  isNotEmpty: "is not empty",
+  isTrue: "is on",
+  isNotTrue: "is off",
+};
+
+/**
+ * What a chip says for one condition: the field, the operator and the value
+ * in the reader's words ("Status is Draft"), each named by `labelOf` and
+ * `valueLabelOf` where the field's source knows a label.
+ */
+export function chipText(
+  condition: ConditionValue,
+  labelOf: (field: string) => string,
+  valueLabelOf: (field: string, value: string) => string
+): string {
+  const field = labelOf(condition.field);
+  const operator = CHIP_OPERATOR[condition.operator] ?? condition.operator;
+  const { value } = condition;
+  if (value === undefined || value === "") return `${field} ${operator}`;
+  if (typeof value === "object") {
+    return `${field} ${operator} ${value.min ?? "…"} and ${value.max ?? "…"}`;
+  }
+  return `${field} ${operator} ${valueLabelOf(condition.field, String(value))}`;
 }

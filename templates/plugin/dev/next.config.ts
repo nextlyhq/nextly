@@ -6,8 +6,14 @@ import type { NextConfig } from "next";
 // external (Turbopack can't bundle them).
 const nextConfig: NextConfig = {
   typescript: { ignoreBuildErrors: true },
-  // Off by default in a Nextly app; see the installation guide to turn it on.
-  cacheComponents: false,
+  // Nextly runs with Cache Components and Partial Prefetching on. Its cache
+  // handlers make the first read after a write show the new version:
+  // https://nextlyhq.com/docs/getting-started/installation#cache-components
+  cacheComponents: true,
+  partialPrefetching: true,
+  cacheHandler: require.resolve("nextly/cache-handler"),
+  cacheMaxMemorySize: 0,
+  cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
   // Transpile the aliased plugin source so HMR fires on src/ edits.
   transpilePackages: ["{{pluginName}}"],
   serverExternalPackages: [

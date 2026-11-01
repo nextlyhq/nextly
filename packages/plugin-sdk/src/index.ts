@@ -656,10 +656,10 @@ export type {
  *
  * @public `PluginAdminContributions`, `PluginAdminPage`, `PluginCollectionView`,
  *   `PluginMenuItem`, `ComponentPath` — exercised by `plugin-form-builder`.
- * @experimental `PluginAdminWidget` and its members — the older widget shape.
- *   No contribution key takes it: a plugin's widgets are declared with
- *   `defineWidget` under `contributes.dashboard`, and startup refuses a
- *   plugin that still carries `contributes.admin.widgets`.
+ *
+ * A plugin's widgets are declared with `defineWidget` under
+ * `contributes.dashboard`, and startup refuses a plugin that still carries
+ * `contributes.admin.widgets`.
  */
 export type {
   ComponentPath,
@@ -668,13 +668,6 @@ export type {
   PluginAdminContributions,
   PluginAdminPage,
   PluginNavSection,
-  PluginAdminWidget,
-  PluginAdminCustomWidget,
-  PluginAdminDataWidget,
-  PluginAdminStatsWidget,
-  PluginAdminDeclarativeWidget,
-  PluginAdminQuerylessWidget,
-  DeclarativeWidgetArchetype,
   PluginCollectionView,
   PluginMenuItem,
 } from "nextly";
@@ -831,8 +824,8 @@ export type {
 } from "nextly";
 
 /**
- * @experimental Dashboard widgets (D22/C9) — the vocabularies a widget and its
- * query are checked against, and the declarative query contract itself.
+ * @experimental Dashboard widgets (D22/C9) — the vocabularies a source and its
+ * query are checked against, and the query contract itself.
  *
  * Nothing here adds, changes or removes a widget or a data source: a plugin's
  * widgets reach the dashboard only through `contributes.dashboard`, each
@@ -843,13 +836,12 @@ export type {
  * is no `nextly/widgets` subpath, so this is the only supported spelling.
  *
  * Every contract a published shape NAMES travels with it, the way core's own
- * root export does: `WidgetDefinition.size` is a `WidgetSizeDeclaration`, and a
- * `WidgetSource` is built out of `WidgetSourceField`, `WidgetSourceKind` and
- * `WidgetOp` — a public property whose type has no public name can be inferred
- * but never annotated.
+ * root export does: a `WidgetSource` is built out of `WidgetSourceField`,
+ * `WidgetSourceKind` and `WidgetOp` — a public property whose type has no
+ * public name can be inferred but never annotated.
  *
- * Held `@experimental` alongside `PluginAdminWidget`: the widget contract
- * graduates per D55. See STABILITY.md.
+ * Held `@experimental` with `defineWidget`: the widget contract graduates per
+ * D55. See STABILITY.md.
  *
  * `WidgetSourceResolver`, `ResolverOptions`, `WidgetScope` and `ReadCaller`
  * are core's own source contract: what a source's resolver is handed and
@@ -862,7 +854,6 @@ export type {
  * grants instead of the roles of whoever minted it.
  */
 export {
-  WIDGET_ARCHETYPES,
   WIDGET_OPS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
@@ -870,15 +861,10 @@ export {
   WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
-  type WidgetDefinition,
   type WidgetLifecycle,
   type WidgetCondition,
-  type WidgetAction,
   type WidgetSetting,
   type WidgetQuery,
-  type WidgetArchetype,
-  type DataWidgetArchetype,
-  type QuerylessWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
   type WidgetFieldChoice,

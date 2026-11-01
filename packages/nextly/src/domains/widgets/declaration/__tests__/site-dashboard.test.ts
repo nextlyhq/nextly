@@ -24,7 +24,7 @@ import {
   defaultLayoutPlan,
 } from "../../default-layout";
 import { siteDashboardRules } from "../../site-rules";
-import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
+import { declaredWidget } from "../declared-widgets";
 import { SITE_CONFIG, siteDashboardContext } from "../site-dashboard";
 
 import { dashboard, revenue } from "./plugin/widgets";
@@ -63,7 +63,6 @@ const warn = vi.fn();
 const error = vi.fn();
 
 beforeEach(() => {
-  resetLegacyIdWarnings();
   warn.mockReset();
   error.mockReset();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
@@ -580,33 +579,18 @@ describe("a plugin's suggestions and alternatives", () => {
 
 describe("the default the site config asks for", () => {
   it("checks a reload's config against the widgets as declared, not the last boot's overrides", () => {
-    // An older-shape widget, whose facts the check reads from the widget list
-    // the site's overrides apply to (a declared one is read from its declaration).
-    const reports = definePlugin({
-      name: "@acme/reports",
-      version: "1.0.0",
-      nextly: "*",
-      contributes: {
-        admin: {
-          widgets: [
-            {
-              id: "acme/reports",
-              component: "@acme/reports/admin#Reports",
-              size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
-            },
-          ],
-        },
-      },
-    } as unknown as Parameters<typeof definePlugin>[0]);
-    // The first boot narrows it to half the width.
-    resetWidgetRegistries([reports], {
-      overrides: { "acme/reports": { size: { max: { w: 6, h: 6 } } } },
+    // Team, a widget whose facts the check reads from the widget list the
+    // site's overrides apply to (a declared one is read from its declaration),
+    // as declared from four to six columns wide. The first boot narrows it to
+    // four.
+    resetWidgetRegistries([], {
+      overrides: { "core/team": { size: { max: { w: 4, h: 4 } } } },
     });
-    // The second drops that override and places it at full width, which the
-    // widget as declared allows.
+    // The second drops that override and places it six wide, which the widget
+    // as declared allows.
     expect(() =>
-      resetWidgetRegistries([reports], {
-        defaultLayout: [{ widget: "acme/reports", w: 12 }],
+      resetWidgetRegistries([], {
+        defaultLayout: [{ widget: "core/team", w: 6 }],
       })
     ).not.toThrow();
   });
@@ -808,35 +792,6 @@ describe("a plugin that adds only Needs attention items", () => {
     ).toContain(
       'plugin "@other/inbox", widget "(none)": its dashboard widgets must be a list of widget declarations'
     );
-  });
-});
-
-describe("startup's warnings", () => {
-  it("go through the registration's logger, and never the process-wide one", () => {
-    const registration = { warn: vi.fn() };
-    // Two plugins declaring one widget id in the old shape: startup keeps the
-    // first and warns.
-    const oldShape = (name: string) =>
-      definePlugin({
-        name,
-        version: "1.0.0",
-        nextly: "*",
-        contributes: {
-          admin: {
-            widgets: [{ id: "shared/card", component: `${name}/admin#Card` }],
-          },
-        } as unknown as PluginContributions,
-      });
-    resetWidgetRegistries(
-      [oldShape("@one/a"), oldShape("@two/b")],
-      { widgets: [{ ...revenue, id: "site/revenue" }] },
-      registration
-    );
-    expect(registration.warn).toHaveBeenCalledWith(
-      expect.stringContaining('each declare a widget "shared/card"'),
-      expect.objectContaining({ kind: "widget-id-shared-old-shape" })
-    );
-    expect(warn).not.toHaveBeenCalled();
   });
 });
 

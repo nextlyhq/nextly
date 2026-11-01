@@ -81,10 +81,11 @@ export function newSubmissionsWidget(
     shows: async ({ services, signal }) =>
       (await services.count(declared.forms, { status: "all", signal })) > 0,
     skeleton: "list",
-    load: async ({ services, size, signal }) =>
+    load: async ({ services, size, signal, scope }) =>
       readNewSubmissions(services, declared, {
         limit: rowsThatFit(size, { density: "default" }),
         signal,
+        scope,
         submissionsPath: submissionsPath(),
       }),
     view: { component: CARD_COMPONENT },
@@ -97,11 +98,11 @@ export function newSubmissionsWidget(
     // what the card lists, a floor ("1,000+") where the card's is one.
     summary: {
       label: "new submissions",
-      count: async ({ services, signal }) => {
+      count: async ({ services, signal, scope }) => {
         const { total, atLeast } = await readNewSubmissions(
           services,
           declared,
-          { limit: 0, signal, submissionsPath: submissionsPath() }
+          { limit: 0, signal, scope, submissionsPath: submissionsPath() }
         );
         return { count: total, atLeast: atLeast === true };
       },

@@ -1,11 +1,11 @@
 /**
- * The size a contributed widget is drawn at when its declaration states none.
+ * The size a widget is read at when what arrived states none.
  *
- * A widget registered through the registry always states its size; one
- * contributed through `contributes.admin.widgets` may leave it out. The server's
- * summary of that widget and the admin's grid both need the same answer, so it
- * lives here, in one place they both read: the server through the canonical
- * summary, the admin through `nextly/config`.
+ * Every registered widget states its size, so this is the reading for a
+ * summary or a payload entry that arrived without one. The server's summary
+ * and the admin's grid both need the same answer, so it lives here, in one
+ * place they both read: the server through the canonical summary, the admin
+ * through `nextly/config`.
  *
  * Imports only a type, so it stays safe for the browser.
  *

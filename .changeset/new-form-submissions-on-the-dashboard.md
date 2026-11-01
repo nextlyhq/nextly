@@ -64,12 +64,18 @@ and `nextly migrate`. Nothing is dropped or rewritten.
 A submission created through a request (a visitor's, or any HTTP create) is
 now stored with the server's `submittedAt`, whatever date it sends, so a
 visitor cannot date a submission into the future to keep it at the top of
-the card. A create made on the server with no request behind it, such as an
-import restoring old submissions, keeps the date it names.
+the card. Such a submission also starts as `new` whatever status it sends
+(spam detection may still flag it `spam`), so a visitor cannot file one as
+already read. A create made on the server with no request behind it, such as
+an import restoring old submissions, keeps the date and the status it names.
 
 A widget's `summary.count` may now answer `{ count, atLeast }` as well as a
 number (`WidgetSummaryCount`), and the dashboard header shows a floor as
-"N+"; a widget answering a plain number is unchanged.
+"N+"; a widget answering a plain number is unchanged. `summary.count` is now
+handed the request's `scope`, as `load` is, and a widget data read's `find`
+takes a `context` it hands the collection's hooks. The card reads the forms
+with it so the form-builder's per-form submission count is skipped, and scans
+the readable forms once per request for the card and the header.
 
 `@nextlyhq/plugin-sdk` adds two types to its root, `AnyWidget` and
 `WidgetReadServices`, for a plugin's widget code to be written in, and four

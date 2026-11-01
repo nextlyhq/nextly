@@ -52,12 +52,11 @@ describe("the dashboard widget surface the SDK publishes", () => {
     expect(doors.filter(name => name in sdk)).toEqual([]);
   });
 
-  it("re-exports the vocabularies a declaration is checked against", async () => {
-    // The runtime arrays, not just their types: a plugin picking an archetype
-    // or an op from a list needs the values, and a type-only re-export would
-    // compile and then be `undefined` at runtime.
+  it("re-exports the vocabularies a source and its query are checked against", async () => {
+    // The runtime arrays, not just their types: a plugin picking an op from a
+    // list needs the values, and a type-only re-export would compile and then
+    // be `undefined` at runtime.
     const sdk = await import("./index");
-    expect(sdk.WIDGET_ARCHETYPES).toContain("metric");
     expect(sdk.WIDGET_OPS).toContain("count");
     expect(sdk.WIDGET_SOURCE_KINDS).toContain("collection");
     expect(sdk.WIDGET_SOURCE_FIELD_TYPES).toContain("string");

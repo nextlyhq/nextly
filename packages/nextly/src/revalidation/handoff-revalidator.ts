@@ -4,12 +4,14 @@
  * write's tags go to the installed expiry hand-off, which records them in the
  * cache tag expiry ledger for every instance's cache handlers to see.
  *
- * With only the in-process default hand-off installed (no ledger), nothing
- * outside a request could act on them, so it does nothing, as the no-op did:
- * a process that never serves a request would keep tags it can never drain.
+ * With only the in-process default hand-off installed, it keeps a write's
+ * tags there only between a release of nextly's services and the next
+ * registration, whose ledger takes them. A process that never had a ledger
+ * keeps nothing, as the no-op did: it would hold tags it can never drain.
  *
  * @module revalidation/handoff-revalidator
  */
+import { ledgerWithdrawn } from "../runtime/cache/ledger-wiring";
 import {
   handOffWithin,
   tagsToExpire,
@@ -25,7 +27,17 @@ import type { CacheRevalidator, RevalidationIntent } from "./types";
 export class HandOffRevalidator implements CacheRevalidator {
   async flush(intents: RevalidationIntent[]): Promise<void> {
     const handoff = expiryHandoff();
-    if (isPendingExpiryHandoff(handoff)) return;
+    if (isPendingExpiryHandoff(handoff)) {
+      // Between a release and the next registration a still-running plugin's
+      // write is kept here, for the next ledger to take when it is installed.
+      // A process that never had a ledger keeps nothing it could not drain.
+      if (ledgerWithdrawn()) {
+        const tags = tagsToExpire(intents);
+        if (tags.length > 0)
+          void handoff.handOff(tags, "a write while no ledger was installed");
+      }
+      return;
+    }
     // Tags an earlier flush could not hand off are retried with this one's:
     // outside Next.js no request flush drains them.
     const tags = [
