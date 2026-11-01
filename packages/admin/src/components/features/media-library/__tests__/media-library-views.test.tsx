@@ -705,6 +705,41 @@ describe("delete with Undo", () => {
     await waitFor(() => expect(bulkDelete()).toBeNull());
   });
 
+  // A bulk dialog can open while a search typed a moment before is still
+  // settling. Left open over the selection the settled search clears, a
+  // delete would be of nothing and a move's confirm would stay disabled.
+  it.each([
+    ["delete", "Delete 1 selected item", "alertdialog"],
+    ["move", "Move", "dialog"],
+  ] as const)(
+    "closes a bulk %s dialog opened before the search settles",
+    async (_action, button, role) => {
+      renderLibrary();
+      await waitFor(() => tile(1));
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: "Select photo-1.jpg" })
+      );
+      fireEvent.change(screen.getByRole("searchbox"), {
+        target: { value: "photo-2" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      // The control: the dialog opened, before the search settled.
+      expect(await screen.findByRole(role)).toBeInTheDocument();
+      expect(api.fetchMedia).not.toHaveBeenCalledWith(
+        expect.objectContaining({ search: "photo-2" })
+      );
+
+      await waitFor(() =>
+        expect(api.fetchMedia).toHaveBeenLastCalledWith(
+          expect.objectContaining({ search: "photo-2" })
+        )
+      );
+
+      await waitFor(() => expect(screen.queryByRole(role)).toBeNull());
+      expect(bulkDelete()).toBeNull();
+    }
+  );
+
   it("keeps the selection across pages of the same set", async () => {
     // POSITIVE CONTROL for the two above: paging lists the same set.
     api.fetchMedia.mockImplementation((params: { page: number }) =>

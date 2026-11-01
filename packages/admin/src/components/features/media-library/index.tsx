@@ -362,7 +362,10 @@ export function MediaLibrary({
   // a bulk action never reaches an item no longer shown (a used file
   // selected in All media, acted on from Unused). Paging and sorting list
   // the same set, so the selection is kept across them. Cleared as the new
-  // set renders, never a frame later.
+  // set renders, never a frame later. A bulk dialog opened over the old
+  // selection closes with it, as one can be while a search is still
+  // settling: left open, it would act on nothing. A move of one item names
+  // its item, so it stays.
   const selectionScope = JSON.stringify([
     activeFolderId,
     view,
@@ -373,6 +376,8 @@ export function MediaLibrary({
   if (selectedScope !== selectionScope) {
     setSelectedScope(selectionScope);
     setSelectedIds(new Set());
+    setIsBulkDeleteDialogOpen(false);
+    if (moveMediaIds === null) setIsMoveToFolderDialogOpen(false);
   }
 
   // Build query params. Local React state name `pageSize` (admin-
