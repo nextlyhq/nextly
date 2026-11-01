@@ -1049,23 +1049,46 @@ function importedName(specifier: ImportSpecifier): string {
 
 /** Whether the file binds `require` at its top level, by a declaration or an import. */
 function declaresRequire(body: Statement[]): boolean {
-  return body.some(statement => {
-    if (statement.type === "ImportDeclaration") {
-      return statement.specifiers.some(specifier =>
-        isNamed(specifier.local, "require")
-      );
-    }
-    const declaration =
-      statement.type === "ExportNamedDeclaration"
-        ? statement.declaration
-        : statement;
-    return (
-      declaration?.type === "VariableDeclaration" &&
-      declaration.declarations.some(declarator =>
-        isNamed(declarator.id, "require")
-      )
-    );
-  });
+  return body.some(
+    statement => importsRequire(statement) || declaresRequireVariable(statement)
+  );
+}
+
+/** Whether `statement` imports a binding named `require`: hoisted, so bound anywhere. */
+function importsRequire(statement: Statement): boolean {
+  return (
+    statement.type === "ImportDeclaration" &&
+    statement.specifiers.some(specifier => isNamed(specifier.local, "require"))
+  );
+}
+
+/** Whether `statement` declares a variable named `require`, exported or not. */
+function declaresRequireVariable(statement: Statement): boolean {
+  const declaration =
+    statement.type === "ExportNamedDeclaration"
+      ? statement.declaration
+      : statement;
+  return (
+    declaration?.type === "VariableDeclaration" &&
+    declaration.declarations.some(declarator =>
+      isNamed(declarator.id, "require")
+    )
+  );
+}
+
+/**
+ * Whether the file binds `require` only by a variable declared after `at`,
+ * where the config object starts. The object's `require.resolve` runs when
+ * the object is evaluated, while that declaration is still in its temporal dead
+ * zone, so it would throw: the lines are printed rather than written.
+ */
+function declaresRequireAfter(body: Statement[], at: number): boolean {
+  if (body.some(importsRequire)) return false;
+  const declarations = body.filter(declaresRequireVariable);
+  return (
+    declarations.length > 0 &&
+    declarations.every(statement => (statement.start ?? 0) >= at)
+  );
 }
 
 /**
@@ -1173,7 +1196,10 @@ function handlerStep(
   const none = { add: [], edits: [] };
   if (hasNextlysHandlers(object)) return { ...none, outcome: "present" };
   const setup = esm ? requireSetupFor(body) : null;
-  const conflict = handlerConflict(object);
+  const conflict =
+    esm && declaresRequireAfter(body, object.start ?? 0)
+      ? "it declares require after its config object, so the handlers' require.resolve would run before require exists; move that declaration above the object"
+      : handlerConflict(object);
   if (conflict) {
     return {
       ...none,
@@ -1358,7 +1384,9 @@ export function cacheComponentsFiles(
   if (typeof patch.handlers === "object") {
     files.skipped.push({
       path: patch.file,
-      why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once (${CACHE_COMPONENTS_DOCS_URL}); to use them, put these in place of the config's own cache settings`,
+      // A cache of the app's own receives no write made outside a request, so
+      // the app is bounded as one without Nextly's handlers: say what that costs.
+      why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once, and in production every cached public read refreshes within a minute of a visit, since a write from another instance, the CLI or a job reaches no other cache (${CACHE_COMPONENTS_DOCS_URL}); to use them, put these in place of the config's own cache settings`,
       toAdd: linesToAdd(
         patch.handlers.lines.map(property => `  ${property},`),
         patch.handlers.requireSetup
