@@ -944,17 +944,20 @@ async function handleUndoDeleteMedia(request: Request): Promise<Response> {
  * content written before it existed, and the same build throughout
  * (`readWithinOneBuild`). Until it is, a use the record lacks may still be in
  * some document, so an item listing no use is not known to be unused, and a
- * Replace keeps the old file whatever the record lists.
+ * Replace keeps the old file whatever the record lists. Before the usage
+ * table exists, `read` is never run, since it reads that table: the answer is
+ * `none`, from a record not built.
  */
 async function readUsageRecord<T>(
-  read: () => Promise<T>
+  read: () => Promise<T>,
+  none: T
 ): Promise<{ value: T; recorded: boolean }> {
   const { mediaUsagePresent, readWithinOneBuild } = await import(
     "../domains/media/usage/media-usage-store"
   );
   const adapter = getService("adapter");
   if (!(await mediaUsagePresent(adapter))) {
-    return { value: await read(), recorded: false };
+    return { value: none, recorded: false };
   }
   return readWithinOneBuild(adapter, read);
 }
@@ -996,12 +999,14 @@ async function handleMediaUsage(
   const caller = await readCaller(auth);
   // The uses, read within one build of the record, so a rebuild meanwhile
   // never lets a partial list read as complete.
-  const { value: uses, recorded } = await readUsageRecord(() =>
-    mediaUsesOf(
-      mediaId,
-      source.bootedMediaUsesSource(getService("adapter"), caller),
-      { byAddressOnly: byAddress }
-    )
+  const { value: uses, recorded } = await readUsageRecord(
+    () =>
+      mediaUsesOf(
+        mediaId,
+        source.bootedMediaUsesSource(getService("adapter"), caller),
+        { byAddressOnly: byAddress }
+      ),
+    { items: [], hidden: [] }
   );
   // Said of every answer: whether the record is built. Of the uses by
   // address, also how many avatars and logos keep the item's address.

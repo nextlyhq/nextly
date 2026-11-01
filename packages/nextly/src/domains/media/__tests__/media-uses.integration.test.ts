@@ -496,3 +496,47 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "where a media item is used, before the usage table exists (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+
+    beforeAll(async () => {
+      // Its own install, so the table's presence is asked afresh: once
+      // found, an install remembers it.
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+      });
+      await t.adapter.insert("media", {
+        id: ITEM.id,
+        filename: ITEM.url.slice("/uploads/".length),
+        originalFilename: "logo.png",
+        mimeType: "image/png",
+        size: 1,
+        url: ITEM.url,
+        uploadedAt: new Date(),
+        updatedAt: new Date(),
+      });
+      // As on a site that has not run the migration creating it.
+      await t.adapter.executeQuery("DROP TABLE nextly_media_usage");
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("answers no uses, with the record unbuilt, rather than failing", async () => {
+      const reader = await keyWith(t, ["read-media"]);
+
+      const answer = await usageOf(reader, ITEM.id);
+
+      expect(answer.status).toBe(200);
+      expect(answer.json.items).toEqual([]);
+      expect(answer.json.meta).toMatchObject({
+        total: 0,
+        usageRecorded: false,
+      });
+    });
+  }
+);
