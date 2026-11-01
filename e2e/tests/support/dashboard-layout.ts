@@ -4,6 +4,13 @@ import { expect, type Page } from "@playwright/test";
 const LAYOUT_PATH = "/admin/api/dashboard/layout";
 
 /**
+ * The helpers here that write the layout. A spec that calls one writes the dashboard as surely as
+ * one that sends the request itself, so `locks-held.test.ts` reads this list to hold such a spec
+ * to the dashboard lock. A writer added below without its name here is a write that check misses.
+ */
+export const LAYOUT_WRITERS = ["resetToDefault"] as const;
+
+/**
  * Which requests are the dashboard's layout read, for a spec that passes it through changed.
  *
  * The admin sends the read the dashboard's width (`?width=`), for the server to judge each card

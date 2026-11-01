@@ -81,8 +81,13 @@ async function cardStates(page: Page): Promise<Record<string, string>> {
 }
 
 test.afterEach(async ({ page }) => {
-  await holdSlowCard(page, 0);
-  await resetToDefault(page);
+  // Both steps run whatever the first one answers: the card's saved layout is dropped even when
+  // the delay's reset fails, so a failure here leaves no layout to the specs after this one.
+  try {
+    await holdSlowCard(page, 0);
+  } finally {
+    await resetToDefault(page);
+  }
 });
 
 test("every other card is drawn while a slow one is still waiting, and the slow one arrives on its own", async ({
