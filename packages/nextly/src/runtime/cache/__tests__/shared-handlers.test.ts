@@ -1,9 +1,9 @@
 /**
- * In production without nextly's cache handlers, a cached public read is kept
- * at most a minute, and nextly says so once. With them, and outside
- * production, the read keeps its lifetime. Whether Next.js serves `"use cache"`
- * through nextly's handler is read from Next.js's own registry, as the
- * installed Next.js fills it.
+ * In production without nextly's cache handlers, a cached public read is
+ * refreshed within a minute of a visit, and nextly says so once. With them,
+ * and outside production, the read keeps its lifetime. Whether Next.js serves
+ * `"use cache"` through nextly's handler is read from Next.js's own registry,
+ * as the installed Next.js fills it.
  */
 import {
   initializeCacheHandlers,

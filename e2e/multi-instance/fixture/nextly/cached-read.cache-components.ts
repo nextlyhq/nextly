@@ -18,7 +18,9 @@ export async function cachedRead(
   if (revalidate === false) {
     cacheLife({ revalidate: Infinity, expire: Infinity });
   } else {
-    cacheLife({ revalidate, expire: Math.max(revalidate * 2, 60) });
+    // Expired at twice the revalidate, and never within 5 minutes: Next.js
+    // leaves an entry that expires sooner out of a static prerender.
+    cacheLife({ revalidate, expire: Math.max(revalidate * 2, 300) });
   }
   return runRegisteredRead(key);
 }

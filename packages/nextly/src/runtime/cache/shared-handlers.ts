@@ -6,8 +6,8 @@
  * another instance, the CLI or a job runner records its expiry where only
  * nextly's handlers read it. No process can count the others, so the bound
  * applies whenever the handlers are not in use: every cached public read is
- * refreshed at least once a minute, and nextly says so once, with the setting
- * that lifts it.
+ * refreshed within a minute of a visit, and nextly says so once, with the
+ * setting that lifts it.
  *
  * Next.js 16.4 loads both handlers before it renders anything. A request's
  * `getIncrementalCache` (`next/dist/server/next-server.js`) imports
@@ -24,10 +24,12 @@ import { getNextlyLogger } from "../../observability/logger";
 
 /**
  * The revalidate a cached public read is given, in seconds, without the
- * handlers. Half a minute, so the app's `"use cache"` read function as
- * `create-nextly-app` writes it, which expires an entry at twice its revalidate
- * and never sooner than 60 s, holds no entry longer than a minute: a revalidate
- * alone would serve a stale entry while it regenerates.
+ * handlers. Half a minute, so a visit is served a write from elsewhere within
+ * a minute: the first read past it gets the entry once while it refreshes. The
+ * app's `"use cache"` read function as `create-nextly-app` writes it expires an
+ * entry at twice its revalidate and never within 5 minutes, since Next.js
+ * leaves an entry that expires sooner out of a static prerender, so no entry
+ * is older than 5 minutes.
  */
 export const UNSHARED_READ_LIFETIME_SECONDS = 30;
 
@@ -103,7 +105,7 @@ function warnUnshared(): void {
   globalForShared.__nextly_unshared_reads_warned = true;
   getNextlyLogger().warn({
     kind: "cache-handlers-not-shared",
-    message: `Nextly's cache handlers don't serve this process: none is installed, or the app keeps a cache handler of its own, which a write made outside a request can't reach. So a write by another instance, the CLI or a job reaches no cache here, and cached public reads are refreshed at least once a minute until Nextly's handlers serve them. Install them in next.config to see every write on every instance and keep longer lifetimes: ${INSTALL_LINES}. What to set, and why: ${CACHE_COMPONENTS_DOCS_URL}`,
+    message: `Nextly's cache handlers don't serve this process: none is installed, or the app keeps a cache handler of its own, which a write made outside a request can't reach. So a write by another instance, the CLI or a job reaches no cache here, and cached public reads are refreshed within a minute of a visit until Nextly's handlers serve them. Install them in next.config to see every write on every instance and keep longer lifetimes: ${INSTALL_LINES}. What to set, and why: ${CACHE_COMPONENTS_DOCS_URL}`,
   });
 }
 

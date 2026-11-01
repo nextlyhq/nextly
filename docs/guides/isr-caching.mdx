@@ -88,11 +88,14 @@ its tags in the database, in a table `nextly migrate` creates:
   happens. A write from a separate process, such as the CLI or another
   instance, does not reach the app's cache, so in production Nextly bounds
   every cached public read: one older than 30 seconds is refreshed in the
-  background, and the `"use cache"` read function `create-nextly-app` writes
-  serves none older than a minute. Where the app registers no such function,
-  the read is refreshed in the same way but not expired: after a quiet spell,
-  the first read can still get the previous version once, however old, while it
-  refreshes. Nextly logs one
+  background. The first visit past that gets the previous version once while
+  it refreshes, and the next gets the new one, so a write shows within a minute
+  of a visit. The `"use cache"` read function `create-nextly-app` writes
+  expires an entry after 5 minutes at the soonest, which is as soon as Next.js
+  still keeps it in a static prerender, so it serves none older than that.
+  Where the app registers no such function, the read is refreshed in the same
+  way but not expired: after a quiet spell, the first read can still get the
+  previous version once, however old, while it refreshes. Nextly logs one
   `cache-handlers-not-shared` line per process when this bound is in force.
   To refresh pages straight away and keep longer lifetimes, install the
   handlers, or run the write in a Route Handler or a Server Action.
@@ -110,7 +113,7 @@ to put in place, where the config already has a cache handler of its own, sets a
 handler setting to `undefined`, or sets `cacheMaxMemorySize` to anything but
 `0`. An app that keeps a handler of its own is served as an app without
 Nextly's: writes made outside a request don't reach that handler, so its cached
-public reads refresh at least once a minute in production.
+public reads refresh within a minute of a visit in production.
 
 To add them to an app by hand:
 
@@ -301,6 +304,10 @@ each of them.
    the directive works only in code Next.js compiles. A scaffolded blog keeps
    that function in `src/nextly/cached-read.ts`. In a blog made by an earlier
    release that file is a stub that registers nothing: replace it with this.
+   Where a copy of it made earlier has an expiry of
+   `Math.max(revalidate * 2, 60)`, change the `60` to `300`: Next.js leaves an
+   entry that expires within 5 minutes out of a static prerender, and a route
+   that must be static, with `ensureStatic`, then fails to build.
 
    ```ts
    // src/nextly/cached-read.ts
@@ -319,7 +326,9 @@ each of them.
      if (revalidate === false) {
        cacheLife({ revalidate: Infinity, expire: Infinity });
      } else {
-       cacheLife({ revalidate, expire: Math.max(revalidate * 2, 60) });
+       // Expired at twice the revalidate, and never within 5 minutes: Next.js
+       // leaves an entry that expires sooner out of a static prerender.
+       cacheLife({ revalidate, expire: Math.max(revalidate * 2, 300) });
      }
      return runRegisteredRead(key);
    }

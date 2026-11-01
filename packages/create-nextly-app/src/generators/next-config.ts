@@ -1386,7 +1386,7 @@ export function cacheComponentsFiles(
       path: patch.file,
       // A cache of the app's own receives no write made outside a request, so
       // the app is bounded as one without Nextly's handlers: say what that costs.
-      why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once, and in production every cached public read refreshes at least once a minute, since a write from another instance, the CLI or a job reaches no other cache (${CACHE_COMPONENTS_DOCS_URL}); to use them, put these in place of the config's own cache settings`,
+      why: `Nextly's cache handlers were not added: ${patch.handlers.skipped}. Without them a page read right after a write can show the previous version once, and in production every cached public read refreshes within a minute of a visit, since a write from another instance, the CLI or a job reaches no other cache (${CACHE_COMPONENTS_DOCS_URL}); to use them, put these in place of the config's own cache settings`,
       toAdd: linesToAdd(
         patch.handlers.lines.map(property => `  ${property},`),
         patch.handlers.requireSetup

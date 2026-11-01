@@ -539,7 +539,7 @@ describe("an existing app with a cache of its own", () => {
     );
     // What keeping them costs: the bound nextly applies without its handlers.
     expect(files.skipped[0]?.why).toMatch(
-      /every cached public read refreshes at least once a minute/
+      /every cached public read refreshes within a minute of a visit/
     );
     expect(files.skipped[0]?.toAdd).toBe(HANDLERS.trimEnd());
   });

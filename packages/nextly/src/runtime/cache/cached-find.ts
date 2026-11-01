@@ -147,7 +147,8 @@ export function applyCache<T>(
   options: CachedFindOptions
 ): Promise<T> {
   // Each path's lifetime is bounded in production while nextly's cache
-  // handlers do not serve it, so a write from elsewhere shows within a minute.
+  // handlers do not serve it, so a write from elsewhere shows within a minute
+  // of a visit.
   // Under Cache Components, through the app's `"use cache"` function when it
   // registered one: `unstable_cache` is the model Cache Components replaces,
   // and a page read right after a write can be served its previous entry once.
