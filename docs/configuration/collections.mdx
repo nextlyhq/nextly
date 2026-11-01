@@ -448,6 +448,42 @@ runs on it, not its collection-level one, and it runs before the source
 collection's own `afterRead`. A delete runs `beforeOperation`, `beforeDelete`,
 the delete, then `afterDelete`.
 
+### A delete's hooks and outside effects
+
+A delete's `beforeOperation` and `beforeDelete` hooks run before its final check.
+Before any hook runs, Nextly checks the caller's permission and, where the
+collection's `delete` rule answers a filter, that the entry matches it. Then it
+runs the hooks, locks the entry's row, and matches the filter again on the
+locked row, so the entry it removes is the one it judged. If a concurrent change
+moved the entry out of the filter in between, that last check refuses the
+delete, after the hooks have run.
+
+For example, an author deletes one of their own posts just as an editor gives
+it to another author. If the editor's change lands after the hooks ran, the
+delete is refused, and a `beforeDelete` hook that emailed the post's
+subscribers has told them about a deletion that never happened.
+
+So keep `beforeOperation` and `beforeDelete` to checks, and throw to refuse the
+delete. Put effects outside Nextly, such as an email, a webhook call or a write
+to another service, in `afterDelete`, which runs only after the delete commits.
+
+`beforeDelete` and `afterDelete` are handed the entry as it was read before the
+hooks ran, not as the locked row the delete removes (`beforeOperation` is given
+only the entry's id, in `args`). A concurrent change that leaves the entry inside the
+filter still lets the delete go ahead, and `data` then shows the values from
+before that change. An effect that must describe the row exactly as deleted
+can take it from the delete's webhook event, which is written from the locked
+row in the delete's own transaction (see
+[Delivery, retries and the outbox](/docs/webhooks#delivery-retries-and-the-outbox)).
+
+A delete made with `deleteEntryInTransaction` inside a plugin's
+[`collections.withTransaction`](/docs/plugins/services#collection-transactions)
+runs differently: its hooks run inside that transaction (after the row is
+locked and matched, where the `delete` rule answers a filter), and `afterDelete`
+runs before the transaction commits. An
+effect made there still happens if the transaction then rolls back, so make it
+once `withTransaction` has resolved.
+
 The validation gate is what separates the two write hooks. Use `beforeValidate`
 to supply or repair a value you want the rules applied to; use `beforeChange` to
 derive the value that gets stored, knowing the document has already passed them.
@@ -528,8 +564,8 @@ hooks: {
 - `afterChange` - outbound side effects (cache busting, webhooks, queue jobs).
 - `beforeRead` - modify query filters (multi-tenant scoping, soft-delete filtering).
 - `afterRead` - shape the response (compute virtual fields, redact sensitive properties).
-- `beforeDelete` - block deletes when there are dependents.
-- `afterDelete` - cascade cleanup (delete files, revoke tokens, audit log).
+- `beforeDelete` - block deletes when there are dependents. Checks only: it can run for a delete that is then refused (see [A delete's hooks and outside effects](#a-deletes-hooks-and-outside-effects)).
+- `afterDelete` - cascade cleanup (delete files, revoke tokens, audit log), and effects outside Nextly such as an email or a call to another service.
 
 ## Next steps
 
