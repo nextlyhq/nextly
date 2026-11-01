@@ -19,13 +19,19 @@ import {
   takePendingExpiries,
 } from "../../revalidation/expiry-handoff";
 
-import { recordExpiredTagsAgain } from "./tag-expiry-view";
+import { recordExpiredTagsAgain, recordLandedSince } from "./tag-expiry-view";
 
 /** The first wait before a retry, doubled after each failure. */
 export const FIRST_RETRY_DELAY_MS = 1_000;
 
 /** The longest wait between two retries. */
 export const MAX_RETRY_DELAY_MS = 30_000;
+
+/**
+ * The longest a cached read waits for a retry it started. The retry goes on
+ * past it, within the ledger's own bound; the read is served meanwhile.
+ */
+export const READ_RETRY_WAIT_MS = 1_000;
 
 interface RetryState {
   timer?: ReturnType<typeof setTimeout>;
@@ -43,6 +49,8 @@ interface RetryState {
   inFlight: string[];
   /** Moved on by each withdrawal, so an attempt begun before one changes nothing after it. */
   generation: number;
+  /** When each kept tag was last refused, on this process's clock. */
+  refusedAt: Map<string, number>;
 }
 
 // One per process, across module copies, like the hand-off it retries into.
@@ -58,7 +66,10 @@ function state(): RetryState {
     held: 0,
     inFlight: [],
     generation: 0,
+    refusedAt: new Map(),
   };
+  // A copy of this module from before `refusedAt` was kept may have made it.
+  globalForRetry.__nextly_record_retry.refusedAt ??= new Map();
   return globalForRetry.__nextly_record_retry;
 }
 
@@ -69,6 +80,8 @@ function state(): RetryState {
 export function holdFailedRecord(tags: string[]): void {
   holdForNextFlush(tags);
   const retry = state();
+  const now = Date.now();
+  for (const tag of tags) retry.refusedAt.set(tag, now);
   // The failure was an attempt: a read waits the backoff from it too.
   retry.lastAttemptAt = Date.now();
   retry.held += 1;
@@ -129,9 +142,23 @@ async function attempt(retry: RetryState): Promise<void> {
   // A record refused while this one runs is not among the tags it takes.
   const heldBefore = retry.held;
   const generation = retry.generation;
-  const tags = takePendingExpiries();
+  // A tag whose record landed after it was refused, such as a hand-off that
+  // answered after it was given up on, is recorded already: recording it
+  // again would only move its expiry on, and refuse what other instances
+  // regenerated since.
+  const kept = takePendingExpiries();
+  const tags = kept.filter(tag => {
+    const refused = retry.refusedAt.get(tag);
+    if (refused !== undefined && recordLandedSince(tag, refused)) {
+      retry.refusedAt.delete(tag);
+      return false;
+    }
+    return true;
+  });
   if (tags.length === 0) {
-    finish(retry, heldBefore);
+    // Every kept expiry landed late: the retries end as if this one had
+    // recorded them, and are said to.
+    if (finish(retry, heldBefore) && kept.length > 0) recovered(kept.length);
     return;
   }
   retry.inFlight = tags;
@@ -143,12 +170,8 @@ async function attempt(retry: RetryState): Promise<void> {
   if (retry.generation !== generation) return;
   retry.inFlight = [];
   if (outcome === "recorded") {
-    if (finish(retry, heldBefore)) {
-      getNextlyLogger().info({
-        kind: "cache-tag-record-recovered",
-        message: `the cache tag expiry ledger recorded the ${tags.length} expiries it had refused`,
-      });
-    }
+    for (const tag of tags) retry.refusedAt.delete(tag);
+    if (finish(retry, heldBefore)) recovered(kept.length);
     return;
   }
   holdForNextFlush(tags);
@@ -159,6 +182,14 @@ async function attempt(retry: RetryState): Promise<void> {
   }
   retry.delayMs = Math.min(retry.delayMs * 2, MAX_RETRY_DELAY_MS);
   schedule(retry, true);
+}
+
+/** Says once that the expiries the ledger refused are recorded now. */
+function recovered(count: number): void {
+  getNextlyLogger().info({
+    kind: "cache-tag-record-recovered",
+    message: `the cache tag expiry ledger recorded the ${count} expiries it had refused`,
+  });
 }
 
 /**
@@ -190,15 +221,22 @@ export function resumeRecordRetry(): void {
  * The retry a cached read makes before it reads, where a timer may never fire
  * (a frozen serverless function): only while tags wait, and no sooner after the
  * last try than the timer would wait, so a ledger that is down is not asked on
- * every read. Awaited, so the function is not frozen in the middle of it.
- * Nothing to await when nothing waits: a read then takes no extra turn, and
- * its order with other reads and writes is as it was.
+ * every read. Awaited, so the function is not frozen in the middle of it, but
+ * for {@link READ_RETRY_WAIT_MS} at most: a ledger that does not answer must
+ * not hold the read. Nothing to await when nothing waits: a read then takes no
+ * extra turn, and its order with other reads and writes is as it was.
  */
 export function retryFailedRecordsAtRead(): Promise<void> | undefined {
   const retry = state();
   if (!retry.pending) return undefined;
   if (Date.now() - retry.lastAttemptAt < retry.delayMs) return undefined;
-  return retryFailedRecords();
+  const running = retryFailedRecords();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waited = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, READ_RETRY_WAIT_MS);
+    timer.unref?.();
+  });
+  return Promise.race([running, waited]).finally(() => clearTimeout(timer));
 }
 
 /** Stops retrying, with the next failure starting over from the first wait. */
