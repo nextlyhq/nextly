@@ -9,9 +9,6 @@ import {
   initializeCacheHandlers,
   setCacheHandler,
 } from "next/dist/server/use-cache/handlers";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setNextlyLogger } from "../../../observability/logger";
@@ -73,26 +70,10 @@ describe("a cached public read without nextly's cache handlers, in production", 
       kind: "cache-handlers-not-shared",
     });
     const message = String(warn.mock.calls[0][0].message);
-    // The settings exactly as create-nextly-app writes them, and the page its
-    // own report links: two copies of one answer, held to each other here.
-    const generator = readFileSync(
-      fileURLToPath(
-        new URL(
-          "../../../../../create-nextly-app/src/generators/next-config.ts",
-          import.meta.url
-        )
-      ),
-      "utf8"
-    );
-    const block = /const HANDLER_PROPERTIES = \[([\s\S]*?)\];/.exec(generator);
-    const lines = [...(block?.[1] ?? "").matchAll(/^\s*(["'])(.+)\1,?$/gm)].map(
-      ([, , line]) => line
-    );
-    expect(lines).toHaveLength(3);
-    for (const line of lines) expect(message).toContain(line);
-    const docs = /CACHE_COMPONENTS_DOCS_URL =\s*"([^"]+)"/.exec(generator)?.[1];
-    expect(docs).toMatch(/installation#cache-components$/);
-    expect(message).toContain(docs);
+    expect(message).toContain('require.resolve("nextly/cache-handler")');
+    expect(message).toContain('require.resolve("nextly/cache-handlers")');
+    // That these are exactly the settings create-nextly-app writes is held by
+    // its own test, which reads this warning against the config it generates.
   });
 
   it("names both causes: no handler installed, or one of the app's own", () => {

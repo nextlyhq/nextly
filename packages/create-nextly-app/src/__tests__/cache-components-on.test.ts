@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildNextConfigTemplate,
@@ -141,6 +141,44 @@ describe("a new project's Next config", () => {
       /Nextly runs with Cache Components and Partial Prefetching on/
     );
     expect(text).not.toMatch(/cacheComponents: false/);
+  });
+
+  it("installs exactly the settings nextly's warning tells an app without them to add", async () => {
+    // The settings a new project gets, as the generator writes them.
+    const written = buildNextConfigTemplate(sqlite)
+      .split("\n")
+      .map(line => line.trim().replace(/,$/, ""))
+      .filter(line => /^cache(Handler|MaxMemorySize|Handlers):/.test(line));
+    expect(written).toHaveLength(3);
+
+    // nextly's warning, as nextly says it in production without the handlers.
+    const nextly = path.join(__dirname, "../../../nextly/src");
+    const logger = await import(path.join(nextly, "observability/logger.ts"));
+    const shared = await import(
+      path.join(nextly, "runtime/cache/shared-handlers.ts")
+    );
+    const warn = vi.fn();
+    const ignore = () => undefined;
+    logger.setNextlyLogger({
+      warn,
+      error: ignore,
+      info: ignore,
+      debug: ignore,
+    });
+    vi.stubEnv("NODE_ENV", "production");
+    const global = globalThis as Record<string, unknown>;
+    delete global.__nextly_unshared_reads_warned;
+    delete global.__nextly_incremental_handler_in_use;
+    try {
+      shared.noteCachedRead(false);
+      const message = String(warn.mock.calls[0]?.[0]?.message);
+      for (const line of written) expect(message).toContain(line);
+      expect(message).toContain(CACHE_COMPONENTS_DOCS_URL);
+    } finally {
+      vi.unstubAllEnvs();
+      logger.setNextlyLogger(undefined);
+      delete global.__nextly_unshared_reads_warned;
+    }
   });
 
   it("is what an existing app with no config gets too, and loads without TypeScript", async () => {

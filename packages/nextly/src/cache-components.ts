@@ -19,7 +19,11 @@
  * @module cache-components
  */
 
-import { getNextlyLogger } from "./observability/logger";
+import {
+  getNextlyLogger,
+  nextlyLoggerInstalled,
+  onNextlyLoggerInstalled,
+} from "./observability/logger";
 
 /** Where the settings an app needs, and why, are written up. */
 const CACHE_COMPONENTS_DOCS_URL =
@@ -95,13 +99,90 @@ function warnedOptions(): Set<CacheComponentsOption> {
 function warnOnceFor(
   options: readonly CacheComponentsOption[],
   kind: string,
-  message: (fresh: CacheComponentsOption[]) => string
+  message: (fresh: CacheComponentsOption[]) => string,
+  now = false
 ): void {
   const warned = warnedOptions();
   const fresh = options.filter(option => !warned.has(option));
   if (fresh.length === 0) return;
   for (const option of fresh) warned.add(option);
-  getNextlyLogger().warn({ kind, message: message(fresh) });
+  const warning = { kind, message: message(fresh) };
+  // Before an app has installed a logger of its own, the line waits for it,
+  // unless `now` says this is the moment any such logger would be in place.
+  if (now || nextlyLoggerInstalled()) {
+    // In order: what waited is older than this.
+    flushQueuedCacheComponentsWarnings();
+    getNextlyLogger().warn(warning);
+    return;
+  }
+  holdForLogger(warning);
+}
+
+/** How long a line said before any app logger waits for one, at most. */
+export const QUEUED_WARNING_WAIT_MS = 10_000;
+
+interface Warning {
+  kind: string;
+  message: string;
+}
+
+/**
+ * Lines said while Next.js loads the config, before `instrumentation.ts` can
+ * install an app's logger, and what sends them on. On `globalThis`, as
+ * `WARNED` is, so every copy of this module shares them.
+ */
+const QUEUED = Symbol.for("nextly/cache-components-queued-warnings");
+
+interface Queue {
+  warnings: Warning[];
+  timer?: ReturnType<typeof setTimeout>;
+  /** Whether the logger and exit hooks are in place, once per process. */
+  hooked: boolean;
+}
+
+function queue(): Queue {
+  const holder = globalThis as unknown as Record<symbol, Queue>;
+  holder[QUEUED] ??= { warnings: [], hooked: false };
+  return holder[QUEUED];
+}
+
+/**
+ * Sends the lines waiting for a logger to the one in place now: an app's, once
+ * it installed one, or the default. Nothing is said twice.
+ */
+export function flushQueuedCacheComponentsWarnings(): void {
+  const waiting = queue();
+  if (waiting.timer !== undefined) clearTimeout(waiting.timer);
+  waiting.timer = undefined;
+  for (const warning of waiting.warnings.splice(0)) {
+    getNextlyLogger().warn(warning);
+  }
+}
+
+/**
+ * Keeps `warning` until a logger can take it. It goes out when an app installs
+ * a logger, when `register()` runs, after {@link QUEUED_WARNING_WAIT_MS}, or as
+ * the process exits, whichever is first: a `next build` or a worker that only
+ * loads the config never runs `instrumentation.ts`, and must still say it.
+ */
+function holdForLogger(warning: Warning): void {
+  const waiting = queue();
+  waiting.warnings.push(warning);
+  if (!waiting.hooked) {
+    waiting.hooked = true;
+    onNextlyLoggerInstalled(flushQueuedCacheComponentsWarnings);
+    if (typeof process !== "undefined" && typeof process.once === "function") {
+      process.once("exit", flushQueuedCacheComponentsWarnings);
+    }
+  }
+  if (waiting.timer === undefined) {
+    waiting.timer = setTimeout(
+      flushQueuedCacheComponentsWarnings,
+      QUEUED_WARNING_WAIT_MS
+    );
+    // The wait must not keep a process alive that has nothing else to do.
+    waiting.timer.unref?.();
+  }
 }
 
 /**
@@ -111,12 +192,14 @@ function warnOnceFor(
  */
 export function warnIfCacheComponentsOff(
   settings: CacheComponentsSettings,
-  where: string
+  where: string,
+  now = false
 ): void {
   warnOnceFor(
     cacheComponentsOptionsOff(settings),
     "cache-components-off",
-    off => cacheComponentsOffWarning(off, where)
+    off => cacheComponentsOffWarning(off, where),
+    now
   );
 }
 
@@ -127,10 +210,14 @@ export function warnIfCacheComponentsOff(
  * the option off.
  */
 export function warnIfRegisteredWithCacheComponentsOff(value: unknown): void {
+  // `register()` runs after `instrumentation.ts` has installed any logger of
+  // the app's, so what waited for one goes out now, and so does this.
+  flushQueuedCacheComponentsWarnings();
   if (value !== undefined) {
     warnIfCacheComponentsOff(
       { cacheComponents: value },
-      "this app's build, as its instrumentation.ts passes it to createRegister()"
+      "this app's build, as its instrumentation.ts passes it to createRegister()",
+      true
     );
     return;
   }
@@ -140,6 +227,7 @@ export function warnIfRegisteredWithCacheComponentsOff(value: unknown): void {
     () =>
       "createRegister() was not passed the app's `cacheComponents` value, so Nextly cannot tell whether Cache Components is on. " +
       "Pass `{ cacheComponents: process.env.__NEXT_CACHE_COMPONENTS }` to it from instrumentation.ts. " +
-      `Nextly supports only Cache Components and Partial Prefetching on: ${CACHE_COMPONENTS_DOCS_URL}`
+      `Nextly supports only Cache Components and Partial Prefetching on: ${CACHE_COMPONENTS_DOCS_URL}`,
+    true
   );
 }
