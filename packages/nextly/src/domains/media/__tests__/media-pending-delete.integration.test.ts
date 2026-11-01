@@ -38,6 +38,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { ServiceContainer } from "../../../services/index";
+import { MediaService as LegacyMediaService } from "../../../services/media";
 import { MediaFolderService } from "../../../services/media-folder";
 import {
   PNG_1X1,
@@ -1441,6 +1442,124 @@ describe.each(getConfiguredTestDialects())(
         await api(editor, "POST", ["deletions", "undo"], {
           body: { ids: files },
         });
+      }
+    );
+
+    /**
+     * The test adapter with every transaction's `lockRow` going through
+     * `onLock`, for a service built over it alone.
+     */
+    function lockingThrough(
+      onLock: (
+        tx: { lockRow(table: string, id: string): Promise<void> },
+        table: string,
+        id: string
+      ) => Promise<void>
+    ): TestNextly["adapter"] {
+      type Tx = Parameters<
+        Parameters<TestNextly["adapter"]["transaction"]>[0]
+      >[0];
+      const forward = <T extends object>(target: T, property: PropertyKey) => {
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      };
+      return new Proxy(t.adapter, {
+        get(adapter, property) {
+          if (property !== "transaction") return forward(adapter, property);
+          return (work: (tx: Tx) => Promise<unknown>, ...rest: unknown[]) =>
+            (
+              adapter.transaction as (
+                work: (tx: Tx) => Promise<unknown>,
+                ...rest: unknown[]
+              ) => Promise<unknown>
+            )(
+              tx =>
+                work(
+                  new Proxy(tx, {
+                    get(target, name) {
+                      if (name === "lockRow") {
+                        return (table: string, id: string) =>
+                          onLock(target, table, id);
+                      }
+                      return forward(target, name);
+                    },
+                  })
+                ),
+              ...rest
+            );
+        },
+      });
+    }
+
+    // A move between two folders of a folder being deleted writes the item's
+    // `folder_id`, whose foreign-key check locks the destination folder. The
+    // move holds the first row it locks while the folder delete reaches
+    // that same row: in the one order (folders, then media) the delete
+    // waits for the move and then removes the moved item; in another, each
+    // would hold a row the other waits for.
+    it.skipIf(dialect === "sqlite")(
+      "lets a move between two folders of a folder being deleted take turns with the delete, never a deadlock",
+      async () => {
+        // Both ways an item is moved: the media update (the move route, a
+        // folder change through the API) and the folder service's own move.
+        for (const way of ["update", "folder service"] as const) {
+          const { folder: parent } = await folderWithFiles(0);
+          const {
+            folder: from,
+            files: [item],
+          } = await folderWithFiles(1, parent);
+          const { folder: to } = await folderWithFiles(0, parent);
+          let moveHolds: { table: string; id: string } | null = null;
+          let held!: () => void;
+          const holding = new Promise<void>(resolve => (held = resolve));
+          let asked!: () => void;
+          const deleteAsks = new Promise<void>(resolve => (asked = resolve));
+          // The move, paused once it holds its first lock.
+          const moverAdapter = lockingThrough(async (tx, table, id) => {
+            await tx.lockRow(table, id);
+            if (moveHolds === null) {
+              moveHolds = { table, id };
+              held();
+              await deleteAsks;
+            }
+          });
+          // The folder delete, letting the move go on once it asks for the
+          // row the move holds.
+          const deleter = new MediaFolderService(
+            lockingThrough(async (tx, table, id) => {
+              const holds = moveHolds as { table: string; id: string } | null;
+              if (holds && holds.table === table && holds.id === id) asked();
+              await tx.lockRow(table, id);
+            }),
+            console as never
+          );
+
+          const moving =
+            way === "update"
+              ? new LegacyMediaService(
+                  moverAdapter,
+                  console as never
+                ).updateMedia(item, { folderId: to })
+              : new MediaFolderService(
+                  moverAdapter,
+                  console as never
+                ).moveMediaToFolder(item, to);
+          await holding;
+          const [moved, deleted] = await Promise.all([
+            moving,
+            deleter.deleteFolder(parent, true),
+          ]);
+
+          expect(moved, way).toMatchObject({ success: true });
+          expect(deleted, way).toMatchObject({
+            success: true,
+            deletedMedia: 1,
+          });
+          expect(await row(item)).toBeUndefined();
+          for (const folder of [parent, from, to]) {
+            expect(await folderExists(folder)).toBe(false);
+          }
+        }
       }
     );
 

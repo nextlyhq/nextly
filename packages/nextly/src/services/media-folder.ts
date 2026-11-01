@@ -41,7 +41,10 @@ import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
-import { lockMediaItems } from "../domains/media/lock-media-items";
+import {
+  lockMediaFolders,
+  lockMediaItems,
+} from "../domains/media/lock-media-items";
 import {
   errorForLog,
   filesKeptByOthers,
@@ -837,29 +840,41 @@ export class MediaFolderService extends BaseService {
     tx: TransactionContext,
     folderId: string
   ): Promise<string[]> {
-    // Each folder locked as it is read, the next level read only once the
-    // one above it is held: a file uploaded or moved into one of them, or a
-    // folder created under one, checks its parent row, so it waits for this
-    // transaction and then finds its folder gone. Nothing can arrive between
-    // what is read here and the delete. Read with a lock, so on MySQL each
-    // level is the latest committed, not an earlier snapshot.
-    await tx.lockRow("media_folders", folderId);
+    // Each folder locked before the level under it is read, so a file
+    // uploaded or moved into one of them, or a folder created under one,
+    // waits for this transaction and then finds its folder gone: nothing
+    // lands between what is read here and the delete. A level's folders are
+    // found, locked in the one order (`lockMediaFolders`), and read again
+    // with a lock, the latest committed on MySQL too, which picks up one
+    // created between the two reads.
+    await lockMediaFolders(tx, [folderId]);
     const all = [folderId];
     let level = [folderId];
     while (level.length > 0) {
-      const next: string[] = [];
-      for (const run of this.idRuns(level, 0)) {
-        const rows = await tx.select<{ id: string }>("media_folders", {
-          columns: ["id"],
-          where: { and: [{ column: "parentId", op: "IN", value: run }] },
-          forUpdate: true,
-        });
-        next.push(...rows.map(row => String(row.id)));
-      }
+      await lockMediaFolders(tx, await this.childFoldersOn(tx, level, false));
+      const next = await this.childFoldersOn(tx, level, true);
       all.push(...next);
       level = next;
     }
     return all;
+  }
+
+  /** The folders directly under `parents`, read with a lock when asked. */
+  private async childFoldersOn(
+    tx: TransactionContext,
+    parents: readonly string[],
+    forUpdate: boolean
+  ): Promise<string[]> {
+    const children: string[] = [];
+    for (const run of this.idRuns(parents, 0)) {
+      const rows = await tx.select<{ id: string }>("media_folders", {
+        columns: ["id"],
+        where: { and: [{ column: "parentId", op: "IN", value: run }] },
+        forUpdate,
+      });
+      children.push(...rows.map(row => String(row.id)));
+    }
+    return children;
   }
 
   /** The ids of the media the folders hold, as `tx` reads them. */
@@ -1081,24 +1096,35 @@ export class MediaFolderService extends BaseService {
     message: string;
   }> {
     try {
-      const { media } = this.tables;
-
-      if (folderId) {
-        const folderResult = await this.getFolderById(folderId);
-        if (!folderResult.success) {
-          return {
-            success: false,
-            statusCode: 404,
-            code: "NOT_FOUND",
-            message: "Folder not found",
-          };
+      // The destination folder, then the item, in the one order
+      // (`lockMediaFolders`), so a folder delete holding the folder and
+      // waiting for the item takes turns with this move rather than
+      // deadlocking with it. A folder gone meanwhile is not found.
+      const moved = await this.adapter.transaction(async tx => {
+        if (folderId) {
+          await lockMediaFolders(tx, [folderId]);
+          const [folder] = await tx.select("media_folders", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "=", value: folderId }] },
+          });
+          if (!folder) return false;
         }
+        await lockMediaItems(tx, [mediaId]);
+        await tx.update(
+          "media",
+          { folderId, updatedAt: new Date() },
+          { and: [{ column: "id", op: "=", value: mediaId }] }
+        );
+        return true;
+      });
+      if (!moved) {
+        return {
+          success: false,
+          statusCode: 404,
+          code: "NOT_FOUND",
+          message: "Folder not found",
+        };
       }
-
-      await this.db
-        .update(media)
-        .set({ folderId, updatedAt: new Date() })
-        .where(eq(media.id, mediaId));
 
       // A direct media-row write that never reaches the media service, so it
       // carries its own invalidation for the same reason the cascade above does.

@@ -40,6 +40,10 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import {
+  lockMediaFolders,
+  lockMediaItems,
+} from "../domains/media/lock-media-items";
 import type {
   MediaLibraryCounts,
   UnusedSources,
@@ -704,9 +708,28 @@ export class MediaService extends BaseService {
       // our first read is not shipped stale. The transaction returns the
       // post-update document (or null when the row is already gone).
       let recorded = false;
+      let folderGone = false;
       const updatedRow = await this.adapter.transaction<Media | null>(
         async tx => {
-          await tx.lockRow("media", mediaId);
+          folderGone = false;
+          // A move into a folder locks the folder before the item, the one
+          // order (`lockMediaFolders`): the write's foreign-key check locks
+          // the folder too, and taken after the item it would deadlock with
+          // a folder delete holding the folder and waiting for the item. A
+          // folder gone meanwhile is not found.
+          const destination = updateData.folderId;
+          if (typeof destination === "string") {
+            await lockMediaFolders(tx, [destination]);
+            const [folder] = await tx.select("media_folders", {
+              columns: ["id"],
+              where: this.whereEq("id", destination),
+            });
+            if (!folder) {
+              folderGone = true;
+              return null;
+            }
+          }
+          await lockMediaItems(tx, [mediaId]);
           const currentRows = await tx.select<StoredMediaRow>("media", {
             where: this.whereEq("id", mediaId),
           });
@@ -749,7 +772,7 @@ export class MediaService extends BaseService {
           success: false,
           statusCode: 404,
           code: "NOT_FOUND",
-          message: "Media not found",
+          message: folderGone ? "Folder not found" : "Media not found",
           data: null,
         };
       }
