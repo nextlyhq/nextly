@@ -461,6 +461,22 @@ describe("what the gallery says for a chip", () => {
     expect(screen.getByTestId("add-panel-count")).toHaveTextContent("1 widget");
   });
 
+  it("says the chip's count once after Clear, not again once the pause has passed", () => {
+    vi.useFakeTimers();
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Trends" }));
+    fireEvent.change(search(), { target: { value: "zzz" } });
+    act(() => vi.advanceTimersByTime(500));
+    expect(live().textContent).toBe("0 results for “zzz”.");
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(live().textContent).toBe("1 widget.");
+    // Each saying is a node of its own: the count said a second time would replace this one.
+    const cleared = live().firstElementChild;
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live().firstElementChild).toBe(cleared);
+    expect(live().textContent).toBe("1 widget.");
+  });
+
   it("never says a chip's count once the add step has opened, nor again on coming back", () => {
     vi.useFakeTimers();
     renderPanel();

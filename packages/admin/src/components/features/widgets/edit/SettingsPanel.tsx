@@ -594,6 +594,34 @@ function SettingControl({
   return <FieldRenderer field={drawnSetting(setting)} mode="edit" />;
 }
 
+/**
+ * What a change of collection reset, said beside the Collection setting. Polite: the reader made
+ * the change, and hears what it reset beside it. The region is drawn, empty, from the moment the
+ * setting is, and the notice fills it: a live region that arrives already holding its words is
+ * not reliably said. Empty, it is taken out of the flow (`sr-only`), so it holds no space under
+ * the control; it stays in the accessibility tree either way.
+ */
+function ResetNotice({
+  setting,
+  notice,
+}: {
+  setting: AnyWidgetSetting;
+  notice: string | undefined;
+}) {
+  if (setting.type !== "collection") return null;
+  return (
+    <p
+      role="status"
+      className={
+        notice === undefined ? "sr-only" : "text-sm text-muted-foreground"
+      }
+      data-testid={`setting-reset-notice-${setting.name}`}
+    >
+      {notice}
+    </p>
+  );
+}
+
 /** One section's settings, each with the notice its last change left beside it. */
 function SectionFields({
   settings,
@@ -613,12 +641,7 @@ function SectionFields({
       {settings.map(setting => (
         <div key={setting.name} className="flex flex-col gap-1.5">
           <SettingControl {...{ setting, sources, saving, widget }} />
-          {/* Polite: the reader made the change, and hears what it reset beside it. */}
-          {resetNotices[setting.name] === undefined ? null : (
-            <p role="status" className="text-sm text-muted-foreground">
-              {resetNotices[setting.name]}
-            </p>
-          )}
+          <ResetNotice setting={setting} notice={resetNotices[setting.name]} />
         </div>
       ))}
     </>
