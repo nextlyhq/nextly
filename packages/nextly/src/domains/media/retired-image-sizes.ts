@@ -155,8 +155,11 @@ export interface SizeFileStorage {
 interface KeptSize {
   name: string;
   path: string;
-  /** `thumbnail`: the item's own thumbnail; `in-use`: another reference. */
-  reason: "thumbnail" | "in-use";
+  /**
+   * `thumbnail`: the item's own thumbnail; `in-use`: another reference;
+   * `held`: an item left as it is names it too (`holdShared`).
+   */
+  reason: "thumbnail" | "in-use" | "held";
 }
 
 /** What the removal does with one item that holds sizes. */
@@ -395,7 +398,35 @@ async function planSizeRemoval(
       if (holdsStoredSizes(row.sizes)) holding.push(row);
     }
   }
-  return holding.map(row => planItem(row, inUse, storage));
+  const plans = holding.map(row => planItem(row, inUse, storage));
+  holdShared(plans, storage.getType());
+  return plans;
+}
+
+/**
+ * Keeps, in every plan, a file that an item left as it is (`blockers`) also
+ * names. An import can copy a record, so two items' `sizes` can name one
+ * stored file; the item left keeps its `sizes`, which go on naming the file,
+ * so the file goes only on the run that clears that item. A size recorded by
+ * its path alone counts by its key: nothing shows the file is not this
+ * storage's of that key. Compared by the key exactly as stored, as the
+ * removal plans it.
+ */
+function holdShared(plans: ItemPlan[], storageType: string): void {
+  const isLeft = (plan: ItemPlan) => blockers(plan, storageType).length > 0;
+  const held = new Set<string>();
+  for (const plan of plans.filter(isLeft)) {
+    for (const file of plan.remove) held.add(file.path);
+    for (const size of plan.pathOnly) held.add(size.path);
+  }
+  if (held.size === 0) return;
+  for (const plan of plans) {
+    if (isLeft(plan)) continue;
+    for (const file of plan.remove.filter(entry => held.has(entry.path))) {
+      plan.keep.push({ name: file.name, path: file.path, reason: "held" });
+    }
+    plan.remove = plan.remove.filter(entry => !held.has(entry.path));
+  }
 }
 
 /** What the database objects left to drop hold, for the listing. */
@@ -442,10 +473,14 @@ function shown(path: string): string {
   return storedPathForLog(path);
 }
 
+const KEPT_REASONS: Record<KeptSize["reason"], string> = {
+  thumbnail: "the item's thumbnail",
+  "in-use": "a media item uses it as an original or a thumbnail",
+  held: "an item left as it is names it too",
+};
+
 function keptReason(kept: KeptSize): string {
-  return kept.reason === "thumbnail"
-    ? "the item's thumbnail"
-    : "a media item uses it as an original or a thumbnail";
+  return KEPT_REASONS[kept.reason];
 }
 
 function itemHeading(plan: ItemPlan): string {
@@ -573,18 +608,58 @@ async function removeSizeFile(
 }
 
 /**
- * Carries out one item's plan, saying what happened to each file. A file in
- * `usedNow`, which a media item came to use as its original or thumbnail
- * after the listing, is kept.
+ * Removes a size file once for the run, however many items name it: an item
+ * after the first takes the first's outcome. A file that could not go then
+ * holds every item naming it, rather than going for a later one while an
+ * earlier one, left, goes on naming it. Null when the file is gone, with
+ * whether this call removed it.
  */
+async function removeOnce(
+  path: string,
+  { storage, outcomes }: Pick<ApplyContext, "storage" | "outcomes">
+): Promise<{ failure: unknown; now: boolean }> {
+  if (outcomes.has(path)) return { failure: outcomes.get(path), now: false };
+  const failure = await removeSizeFile(storage, path);
+  outcomes.set(path, failure);
+  return { failure, now: true };
+}
+
+/**
+ * Removes one file an item's plan removes, saying what happened to it: kept
+ * when a media item came to use it as its original or thumbnail after the
+ * listing (`usedNow`), otherwise removed once for the run (`removeOnce`).
+ * Answers why it stays when its delete failed, else null.
+ */
+async function removePlannedFile(
+  path: string,
+  usedNow: ReadonlySet<string>,
+  context: ApplyContext
+): Promise<string | null> {
+  const { say, report } = context;
+  if (usedNow.has(path)) {
+    report.filesKept += 1;
+    say(
+      `  kept    ${shown(path)} (a media item uses it now as an original or a thumbnail)`
+    );
+    return null;
+  }
+  const { failure, now } = await removeOnce(path, context);
+  if (failure !== null) {
+    return `could not remove ${shown(path)}: ${errorForLog(failure)}`;
+  }
+  if (now) report.filesRemoved += 1;
+  const shared = now ? "" : " (with an item before it that names it too)";
+  say(`  removed ${shown(path)}${shared}`);
+  return null;
+}
+
+/** Carries out one item's plan, saying what happened to each file. */
 async function applyItem(
   plan: ItemPlan,
   usedNow: ReadonlySet<string>,
-  storage: SizeFileStorage,
-  store: Pick<RetiredSizesStore, "clearSizes">,
-  say: (line: string) => void,
-  report: SizeRemovalReport
+  context: ApplyContext
 ): Promise<void> {
+  const { storage, store, say, report } = context;
   say(itemHeading(plan));
   // Nothing of an item is removed when one of its sizes cannot be located,
   // is elsewhere or is recorded by path alone: its `sizes` stays, and with it
@@ -592,22 +667,8 @@ async function applyItem(
   const reasons = blockers(plan, storage.getType());
   if (reasons.length === 0) {
     for (const file of plan.remove) {
-      if (usedNow.has(file.path)) {
-        report.filesKept += 1;
-        say(
-          `  kept    ${shown(file.path)} (a media item uses it now as an original or a thumbnail)`
-        );
-        continue;
-      }
-      const failure = await removeSizeFile(storage, file.path);
-      if (failure === null) {
-        report.filesRemoved += 1;
-        say(`  removed ${shown(file.path)}`);
-      } else {
-        reasons.push(
-          `could not remove ${shown(file.path)}: ${errorForLog(failure)}`
-        );
-      }
+      const failed = await removePlannedFile(file.path, usedNow, context);
+      if (failed !== null) reasons.push(failed);
     }
   }
   for (const kept of plan.keep) {
@@ -703,6 +764,7 @@ export async function removeStoredImageSizes(options: {
     referencedNow: options.referencedNow,
     say,
     report,
+    outcomes: new Map(),
   });
   return { code: sayApplied(report, objects, say), report };
 }
@@ -714,6 +776,8 @@ interface ApplyContext {
   referencedNow: ReferencedNow;
   say: (line: string) => void;
   report: SizeRemovalReport;
+  /** Each stored file asked to go this run, and its delete's failure or null. */
+  outcomes: Map<string, unknown>;
 }
 
 /**
@@ -723,8 +787,9 @@ interface ApplyContext {
  */
 async function applyPlans(
   plans: readonly ItemPlan[],
-  { storage, store, referencedNow, say, report }: ApplyContext
+  context: ApplyContext
 ): Promise<void> {
+  const { referencedNow, say, report } = context;
   const batches = inBatches(plans);
   for (const [at, batch] of batches.entries()) {
     const paths = batch.flatMap(plan => plan.remove.map(file => file.path));
@@ -740,7 +805,7 @@ async function applyPlans(
       return;
     }
     for (const plan of batch) {
-      await applyItem(plan, usedNow, storage, store, say, report);
+      await applyItem(plan, usedNow, context);
     }
   }
 }

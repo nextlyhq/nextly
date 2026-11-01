@@ -719,6 +719,149 @@ describe("a delete that fails while the file may still be there", () => {
   );
 });
 
+describe("a size file two items name", () => {
+  // An import can copy a record, so two items' `sizes` can name one stored
+  // file. Whether it goes is one decision for every item naming it: removed
+  // for one while another keeps its record of it, that record names nothing.
+
+  /** Two items on `adapter` whose `small` sizes name one stored file. */
+  async function twoItemsSharing(adapter: IStorageAdapter, extraOfB = {}) {
+    const first = await put(adapter, "first.png");
+    const second = await put(adapter, "second.png");
+    const shared = await storedSize(adapter, "shared-small.webp");
+    const store = new MemoryStore([
+      {
+        id: "first",
+        filename: first.path,
+        url: first.url,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({ small: shared }),
+      },
+      {
+        id: "second",
+        filename: second.path,
+        url: second.url,
+        thumbnailUrl: null,
+        sizes: JSON.stringify({ small: shared, ...extraOfB }),
+      },
+    ]);
+    return { shared, store };
+  }
+
+  /** `adapter`, counting the deletes it is asked for, by path. */
+  function counting(adapter: IStorageAdapter) {
+    const deletes: string[] = [];
+    const storage = Object.assign(Object.create(adapter) as IStorageAdapter, {
+      delete: async (filePath: string) => {
+        deletes.push(filePath);
+        await adapter.delete(filePath);
+      },
+    });
+    return { storage, deletes };
+  }
+
+  it("is kept while an item left as it is names it, and that item's record stays", async () => {
+    const adapter = new Bucket("s3");
+    // The second item also has a size recorded by its path alone, which
+    // leaves it as it is.
+    const { shared, store } = await twoItemsSharing(adapter, {
+      medium: { path: "2026/10/second-medium.webp" },
+    });
+    const listed: string[] = [];
+
+    const dry = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: false,
+      referencedNow: usedIn(store),
+      say: line => listed.push(line),
+    });
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage: adapter,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: () => {},
+    });
+
+    // The first item's part of the listing, up to the second item's heading.
+    const firstItem = listed
+      .slice(
+        listed.findIndex(line => line.startsWith("media first")),
+        listed.findIndex(line => line.startsWith("media second"))
+      )
+      .join("\n");
+    expect(dry.code).toBe(0);
+    expect(firstItem).toContain(
+      `keep   ${shared.path} (size "small": an item left as it is names it too)`
+    );
+    expect(firstItem).not.toContain(`remove ${shared.path}`);
+    expect(code).toBe(1);
+    expect([...adapter.files.keys()]).toContain(shared.path);
+    expect(report.itemsLeft.map(item => item.id)).toEqual(["second"]);
+    expect(holdsStoredSizes(store.table[1].sizes)).toBe(true);
+    // The first item's record goes: the second's still names the file.
+    expect(store.cleared).toEqual(["first"]);
+  });
+
+  it("is kept for every item naming it when its delete fails, and none of them is cleared", async () => {
+    const adapter = new Bucket("s3");
+    const { shared, store } = await twoItemsSharing(adapter);
+    // Refused once, then allowed: a later item asking again would succeed.
+    let refused = false;
+    const storage = Object.assign(Object.create(adapter) as IStorageAdapter, {
+      delete: async (filePath: string) => {
+        if (filePath === shared.path && !refused) {
+          refused = true;
+          throw new Error("Access Denied");
+        }
+        await adapter.delete(filePath);
+      },
+    });
+    const lines: string[] = [];
+
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: line => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect([...adapter.files.keys()]).toContain(shared.path);
+    expect(store.cleared).toEqual([]);
+    expect(report.itemsLeft.map(item => item.id)).toEqual(["first", "second"]);
+    expect(
+      lines.filter(line => line.includes(`could not remove ${shared.path}`))
+    ).toHaveLength(2);
+  });
+
+  it("is removed once, and every item naming it cleared, when nothing holds it (the control)", async () => {
+    const adapter = new Bucket("s3");
+    const { shared, store } = await twoItemsSharing(adapter);
+    const { storage, deletes } = counting(adapter);
+
+    const { code, report } = await removeStoredImageSizes({
+      store,
+      storage,
+      objects,
+      apply: true,
+      referencedNow: usedIn(store),
+      say: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect([...adapter.files.keys()]).not.toContain(shared.path);
+    expect(deletes).toEqual([shared.path]);
+    expect(report.filesRemoved).toBe(1);
+    expect(store.cleared).toEqual(["first", "second"]);
+  });
+});
+
 describe("sizes stored on another storage than the one configured now", () => {
   // The key is the same, the storage is not: the size's file is the old
   // bucket's, and another item's original is this bucket's. Taken as in use
