@@ -20,7 +20,6 @@ import {
   expireTags,
   isEntryExpired,
   localNow,
-  OFFSET_READING_MAX_AGE_MS,
   publishTagExpiryLedger,
   refreshTagExpiries,
   TAG_LOOKUP_TTL_MS,
@@ -463,27 +462,7 @@ describe("the database's clock, learned from slow lookups", () => {
     expect(await getAfter(handler, "k", 10_000)).toBeNull();
   });
 
-  it("keeps the tightest reading of the clock over a slower one", async () => {
-    const { ledger, rows, timing } = slowLedger();
-    publishTagExpiryLedger(ledger);
-    const handler = new IncrementalHandler();
-    // A quick lookup learns the clock exactly.
-    rows.set("posts", T0 - 10_000);
-    await handler.set("warm", page(0), { tags: ["posts"] });
-    expect(await getAfter(handler, "warm", 0)).not.toBeNull();
-
-    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
-    await handler.set("k", page(1), { tags: ["posts"] });
-    const begun = Date.now();
-    // Another instance's expiry from 3 s before the entry began.
-    rows.set("posts", begun - 3_000);
-    // This lookup's answer takes 10 s to arrive: judged by it, the entry
-    // could have begun up to 10 s earlier than it did, before that expiry.
-    timing.repliedMs = 10_000;
-    expect(await getAfter(handler, "k", 10_000)).not.toBeNull();
-  });
-
-  it("learns a clock that moved once the tightest reading is a minute old", async () => {
+  it("follows a database clock that stepped back at once, however slow the lookup that tells it", async () => {
     const { ledger, rows, timing } = slowLedger();
     publishTagExpiryLedger(ledger);
     const handler = new IncrementalHandler();
@@ -493,17 +472,69 @@ describe("the database's clock, learned from slow lookups", () => {
     await handler.set("warm", page(0), { tags: ["posts"] });
     expect(await getAfter(handler, "warm", 0)).not.toBeNull();
 
-    // The database fails over to a host whose clock matches this process's.
-    vi.advanceTimersByTime(OFFSET_READING_MAX_AGE_MS);
+    // The database fails over to a host whose clock matches this process's,
+    // and another instance writes after the entry began, on that clock.
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
     timing.skewMs = 0;
     await handler.set("k", page(1), { tags: ["posts"] });
     rows.set("posts", Date.now() + 100 + TAG_EXPIRY_GRACE_MS);
     vi.advanceTimersByTime(200);
 
-    // A slower lookup than the first: still the one to learn from, since the
-    // first is a minute old, and the entry begun before the write is refused.
+    // A slower lookup than the first still sets the offset: kept at +30 s,
+    // the entry would look begun 30 s later than it was, after the write.
     timing.repliedMs = 2_000;
     expect(await getAfter(handler, "k", 2_000)).toBeNull();
+  });
+
+  it("ignores the offset an earlier copy of this module writes to the shared state", async () => {
+    const { ledger, rows } = slowLedger();
+    publishTagExpiryLedger(ledger);
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    rows.set("posts", T0 + 100 + TAG_EXPIRY_GRACE_MS);
+    vi.advanceTimersByTime(200);
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+
+    // An earlier copy, still loaded after a hot reload, writes the midpoint
+    // of a slow read of its own, 30 s too far ahead, where it keeps it.
+    await handler.set("k", page(1), { tags: ["posts"] });
+    rows.set("posts", Date.now() + 100 + TAG_EXPIRY_GRACE_MS);
+    (
+      globalThis as unknown as {
+        __nextly_tag_expiry_view: { offsetMs: number };
+      }
+    ).__nextly_tag_expiry_view.offsetMs = 30_000;
+    vi.advanceTimersByTime(TAG_LOOKUP_TTL_MS);
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+  });
+
+  it("asks again about an expiry an earlier copy of this module looked up, before judging by it", async () => {
+    const { ledger, rows } = slowLedger();
+    const expiriesOf = vi.spyOn(ledger, "expiriesOf");
+    // The state an earlier copy made: an expiry it looked up a moment ago,
+    // and an offset of its own, but none this copy learned.
+    rows.set("posts", T0 + 100 + TAG_EXPIRY_GRACE_MS);
+    (
+      globalThis as { __nextly_tag_expiry_view?: unknown }
+    ).__nextly_tag_expiry_view = {
+      ledger,
+      lookups: new Map([["posts", { expiredAt: T0 - 60_000, askedAt: T0 }]]),
+      asking: new Map(),
+      own: new Map(),
+      mine: new Map(),
+      offsetMs: 30_000,
+      sweptAt: T0,
+      lastLocal: 0,
+      warned: false,
+    };
+    const handler = new IncrementalHandler();
+    await handler.set("k", page(1), { tags: ["posts"] });
+    vi.advanceTimersByTime(200);
+
+    // Within the lookup TTL, yet asked again: the answer it has carries no
+    // offset this copy can judge it by.
+    expect(await getAfter(handler, "k", 0)).toBeNull();
+    expect(expiriesOf).toHaveBeenCalledTimes(1);
   });
 });
 

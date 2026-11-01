@@ -54,17 +54,21 @@ interface ViewState {
    */
   mine: Map<string, number>;
   /**
-   * The database's clock less this process's, at least: a read's statement ran
-   * somewhere between its start and its answer, so the database's time it
-   * reported, less the answer's local time, is a lower bound. Judged by it, an
-   * entry looks no later than it began, so none begun before an expiry passes
-   * for one begun after it; a looser bound costs a rebuild, never a stale read.
+   * The database's clock less this process's, at least, as the latest read
+   * that found a row told it; undefined until this copy of the module has
+   * learned it. A read's statement ran somewhere between its start and its
+   * answer, so the database's time it reported, less the answer's local time,
+   * is a lower bound. Judged by it, an entry looks no later than it began, so
+   * none begun before an expiry passes for one begun after it: a larger offset
+   * would accept stale entries, and a smaller one only costs rebuilds. So the
+   * latest bound is taken, however loose: an earlier, tighter one may no
+   * longer hold, as after a failover to a database whose clock is behind.
+   *
+   * Its own name, not the `offsetMs` an earlier copy of this module keeps in
+   * this shared state: that copy writes the midpoint of its reads there, which
+   * is not a lower bound, and is never read here.
    */
-  offsetMs: number;
-  /** How long the read `offsetMs` came from took, the bound's slack; Infinity before one. */
-  offsetRttMs: number;
-  /** When that read answered, on this process's clock. */
-  offsetAt: number;
+  lowerOffsetMs?: number;
   /** When stale answers were last dropped, on this process's clock. */
   sweptAt: number;
   /** The last time `localNow` gave, so the next is strictly later. */
@@ -72,21 +76,11 @@ interface ViewState {
   warned: boolean;
 }
 
-/**
- * How long the tightest reading of the database's offset is kept over a looser
- * later one. The two clocks drift by far less than a lookup's round trip in a
- * minute, so a reading that old is replaced by the next, however slow.
- */
-export const OFFSET_READING_MAX_AGE_MS = 60_000;
-
 const globalForView = globalThis as unknown as {
-  // A copy of this module from before `mine`, or the offset's slack, was kept
-  // may have made it.
-  __nextly_tag_expiry_view?: Omit<
-    ViewState,
-    "mine" | "offsetRttMs" | "offsetAt"
-  > &
-    Partial<Pick<ViewState, "mine" | "offsetRttMs" | "offsetAt">>;
+  // A copy of this module from before `mine` was kept may have made it.
+  __nextly_tag_expiry_view?: Omit<ViewState, "mine"> & {
+    mine?: ViewState["mine"];
+  };
 };
 
 function state(): ViewState {
@@ -95,9 +89,6 @@ function state(): ViewState {
     asking: new Map(),
     own: new Map(),
     mine: new Map(),
-    offsetMs: 0,
-    offsetRttMs: Infinity,
-    offsetAt: -Infinity,
     sweptAt: 0,
     lastLocal: 0,
     warned: false,
@@ -105,11 +96,7 @@ function state(): ViewState {
   const view = globalForView.__nextly_tag_expiry_view;
   // A bundled or hot-reloaded copy keeps the state an older copy made, which
   // has no `mine`: given one here, the first record would otherwise throw.
-  return Object.assign(view, {
-    mine: view.mine ?? new Map(),
-    offsetRttMs: view.offsetRttMs ?? Infinity,
-    offsetAt: view.offsetAt ?? -Infinity,
-  });
+  return Object.assign(view, { mine: view.mine ?? new Map() });
 }
 
 /** Publishes the ledger the handlers read and record into; `null` withdraws it. */
@@ -117,9 +104,18 @@ export function publishTagExpiryLedger(ledger: TagExpiryLedger | null): void {
   const view = state();
   view.ledger = ledger ?? undefined;
   // A new ledger is asked afresh about every tag, and its database's clock
-  // is learned afresh: the next reading of it replaces the one kept.
+  // is learned afresh.
   view.lookups.clear();
-  view.offsetRttMs = Infinity;
+  view.lowerOffsetMs = undefined;
+}
+
+/**
+ * The offset entries are judged by: the lower bound learned, or none before
+ * one is. Only an expiry a lookup found needs it, and a lookup that finds one
+ * learns it.
+ */
+function offsetOf(view: ViewState): number {
+  return view.lowerOffsetMs ?? 0;
 }
 
 /** Warns once, through nextly's logger, that the ledger could not be used. */
@@ -159,7 +155,7 @@ export function localNow(): number {
 function sweep(view: ViewState, now: number): void {
   if (now - view.sweptAt < TAG_LOOKUP_TTL_MS) return;
   view.sweptAt = now;
-  const databaseHorizon = now + view.offsetMs - LEDGER_RETENTION_MS;
+  const databaseHorizon = now + offsetOf(view) - LEDGER_RETENTION_MS;
   for (const [tag, lookup] of view.lookups) {
     const drop =
       lookup.expiredAt > 0
@@ -192,33 +188,25 @@ export async function refreshTagExpiries(
   const stale: string[] = [];
   for (const tag of new Set(tags)) {
     const asking = view.asking.get(tag);
+    const lookup = view.lookups.get(tag);
     if (asking !== undefined) pending.add(asking);
     else if (
-      now - (view.lookups.get(tag)?.askedAt ?? -Infinity) >=
-      TAG_LOOKUP_TTL_MS
+      now - (lookup?.askedAt ?? -Infinity) >= TAG_LOOKUP_TTL_MS ||
+      // An expiry an earlier copy of this module looked up, with no offset
+      // this copy learned to judge it by: asked again, which tells it.
+      (view.lowerOffsetMs === undefined && (lookup?.expiredAt ?? 0) > 0)
     ) {
       stale.push(tag);
     }
   }
   if (stale.length > 0) {
     const read = (async () => {
-      const startedAt = Date.now();
       try {
         const answer = await ledger.expiriesOf(stale);
         const finishedAt = Date.now();
-        // A read that found no rows carries no clock to learn from. One that
-        // took longer than the reading kept is a looser bound, so it replaces
-        // that reading only once the reading is old enough for the clocks to
-        // have drifted.
-        const rttMs = finishedAt - startedAt;
-        if (
-          answer?.now !== undefined &&
-          (rttMs <= view.offsetRttMs ||
-            finishedAt - view.offsetAt >= OFFSET_READING_MAX_AGE_MS)
-        ) {
-          view.offsetMs = answer.now - finishedAt;
-          view.offsetRttMs = rttMs;
-          view.offsetAt = finishedAt;
+        // A read that found no rows carries no clock to learn from.
+        if (answer?.now !== undefined) {
+          view.lowerOffsetMs = answer.now - finishedAt;
         }
         for (const tag of stale) {
           view.lookups.set(tag, {
@@ -270,7 +258,7 @@ function expiryOf(view: ViewState, tag: string): number {
   const own = view.own.get(tag);
   return Math.max(
     recordedExpiry(view, tag),
-    own === undefined ? 0 : own + view.offsetMs
+    own === undefined ? 0 : own + offsetOf(view)
   );
 }
 
@@ -286,7 +274,7 @@ export function isEntryExpired(
 ): boolean {
   if (Date.now() - storedAt > LEDGER_RETENTION_MS) return true;
   const view = state();
-  const storedOnDatabaseClock = storedAt + view.offsetMs;
+  const storedOnDatabaseClock = storedAt + offsetOf(view);
   for (const tag of tags) {
     // Another instance's expiry, on the database's clock, has no order with
     // this process's events: at or after, since an entry begun in the same
@@ -307,7 +295,7 @@ export function latestExpiry(tags: Iterable<string>): number {
   let latest = 0;
   for (const tag of tags) {
     const expiredAt = expiryOf(view, tag);
-    if (expiredAt > 0) latest = Math.max(latest, expiredAt - view.offsetMs);
+    if (expiredAt > 0) latest = Math.max(latest, expiredAt - offsetOf(view));
   }
   return latest;
 }
