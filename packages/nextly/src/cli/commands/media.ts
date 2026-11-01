@@ -582,6 +582,7 @@ export function createMediaCommand(): Command {
                 withRetiredSizes: false,
               }),
               executeSql: statement => drizzle.executeQuery(statement),
+              dropUnderLock: dropSizesUnderSchemaLock(drizzle),
               say: line => console.log(line),
             })
         );
@@ -760,12 +761,52 @@ async function reindexUsageWithServices(
   }
 }
 
+/** Runs a drop holding the schema lock, answering the drop's exit status. */
+export type DropUnderLock = (drop: () => Promise<number>) => Promise<number>;
+
+/**
+ * The schema lock as `remove-sizes --apply --drop` holds it: around the
+ * drop's fresh checks and both drops, and not the file removal before them,
+ * which can run long. `nextly migrate` and a Schema Builder change hold the
+ * same lock, so neither reads the media table while its `sizes` column goes,
+ * and nothing comes to depend on the table between the checks and its drop.
+ * A held lock is waited for as `nextly migrate` waits, then the run stops
+ * naming the holder, having dropped nothing.
+ */
+export function dropSizesUnderSchemaLock(
+  adapter: DrizzleAdapter,
+  waitMs?: number
+): DropUnderLock {
+  return async drop => {
+    // Loaded for a drop, not with the command.
+    const [{ withMigrateLock }, { DROP_SIZES_COMMAND }, { NextlyError }] =
+      await Promise.all([
+        import("../../domains/schema/pipeline/locks"),
+        import("../../domains/media/retired-image-sizes-constants"),
+        import("../../errors/nextly-error"),
+      ]);
+    const outcome = await withMigrateLock(adapter, adapter.dialect, drop, {
+      command: DROP_SIZES_COMMAND,
+      mode: "wait",
+      waitMs,
+    });
+    // Only a wait given `isSettled` ends without running, and this one is not.
+    if (!outcome.ran) {
+      throw NextlyError.internal({
+        logContext: { reason: "the sizes drop ended without running" },
+      });
+    }
+    return outcome.value;
+  };
+}
+
 /**
  * `nextly media remove-sizes [--apply] [--drop]` over a database: says there
  * is nothing to remove once the column is gone, and otherwise lists, or with
  * `apply` removes, the size files its items name. With `apply` and `drop`, and
  * only once that left no item holding sizes, it then drops the column and the
- * table (`dropRetiredImageSizes`). Returns the exit status.
+ * table (`dropRetiredImageSizes`) inside `dropUnderLock`. Returns the exit
+ * status.
  */
 export async function runRemoveSizes(options: {
   db: unknown;
@@ -775,6 +816,8 @@ export async function runRemoveSizes(options: {
   drop?: boolean;
   referencedNow: ReferencedNow;
   executeSql: (statement: string) => Promise<unknown>;
+  /** Holds the schema lock around the drop (`dropSizesUnderSchemaLock`). */
+  dropUnderLock: DropUnderLock;
   say: (line: string) => void;
 }): Promise<number> {
   const { db, dialect, say } = options;
@@ -814,10 +857,12 @@ export async function runRemoveSizes(options: {
     );
     return code;
   }
-  return dropRetiredImageSizes({
-    db,
-    dialect,
-    executeSql: options.executeSql,
-    say,
-  });
+  return options.dropUnderLock(() =>
+    dropRetiredImageSizes({
+      db,
+      dialect,
+      executeSql: options.executeSql,
+      say,
+    })
+  );
 }

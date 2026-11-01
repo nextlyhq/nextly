@@ -156,6 +156,11 @@ async function removeSizes(
     drop: flags.drop === true,
     referencedNow: nothingUsedNow,
     executeSql: statement => fresh.exec(statement),
+    // The drop runs as it is: this suite's subject is what each dialect
+    // reads, removes and drops. That the command holds the schema lock around
+    // it, and drops nothing while another run holds it, is covered with the
+    // other locked paths (schema-lock-paths.integration.test.ts).
+    dropUnderLock: drop => drop(),
     say: line => lines.push(line),
   });
   return { code, lines };
