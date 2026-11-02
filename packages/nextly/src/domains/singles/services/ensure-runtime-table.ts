@@ -251,13 +251,23 @@ export async function ensureSingleRuntimeTable(
         dialect,
         { status, localized: localized && companionReady }
       );
+      // Which registration this one replaces, read before it is replaced.
+      const replaced = resolver.getTable(singleMeta.tableName);
       resolver.registerDynamicSchema(singleMeta.tableName, table);
       let ours = lazilyRegistered.get(resolver);
       if (!ours) {
         ours = new Map();
         lazilyRegistered.set(resolver, ours);
       }
-      ours.set(singleMeta.tableName, table);
+      // Marked as a read's recovery only when it is one: the table was
+      // missing, or the registration it replaces was already a recovery. A
+      // rebuild of one that boot, create time or the Builder made (after this
+      // instance's own field edit, say) stays theirs, so writes go on.
+      if (mainMissing || replaced === ours.get(singleMeta.tableName)) {
+        ours.set(singleMeta.tableName, table);
+      } else {
+        ours.delete(singleMeta.tableName);
+      }
     }
 
     // Registering a companion that does not physically exist would give the

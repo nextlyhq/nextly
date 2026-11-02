@@ -105,6 +105,40 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedHeadings()).toEqual(["One"]);
     }, 120_000);
 
+    it("writes no instance for a create whose caller commits after the refusal", async () => {
+      // A caller's own transaction, as a plugin's: it catches the refused
+      // create and commits. Whatever the create wrote to the field group's
+      // table before it was refused would then be kept.
+      await boot(dialect);
+      const registry = current!.getService(
+        "schemaRegistry" as never
+      ) as SchemaRegistry;
+      registry.retractDynamicSchema(GROUP_TABLE);
+      const entries = (
+        current!.getService("collectionsHandler") as unknown as {
+          getEntryService(): {
+            createEntryInTransaction(
+              tx: unknown,
+              params: Record<string, unknown>,
+              data: Record<string, unknown>
+            ): Promise<{ success: boolean }>;
+          };
+        }
+      ).getEntryService();
+      let answer: unknown;
+      await current!.adapter.transaction(async tx => {
+        answer = await entries
+          .createEntryInTransaction(
+            tx,
+            { collectionName: PAGES, overrideAccess: true },
+            { title: "About", hero: { heading: "Two" } }
+          )
+          .catch((error: unknown) => error);
+      });
+      expect(answer).not.toMatchObject({ success: true });
+      expect(await storedHeadings()).toEqual(["One"]);
+    }, 120_000);
+
     it("writes the instance in place once the registry is reloaded", async () => {
       const { id } = await boot(dialect);
       const registry = current!.getService(

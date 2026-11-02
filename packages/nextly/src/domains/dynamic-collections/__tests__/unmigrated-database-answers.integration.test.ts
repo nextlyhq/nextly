@@ -838,6 +838,16 @@ describe.each(getConfiguredTestDialects())(
           .soft(String(failure.error), "each batch item says why")
           .toContain("not registered");
       }
+      // A caller's transaction that commits after the refused create, as a
+      // plugin may: the refusal came before the row, so nothing is kept.
+      await t().adapter.transaction(async tx => {
+        const result = await entries.createEntryInTransaction(tx, params, {
+          title: "Sixth",
+        });
+        expect
+          .soft(result.success, "create in a committed transaction")
+          .toBe(false);
+      });
       // The refusals came before any row: the boot's one entry is all there is.
       expect(await rowCount(POSTS_TABLE)).toBe(1);
     }, 120_000);

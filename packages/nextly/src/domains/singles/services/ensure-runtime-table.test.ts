@@ -363,6 +363,39 @@ describe("ensureSingleRuntimeTable — writes in production", () => {
     expect(registered).toEqual([]);
   });
 
+  it("keeps letting writes through after it rebuilds a table boot registered", async () => {
+    // This instance changed the Single's fields (the Builder in production):
+    // the row moves on, and the next touch rebuilds a registration that was
+    // never a recovery.
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, registered } = makeAdapter({
+      single_test_page: { foreign: true },
+    });
+    await ensureSingleRuntimeTable(adapter, { ...meta, schemaVersion: 1 });
+    const moved = { ...meta, schemaVersion: 2 };
+    await ensureSingleRuntimeTable(adapter, moved);
+    expect(registered).toEqual(["single_test_page"]);
+    for (const attempt of [1, 2]) {
+      await expect(
+        ensureSingleRuntimeTable(adapter, moved, undefined, write),
+        `write ${attempt}`
+      ).resolves.toBeUndefined();
+    }
+  });
+
+  it("still refuses a write after it rebuilds a table only a read recovered", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, registered } = makeAdapter();
+    await ensureSingleRuntimeTable(adapter, { ...meta, schemaVersion: 1 });
+    const moved = { ...meta, schemaVersion: 2 };
+    await ensureSingleRuntimeTable(adapter, moved);
+    expect(registered).toEqual(["single_test_page", "single_test_page"]);
+    const error = await refusal(
+      ensureSingleRuntimeTable(adapter, moved, undefined, write)
+    );
+    expect(error).toMatchObject({ code: "NEXTLY_TABLE_NOT_REGISTERED" });
+  });
+
   it("lets a write through once a registration of its own replaces the read's", async () => {
     vi.stubEnv("NODE_ENV", "production");
     const { adapter, tables } = makeAdapter();
