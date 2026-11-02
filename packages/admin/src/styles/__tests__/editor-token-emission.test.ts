@@ -23,7 +23,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import postcss, { AtRule, type Root } from "postcss";
+import postcss, {
+  AtRule,
+  type Container,
+  type Document,
+  type Root,
+} from "postcss";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -67,7 +72,11 @@ function declaredOnAdminRoot(sheet: Root): Set<string> {
     if (!rule.selectors.every(selector => selector.trim() === ADMIN_ROOT)) {
       return;
     }
-    for (let parent = rule.parent; parent; parent = parent.parent) {
+    for (
+      let parent: Container | Document | undefined = rule.parent;
+      parent;
+      parent = parent.parent
+    ) {
       if (parent instanceof AtRule && parent.name !== "layer") return;
     }
     rule.each(child => {
