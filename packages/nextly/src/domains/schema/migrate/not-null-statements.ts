@@ -1,0 +1,577 @@
+/**
+ * Which statements of a migration unit make a column NOT NULL, read from the statements alone:
+ * the one reader `nextly migrate` judges a file's required columns through, before the file runs
+ * and at the statement itself.
+ *
+ * The forms it reads, each a decision row of `readNotNullChanges`:
+ *
+ * | Statement | Change |
+ * |---|---|
+ * | `ALTER TABLE t ALTER [COLUMN] c SET NOT NULL` (PostgreSQL) | c's null rows break it |
+ * | `ALTER TABLE t MODIFY [COLUMN] c <type> ... NOT NULL` (MySQL) | c's null rows break it |
+ * | `ALTER TABLE t CHANGE [COLUMN] old new <type> ... NOT NULL` (MySQL) | old's null rows break it |
+ * | `ALTER TABLE t ADD [COLUMN] c <type> NOT NULL`, no default and no generated value | every row breaks it |
+ * | `CREATE TABLE __new_t (...)` then `INSERT INTO __new_t (...) SELECT ... FROM t` (SQLite rebuild) | for each NOT NULL column of `__new_t`: the null rows of the column of t copied into it, or every row of t when nothing is copied into it and it has no default |
+ *
+ * Anything else is no change: a nullable MODIFY, `SET DEFAULT`, `DROP NOT NULL`, an ADD with a
+ * DEFAULT, a NOT NULL inside a CHECK's parentheses. Each change also says what the statements
+ * before it did to its table, which decides when the change is counted:
+ *
+ * - `writtenEarlier`: an earlier statement wrote rows of the table (UPDATE, INSERT, DELETE,
+ *   REPLACE, MERGE, TRUNCATE, COPY on it), or a statement whose reach is not read (`DO`, `CALL`,
+ *   `WITH`, `LOAD`, a write on a table this does not name) ran before it. The rows still null are
+ *   counted AT the statement, after that fill; counting before the file runs would refuse a file
+ *   that fills them first.
+ * - `before`: the table's and the column's names before the unit's first statement, following
+ *   the renames before the change, or null when the unit itself created the table or the column
+ *   (which then holds no row the file did not put there).
+ *
+ * Statements are read through the shared statement cursor (`cursorOf`), on the splitter's one
+ * tokenizer, so a name or a keyword inside a string literal or a comment is never read as one.
+ *
+ * @module domains/schema/migrate/not-null-statements
+ */
+import type { SupportedDialect } from "../../../database/schema-registry";
+
+import {
+  cursorOf,
+  StatementCursor,
+  type StatementToken,
+} from "./statement-cursor";
+
+/** One column a statement makes NOT NULL, as the statements say it. Names are lower-cased. */
+export interface NotNullChange {
+  /** The statement's 0-based position in the unit. */
+  statement: number;
+  /** The table, as named at the statement. */
+  table: string;
+  /**
+   * The column whose null rows break the change, as named at the statement; `null` for a column
+   * added NOT NULL with no default, which every existing row breaks.
+   */
+  column: string | null;
+  /** The column the statement leaves required, as named after it: the one a field maps to. */
+  required: string;
+  /**
+   * The table and the column as named before the unit's first statement; `column` is `null` for
+   * an added column. `null` when the unit itself created the table or the column.
+   */
+  before: { table: string; column: string | null } | null;
+  /** An earlier statement of the unit wrote rows of this table, or may have. */
+  writtenEarlier: boolean;
+}
+
+/** A table as the statements read so far leave it. */
+interface TableState {
+  /** Its name before the unit ran, or `null` when the unit created it. */
+  origin: string | null;
+  /** A renamed or created column: its name before the unit ran, or `null` when the unit made it. */
+  columns: Map<string, string | null>;
+  written: boolean;
+}
+
+/** A column definition of a `CREATE TABLE` body or an `ADD`/`MODIFY`/`CHANGE` clause. */
+interface ColumnDefinition {
+  name: string;
+  notNull: boolean;
+  /** It gets a value without one being written: a default, a generated value, a sequence. */
+  hasValue: boolean;
+}
+
+/** First words of a statement that writes rows of the table it names next. */
+const ROW_WRITE_WORDS = new Set([
+  "UPDATE",
+  "INSERT",
+  "DELETE",
+  "REPLACE",
+  "MERGE",
+  "TRUNCATE",
+  "COPY",
+]);
+
+/** First words of a statement whose reach is not read: it may write rows of any table. */
+const UNREAD_WRITE_WORDS = new Set(["DO", "CALL", "WITH", "LOAD", "EXECUTE"]);
+
+/** Words that start an item of a table body, or an `ADD` clause, that is not a column. */
+const NON_COLUMN_WORDS = new Set([
+  "CONSTRAINT",
+  "PRIMARY",
+  "FOREIGN",
+  "UNIQUE",
+  "CHECK",
+  "EXCLUDE",
+  "INDEX",
+  "KEY",
+  "FULLTEXT",
+  "SPATIAL",
+  "PARTITION",
+  "PERIOD",
+  "SYSTEM",
+  "LIKE",
+]);
+
+/** Words in a column definition that give it a value no row has to write. */
+const VALUE_WORDS = new Set([
+  "DEFAULT",
+  "GENERATED",
+  "AS",
+  "AUTO_INCREMENT",
+  "AUTOINCREMENT",
+  "IDENTITY",
+]);
+
+/** PostgreSQL's sequence-backed types, which fill every row. */
+const SERIAL_TYPES = new Set([
+  "SERIAL",
+  "SERIAL2",
+  "SERIAL4",
+  "SERIAL8",
+  "SMALLSERIAL",
+  "BIGSERIAL",
+]);
+
+/** The rebuild twin SQLite copies a table into (`sqliteTableRebuildStatements`). */
+const REBUILD_PREFIX = "__new_";
+
+/** Modifiers between a row statement's first word and its table, skipped where they stand. */
+const ROW_MODIFIERS = [
+  "LOW_PRIORITY",
+  "DELAYED",
+  "HIGH_PRIORITY",
+  "QUICK",
+  "IGNORE",
+  "ONLY",
+];
+
+/** The tokens inside the parentheses `tokens` opens with, or undefined when they do not. */
+function parenthesised(
+  tokens: readonly StatementToken[]
+): StatementToken[] | undefined {
+  if (tokens[0] !== "(") return undefined;
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i] === "(") depth += 1;
+    if (tokens[i] === ")") depth -= 1;
+    if (depth === 0) return tokens.slice(1, i);
+  }
+  return undefined;
+}
+
+/** The comma-separated items of a token list, split outside parentheses. */
+function itemsOf(tokens: readonly StatementToken[]): StatementToken[][] {
+  return new StatementCursor(tokens).clauses();
+}
+
+/** An item that is one plain column name and nothing else, or undefined. */
+function plainName(item: readonly StatementToken[]): string | undefined {
+  const cursor = new StatementCursor(item);
+  const name = cursor.name();
+  return name !== undefined && cursor.peek() === undefined ? name : undefined;
+}
+
+/**
+ * What a column definition's tokens after its name say: NOT NULL outside any parentheses (so a
+ * CHECK's `IS NOT NULL` is not read as one), and a value no row has to write.
+ */
+function readDefinition(
+  name: string,
+  rest: readonly StatementToken[]
+): ColumnDefinition {
+  let depth = 0;
+  let notNull = false;
+  let hasValue = false;
+  let primaryKey = false;
+  rest.forEach((token, i) => {
+    if (token === "(") depth += 1;
+    if (token === ")") depth -= 1;
+    if (depth !== 0 || typeof token !== "string") return;
+    if (token === "NOT" && rest[i + 1] === "NULL") notNull = true;
+    if (VALUE_WORDS.has(token)) hasValue = true;
+    if (i === 0 && SERIAL_TYPES.has(token)) hasValue = true;
+    if (token === "PRIMARY" && rest[i + 1] === "KEY") primaryKey = true;
+  });
+  // SQLite's `INTEGER PRIMARY KEY` is the rowid, which every row gets.
+  if (primaryKey && rest[0] === "INTEGER") hasValue = true;
+  return { name, notNull, hasValue };
+}
+
+/** The column definitions of a `CREATE TABLE` body, table constraints left out. */
+function bodyColumns(
+  tokens: readonly StatementToken[]
+): ColumnDefinition[] | undefined {
+  const body = parenthesised(tokens);
+  if (body === undefined) return undefined;
+  const columns: ColumnDefinition[] = [];
+  for (const item of itemsOf(body)) {
+    const cursor = new StatementCursor(item);
+    const first = cursor.peek();
+    if (typeof first === "string" && NON_COLUMN_WORDS.has(first)) continue;
+    const name = cursor.name();
+    if (name === undefined) continue;
+    columns.push(readDefinition(name, cursor.rest()));
+  }
+  return columns;
+}
+
+/** The statements of a unit read in order, keeping what each leaves its tables. */
+class UnitReader {
+  private readonly tables = new Map<string, TableState>();
+  /** Tables dropped by the unit, by name, for a rebuild's twin renamed back onto one. */
+  private readonly dropped = new Map<string, TableState>();
+  /** The column definitions of the tables the unit created, for a rebuild's copy. */
+  private readonly created = new Map<string, ColumnDefinition[]>();
+  /** A statement whose reach is not read ran: it may have written rows of any table. */
+  private anyWritten = false;
+  readonly changes: NotNullChange[] = [];
+
+  constructor(private readonly dialect: SupportedDialect) {}
+
+  private state(table: string): TableState {
+    let state = this.tables.get(table);
+    if (state === undefined) {
+      state = { origin: table, columns: new Map(), written: false };
+      this.tables.set(table, state);
+    }
+    return state;
+  }
+
+  /** A column's name before the unit ran, or `null` when the unit made it or its table. */
+  private columnOrigin(state: TableState, column: string): string | null {
+    if (state.origin === null) return null;
+    return state.columns.has(column)
+      ? (state.columns.get(column) ?? null)
+      : column;
+  }
+
+  private change(
+    statement: number,
+    table: string,
+    column: string | null,
+    required: string
+  ): void {
+    const state = this.state(table);
+    const columnBefore =
+      column === null ? null : this.columnOrigin(state, column);
+    const before =
+      state.origin === null || (column !== null && columnBefore === null)
+        ? null
+        : { table: state.origin, column: columnBefore };
+    this.changes.push({
+      statement,
+      table,
+      column,
+      required,
+      before,
+      writtenEarlier: state.written || this.anyWritten,
+    });
+  }
+
+  read(statement: string, index: number): void {
+    const cursor = cursorOf(statement, this.dialect);
+    const first = cursor.peek();
+    if (typeof first !== "string") return;
+    if (UNREAD_WRITE_WORDS.has(first)) {
+      this.anyWritten = true;
+    } else if (ROW_WRITE_WORDS.has(first)) {
+      cursor.accept(first);
+      this.readRowWrite(cursor, first, index);
+    } else if (cursor.accept("CREATE", "TABLE")) {
+      this.readCreateTable(cursor);
+    } else if (cursor.accept("DROP", "TABLE")) {
+      this.readDropTables(cursor);
+    } else if (cursor.accept("ALTER", "TABLE")) {
+      this.readAlterTable(cursor, index);
+    } else if (cursor.accept("RENAME", "TABLE")) {
+      this.readRenameTables(cursor);
+    }
+  }
+
+  /**
+   * `UPDATE`, `INSERT`, `DELETE`, ... on a table: its rows written, and a rebuild's copy read. A
+   * write whose table is not read here (qualified, several tables, a join) may have written any.
+   */
+  private readRowWrite(
+    cursor: StatementCursor,
+    word: string,
+    index: number
+  ): void {
+    for (const modifier of ROW_MODIFIERS) cursor.accept(modifier);
+    // SQLite's `INSERT OR REPLACE` / `UPDATE OR IGNORE`: the word after OR is not the table.
+    const resolution = cursor.peek(1);
+    if (cursor.isWord("OR") && typeof resolution === "string") {
+      cursor.accept("OR", resolution);
+    }
+    if (word === "INSERT" || word === "REPLACE" || word === "MERGE") {
+      cursor.accept("INTO");
+    } else if (word === "DELETE" && !cursor.accept("FROM")) {
+      // MySQL's multi-table `DELETE a FROM a JOIN b` names its tables before FROM.
+      this.anyWritten = true;
+      return;
+    } else if (word === "TRUNCATE") {
+      cursor.accept("TABLE");
+    }
+    // PostgreSQL's `DELETE FROM ONLY t` / `TRUNCATE ONLY t`.
+    cursor.accept("ONLY");
+    const target = cursor.name();
+    if (target === undefined) {
+      this.anyWritten = true;
+      return;
+    }
+    this.state(target).written = true;
+    if (word === "TRUNCATE") {
+      while (cursor.accept(",")) {
+        const next = cursor.name();
+        if (next === undefined) this.anyWritten = true;
+        else this.state(next).written = true;
+      }
+      return;
+    }
+    const rest = cursor.rest();
+    if (word === "UPDATE") {
+      // A multi-table UPDATE (`UPDATE a JOIN b`, `UPDATE a, b`) writes tables this does not read.
+      const set = rest.indexOf("SET");
+      const head = set === -1 ? rest : rest.slice(0, set);
+      if (head.includes("JOIN") || head.includes(",")) this.anyWritten = true;
+    }
+    if (word === "INSERT") this.readRebuildCopy(rest, target, index);
+  }
+
+  /**
+   * `INSERT INTO __new_t [(cols)] SELECT items FROM t ...`, where the unit created `__new_t`: a
+   * rebuild of t. Each NOT NULL column of the twin is a change on t: the null rows of the column
+   * of t copied into it, or every row of t when nothing is copied into it and it has no value of
+   * its own. A copied item that is not a plain column, or a copy from more than one table, is
+   * not read.
+   */
+  private readRebuildCopy(
+    rest: readonly StatementToken[],
+    twin: string,
+    index: number
+  ): void {
+    const definitions = this.created.get(twin);
+    if (definitions === undefined || !twin.startsWith(REBUILD_PREFIX)) return;
+    const table = twin.slice(REBUILD_PREFIX.length);
+    let into = definitions.map(d => d.name);
+    let query = rest;
+    const listed = parenthesised(rest);
+    if (listed !== undefined) {
+      into = itemsOf(listed).map(item => plainName(item) ?? "");
+      query = rest.slice(listed.length + 2);
+    }
+    if (query[0] !== "SELECT") return;
+    const from = query.lastIndexOf("FROM");
+    if (from === -1) return;
+    const items = itemsOf(query.slice(1, from));
+    const source = new StatementCursor(query.slice(from + 1));
+    if (source.name() !== table) return;
+    if (source.isWord(",") || source.isWord("JOIN")) return;
+    const everyColumn =
+      items.length === 1 && items[0].length === 1 && items[0][0] === "*";
+    const copied = new Map(
+      into.map((name, i) => [
+        name,
+        everyColumn ? name : (plainName(items[i] ?? []) ?? null),
+      ])
+    );
+    for (const definition of definitions) {
+      if (!definition.notNull) continue;
+      if (copied.has(definition.name)) {
+        const column = copied.get(definition.name);
+        if (column) this.change(index, table, column, definition.name);
+      } else if (!definition.hasValue) {
+        this.change(index, table, null, definition.name);
+      }
+    }
+  }
+
+  /** `CREATE TABLE [IF NOT EXISTS] t (...)`: t made by the unit, with its columns. */
+  private readCreateTable(cursor: StatementCursor): void {
+    cursor.acceptCondition();
+    const table = cursor.name();
+    if (table === undefined) return;
+    const rest = cursor.rest();
+    const columns = bodyColumns(rest);
+    this.tables.set(table, {
+      origin: null,
+      columns: new Map(),
+      // `CREATE TABLE t AS SELECT ...` writes the rows it creates.
+      written: rest.includes("SELECT"),
+    });
+    if (columns !== undefined) this.created.set(table, columns);
+  }
+
+  /** `DROP TABLE [IF EXISTS] a[, b...]`: each gone, kept for a twin renamed back onto it. */
+  private readDropTables(cursor: StatementCursor): void {
+    cursor.acceptCondition();
+    do {
+      const table = cursor.name();
+      if (table === undefined) return;
+      this.dropped.set(table, this.state(table));
+      this.tables.delete(table);
+    } while (cursor.accept(","));
+  }
+
+  /** MySQL's `RENAME TABLE a TO b[, c TO d]`. */
+  private readRenameTables(cursor: StatementCursor): void {
+    do {
+      const from = cursor.name();
+      if (from === undefined || !cursor.accept("TO")) return;
+      const to = cursor.name();
+      if (to === undefined) return;
+      this.renameTable(from, to);
+    } while (cursor.accept(","));
+  }
+
+  /**
+   * A table renamed. A rebuild's twin renamed back onto the table it rebuilt, which the unit
+   * dropped, IS that table again: its rows were copied from it.
+   */
+  private renameTable(from: string, to: string): void {
+    const state = this.state(from);
+    this.tables.delete(from);
+    const rebuilt = this.dropped.get(to);
+    if (from === `${REBUILD_PREFIX}${to}` && rebuilt !== undefined) {
+      this.tables.set(to, {
+        ...rebuilt,
+        written: rebuilt.written || state.written,
+      });
+      this.dropped.delete(to);
+      return;
+    }
+    this.tables.set(to, state);
+  }
+
+  /** `ALTER TABLE [IF EXISTS] [ONLY] t <clause>[, <clause>...]`. */
+  private readAlterTable(cursor: StatementCursor, index: number): void {
+    cursor.acceptCondition();
+    cursor.accept("ONLY");
+    let table = cursor.name();
+    if (table === undefined) return;
+    for (const tokens of cursor.clauses()) {
+      const renamedTo = this.readAlterClause(
+        new StatementCursor(tokens),
+        table,
+        index
+      );
+      if (renamedTo !== undefined) table = renamedTo;
+    }
+  }
+
+  /** One clause of an ALTER TABLE on `table`; returns the table's new name when it renames it. */
+  private readAlterClause(
+    clause: StatementCursor,
+    table: string,
+    index: number
+  ): string | undefined {
+    const state = this.state(table);
+    if (clause.accept("ADD")) {
+      const first = clause.peek();
+      if (typeof first === "string" && NON_COLUMN_WORDS.has(first)) {
+        return undefined;
+      }
+      clause.accept("COLUMN");
+      clause.acceptCondition();
+      const column = clause.name();
+      if (column === undefined) return undefined;
+      const definition = readDefinition(column, clause.rest());
+      if (definition.notNull && !definition.hasValue) {
+        this.change(index, table, null, column);
+      }
+      state.columns.set(column, null);
+      return undefined;
+    }
+    if (clause.accept("ALTER")) {
+      clause.accept("COLUMN");
+      const column = clause.name();
+      if (column !== undefined && clause.accept("SET", "NOT", "NULL")) {
+        this.change(index, table, column, column);
+      }
+      return undefined;
+    }
+    if (clause.accept("MODIFY")) {
+      clause.accept("COLUMN");
+      const column = clause.name();
+      if (
+        column !== undefined &&
+        readDefinition(column, clause.rest()).notNull
+      ) {
+        this.change(index, table, column, column);
+      }
+      return undefined;
+    }
+    if (clause.accept("CHANGE")) {
+      clause.accept("COLUMN");
+      const from = clause.name();
+      const to = clause.name();
+      if (from === undefined || to === undefined) return undefined;
+      if (readDefinition(to, clause.rest()).notNull) {
+        this.change(index, table, from, to);
+      }
+      this.renameColumn(state, from, to);
+      return undefined;
+    }
+    if (clause.accept("RENAME")) return this.readRename(clause, table, state);
+    if (clause.accept("DROP")) {
+      clause.accept("COLUMN");
+      clause.acceptCondition();
+      const column = clause.name();
+      if (column !== undefined) state.columns.set(column, null);
+    }
+    return undefined;
+  }
+
+  /**
+   * `RENAME [COLUMN] a TO b` (a column), `RENAME [TO|AS] u` (the table); an index, key or
+   * constraint renamed leaves the table and its columns as they were.
+   */
+  private readRename(
+    clause: StatementCursor,
+    table: string,
+    state: TableState
+  ): string | undefined {
+    if (
+      clause.isWord("INDEX") ||
+      clause.isWord("KEY") ||
+      clause.isWord("CONSTRAINT")
+    ) {
+      return undefined;
+    }
+    if (clause.accept("COLUMN")) {
+      const from = clause.name();
+      if (from === undefined || !clause.accept("TO")) return undefined;
+      const to = clause.name();
+      if (to !== undefined) this.renameColumn(state, from, to);
+      return undefined;
+    }
+    if (!clause.accept("TO")) clause.accept("AS");
+    const to = clause.name();
+    if (to === undefined) return undefined;
+    // `RENAME a TO b` without COLUMN is a column rename on PostgreSQL and SQLite.
+    if (clause.accept("TO")) {
+      const column = clause.name();
+      if (column !== undefined) this.renameColumn(state, to, column);
+      return undefined;
+    }
+    this.renameTable(table, to);
+    return to;
+  }
+
+  private renameColumn(state: TableState, from: string, to: string): void {
+    if (from === to) return;
+    state.columns.set(to, this.columnOrigin(state, from));
+    state.columns.set(from, null);
+  }
+}
+
+/**
+ * Every column the statements of one unit make NOT NULL, in statement order, with what the
+ * statements before each did to its table. The one reading of a file's required columns.
+ */
+export function readNotNullChanges(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): NotNullChange[] {
+  const reader = new UnitReader(dialect);
+  statements.forEach((statement, index) => reader.read(statement, index));
+  return reader.changes;
+}

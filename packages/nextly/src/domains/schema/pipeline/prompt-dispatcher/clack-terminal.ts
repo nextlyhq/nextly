@@ -82,6 +82,14 @@ function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
   return event.kind === "destructive_drop";
 }
 
+/** Whether an event makes a column NOT NULL over rows: made required, or added required. */
+function makesColumnRequired(event: ClassifierEvent): boolean {
+  return (
+    event.kind === "add_not_null_with_nulls" ||
+    event.kind === "add_required_field_no_default"
+  );
+}
+
 /** Asks at the terminal, defaulting to no; a cancelled prompt is a no. */
 async function askInTerminal(question: string): Promise<boolean> {
   const answer = await clack.confirm({
@@ -193,7 +201,15 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       // judge: applied when covered, refused at once, naming the consent
       // that covers it, when not. Anything needing a real decision —
       // renames, type changes — still requires a terminal below.
-      if (candidates.length === 0 && events.every(isDrop)) {
+      //
+      // A column made required has no answer a run without a terminal could give, so it goes on
+      // unanswered: the push counts the rows in its way before anything runs and refuses naming
+      // the entity, the field and the count (`refuseRequiredColumnsOverNulls`), or goes ahead when
+      // no row is in the way any more. Refused here instead, it named none of them.
+      if (
+        candidates.length === 0 &&
+        events.every(e => isDrop(e) || makesColumnRequired(e))
+      ) {
         return {
           confirmedRenames: [],
           resolutions:

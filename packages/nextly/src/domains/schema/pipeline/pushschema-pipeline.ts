@@ -122,6 +122,7 @@ import type {
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
 import { builtByFor } from "./registered-collections";
+import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import {
   sqliteRebuiltTables,
@@ -871,6 +872,8 @@ export class PushSchemaPipeline {
       if (!dispatchResult.proceed) {
         throw new PromptCancelledError();
       }
+      // A column made NOT NULL over rows no answer fills is refused here, before anything runs.
+      await refuseNotNullOverNulls(args, classificationResult, dispatchResult);
 
       // F5 PR 4: patch desired.collections inline for make_optional
       // resolutions BEFORE building drizzleSchema, so pushSchema sees the

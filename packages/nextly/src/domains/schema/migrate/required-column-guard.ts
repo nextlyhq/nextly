@@ -1,0 +1,432 @@
+/**
+ * `nextly migrate` refusing a migration file that makes a column required over rows that would
+ * break it, naming the entity, the field and the count.
+ *
+ * The file's statements are read once (`readNotNullChanges`), and each change is counted
+ * where its count is the truth:
+ *
+ * - Before any statement of the file runs (`refuseRequiredColumnsOverNulls`), for a change no
+ *   earlier statement of the file writes rows for. Nothing has run and nothing is recorded, on
+ *   every dialect, MySQL included, where a statement that ran would stay applied.
+ * - At the statement itself (`requiredColumnCheckpoint`, called by the runner before each
+ *   statement), for a change an earlier statement of the file fills: the rows still null after
+ *   that fill are the ones that break it. On PostgreSQL and SQLite it is counted inside the
+ *   file's transaction, which the refusal rolls back; on MySQL the statements before it have run,
+ *   and the refusal names them.
+ *
+ * A table is judged only when the registry names it as a collection's, a Single's or a field
+ * group's (`dynamic_collections`, `dynamic_singles`, `dynamic_components`); Nextly's own tables
+ * have the core reconcile, and a plugin's are its own. A column maps to its field through the
+ * column descriptor. A field group's rows are counted by the collection or Single that holds
+ * them (`_parent_table`), so the refusal names each with its count.
+ *
+ * @module domains/schema/migrate/required-column-guard
+ */
+import { sql } from "drizzle-orm";
+
+import type { SupportedDialect } from "../../../database/schema-registry";
+import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  countRowsBreakingNotNull,
+  querySqlRows,
+  type RowsBreakingNotNull,
+} from "../pipeline/classifier/count-helpers";
+import {
+  introspectLiveColumns,
+  introspectTableNames,
+} from "../pipeline/diff/introspect-live";
+import {
+  requiredColumnBreakMessage,
+  requiredColumnOverNullsError,
+  type RequiredColumnBreak,
+  type RequiredColumnEntity,
+} from "../required-column-refusal";
+import {
+  getColumnDescriptor,
+  getComponentRowColumnDescriptor,
+} from "../services/field-column-descriptor";
+
+import type { MigrationUnit } from "./migration-transaction";
+import { readNotNullChanges } from "./not-null-statements";
+import { splitSqlStatements } from "./split-sql";
+import { labelOf } from "./statement-judgement";
+
+/** One column to count: its table and column as they stand when counted. */
+export interface RequiredColumnTarget {
+  table: string;
+  /** The column whose null rows break it; `null` for an added column, which every row breaks. */
+  column: string | null;
+  /** The column the change leaves required, which a field maps to. */
+  required: string;
+}
+
+/** A table the registry names, with the entity it belongs to. */
+interface TableOwner {
+  entity: RequiredColumnEntity;
+  /** The table's name as the registry records it. */
+  table: string;
+  fieldGroup: boolean;
+  /** Each field's column, lower-cased, to the field's name. */
+  fieldsByColumn: Map<string, string>;
+}
+
+/** The registry's entities, by table. Names are compared lower-cased. */
+export interface RequiredColumnOwners {
+  /** The collection, Single or field group whose table this is, or undefined. */
+  owner(table: string): TableOwner | undefined;
+  /** The collection or Single whose table this is: a field group row's `_parent_table`. */
+  holder(table: string): RequiredColumnEntity | undefined;
+}
+
+/** What the judgement reads of the database, injected so it can be judged without one. */
+export interface RequiredColumnFacts {
+  owners: RequiredColumnOwners;
+  /**
+   * The live column, by the owner's table name and the column name lower-cased: undefined when
+   * the table or the column is not there. `null` column asks for the table alone. `name` is the
+   * column's name as the database spells it, which the count uses.
+   */
+  live(
+    table: string,
+    column: string | null
+  ): { nullable: boolean; name?: string } | undefined;
+  count(target: {
+    table: string;
+    column: string | null;
+    byParent: boolean;
+  }): Promise<RowsBreakingNotNull>;
+}
+
+/** The registry tables, with the kind of entity each records. */
+const REGISTRIES: ReadonlyArray<{
+  table: string;
+  kind: RequiredColumnEntity["kind"];
+}> = [
+  { table: "dynamic_collections", kind: "collection" },
+  { table: "dynamic_singles", kind: "single" },
+  { table: STORAGE_FORMAT.registryTable, kind: "fieldGroup" },
+];
+
+/**
+ * The columns that would break, counted for each target: the one judgement both the pre-run
+ * and the at-statement count make. A target on a table the registry does not name is left
+ * alone; one whose column is not on the table, or is already NOT NULL, has no row to break
+ * (a statement on a column that is not there fails on its own). A count that fails refuses,
+ * naming the table, rather than letting an uncounted change run.
+ */
+export async function judgeRequiredColumnTargets(
+  targets: readonly RequiredColumnTarget[],
+  facts: RequiredColumnFacts
+): Promise<RequiredColumnBreak[]> {
+  const breaks: RequiredColumnBreak[] = [];
+  for (const target of targets) {
+    const owner = facts.owners.owner(target.table);
+    if (owner === undefined) continue;
+    const live = facts.live(owner.table, target.column);
+    if (live === undefined) continue;
+    if (target.column !== null && !live.nullable) continue;
+    let rows: RowsBreakingNotNull;
+    try {
+      rows = await facts.count({
+        table: owner.table,
+        column: target.column === null ? null : (live.name ?? target.column),
+        byParent: owner.fieldGroup,
+      });
+    } catch (error) {
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage: `The rows of '${owner.table}' that would break making '${target.required}' required could not be counted, so the migration was not run.`,
+        logContext: {
+          reason: "required-column-count-failed",
+          table: owner.table,
+          column: target.column,
+        },
+        ...(error instanceof Error ? { cause: error } : {}),
+      });
+    }
+    if (rows.total === 0) continue;
+    const field =
+      owner.fieldsByColumn.get(target.required) ??
+      (target.column === null
+        ? undefined
+        : owner.fieldsByColumn.get(target.column)) ??
+      target.required;
+    // A field group's users with the rows each holds; a row whose parent table the registry does
+    // not name is still counted in the total.
+    const users = [...rows.byParentTable].flatMap(([table, count]) => {
+      const holder = facts.owners.holder(table);
+      return holder === undefined ? [] : [{ ...holder, count }];
+    });
+    breaks.push({
+      entity: owner.entity,
+      field,
+      count: rows.total,
+      added: target.column === null,
+      ...(owner.fieldGroup ? { users } : {}),
+    });
+  }
+  return breaks;
+}
+
+/** A registry row's `fields`, which a dialect returns as JSON text or as the parsed value. */
+function fieldsOf(raw: unknown): FieldDefinition[] {
+  const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+  return Array.isArray(value) ? (value as FieldDefinition[]) : [];
+}
+
+/**
+ * The registry's collections, Singles and field groups, read through `db`: the handle a count
+ * runs on, so inside a file's transaction it reads what the transaction sees. A registry table
+ * the database does not have records nothing.
+ */
+export async function readRequiredColumnOwners(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<RequiredColumnOwners> {
+  const present = new Set(
+    (
+      await introspectTableNames(
+        db,
+        dialect,
+        REGISTRIES.map(r => r.table)
+      )
+    ).map(name => name.toLowerCase())
+  );
+  const owners = new Map<string, TableOwner>();
+  for (const registry of REGISTRIES) {
+    if (!present.has(registry.table)) continue;
+    const rows = await querySqlRows<{
+      slug: string;
+      table_name: string;
+      fields: unknown;
+    }>(
+      db,
+      dialect,
+      sql`SELECT ${sql.identifier("slug")} AS slug, ${sql.identifier("table_name")} AS table_name, ${sql.identifier("fields")} AS fields FROM ${sql.identifier(registry.table)}`
+    );
+    const fieldGroup = registry.kind === "fieldGroup";
+    for (const row of rows) {
+      const fieldsByColumn = new Map<string, string>();
+      for (const field of fieldsOf(row.fields)) {
+        if (typeof field?.name !== "string") continue;
+        // The column a field occupies is the descriptor's answer, never a second spelling of it.
+        const descriptor = fieldGroup
+          ? getComponentRowColumnDescriptor(field, dialect, "fieldGroup")
+          : getColumnDescriptor(field, dialect, "collection");
+        if (descriptor !== null) {
+          fieldsByColumn.set(descriptor.name.toLowerCase(), field.name);
+        }
+      }
+      owners.set(String(row.table_name).toLowerCase(), {
+        entity: { kind: registry.kind, slug: String(row.slug) },
+        table: String(row.table_name),
+        fieldGroup,
+        fieldsByColumn,
+      });
+    }
+  }
+  return {
+    owner: table => owners.get(table.toLowerCase()),
+    holder: table => {
+      const owner = owners.get(table.toLowerCase());
+      return owner === undefined || owner.fieldGroup ? undefined : owner.entity;
+    },
+  };
+}
+
+/** The facts of the database `db` reaches, for the targets on tables the registry names. */
+async function readFacts(
+  db: unknown,
+  dialect: SupportedDialect,
+  targets: readonly RequiredColumnTarget[]
+): Promise<RequiredColumnFacts> {
+  const owners = await readRequiredColumnOwners(db, dialect);
+  const tables = [
+    ...new Set(
+      targets.flatMap(t => {
+        const owner = owners.owner(t.table);
+        return owner === undefined ? [] : [owner.table];
+      })
+    ),
+  ];
+  const snapshot = await introspectLiveColumns(db, dialect, tables);
+  const columns = new Map(
+    snapshot.tables.map(table => [
+      table.name.toLowerCase(),
+      new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
+    ])
+  );
+  return {
+    owners,
+    live: (table, column) => {
+      const live = columns.get(table.toLowerCase());
+      if (live === undefined) return undefined;
+      if (column === null) return { nullable: true };
+      const found = live.get(column.toLowerCase());
+      return found === undefined
+        ? undefined
+        : { nullable: found.nullable, name: found.name };
+    },
+    count: target => countRowsBreakingNotNull(db, dialect, target),
+  };
+}
+
+/**
+ * The refusal, as the shared one names each column (`requiredColumnOverNullsError`), with a
+ * message that says which file it was and what of it ran: nothing, when it was refused before
+ * its first statement; at a statement, the statements before it, and whether they stayed.
+ */
+export function requiredColumnMigrationRefusal(
+  breaks: readonly RequiredColumnBreak[],
+  where: {
+    source: string;
+    dialect: SupportedDialect;
+    at?: {
+      index: number;
+      statements: readonly string[];
+      transaction: boolean;
+    };
+  }
+): NextlyError {
+  const base = requiredColumnOverNullsError(breaks, { source: where.source });
+  const sentences = breaks.map(requiredColumnBreakMessage).join(" ");
+  const { at } = where;
+  let message: string;
+  if (at === undefined) {
+    message = `${where.source} was refused before any of its statements ran, and nothing of it was applied: ${sentences}`;
+  } else {
+    const label = (i: number) =>
+      `${String(i + 1)}. ${labelOf(at.statements[i], where.dialect)}`;
+    const ran = at.statements.slice(0, at.index).map((_, i) => label(i));
+    // What stayed of the statements that ran: a transaction undoes them where the dialect can
+    // undo a schema change; MySQL commits each schema change as it runs, and with it any rows
+    // written before it.
+    const kept = !at.transaction
+      ? "They ran outside a transaction, and stayed applied."
+      : where.dialect === "mysql"
+        ? "MySQL commits a schema change as it runs, so a schema change among them stayed applied, with any rows written before it; the rest was rolled back."
+        : "The file's transaction was rolled back, so none of them stayed applied.";
+    message = `${where.source} was refused at its statement ${label(at.index)} (of ${String(at.statements.length)}): ${sentences} The statements that ran before it: ${ran.join("; ")}. ${kept}`;
+  }
+  return new NextlyError({
+    code: base.code,
+    publicMessage: message,
+    publicData: base.publicData,
+    logContext: {
+      ...base.logContext,
+      ...(at === undefined
+        ? { phase: "before-any-statement" }
+        : { phase: "at-statement", statement: at.index + 1 }),
+    },
+  });
+}
+
+/**
+ * The columns a file would break before any of its statements runs: each change no earlier
+ * statement of the file writes rows for, counted under the names it had before the file, and
+ * skipped where the file itself created its table or column. Reads nothing when there is none.
+ */
+export async function requiredColumnBreaksBeforeRun(
+  db: unknown,
+  dialect: SupportedDialect,
+  statements: readonly string[]
+): Promise<RequiredColumnBreak[]> {
+  const targets = readNotNullChanges(statements, dialect).flatMap(change =>
+    change.writtenEarlier || change.before === null
+      ? []
+      : [
+          {
+            table: change.before.table,
+            column: change.before.column,
+            required: change.required,
+          },
+        ]
+  );
+  if (targets.length === 0) return [];
+  return judgeRequiredColumnTargets(
+    targets,
+    await readFacts(db, dialect, targets)
+  );
+}
+
+/**
+ * Refuses a migration file whose statements make a column required over rows that would break
+ * it, before any of them runs and before the ledger records an attempt. `source` is the file's
+ * name, as the refusal names it.
+ */
+export async function refuseRequiredColumnsOverNulls(
+  db: unknown,
+  dialect: SupportedDialect,
+  statements: readonly string[],
+  source: string
+): Promise<void> {
+  const breaks = await requiredColumnBreaksBeforeRun(db, dialect, statements);
+  if (breaks.length === 0) return;
+  throw requiredColumnMigrationRefusal(breaks, { source, dialect });
+}
+
+/**
+ * What `migrate --dry-run` says of a pending file: each column a real run would refuse it over
+ * before running it, from the same count. A change the file fills first is counted only at its
+ * statement, when the run gets there.
+ */
+export async function previewRequiredColumns(
+  db: unknown,
+  dialect: SupportedDialect,
+  file: { upSql: string; transaction: boolean },
+  logger: { info(message: string): void }
+): Promise<void> {
+  const statements = splitSqlStatements(file.upSql, dialect, file);
+  for (const b of await requiredColumnBreaksBeforeRun(
+    db,
+    dialect,
+    statements
+  )) {
+    logger.info(
+      `    ✖ a real run would refuse it: ${requiredColumnBreakMessage(b)}`
+    );
+  }
+}
+
+/**
+ * The count a unit's runner makes before each statement, for each change an earlier statement
+ * of the unit writes rows for, through the handle the statements run on (the transaction's,
+ * when there is one): the rows still null after the fill. Undefined when the unit has no such
+ * change, so a runner pays nothing for it. A DOWN is left to the database.
+ */
+export function requiredColumnCheckpoint(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  unit: MigrationUnit
+): ((db: unknown, index: number) => Promise<void>) | undefined {
+  if (unit.direction === "down") return undefined;
+  const byStatement = new Map<number, RequiredColumnTarget[]>();
+  for (const change of readNotNullChanges(statements, dialect)) {
+    if (!change.writtenEarlier) continue;
+    const targets = byStatement.get(change.statement) ?? [];
+    targets.push({
+      table: change.table,
+      column: change.column,
+      required: change.required,
+    });
+    byStatement.set(change.statement, targets);
+  }
+  if (byStatement.size === 0) return undefined;
+  return async (db, index) => {
+    const targets = byStatement.get(index);
+    if (targets === undefined) return;
+    const breaks = await judgeRequiredColumnTargets(
+      targets,
+      await readFacts(db, dialect, targets)
+    );
+    if (breaks.length === 0) return;
+    throw requiredColumnMigrationRefusal(breaks, {
+      source: unit.source,
+      dialect,
+      at: { index, statements, transaction: unit.transaction },
+    });
+  };
+}
