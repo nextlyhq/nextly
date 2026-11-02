@@ -358,7 +358,8 @@ function selectedInstance(
     editor.document,
     editor.selectedId,
     library.definitions,
-    library.components
+    library.components,
+    lockViewOf(editor)
   );
 }
 

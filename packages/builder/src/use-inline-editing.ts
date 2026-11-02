@@ -24,9 +24,11 @@
  */
 
 import { getBlock, findNode } from "@nextlyhq/blocks-engine";
+import { INSTANCE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useCallback, useSyncExternalStore } from "react";
 
 import type { EditorState } from "./editor-state";
+import { composedTextAt } from "./exposed-inline";
 import {
   INLINE_EDIT_UNCHANGED,
   type InlineEditOutcome,
@@ -41,7 +43,11 @@ import {
   type InlineRichTextEditorLoader,
   type InlineRichTextFinished,
 } from "./use-inline-rich-text";
-import { useInlineText, type InlineTextEditing } from "./use-inline-text";
+import {
+  editableFrom,
+  useInlineText,
+  type InlineTextEditing,
+} from "./use-inline-text";
 
 export interface UseInlineEditingResult {
   /** The plain value being edited, or `null`. */
@@ -92,28 +98,33 @@ function markedAt(target: EventTarget | null): {
   nodeId: string;
   prop: string;
   element: HTMLElement;
+  /** Whether the node is one a component contributed, by its marker. */
+  inComponent: boolean;
 } | null {
-  if (!(target instanceof Element)) return null;
-  const element = target.closest<HTMLElement>("[data-nx-prop]");
-  if (element === null) return null;
-  const prop = element.getAttribute("data-nx-prop");
-  const nodeId = element
-    .closest("[data-nx-node]")
-    ?.getAttribute("data-nx-node");
-  if (prop === null || nodeId === null || nodeId === undefined) return null;
-  return { nodeId, prop, element };
+  const found = editableFrom(target);
+  if (found === null) return null;
+  const placement =
+    found.element.closest("[data-nx-node]")?.getAttribute(INSTANCE_ATTRIBUTE) ??
+    "";
+  return { ...found, inComponent: placement !== "" };
 }
 
 /**
  * @param editor - the editor state whose document is being edited
  * @param loadRichText - how to obtain the shared rich-text editor, when there is one
  * @param onFinished - told how every finished PASSAGE turned out; see {@link InlineRichTextFinished}
+ * @param onPartOf - told the placement whose text was double-clicked when that
+ *   text belongs to the component's design rather than to a field it exposes;
+ *   the placement is selected first, and the host says so
+ * @param passages - where inspector fields hold open passages; `commit`
+ *   finishes them first, see {@link OpenPassages}
  * @returns one edit at a time, and the canvas handler that starts it
  */
 export function useInlineEditing(
   editor: EditorState,
   loadRichText?: InlineRichTextEditorLoader,
   onFinished?: InlineRichTextFinished,
+  onPartOf?: (placementId: string) => void,
   passages?: OpenPassages
 ): UseInlineEditingResult {
   const subscribe = useCallback(
@@ -232,6 +243,28 @@ export function useInlineEditing(
     }) => {
       const found = markedAt(event.target);
       if (found === null) return;
+      // Text inside a component: its exposed text is edited in place through
+      // the placement (the plain surface below finds it), and anything else
+      // is the component's own, which selects the placement and says so.
+      // Asked only of an element a component contributed, which the renderer
+      // marks with its placement: the page's own text never needs the
+      // composition.
+      const composed = found.inComponent
+        ? composedTextAt(
+            editor.document,
+            editor.composed(),
+            found.nodeId,
+            found.prop,
+            editor.lockDefinitions
+          )
+        : null;
+      if (composed?.kind === "part-of") {
+        if (rich.commit().status === "refused") return;
+        plain.commit();
+        editor.select(composed.placementId);
+        onPartOf?.(composed.placementId);
+        return;
+      }
       const point =
         event.clientX === undefined || event.clientY === undefined
           ? undefined
@@ -250,7 +283,7 @@ export function useInlineEditing(
       if (rich.commit().status === "refused") return;
       plain.onDoubleClick(event);
     },
-    [kindOf, openOn, plain, rich]
+    [editor, kindOf, onPartOf, openOn, plain, rich]
   );
 
   return {

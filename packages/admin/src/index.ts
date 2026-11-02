@@ -119,6 +119,8 @@ export { useRecentActivity } from "./hooks/queries/useRecentActivity";
 
 // Custom hooks
 export { useDebouncedValue } from "./hooks/useDebouncedValue";
+// The signed-in user's id, for a surface that keeps something per user.
+export { useCurrentUserId } from "./hooks/useCurrentUserId";
 // Permission gating (D36) — client-side UX checks for admin + plugin UI.
 export { useCan } from "./hooks/useCan";
 /**

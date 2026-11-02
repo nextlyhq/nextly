@@ -179,6 +179,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "toastMutationResult (value)",
   "transformColumns (value)",
   "useBeforeDocumentAction (value)",
+  "useCurrentUserId (value)",
   "useDocumentActions (value)",
   "useDocumentCheckpoint (value)",
   "useDocumentIdentity (value)",

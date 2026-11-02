@@ -515,7 +515,7 @@ export interface LockView {
 }
 
 /** The view's lock source, or the live registry the store defaults to. */
-function lockSourceOf(view: LockView | undefined): SlotDefaultSource {
+export function lockSourceOf(view: LockView | undefined): SlotDefaultSource {
   return view?.definitions ?? registryBlockSource();
 }
 
