@@ -45,6 +45,7 @@ import {
   walkNodes,
   type BlockDocument,
   type BreakpointSet,
+  type Rgb,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -258,8 +259,51 @@ function siteSurface(
  * scheme over what may be a light ground.
  */
 function isDarkGround(value: string): boolean {
-  const rgb = parseColor(value);
-  return rgb !== undefined && relativeLuminance(rgb) < DARK_GROUND_LUMINANCE;
+  const luminance = groundLuminance(value.trim());
+  return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
+}
+
+/** `oklch(L …)`, its lightness as a number or a percentage. */
+const OKLCH = /^oklch\(\s*([\d.]+)(%?)/i;
+/** `hsl(H S% L%)` or `hsla(H, S%, L%, A)`, hue optionally in degrees. */
+const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
+
+/**
+ * The relative luminance of a ground colour, or `undefined` when it cannot be
+ * told. Hex and `rgb()` go through the engine's own parser. `oklch()`, which
+ * Tailwind themes write, carries perceptual lightness directly: its L cubed is
+ * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
+ * which shadcn-style themes write, converts to rgb by the standard formula.
+ */
+function groundLuminance(text: string): number | undefined {
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return relativeLuminance(rgb);
+  const oklch = OKLCH.exec(text);
+  if (oklch) {
+    const lightness = Number(oklch[1]) / (oklch[2] === "%" ? 100 : 1);
+    return Math.min(1, Math.max(0, lightness)) ** 3;
+  }
+  const hsl = HSL.exec(text);
+  if (hsl) {
+    const [hue, saturation, lightness] = [hsl[1], hsl[2], hsl[3]].map(Number);
+    return relativeLuminance(
+      hslToRgb(hue ?? 0, (saturation ?? 0) / 100, (lightness ?? 0) / 100)
+    );
+  }
+  return undefined;
+}
+
+/** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
+function hslToRgb(hue: number, saturation: number, lightness: number): Rgb {
+  const h = ((hue % 360) + 360) % 360;
+  const a = saturation * Math.min(lightness, 1 - lightness);
+  const channel = (n: number): number => {
+    const k = (n + h / 30) % 12;
+    return Math.round(
+      (lightness - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255
+    );
+  };
+  return { r: channel(0), g: channel(8), b: channel(4), a: 1 };
 }
 
 /** Whether an event started inside editor chrome rather than inside the page. */

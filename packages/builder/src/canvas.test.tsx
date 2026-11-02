@@ -3404,10 +3404,39 @@ describe("the site's ground and text on the canvas root", () => {
     ).toBe(false);
   });
 
+  it("judges oklch and hsl grounds by their lightness", () => {
+    // Tailwind themes write oklch, shadcn-style themes hsl; a dark ground in
+    // either is dark, and a light one is not.
+    const marked = (dark: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-dark-ground");
+    expect(marked("oklch(0.145 0 0)")).toBe(true);
+    expect(marked("oklch(14.5% 0 0)")).toBe(true);
+    expect(marked("hsl(222 47% 11%)")).toBe(true);
+    expect(marked("hsl(222, 47%, 11%)")).toBe(true);
+    expect(marked("oklch(0.98 0 0)")).toBe(false);
+    expect(marked("hsl(0 0% 98%)")).toBe(false);
+  });
+
   it("marks no dark ground when it cannot read the dark value", () => {
     // A valid colour this engine does not parse says nothing about luminance,
     // so the canvas keeps the page's light default rather than guessing dark.
-    for (const dark of ["white", "oklch(0.98 0 0)", "var(--elsewhere)"]) {
+    for (const dark of [
+      "white",
+      "color-mix(in srgb, white, black)",
+      "var(--elsewhere)",
+    ]) {
       const site: SiteSheetInput = {
         breakpoints,
         tokens: {
