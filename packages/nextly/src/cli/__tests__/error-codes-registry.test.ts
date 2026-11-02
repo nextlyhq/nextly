@@ -229,6 +229,12 @@ describe("the errors a command can end with", () => {
         join("cli", "commands", "create-admin.ts"),
         join("cli", "commands", "create-admin.ts"),
       ],
+      // `nextly migrate` prints the error, then exits 2 for an edited
+      // migration and 1 otherwise (`migrateExitCode`).
+      [
+        join("cli", "commands", "migrate.ts"),
+        join("cli", "commands", "migrate.ts"),
+      ],
     ]);
     const found: string[] = [];
     for (const file of sourceFiles(join(SRC, "cli"))) {
