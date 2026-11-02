@@ -312,7 +312,7 @@ describe("canPlace: component placements", () => {
       )
     ).toMatchObject({
       reason: "content-model",
-      refusedBy: { type: "t/box", id: "inner" },
+      refusedBy: { type: "t/box" },
     });
   });
 
@@ -431,5 +431,98 @@ describe("resolveContentModel", () => {
       content: "flow",
       without: ["interactive", "main"],
     });
+  });
+});
+
+describe("resolveContentModel containment", () => {
+  it("reads an answer whose fields throw when read as undeclared", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        // Answers `then` like a plain object, so only the fields read during
+        // normalisation throw.
+        get(_target, key) {
+          if (key === "then") return undefined;
+          throw new Error("boom");
+        },
+      }
+    );
+    expect(resolveContentModel(() => hostile, {})).toBe(
+      UNDECLARED_CONTENT_MODEL
+    );
+  });
+});
+
+describe("canPlace: a placement is what it composes to", () => {
+  it("counts an override that switches the inner box's link on", () => {
+    const exposing = component(undefined) as unknown as {
+      exposed?: unknown;
+    };
+    exposing.exposed = [
+      {
+        id: "go",
+        label: "Link",
+        type: "text",
+        nodeId: "inner",
+        propPath: "link",
+      },
+    ];
+    const components = new Map([["c", exposing as unknown as BlockDocument]]);
+    const placed = node(COMPONENT_INSTANCE_TYPE, {
+      componentId: "c",
+      overrides: { go: "/go" },
+    });
+    expect(
+      canPlace([node("t/button")], into(placed, "body"), sources(components))
+    ).toMatchObject({ reason: "content-model" });
+  });
+
+  it("takes phrasing from its roots, not from a phrasing block inside a flow root", () => {
+    const flowRoot = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "wrap",
+          type: "t/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [{ id: "b", type: "t/button", version: 1, props: {} }],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const components = new Map([["c", flowRoot]]);
+    expect(
+      canPlace([instance("c")], into(node("t/label")), sources(components))
+    ).toMatchObject({ reason: "phrasing-only" });
+  });
+});
+
+describe("canPlace: a block that draws nothing", () => {
+  it("is no content, so a link refuses it only once it draws", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "t/frame",
+          rendersNothing: (props: { src?: string }) => !props.src,
+          contentModel: () => ({ is: ["flow", "interactive"] }),
+        },
+      ] as never,
+      { source: "test" }
+    );
+    const linked = node("t/box", { link: "/go" });
+    expect(canPlace([node("t/frame")], into(linked), sources())).toEqual({
+      allowed: true,
+    });
+    expect(
+      canPlace(
+        [node("t/frame", { src: "https://example.com" })],
+        into(linked),
+        sources()
+      )
+    ).toMatchObject({ reason: "content-model" });
   });
 });

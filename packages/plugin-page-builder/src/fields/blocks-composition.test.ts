@@ -46,6 +46,23 @@ beforeEach(() => {
       // refused on its own account, which these cases do not test.
       { ...base, name: "acme/box", slots: { children: {} } },
       { ...base, name: "acme/columns", slots: { children: {} } },
+      {
+        ...base,
+        name: "acme/linkcard",
+        slots: { children: {} },
+        contentModel: (props: { link?: string }) =>
+          props.link
+            ? {
+                is: ["flow", "interactive"],
+                accepts: { without: ["interactive"] },
+              }
+            : { is: ["flow"] },
+      },
+      {
+        ...base,
+        name: "acme/cta",
+        contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
+      },
       { ...base, name: "acme/column", parent: ["acme/columns"] },
       {
         ...base,
@@ -1120,6 +1137,50 @@ describe("a component save judged inside the documents that use it", () => {
       })
     ).toEqual([]);
     expect(asked).toEqual([]);
+  });
+
+  it("judges its hosts when a setting changes what it is, with its shape unmoved", async () => {
+    // The page puts a call to action in the card's exposed slot; switching
+    // the card's link on moves nothing a shape footprint records.
+    const tile = (props: Node) =>
+      component(
+        [
+          {
+            id: "card",
+            type: "acme/linkcard",
+            version: 1,
+            props,
+            slots: { children: [] },
+          },
+        ],
+        { slots: { body: { label: "Body", nodeId: "card", slot: "children" } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { tile: { published: tile({}) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "tile", {
+              slots: {
+                body: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ tile: [hostPage] });
+
+    const issues = await judge(
+      tile({ link: "/go" }),
+      write(readStored, COMPONENTS, "tile"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
   });
 
   it("does not report a host that was already broken before this save", async () => {

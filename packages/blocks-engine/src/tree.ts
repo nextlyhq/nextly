@@ -143,6 +143,8 @@ export interface SlotDefaultSource {
          * `resolveContentModel`, which checks it rather than trusting it.
          */
         contentModel?: ContentModelDeclaration;
+        /** Whether these props draw nothing, read by the placement rule. */
+        rendersNothing?: (props: never) => boolean;
         /** The label an author knows the block by, read to word a refusal. */
         editor?: { readonly label?: string };
       }

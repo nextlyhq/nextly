@@ -911,7 +911,12 @@ export const pageBuilder = (
         onPlacementUnjudged: found =>
           ctx.logger.warn(
             `[page-builder] a save kept ${String(found.breaks)} block placement(s) the editor's rules refuse, because the stored value they may already be part of could not be read; repair them in the editor`,
-            { field: found.field, collection: found.collection }
+            {
+              field: found.field,
+              kind: found.kind,
+              slug: found.slug,
+              id: found.id,
+            }
           ),
         onLockedExposures: found =>
           ctx.logger.warn(

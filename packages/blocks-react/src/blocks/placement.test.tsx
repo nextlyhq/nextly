@@ -168,6 +168,37 @@ const VARIANTS: readonly Variant[] = [
     is: ["flow", "interactive"],
     without: [],
   },
+  {
+    name: "Rich text holding an unusable link",
+    type: "core/rich-text",
+    props: {
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [
+                {
+                  type: "link",
+                  url: "javascript:alert(1)",
+                  children: [{ type: "text", text: "Read on" }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+    ...FLOW,
+  },
+  {
+    name: "Embed with nothing to embed",
+    type: "core/embed",
+    props: {},
+    is: [],
+    without: [],
+  },
   { name: "List", type: "core/list", props: { items: ["a"] }, ...FLOW },
   {
     name: "Image",

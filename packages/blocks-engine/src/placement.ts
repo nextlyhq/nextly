@@ -19,13 +19,19 @@
  * change its HTML is judged by what it now renders.
  */
 import {
+  CONTENT_KINDS,
   contentModelKey,
+  NO_MARKUP_CONTENT_MODEL,
   resolveContentModel,
   type ContentKind,
   type ResolvedContentModel,
 } from "./content-model";
-import { COMPONENT_INSTANCE_TYPE } from "./document";
-import { MAX_COMPOSED_DEPTH, MAX_NODES } from "./limits";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockNode,
+} from "./document";
+import { MAX_NODES } from "./limits";
 import {
   canBeRoot,
   canNest,
@@ -35,8 +41,13 @@ import {
   type NestingSource,
 } from "./nesting";
 import { isPlainRecord } from "./plain-record";
-import { readableDefinition, type ComponentLookup } from "./resolve-instances";
+import {
+  readableDefinition,
+  resolveComponentInstances,
+  type ComponentLookup,
+} from "./resolve-instances";
 import type { SlotDefaultSource } from "./tree";
+import { declaresNoMarkup } from "./visibility";
 
 /**
  * What the rule reads its answers from.
@@ -150,15 +161,16 @@ interface SlotRule {
 }
 
 /**
- * Answers memoised for one judgement. A component's slots and kinds are read
- * by walking its definition, and a drag asks about the same placement on every
- * pointer move.
+ * Answers memoised for one judgement. A placement's slots and kinds are read
+ * by composing it, and a drag asks about the same placement on every pointer
+ * move. Keyed by the NODE, because its overrides and variant are part of what
+ * it composes to.
  */
 interface Memo {
-  readonly instances: Map<string, InstanceFacts | undefined>;
+  readonly instances: WeakMap<object, InstanceFacts | undefined>;
 }
 
-/** What one component placement declares, read from its definition. */
+/** What one component placement declares, read from what it composes to. */
 interface InstanceFacts {
   readonly slots: ReadonlyMap<string, SlotRule>;
   readonly kinds: readonly ContentKind[];
@@ -166,34 +178,36 @@ interface InstanceFacts {
 
 /** A fresh memo, for one judgement. */
 function newMemo(): Memo {
-  return { instances: new Map() };
+  return { instances: new WeakMap() };
 }
 
 /**
  * A node's content model for its props.
  *
- * A component placement is what its component renders: every kind any block
- * in the definition is. Its slots are judged per slot, so the placement itself
- * refuses nothing beneath it here.
+ * A block that draws nothing for these props is no content at all, decided by
+ * its own `rendersNothing`. A component placement is what it composes to:
+ * every kind its blocks are, phrasing only when every root is. Its slots are
+ * judged per slot, so the placement itself refuses nothing beneath it here.
  */
 function modelOf(
   node: PlacedNode,
   sources: PlacementSources,
-  memo: Memo,
-  depth = 0
+  memo: Memo
 ): ResolvedContentModel {
   if (node.type === COMPONENT_INSTANCE_TYPE) {
-    const facts = instanceFacts(node, sources, memo, depth);
-    return {
-      is: facts?.kinds ?? ["flow"],
-      content: "flow",
-      without: [],
-    };
+    const facts = instanceFacts(node, sources, memo);
+    return { is: facts?.kinds ?? ["flow"], content: "flow", without: [] };
   }
-  return resolveContentModel(
-    sources.definitions.get(node.type)?.contentModel,
-    node.props
-  );
+  const definition = sources.definitions.get(node.type);
+  if (
+    definition !== undefined &&
+    declaresNoMarkup(node as unknown as BlockNode, type =>
+      sources.definitions.get(type)
+    )
+  ) {
+    return NO_MARKUP_CONTENT_MODEL;
+  }
+  return resolveContentModel(definition?.contentModel, node.props);
 }
 
 /** A node's content model as a comparable string. */
@@ -218,7 +232,7 @@ function declaredSlots(
   memo: Memo
 ): ReadonlyMap<string, SlotRule> | undefined {
   if (node.type === COMPONENT_INSTANCE_TYPE) {
-    return instanceFacts(node, sources, memo, 0)?.slots;
+    return instanceFacts(node, sources, memo)?.slots;
   }
   const definition = sources.definitions.get(node.type);
   if (definition === undefined) return undefined;
@@ -253,48 +267,47 @@ export function declaredSlotNames(
 }
 
 /**
- * What a component placement declares: the slots its component exposes, each
- * accepting what both the exposure and the inner slot allow and refusing what
- * the inner chain refuses, and every kind its blocks are.
- *
- * `depth` bounds the walk through components placed inside components, at the
- * same cap the resolver composes to.
+ * What a component placement declares, read from what it COMPOSES to: the
+ * resolver applies its variant and overrides and expands the components it
+ * holds, so a placement whose override switches a Card's link on is judged as
+ * the linked Card it draws. One implementation of "what does this placement
+ * draw", the resolver's, rather than a second one here.
  */
 function instanceFacts(
   node: PlacedNode,
   sources: PlacementSources,
-  memo: Memo,
-  depth: number
+  memo: Memo
 ): InstanceFacts | undefined {
-  const props = isPlainRecord(node.props) ? node.props : undefined;
-  const componentId = props?.componentId;
-  if (typeof componentId !== "string") return undefined;
-  if (memo.instances.has(componentId)) return memo.instances.get(componentId);
-  // Recorded before the walk, so a component reaching itself reads as unknown
-  // rather than recursing; the cycle is the resolver's to refuse.
-  memo.instances.set(componentId, undefined);
+  if (!isPlainRecord(node)) return undefined;
+  if (memo.instances.has(node)) return memo.instances.get(node);
+  // Recorded before composing, so a placement reaching itself reads as
+  // unknown rather than recursing; the cycle is the resolver's to refuse.
+  memo.instances.set(node, undefined);
   let facts: InstanceFacts | undefined;
   try {
-    const definition = readableDefinition(sources.components?.get(componentId));
-    facts =
-      definition === undefined || depth > MAX_COMPOSED_DEPTH
-        ? undefined
-        : readInstance(
-            definition.nodes,
-            definition.slots,
-            sources,
-            memo,
-            depth
-          );
+    facts = composeInstance(node, sources, memo);
   } catch {
     // A lookup that raises is no answer, as when the engine places an instance.
     facts = undefined;
   }
-  memo.instances.set(componentId, facts);
+  memo.instances.set(node, facts);
   return facts;
 }
 
-/** A node a component definition holds, with what reached it. */
+/** The type of the stand-in an exposed slot holds while a placement composes. */
+const PROBE_TYPE = "nextly/placement-probe";
+
+/** The stand-in's id for an exposed slot. */
+const probeId = (slot: string): string => `nextly-placement-probe-${slot}`;
+
+/** Where the walk of a composed placement is: what reached it, and its parent. */
+interface ComposedVisit {
+  readonly refused: readonly ContentRefuser[];
+  readonly parent: Holder | undefined;
+  readonly slot: string | undefined;
+}
+
+/** A composed node, with its model and what reached it. */
 interface Holder {
   readonly node: PlacedNode;
   readonly model: ResolvedContentModel;
@@ -302,67 +315,126 @@ interface Holder {
 }
 
 /**
- * Walk a component definition once, bounded by the node cap: collect every
- * kind its blocks are, and for each exposed slot the chain of refusals down to
- * the node that holds it.
+ * Compose one placement with a stand-in in each exposed slot, then walk the
+ * result once, bounded by the node cap. A stand-in lands where the host's
+ * content for that slot would, so the node above it is the slot's holder and
+ * the chain above that is what its content inherits.
  */
-function readInstance(
-  nodes: readonly unknown[],
-  exposed: Readonly<Record<string, unknown>> | undefined,
+function composeInstance(
+  node: PlacedNode & Readonly<Record<string, unknown>>,
   sources: PlacementSources,
-  memo: Memo,
-  depth: number
+  memo: Memo
+): InstanceFacts | undefined {
+  const props = isPlainRecord(node.props) ? node.props : undefined;
+  const componentId = props?.componentId;
+  const components = sources.components;
+  if (typeof componentId !== "string" || components === undefined) {
+    return undefined;
+  }
+  const definition = readableDefinition(components.get(componentId));
+  if (definition === undefined) return undefined;
+  const exposed = isPlainRecord(definition.slots) ? definition.slots : {};
+  const probes: Record<string, BlockNode[]> = {};
+  for (const slot of Object.keys(exposed)) {
+    probes[slot] = [
+      { id: probeId(slot), type: PROBE_TYPE, version: 1, props: {} },
+    ];
+  }
+  const composed = resolveComponentInstances(
+    {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [{ ...(node as unknown as BlockNode), slots: probes }],
+    },
+    components
+  ).document.nodes;
+  if (composed.some(root => root.unresolvedComponent !== undefined)) {
+    return undefined;
+  }
+  return readComposed(composed, exposed, sources, memo);
+}
+
+/** Walk a composed placement: its kinds, and each exposed slot's rule. */
+function readComposed(
+  composed: readonly BlockNode[],
+  exposed: Readonly<Record<string, unknown>>,
+  sources: PlacementSources,
+  memo: Memo
 ): InstanceFacts {
   const kinds = new Set<ContentKind>();
-  const holders = new Map<string, Holder>();
-  const none: readonly ContentRefuser[] = [];
+  const slots = new Map<string, SlotRule>();
+  let rootsArePhrasing = composed.length > 0;
+  const top: ComposedVisit = {
+    refused: [],
+    parent: undefined,
+    slot: undefined,
+  };
   walkPlaced(
-    nodes.map(node => ({ node, carry: none })),
-    (node, refused) => {
-      const model = modelOf(node, sources, memo, depth + 1);
-      for (const kind of model.is) kinds.add(kind);
-      if (typeof node.id === "string") {
-        holders.set(node.id, { node, model, refused });
+    composed.slice(0, MAX_NODES).map(root => ({ node: root, carry: top })),
+    (at, { refused, parent, slot }) => {
+      if (at.type === PROBE_TYPE) {
+        const exposureId = probeExposure(at, exposed);
+        if (
+          exposureId !== undefined &&
+          parent !== undefined &&
+          slot !== undefined
+        ) {
+          slots.set(
+            exposureId,
+            slotRuleFor(exposed[exposureId], parent, slot, sources)
+          );
+        }
+        return undefined;
       }
-      const beneath = withRefusals(refused, node, model);
-      return () => beneath;
+      const model = modelOf(at, sources, memo);
+      if (parent === undefined) {
+        rootsArePhrasing &&= model.is.includes("phrasing");
+      }
+      // Phrasing is a fact about the roots, which are what sits in the host's
+      // slot; every other kind counts from anywhere inside, for what an
+      // ancestor refuses beneath it.
+      for (const kind of model.is) if (kind !== "phrasing") kinds.add(kind);
+      const holder: Holder = { node: at, model, refused };
+      const beneath = withRefusals(refused, at, model);
+      return childSlot => ({
+        refused: beneath,
+        parent: holder,
+        slot: childSlot,
+      });
     }
   );
-  return {
-    slots: exposedSlotRules(exposed, holders, sources),
-    kinds: [...kinds],
-  };
+  if (rootsArePhrasing) kinds.add("phrasing");
+  return { slots, kinds: CONTENT_KINDS.filter(kind => kinds.has(kind)) };
+}
+
+/** Which exposed slot a stand-in stood in for, or undefined. */
+function probeExposure(
+  probe: PlacedNode,
+  exposed: Readonly<Record<string, unknown>>
+): string | undefined {
+  return Object.keys(exposed).find(slot => probeId(slot) === probe.id);
 }
 
 /**
- * Each exposed slot's rule: both allow-lists, the holder's content, and what
- * the chain down to the holder refuses. An exposure naming a node the
- * definition does not hold declares nothing; the definition's own validation
- * reports it.
+ * An exposed slot's rule: both allow-lists, the holder's content, and what the
+ * chain down to the holder refuses.
  */
-function exposedSlotRules(
-  exposed: Readonly<Record<string, unknown>> | undefined,
-  holders: ReadonlyMap<string, Holder>,
+function slotRuleFor(
+  exposure: unknown,
+  holder: Holder,
+  slot: string,
   sources: PlacementSources
-): ReadonlyMap<string, SlotRule> {
-  const slots = new Map<string, SlotRule>();
-  for (const [id, exposure] of Object.entries(exposed ?? {})) {
-    if (!isPlainRecord(exposure)) continue;
-    const { nodeId, slot, allow } = exposure;
-    if (typeof nodeId !== "string" || typeof slot !== "string") continue;
-    const holder = holders.get(nodeId);
-    if (holder === undefined) continue;
-    const inner = sources.nesting.slotAllowOf?.(holder.node.type, slot);
-    slots.set(id, {
-      allow: [allow, inner].filter(
-        (list): list is readonly string[] =>
-          Array.isArray(list) && list.length > 0
-      ),
-      content: holder.model.content,
-      without: withRefusals(holder.refused, holder.node, holder.model),
-    });
-  }
-  return slots;
+): SlotRule {
+  const allow = isPlainRecord(exposure) ? exposure.allow : undefined;
+  const inner = sources.nesting.slotAllowOf?.(holder.node.type, slot);
+  return {
+    allow: [allow, inner].filter(
+      (list): list is readonly string[] =>
+        Array.isArray(list) && list.length > 0
+    ),
+    content: holder.model.content,
+    without: withRefusals(holder.refused, holder.node, holder.model),
+  };
 }
 
 /** Whether a stored value reads as a node the rule can judge. */
@@ -481,7 +553,12 @@ function judgeOne(
   const named = nameRules(blockType, parent.type, slot, rule, sources);
   if (!named.allowed) return named;
   const content = rule?.content ?? parentModel.content;
-  if (content === "phrasing" && !model.is.includes("phrasing")) {
+  // A block drawing nothing is no content, so nothing it is can be refused.
+  if (
+    content === "phrasing" &&
+    model.is.length > 0 &&
+    !model.is.includes("phrasing")
+  ) {
     return {
       allowed: false,
       reason: "phrasing-only",
@@ -609,7 +686,7 @@ export function canPlace(
   const memo = newMemo();
   let verdict: PlacementVerdict = ALLOWED;
   walkPlaced(
-    placing.map(node => ({ node, carry: site })),
+    placing.slice(0, MAX_NODES).map(node => ({ node, carry: site })),
     (node, at) => {
       const judged = judgeOne(
         node,
@@ -708,7 +785,7 @@ function ancestryOf(
   let found: Step | undefined;
   const top: Pick<Step, "slot" | "up"> = { slot: undefined, up: undefined };
   walkPlaced(
-    nodes.map(node => ({ node, carry: top })),
+    nodes.slice(0, MAX_NODES).map(node => ({ node, carry: top })),
     (node, { slot, up }) => {
       const step: Step = { node, slot, up };
       if (node.id === id) {

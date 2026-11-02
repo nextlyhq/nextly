@@ -26,9 +26,14 @@ import type {
   PluginFieldType,
 } from "@nextlyhq/plugin-sdk";
 
+import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
-import { compositionIssues, type CompositionSetup } from "./blocks-composition";
+import {
+  compositionIssues,
+  documentOf,
+  type CompositionSetup,
+} from "./blocks-composition";
 import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { blocksOptionsOf } from "./blocks-options";
@@ -150,7 +155,12 @@ export function blocksFieldType(
       ) {
         return issues;
       }
-      return readStoredForms(args.write, args.path).then(stored => {
+      const status = (args.data as { status?: unknown } | undefined)?.status;
+      return readStoredForms(
+        args.write,
+        args.path,
+        formsChangedBy(typeof status === "string" ? status : undefined)
+      ).then(stored => {
         const again = stored.forms.length === 0 ? issues : judge(stored.forms);
         // A stored value this cannot read may already hold every placement
         // break found, so none is refused; the server log says what was kept
@@ -161,9 +171,7 @@ export function blocksFieldType(
         if (kept.length < again.length) {
           composition?.()?.onPlacementUnjudged?.({
             field: args.path,
-            ...(args.write?.kind === "collection"
-              ? { collection: args.write.slug }
-              : {}),
+            ...documentOf(args.write),
             breaks: again.length - kept.length,
           });
         }

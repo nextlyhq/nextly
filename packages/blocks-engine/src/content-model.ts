@@ -87,6 +87,18 @@ export const UNDECLARED_CONTENT_MODEL: ResolvedContentModel = {
   without: [],
 };
 
+/**
+ * The model of a block that draws nothing for its props (an Embed with no
+ * source): no markup is no content, so nothing refuses it and it refuses
+ * nothing. Decided by the block's own `rendersNothing`, the answer the renderer
+ * and the stylesheet already use.
+ */
+export const NO_MARKUP_CONTENT_MODEL: ResolvedContentModel = {
+  is: [],
+  content: "flow",
+  without: [],
+};
+
 /** How a caller hands over a block's declaration, when it has one. */
 export type ContentModelDeclaration = (props: never) => unknown;
 
@@ -106,9 +118,8 @@ export function resolveContentModel(
   props: unknown
 ): ResolvedContentModel {
   if (typeof declaration !== "function") return UNDECLARED_CONTENT_MODEL;
-  let answer: unknown;
   try {
-    answer = declaration(props as never);
+    const answer: unknown = declaration(props as never);
     // Read inside the guard: a throwing `then` getter would escape otherwise.
     if (typeof (answer as { then?: unknown } | null)?.then === "function") {
       // A pending promise is not an answer, and a rejection left unobserved
@@ -116,10 +127,12 @@ export function resolveContentModel(
       void Promise.resolve(answer).catch(() => undefined);
       return UNDECLARED_CONTENT_MODEL;
     }
+    // Normalised inside the guard too: the answer is the author's object, and
+    // a getter or proxy on it can throw while its fields are read.
+    return normalise(answer) ?? UNDECLARED_CONTENT_MODEL;
   } catch {
     return UNDECLARED_CONTENT_MODEL;
   }
-  return normalise(answer) ?? UNDECLARED_CONTENT_MODEL;
 }
 
 /** The answer in its normal form, or undefined when it is not a model. */

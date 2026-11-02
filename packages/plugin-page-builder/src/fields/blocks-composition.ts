@@ -42,6 +42,7 @@ import {
   compositionFaults,
   contentOnlyExposures,
   MAX_COMPOSED_DEPTH,
+  contentModelKeyOf,
   nodeLocks,
   registryBlockSource,
   registryNestingSource,
@@ -183,12 +184,17 @@ export interface CompositionSetup {
   readonly composesDocuments: boolean;
 }
 
+/** Which document a write is to: a collection or a single, its slug, an id. */
+export interface WrittenTo {
+  readonly kind?: string;
+  readonly slug?: string;
+  readonly id?: string;
+}
+
 /** Placement breaks a write kept unjudged, for the server log. */
-export interface PlacementUnjudged {
+export interface PlacementUnjudged extends WrittenTo {
   /** The blocks field written. */
   readonly field: string;
-  /** The collection written, when the write names one. */
-  readonly collection?: string;
   /** How many breaks were kept. */
   readonly breaks: number;
 }
@@ -280,7 +286,12 @@ export async function compositionIssues(
   const tally = hostTally(self ?? "", setup);
   // Read once for the save, and only if a lock is found broken.
   let storedRead: Promise<StoredRead> | undefined;
-  const stored = () => (storedRead ??= readStoredForms(write, args.path));
+  const stored = () =>
+    (storedRead ??= readStoredForms(
+      write,
+      args.path,
+      formsChangedBy(nextStatus)
+    ));
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
     await judgeOwnComposition({
@@ -292,6 +303,7 @@ export async function compositionIssues(
       report,
       stored,
       field: args.path,
+      writtenTo: documentOf(write),
     });
     if (self !== undefined) {
       await judgeHosts({
@@ -452,6 +464,8 @@ async function judgeOwnComposition(args: {
   stored: () => Promise<StoredRead>;
   /** The blocks field being written, for the server log. */
   field?: string;
+  /** Which document is being written, for the server log. */
+  writtenTo?: WrittenTo;
 }): Promise<void> {
   const { document, self, read, setup, work, report } = args;
   // A component's own document under its own id, so a placement leading back
@@ -481,6 +495,7 @@ async function judgeOwnComposition(args: {
       reading: { library, read, limits: setup.limits, work },
       stored: args.stored,
       field: args.field,
+      writtenTo: args.writtenTo,
     }
   );
   for (const fault of faults) {
@@ -515,6 +530,7 @@ async function measuredAgainstStored(
     };
     stored: () => Promise<StoredRead>;
     field: string | undefined;
+    writtenTo: WrittenTo | undefined;
   }
 ): Promise<readonly CompositionFault[]> {
   const lockBroken = faults.some(fault => LOCK_FAULTS.has(fault.code));
@@ -548,6 +564,7 @@ async function measuredAgainstStored(
   if (kept.length < again.length) {
     setup.onPlacementUnjudged?.({
       field: args.field ?? "",
+      ...args.writtenTo,
       breaks: again.length - kept.length,
     });
   }
@@ -1042,6 +1059,12 @@ interface Footprint {
 }
 
 interface SelectionFootprint {
+  /**
+   * What the placement rule reads of the composed component: each block
+   * type with the content model its settings give it. A Card switching its
+   * link on, or a Button added inside, changes it with the shape unmoved.
+   */
+  readonly placement: string;
   readonly rootTypes: ReadonlySet<string>;
   readonly depth: number;
   readonly componentDepth: number;
@@ -1088,6 +1111,7 @@ async function footprintOf(
     if (composed.incomplete || componentDepth === undefined) complete = false;
     const nodes = composed.composition.document.nodes;
     selections.set(variant ?? "", {
+      placement: placementFacts(nodes, setup),
       rootTypes: new Set(nodes.map(root => root.type)),
       depth: deepest(nodes, setup),
       componentDepth: componentDepth ?? MAX_COMPOSED_DEPTH + 1,
@@ -1107,6 +1131,35 @@ async function footprintOf(
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
+/**
+ * The placement facts of a composed tree, as one comparable string: every
+ * distinct block type with its resolved content model, bounded as `deepest`
+ * is. A set rather than a count per node, so moving a block changes nothing
+ * here (the slot and depth footprints see moves).
+ */
+function placementFacts(
+  nodes: readonly BlockNode[],
+  setup: CompositionSetup
+): string {
+  const sources = {
+    nesting: registryNestingSource(),
+    definitions: registryBlockSource(),
+  };
+  const facts = new Set<string>();
+  const visit = (forest: unknown, at: number): void => {
+    if (!Array.isArray(forest) || at > setup.limits.maxDepth + 1) return;
+    for (const entry of forest as BlockNode[]) {
+      if (typeof entry?.type !== "string") continue;
+      facts.add(`${entry.type}|${contentModelKeyOf(entry, sources)}`);
+      for (const children of Object.values(entry.slots ?? {})) {
+        visit(children, at + 1);
+      }
+    }
+  };
+  visit(nodes, 1);
+  return [...facts].sort().join("\n");
+}
+
 function deepest(nodes: readonly BlockNode[], setup: CompositionSetup): number {
   let most = 0;
   const visit = (forest: unknown, at: number): void => {
@@ -1216,7 +1269,9 @@ function exposedSlots(
       id,
       holder === undefined
         ? "?"
-        : `${nodeId}|${holder.type}|${name}|${holder.depth}|${lockOf(locks, nodeId)}`
+        : // The allow-list too: narrowing it can refuse content a host
+          // already put in the slot, with nothing else about the slot moved.
+          `${nodeId}|${holder.type}|${name}|${holder.depth}|${lockOf(locks, nodeId)}|${JSON.stringify((slot as { allow?: unknown }).allow ?? null)}`
     );
   }
   return out;
@@ -1290,6 +1345,9 @@ function selectionWorsens(
   before: SelectionFootprint,
   after: SelectionFootprint
 ): boolean {
+  // Any change to what the placement rule reads may break a host, in either
+  // direction a host cannot be told apart from here, so it is judged.
+  if (after.placement !== before.placement) return true;
   if (after.depth > before.depth) return true;
   if (after.componentDepth > before.componentDepth) return true;
   for (const type of after.rootTypes) {
@@ -1299,4 +1357,14 @@ function selectionWorsens(
     if (count > (before.lockFaults.get(fault) ?? 0)) return true;
   }
   return false;
+}
+
+/** Which document a write is to, for the server log: kind, slug and entry id. */
+export function documentOf(write: PluginFieldWrite | undefined): WrittenTo {
+  if (write === undefined) return {};
+  return {
+    kind: write.kind,
+    slug: write.slug,
+    ...(write.id === undefined ? {} : { id: write.id }),
+  };
 }

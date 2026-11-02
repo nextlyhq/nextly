@@ -145,11 +145,13 @@ describe.each(getConfiguredTestDialects())(
     });
 
     const warnings: string[] = [];
+    const warned: unknown[] = [];
     const logger = {
       debug() {},
       info() {},
-      warn(message: string) {
+      warn(message: string, meta?: unknown) {
         warnings.push(message);
+        warned.push(meta);
       },
       error() {},
     };
@@ -158,6 +160,7 @@ describe.each(getConfiguredTestDialects())(
       options: { translated?: boolean } = {}
     ): Promise<TestNextly> {
       warnings.length = 0;
+      warned.length = 0;
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder()],
@@ -349,6 +352,14 @@ describe.each(getConfiguredTestDialects())(
       expect(saved.item).toBeDefined();
       expect(warnings.some(line => line.includes("block placement"))).toBe(
         true
+      );
+      // Names the entry, so an operator can find the page to repair.
+      expect(warned).toContainEqual(
+        expect.objectContaining({
+          kind: "collection",
+          slug: "articles",
+          id: String(created.item.id),
+        })
       );
     });
   }

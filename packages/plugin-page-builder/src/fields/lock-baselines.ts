@@ -55,7 +55,13 @@ export async function storedFormsOf(
  */
 export async function readStoredForms(
   write: PluginFieldWrite | undefined,
-  field: string
+  field: string,
+  /**
+   * The lifecycle forms the write changes, by `formsChangedBy`'s answer (true
+   * is the draft): a draft-only write is measured against the draft alone, so
+   * a break only the published form holds is not passed off as the draft's.
+   */
+  changed: readonly boolean[] = [false, true]
 ): Promise<{ forms: BlockDocument[]; readable: boolean }> {
   if (write === undefined) return { forms: [], readable: true };
   if (write.kind !== "collection") return { forms: [], readable: false };
@@ -63,7 +69,8 @@ export async function readStoredForms(
   if (id === undefined) return { forms: [], readable: true };
   const forms: BlockDocument[] = [];
   let readable = true;
-  for (const form of ["published", "draft"] as const) {
+  for (const draft of changed) {
+    const form = draft ? "draft" : "published";
     try {
       const read = await write.readStored({
         collection: write.slug,
