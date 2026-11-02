@@ -94,7 +94,12 @@ interface HistoryStep {
  */
 type HistoryEntry =
   | { readonly kind: "ops"; readonly ops: readonly BuilderOp[] }
-  | { readonly kind: "step"; readonly step: HistoryStep };
+  | {
+      readonly kind: "step";
+      readonly step: HistoryStep;
+      /** The step as recorded, kept as it moves between the stacks. */
+      readonly origin: HistoryStep;
+    };
 
 /** The step that replays `step` the other way, for the opposite stack. */
 function reversed(step: HistoryStep): HistoryStep {
@@ -724,9 +729,13 @@ function lockSourcesOf(
  */
 function useHistoryStacks(): {
   depths: { undo: number; redo: number; document: number };
-  push: (entry: HistoryEntry, into: "undo" | "redo" | "new") => void;
+  push: (
+    entry: HistoryEntry,
+    into: "undo" | "redo" | "new"
+  ) => HistoryEntry | undefined;
   pop: (from: "undo" | "redo") => HistoryEntry | undefined;
   remove: (entry: HistoryEntry) => void;
+  withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
 } {
   const undoStack = useRef<HistoryEntry[]>([]);
   const redoStack = useRef<HistoryEntry[]>([]);
@@ -751,6 +760,7 @@ function useHistoryStacks(): {
   }, []);
   const push = useCallback(
     (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
+      let dropped: HistoryEntry | undefined;
       if (into === "redo") {
         redoStack.current.push(entry);
       } else {
@@ -761,7 +771,7 @@ function useHistoryStacks(): {
         // recent edit unrepeatable, which is the one an author is most likely
         // to want back.
         if (undoStack.current.length > MAX_HISTORY) {
-          const dropped = undoStack.current.shift();
+          dropped = undoStack.current.shift();
           if (dropped?.kind === "ops") forgotten.current += 1;
         }
         // A new edit invalidates the redo branch: those inverses were computed
@@ -770,6 +780,7 @@ function useHistoryStacks(): {
         redoStack.current = [];
       }
       sync();
+      return dropped;
     },
     [sync]
   );
@@ -789,7 +800,27 @@ function useHistoryStacks(): {
     },
     [sync]
   );
-  return { depths, push, pop, remove };
+  /*
+   * Take a recorded step back out, wherever it sits: undone, it is on the
+   * redo stack under another entry. The entry its recording pushed off a full
+   * history comes back to the old end, since a change that never took effect
+   * must not cost the oldest edit.
+   */
+  const withdraw = useCallback(
+    (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
+      const kept = (held: HistoryEntry) =>
+        held.kind !== "step" || held.origin !== origin;
+      undoStack.current = undoStack.current.filter(kept);
+      redoStack.current = redoStack.current.filter(kept);
+      if (dropped !== undefined && undoStack.current.length < MAX_HISTORY) {
+        undoStack.current.unshift(dropped);
+        if (dropped.kind === "ops") forgotten.current -= 1;
+      }
+      sync();
+    },
+    [sync]
+  );
+  return { depths, push, pop, remove, withdraw };
 }
 
 /**
@@ -799,12 +830,12 @@ function useHistoryStacks(): {
  * not pushed back.
  */
 function replayStep(
-  step: HistoryStep,
+  { step, origin }: { step: HistoryStep; origin: HistoryStep },
   into: "undo" | "redo",
   push: (entry: HistoryEntry, into: "undo" | "redo") => void,
   remove: (entry: HistoryEntry) => void
 ): Promise<boolean> {
-  const moved: HistoryEntry = { kind: "step", step: reversed(step) };
+  const moved: HistoryEntry = { kind: "step", step: reversed(step), origin };
   push(moved, into);
   return step.undo().then(
     took => {
@@ -889,7 +920,7 @@ export function useEditorState({
     );
   latestDocument.current = document;
 
-  const { depths, push, pop, remove } = useHistoryStacks();
+  const { depths, push, pop, remove, withdraw } = useHistoryStacks();
 
   /**
    * Run an op and record its inverse on the given stack.
@@ -1042,7 +1073,7 @@ export function useEditorState({
       if (entry === undefined) return false;
       const into = from === "undo" ? "redo" : "undo";
       if (entry.kind === "step") {
-        return replayStep(entry.step, into, push, remove);
+        return replayStep(entry, into, push, remove);
       }
       return run(entry.ops, into) !== null;
     },
@@ -1053,11 +1084,10 @@ export function useEditorState({
   // Bounded and branch-ending exactly as a fresh document edit is.
   const recordStep = useCallback(
     (step: HistoryStep) => {
-      const entry: HistoryEntry = { kind: "step", step };
-      push(entry, "new");
-      return () => remove(entry);
+      const dropped = push({ kind: "step", step, origin: step }, "new");
+      return () => withdraw(step, dropped);
     },
-    [push, remove]
+    [push, withdraw]
   );
 
   const select = useCallback(

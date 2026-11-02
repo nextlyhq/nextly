@@ -12,6 +12,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const toastError = vi.fn();
 vi.mock("@nextlyhq/ui", () => ({ toast: { error: toastError } }));
 
+/** The site style's read, as the editor's query holds it. */
+let read: { data: unknown } = { data: { tokens: null } };
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  useSingleDocument: () => read,
+}));
+
 const { useSiteStyleHistory } = await import("./site-style-history");
 
 type Step = { undo: () => Promise<boolean>; redo: () => Promise<boolean> };
@@ -48,21 +54,52 @@ describe("useSiteStyleHistory", () => {
     expect(recorded).toEqual([]);
   });
 
-  it("moves the revision on when a step is undone or redone", async () => {
-    const { result } = renderHook(() => useSiteStyleHistory());
+  it("moves the revision on once the replayed value has been read back", async () => {
+    // The write invalidates the read rather than updating it: remounting
+    // before the read catches up would show the value the replay replaced.
+    const { result, rerender } = renderHook(() => useSiteStyleHistory());
     const recorded: Step[] = [];
     act(() => result.current.connect(record(recorded)));
     act(() => result.current.history.record(step(true)));
-    const before = result.current.revision;
+    const before = result.current.replay.revision;
     await act(async () => {
       await recorded[0]?.undo();
     });
-    expect(result.current.revision).toBe(before + 1);
-    await act(async () => {
-      await recorded[0]?.redo();
-    });
-    expect(result.current.revision).toBe(before + 2);
+    expect(result.current.replay.revision).toBe(before);
+    expect(result.current.replay.settling).toBe(true);
+
+    read = { data: { tokens: { tokens: [] } } };
+    rerender();
+    expect(result.current.replay.revision).toBe(before + 1);
+    expect(result.current.replay.settling).toBe(false);
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("is settling while a replay is in flight", async () => {
+    let answer: (stored: boolean) => void = () => {};
+    const { result } = renderHook(() => useSiteStyleHistory());
+    const recorded: Step[] = [];
+    act(() => result.current.connect(record(recorded)));
+    act(() =>
+      result.current.history.record({
+        undo: () =>
+          new Promise(resolve => {
+            answer = resolve;
+          }),
+        redo: () => Promise.resolve(true),
+      })
+    );
+    let undoing: Promise<boolean> | undefined;
+    act(() => {
+      undoing = recorded[0]?.undo();
+    });
+    expect(result.current.replay.settling).toBe(true);
+    await act(async () => {
+      answer(false);
+      await undoing;
+    });
+    // Refused: nothing changed, so nothing waits for a read.
+    expect(result.current.replay.settling).toBe(false);
   });
 
   it("says so when the write taking a change back is refused", async () => {

@@ -78,8 +78,8 @@ describe("a style change undone behind the open tab", () => {
         </button>
       );
     }
-    const panel = (revision: number) => (
-      <StyleRevisionContext.Provider value={revision}>
+    const panel = (revision: number, settling = false) => (
+      <StyleRevisionContext.Provider value={{ revision, settling }}>
         <DesignPanel
           view={{ current: "variables", choose: vi.fn() }}
           tabs={{
@@ -99,5 +99,25 @@ describe("a style change undone behind the open tab", () => {
 
     rerender(panel(1));
     expect(screen.getByRole("button", { name: "stored" })).toBeTruthy();
+  });
+
+  it("holds the tab inert while a replay settles, so nothing is edited against the old value", () => {
+    const panel = (settling: boolean) => (
+      <StyleRevisionContext.Provider value={{ revision: 0, settling }}>
+        <DesignPanel
+          view={{ current: "variables", choose: vi.fn() }}
+          tabs={{
+            variables: () => <button type="button">a control</button>,
+            classes: () => null,
+            fonts: () => null,
+          }}
+        />
+      </StyleRevisionContext.Provider>
+    );
+    const { rerender } = render(panel(true));
+    const holder = screen.getByText("a control").closest("[aria-busy]");
+    expect(holder?.hasAttribute("inert")).toBe(true);
+    rerender(panel(false));
+    expect(screen.getByText("a control").closest("[inert]")).toBeNull();
   });
 });

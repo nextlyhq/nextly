@@ -1653,6 +1653,47 @@ describe("a step recorded from outside the document", () => {
     expect(undone).toBe(false);
   });
 
+  it("is withdrawn wherever it sits, even after it was undone", async () => {
+    // Undone while its save is still pending, then refused: no Redo may be
+    // left for a change that was never stored.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "pending"));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    expect(result.current.canRedo).toBe(true);
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(false);
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it("gives back the entry it pushed off a full history when it is withdrawn", () => {
+    // A refused change changed nothing, so it must not cost the oldest edit.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([]) })
+    );
+    let withdraw: () => void = () => {};
+    act(() => {
+      for (let i = 0; i < MAX_HISTORY; i += 1) {
+        result.current.apply(insert(`n${i}`, i));
+      }
+      withdraw = result.current.recordStep(step(calls, "refused"));
+    });
+    act(() => withdraw());
+    expect(result.current.undoDepth).toBe(MAX_HISTORY);
+    act(() => {
+      for (let i = 0; i < MAX_HISTORY; i += 1) result.current.undo();
+    });
+    expect(ids(result.current.document)).toEqual([]);
+  });
+
   it("can be withdrawn before it is replayed, as a refused save is", () => {
     const calls: string[] = [];
     const { result } = renderHook(() =>

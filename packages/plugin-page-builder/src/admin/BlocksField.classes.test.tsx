@@ -474,12 +474,20 @@ describe("undoing a class created from the editor", () => {
   it("mounts the breakpoint manager afresh when a style step is undone", async () => {
     // It holds its own draft and the save it is waiting on the read for, and
     // would otherwise keep showing the set the undo took back.
-    openEditor();
+    const { rerender } = render(<Host />);
     await classProps().onCreateClass!("call-to-action");
     const before = managerMounts;
     await act(async () => {
       await recorded[0]?.undo();
     });
+    // Not yet: the read still holds the value the undo replaced.
+    expect(managerMounts).toBe(before);
+    storedRead = {
+      data: { classes: [] },
+      isPending: false,
+      error: null,
+    };
+    rerender(<Host />);
     expect(managerMounts).toBe(before + 1);
   });
 });

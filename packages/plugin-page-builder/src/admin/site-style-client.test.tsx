@@ -532,4 +532,44 @@ describe("a save inside the editor, as a step of its history", () => {
     });
     expect(writes.at(-1)).toEqual({ classes: [] });
   });
+
+  it("records no step for a save that leaves the section as it was", async () => {
+    // Pressing Save on an unchanged set changes nothing: no Undo to take,
+    // and the redo branch is left alone.
+    readAnswer = {
+      data: { classes: [{ id: "a", slug: "a" }] },
+      isPending: false,
+      error: null,
+    };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("classes", [{ id: "a", slug: "a" }]);
+    });
+    expect(steps).toEqual([]);
+  });
+
+  it("builds on a newer read once its own saves have settled", async () => {
+    // Another tab changes the section after this editor's save: the next
+    // step must take back to that, not to this editor's older value.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { steps, wrapper } = editorHistory();
+    const { result, rerender } = renderHook(() => useSaveSiteStyle(), {
+      wrapper,
+    });
+    const mine = [{ id: "a", slug: "a" }];
+    const theirs = [{ id: "t", slug: "theirs" }];
+    await act(async () => {
+      await result.current.save("classes", mine);
+    });
+    readAnswer = { data: { classes: theirs }, isPending: false, error: null };
+    rerender();
+    await act(async () => {
+      await result.current.save("classes", [...theirs, { id: "b", slug: "b" }]);
+    });
+    await act(async () => {
+      await steps[1]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: theirs });
+  });
 });

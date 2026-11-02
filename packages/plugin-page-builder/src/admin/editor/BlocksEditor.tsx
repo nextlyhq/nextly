@@ -595,7 +595,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
   const style = useSiteStyleHistory();
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
-      <StyleRevisionContext.Provider value={style.revision}>
+      <StyleRevisionContext.Provider value={style.replay}>
         <ConnectStyleHistoryContext.Provider value={style.connect}>
           <EditorBody {...props} />
         </ConnectStyleHistoryContext.Provider>

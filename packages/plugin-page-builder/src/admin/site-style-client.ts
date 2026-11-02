@@ -197,7 +197,28 @@ export interface SiteStyleStep {
 export interface SiteStyleHistory {
   /** Records a step; answers a function that withdraws it. */
   readonly record: (step: SiteStyleStep) => () => void;
-  readonly settled: Map<SiteStyleSection, Promise<unknown>>;
+  readonly settled: Map<SiteStyleSection, SectionChain>;
+}
+
+/**
+ * One section's writes in this editor, in turn.
+ *
+ * `tail` settles to what the section holds once every write made so far has
+ * answered. Once none is in flight (`pending` 0), `held` is that value and
+ * `heldAt` the stored document read at that moment: a newer read means the
+ * section moved elsewhere (another tab, or the echo of these writes), and the
+ * read is believed over the chain from then on.
+ */
+export interface SectionChain {
+  tail: Promise<unknown>;
+  pending: number;
+  held: unknown;
+  heldAt: unknown;
+}
+
+/** Whether two section values are the same, as stored JSON. */
+function sameSection(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 /** Null outside the editor, where a save joins no history. */
@@ -283,25 +304,57 @@ export function useSaveSiteStyle(): SiteStyleWrite {
    */
   const inTurn = useCallback(
     (
-      settled: Map<SiteStyleSection, Promise<unknown>>,
+      chain: SectionChain,
       section: SiteStyleSection,
       value: (before: unknown) => unknown
     ) => {
-      const before =
-        settled.get(section) ??
-        Promise.resolve(storedSection(stored.current, section));
+      const before = chain.tail;
+      chain.pending += 1;
       const done = before.then(async held => {
         const next = await value(held);
         const result = await write(section, next);
         return { result, holds: result.saved ? next : held };
       });
-      settled.set(
-        section,
-        done.then(({ holds }) => holds)
-      );
+      chain.tail = done.then(({ holds }) => {
+        chain.pending -= 1;
+        if (chain.pending === 0) {
+          chain.held = holds;
+          chain.heldAt = stored.current;
+        }
+        return holds;
+      });
       return { before, done };
     },
     [write]
+  );
+
+  /**
+   * The section's chain, begun again from the stored read when nothing of
+   * this editor's is in flight and the read has moved on since it settled.
+   */
+  const chainOf = useCallback(
+    (
+      settled: Map<SiteStyleSection, SectionChain>,
+      section: SiteStyleSection
+    ): SectionChain => {
+      const known = settled.get(section);
+      if (
+        known !== undefined &&
+        (known.pending > 0 || known.heldAt === stored.current)
+      ) {
+        return known;
+      }
+      const held = storedSection(stored.current, section);
+      const fresh: SectionChain = {
+        tail: Promise.resolve(held),
+        pending: 0,
+        held,
+        heldAt: stored.current,
+      };
+      settled.set(section, fresh);
+      return fresh;
+    },
+    []
   );
 
   /*
@@ -317,9 +370,16 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     ): Promise<SiteStyleSaveResult> => {
       if (history === null) return write(section, value);
       const { settled } = history;
-      const { before, done } = inTurn(settled, section, () => value);
+      const chain = chainOf(settled, section);
+      // A save that leaves the section as it stands is no step to take back,
+      // and must not end the redo branch.
+      if (chain.pending === 0 && sameSection(chain.held, value)) {
+        return write(section, value);
+      }
+      const { before, done } = inTurn(chain, section, () => value);
       const replay = (target: () => unknown) => async () =>
-        (await inTurn(settled, section, target).done).result.saved;
+        (await inTurn(chainOf(settled, section), section, target).done).result
+          .saved;
       const withdraw = history.record({
         undo: replay(() => before),
         redo: replay(() => value),
@@ -328,7 +388,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       if (!result.saved) withdraw();
       return result;
     },
-    [write, history, inTurn]
+    [write, history, inTurn, chainOf]
   );
 
   return { save, saving: mutation.isPending };
