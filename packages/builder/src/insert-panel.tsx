@@ -694,25 +694,47 @@ function howToAdd(entry: InsertEntry): string {
 }
 
 /**
- * The line under the search that says where the next block goes, read from
- * the FIRST place a click may use — the one an author expects.
+ * The line under the search that says where the next block goes: where the
+ * highlighted tile goes, or at rest the FIRST place a click may use — the
+ * one an author expects. Following the highlight names a place before the
+ * click wherever a tile goes further than that first place: past a region
+ * that refuses it, or inside the selected container as the last resort.
  *
- * A polite live region, because it changes with every selection and an
- * assertive one would interrupt a screen reader mid-sentence each time. The
- * block is named as Layers names it, an author's own name first, so the line
- * agrees with the tree beside it.
+ * A polite live region at rest, because it changes with every selection and
+ * an assertive one would interrupt a screen reader mid-sentence each time.
+ * Not while it follows the highlight: the highlighted tile's own description
+ * already says where it goes, so announcing the line too would say it twice
+ * on every arrow key. The block is named as Layers names it, an author's own
+ * name first, so the line agrees with the tree beside it.
  */
 function PlacementLine({
   document,
-  candidate,
+  first,
+  shown,
+  groups,
+  tokens,
+  offers,
 }: {
   document: BlockDocument;
-  candidate: InsertionCandidate;
+  first: InsertionCandidate;
+  shown: boolean;
+  groups: readonly InsertGroup<InsertEntry>[];
+  tokens: ReadonlyMap<string, string>;
+  offers: ReadonlyMap<string, EntryOffer>;
 }): React.JSX.Element {
+  const highlighted = useCommandHighlight();
+  const entry = shown
+    ? highlightedEntry(groups, tokens, highlighted)
+    : undefined;
+  const place =
+    (entry === undefined ? undefined : offers.get(entry.id)?.place) ?? first;
   return (
-    <p className="nx-insert-panel__placement" aria-live="polite">
+    <p
+      className="nx-insert-panel__placement"
+      aria-live={entry === undefined ? "polite" : "off"}
+    >
       <CornerDownRight aria-hidden="true" size={14} />
-      <span>{placementWords("Adding", document, candidate)}</span>
+      <span>{placementWords("Adding", document, place)}</span>
     </p>
   );
 }
@@ -1131,7 +1153,14 @@ export function InsertPanel({
         onValueChange={setQuery}
         placeholder={SEARCH_PLACEHOLDERS[tab]}
       />
-      <PlacementLine document={editor.document} candidate={firstPlace} />
+      <PlacementLine
+        document={editor.document}
+        first={firstPlace}
+        shown={moved !== null}
+        groups={groups}
+        tokens={tokens}
+        offers={offers}
+      />
       <LibraryNotices library={library} tab={tab} />
       <CommandList
         className="nx-insert-panel__list"
