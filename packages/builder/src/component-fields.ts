@@ -16,6 +16,7 @@
  * @module component-fields
  */
 import {
+  EXPOSED_PROPERTY_TYPES,
   exposureTypeForProp,
   isComponentDocument,
   isPlainRecord,
@@ -107,13 +108,17 @@ export function exposedFields(
 }
 
 function isReadableField(entry: unknown): entry is ExposedProperty {
-  return (
-    isPlainRecord(entry) &&
-    typeof entry.id === "string" &&
-    typeof entry.type === "string" &&
-    typeof entry.label === "string" &&
-    typeof entry.nodeId === "string"
-  );
+  if (
+    !isPlainRecord(entry) ||
+    typeof entry.id !== "string" ||
+    typeof entry.label !== "string" ||
+    typeof entry.nodeId !== "string" ||
+    !(EXPOSED_PROPERTY_TYPES as readonly unknown[]).includes(entry.type)
+  ) {
+    return false;
+  }
+  // Every field but visibility drives a prop, named by its path.
+  return entry.type === "visibility" || typeof entry.propPath === "string";
 }
 
 /** The ids of the slots a component exposes. */

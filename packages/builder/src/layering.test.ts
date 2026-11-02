@@ -113,8 +113,15 @@ const ALLOWED_IN_TESTS = [
   "@nextlyhq/module-specifiers",
   "@testing-library/react",
   "node:fs",
+  // `createRequire`, for `canvas-environment.test.tsx`: it loads a second copy
+  // of React in development, after giving the console the `timeStamp` a
+  // browser's has, so React describes changed props as it does in a browser.
+  "node:module",
   "node:path",
   "node:url",
+  // That same test renders on its own copy of React, so it creates the root
+  // itself rather than through the testing library, which holds the first.
+  "react-dom/client",
   // Server rendering, for the hydration assertions. A shell whose server and
   // first client render disagree is repaired by React discarding the subtree,
   // and `renderToString` is the only way to observe that from a test.

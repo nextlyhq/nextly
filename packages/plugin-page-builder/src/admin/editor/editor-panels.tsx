@@ -434,8 +434,17 @@ export function editorPanelRenderer({
               the shell's CHILDREN — sibling subtrees, so nothing the panel can
               read from where it sits reports what this file knows by writing
               both. Passed as a fact rather than inferred.
+
+              The component definitions go with it so a dragged instance is
+              judged by what it draws, as its drop on the canvas is.
             */
-      layers: () => <LayersPanel editor={editor} moveHints />,
+      layers: () => (
+        <LayersPanel
+          editor={editor}
+          moveHints
+          definitions={offered.definitions}
+        />
+      ),
       design: () => (
         <DesignPanel
           view={view}

@@ -32,6 +32,10 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  CONTENT_CONTROL_TYPES,
+  hasContentControl,
+} from "./content-control-types";
 import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
 import { blockLabel } from "./inserter";
@@ -49,14 +53,8 @@ import type { BuilderOp, NodePatch } from "./ops";
  * told the prop exists and is not editable here — because omitting it entirely
  * would present an incomplete block as a complete one.
  */
-export const SUPPORTED_PROP_TYPES = [
-  "text",
-  "textarea",
-  "url",
-  "number",
-  "checkbox",
-  "select",
-] as const;
+export const SUPPORTED_PROP_TYPES: typeof CONTENT_CONTROL_TYPES =
+  CONTENT_CONTROL_TYPES;
 
 export type SupportedPropType = (typeof SUPPORTED_PROP_TYPES)[number];
 
@@ -82,6 +80,12 @@ export interface EditableProp {
    * so the author sees the value and is told why it holds.
    */
   readonly readOnly: boolean;
+  /**
+   * What the block holds when the prop was never set: its `defaultProps`
+   * entry, or `undefined`. A switch or a choice shows it until a value is
+   * stored, since it is the value that applies.
+   */
+  readonly defaultValue?: unknown;
 }
 
 /**
@@ -239,6 +243,25 @@ export function fieldLabel(name: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
+/**
+ * What an author calls a prop: the label its block gives it, or its name,
+ * spaced and capitalised, when the block gives none.
+ */
+export function propLabel(name: string, schema: PropSchema): string {
+  const given = schema.label;
+  return typeof given === "string" && given.trim() !== ""
+    ? given
+    : fieldLabel(name);
+}
+
+/** What an author calls one of a select's options, or the option itself. */
+export function optionLabel(schema: PropSchema, option: string): string {
+  const named = schema.optionLabels;
+  if (typeof named !== "object" || named === null) return option;
+  const given = (named as Record<string, unknown>)[option];
+  return typeof given === "string" && given.trim() !== "" ? given : option;
+}
+
 /** Read a schema's `options`, which is untyped by construction. */
 function optionsOf(schema: PropSchema): readonly string[] {
   const declared = schema.options;
@@ -332,9 +355,10 @@ export function inspectSelection(
           name,
           schema,
           value: node.props[name],
-          supported: (SUPPORTED_PROP_TYPES as readonly string[]).includes(
-            schema.type
-          ),
+          defaultValue: (
+            definition.defaultProps as Record<string, unknown> | undefined
+          )?.[name],
+          supported: hasContentControl(schema.type),
           options: optionsOf(schema),
           readOnly: designLock !== undefined && !content.has(name),
         },
@@ -744,6 +768,12 @@ export function propPatch(
   name: string,
   value: unknown
 ): NodePatch {
+  // `undefined` REMOVES the prop rather than storing it: a document holds no
+  // undefined values, and an absent prop is what "not set" already means.
+  if (value === undefined) {
+    const { [name]: _removed, ...rest } = node.props;
+    return { props: rest };
+  }
   return { props: { ...node.props, [name]: value } };
 }
 

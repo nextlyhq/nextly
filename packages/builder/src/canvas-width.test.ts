@@ -23,6 +23,8 @@ import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   editingBreakpointOf,
+  frameFitScale,
+  previewHeight,
   previewWidth,
   widthForBreakpoint,
   offeredTiers,
@@ -429,5 +431,69 @@ describe("the device an edit goes to", () => {
       container: [{ id: "card", label: "Card", maxWidth: 400 }],
     };
     expect(editingBreakpointOf(withContainer, "card")).toBe(BASE_BREAKPOINT);
+  });
+});
+
+describe("the height a device is previewed at", () => {
+  it("changes band exactly at 600 and at 1024", () => {
+    // Each pair straddles a bound, so a band written with `<=` instead of `<`
+    // moves one of the four and fails here.
+    expect(previewHeight(599)).toBe(844);
+    expect(previewHeight(600)).toBe(1024);
+    expect(previewHeight(1023)).toBe(1024);
+    expect(previewHeight(1024)).toBe(800);
+  });
+
+  it("gives a site-added breakpoint the height of the band its width is in", () => {
+    // A breakpoint no preset knows about still has a width, and the bands
+    // answer for it. Read through `previewWidth`, which is how the frame gets
+    // its width, so the pair is tested as the frame will use it.
+    const custom: BreakpointSet = {
+      viewport: [
+        { id: "phablet", label: "Phablet", maxWidth: 700 },
+        { id: "small", label: "Small", maxWidth: 480 },
+      ],
+      container: [],
+    };
+    const phablet = previewWidth(custom, "phablet");
+    const small = previewWidth(custom, "small");
+    const base = previewWidth(custom, BASE_BREAKPOINT);
+    expect(phablet).toBe(700);
+    expect(small).toBe(480);
+    expect(base).toBe(1280);
+    expect(previewHeight(phablet ?? 0)).toBe(1024);
+    expect(previewHeight(small ?? 0)).toBe(844);
+    expect(previewHeight(base ?? 0)).toBe(800);
+  });
+});
+
+describe("the scale that fits a frame into its region", () => {
+  const desktop = { width: 1280, height: 800 };
+
+  it("fits the width when the width is what does not fit", () => {
+    expect(frameFitScale(desktop, { width: 640, height: 2000 })).toBe(0.5);
+  });
+
+  it("fits the HEIGHT when the height is what does not fit", () => {
+    // The case a width-only fit gets wrong: the region is as wide as the
+    // frame, so fitting the width alone answers 1 and the bottom half of the
+    // previewed viewport is off screen.
+    expect(frameFitScale(desktop, { width: 1280, height: 400 })).toBe(0.5);
+  });
+
+  it("takes the smaller ratio when neither dimension fits", () => {
+    expect(frameFitScale(desktop, { width: 960, height: 200 })).toBe(0.25);
+    expect(frameFitScale(desktop, { width: 320, height: 600 })).toBe(0.25);
+  });
+
+  it("never magnifies a frame smaller than its region", () => {
+    expect(frameFitScale(desktop, { width: 4000, height: 4000 })).toBe(1);
+  });
+
+  it("is the identity for a region not measured yet, or of zero", () => {
+    expect(frameFitScale(desktop, {})).toBe(1);
+    expect(frameFitScale(desktop, { width: 640 })).toBe(1);
+    expect(frameFitScale(desktop, { width: 0, height: 800 })).toBe(1);
+    expect(frameFitScale(desktop, { width: 640, height: Number.NaN })).toBe(1);
   });
 });

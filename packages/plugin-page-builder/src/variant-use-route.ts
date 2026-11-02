@@ -47,8 +47,8 @@ import { z } from "nextly/zod";
 import { COMPONENTS_SLUG } from "./collections/components";
 import type { HostFinder, HostRef } from "./fields/blocks-composition";
 import {
-  asTheCaller,
   componentReadPermission,
+  readingAsUser,
   type ComponentStore,
 } from "./library-route";
 import {
@@ -253,7 +253,7 @@ function callerMayRead(
       const row = await requireNextly().findByID({
         collection: slug,
         id,
-        ...(await asTheCaller(ctx)),
+        ...(await readingAsUser(ctx)),
         status: "all",
         depth: 0,
       });

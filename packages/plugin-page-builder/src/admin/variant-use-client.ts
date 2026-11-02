@@ -6,11 +6,18 @@
  *
  * @module admin/variant-use-client
  */
+import {
+  isComponentDocument,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import type {
   ComponentVariantsHost,
   VariantUse,
 } from "@nextlyhq/builder/shell";
-import { usePluginRouteMutation } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentIdentity,
+  usePluginRouteMutation,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useMemo } from "react";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -46,4 +53,18 @@ export function useVariantUse(
       },
     };
   }, [componentId, write]);
+}
+
+/**
+ * The variant host for the component a document view edits: asked only of a
+ * component with a row, since a page has no variants and a component not yet
+ * saved has no placements.
+ */
+export function useEditedComponentVariants(
+  document: BlockDocument
+): ComponentVariantsHost | undefined {
+  const identity = useDocumentIdentity();
+  return useVariantUse(
+    isComponentDocument(document) ? identity?.documentId : undefined
+  );
 }

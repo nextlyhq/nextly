@@ -41,6 +41,8 @@ import {
   previewStateClass,
   registerBlocks,
   STYLE_STATES,
+  type BlockDocument,
+  type SiteSheetInput,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
@@ -3221,5 +3223,242 @@ describe("a link drawn on the canvas", () => {
     if (help === null) throw new Error("expected the overlay's link");
 
     expect(fireEvent.click(help)).toBe(true);
+  });
+});
+
+describe("the site's dark-mode strategy on the canvas root", () => {
+  /*
+   * The stylesheet darkens the canvas page's scheme with the system only for a
+   * site on the `media` strategy, and only the token set says which strategy
+   * that is. So the root carries it — on `data-nx-site-dark-ground`, beside
+   * the dark ground the default token set gives every site here — and carries
+   * the DEFAULT when a site states none: an absent strategy is `attribute`,
+   * which the system's scheme never reaches.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function strategyOf(siteStyles: SiteSheetInput | false): string | null {
+    const { container } = render(
+      <Canvas document={page} siteStyles={siteStyles} />
+    );
+    return (
+      container
+        .querySelector(`.${CANVAS_ROOT_CLASS}`)
+        ?.getAttribute("data-nx-site-dark-ground") ?? null
+    );
+  }
+
+  it("states `media` for a site that darkens with the system", () => {
+    expect(
+      strategyOf({ breakpoints, tokens: { tokens: [], darkMode: "media" } })
+    ).toBe("media");
+  });
+
+  it("states `attribute` for a site that names no strategy", () => {
+    expect(strategyOf({ breakpoints, tokens: { tokens: [] } })).toBe(
+      "attribute"
+    );
+    expect(strategyOf({ breakpoints })).toBe("attribute");
+  });
+
+  it("states nothing when the host serves no site sheet", () => {
+    expect(strategyOf(false)).toBeNull();
+  });
+});
+
+describe("the site's body font on the canvas root", () => {
+  /*
+   * The stylesheet sets the page in `--nx-canvas-site-font`, and the root
+   * states which token property that is. The property's name depends on the
+   * prefix the site's tokens are emitted under, so a hard-coded `--site-` left
+   * a site under another prefix in the fallback face.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function fontOf(
+    siteStyles: SiteSheetInput | false,
+    routePrefix?: string
+  ): string {
+    const { container } = render(
+      <Canvas
+        document={page}
+        siteStyles={siteStyles}
+        {...(routePrefix === undefined
+          ? {}
+          : {
+              render: {
+                styleContext: { breakpoints, tokenPrefix: routePrefix },
+              },
+            })}
+      />
+    );
+    const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+    return root?.style.getPropertyValue("--nx-canvas-site-font") ?? "";
+  }
+
+  it("names the body font under the token set's prefix", () => {
+    expect(
+      fontOf({ breakpoints, tokens: { tokens: [], prefix: "--brand-" } })
+    ).toBe("var(--brand-font-body, system-ui)");
+  });
+
+  it("lets the sheet's own prefix win, as the sheet compiler does", () => {
+    expect(
+      fontOf({
+        breakpoints,
+        tokenPrefix: "--acme-",
+        tokens: { tokens: [], prefix: "--brand-" },
+      })
+    ).toBe("var(--acme-font-body, system-ui)");
+  });
+
+  it("takes the route context's prefix when the site states none, as the renderer does", () => {
+    /*
+     * The renderer reconciles the route's prefix into the sheet it emits when
+     * the site states none, so the body font is declared under it. Reading the
+     * site input alone named `--site-font-body`, which nothing declared.
+     */
+    expect(fontOf({ breakpoints }, "--route-")).toBe(
+      "var(--route-font-body, system-ui)"
+    );
+    // The site's own prefix still outranks the route's, as in the sheet.
+    expect(
+      fontOf(
+        { breakpoints, tokens: { tokens: [], prefix: "--brand-" } },
+        "--route-"
+      )
+    ).toBe("var(--brand-font-body, system-ui)");
+  });
+
+  it("uses the default prefix when the site states none", () => {
+    expect(fontOf({ breakpoints })).toBe("var(--site-font-body, system-ui)");
+  });
+
+  it("states nothing when the host serves no site sheet", () => {
+    expect(fontOf(false)).toBe("");
+  });
+});
+
+describe("the site's ground and text on the canvas root", () => {
+  /*
+   * The page is drawn from the site's own background and text tokens, named
+   * under the prefix the renderer emits them with, and its colour scheme goes
+   * dark only where the site's dark values include a dark ground. The
+   * strategy alone says when dark values apply, not that the page is dark.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function rootOf(siteStyles: SiteSheetInput | false): HTMLElement | null {
+    const { container } = render(
+      <Canvas document={page} siteStyles={siteStyles} />
+    );
+    return container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+  }
+
+  it("names the background and text tokens under the site's prefix", () => {
+    const root = rootOf({
+      breakpoints,
+      tokens: { tokens: [], prefix: "--brand-" },
+    });
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe(
+      "var(--brand-color-background, Canvas)"
+    );
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ink")).toBe(
+      "var(--brand-color-text, CanvasText)"
+    );
+  });
+
+  it("marks a dark ground when the site's background has a dark value", () => {
+    // The default token set gives the background a dark value of its own.
+    expect(
+      rootOf({ breakpoints })?.hasAttribute("data-nx-site-dark-ground")
+    ).toBe(true);
+  });
+
+  it("marks no dark ground when the site's dark values keep it light", () => {
+    const light = (dark?: string): SiteSheetInput => ({
+      breakpoints,
+      tokens: {
+        darkMode: "media",
+        tokens: [
+          {
+            name: "color.background",
+            kind: "color",
+            values:
+              dark === undefined
+                ? { light: "#ffffff" }
+                : { light: "#ffffff", dark },
+          },
+        ],
+      },
+    });
+    // A background with no dark value, and one whose dark value is light.
+    expect(rootOf(light())?.hasAttribute("data-nx-site-dark-ground")).toBe(
+      false
+    );
+    expect(
+      rootOf(light("#f3f4f6"))?.hasAttribute("data-nx-site-dark-ground")
+    ).toBe(false);
+  });
+
+  it("judges oklch and hsl grounds by their lightness", () => {
+    // Tailwind themes write oklch, shadcn-style themes hsl; a dark ground in
+    // either is dark, and a light one is not.
+    const marked = (dark: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-dark-ground");
+    expect(marked("oklch(0.145 0 0)")).toBe(true);
+    expect(marked("oklch(14.5% 0 0)")).toBe(true);
+    expect(marked("hsl(222 47% 11%)")).toBe(true);
+    expect(marked("hsl(222, 47%, 11%)")).toBe(true);
+    expect(marked("oklch(0.98 0 0)")).toBe(false);
+    expect(marked("hsl(0 0% 98%)")).toBe(false);
+  });
+
+  it("marks no dark ground when it cannot read the dark value", () => {
+    // A valid colour this engine does not parse says nothing about luminance,
+    // so the canvas keeps the page's light default rather than guessing dark.
+    for (const dark of [
+      "white",
+      "color-mix(in srgb, white, black)",
+      "var(--elsewhere)",
+    ]) {
+      const site: SiteSheetInput = {
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      };
+      expect(rootOf(site)?.hasAttribute("data-nx-site-dark-ground")).toBe(
+        false
+      );
+    }
+  });
+
+  it("names nothing when the host serves no site sheet", () => {
+    const root = rootOf(false);
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");
+    expect(root?.hasAttribute("data-nx-site-dark-ground")).toBe(false);
   });
 });

@@ -27,7 +27,14 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  type OpenPassages,
 } from "@nextlyhq/builder/shell";
+import {
+  DocumentPrimaryAction,
+  DocumentSaveIndicator,
+  loadInlineRichTextEditor,
+  MediaPickerDialog,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { useState, type ComponentProps, type JSX } from "react";
 import {
@@ -41,13 +48,12 @@ import {
 import { siteSheet } from "../../site-style";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
+import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import { SiteStyleHistoryContext } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
-import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
-import { DocumentActionButtons } from "./document-action-buttons";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -224,10 +230,6 @@ function editorTopBar(view: EditorView): {
       <>
         <HistoryButtons editor={editor} inline={inline} />
         <DocumentStatusPill isDirty={documentDirty} />
-        {/* Beside the publish state, not folded into it. The two answer
-                different questions and one of them has no answer where a
-                collection declares no lifecycle. */}
-        <UnsavedChangesPill isDirty={documentDirty} />
       </>
     ),
     topBarCenter: (
@@ -271,14 +273,81 @@ function editorTopBar(view: EditorView): {
     ),
     topBarEnd: (
       <>
+        {/* Whether the work is stored, beside the verbs that store it: the
+          header's own chip, which reads the field's held work too. Its text
+          sits against Preview, so the width it reserves for its longest
+          state opens towards the panel buttons rather than between it and
+          what it describes. Reserved only where the bar has the room: below
+          1400px it takes what it shows, as the device labels give way there,
+          so the end column never runs into the zoom. */}
+        <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
-          document's save verbs, which the builder's taking the window would
-          otherwise leave reachable only from the keyboard. */}
-        <DocumentActionButtons />
+          document's leading action with its other ways to publish on its
+          arrow, which the builder's taking the window would otherwise leave
+          reachable only from the keyboard. */}
+        <DocumentPrimaryAction />
       </>
     ),
   };
+}
+
+type ContentServices = NonNullable<
+  ComponentProps<typeof InspectorPanel>["contentServices"]
+>;
+
+let contentServices: ContentServices | undefined;
+
+/**
+ * What the inspector's Content tab borrows from the admin: the media library,
+ * to choose an image, the shared rich-text editor, and the page builder's
+ * entries route, to find an entry a `relation` prop points at with the
+ * author's own access. Built on first use and
+ * kept for the module's life, so the panel never sees a new object on a
+ * render, and loading this module reads nothing from the admin's surface
+ * until an editor is drawn.
+ */
+function borrowedServices(): ContentServices {
+  contentServices ??= {
+    MediaPicker: MediaPickerDialog,
+    loadRichTextEditor: loadInlineRichTextEditor,
+    findEntries,
+  };
+  return contentServices;
+}
+
+/**
+ * The borrowed services with this editor's open-passage registry and its
+ * language, one object per registry and language so the panel sees the same
+ * one on every render. A relation search reads titles in the language being
+ * edited.
+ */
+const servicesByPassages = new WeakMap<
+  OpenPassages,
+  Map<string, ContentServices>
+>();
+
+function servicesFor(
+  passages: OpenPassages,
+  locale: string | undefined
+): ContentServices {
+  let byLocale = servicesByPassages.get(passages);
+  if (byLocale === undefined) {
+    byLocale = new Map();
+    servicesByPassages.set(passages, byLocale);
+  }
+  const key = locale ?? "";
+  let services = byLocale.get(key);
+  if (services === undefined) {
+    services = {
+      ...borrowedServices(),
+      openPassages: passages,
+      findEntries: query =>
+        findEntries(locale === undefined ? query : { ...query, locale }),
+    };
+    byLocale.set(key, services);
+  }
+  return services;
 }
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
@@ -329,6 +398,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
+      contentServices={servicesFor(view.passages, view.locale)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}

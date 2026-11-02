@@ -127,6 +127,21 @@ describe("the envelope op", () => {
     expect(() => applyOp(component(), unset)).toThrow(/not a field this op/);
   });
 
+  it("refuses an unset list holding an accessor without running it", () => {
+    let ran = false;
+    const unset: string[] = [];
+    Object.defineProperty(unset, 0, {
+      enumerable: true,
+      get() {
+        ran = true;
+        return "exposed";
+      },
+    });
+    const op = { kind: "envelope", patch: {}, unset } as unknown as BuilderOp;
+    expect(() => applyOp(component({ exposed: [title] }), op)).toThrow(OpError);
+    expect(ran).toBe(false);
+  });
+
   it("refuses a field both written and removed", () => {
     expect(() =>
       applyOp(component(), {

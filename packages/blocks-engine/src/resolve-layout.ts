@@ -62,9 +62,8 @@ export type LayoutResolution =
 /**
  * The Layout `page` gets, by the rule above.
  *
- * @experimental No renderer draws Layouts yet; the rule is published so the
- * stored choice and its protections can ship first, and may still change when
- * the renderer that draws it lands.
+ * @experimental Shared by the page route's Layout drawing and the plugin, and
+ * may still change before Layouts are marked stable.
  */
 export function resolvePageLayout(
   page: PageLayoutChoice,
