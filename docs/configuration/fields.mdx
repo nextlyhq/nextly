@@ -969,6 +969,12 @@ text({
 });
 ```
 
+A refusal never names a field the caller may not read: an issue on such a field, or
+inside one, reaches them as "A field you can't see doesn't pass validation.", whatever
+its message. Every other message is shown as written, including one that names no
+field, so don't put a field's value in it: a validator handed `data` could quote a
+field the caller can't see.
+
 ### `defaultValue`
 
 Static value or `(data) => value` function. The function form receives the document data being created so you can compute defaults from sibling fields. Each field type's signature accepts the value type appropriate for that field.

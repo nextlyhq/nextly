@@ -40,6 +40,7 @@ import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   askEachLanguage,
   currentRuleLanguage,
+  readLanguagesFor,
   withRuleLanguage,
   writeAsNamedLanguagesFor,
   writeLanguagesFor,
@@ -147,6 +148,10 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import {
+  issuesTheReaderMaySee,
+  type IssueReader,
+} from "../../../shared/lib/unreadable-field-issues";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import {
   isWriteIntegrityFailure,
@@ -691,6 +696,8 @@ interface GoingLiveArgs {
   /** The write locale; `undefined` for the unlocalized write. */
   locale: string | undefined;
   user: UserContext | undefined;
+  /** Who a refusal is told to; see `EntryValidationArgs.reader`. */
+  reader: IssueReader;
   fields: FieldDefinition[];
   /** The caller's payload, after hooks, shaped for the row. */
   finalData: Record<string, unknown>;
@@ -855,7 +862,13 @@ interface GoingLiveReads {
 /** What a release's write judges with, the same for every entry. */
 type ReleaseWriteContext = Omit<
   GoingLiveArgs,
-  "collectionName" | "entryId" | "user" | "existingEntry" | "drafts" | "reads"
+  | "collectionName"
+  | "entryId"
+  | "user"
+  | "reader"
+  | "existingEntry"
+  | "drafts"
+  | "reads"
 >;
 
 /** What judging the languages a publish puts live needs. */
@@ -887,6 +900,8 @@ interface LanguagesGoLiveArgs {
   alsoGoingLive?: readonly string[];
   fields: FieldDefinition[];
   user: UserContext | undefined;
+  /** Who a refusal is told to; see `EntryValidationArgs.reader`. */
+  reader: IssueReader;
   /**
    * The transaction the publish runs in, when it is judged under its row
    * lock. Every read then runs on it; absent, they run on the pool.
@@ -903,6 +918,16 @@ interface EntryValidationArgs {
   collectionName: string;
   mode: "create" | "update";
   user: UserContext | undefined;
+  /**
+   * Who the refusal is told to: an issue on a field they may not read is told
+   * without naming it. Required, so no write path can forget to say.
+   */
+  reader: IssueReader;
+  /**
+   * The language the document is, where a write judges several in turn; see
+   * `issuesTheReaderMaySee`.
+   */
+  readLocale?: string;
   /** What `localizedRequiredContext` resolved for a localized write. */
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
@@ -2191,8 +2216,9 @@ export class CollectionMutationService extends BaseService {
   private async entryIssues(
     args: EntryValidationArgs
   ): Promise<ValidationIssue[]> {
-    return validateEntryData(
-      this.validationView(args.data, args.fields),
+    const view = this.validationView(args.data, args.fields);
+    const issues = await validateEntryData(
+      view,
       attachFieldValidators("collection", args.collectionName, args.fields),
       {
         mode: args.mode,
@@ -2216,6 +2242,58 @@ export class CollectionMutationService extends BaseService {
         ),
       }
     );
+    // The document judged can hold fields the caller may not read; their
+    // issues are told without naming them or their values.
+    if (issues.length === 0) return issues;
+    const service = this.fieldGroupDataService;
+    const collection = await this.collectionService.getCollection(
+      args.collectionName,
+      args.tx?.getDrizzle()
+    );
+    return issuesTheReaderMaySee(issues, {
+      kind: "collection",
+      slug: args.collectionName,
+      document: view,
+      fields: args.fields as unknown as FieldConfig[],
+      fieldGroups: service && {
+        getComponentFields: componentSlug =>
+          service.getComponentFields(componentSlug, args.tx?.getDrizzle()),
+      },
+      executor: args.tx?.getDrizzle(),
+      entryId: args.id,
+      tableName: collectionTableName(collection, args.collectionName),
+      // As this service reads the document in that language.
+      readLanguage:
+        args.readLocale === undefined
+          ? undefined
+          : readLanguagesFor(this.localization, args.readLocale),
+      // A stored entry the reader may not read is shown to them in no part.
+      // A read limited to a filter is not matched against this entry here,
+      // so it is judged as one that may not reach it.
+      rowReadable:
+        args.id === undefined
+          ? undefined
+          : async () => {
+              const read = await this.accessService.checkCollectionRead({
+                collectionName: args.collectionName,
+                user: args.user,
+                authenticatedScope: args.reader.authenticatedScope,
+                executor: args.tx?.getDrizzle(),
+              });
+              return read.denied === null && read.filter === undefined;
+            },
+      // Judged by the Public role this service's own gate reads.
+      reader: {
+        ...args.reader,
+        grants:
+          args.reader.grants ??
+          this.callerGrants(
+            args.reader.user,
+            args.reader.authenticatedScope,
+            args.tx?.getDrizzle()
+          ),
+      },
+    });
   }
 
   /**
@@ -3217,6 +3295,8 @@ export class CollectionMutationService extends BaseService {
         collectionName: params.collectionName,
         entryId,
         user: params.user,
+        // Told to the author the release is judged for.
+        reader: { user: params.user },
         existingEntry,
         // Served from the batch's one read, by the entry it was asked for.
         drafts: {
@@ -3572,6 +3652,7 @@ export class CollectionMutationService extends BaseService {
       writeLocalePromoted: promotesDraft,
       fields: args.fields,
       user: args.user,
+      reader: args.reader,
       reads: args.reads,
     });
   }
@@ -3847,6 +3928,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: args.collectionName,
       mode: "update",
       user: args.user,
+      reader: args.reader,
+      readLocale: args.locale,
       localeCtx: await this.localizedRequiredContext(
         args.collectionName,
         args.locale,
@@ -3900,6 +3983,8 @@ export class CollectionMutationService extends BaseService {
         collectionName: args.collectionName,
         mode: "update",
         user: args.user,
+        reader: args.reader,
+        readLocale: locale,
         localeCtx: await this.localizedRequiredContext(
           args.collectionName,
           locale,
@@ -5966,6 +6051,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           mode: "create",
           user: params.user,
+          reader: params,
           localeCtx,
           // No transaction yet, so stored rows are read on the pool: no row
           // of this write exists for a read to miss.
@@ -7153,6 +7239,8 @@ export class CollectionMutationService extends BaseService {
             entryId: args.entryId,
             locale,
             user: args.caller.user,
+            // Told only the issues on fields the caller may read.
+            reader: args.caller,
             fields: context.fields,
             manyToManyFields: context.manyToManyFields,
             splitComponentSchemas: context.splitComponentSchemas,
@@ -7804,6 +7892,8 @@ export class CollectionMutationService extends BaseService {
                 writeLocaleValues: {},
                 perLocaleStatus: false,
                 everyLanguage: true,
+                // Told only the issues on fields the caller may read.
+                reader: params,
                 // A change kept under no language is the main row's own.
                 writeLocalePromoted: promotions.some(p => p.locale === null),
                 ...(promotions.length > 0
@@ -10794,6 +10884,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           mode: "update",
           user: params.user,
+          reader: params,
           localeCtx,
           id: params.entryId,
         });
@@ -11238,6 +11329,7 @@ export class CollectionMutationService extends BaseService {
         entryId: params.entryId,
         locale: params.locale,
         user: params.user,
+        reader: params,
         fields,
         finalData,
         componentFieldData,
@@ -14640,6 +14732,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           mode: "create",
           user: params.user,
+          reader: params,
           // On the caller's transaction, so a row an earlier entry of the
           // same batch wrote is seen.
           tx,
@@ -15274,6 +15367,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           mode: "update",
           user: params.user,
+          reader: params,
           id: entryId,
           tx,
         });
@@ -15596,6 +15690,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           mode: "update",
           user: params.user,
+          reader: params,
           id: entryId,
           tx,
         });
