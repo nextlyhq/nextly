@@ -429,6 +429,10 @@ function directEntriesReads(ctx: EntriesRouteContext): EntriesReads {
       const result = await requireNextly().find({
         collection: args.collection,
         ...(await readingAsUser(ctx)),
+        // Every status, as the admin's own relationship picker asks: an
+        // author may point at a post that is not published yet. Which rows
+        // this caller sees is still core's to decide, through the line above.
+        status: "all",
         ...(args.where === undefined ? {} : { where: args.where }),
         select: args.select,
         limit: args.limit,

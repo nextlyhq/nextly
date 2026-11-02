@@ -117,6 +117,16 @@ describe("the entries route reads AS THE CALLER", () => {
     expect(args).not.toHaveProperty("actor");
   });
 
+  it("asks for every status, so an author can choose a draft as in the admin's own picker", async () => {
+    await entriesRoute().handler(
+      request("collection=posts"),
+      contextAs({ user: { id: "u1", roles: ["editor"] } })
+    );
+    const args = nextly.find.mock.calls[0]?.[0] as Record<string, unknown>;
+    // Which rows each caller sees is still core's, through overrideAccess.
+    expect(args).toMatchObject({ status: "all", overrideAccess: false });
+  });
+
   it("forwards an API key's own scope as the actor, so the key is judged on its grants", async () => {
     const scope = { actorType: "apiKey", permissions: ["read-posts"] };
 
