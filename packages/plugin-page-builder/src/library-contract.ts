@@ -410,13 +410,25 @@ export const COMPONENT_FACTS_ID_PARAM = "id";
  * the client requests it. No language is the app default, as everywhere in
  * the admin.
  */
-export function componentFactsPath(id: string, locale?: string | null): string {
+export function componentFactsPath(
+  id: string,
+  locale?: string | null,
+  /**
+   * A token the route ignores, which makes the path, and so the read's cache
+   * key, one asker's own: an editor trusts no answer read before it mounted.
+   */
+  mount?: string
+): string {
   const query = new URLSearchParams({ [COMPONENT_FACTS_ID_PARAM]: id });
   if (locale !== undefined && locale !== null && locale !== "") {
     query.set(COMPONENT_LIBRARY_LOCALE_PARAM, locale);
   }
+  if (mount !== undefined) query.set(COMPONENT_FACTS_MOUNT_PARAM, mount);
   return `${COMPONENT_FACTS_ROUTE_PATH}?${query.toString()}`;
 }
+
+/** The query parameter carrying an asker's mount token, which the route ignores. */
+export const COMPONENT_FACTS_MOUNT_PARAM = "mount";
 
 /**
  * What the component editor is told about the component it edits.

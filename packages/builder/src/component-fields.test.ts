@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyFieldEdit,
   envelopeOpFor,
+  exposedFields,
   exposeOffer,
   exposeProp,
   exposeVisibility,
@@ -340,6 +341,27 @@ describe("the envelope op", () => {
       unset: ["slots"],
     });
     expect(envelopeOpFor(before, before)).toBeUndefined();
+  });
+});
+
+describe("a component holding a malformed field entry", () => {
+  it("is read without it, so its view still opens", () => {
+    const stored = component({
+      exposed: [
+        null,
+        { id: 4 },
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "c1",
+          propPath: "title",
+          type: "text",
+        },
+      ] as never,
+    });
+    expect(exposedFields(stored).map(field => field.id)).toEqual(["title"]);
+    expect(propExposure(stored, "c1", "title")?.id).toBe("title");
+    expect(visibilityExposure(stored, "c1")).toBeUndefined();
   });
 });
 

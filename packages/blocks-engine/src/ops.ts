@@ -3571,7 +3571,9 @@ function applyEnvelope(
   for (const key of touched as EnvelopeField[]) {
     const value = ownValue(held, key);
     if (value === undefined) absent.push(key);
-    else prior[key] = value;
+    // Detached, as `update`'s prior values are: the inverse must restore the
+    // field as it stood, whatever later touches the old document's copy.
+    else prior[key] = snapshot(value);
   }
 
   const next: Record<string, unknown> = { ...held, ...snapshot(op.patch) };

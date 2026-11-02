@@ -13,7 +13,7 @@
  */
 import type { ComponentFieldsHost } from "@nextlyhq/builder/shell";
 import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   componentFactsPath,
@@ -43,9 +43,14 @@ export function useComponentFacts(
   componentId: string | undefined
 ): ComponentFieldsHost | undefined {
   const locale = useDocumentLocale();
+  // A read of this editor's OWN, keyed by a token made when it mounts: the
+  // query cache would otherwise hand back an answer from an earlier mount while
+  // it asks again, and a definition published since could hold an id that
+  // answer lacks.
+  const [mounted] = useState(mountToken);
   const read = usePluginRoute<ComponentFactsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: componentFactsPath(componentId ?? "", locale?.code),
+    path: componentFactsPath(componentId ?? "", locale?.code, mounted),
     enabled: componentId !== undefined,
     staleTime: 0,
   });
@@ -53,14 +58,17 @@ export function useComponentFacts(
   const failed = error !== null && error !== undefined;
   return useMemo(() => {
     if (componentId === undefined) return undefined;
-    if (data === undefined) {
-      return {
-        reserved: { unavailable: failed ? FACTS_FAILED : FACTS_PENDING },
-      };
-    }
+    // A failed read, even one holding an earlier answer, is not trusted.
+    if (failed) return { reserved: { unavailable: FACTS_FAILED } };
+    if (data === undefined) return { reserved: { unavailable: FACTS_PENDING } };
     return {
       reserved: data.live,
       ...(data.reach === null ? {} : { reach: data.reach }),
     };
   }, [componentId, data, failed]);
+}
+
+/** A token unique to one mount of the editor. */
+function mountToken(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }

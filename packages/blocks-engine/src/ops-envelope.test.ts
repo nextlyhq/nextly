@@ -71,6 +71,17 @@ describe("the envelope op", () => {
     expect(undone.document).toEqual(before);
   });
 
+  it("records the replaced field as it stood, whatever later touches the old copy", () => {
+    const before = component({ exposed: [title] });
+    const applied = applyOp(before, {
+      kind: "envelope",
+      patch: { exposed: [] },
+    });
+    before.exposed?.push({ ...title, id: "late" });
+    const undone = applyOp(applied.document, applied.inverse);
+    expect((undone.document as ComponentDocument).exposed).toEqual([title]);
+  });
+
   it("removes a field named in unset, and its undo puts it back", () => {
     const before = component({ exposed: [title] });
     const applied = applyOp(before, {

@@ -62,6 +62,23 @@ describe("the component's facts", () => {
     expect(result.current).toEqual({ reserved: { unavailable: FACTS_FAILED } });
   });
 
+  it("trust no earlier answer while a read failed", () => {
+    answering(
+      { live: { properties: ["title"], slots: [] }, reach: null },
+      new Error("Forbidden")
+    );
+    const { result } = renderHook(() => useComponentFacts("hero"));
+    expect(result.current).toEqual({ reserved: { unavailable: FACTS_FAILED } });
+  });
+
+  it("are read under a key of this mount's own, so no cached answer stands in", () => {
+    answering(undefined);
+    renderHook(() => useComponentFacts("hero"));
+    renderHook(() => useComponentFacts("hero"));
+    const paths = read.mock.calls.map(call => call[0].path);
+    expect(new Set(paths).size).toBe(2);
+  });
+
   it("reserve the live ids and carry the count once answered", () => {
     answering({
       live: { properties: ["title"], slots: [] },
@@ -79,7 +96,9 @@ describe("the component's facts", () => {
     answering(undefined);
     renderHook(() => useComponentFacts("hero"));
     expect(read.mock.calls[0]?.[0]).toMatchObject({
-      path: "/component-facts?id=hero&locale=de",
+      path: expect.stringMatching(
+        /^\/component-facts\?id=hero&locale=de&mount=/
+      ),
       enabled: true,
     });
   });

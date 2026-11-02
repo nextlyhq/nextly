@@ -18,6 +18,7 @@
 import {
   exposureTypeForProp,
   isComponentDocument,
+  isPlainRecord,
   planExposeProperty,
   planRemoveExposedSlot,
   planRemoveExposure,
@@ -90,11 +91,29 @@ export function editedComponent(
   return isComponentDocument(document) ? document : undefined;
 }
 
-/** The fields a component exposes, read as a list whatever is stored. */
+/**
+ * The fields a component exposes, read as a list whatever is stored.
+ *
+ * An entry that is not a field (a stored or imported row holding `null`, or
+ * one without an id or a type) is left out rather than read: the view has to
+ * open on such a component so the author can repair it, and the envelope
+ * check names the broken entry on save.
+ */
 export function exposedFields(
   component: ComponentDocument
 ): readonly ExposedProperty[] {
-  return Array.isArray(component.exposed) ? component.exposed : [];
+  if (!Array.isArray(component.exposed)) return [];
+  return component.exposed.filter(isReadableField);
+}
+
+function isReadableField(entry: unknown): entry is ExposedProperty {
+  return (
+    isPlainRecord(entry) &&
+    typeof entry.id === "string" &&
+    typeof entry.type === "string" &&
+    typeof entry.label === "string" &&
+    typeof entry.nodeId === "string"
+  );
 }
 
 /** The ids of the slots a component exposes. */
