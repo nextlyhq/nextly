@@ -22,6 +22,7 @@ import {
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
+import { installRegistryResolver } from "../../utils/registry-resolver";
 import { runPluginUninstall } from "../plugin-lifecycle-runner";
 
 const db = vi.hoisted(() => ({
@@ -187,6 +188,10 @@ const uninstall = () =>
 beforeEach(async () => {
   const adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
+  // The static resolver every production adapter carries: the uninstall's lock
+  // seeds its row through a transaction insert, which an adapter refuses for a
+  // table its resolver does not hold.
+  installRegistryResolver(adapter);
   db.adapter = adapter as unknown as typeof db.adapter;
   db.drizzle = adapter.getDrizzle();
   db.afterTransaction = undefined;
