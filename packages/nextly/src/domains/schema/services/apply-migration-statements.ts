@@ -37,13 +37,10 @@ import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DatabaseInstance } from "../../../types/database-operations";
-import { executeTransaction } from "../migrate/migration-transaction";
 import {
   isIdempotencyError,
   splitStatements,
 } from "../pipeline/sql-statement-utils";
-
-import { rebuildSqliteNullability } from "./sqlite-nullability-rebuild";
 
 /**
  * The adapter surface this needs.
@@ -168,6 +165,14 @@ async function runRebuilding(
   statements: readonly string[],
   progress: { ran: number }
 ): Promise<void> {
+  // Loaded here, not at the top: only a SQLite save that changes whether a column may be empty
+  // rebuilds a table, and every save and boot that loads this module would otherwise load the
+  // rebuild and the migration transaction too.
+  const [{ executeTransaction }, { rebuildSqliteNullability }] =
+    await Promise.all([
+      import("../migrate/migration-transaction"),
+      import("./sqlite-nullability-rebuild"),
+    ]);
   await executeTransaction(rebuild.adapter, async tx => {
     for (const statement of statements) {
       await tx.execute(statement);
