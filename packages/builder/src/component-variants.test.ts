@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   addVariant,
   chooseVariantOp,
-  defaultValueOf,
+  defaultValues,
   deleteSentence,
   deleteVariant,
   nextVariantName,
@@ -203,7 +203,7 @@ describe("editing a component's variants", () => {
       propPath: undefined,
     } as unknown as NonNullable<ComponentDocument["exposed"]>[number];
     const component = { ...card(), exposed: [broken] };
-    expect(defaultValueOf(component, broken)).toBeUndefined();
+    expect(defaultValues(component).get("title")).toBeUndefined();
   });
 
   it("reads a gated part's visibility default as hidden, as the page draws it", () => {
@@ -228,8 +228,10 @@ describe("editing a component's variants", () => {
         },
       ],
     };
-    expect(defaultValueOf(gated, gated.exposed![0]!)).toBe(false);
-    expect(defaultValueOf(card(), { ...gated.exposed![0]! })).not.toBe(false);
+    expect(defaultValues(gated).get("shown")).toBe(false);
+    expect(
+      defaultValues({ ...gated, nodes: card().nodes }).get("shown")
+    ).not.toBe(false);
   });
 
   it("names a new variant past the ones there are", () => {
@@ -246,9 +248,7 @@ describe("editing a component's variants", () => {
 
   it("reads a field's default off the node it drives", () => {
     const component = card();
-    expect(defaultValueOf(component, component.exposed![0]!)).toBe(
-      "Default title"
-    );
+    expect(defaultValues(component).get("title")).toBe("Default title");
   });
 
   it("summarises an empty variant as no changes", () => {
@@ -268,7 +268,7 @@ describe("the delete sentence", () => {
     ).toMatch(/^Used by 3 placements in 2 documents\. /);
     expect(
       deleteSentence({ placements: 1, documents: 1, complete: false })
-    ).toMatch(/^Used by at least 1 placement in 1 document\. /);
+    ).toMatch(/^Used by at least 1 placement in at least 1 document\. /);
   });
 
   it("never says none for a count it could not make", () => {

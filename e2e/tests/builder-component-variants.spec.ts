@@ -327,7 +327,7 @@ test.describe("a component's variants", () => {
       name: "Delete the variant “Featured”?",
     });
     await expect(dialog).toContainText(
-      /Used by (at least )?1 placement in 1 document\./
+      /Used by (at least )?1 placement in (at least )?1 document\./
     );
     await expect(dialog).toContainText("keep their own changes");
     await dialog.getByRole("button", { name: "Delete variant" }).click();

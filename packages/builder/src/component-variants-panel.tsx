@@ -51,7 +51,7 @@ import { commitOnEnter } from "./commit-on-enter";
 import { exposedFields } from "./component-fields";
 import {
   addVariant,
-  defaultValueOf,
+  defaultValues,
   deleteSentence,
   deleteVariant,
   nextVariantName,
@@ -221,6 +221,13 @@ function VariantRow({
   onNameSelected: () => void;
   onDelete: () => void;
 }): React.JSX.Element {
+  // Resolved once for the whole component while the values are open, not
+  // once per field.
+  const defaults = React.useMemo(
+    () =>
+      open ? defaultValues(context.component) : new Map<string, unknown>(),
+    [open, context.component]
+  );
   const valuesId = React.useId();
   const problemId = React.useId();
   const nameRef = React.useRef<HTMLInputElement>(null);
@@ -300,6 +307,7 @@ function VariantRow({
               context={context}
               option={option}
               field={field}
+              fallback={defaults.get(field.id)}
             />
           ))}
         </div>
@@ -365,16 +373,17 @@ function VariantValueRow({
   context,
   option,
   field,
+  fallback,
 }: {
   context: VariantEditContext;
   option: VariantOption;
   field: ExposedProperty;
+  /** The component's own value, shown while the variant sets none. */
+  fallback: unknown;
 }): React.JSX.Element {
   const id = `${React.useId()}-${field.id}`;
   const set = Object.hasOwn(option.values, field.id);
-  const value = set
-    ? option.values[field.id]
-    : defaultValueOf(context.component, field);
+  const value = set ? option.values[field.id] : fallback;
   const [problem, setProblem] = React.useState<string | undefined>(undefined);
   const commit = (next: OverrideValue) => {
     const outcome = setVariantValue(context, option.id, field.id, next);

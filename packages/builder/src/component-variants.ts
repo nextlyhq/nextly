@@ -27,7 +27,6 @@ import {
   variantOptions,
   type BlockNode,
   type ComponentDocument,
-  type ExposedProperty,
   type OverrideValue,
   type VariantEditProblem,
   type VariantEditResult,
@@ -219,22 +218,24 @@ export function resetVariantValue(
 }
 
 /**
- * The component's own value for an exposed field, which a variant that sets
- * nothing for it shows.
+ * The component's own value for each exposed field, by field id: what a
+ * variant that sets nothing for a field shows.
  *
  * Read from what the resolver itself makes of a placement that sets nothing,
- * so a visibility field gated by its node's conditions reads as hidden, and a
- * field the resolver cannot use reads as no value, exactly as a page shows
- * them.
+ * once for the whole component, so a visibility field gated by its node's
+ * conditions reads as hidden, and a field the resolver cannot use has no
+ * value, exactly as a page shows them.
  */
-export function defaultValueOf(
-  component: ComponentDocument,
-  field: ExposedProperty
-): unknown {
-  const state = instanceExposure(component, UNPLACED).properties.find(
-    row => row.property.id === field.id
-  );
-  return state === undefined || state.cleared ? undefined : state.value;
+export function defaultValues(
+  component: ComponentDocument
+): ReadonlyMap<string, unknown> {
+  const values = new Map<string, unknown>();
+  for (const row of instanceExposure(component, UNPLACED).properties) {
+    if (!values.has(row.property.id)) {
+      values.set(row.property.id, row.cleared ? undefined : row.value);
+    }
+  }
+  return values;
 }
 
 /** A placement that chooses nothing and sets nothing. */
@@ -272,7 +273,7 @@ export function deleteSentence(use: VariantUse | null | undefined): string {
   }
   const floor = use.complete ? "" : "at least ";
   const placements = `${floor}${String(use.placements)} ${use.placements === 1 ? "placement" : "placements"}`;
-  const documents = `${String(use.documents)} ${use.documents === 1 ? "document" : "documents"}`;
+  const documents = `${floor}${String(use.documents)} ${use.documents === 1 ? "document" : "documents"}`;
   return `Used by ${placements} in ${documents}. ${after}`;
 }
 
