@@ -35,7 +35,7 @@ Scheduling a document from its editor is one "Schedule…" dialog, on the arrow 
 - **with an existing release** — only an ordinary release in draft or scheduled that you may add to, shown with when it acts and how many documents it holds; single-document, stopped, published, cancelled and overdue releases are not offered;
 - **in a new release** — named there, with an optional description; you schedule it from its page.
 
-Then whether, at that moment, it **goes live or comes down**, each held with its reason where you lack the document's own permission. A refusal for the document's hard problems is said in the dialog, one line per problem, and the dialog stays open. A translated document says that every language moves together, and unsaved edits are noted as not included.
+Then whether, at that moment, it **goes live or comes down**, each held with its reason where you lack the document's own permission. A refusal for the document's hard problems is said in the dialog, one line per problem, and the dialog stays open. A translated document says that every language moves together, and on a collection entry, unsaved edits are noted as not included.
 
 "Schedule publish…" and "Add to release…" are replaced by "Schedule…".
 

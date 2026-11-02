@@ -367,9 +367,14 @@ export default function EditEntryPage({
     // With no drafts, a save of a live entry is published at once.
     savesGoLive:
       collection?.draftsEnabled !== true && entry?.status === "published",
-    // A release moves every language of a translated entry together.
+    // A release moves every language of a translated entry together. The
+    // collection read carries `localized`, which the admin's Collection type
+    // does not declare, so it is narrowed here rather than cast.
     languages:
-      localizationEnabled && collection?.localized === true
+      localizationEnabled &&
+      collection !== undefined &&
+      "localized" in collection &&
+      collection.localized === true
         ? locales.map(each => each.label)
         : undefined,
   });
