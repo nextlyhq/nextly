@@ -67,7 +67,7 @@ import {
   type LayersRow,
   type LayersVerdictCache,
 } from "./layers-drop";
-import { lockBlockingMove } from "./locking";
+import { isLayersLockFacts } from "./lock-refusal";
 import { refusalAnnouncement, unmovedAnnouncement } from "./move-refusal";
 
 /** How long the pointer rests on a collapsed row before it opens. */
@@ -335,7 +335,12 @@ function heldInPlace(editor: EditorState, id: string): boolean {
   const found = editor.lockRefusalFor([
     { kind: "move", id, to: { index: editor.document.nodes.length } },
   ]);
-  return found !== undefined && found.lock !== "insert";
+  // A slot locked to its order still lets it be reordered inside the slot. A
+  // Layers lock is not asked here: the drag starts and every place refuses it
+  // in the lock's words (`layersDrop`), so the author is told why.
+  return (
+    found !== undefined && !isLayersLockFacts(found) && found.lock !== "insert"
+  );
 }
 
 /** The row a press landed in, inside `host`: its block and its depth. */
@@ -353,15 +358,13 @@ function pressedRow(
 }
 
 /**
- * Whether a drag may pick the block up. A locked block, or one its area holds
- * in place, is left alone: the press still selects it, as a click on a locked
- * block does on the canvas.
+ * Whether a drag may pick the block up. A block its area holds in place is
+ * left alone: the press still selects it. A block a Layers lock holds, its own
+ * or one inside or around it, is picked up so that the drag can say why it
+ * will not land anywhere, as the canvas does.
  */
 function movable(editor: EditorState, id: string): boolean {
-  return (
-    lockBlockingMove(editor.document, id) === undefined &&
-    !heldInPlace(editor, id)
-  );
+  return !heldInPlace(editor, id);
 }
 
 /** A comparable spelling of what is drawn, so an unchanged aim draws nothing. */

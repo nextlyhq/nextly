@@ -54,7 +54,9 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import {
+  layersLockRefusalFor,
   lockRefusalWording,
+  savedLockRemovedBy,
   type LockEditRefusal,
   type LockRefusalFacts,
 } from "./lock-refusal";
@@ -613,8 +615,9 @@ function useComposer(
 }
 
 /**
- * Whether a fresh edit is refused: the page no longer composes, or the edit
- * adds a lock break. The host is told why, in that order.
+ * Whether a fresh edit is refused: it deletes a block the saved page still
+ * holds locked, the page no longer composes, or the edit adds a lock break.
+ * The host is told why, in that order.
  */
 function refusedAsFresh(
   before: BlockDocument,
@@ -624,6 +627,7 @@ function refusedAsFresh(
     current,
     limits,
     compose,
+    ops,
   }: {
     stored: BlockDocument;
     current: Pick<
@@ -632,8 +636,16 @@ function refusedAsFresh(
     >;
     limits: DocumentLimits;
     compose: Composer | undefined;
+    /** The edit's ops, for the saved page's Layers lock on what it deletes. */
+    ops: readonly BuilderOp[];
   }
 ): boolean {
+  // A delete of a block the SAVED page still holds locked, though the author
+  // has unlocked it since: a save would refuse it, so the edit is refused now,
+  // with the way forward.
+  if (reportLayersLock(before, ops, current.onLockRefused, after, stored)) {
+    return true;
+  }
   if (
     compose !== undefined &&
     refusedForRoom(before, after, current, limits, compose)
@@ -650,9 +662,11 @@ function refusedAsFresh(
 }
 
 /**
- * The lock break `ops` would add to `document`, applied only to ask. Ops the
- * document cannot take are the apply's to refuse; they add no lock break,
- * because they add nothing.
+ * The lock `ops` would break in `document`, applied only to ask: a block
+ * locked in Layers first, now or on the saved page for a delete, then the
+ * slot locks a block declares. Ops the document cannot take for another
+ * reason are the apply's to refuse; they add no lock break, because they add
+ * nothing.
  */
 function lockAnswerFor(
   document: BlockDocument,
@@ -660,6 +674,8 @@ function lockAnswerFor(
   stored: BlockDocument,
   judgement: LockJudgement
 ): LockRefusalFacts | undefined {
+  const layers = layersLockRefusalFor(document, ops, stored);
+  if (layers !== undefined) return layers;
   let group;
   try {
     group = applyOps(document, ops, judgement.limits);
@@ -668,6 +684,33 @@ function lockAnswerFor(
   }
   if (group.inverses.length === 0) return undefined;
   return lockBreakAdded(document, group.document, stored, judgement);
+}
+
+/**
+ * Tell the host which Layers lock refused an edit, and answer whether one did.
+ *
+ * With `after` and `stored`, the edit applied and only the saved page's lock
+ * on a block it deletes is asked (`savedLockRemovedBy`); without them, the
+ * edit was refused by the op layer and the lock it broke is found again.
+ */
+function reportLayersLock(
+  before: BlockDocument,
+  ops: readonly BuilderOp[],
+  onLockRefused: UseEditorStateArgs["onLockRefused"],
+  after?: BlockDocument,
+  stored?: BlockDocument
+): boolean {
+  const found =
+    after === undefined || stored === undefined
+      ? layersLockRefusalFor(before, ops)
+      : savedLockRemovedBy(before, after, stored, ops);
+  if (found === undefined) return false;
+  onLockRefused?.({
+    reason: "locked",
+    sentence: refusalAnnouncement(lockRefusalWording(found)),
+    lock: found,
+  });
+  return true;
 }
 
 /** The lock judgement from what the store reads at apply time. */
@@ -987,6 +1030,17 @@ export function useEditorState({
         // cap, a move onto a node that no longer exists, an update to a node
         // a concurrent edit removed. The caller decides what to say about it.
         // Nothing is committed — see the atomicity note above.
+        //
+        // A block locked in Layers is the one refusal the host is told the
+        // reason for here, in the lock's own words, whichever surface sent the
+        // edit: nothing on the canvas explains it otherwise.
+        if (into === "new") {
+          reportLayersLock(
+            latestDocument.current,
+            ops,
+            composition.current.onLockRefused
+          );
+        }
         return null;
       }
 
@@ -1014,6 +1068,7 @@ export function useEditorState({
           current: composition.current,
           limits,
           compose: composerNow(),
+          ops,
         })
       ) {
         return null;
