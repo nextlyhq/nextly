@@ -176,6 +176,8 @@ describe("preferences round-trip", () => {
     // sense of what was stored — so a round trip carrying fit would pass
     // whether the value survived or was discarded.
     zoom: { kind: "fixed", scale: 1.5 },
+    // Non-default as well: null, the base breakpoint, is the default.
+    editingBreakpoint: "tablet",
   };
 
   it("restores what was written", () => {
@@ -194,6 +196,17 @@ describe("preferences round-trip", () => {
     for (const bad of [undefined, "1.5", 0, 99, null]) {
       const store = memoryStore(JSON.stringify({ ...stored, zoom: bad }));
       expect(readPreferences(store).zoom).toEqual(DEFAULT_PREFERENCES.zoom);
+    }
+  });
+
+  it("starts on the base breakpoint when the stored device is not a name", () => {
+    // Preferences from before there was a device have no such field; an empty
+    // or non-string value names no breakpoint either.
+    for (const bad of [undefined, "", 3, null]) {
+      const store = memoryStore(
+        JSON.stringify({ ...stored, editingBreakpoint: bad })
+      );
+      expect(readPreferences(store).editingBreakpoint).toBeNull();
     }
   });
 
@@ -243,6 +256,7 @@ describe("preferences round-trip", () => {
       // `leftPinned` does here rather than surfacing as `undefined`.
       showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
       zoom: DEFAULT_PREFERENCES.zoom,
+      editingBreakpoint: DEFAULT_PREFERENCES.editingBreakpoint,
     });
   });
 
@@ -333,9 +347,10 @@ describe("the rail's items, in the order an author meets them", () => {
  * not dropped as unknown, which would close the panel an author left open.
  */
 describe("preferences saved before panels had parts", () => {
-  it("load whole, with no part chosen", () => {
-    // Written by the editor before the Design panel's tabs existed: no
-    // leftPanelView, and an old panel id. Every other preference must survive.
+  it("load whole, with no part chosen and Desktop as the device", () => {
+    // Written by the editor before the Design panel's tabs and the stored
+    // device existed: no leftPanelView, no editingBreakpoint. Every other
+    // preference must survive.
     const yesterday = {
       leftPanel: "layers",
       leftPinned: false,
@@ -350,6 +365,7 @@ describe("preferences saved before panels had parts", () => {
       leftPanelView: null,
       leftPinned: false,
       zoom: { kind: "fixed", scale: 1.5 },
+      editingBreakpoint: null,
       layouts: {
         "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
       },

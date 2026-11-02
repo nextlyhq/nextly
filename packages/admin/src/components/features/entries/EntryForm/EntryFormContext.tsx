@@ -103,6 +103,26 @@ export interface EntryFormContextValue {
    * deliberately not where per-plugin wiring goes.
    */
   renderEntryFields?: (excludePath: string) => ReactNode;
+
+  /**
+   * Opens the document's full-page preview, where the editor offers one.
+   *
+   * Read through {@link useDocumentPreview}. Absent wherever the editor's own
+   * Preview action is absent, for the same reasons.
+   */
+  preview?: DocumentPreview;
+}
+
+/**
+ * The surrounding document's full-page preview, as the editor opens it.
+ *
+ * `open` is the editor's own handler, not a second way to build the address:
+ * the preview renders the saved row in the language being edited, and a copy
+ * resolving either of those itself would open a different page.
+ */
+export interface DocumentPreview {
+  /** Opens the preview; resolving its address may take a round trip. */
+  open: () => void | Promise<void>;
 }
 
 /**
@@ -219,6 +239,13 @@ export interface EntryFormContextProviderProps {
   renderEntryFields?: (excludePath: string) => ReactNode;
 
   /**
+   * The editor's handler for its full-page preview. Pass it exactly where the
+   * editor offers its own Preview action, so a field offers one on the same
+   * terms.
+   */
+  openPreview?: () => void | Promise<void>;
+
+  /**
    * Child components.
    */
   children: ReactNode;
@@ -258,6 +285,7 @@ export function EntryFormContextProvider({
   kind = "collection",
   documentStatus,
   renderEntryFields,
+  openPreview,
   children,
 }: EntryFormContextProviderProps): JSX.Element {
   /*
@@ -287,6 +315,8 @@ export function EntryFormContextProvider({
        * to tell that from a renderer that draws nothing.
        */
       ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
+      // Spread for the same reason: absent means the editor offers no preview.
+      ...(openPreview === undefined ? {} : { preview: { open: openPreview } }),
     }),
     [
       entryId,
@@ -296,6 +326,7 @@ export function EntryFormContextProvider({
       status,
       hasWorkingDraft,
       renderEntryFields,
+      openPreview,
     ]
   );
 
@@ -447,6 +478,19 @@ export function useDocumentIdentity(): DocumentIdentity | null {
 export function useEntryFieldsPanel(excludePath: string): ReactNode | null {
   const context = useOptionalEntryFormContext();
   return context?.renderEntryFields?.(excludePath) ?? null;
+}
+
+/**
+ * The surrounding document's full-page preview, or `null` where the editor
+ * offers none.
+ *
+ * `null` covers every reason the editor's own Preview action is absent — no
+ * preview configured, an entry never saved, a reader who may not mint one —
+ * and outside a form. A field offering a preview of its own there would open
+ * nothing, or open a page the author may not see.
+ */
+export function useDocumentPreview(): DocumentPreview | null {
+  return useContext(EntryFormContext)?.preview ?? null;
 }
 
 export function useDocumentStatus(): DocumentStatus | null {

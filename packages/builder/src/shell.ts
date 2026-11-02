@@ -200,8 +200,11 @@ export type { CanvasZoomControlProps } from "./canvas-zoom-control";
 export type { CanvasZoom } from "./canvas-zoom";
 export {
   breakpointsAtWidth,
+  DESKTOP_PREVIEW_WIDTH,
   editedBreakpointAtWidth,
+  editingBreakpointOf,
   offeredTiers,
+  previewWidth,
   selectableTiers,
   widthForBreakpoint,
 } from "./canvas-width";

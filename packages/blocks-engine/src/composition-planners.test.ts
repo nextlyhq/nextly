@@ -2382,6 +2382,19 @@ describe("duplicating a component definition", () => {
     );
   });
 
+  it("copies a variant that presets nothing, which the save only warns about", () => {
+    // Removing a field empties a variant whose only value it was. That is a
+    // warning at the definition's own save, so refusing to duplicate such a
+    // component would refuse a copy the original's gate accepts.
+    const source = definitionWith({
+      variants: { plain: { label: "Plain", overrides: {} } },
+    });
+
+    expect(definition(dup(source)).variants).toEqual({
+      plain: { label: "Plain", overrides: {} },
+    });
+  });
+
   it("refuses a document that is not a component", () => {
     // A pattern duplicated through here would be stored as a component and
     // refused by the collection it landed in, having reported success.
