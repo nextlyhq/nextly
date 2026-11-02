@@ -194,16 +194,12 @@ describe("useBlockKeyboardActions", () => {
     );
   });
 
-  it("ALLOWS moving a container that holds a locked block", () => {
+  it("REFUSES moving a container that holds a locked block, before applying", () => {
     /*
-     * The direction that is easy to get wrong by being cautious, and the reason
-     * move and delete ask different questions.
-     *
-     * Moving the container leaves the locked child in the same slot at the same
-     * index with the same neighbours, so nothing the lock protects has changed.
-     * Refusing here would let one locked caption freeze the entire section
-     * around it, which an author would experience as the editor breaking rather
-     * than as a lock working.
+     * A locked block does not move until it is unlocked, and moving the
+     * container would carry it. The op layer refuses the move, so the editor
+     * refuses it before applying and says so, rather than handing the store a
+     * move it will throw on.
      */
     const editor = editorSpy(
       documentOf([
@@ -232,8 +228,10 @@ describe("useBlockKeyboardActions", () => {
 
     press("ArrowDown", { altKey: true });
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0][0].kind).toBe("move");
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /is locked\. unlock it to move it/i
+    );
   });
 
   it("moves the selected block up", () => {

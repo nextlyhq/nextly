@@ -176,6 +176,13 @@ export interface CompositionSetup {
    */
   readonly onPlacementUnjudged?: (found: PlacementUnjudged) => void;
   /**
+   * Told of a write whose Layers locks could not be judged, because the
+   * stored value they would be judged against could not be read (a localized
+   * field whose language store is not ready). Kept, not refused, so the
+   * server log is where an operator learns of it.
+   */
+  readonly onLayersLockUnjudged?: (found: LayersLockUnjudged) => void;
+  /**
    * Whether documents are composed against this store at all. `false` where
    * the renderer draws components from somewhere no collection can stand for
    * (a route's own `resolveComponents`): composing against this store would
@@ -198,6 +205,12 @@ export interface PlacementUnjudged extends WrittenTo {
   readonly field: string;
   /** How many breaks were kept. */
   readonly breaks: number;
+}
+
+/** A write whose Layers locks were not judged, for the server log. */
+export interface LayersLockUnjudged extends WrittenTo {
+  /** The blocks field written. */
+  readonly field: string;
 }
 
 /**

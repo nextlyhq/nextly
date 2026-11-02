@@ -991,11 +991,27 @@ export {
   sameStyleValue,
   type AppliedOp,
   type AppliedOps,
+  type ApplyOptions,
   type BuilderOp,
   type NodePatch,
   type OpPosition,
   type SlotAddress,
 } from "./ops";
+
+// The Layers lock's rule, stated once: for one op, which the apply asks of
+// every edit and an editing surface asks before offering one; and for a whole
+// write, judged against the document it would replace, which a save asks
+// because a write through the API carries no ops to judge.
+export {
+  layersLockBreak,
+  lockedAncestorOf,
+  type LayersLockBreak,
+} from "./layers-lock";
+export {
+  layersLockChanges,
+  type LayersLockChange,
+  type LayersLockChangeKind,
+} from "./layers-lock-stored";
 
 /**
  * The stored shape of rich text.

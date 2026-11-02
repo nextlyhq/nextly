@@ -965,6 +965,16 @@ export const pageBuilder = (
               id: found.id,
             }
           ),
+        onLayersLockUnjudged: found =>
+          ctx.logger.warn(
+            `[page-builder] a save was not checked against the blocks locked in Layers, because the stored value could not be read in its language yet; a locked block it changed was not protected`,
+            {
+              field: found.field,
+              kind: found.kind,
+              slug: found.slug,
+              id: found.id,
+            }
+          ),
         onLockedExposures: found =>
           ctx.logger.warn(
             `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,

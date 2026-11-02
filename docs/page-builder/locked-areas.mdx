@@ -93,6 +93,24 @@ first time, and a language saving its first value, are measured against the star
 blocks alone.
 A page placing a component keeps what the component itself holds.
 
+## A block locked in Layers
+
+An author can also lock one block in Layers. That lock is different from a slot's: it
+is a convenience that anyone who may edit the page can lift, not a rule a block
+declares, and it covers the block and everything inside it. While a block is locked,
+nothing may change it or anything inside it, its name included; it can't be moved or
+deleted, and neither can a block that holds it; and nothing can be moved out of it or
+added to it. Changing only the lock is always allowed.
+
+Every save is held to it, the API's and an agent's included. A save is compared with
+the page as stored, its working draft where there is one: a block locked there may
+not change, move or disappear, and the save is refused with the code
+`layers-lock-changed`, naming the block. A block added before a locked one shifts its
+position without moving it, so that is allowed. To change a locked block, send it
+unlocked in the same save. A block can't be unlocked and deleted in one save, so unlock
+it and save first. On a localized blocks field whose language can't be read yet, the
+save is kept and the server log says it went unchecked.
+
 ## Components and locks
 
 A lock inside a component holds on every page that places it. A placement cannot use an

@@ -1,0 +1,186 @@
+/**
+ * Which stored value a write's Layers locks are judged against, and what a
+ * write that cannot be judged gets.
+ *
+ * The SQLite suite (`__tests__/layers-lock.integration.test.ts`) shows the
+ * refusals through the Direct API. What it cannot set up is a language whose
+ * store is not ready yet, which is the one read that keeps a write unjudged
+ * rather than failing it; that, and the exact read asked for, are pinned here
+ * against a stored read the test controls.
+ */
+import {
+  NextlyError,
+  type PluginFieldValidateArgs,
+  type PluginFieldWrite,
+  type PluginStoredValueTarget,
+} from "@nextlyhq/plugin-sdk";
+import { describe, expect, it, vi } from "vitest";
+
+import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+
+import {
+  LAYERS_LOCK_CHANGED,
+  layersLockIssues,
+  withLockIssues,
+} from "./layers-lock-judgement";
+
+const lockedPage = (tone: string) => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: [
+    {
+      id: "hero",
+      type: "core/box",
+      version: 1,
+      props: { tone },
+      locked: true,
+      name: "Hero",
+    },
+  ],
+});
+
+function writeTo(
+  readStored: PluginFieldWrite["readStored"],
+  extra: Partial<PluginFieldWrite> = {}
+): PluginFieldWrite {
+  return {
+    kind: "collection",
+    slug: "pages",
+    id: "p1",
+    inTransaction: false,
+    readStored,
+    ...extra,
+  };
+}
+
+function argsFor(
+  write: PluginFieldWrite | undefined,
+  extra: Partial<PluginFieldValidateArgs> = {},
+  localized = false
+): PluginFieldValidateArgs {
+  return {
+    data: {},
+    req: {},
+    field: { name: "content", type: "blocks", localized },
+    path: "content",
+    mode: "update",
+    ...(write === undefined ? {} : { write }),
+    ...extra,
+  } as PluginFieldValidateArgs;
+}
+
+describe("layersLockIssues", () => {
+  it("reads the newest stored form alone, in the write's language", async () => {
+    const asked: PluginStoredValueTarget[] = [];
+    const issues = await layersLockIssues(
+      lockedPage("light"),
+      argsFor(
+        writeTo(
+          async target => {
+            asked.push(target);
+            return { kind: "value", value: lockedPage("dark") };
+          },
+          { locale: "de" }
+        )
+      ),
+      "Content"
+    );
+
+    expect(asked).toEqual([
+      {
+        collection: "pages",
+        id: "p1",
+        field: "content",
+        form: "draft",
+        locale: "de",
+      },
+    ]);
+    expect(issues).toEqual([
+      {
+        path: "content",
+        code: LAYERS_LOCK_CHANGED,
+        message: expect.stringContaining('"Hero" is locked in Layers'),
+      },
+    ]);
+    expect(issues[0]?.message).toMatch(/^Content\/nodes\/0: /);
+  });
+
+  it("keeps a translated field's write whose language store is not ready, and says so", async () => {
+    const onUnjudged = vi.fn();
+    const issues = await layersLockIssues(
+      lockedPage("light"),
+      argsFor(
+        writeTo(async () => {
+          throw NextlyError.serviceUnavailable();
+        }),
+        {},
+        true
+      ),
+      "Content",
+      onUnjudged
+    );
+
+    expect(issues).toEqual([]);
+    expect(onUnjudged).toHaveBeenCalledWith({
+      field: "content",
+      kind: "collection",
+      slug: "pages",
+      id: "p1",
+    });
+  });
+
+  it("fails the write on any other failure to read, rather than passing it unjudged", async () => {
+    // The same answer on a field NOT kept per language is an error: only a
+    // translated field has a store that can be not ready yet.
+    const notReady = writeTo(async () => {
+      throw NextlyError.serviceUnavailable();
+    });
+    await expect(
+      layersLockIssues(lockedPage("light"), argsFor(notReady), "Content")
+    ).rejects.toThrow();
+  });
+
+  it("reads nothing for a create, a value judged alone, or a nested field", async () => {
+    const readStored = vi.fn(async () => ({
+      kind: "value" as const,
+      value: lockedPage("dark"),
+    }));
+    const value = lockedPage("light");
+    expect(
+      await layersLockIssues(
+        value,
+        argsFor(writeTo(readStored), { mode: "create" }),
+        "Content"
+      )
+    ).toEqual([]);
+    expect(
+      await layersLockIssues(value, argsFor(undefined), "Content")
+    ).toEqual([]);
+    expect(
+      await layersLockIssues(
+        value,
+        argsFor(writeTo(readStored), { path: "sections[0].content" }),
+        "Content"
+      )
+    ).toEqual([]);
+    expect(readStored).not.toHaveBeenCalled();
+    // The control: the same value on a top-level update is read and refused.
+    expect(
+      await layersLockIssues(value, argsFor(writeTo(readStored)), "Content")
+    ).toHaveLength(1);
+  });
+});
+
+describe("withLockIssues", () => {
+  it("keeps the rules' answer when no lock broke, and adds to it otherwise", () => {
+    const lock = { path: "content", code: LAYERS_LOCK_CHANGED, message: "x" };
+    expect(withLockIssues(true, [], "content")).toBe(true);
+    expect(withLockIssues(true, [lock], "content")).toEqual([lock]);
+    expect(withLockIssues("bad", [lock], "content")).toEqual([
+      { path: "content", message: "bad" },
+      lock,
+    ]);
+    const rule = { path: "content", code: "wrong-parent", message: "y" };
+    expect(withLockIssues([rule], [lock], "content")).toEqual([rule, lock]);
+  });
+});

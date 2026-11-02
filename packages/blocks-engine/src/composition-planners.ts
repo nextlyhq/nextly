@@ -41,6 +41,7 @@ import type {
   ExposedPropertyType,
   ExposedSlot,
 } from "./document";
+import { lockedAncestorOf } from "./layers-lock";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
 import {
@@ -1861,7 +1862,8 @@ function replaceOps(
   }
 
   const refusal =
-    lockRefusal(saved.selected) ?? removableRefusal(document, saved.selected);
+    lockRefusal(document.nodes, saved.selected) ??
+    removableRefusal(document, saved.selected);
   if (refusal !== undefined) return refusal;
 
   const position = replacementPosition(saved.at);
@@ -2146,7 +2148,8 @@ export function planInsertPattern(
     // a locked subtree and a malformed node for the same reasons an insert
     // does. Only that target deletes anything; a positional insert adds.
     (target === "document"
-      ? (lockRefusal(document.nodes) ?? shapeRefusal(document.nodes))
+      ? (lockRefusal(document.nodes, document.nodes) ??
+        shapeRefusal(document.nodes))
       : undefined);
   if (refusal !== undefined) return refusal;
 
@@ -2407,12 +2410,24 @@ function destinationOf(
 
   const parent = findNode(document.nodes, target.parentId);
   if (parent === undefined) return { problem: "unknown" };
+  // A run put into a locked block, or into a block inside one, changes what
+  // that lock protects, and the op layer refuses the insert.
+  if (holdsLayersLock(document.nodes, parent)) {
+    return { problem: "destination-locked" };
+  }
   return {
     place: {
       at: target,
       where: { kind: "slot", parentType: parent.type, slot: target.slot },
     },
   };
+}
+
+/** Whether a block is locked in Layers, itself or by a block around it. */
+function holdsLayersLock(nodes: BlockNode[], block: BlockNode): boolean {
+  return (
+    block.locked === true || lockedAncestorOf(nodes, block.id) !== undefined
+  );
 }
 
 /** The first id this document holds twice, or `undefined`. */
@@ -2482,9 +2497,18 @@ function duplicateDomIdRefusal(
  * {@link insertOps} — but a lock on the page is content an author protected,
  * and a remove refuses it for a reason no re-ordering of the group can satisfy.
  */
-function lockRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
+function lockRefusal(
+  nodes: BlockNode[],
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
   for (const root of roots) {
-    if (lockedWithin(root) !== undefined) {
+    // Inside the run, and around it: taking a block out of a locked one
+    // changes what that lock protects as surely as deleting a locked block,
+    // and the op layer refuses both.
+    if (
+      lockedWithin(root) !== undefined ||
+      lockedAncestorOf(nodes, root.id) !== undefined
+    ) {
       return { problem: "destination-locked" };
     }
   }
@@ -2803,7 +2827,8 @@ export function planDetach(
   // own subtree is not among them — that content is moving, not being copied
   // beside itself, and treating it as taken renames the author's own anchors.
   const locked =
-    lockRefusal([located.node]) ?? removableRefusal(document, [located.node]);
+    lockRefusal(document.nodes, [located.node]) ??
+    removableRefusal(document, [located.node]);
   if (locked !== undefined) return locked;
 
   const removal: BuilderOp = { kind: "remove", id: located.node.id };

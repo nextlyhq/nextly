@@ -249,18 +249,21 @@ describe("toolbarActions", () => {
     );
   });
 
-  it("a lock INSIDE a block stops its delete but not its move", () => {
-    // THE case that separates asking the two lock rules from reading
-    // `node.locked` once: delete destroys the subtree, a move carries it
-    // intact. Both halves are asserted, so a toolbar that used one answer for
-    // both fails here whichever answer it picked.
+  it("a lock INSIDE a block stops its delete and its move", () => {
+    // THE case that separates asking the lock rule from reading `node.locked`
+    // once: a locked block does not move or disappear until it is unlocked,
+    // and moving or deleting the block around it would do both to it. The op
+    // layer refuses either, so the toolbar offers neither, naming the block.
     const document = documentOf([
       box("outer", [node("kid", "acme/heading", { locked: true })]),
       node("after"),
     ]);
     const actions = toolbarActions(document, "outer");
 
-    expect(actionOf(actions, "move-down").enabled).toBe(true);
+    expect(actionOf(actions, "move-down").enabled).toBe(false);
+    expect(actionOf(actions, "move-down").reason).toBe(
+      "Heading inside this block is locked."
+    );
     expect(actionOf(actions, "delete").enabled).toBe(false);
     expect(actionOf(actions, "delete").reason).toBe(
       "Heading inside this block is locked."
