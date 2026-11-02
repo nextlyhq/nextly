@@ -47,6 +47,7 @@ import * as React from "react";
 
 import { autoscrollStep } from "./autoscroll";
 import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
+import { isElement } from "./dom-kind";
 import { placementSources } from "./drop-targets";
 import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
@@ -342,7 +343,8 @@ function pressedRow(
   target: EventTarget,
   host: HTMLElement
 ): { id: string; depth: number } | null {
-  if (!(target instanceof Element)) return null;
+  // Asked by node kind, so a row in another document still answers.
+  if (!isElement(target)) return null;
   const row = target.closest('[role="treeitem"]');
   if (row === null || !host.contains(row)) return null;
   const id = rowBlockId(row);
