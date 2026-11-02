@@ -339,7 +339,8 @@ function DarkValue({
         <div className="nx-vars-editor__same">
           <span>Same as light</span>
           {readOnly ? null : (
-            <Button type="button" variant="ghost" size="sm" onClick={onAdd}>
+            // Outlined, so the action reads as one at rest, not only on hover.
+            <Button type="button" variant="outline" size="sm" onClick={onAdd}>
               Add dark value
             </Button>
           )}
@@ -358,7 +359,7 @@ function DarkValue({
       {readOnly ? null : (
         <Button
           type="button"
-          variant="ghost"
+          variant="outline"
           size="sm"
           className="nx-vars-editor__inline-action"
           onClick={onClear}
