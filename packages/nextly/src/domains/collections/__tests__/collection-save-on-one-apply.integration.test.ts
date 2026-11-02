@@ -8,8 +8,8 @@
  *   indexes and foreign keys.
  * - **The whole database.** The apply diffs every table the Builder owns, as the schema dialog's
  *   does, so another table's drift refuses the save, naming that table.
- * - **Never beside another schema change.** A save while a migration holds the schema lock is
- *   refused at once, with nothing written.
+ * - **Never beside another schema change.** A save, or the schema dialog's apply, while a
+ *   migration holds the schema lock is refused at once, with nothing written.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -18,9 +18,11 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
-import { DrizzleStatementExecutor } from "../../schema/services/drizzle-statement-executor";
 import { withSchemaLock } from "../../schema/pipeline/schema-lock";
+import { applyCollectionSchemaChange } from "../../schema/services/collection-schema-apply";
+import { DrizzleStatementExecutor } from "../../schema/services/drizzle-statement-executor";
 
 interface CollectionsHandler {
   createCollection(data: Record<string, unknown>): Promise<{
@@ -238,10 +240,10 @@ describeEachDialect("a collection's Builder save", dialect => {
     expect(await recordedFields()).toEqual(recordedBefore);
   }, 120_000);
 
-  it("is refused at once, writing nothing, while a migration holds the schema lock", async () => {
-    await seeded();
-    const before = await liveItems();
-    const recordedBefore = await recordedFields();
+  /** Hold the schema lock as `nextly migrate` would, for as long as `during` runs. */
+  async function whileMigrationHoldsLock(
+    during: () => Promise<void>
+  ): Promise<void> {
     let release = (): void => undefined;
     const released = new Promise<void>(resolve => {
       release = resolve;
@@ -265,20 +267,60 @@ describeEachDialect("a collection's Builder save", dialect => {
     );
     await Promise.race([isHeld, holder]);
     try {
-      const saved = await save();
-
-      expect(saved).toMatchObject({
-        success: false,
-        message:
-          "A migration is running on this database, so this change was not saved. " +
-          "Save it again once the migration ends.",
-      });
+      await during();
     } finally {
       release();
       await holder;
     }
+  }
+
+  const LOCK_HELD =
+    "A migration is running on this database, so this change was not saved. " +
+    "Save it again once the migration ends.";
+
+  it("is refused at once, writing nothing, while a migration holds the schema lock", async () => {
+    await seeded();
+    const before = await liveItems();
+    const recordedBefore = await recordedFields();
+
+    await whileMigrationHoldsLock(async () => {
+      const saved = await save();
+
+      expect(saved).toMatchObject({ success: false, message: LOCK_HELD });
+    });
 
     expect(await liveItems()).toBe(before);
     expect(await recordedFields()).toEqual(recordedBefore);
+  }, 120_000);
+
+  it("refuses the schema dialog's apply at once, writing nothing, while another schema change holds the lock", async () => {
+    // The dialog holds no lock of its own; the shared apply takes it. The change here would
+    // apply cleanly unguarded, adding a column, so only the lock keeps the table as it was.
+    await seeded();
+    const before = await liveItems();
+    const [row] = await query<{ fields: unknown }>(
+      `SELECT ${q("fields")} AS fields FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'items'`
+    );
+    const recorded = (
+      typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+    ) as FieldDefinition[];
+
+    await whileMigrationHoldsLock(async () => {
+      await expect(
+        applyCollectionSchemaChange({
+          slug: "items",
+          collection: { tableName: "dc_items", fields: recorded },
+          fields: [...recorded, { name: "extra", type: "text" }],
+          wasLocalized: false,
+          isLocalized: false,
+          status: false,
+          wasStatus: false,
+          renameResolutions: [],
+          eventResolutions: [],
+        })
+      ).rejects.toMatchObject({ publicMessage: LOCK_HELD });
+    });
+
+    expect(await liveItems()).toBe(before);
   }, 120_000);
 });

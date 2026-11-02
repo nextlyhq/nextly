@@ -25,11 +25,13 @@ import { buildFullDesiredSchema } from "../../../dispatcher/helpers/desired-sche
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
+  getLoggerFromDI,
   getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di";
 import { NextlyError } from "../../../errors";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { consoleLogger } from "../../../shared/types";
 import { appLocalization } from "../../i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
@@ -75,6 +77,7 @@ import type { DesiredCollection } from "../pipeline/types";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { toSnakeCase } from "./field-column-descriptor";
+import { withSchemaChangeExcluded } from "./schema-change-exclusion";
 
 /**
  * The fields the registry records for a collection before a Schema Builder change, as it records
@@ -214,11 +217,34 @@ export interface CollectionSchemaChange {
 /**
  * Apply one collection's schema change to this database, or refuse it.
  *
+ * Under the schema lock, whoever calls, so no two applies, and no migration, ever run beside each
+ * other: the SQLite recovery below finishes or undoes a rebuild it believes interrupted, which is
+ * only safe while nothing else can be in the middle of one. The lock is re-entrant, so a caller
+ * already holding it (the Builder save, which also holds it across its file and registry writes)
+ * runs inside its own claim; the schema dialog takes it here. A change while another holds it is
+ * refused at once, with nothing written.
+ *
  * @throws {NextlyError} `NEXTLY_MIGRATION_APPLY_FAILED` with the pipeline's own words when the
  *   push is refused, the refusal of a leaving field's settings as it is, and `INTERNAL_ERROR` when
  *   the push landed and the companion could not be brought in step
  */
 export async function applyCollectionSchemaChange(
+  change: CollectionSchemaChange
+): Promise<Extract<ApplyResult, { success: true }>> {
+  return withSchemaChangeExcluded(
+    {
+      adapter: getAdapterFromDI(),
+      logger: getLoggerFromDI() ?? consoleLogger,
+      label: `apply schema changes to collection "${change.slug}"`,
+      // This path runs the push pipeline, so it issues DDL and may create the lock table.
+      issuesDdl: true,
+    },
+    () => applyHoldingSchemaLock(change)
+  );
+}
+
+/** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
+async function applyHoldingSchemaLock(
   change: CollectionSchemaChange
 ): Promise<Extract<ApplyResult, { success: true }>> {
   const { slug, collection, fields, wasLocalized, isLocalized } = change;
