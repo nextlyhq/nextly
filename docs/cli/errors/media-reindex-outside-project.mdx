@@ -1,0 +1,24 @@
+---
+title: MEDIA_REINDEX_OUTSIDE_PROJECT
+description: "`nextly media reindex-usage` was run from outside the project `--cwd` names, or given a configuration from outside it, so the database it would rebuild or the content it would read may be another project's."
+---
+
+## Cause
+
+`nextly media reindex-usage` was run from outside the project `--cwd` names, or given a configuration from outside it, so the database it would rebuild or the content it would read may be another project's.
+
+The rebuild empties the record of where each media item is used, in the database it connects to, and writes it again from the collections and Singles the config names. The database settings are read when the CLI starts, from `.env` where it runs, the shell or a parent process, before `--cwd` names the project, so from another folder they may name another project's database. A config outside the project, given with `--config` or linked from it, may name another project's collections. Either way the record would stop describing the content beside it. Nothing was rebuilt.
+
+## Fix
+
+- Change into the project folder and run `nextly media reindex-usage` there.
+- Pass `--config` a configuration inside the project, or none, so the project's own is found.
+
+## Example
+
+```text
+✗ Nothing was rebuilt: the command was run from outside /home/you/app.
+  Why:  The database settings were read before --cwd named /home/you/app, so they may be another project's.
+  Next: Run the command from /home/you/app to rebuild its record.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-reindex-outside-project  (MEDIA_REINDEX_OUTSIDE_PROJECT)
+```

@@ -12,7 +12,7 @@ import { container } from "../../../di/container";
 import { registerRevalidationServices } from "../../../di/registrations/register-revalidation";
 import type { RegistrationContext } from "../../../di/registrations/types";
 import { setDefaultRevalidatorFactory } from "../../../revalidation/default-revalidator";
-import { NoopRevalidator } from "../../../revalidation/noop-revalidator";
+import { HandOffRevalidator } from "../../../revalidation/handoff-revalidator";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import { NextCacheRevalidator } from "../next-cache-revalidator";
 import { registerNextCacheRevalidator } from "../register";
@@ -52,11 +52,12 @@ describe("registerNextCacheRevalidator", () => {
     );
   });
 
-  it("falls back to the no-op when no adapter installed its factory", () => {
-    // A bare boot with no Next adapter registered uses the no-op.
+  it("falls back to handing writes off when no adapter installed its factory", () => {
+    // A bare boot with no Next adapter registered (the CLI, a script) hands a
+    // write's tags to the expiry hand-off, so they reach the ledger.
     registerRevalidationServices(ctx);
     expect(container.get<CacheRevalidator>("cacheRevalidator")).toBeInstanceOf(
-      NoopRevalidator
+      HandOffRevalidator
     );
   });
 });

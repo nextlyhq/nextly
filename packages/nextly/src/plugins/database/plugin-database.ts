@@ -25,6 +25,7 @@ import { eq, getColumns, inArray } from "drizzle-orm";
 
 import { isMissingNamedColumnError } from "../../database/missing-column";
 import type { SupportedDialect } from "../../database/schema-registry";
+import type { EntityOwner } from "../../domains/schema/extension/build-extension-schema";
 import { toDrizzleTable } from "../../domains/schema/extension/compile";
 import type {
   ColumnBuilder,
@@ -46,6 +47,7 @@ import {
   type ContributedColumn,
   type TableAccessRules,
 } from "./access";
+import { type ContentTarget, contentTarget } from "./content-target";
 import { runInPluginTransactionFlow } from "./plugin-transaction-in-flow";
 import { linkPluginTransaction } from "./plugin-transaction-link";
 
@@ -125,6 +127,21 @@ export interface PluginDatabaseDeps {
   contributions?: () => ReadonlyMap<string, readonly ContributedColumn[]>;
   /** The runtime Drizzle table of an entity or core table, by SQL name. */
   entityTable?: (tableName: string) => unknown;
+  /**
+   * The collection, Single or field group an entity table stores, by SQL
+   * name, from the compiled schema. Read per call. With `expireContent`, a
+   * `contributed` write that changed a row expires the cached reads of the
+   * entry or Single that row belongs to; absent, it expires nothing.
+   */
+  contentEntity?: (tableName: string) => EntityOwner | undefined;
+  /** Expires the cached reads of one entry or Single. Never throws. */
+  expireContent?: (target: ContentTarget) => Promise<void>;
+  /**
+   * Inside a transaction: holds work until the transaction commits, and
+   * drops it on a rollback. Absent outside one, where a write's expiry runs
+   * once the write has finished.
+   */
+  afterCommit?: (effect: () => unknown) => void;
 }
 
 /**
@@ -1251,7 +1268,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
             .set(assignments)
             .where(eq(reach.key as never, id as never))
         );
-        return affectedRows(result);
+        const changed = affectedRows(result);
+        if (changed > 0) await expireChangedContent(tableName, id, deps);
+        return changed;
       };
       // Closure-bound rather than methods reading `this`, so a destructured
       // `const { get } = ctx.db.contributed(...)` works like the object form.
@@ -1329,6 +1348,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           },
           transaction: () => Promise.reject(nestedTransactionError()),
           track: scope.track,
+          // A `contributed` write's expiry waits for the commit with the core
+          // work's, so a rolled-back write expires nothing.
+          afterCommit: effect => committed.push(effect),
         });
         if (tx.adapterTx) {
           linkPluginTransaction(scoped, tx.adapterTx, scope, effect =>
@@ -1619,6 +1641,62 @@ async function whenColumnsExist<T>(
  * than thrown: the transaction has committed, and its caller is owed that
  * result, not an effect's failure in its place.
  */
+/**
+ * Expire the cached reads of the entry or Single a `contributed` write to row
+ * `id` of `tableName` changed: now, or inside a transaction once it commits.
+ * The row's document is found before the commit, on the write's own
+ * connection, so a field group's parent read sees the transaction's rows.
+ *
+ * Best-effort, never thrown: outside a transaction the row has already been
+ * changed when this runs, so a failed lookup of its document must not tell
+ * the caller the write failed. It is logged, naming the row, and nothing is
+ * expired for it.
+ */
+async function expireChangedContent(
+  tableName: string,
+  id: unknown,
+  deps: PluginDatabaseDeps
+): Promise<void> {
+  if (typeof id !== "string" && typeof id !== "number") return;
+  try {
+    await findAndExpire(tableName, id, deps);
+  } catch (error) {
+    // Guarded too, as `runCommitEffects` guards its logging: an app logger
+    // that throws must not reject a write that has already happened.
+    try {
+      getNextlyLogger().warn({
+        kind: "contributed-write-expiry-failed",
+        message: `The cached reads of the row "${String(id)}" of "${tableName}" were not expired after a contributed write: ${error instanceof Error ? error.message : String(error)}`,
+        table: tableName,
+        id: String(id),
+      });
+    } catch {
+      // Nothing is left to report it to.
+    }
+  }
+}
+
+/** Find the document a contributed write changed, and expire it or queue it. */
+async function findAndExpire(
+  tableName: string,
+  id: string | number,
+  deps: PluginDatabaseDeps
+): Promise<void> {
+  const { contentEntity, entityTable, expireContent } = deps;
+  if (!contentEntity || !entityTable || !expireContent) return;
+  const target = await contentTarget(tableName, id, {
+    contentEntity,
+    entityTable,
+    db: deps.db,
+  });
+  if (target === undefined) return;
+  if (deps.afterCommit) {
+    deps.afterCommit(() => expireContent(target));
+    return;
+  }
+  await expireContent(target);
+}
+
 async function runCommitEffects(
   effects: readonly (() => unknown)[]
 ): Promise<void> {

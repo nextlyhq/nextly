@@ -226,20 +226,10 @@ export function UploadTray({
     returnFocusRef?.current?.focus();
   };
 
+  // The uploads' live region is not drawn here: `LazyUploadTray` draws it
+  // beside this tray, so it is mounted before this chunk has arrived.
   return (
     <>
-      {/* The single live region for uploads: always mounted, and separate
-          from the visible heading, so each change is announced once. */}
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className="sr-only"
-      >
-        {rows.length > 0 &&
-          (isUploading ? summary : `Upload finished. ${summary}.`)}
-      </div>
-
       {rows.length > 0 && (
         <section
           ref={trayRef}

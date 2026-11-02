@@ -604,8 +604,6 @@ const KEYS_WITHOUT_COMPONENTS = new Set([
 interface ExposedPaths {
   /** Paths the admin resolves through the registry — each needs an import. */
   registered: string[];
-  /** Widget component paths: deliberately NOT imported into the generated map. */
-  widgets: string[];
   /** Emitted keys this helper classifies neither way. Must stay empty. */
   unclassified: string[];
 }
@@ -654,19 +652,8 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
 
   return {
     registered,
-    // A widget's component is OPTIONAL now: a declarative widget names an
-    // archetype and a query and ships no UI code, so it exposes no path for
-    // the import map to carry. Dropped rather than collected as `undefined`,
-    // because this list is what the map's coverage is measured against and an
-    // absent path is not an uncovered one.
-    widgets: (meta.widgets ?? []).flatMap(widget =>
-      widget.component === undefined ? [] : [widget.component]
-    ),
     unclassified: Object.keys(meta).filter(
-      key =>
-        !readsComponents.has(key) &&
-        key !== "widgets" &&
-        !KEYS_WITHOUT_COMPONENTS.has(key)
+      key => !readsComponents.has(key) && !KEYS_WITHOUT_COMPONENTS.has(key)
     ),
   };
 }
@@ -695,17 +682,9 @@ describe("parity with the admin-meta surface", () => {
           header: { slot: "@acme/x/admin#HeaderSlot" },
           schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
           entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
-          widgets: [
-            { id: "stats", component: "@acme/x/admin#StatsWidget" },
-            // A DECLARATIVE widget beside it: an archetype and a query, no UI
-            // code. It must contribute no path at all -- see the assertion at
-            // the end of this test.
-            {
-              id: "posts",
-              archetype: "metric",
-              query: { source: "collection:posts", op: "count" },
-            },
-          ],
+          // A key startup refuses, carried as plain JavaScript can: it must
+          // contribute no path at all.
+          widgets: [{ id: "stats", component: "@acme/x/admin#StatsWidget" }],
           clientConfig: { accent: "#0ea5e9" },
         },
       },
@@ -739,26 +718,10 @@ describe("parity with the admin-meta surface", () => {
       expect(collected.has(path)).toBe(true);
     }
 
-    // Widget components ARE collected now, and this records why the exclusion
-    // ended rather than only that it did.
-    //
-    // Being pre-bundled by this map is what puts a component in the registry
-    // `PluginSlot` reads -- the registry's runtime fallback cannot resolve a
-    // bare package specifier in a bundled browser. So while widgets were
-    // excluded, a `custom` widget drew its card and then nothing inside it
-    // unless the plugin called `registerComponents` itself from its admin
-    // entry, which the documented contract never asked it to do.
-    expect(exposed.widgets).toEqual(["@acme/x/admin#StatsWidget"]);
-
-    // A DECLARATIVE widget still contributes no path whatsoever. The fixture
-    // declares two widgets and only one names a component: the host draws the
-    // other from its archetype and query, so there is nothing for any import
-    // map to carry for it. Without this the assertion above could be read as
-    // "widgets contribute one path each", which stopped being true when
-    // `component` became conditional.
-    expect(meta.widgets).toHaveLength(2);
-    expect(exposed.widgets).toHaveLength(1);
-    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(true);
+    // Nothing the plugin carries under `admin.widgets` is imported: startup
+    // refuses the key, and admin-meta publishes nothing under it.
+    expect(meta).not.toHaveProperty("widgets");
+    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(false);
 
     // `clientConfig` is plugin data. A colour is not a component path, and
     // reading it as one would demand an import for a module named `#0ea5e9`.
@@ -974,7 +937,7 @@ describe("the list of paths the map registers", () => {
 });
 
 describe("the map's entries: each component with who declared it and what it is for", () => {
-  it("tags every kind of component, naming a widget's id", () => {
+  it("tags every kind of component, naming a widget's id, and nothing a plugin carries under admin.widgets", () => {
     const shop = {
       name: "@acme/shop",
       version: "1.0.0",
@@ -983,6 +946,7 @@ describe("the map's entries: each component with who declared it and what it is 
         fieldTypes: [{ type: "color", component: "@acme/shop/admin#Color" }],
         admin: {
           pages: [{ path: "reports", component: "@acme/shop/admin#Reports" }],
+          // A key startup refuses: nothing under it is imported.
           widgets: [
             { id: "acme/old", title: "Old", component: "@acme/shop/admin#Old" },
           ],
@@ -1009,12 +973,6 @@ describe("the map's entries: each component with who declared it and what it is 
         path: "@acme/shop/admin#Header",
         owner: 'plugin "@acme/shop"',
         use: "slot",
-      },
-      {
-        path: "@acme/shop/admin#Old",
-        owner: 'plugin "@acme/shop"',
-        use: "widget",
-        widget: "acme/old",
       },
       {
         path: "@acme/shop/admin#Reports",

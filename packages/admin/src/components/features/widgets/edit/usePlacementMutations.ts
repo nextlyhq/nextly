@@ -39,7 +39,12 @@ export interface PlacementMutations {
    * it knows every setting it drew — and a per-field write could not express
    * clearing one, since an emptied field arrives as an absent key.
    */
-  setConfig: (placementId: string, config: Record<string, unknown>) => void;
+  /** Records a card's settings, and its own title where the change sets one (`setPlacementConfig`). */
+  setConfig: (
+    placementId: string,
+    config: Record<string, unknown>,
+    ownTitle?: string
+  ) => void;
   /** Move one card to an end, or one step past its drawn neighbour. */
   move: (placementId: string, direction: MoveDirection) => void;
   /** Move one card to `final` among the drawn cards: where a drag released it. */
@@ -114,9 +119,9 @@ export function usePlacementMutations(
   );
 
   const setConfig = useCallback(
-    (placementId: string, config: Record<string, unknown>) =>
+    (placementId: string, config: Record<string, unknown>, ownTitle?: string) =>
       mutatePlacements(placements =>
-        setPlacementConfig(placements, placementId, config)
+        setPlacementConfig(placements, placementId, config, ownTitle)
       ),
     [mutatePlacements]
   );

@@ -11,7 +11,8 @@ import { fetchWidgetBatch, type StreamedSlot } from "./widget-query-stream";
 vi.mock("@admin/lib/api/refreshInterceptor", () => ({ authFetch: vi.fn() }));
 
 const fetched = vi.mocked(authFetch);
-const count = { source: "collection:posts", op: "count" } as const;
+// One card's ask, as the batch sends every card: by its widget and its card.
+const count = { widget: "core/count", card: "posts" } as const;
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -75,6 +76,28 @@ describe("fetchWidgetBatch", () => {
     );
     expect(init?.signal).toBe(signal);
     expect(JSON.parse(String(init?.body))).toEqual({ queries: [count, count] });
+  });
+
+  it("sends the layout read's token beside the queries when it has one, and no field when it has none", async () => {
+    const answer = () =>
+      Response.json({
+        results: [{ ok: true, result: { op: "count", total: 4 } }],
+      });
+    fetched.mockResolvedValueOnce(answer()).mockResolvedValueOnce(answer());
+
+    await fetchWidgetBatch([count], {
+      onSlots: vi.fn(),
+      readAheadToken: "load-1",
+    });
+    await fetchWidgetBatch([count], { onSlots: vi.fn() });
+
+    const [named, unnamed] = fetched.mock.calls.map(([, init]) =>
+      JSON.parse(String(init?.body))
+    );
+    expect(named).toEqual({ queries: [count], readAheadToken: "load-1" });
+    // No layout read to name: the body is the queries alone, as an older
+    // server reads it.
+    expect(unnamed).toEqual({ queries: [count] });
   });
 
   it("reads a line split across two chunks as one line", async () => {

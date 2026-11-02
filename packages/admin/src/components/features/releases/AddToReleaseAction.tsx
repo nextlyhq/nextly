@@ -44,8 +44,10 @@ import {
 import { useCan } from "@admin/hooks/useCan";
 import type { Release, ReleaseMemberAction } from "@admin/types/releases";
 
+import { dialogOpenerOf, returnFocusTo } from "./dialog-opener";
 import { releaseErrorMessage } from "./release-error";
 import { describeRelease } from "./release-schedule";
+import { useOpenForDocument } from "./useOpenForDocument";
 
 /**
  * Choosing the release, with its schedule shown beneath.
@@ -307,6 +309,7 @@ function AddToReleaseDialog({
   canRead,
   canPublishDocument,
   canUnpublishDocument,
+  opener,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
@@ -316,6 +319,7 @@ function AddToReleaseDialog({
   canRead: boolean;
   canPublishDocument: boolean;
   canUnpublishDocument: boolean;
+  opener: HTMLElement | null;
 }) {
   const {
     releaseId,
@@ -342,7 +346,7 @@ function AddToReleaseDialog({
         else onOpenChange(true);
       }}
     >
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={event => returnFocusTo(opener, event)}>
         <form
           onSubmit={event => {
             event.preventDefault();
@@ -477,23 +481,13 @@ export function useAddToReleaseAction({
   // they learn is that it failed.
   const canPublishDocument = useCan(`publish-${scopeSlug}`);
   const canUnpublishDocument = useCan(`unpublish-${scopeSlug}`);
-  /*
-   * Which DOCUMENT the picker is open for, rather than whether it is open.
-   *
-   * This hook is called from the page, and the router renders the same page
-   * component for every entry of a route without a key — so navigating from one
-   * document to another keeps this state alive. A plain boolean would survive
-   * that move and the picker would reappear over a document nobody opened it
-   * for, aimed at the new one.
-   *
-   * Scoping the state to the document makes that unrepresentable rather than
-   * cleaning up after it: an identity from another document simply is not open,
-   * with no effect to fire and nothing to forget on a later route.
-   */
-  const documentKey = `${scopeKind}:${scopeSlug}:${entryId}`;
-  const [openFor, setOpenFor] = useState<string | null>(null);
-  const open = openFor === documentKey;
-  const setOpen = (next: boolean) => setOpenFor(next ? documentKey : null);
+  // Open only for the document it was opened for, and closed by leaving it:
+  // the page stays mounted from one document to the next.
+  const { open, setOpen } = useOpenForDocument(
+    `${scopeKind}:${scopeSlug}:${entryId}`
+  );
+  // Where focus goes back to when the dialog closes.
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
 
   /*
    * EXISTENCE is decided by authority over the feature; USABILITY by facts
@@ -526,7 +520,7 @@ export function useAddToReleaseAction({
   /*
    * A DESCRIPTION and the handler that runs it, for the editor's action model
    * to place. This module renders no trigger, which is what lets the model put
-   * the action in the overflow menu beside Duplicate; a component drawing its
+   * the action on the Publish split's arrow; a component drawing its
    * own button decides that itself and cannot be told otherwise.
    *
    * It also keeps the control out of the editor's `<form>`. A `<button>` with
@@ -537,12 +531,20 @@ export function useAddToReleaseAction({
   const contributed: ContributedAction = {
     action: {
       id: "add-to-release",
-      label: "Add to release",
-      placement: "menu",
-      group: "document",
+      // It opens a dialog, so it ends in an ellipsis, as Schedule publish…
+      // beside it does.
+      label: "Add to release…",
+      // On the Publish split's arrow, beside Schedule publish…: both decide
+      // when this document goes live.
+      placement: "publish-menu",
       ...(disabledReason === undefined ? {} : { disabledReason }),
     },
-    binding: { onSelect: () => setOpen(true) },
+    binding: {
+      onSelect: () => {
+        setOpener(dialogOpenerOf(globalThis.document?.activeElement ?? null));
+        setOpen(true);
+      },
+    },
   };
 
   const dialog = (
@@ -555,6 +557,7 @@ export function useAddToReleaseAction({
       canRead={canRead}
       canPublishDocument={canPublishDocument}
       canUnpublishDocument={canUnpublishDocument}
+      opener={opener}
     />
   );
 

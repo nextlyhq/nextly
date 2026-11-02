@@ -1,10 +1,18 @@
 /**
  * What a media cleanup log may show of a failure: the file, never a secret
- * a signed or tokenized URL, or a message quoting one, can carry.
+ * a signed or tokenized URL, or a message quoting one, can carry. And that
+ * the search for files another item refers to still answers when the retired
+ * `sizes` column is dropped between its check and its read.
  */
+import { sql, type SQL } from "drizzle-orm";
+import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
-import { errorForLog, storedPathForLog } from "../remove-stored-files";
+import {
+  errorForLog,
+  filesKeptByOthers,
+  storedPathForLog,
+} from "../remove-stored-files";
 
 describe("errorForLog", () => {
   it.each([
@@ -54,4 +62,94 @@ describe("storedPathForLog", () => {
   it("keeps a stored path's spelling, without its query", () => {
     expect(storedPathForLog("2026/10/a b.png?v=1")).toBe("2026/10/a b.png");
   });
+});
+
+describe("filesKeptByOthers, when the sizes column is gone by the time it is read", () => {
+  // The columns the search builds its `like`s over; the read below answers
+  // without a database.
+  const media = sqliteTable("media", {
+    filename: text("filename"),
+    url: text("url"),
+    thumbnailUrl: text("thumbnail_url"),
+  });
+  const otherOriginal = "2026/10/9a9a-other.png";
+
+  /**
+   * A search whose check finds the sizes column, and whose read naming it
+   * fails with `error`, as one does once a drop has run in between; read
+   * without it, the other item's row is found.
+   */
+  function racing(error: unknown, reads: Array<"with" | "without">) {
+    return {
+      columns: media,
+      dialect: "postgresql" as const,
+      sizesColumn: async () => sql`${sql.identifier("sizes")}`,
+      read: async (_where: SQL, sizes: SQL | undefined) => {
+        reads.push(sizes === undefined ? "without" : "with");
+        if (sizes !== undefined) throw error;
+        return [{ filename: otherOriginal, url: `/uploads/${otherOriginal}` }];
+      },
+    };
+  }
+
+  it.each([
+    [
+      "PostgreSQL",
+      Object.assign(new Error('column "sizes" does not exist'), {
+        code: "42703",
+      }),
+    ],
+    [
+      "MySQL",
+      Object.assign(new Error("Unknown column 'sizes' in 'where clause'"), {
+        code: "ER_BAD_FIELD_ERROR",
+        errno: 1054,
+      }),
+    ],
+    ["SQLite", new Error("no such column: sizes")],
+    [
+      "a driver error a query wrapper carries as its cause",
+      new Error("Failed query: select ...", {
+        cause: Object.assign(new Error('column "sizes" does not exist'), {
+          code: "42703",
+        }),
+      }),
+    ],
+  ])("reads again without it on %s, and answers", async (_dialect, error) => {
+    const reads: Array<"with" | "without"> = [];
+
+    const kept = await filesKeptByOthers(
+      racing(error, reads),
+      ["2026/10/1d1d-gone.png", otherOriginal],
+      ["deleted"]
+    );
+
+    expect(reads).toEqual(["with", "without"]);
+    expect(kept).not.toBeNull();
+    expect([...(kept ?? [])]).toEqual([otherOriginal]);
+  });
+
+  it.each([
+    [
+      "another column missing",
+      Object.assign(new Error('column "filename" does not exist'), {
+        code: "42703",
+      }),
+    ],
+    ["a connection lost", new Error("Connection terminated unexpectedly")],
+  ])(
+    "still answers null, removing nothing, for %s (the control)",
+    async (_case, error) => {
+      const reads: Array<"with" | "without"> = [];
+
+      const kept = await filesKeptByOthers(
+        racing(error, reads),
+        ["2026/10/1d1d-gone.png"],
+        ["deleted"]
+      );
+
+      expect(reads).toEqual(["with"]);
+      expect(kept).toBeNull();
+    }
+  );
 });
