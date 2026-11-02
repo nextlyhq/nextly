@@ -165,7 +165,7 @@ export interface TokenRow {
 }
 
 /** The tokens of one kind, in stored order, as rows. */
-export function tokenRows(
+function tokenRows(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
 ): readonly TokenRow[] {
