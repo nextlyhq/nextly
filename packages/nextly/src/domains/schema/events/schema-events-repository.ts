@@ -463,6 +463,26 @@ export class SchemaEventsRepository {
   }
 
   /**
+   * Record a checksum on a row in place, with `note` added after any note it
+   * has: the checksum of an applied migration's file as it now stands, where
+   * `migrate:resolve --applied` accepts an edit to it, or where the row was
+   * recorded without one. Only the checksum and the note change, so the row
+   * is the same outcome it was, read the same way by every build.
+   */
+  async recordChecksum(
+    id: string,
+    sha256: string,
+    note: string
+  ): Promise<void> {
+    const row = await this.findById(id);
+    if (!row) return;
+    await this.db
+      .update(this.table)
+      .set({ sha256, note: appendNote(row.note, note) })
+      .where(sql`id = ${id}`);
+  }
+
+  /**
    * Every `file_rollback` row for one filename: its down section's attempts,
    * which `migrate:resolve --failed-cleanup` clears beside its UP's.
    */
