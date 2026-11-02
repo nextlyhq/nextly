@@ -104,6 +104,7 @@ import {
   type RefusalWording,
 } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import {
   blockLabel,
   blockSourceFor,
@@ -288,7 +289,7 @@ type PanelTab = "blocks" | "sections";
 /** What the search says it searches, per tab. */
 const SEARCH_PLACEHOLDERS: Readonly<Record<PanelTab, string>> = {
   blocks: "Search blocks and components",
-  sections: "Search sections",
+  sections: `Search ${EDITOR_WORDS.sections.toLowerCase()}`,
 };
 
 /** Which tab an entry is offered in. Patterns are Sections; the rest Blocks. */
@@ -1117,7 +1118,7 @@ export function InsertPanel({
     onInsert?.(first.node);
   };
 
-  const header = <h2 className="nx-insert-panel__title">Add</h2>;
+  const header = <h2 className="nx-insert-panel__title">{EDITOR_WORDS.add}</h2>;
   const firstPlace = candidates[0];
   if (firstPlace === undefined) {
     // Only an `inside` can leave no place: the container it names is gone
@@ -1338,8 +1339,8 @@ export function InsertPanel({
         className="nx-insert-panel__tabs"
       >
         <TabsList className="nx-insert-panel__tablist">
-          <TabsTrigger value="blocks">Blocks</TabsTrigger>
-          <TabsTrigger value="sections">Sections</TabsTrigger>
+          <TabsTrigger value="blocks">{EDITOR_WORDS.blocks}</TabsTrigger>
+          <TabsTrigger value="sections">{EDITOR_WORDS.sections}</TabsTrigger>
         </TabsList>
         {/* One tab panel per tab, so each trigger controls an element that
             exists. A closed tab panel renders none of its children, so the
