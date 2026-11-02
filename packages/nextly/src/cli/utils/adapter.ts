@@ -13,6 +13,7 @@ import {
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { announceMode } from "../environment";
 import { connectionFailure, databaseEnvError } from "../errors/areas/database";
 
 import type { Logger } from "./logger";
@@ -95,6 +96,9 @@ export function detectDialectFromUrl(
  * @returns Validation result with errors if any
  */
 export function validateDatabaseEnv(): DatabaseEnvValidation {
+  // Every command that reaches a database checks its settings here first, so
+  // this is where the run names its mode and where its URL came from.
+  announceMode();
   const errors: string[] = [];
   let problem: DatabaseEnvValidation["problem"];
   const databaseUrl = process.env.DATABASE_URL;
@@ -170,6 +174,9 @@ export async function createCliAdapter(
   options: CreateCliAdapterOptions = {}
 ): Promise<CLIDatabaseAdapter> {
   const { logger } = options;
+  // A command may connect without the settings check first, as
+  // `plugins install` does; it names its mode here instead (once a run).
+  announceMode();
 
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
   let dialect = options.dialect;
