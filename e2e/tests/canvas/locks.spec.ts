@@ -176,18 +176,25 @@ test.describe("the editor inside locked areas", () => {
     await expect(page.getByText(SEALED_DESIGN)).toBeVisible();
     await expect(page.getByLabel("Text", { exact: true })).toBeEnabled();
     await expect(page.getByLabel("Level", { exact: true })).toBeDisabled();
-    await expect(page.getByLabel("Lock this block")).toBeDisabled();
+    // The block's own lock is held with its design: the card's menu shows
+    // Lock disabled, with the reason.
+    await page.getByRole("button", { name: "Actions for Heading" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Lock/ })).toBeDisabled();
+    await page.keyboard.press("Escape");
     // Content still saves through the store.
     const text = page.getByLabel("Text", { exact: true });
     await text.fill("Spring sale");
     await text.blur();
     await expect.poll(() => undoDepth(page)).toBe(1);
 
-    // The Style tab is shown, every control in it held.
+    // The Style tab is shown, every control that edits held. A section's
+    // toggle and the state switcher only choose what is shown.
     await page.getByRole("tab", { name: "Style" }).click();
     const controls = page
       .getByRole("tabpanel")
-      .locator("input, button, select, textarea");
+      .locator(
+        'input, button:not([aria-expanded]):not([role="radio"]), select, textarea'
+      );
     expect(await controls.count()).toBeGreaterThan(0);
     for (const control of await controls.all()) {
       await expect(control).toBeDisabled();
