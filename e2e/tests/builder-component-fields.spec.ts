@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { block, layerRow, openLayers } from "./canvas/editor-driver";
+import { block, layerRow, openLayers, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -130,8 +130,8 @@ test.describe("a component's exposed fields", () => {
         ["PATCH", "PUT"].includes(response.request().method()) &&
         response.ok()
     );
-    // A component never published saves as a draft.
-    await page.getByRole("button", { name: "Save draft", exact: true }).click();
+    // Saved without publishing, wherever the top bar keeps the save.
+    await pressSave(page);
     await saved;
 
     await page.reload();
@@ -250,7 +250,7 @@ test.describe("a component's exposed fields", () => {
         ["PATCH", "PUT"].includes(response.request().method()) &&
         response.ok()
     );
-    await page.getByRole("button", { name: /^Save( draft)?$/ }).click();
+    await pressSave(page);
     await saved;
 
     const stored = await page.request.get(`${entry}?draft=true`);
