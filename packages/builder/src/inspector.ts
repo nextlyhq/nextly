@@ -27,11 +27,17 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentPath,
+  type NodeLock,
   type PropSchema,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import type { RefusalWording } from "./drag-refusal";
+import type { EditorState } from "./editor-state";
 import { blockLabel } from "./inserter";
+import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./ops";
 
 /**
@@ -70,6 +76,12 @@ export interface EditableProp {
   readonly supported: boolean;
   /** The options a `select` offers, empty for every other type. */
   readonly options: readonly string[];
+  /**
+   * Whether a lock fixes this prop where the block sits: it is not content,
+   * and the block is inside an area locked to its content. Shown, not hidden,
+   * so the author sees the value and is told why it holds.
+   */
+  readonly readOnly: boolean;
 }
 
 /**
@@ -152,6 +164,13 @@ export interface BlockInspection {
    * back to the registry for a second reading of the same definition.
    */
   readonly inspector: ComponentPath | undefined;
+  /**
+   * Why the block's design and settings can't change, when it sits inside an
+   * area locked to its content; undefined where nothing fixes them. Worded as
+   * the store's refusal of the same edit is, so the read-only controls and a
+   * refused edit give one reason.
+   */
+  readonly designLock: RefusalWording | undefined;
 }
 
 /** The selected node together with the definition that describes it. */
@@ -292,11 +311,17 @@ export function selectionIsInspectable(
 
 export function inspectSelection(
   document: BlockDocument,
-  selectedId: string | null
+  selectedId: string | null,
+  /** The editor's lock source and composed page; see `contentOnlyAreaOf`. */
+  view?: LockView
 ): BlockInspection | null {
   const selected = selectedBlock(document, selectedId);
   if (selected === null) return null;
   const { node, definition } = selected;
+  const designLock = designLockOf(document, node.id, view);
+  // Content stays editable under the lock; the rest is read-only. The same
+  // set the save's lock rule keeps, read from the same declaration.
+  const content = contentPropsOf(definition.props);
 
   const declared = definition.props ?? {};
   const props = Object.entries(declared).flatMap<EditableProp>(
@@ -311,6 +336,7 @@ export function inspectSelection(
             schema.type
           ),
           options: optionsOf(schema),
+          readOnly: designLock !== undefined && !content.has(name),
         },
       ];
     }
@@ -345,6 +371,7 @@ export function inspectSelection(
         : undefined,
     props,
     inspector: inspectorOf(definition),
+    designLock,
   };
 }
 
@@ -390,12 +417,93 @@ export function blockIsReadOnly(document: BlockDocument, id: string): boolean {
 export function propIsWritable(
   document: BlockDocument,
   id: string,
-  name: string
+  name: string,
+  view?: LockView
 ): boolean {
   if (blockIsReadOnly(document, id)) return false;
-  const area = nodeLocks(document.nodes, registryBlockSource()).get(id);
-  if (area?.lock !== "contentOnly") return true;
-  return contentPropsOf(getBlock(area.type)?.props).has(name);
+  const held = contentOnlyAreaOf(document, id, view);
+  if (held === undefined) return true;
+  return contentPropsOf(lockSourceOf(view).get(held.type)?.props).has(name);
+}
+
+/**
+ * Why `node`'s design is fixed, when it sits inside a `"contentOnly"` area.
+ *
+ * Read from the engine's `nodeLocks`, the walk that passes each slot's lock
+ * down as validation does, against the live registry the store's lock check
+ * defaults to, so the inspector holds read-only exactly what a save refuses
+ * to change. The area is named by its outermost locked block, the one the
+ * author sees on the canvas. The inspector and the canvas's spacing handles
+ * both ask it, so the two hold the same blocks.
+ */
+export function designLockOf(
+  document: BlockDocument,
+  nodeId: string,
+  view?: LockView
+): RefusalWording | undefined {
+  const held = contentOnlyAreaOf(document, nodeId, view);
+  if (held === undefined) return undefined;
+  return lockRefusalWording({
+    code: "locked-slot-content-only",
+    holderType: held.area.holderType,
+    lock: "contentOnly",
+    childType: held.type,
+  });
+}
+
+/**
+ * Where `id` sits inside a `"contentOnly"` area, or `undefined` outside one.
+ *
+ * The one reading both {@link propIsWritable} and {@link designLockOf} take,
+ * so the controls the inspector holds read-only and the commits it refuses
+ * are the same set. Read from the engine's `nodeLocks` against the live
+ * registry, the walk validation applies on save.
+ *
+ * Asked of the page first, then of the composed page: content a page gives
+ * a component's exposed slot keeps its own id there, and sits under the
+ * component's locks, which the page alone does not hold. The save judges the
+ * composed page too. Both are read against the lock source the editor judges
+ * edits by, so a host's own definitions hold here as they hold on `apply`.
+ */
+function contentOnlyAreaOf(
+  document: BlockDocument,
+  id: string,
+  view?: LockView
+): (NodeLock & { readonly area: NonNullable<NodeLock["area"]> }) | undefined {
+  const source = lockSourceOf(view);
+  const trees =
+    view?.composed === undefined ? [document] : [document, view.composed];
+  for (const tree of trees) {
+    const held = nodeLocks(tree.nodes, source).get(id);
+    if (held?.area !== undefined) return { ...held, area: held.area };
+  }
+  return undefined;
+}
+
+/**
+ * What the editor judges locks by, as the inspector reads it: the lock source
+ * its edits are refused against, and the page with its placements composed in.
+ * Absent, the live registry and the page alone.
+ */
+export interface LockView {
+  readonly definitions?: SlotDefaultSource;
+  readonly composed?: BlockDocument;
+}
+
+/** The view's lock source, or the live registry the store defaults to. */
+function lockSourceOf(view: LockView | undefined): SlotDefaultSource {
+  return view?.definitions ?? registryBlockSource();
+}
+
+/** An editor's {@link LockView}, read as it stands. */
+export function lockViewOf(
+  editor: Pick<EditorState, "composed" | "lockDefinitions">
+): LockView {
+  const composed = editor.composed();
+  return {
+    definitions: editor.lockDefinitions,
+    ...(composed === undefined ? {} : { composed }),
+  };
 }
 
 /**
@@ -416,8 +524,32 @@ export interface BlockLockStatus {
    * sets it, or `undefined` where no slot lock applies.
    */
   readonly slot:
-    | { readonly lock: ActiveSlotLock; readonly holder: string }
+    | {
+        readonly lock: ActiveSlotLock;
+        readonly holder: string;
+        /** What the lock fixes, in the words a refused edit uses. */
+        readonly reason: string;
+      }
     | undefined;
+}
+
+/**
+ * What a slot locked `all` or `insert` fixes, in an author's words. A
+ * `contentOnly` area's reason is the lock refusal's own wording instead.
+ */
+const ARRANGEMENT_LOCK_WORDS = {
+  all: "fixes which blocks it holds and their order, so this one can't be moved or removed",
+  insert:
+    "fixes which blocks it holds, so this one can't be removed or moved out",
+} as const;
+
+/**
+ * Whether the block's own Layers lock may be set or lifted here. Not inside a
+ * `contentOnly` area, which pins the node's `locked` field with its design, so
+ * the save would refuse the change.
+ */
+export function layersLockChangeable(status: BlockLockStatus): boolean {
+  return status.slot?.lock !== "contentOnly";
 }
 
 /**
@@ -431,24 +563,43 @@ export interface BlockLockStatus {
  */
 export function lockStatusOf(
   document: BlockDocument,
-  id: string
+  id: string,
+  view?: LockView
 ): BlockLockStatus {
   const node = findNode(document.nodes, id);
   const layers = node !== undefined && isLocked(node);
-  const at = nodeLocks(document.nodes, registryBlockSource()).get(id);
-  if (at?.lock === undefined) return { layers, slot: undefined };
+  // The page first, then the document the editor composes around it (a
+  // Layout's regions, a component's contents), each judged with the view's
+  // definitions: the same trees and source a save and the canvas use.
+  const source = lockSourceOf(view);
+  const trees =
+    view?.composed === undefined ? [document] : [document, view.composed];
+  const found = trees
+    .map(tree => ({ tree, at: nodeLocks(tree.nodes, source).get(id) }))
+    .find(({ at }) => at?.lock !== undefined);
+  const at = found?.at;
+  if (found === undefined || at?.lock === undefined) {
+    return { layers, slot: undefined };
+  }
   const holderType =
     at.lock === "contentOnly" && at.area !== undefined
       ? at.area.holderType
-      : declaringAncestor(document, id);
+      : declaringAncestor(found.tree, id, source);
+  const holder =
+    holderType === undefined ? "The block it sits in" : blockLabel(holderType);
+  const held =
+    at.lock === "contentOnly" ? designLockOf(document, id, view) : undefined;
   return {
     layers,
     slot: {
       lock: at.lock,
-      holder:
-        holderType === undefined
-          ? "The block it sits in"
-          : blockLabel(holderType),
+      holder,
+      reason:
+        at.lock === "contentOnly"
+          ? held === undefined
+            ? `${holder} fixes this block's design.`
+            : refusalAnnouncement(held)
+          : `${holder} ${ARRANGEMENT_LOCK_WORDS[at.lock]}.`,
     },
   };
 }
@@ -460,7 +611,8 @@ export function lockStatusOf(
  */
 function declaringAncestor(
   document: BlockDocument,
-  id: string
+  id: string,
+  source: SlotDefaultSource
 ): string | undefined {
   let current = id;
   // Bounded by the document's depth: each step moves one parent up.
@@ -468,7 +620,7 @@ function declaringAncestor(
     const location = locateNode(document.nodes, current);
     const parent = location?.parent;
     if (parent === undefined || location?.slot === undefined) return undefined;
-    const declared = getBlock(parent.type)?.slots?.[location.slot]?.lock;
+    const declared = source.get(parent.type)?.slots?.[location.slot]?.lock;
     if (declared !== undefined && declared !== false) return parent.type;
     current = parent.id;
   }
@@ -488,22 +640,26 @@ const LAYERS_LOCK_REASON =
  */
 export function designReadOnlyReason(
   document: BlockDocument,
-  id: string
+  id: string,
+  view?: LockView
 ): string | undefined {
   if (findNode(document.nodes, id) === undefined) {
     return "This block is no longer on the page.";
   }
-  const status = lockStatusOf(document, id);
-  if (status.layers) return LAYERS_LOCK_REASON;
-  if (status.slot?.lock === "contentOnly") {
-    return `${status.slot.holder} fixes the design of the blocks it holds, so only this block's content can change here.`;
-  }
-  return undefined;
+  if (lockStatusOf(document, id, view).layers) return LAYERS_LOCK_REASON;
+  // A `contentOnly` area's reason is the lock refusal's own wording, so the
+  // inspector, a refused move and a refused save say one thing.
+  const held = designLockOf(document, id, view);
+  return held === undefined ? undefined : refusalAnnouncement(held);
 }
 
 /** Whether a block's design may be changed: {@link designReadOnlyReason}, as a yes or no. */
-export function designIsWritable(document: BlockDocument, id: string): boolean {
-  return designReadOnlyReason(document, id) === undefined;
+export function designIsWritable(
+  document: BlockDocument,
+  id: string,
+  view?: LockView
+): boolean {
+  return designReadOnlyReason(document, id, view) === undefined;
 }
 
 /**

@@ -31,7 +31,7 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
-import type { BlockLockStatus } from "./inspector";
+import { layersLockChangeable, type BlockLockStatus } from "./inspector";
 import type { SharedBlockVerbs } from "./keyboard-actions";
 import type { ToolbarActionId } from "./toolbar-actions";
 
@@ -61,8 +61,15 @@ export interface BlockCardProps {
   readonly onRename?: ((name: string) => void) | undefined;
   /** Set or lift the Layers lock. Omitted withholds Lock and Unlock. */
   readonly onLock?: ((locked: boolean) => void) | undefined;
+  /**
+   * Why Lock and Unlock are held here, when they are: shown disabled with
+   * this reason rather than left out, so the menu says why.
+   */
+  readonly lockHeld?: string | undefined;
   /** The shared block verbs, when the host supplies them. */
   readonly verbs?: CardVerbs | undefined;
+  /** The id the lock reason takes, so held controls can point at it. */
+  readonly reasonId?: string | undefined;
 }
 
 export function BlockCard({
@@ -73,7 +80,9 @@ export function BlockCard({
   lock,
   onRename,
   onLock,
+  lockHeld,
   verbs,
+  reasonId,
 }: BlockCardProps): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
   const title = name === "" ? type : name;
@@ -113,13 +122,14 @@ export function BlockCard({
             onRename === undefined ? undefined : () => setRenaming(true)
           }
           onLock={onLock}
+          lockHeld={lockHeld}
           verbs={verbs}
         />
       </div>
       {description === "" ? null : (
         <p className="nx-block-card__description">{description}</p>
       )}
-      <LockLines lock={lock} />
+      <LockLines lock={lock} reasonId={reasonId} />
     </div>
   );
 }
@@ -180,12 +190,14 @@ function CardMenu({
   locked,
   onRename,
   onLock,
+  lockHeld,
   verbs,
 }: {
   title: string;
   locked: boolean;
   onRename: (() => void) | undefined;
   onLock: ((locked: boolean) => void) | undefined;
+  lockHeld: string | undefined;
   verbs: CardVerbs | undefined;
 }): React.JSX.Element | null {
   const offered = (verbs?.actions ?? []).filter(action =>
@@ -229,41 +241,52 @@ function CardMenu({
           </DropdownMenuItem>
         )}
         {onLock === undefined ? null : (
-          <DropdownMenuItem onSelect={() => onLock(!locked)}>
-            {locked ? "Unlock" : "Lock"}
-          </DropdownMenuItem>
+          <MenuItem
+            label={locked ? "Unlock" : "Lock"}
+            reason={lockHeld}
+            onSelect={() => onLock(!locked)}
+          />
         )}
         {offered.length === 0 ? null : <DropdownMenuSeparator />}
         {offered.map(action => (
-          <DropdownMenuItem
+          <MenuItem
             key={action.id}
-            disabled={!action.enabled}
+            label={action.label}
+            reason={action.enabled ? undefined : (action.reason ?? "")}
             onSelect={() => verbs?.run(action.id)}
-          >
-            {action.label}
-            {/*
-              Visible text rather than a tooltip, as the context menu does: a
-              disabled menu item takes no pointer and no keyboard focus, so a
-              tooltip there would reach nobody.
-            */}
-            {action.reason === undefined ? null : (
-              <span className="nx-block-card__reason"> — {action.reason}</span>
-            )}
-          </DropdownMenuItem>
+          />
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/** What each slot lock fixes, in an author's words. */
-const SLOT_LOCK_WORDS = {
-  all: "fixes which blocks it holds and their order, so this one can't be moved or removed",
-  insert:
-    "fixes which blocks it holds, so this one can't be removed or moved out",
-  contentOnly:
-    "fixes the design of the blocks it holds, so only this block's content can change",
-} as const;
+/**
+ * One item of the card's menu, held with its reason when it may not run.
+ *
+ * The reason is visible text rather than a tooltip, as the context menu does:
+ * a disabled menu item takes no pointer and no keyboard focus, so a tooltip
+ * there would reach nobody. An empty reason holds the item and says nothing.
+ */
+function MenuItem({
+  label,
+  reason,
+  onSelect,
+}: {
+  label: string;
+  /** Why it is held, or `undefined` while it may run. */
+  reason: string | undefined;
+  onSelect: () => void;
+}): React.JSX.Element {
+  return (
+    <DropdownMenuItem disabled={reason !== undefined} onSelect={onSelect}>
+      {label}
+      {reason === undefined || reason === "" ? null : (
+        <span className="nx-block-card__reason"> — {reason}</span>
+      )}
+    </DropdownMenuItem>
+  );
+}
 
 /**
  * One line per lock that holds the block, each saying what it fixes and where
@@ -271,22 +294,33 @@ const SLOT_LOCK_WORDS = {
  */
 function LockLines({
   lock,
+  reasonId,
 }: {
   lock: BlockLockStatus;
+  /** The id the reason a held control points at takes. */
+  reasonId?: string | undefined;
 }): React.JSX.Element | null {
   if (!lock.layers && lock.slot === undefined) return null;
+  // The reason held controls point at: the Layers lock when it holds, which
+  // holds everything, and otherwise the slot's.
+  const layersId = lock.layers ? reasonId : undefined;
+  const slotId = lock.layers ? undefined : reasonId;
   return (
     <ul className="nx-block-card__status">
       {lock.layers ? (
         <li data-lock="layers">
-          <strong>Locked</strong>: it can&apos;t be moved, deleted or edited.
-          Unlock it from the menu.
+          <span id={layersId}>
+            <strong>Locked</strong>: it can&apos;t be moved, deleted or edited.
+          </span>
+          {layersLockChangeable(lock) ? " Unlock it from the menu." : null}
         </li>
       ) : null}
       {lock.slot === undefined ? null : (
         <li data-lock={lock.slot.lock}>
-          {lock.slot.holder} {SLOT_LOCK_WORDS[lock.slot.lock]}. That block sets
-          it itself, so it can&apos;t be unlocked here.
+          {/* Its own element, so the sentence a held control points at is
+              exactly the reason. */}
+          <span id={slotId}>{lock.slot.reason}</span> That block sets it itself,
+          so it can&apos;t be unlocked here.
         </li>
       )}
     </ul>

@@ -123,6 +123,8 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 
@@ -912,5 +914,31 @@ describe("the instance's own name", () => {
       id: "i1",
       patch: { name: "Footer" },
     });
+  });
+});
+
+describe("the instance's card menu", () => {
+  it("offers the shared block verbs, as a block's card does", () => {
+    const run = vi.fn();
+    const lookup: ComponentLookup = new Map([["header", header()]]);
+    render(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance()))}
+        componentLibrary={{ definitions: lookup, components: LIBRARY }}
+        verbs={{
+          actions: [
+            { id: "duplicate", label: "Duplicate", enabled: true },
+            { id: "delete", label: "Delete", enabled: true },
+          ],
+          run,
+        }}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Actions for/ }), {
+      key: "Enter",
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(run).toHaveBeenCalledWith("duplicate");
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull(); // menu closed
   });
 });

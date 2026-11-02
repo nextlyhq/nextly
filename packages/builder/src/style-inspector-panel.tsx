@@ -83,6 +83,7 @@ import {
   designIsWritable,
   designReadOnlyReason,
   fieldLabel,
+  lockViewOf,
 } from "./inspector";
 import type { BuilderOp } from "./ops";
 import type { SideOrientation } from "./side-orientation";
@@ -560,6 +561,7 @@ export function StyleInspectorPanel({
     breakpoint,
     variantAt: (property, path) => chosenForms[formKey(property, path)],
     media: rendersMedia(renderedTag),
+    breakpoints,
   });
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -630,7 +632,8 @@ export function StyleInspectorPanel({
    */
   const readOnlyReason = designReadOnlyReason(
     editor.document,
-    inspected.nodeId
+    inspected.nodeId,
+    lockViewOf(editor)
   );
   const groups = inspected.sections.map(section => section.key);
   // Held rather than left to the accordion, so the open section survives a
@@ -940,11 +943,12 @@ function SideBoxFrame({
 
 /**
  * The elements whose content is an external resource the box fits, which is
- * where the media fit properties show without being asked for.
+ * where the media fit properties show without being asked for. Not
+ * `<picture>`: it only chooses a source, and the `<img>` inside it is the
+ * element `object-fit` applies to.
  */
 const REPLACED_ELEMENTS: ReadonlySet<string> = new Set([
   "img",
-  "picture",
   "video",
   "iframe",
   "embed",
@@ -2440,7 +2444,7 @@ function writeStyleValue({
    * lock holds, but a lock set from Layers after the panel drew must stop the
    * next write too, so the live document is asked at the moment of the write.
    */
-  if (!designIsWritable(editor.document, nodeId)) {
+  if (!designIsWritable(editor.document, nodeId, lockViewOf(editor))) {
     setIssue("This block's design is locked, so it can't be changed here.");
     return "refused";
   }

@@ -1,5 +1,6 @@
 import type {
   PluginCollectionService,
+  PluginContext,
   QueryOptions,
   PaginatedResult,
   BatchOperationResult,
@@ -36,5 +37,30 @@ const bulk: Promise<BatchOperationResult> = svc.createMany(
   sys
 );
 
+// ownCollections reads the plugin's own declared collections with no hook
+// shaping the read. It takes the same query options and only data options.
+declare const ctx: PluginContext;
+const own = ctx.services.ownCollections;
+const ownList: Promise<PaginatedResult<unknown>> = own.listEntries(
+  "ledger",
+  q,
+  {
+    locale: "fr",
+  }
+);
+const ownTotal: Promise<number> = own.count("ledger", { where: q.where });
+const ownBuckets: Promise<{
+  buckets: { value: string | null; count: number }[];
+  truncated: boolean;
+}> = own.group("ledger", { groupBy: "kind" });
+
 // Exported so eslint does not flag the assertions as unused.
-export const __d56TypeCheck = { q, list, total, bulk };
+export const __d56TypeCheck = {
+  q,
+  list,
+  total,
+  bulk,
+  ownList,
+  ownTotal,
+  ownBuckets,
+};

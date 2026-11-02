@@ -38,6 +38,7 @@ import {
   stylePropertiesForSupports,
   type BlockDocument,
   type BreakpointId,
+  type BreakpointSet,
   type StyleState,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
@@ -94,6 +95,12 @@ export interface StyleInspectionOptions extends StyleControlOptions {
    * for. The canvas knows what a block renders as; the document does not.
    */
   readonly media?: boolean;
+  /**
+   * The site's breakpoints, so the display a tier is judged by can be read
+   * through the wider tiers that also apply at this one. Without them only
+   * this tier and the unconditional one are read.
+   */
+  readonly breakpoints?: BreakpointSet;
 }
 
 /** One catalog property as the Style tab offers it. */
@@ -223,7 +230,7 @@ export function inspectStyle(
   }
 
   const tiers: TierContext = {
-    display: displayOf(node.styles, state, breakpoint),
+    display: displayOf(node.styles, state, breakpoint, options?.breakpoints),
     media: options?.media === true,
     state,
   };
@@ -257,9 +264,10 @@ export function inspectStyle(
 }
 
 /**
- * The display the block is given at this address, falling back to the base
- * state and then to the unconditional breakpoint, as the cascade would: a flex
- * container set at the base is still one while its hover is being edited.
+ * The display that applies to the block at this address, read as the
+ * cascade resolves it: this state at this tier, then this state at each wider
+ * tier, then the base state the same way. A state rule outranks a breakpoint
+ * rule (its pseudo-class is more specific), so the whole state comes first.
  *
  * Read from what the node stores, so a block that is a flex container only by
  * its own stylesheet keeps its flex controls behind "+ More", one click away.
@@ -267,23 +275,47 @@ export function inspectStyle(
 function displayOf(
   styles: Parameters<typeof readStyleValue>[0],
   state: StyleState,
-  breakpoint: BreakpointId
+  breakpoint: BreakpointId,
+  breakpoints: BreakpointSet | undefined
 ): string | undefined {
-  const addresses: [StyleState, BreakpointId][] = [
-    [state, breakpoint],
-    ["base", breakpoint],
-    ["base", BASE_BREAKPOINT],
-  ];
-  for (const [atState, atBreakpoint] of addresses) {
-    const value = readStyleValue(styles, {
-      state: atState,
-      breakpoint: atBreakpoint,
-      property: "display",
-      path: [],
-    });
-    if (typeof value === "string") return value.trim().toLowerCase();
+  const tiers = tiersFrom(breakpoint, breakpoints);
+  const states: StyleState[] = state === "base" ? ["base"] : [state, "base"];
+  for (const atState of states) {
+    for (const atBreakpoint of tiers) {
+      const value = readStyleValue(styles, {
+        state: atState,
+        breakpoint: atBreakpoint,
+        property: "display",
+        path: [],
+      });
+      if (typeof value === "string") return value.trim().toLowerCase();
+    }
   }
   return undefined;
+}
+
+/**
+ * This tier and every tier that also applies at it, narrowest first: the
+ * wider tiers of its own axis by their upper bound, then the unconditional
+ * one. Unknown tiers read as themselves and the unconditional one.
+ */
+function tiersFrom(
+  breakpoint: BreakpointId,
+  breakpoints: BreakpointSet | undefined
+): BreakpointId[] {
+  if (breakpoint === BASE_BREAKPOINT) return [BASE_BREAKPOINT];
+  const axis = [breakpoints?.viewport ?? [], breakpoints?.container ?? []].find(
+    defs => defs.some(def => def.id === breakpoint)
+  );
+  const own = axis?.find(def => def.id === breakpoint)?.maxWidth;
+  const wider =
+    axis === undefined || own === undefined
+      ? []
+      : axis
+          .filter(def => def.maxWidth !== undefined && def.maxWidth > own)
+          .sort((a, b) => (a.maxWidth ?? 0) - (b.maxWidth ?? 0))
+          .map(def => def.id);
+  return [breakpoint, ...wider, BASE_BREAKPOINT];
 }
 
 /** One property's controls and the value they are showing. */

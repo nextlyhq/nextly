@@ -58,6 +58,7 @@ import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
+import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
   blockIsReadOnly,
@@ -66,7 +67,9 @@ import {
   inspectSelection,
   lockOp,
   lockStateOf,
+  layersLockChangeable,
   lockStatusOf,
+  lockViewOf,
   propIsWritable,
   propPatch,
   renameOp,
@@ -379,7 +382,8 @@ function selectedInstance(
 function surfaceFor(
   editor: EditorState,
   instance: InstanceInspection | null,
-  inspection: BlockInspection | null
+  inspection: BlockInspection | null,
+  verbs: CardVerbs | undefined
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -409,7 +413,13 @@ function surfaceFor(
   }
   if (instance !== null) {
     return {
-      tabless: <InstanceInspectorPanel inspection={instance} editor={editor} />,
+      tabless: (
+        <InstanceInspectorPanel
+          inspection={instance}
+          editor={editor}
+          verbs={verbs}
+        />
+      ),
     };
   }
   /*
@@ -460,7 +470,11 @@ export function InspectorPanel({
     cascade,
     previewContainer,
   });
-  const inspection = inspectSelection(editor.document, editor.selectedId);
+  const inspection = inspectSelection(
+    editor.document,
+    editor.selectedId,
+    lockViewOf(editor)
+  );
   /*
    * Asked beside the block inspection rather than instead of it, and the two
    * cannot both answer: a node is an instance or a registered block, never
@@ -507,9 +521,14 @@ export function InspectorPanel({
     [editor]
   );
 
-  const surface = surfaceFor(editor, instance, inspection);
+  // The lock reason's id, which every held control points to. Made before
+  // the early return, as every hook here is.
+  const reasonId = React.useId();
+
+  const surface = surfaceFor(editor, instance, inspection, verbs);
   if ("tabless" in surface) return surface.tabless;
   const block = surface.block;
+  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
 
   return (
     <div className="nx-inspector">
@@ -521,10 +540,18 @@ export function InspectorPanel({
         type={block.label}
         name={block.identity.name}
         description={block.description}
-        lock={lockStatusOf(editor.document, block.nodeId)}
+        lock={lock}
         onRename={name => editor.apply(renameOp(block.nodeId, name))}
         onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
+        // Held inside a `contentOnly` area, which pins the node's own lock
+        // with its design: the save would refuse the change.
+        lockHeld={
+          layersLockChangeable(lock)
+            ? undefined
+            : "The area it sits in fixes this."
+        }
         verbs={verbs}
+        reasonId={reasonId}
       />
 
       {/*
@@ -562,6 +589,7 @@ export function InspectorPanel({
             inspectors={inspectors}
             blocks={blocks}
             onScreen={tab === "content"}
+            reasonId={reasonId}
           />
         </TabsContent>
 
@@ -594,19 +622,27 @@ function ContentTab({
   inspectors,
   blocks,
   onScreen,
+  reasonId,
 }: {
   block: BlockInspection;
   editor: EditorState;
   onCommit: (name: string, value: unknown) => void;
   inspectors: BlockInspectorResolver | undefined;
   blocks: BlockResolver | undefined;
+  /** The id of the lock reason held controls point to, in the card. */
+  reasonId: string;
   /** Whether the Content tab is the one showing. */
   onScreen: boolean;
 }): React.JSX.Element {
   // Whether the Advanced section is open, so the panel inside it can be told
   // when it stops being on screen and settle its draft.
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
-  const designLocked = designReadOnlyReason(editor.document, block.nodeId);
+  const designLocked = designReadOnlyReason(
+    editor.document,
+    block.nodeId,
+    lockViewOf(editor)
+  );
+
   return (
     <>
       <ContentSurface
@@ -618,6 +654,7 @@ function ContentTab({
         editor={editor}
         onCommit={commit}
         inspectors={inspectors}
+        reasonId={reasonId}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*
@@ -634,17 +671,13 @@ function ContentTab({
         >
           Advanced
         </summary>
-        {designLocked === undefined ? null : (
-          <p className="nx-inspector__note">{designLocked}</p>
-        )}
         {/*
-        A disabled fieldset, as on the Style tab: every native control
-        inside is read-only at once while the design is locked, and the
-        panel's own write path refuses what the save would.
-      */}
-        <fieldset
-          className="nx-inspector__advanced-fields"
-          disabled={designLocked !== undefined}
+          Held while the design is locked: every native control inside is
+          read-only at once and points at the reason in the card, and the
+          panel's own write path refuses what the save would.
+        */}
+        <HeldByLock
+          reasonId={designLocked === undefined ? undefined : reasonId}
         >
           <AdvancedPanel
             // Keyed by node, so a half-typed attribute does not travel to
@@ -659,7 +692,7 @@ function ContentTab({
             active={onScreen && advancedOpen}
             blocks={blocks}
           />
-        </fieldset>
+        </HeldByLock>
       </details>
     </>
   );
@@ -769,7 +802,7 @@ function commitProp(
 ): BlockDocument | null {
   // Refused here, for every caller: a lock set after a field drew must still
   // stop the write, and inside a `contentOnly` area only content may change.
-  if (!propIsWritable(document, id, name)) return null;
+  if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
   return editor.apply({
@@ -792,18 +825,26 @@ function ContentSurface({
   editor,
   onCommit,
   inspectors,
+  reasonId,
 }: {
   inspection: BlockInspection;
   editor: EditorState;
   onCommit: (name: string, value: unknown) => void;
   inspectors: BlockInspectorResolver | undefined;
+  reasonId: string;
 }): React.JSX.Element {
   const generated = (
     <ContentFields
       inspection={inspection}
       onCommit={onCommit}
+      reasonId={reasonId}
       writable={name =>
-        propIsWritable(editor.document, inspection.nodeId, name)
+        propIsWritable(
+          editor.document,
+          inspection.nodeId,
+          name,
+          lockViewOf(editor)
+        )
       }
     />
   );
@@ -863,7 +904,9 @@ function CustomInspector({
   const commit = React.useCallback(
     (name: string, value: unknown): void => {
       const { editor: current, document } = live.current;
-      if (!propIsWritable(document, nodeId, name)) return;
+      if (!propIsWritable(document, nodeId, name, lockViewOf(current))) {
+        return;
+      }
       const next = commitProp(current, document, nodeId, name, value);
       if (next !== null) live.current = { editor: current, document: next };
     },
@@ -918,10 +961,13 @@ class CustomInspectorBoundary extends React.Component<
 function ContentFields({
   inspection,
   onCommit,
+  reasonId,
   writable,
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => void;
+  /** The id of the lock reason a held field points to. */
+  reasonId: string;
   /**
    * Whether one prop may be set: not on a locked block, and inside a
    * `contentOnly` area only for content props. The same rule the commit and
@@ -940,15 +986,20 @@ function ContentFields({
   return (
     <div className="nx-inspector__fields">
       {inspection.props.map(prop => (
-        <PropField
+        <HeldByLock
           // Keyed by node AND prop: a bare prop name would let React reuse one
           // block's field for the next block's same-named prop, so the input
           // would keep the previous block's uncommitted text.
           key={`${inspection.nodeId}:${prop.name}`}
-          prop={prop}
-          disabled={!writable(prop.name)}
-          onCommit={onCommit}
-        />
+          // A held field points at the reason in the card.
+          reasonId={writable(prop.name) ? undefined : reasonId}
+        >
+          <PropField
+            prop={prop}
+            disabled={!writable(prop.name)}
+            onCommit={onCommit}
+          />
+        </HeldByLock>
       ))}
     </div>
   );
