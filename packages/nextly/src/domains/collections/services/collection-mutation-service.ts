@@ -260,7 +260,10 @@ import {
 } from "../../singles/services/live-shared-single";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
-import { mergeComponentPatches } from "../../versions/draft-components";
+import {
+  draftComponentValues,
+  mergeComponentPatches,
+} from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
@@ -1112,6 +1115,19 @@ export async function readStoredManyToMany(
   });
 }
 
+/** A document's many-to-many ids, each field's that holds a list. */
+function manyToManyValuesIn(
+  document: Record<string, unknown>,
+  manyToManyFields: readonly FieldDefinition[]
+): Record<string, string[]> {
+  const values: Record<string, string[]> = {};
+  for (const field of manyToManyFields) {
+    const value = document[field.name];
+    if (Array.isArray(value)) values[field.name] = value.map(String);
+  }
+  return values;
+}
+
 /**
  * The language rules a publish judges in, with a required top-level component
  * enforced for the default language only, as a translated field's `required`
@@ -1125,7 +1141,14 @@ export function componentsRequiredInDefaultLanguage<
     enforceLocalizedRequired: boolean;
   },
 >(context: T, fields: readonly FieldDefinition[]): T {
-  if (context.enforceLocalizedRequired) return context;
+  // A document with no translated fields is one document in every language:
+  // its components are as much the default language's as anyone's.
+  if (
+    context.enforceLocalizedRequired ||
+    context.localizedFieldNames.size === 0
+  ) {
+    return context;
+  }
   const components = fields
     .filter(field => isFieldGroupField(field as unknown as FieldConfig))
     .map(field => field.name);
@@ -3868,6 +3891,9 @@ export class CollectionMutationService extends BaseService {
     args: GoingLiveArgs
   ): Promise<ValidationIssue[]> {
     let promotesDraft = false;
+    // The document the promotion puts live, whose component and relationship
+    // values every language then goes live with.
+    let promoted: Record<string, unknown> | undefined;
     if (args.promoteRestoreCtx !== null) {
       const advisoryDraft = await args.drafts.findWorkingDraft(
         {
@@ -3879,11 +3905,15 @@ export class CollectionMutationService extends BaseService {
       );
       if (advisoryDraft) {
         promotesDraft = true;
-        const issues = await this.promotedDraftIssues(
+        promoted = this.promotedDocumentOf(
           args,
-          advisoryDraft.snapshot,
-          args.promoteRestoreCtx
+          buildRestorePayload(
+            advisoryDraft.snapshot,
+            args.fields as unknown as FieldConfig[],
+            args.promoteRestoreCtx
+          ).payload
         );
+        const issues = await this.promotedDraftIssues(args, promoted);
         if (issues.length > 0) return issues;
       }
     }
@@ -3914,8 +3944,19 @@ export class CollectionMutationService extends BaseService {
       relations: {
         tableName: args.tableName,
         manyToManyFields: args.manyToManyFields,
-        componentFieldData: args.componentFieldData,
-        manyToManyData: args.manyToManyData,
+        // The values the write leaves: a promoted change's, which carry the
+        // caller's own, or else the caller's.
+        componentFieldData:
+          promoted === undefined
+            ? args.componentFieldData
+            : draftComponentValues(
+                promoted,
+                args.fields as unknown as FieldConfig[]
+              ),
+        manyToManyData:
+          promoted === undefined
+            ? args.manyToManyData
+            : manyToManyValuesIn(promoted, args.manyToManyFields),
         componentSchemas: args.splitComponentSchemas,
         batch: args.relationsBatch ?? args.reads?.relations,
       },
@@ -4153,17 +4194,8 @@ export class CollectionMutationService extends BaseService {
   /** The violations of the document a promoted working draft would write. */
   private async promotedDraftIssues(
     args: GoingLiveArgs,
-    snapshot: unknown,
-    restoreCtx: RestoreSchemaContext
+    merged: Record<string, unknown>
   ): Promise<ValidationIssue[]> {
-    const merged = this.promotedDocumentOf(
-      args,
-      buildRestorePayload(
-        snapshot,
-        args.fields as unknown as FieldConfig[],
-        restoreCtx
-      ).payload
-    );
     // Judged as ASSEMBLED, with nothing removed. A field this publisher may
     // not write is not a schema violation: the gate that judges permission
     // refuses a promotion that changes one, under the row lock where it can
@@ -4178,11 +4210,14 @@ export class CollectionMutationService extends BaseService {
       user: args.user,
       reader: args.reader,
       readLocale: args.locale,
-      localeCtx: await this.localizedRequiredContext(
-        args.collectionName,
-        args.locale,
-        undefined,
-        args.reads?.companion
+      localeCtx: componentsRequiredInDefaultLanguage(
+        await this.localizedRequiredContext(
+          args.collectionName,
+          args.locale,
+          undefined,
+          args.reads?.companion
+        ),
+        args.fields
       ),
       id: args.entryId,
     });

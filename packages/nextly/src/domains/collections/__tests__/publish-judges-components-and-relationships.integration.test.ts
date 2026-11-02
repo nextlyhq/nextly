@@ -108,6 +108,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         ],
       }),
       defineFieldGroup({ slug: "card", fields: [text({ name: "label" })] }),
+      defineFieldGroup({ slug: "aside", fields: [text({ name: "body" })] }),
       // Its values are kept per language, in its translations table.
       defineFieldGroup({
         slug: "note",
@@ -164,6 +165,36 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               (value as Doc | null)?.heading !== "draft only" ||
               "this hero cannot go live",
           }),
+        ],
+      }),
+      // Translated, with drafts: a pending change is promoted when published.
+      // Its hero may not say "Bad" where the title says "Blocked".
+      defineCollection({
+        slug: "manuals",
+        status: true,
+        localized: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title", localized: true }),
+          fieldGroup({
+            name: "hero",
+            component: "hero",
+            validate: (value: unknown, { data }: { data: Doc }) =>
+              data.status !== "published" ||
+              !(
+                data.title === "Blocked" &&
+                (value as Doc | null)?.heading === "Bad"
+              ) ||
+              "this hero cannot go live beside this title",
+          }),
+        ],
+      }),
+      defineCollection({
+        slug: "asides",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "aside", component: "aside" }),
         ],
       }),
       // A localized group's value judged as it goes live, by its own rule.
@@ -484,7 +515,64 @@ describe.each(getConfiguredTestDialects())(
         hero: { heading: "fine", code: "retired" },
       });
 
+      ids.missingDe = await created(t, "pages", {
+        title: "missing, published in German",
+        status: "draft",
+      });
+      // Live in English with no hero, and a German change pending.
+      ids.manualGerman = await created(
+        t,
+        "manuals",
+        { title: "Manual", status: "published" },
+        "en"
+      );
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "manuals",
+              entryId: ids.manualGerman,
+              overrideAccess: true,
+              locale: "de",
+            },
+            { title: "Handbuch" }
+          )
+        ).success
+      ).toBe(true);
+      // Live in English, German titled "Blocked" and not yet live, and an
+      // English change pending that gives the shared hero a heading German
+      // forbids.
+      ids.manualSwept = await created(
+        t,
+        "manuals",
+        { title: "Fine", status: "published", hero: hero("Good") },
+        "en"
+      );
+      for (const [locale, data] of [
+        ["de", { title: "Blocked", status: "draft" }],
+        ["en", { hero: hero("Bad") }],
+      ] as const) {
+        expect(
+          (
+            await entriesOf(t).updateEntry(
+              {
+                collectionName: "manuals",
+                entryId: ids.manualSwept,
+                overrideAccess: true,
+                locale,
+              },
+              data
+            )
+          ).success
+        ).toBe(true);
+      }
+      ids.aside = await created(t, "asides", {
+        title: "aside",
+        status: "draft",
+      });
+
       await makeRequired(t, "pages", ["hero", "cards", "zone"]);
+      await makeRequired(t, "manuals", ["hero"]);
       await makeRequired(t, "drafted", ["hero"]);
       await makeRequired(t, "guides", ["hero"]);
       await makeRequired(t, "stories", ["tags"]);
@@ -676,6 +764,27 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(bulkTwo);
     });
 
+    it("keeps a required component enforced on a collection without languages, whatever language a publish names", async () => {
+      const result = await publish(t, "pages", ids.missingDe, {}, "de");
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("hero");
+    });
+
+    it("lets a pending change in another language go live while the required component is missing", async () => {
+      const result = await publish(t, "manuals", ids.manualGerman, {}, "de");
+
+      expect(result.success, JSON.stringify(result)).toBe(true);
+    });
+
+    it("judges each language a publish of every language puts live with the change it promotes", async () => {
+      // The wildcard write promotes the pending change into every language.
+      const result = await publish(t, "manuals", ids.manualSwept, {}, "*");
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("hero");
+    });
+
     it("stops a release whose document lacks a required component, naming it and the field, and publishes none of it", async () => {
       const author = await seedPlainAuthor(t);
       for (const action of ["read", "update", "publish", "unpublish"]) {
@@ -750,6 +859,28 @@ describe.each(getConfiguredTestDialects())(
           fallbackLocale: false,
         })
       ).rejects.toThrow();
+    });
+
+    // Last: it removes the aside group's table.
+    it("refuses alike on every dialect when a publish cannot read a component inside its transaction", async () => {
+      const registry = t.getService("fieldGroupRegistryService") as {
+        getComponent(slug: string): Promise<{ tableName: string }>;
+      };
+      const { tableName } = await registry.getComponent("aside");
+      await t.adapter.executeQuery(`DROP TABLE ${tableName}`);
+
+      // Publishing every language judges on its own transaction.
+      const result = await entriesOf(t).publishAllLocales({
+        collectionName: "asides",
+        entryId: ids.aside,
+        overrideAccess: true,
+      });
+
+      expect(result.success).toBe(false);
+      const row = await t.adapter.selectOne<{ status?: string }>("dc_asides", {
+        where: { and: [{ column: "id", op: "=", value: ids.aside }] },
+      });
+      expect(row?.status).toBe("draft");
     });
   }
 );

@@ -1098,6 +1098,16 @@ describe("FieldGroupDataService", () => {
       );
     });
 
+    it("refuses a zone whose component cannot be looked up, even when the error names a missing relation", async () => {
+      ctx.registry.getComponent.mockRejectedValueOnce(
+        new Error('relation "dynamic_components" does not exist')
+      );
+
+      await expect(strictRead([multiComponentField()])).rejects.toThrow(
+        "dynamic_components"
+      );
+    });
+
     it("reads a zone whose component table is not there yet as holding nothing", async () => {
       ctx.adapter.select.mockRejectedValue(
         new Error("no such table: comp_hero")

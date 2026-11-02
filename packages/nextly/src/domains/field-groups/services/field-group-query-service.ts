@@ -1152,7 +1152,9 @@ export class FieldGroupQueryService extends BaseService {
       } catch (error) {
         // As the single and repeatable reads do: a strict reader is told,
         // since a zone read without one of its kinds is not the zone stored.
-        if (read.strict && !isMissingComponentTableError(error)) throw error;
+        // A missing table is already read as empty by the instance read, so
+        // what reaches here is a failed lookup, whatever its message says.
+        if (read.strict) throw error;
         this.logger.debug("Could not load component for batch populate", {
           slug,
           error: error instanceof Error ? error.message : String(error),
@@ -1292,7 +1294,13 @@ export class FieldGroupQueryService extends BaseService {
       );
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
-      if (read.strict && !isMissingComponentTableError(error)) {
+      // On a transaction a failed statement has aborted it on PostgreSQL, so
+      // reading on as though the table were empty is possible on the other
+      // dialects only: every dialect refuses alike instead.
+      if (
+        read.executor !== undefined ||
+        (read.strict && !isMissingComponentTableError(error))
+      ) {
         throw error;
       }
       this.logger.debug("Could not batch query component table", {

@@ -264,6 +264,14 @@ describe("required components by language", () => {
     ).toEqual(["hero", "title"]);
   });
 
+  it("keeps it on a document with no translated fields, whatever the language", () => {
+    const ctx = {
+      localizedFieldNames: new Set<string>(),
+      enforceLocalizedRequired: false,
+    };
+    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
+  });
+
   it("keeps it in the default language", () => {
     const ctx = context(true);
     expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
