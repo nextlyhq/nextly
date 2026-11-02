@@ -763,12 +763,30 @@ const posts = await nextly.find({
 
 ## Sorting
 
-Pass a single field name. Prefix with `-` for descending:
+Pass a field name, prefixed with `-` for descending, or several in order:
 
 ```typescript
 await nextly.find({ collection: "posts", sort: "-publishedAt" });
 await nextly.find({ collection: "posts", sort: "title" });
+// Featured posts first, then newest; a comma string reads the same.
+await nextly.find({ collection: "posts", sort: ["-featured", "-publishedAt"] });
+await nextly.find({ collection: "posts", sort: "-featured,-publishedAt" });
 ```
+
+- Each key sorts in turn. Entries still tied come back in **id order**, so a page never shifts between reads. A key may name `id` itself (`"-id"`); otherwise the id sorts ascending, last.
+- An entry with **no value** for a key (or, for a field held per language, no translation in the language read) comes **after** the entries with one, in either direction, on every database.
+- How text compares (case and accents) follows each database's collation, so mixed-case text may order differently between PostgreSQL, MySQL and SQLite.
+- A key that names no field is dropped with a warning, and the read sorts by the others.
+
+## Starting at an offset
+
+`offset` skips that many entries, whether or not that falls on a page boundary. `offset: 6, limit: 6` returns items 7 to 12:
+
+```typescript
+await nextly.find({ collection: "posts", sort: "-publishedAt", offset: 6, limit: 6 });
+```
+
+`offset` is a whole number from 0, and it can't be combined with `page`. `meta.total` stays the full match count, and `hasNext` and `hasPrev` follow the offset. With no `sort`, an offset read is in id order.
 
 ## Selecting fields
 
