@@ -490,7 +490,7 @@ function ChoiceValue({
         <SelectValue placeholder="Choose" />
       </SelectTrigger>
       <SelectContent>
-        {(field.options ?? []).map(choice => (
+        {choicesOf(field).map(choice => (
           // Prefixed, because the primitive reserves the empty string for
           // "no selection" and a choice may be "".
           <SelectItem key={choice.value} value={`=${choice.value}`}>
@@ -499,6 +499,24 @@ function ChoiceValue({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+/**
+ * A choice field's options, read defensively: a stored or imported field may
+ * hold anything there, and only `{ value, label }` strings can be drawn.
+ */
+function choicesOf(
+  field: ExposedProperty
+): readonly { value: string; label: string }[] {
+  const options: unknown = field.options;
+  if (!Array.isArray(options)) return [];
+  return options.filter(
+    (option): option is { value: string; label: string } =>
+      typeof option === "object" &&
+      option !== null &&
+      typeof (option as { value?: unknown }).value === "string" &&
+      typeof (option as { label?: unknown }).label === "string"
   );
 }
 
@@ -575,7 +593,14 @@ function DeleteVariantDialog({
           <Button type="button" variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="button" variant="destructive" onClick={confirm}>
+          <Button
+            type="button"
+            variant="destructive"
+            // Held while the count is out, so the delete is confirmed with
+            // the number in view; a count that failed does not hold it.
+            disabled={use === undefined}
+            onClick={confirm}
+          >
             Delete variant
           </Button>
         </DialogFooter>

@@ -198,12 +198,38 @@ describe("editing a component's variants", () => {
   });
 
   it("has no default for a stored field without a path", () => {
-    const component = card();
     const broken = {
-      ...component.exposed![0]!,
+      ...card().exposed![0]!,
       propPath: undefined,
     } as unknown as NonNullable<ComponentDocument["exposed"]>[number];
+    const component = { ...card(), exposed: [broken] };
     expect(defaultValueOf(component, broken)).toBeUndefined();
+  });
+
+  it("reads a gated part's visibility default as hidden, as the page draws it", () => {
+    const base = card();
+    const gated: ComponentDocument = {
+      ...base,
+      nodes: [
+        {
+          ...base.nodes[0]!,
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+          },
+        },
+      ],
+      exposed: [
+        {
+          id: "shown",
+          label: "Shown",
+          nodeId: "heading",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+    };
+    expect(defaultValueOf(gated, gated.exposed![0]!)).toBe(false);
+    expect(defaultValueOf(card(), { ...gated.exposed![0]! })).not.toBe(false);
   });
 
   it("names a new variant past the ones there are", () => {

@@ -387,6 +387,22 @@ describe("variant names on save", () => {
     ]);
   });
 
+  it("refuse a newcomer ordered before the variants that shared the name", () => {
+    const next = card({
+      c: { label: "featured", overrides: { title: "c" } },
+      ...clashing.variants,
+    });
+
+    expect(
+      validate(next, { ...context, stored: [clashing] })
+        .filter(issue => issue.code === "variant-label-clash")
+        .map(issue => [issue.path, issue.severity])
+    ).toEqual([
+      ["/variants/c/label", "error"],
+      ["/variants/b/label", "warning"],
+    ]);
+  });
+
   it("accept distinct names", () => {
     const issues = validate(
       card({

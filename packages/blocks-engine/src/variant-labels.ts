@@ -73,8 +73,12 @@ export function variantLabelIssues(
   const issues: ValidationIssue[] = [];
   const record = variants as Record<string, { label: string }>;
   for (const [name, keys] of shared) {
-    const first = ownEntry(record, keys[0])?.label.trim() ?? name;
-    for (const key of keys.slice(1)) {
+    // Compared with a variant that already held the name where one did, so
+    // every newcomer is named as one wherever the save placed it.
+    const anchor = keys.find(key => old.has(clashKey(name, key))) ?? keys[0];
+    const first = ownEntry(record, anchor)?.label.trim() ?? name;
+    for (const key of keys) {
+      if (key === anchor) continue;
       const label = ownEntry(record, key)?.label.trim() ?? name;
       issues.push({
         path: pointer(pointer("/variants", key), "label"),

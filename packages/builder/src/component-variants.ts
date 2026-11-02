@@ -15,7 +15,8 @@
  * @module component-variants
  */
 import {
-  findNode,
+  COMPONENT_INSTANCE_TYPE,
+  instanceExposure,
   isPlainRecord,
   planAddVariant,
   planDeleteVariant,
@@ -219,29 +220,30 @@ export function resetVariantValue(
 
 /**
  * The component's own value for an exposed field, which a variant that sets
- * nothing for it shows: the prop at the field's path on the node it drives.
- * Visibility reads as shown: the definition draws every node it holds.
+ * nothing for it shows.
+ *
+ * Read from what the resolver itself makes of a placement that sets nothing,
+ * so a visibility field gated by its node's conditions reads as hidden, and a
+ * field the resolver cannot use reads as no value, exactly as a page shows
+ * them.
  */
 export function defaultValueOf(
   component: ComponentDocument,
   field: ExposedProperty
 ): unknown {
-  const node = findNode(component.nodes, field.nodeId);
-  if (node === undefined) return undefined;
-  if (field.type === "visibility") return true;
-  // A stored or imported field may lack its path; it then has no default to
-  // show rather than one read from nowhere.
-  const path: unknown = field.propPath;
-  if (typeof path !== "string") return undefined;
-  let current: unknown = node.props;
-  for (const segment of path.split(".")) {
-    if (!isPlainRecord(current) || !Object.hasOwn(current, segment)) {
-      return undefined;
-    }
-    current = current[segment];
-  }
-  return current;
+  const state = instanceExposure(component, UNPLACED).properties.find(
+    row => row.property.id === field.id
+  );
+  return state === undefined || state.cleared ? undefined : state.value;
 }
+
+/** A placement that chooses nothing and sets nothing. */
+const UNPLACED: BlockNode = {
+  id: "",
+  type: COMPONENT_INSTANCE_TYPE,
+  version: 1,
+  props: { componentId: "" },
+};
 
 /** How many values a variant presets, in words: "2 values", "(no changes)". */
 export function valuesSummary(option: VariantOption): string {

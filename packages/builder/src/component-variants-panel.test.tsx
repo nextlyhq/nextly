@@ -27,7 +27,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import type { ComponentVariantsHost } from "./component-variants";
+import type { ComponentVariantsHost, VariantUse } from "./component-variants";
 import { useEditorState, type EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -238,5 +238,58 @@ describe("a component's variants in its own view", () => {
     });
     expect(variantsOf(editor())).toBeUndefined();
     expect(section().textContent).toContain("No variants yet");
+  });
+
+  it("holds the delete while the count is out", async () => {
+    let answer: (use: VariantUse) => void = () => {};
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      countUse: () =>
+        new Promise<VariantUse>(resolve => {
+          answer = resolve;
+        }),
+    });
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Delete the variant Night",
+      })
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Delete the variant “Night”?",
+    });
+    const confirm = within(dialog).getByRole("button", {
+      name: "Delete variant",
+    });
+    expect(confirm).toHaveProperty("disabled", true);
+
+    await act(async () => {
+      answer({ placements: 0, documents: 0, complete: true });
+    });
+    expect(confirm).toHaveProperty("disabled", false);
+  });
+
+  it("draws a choice field whose stored options are not a list, offering none", () => {
+    const base = component();
+    mount({
+      ...base,
+      exposed: [
+        {
+          id: "tone",
+          label: "Tone",
+          nodeId: "h1",
+          propPath: "tone",
+          type: "select",
+          options: { light: "Light" } as unknown as [],
+        },
+      ],
+      variants: { a: { label: "Night", overrides: {} } },
+    });
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Show the values of Night",
+      })
+    );
+    expect(
+      within(section()).getByRole("combobox", { name: "Tone" })
+    ).toBeDefined();
   });
 });
