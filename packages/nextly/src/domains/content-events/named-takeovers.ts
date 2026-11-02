@@ -64,9 +64,7 @@ function fromIdOf(event: {
 export async function nameTakeoverHolders<
   T extends { kind: string; payload: Record<string, unknown> | null },
 >(events: T[], names: PeopleNamesById = userNames): Promise<T[]> {
-  const ids = [
-    ...new Set(events.flatMap(event => fromIdOf(event) ?? [])),
-  ];
+  const ids = [...new Set(events.flatMap(event => fromIdOf(event) ?? []))];
   if (ids.length === 0) return events;
   const byId = new Map<string, string>();
   try {
