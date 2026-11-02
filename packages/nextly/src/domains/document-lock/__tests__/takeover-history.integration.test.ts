@@ -2,10 +2,11 @@
  * Taking a document over is recorded in that document's history, on every
  * dialect, and nothing else the lock does is.
  *
- * Only an integration test can show the two belong to one transaction: the
- * claim is replaced and the event written on the same connection, so a
- * failed event has to leave the previous holder's row exactly as it was. A
- * unit double of the transaction would report a rollback it never performed.
+ * The claim and its event belong to one transaction. That is shown two ways:
+ * the event's insert is watched running on the transaction that replaces the
+ * claim (not the pool, not a transaction of its own), and a failed event is
+ * shown to leave the previous holder's row and token exactly as they were,
+ * on each real database rather than a unit double of the transaction.
  *
  * The events are read back through the document's history read (the Direct
  * API's `contentEvents.list`), the one every surface uses, rather than from
@@ -13,6 +14,10 @@
  * missing here exactly as it would in the admin.
  */
 
+import type {
+  TransactionContext,
+  TransactionOptions,
+} from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -137,6 +142,57 @@ async function claim(
 }
 
 /**
+ * The adapter, watched: the tables each transaction it opens inserts into, in
+ * the order they were opened, and those it inserts into on its own pool.
+ * Calls are made on the real adapter and the real transaction, so nothing
+ * about the write changes; the watch only reports where it happened.
+ */
+function watched(adapter: TestNextly["adapter"]) {
+  const transactions: string[][] = [];
+  const pool: string[] = [];
+  const recording = (
+    target: object,
+    insert: unknown,
+    into: string[]
+  ): ((...args: unknown[]) => unknown) => {
+    if (typeof insert !== "function") throw new Error("no insert to watch");
+    return (...args: unknown[]): unknown => {
+      into.push(String(args[0]));
+      return Reflect.apply(insert, target, args) as unknown;
+    };
+  };
+  const ctxWatched = (ctx: TransactionContext, inserts: string[]) =>
+    new Proxy(ctx, {
+      get(target, prop) {
+        const value: unknown = Reflect.get(target, prop, target);
+        if (prop === "insert") return recording(target, value, inserts);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  const proxy = new Proxy(adapter, {
+    get(target, prop) {
+      if (prop === "transaction") {
+        return <T>(
+          work: (ctx: TransactionContext) => Promise<T>,
+          options?: TransactionOptions
+        ): Promise<T> => {
+          const inserts: string[] = [];
+          transactions.push(inserts);
+          return target.transaction(
+            ctx => work(ctxWatched(ctx, inserts)),
+            options
+          );
+        };
+      }
+      const value: unknown = Reflect.get(target, prop, target);
+      if (prop === "insert") return recording(target, value, pool);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { adapter: proxy, transactions, pool };
+}
+
+/**
  * Push the claim's expiry into the past, with the clock expression the
  * repository writes expiries with, so the lapse is the database's own.
  */
@@ -235,6 +291,29 @@ describe.each(getConfiguredTestDialects())(
         fromId: ADA.id,
         fromName: null,
       });
+    }, 120_000);
+
+    it("writes the event on the transaction that replaces the claim, and no other", async () => {
+      const t = await boot(dialect);
+      const { ref } = await post(t);
+      await claim(t, ref, ADA);
+
+      // Watched from here: the takeover alone.
+      const watch = watched(t.adapter);
+      const taken = await acquireDocumentLock(
+        watch.adapter,
+        ref,
+        claimant(GRACE),
+        { takeover: true }
+      );
+      expect(taken.status).toBe("acquired");
+
+      // One transaction, the claim's own, and the event's insert inside it:
+      // an event written on the pool or on a transaction of its own could
+      // commit while the claim rolled back.
+      expect(watch.transactions).toHaveLength(1);
+      expect(watch.transactions[0]).toContain("nextly_content_events");
+      expect(watch.pool).toEqual([]);
     }, 120_000);
 
     it("refuses the takeover and keeps the holder when the event write fails", async () => {

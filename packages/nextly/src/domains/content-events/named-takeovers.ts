@@ -14,7 +14,7 @@
 
 import { z } from "zod";
 
-import { getService } from "../../di";
+import { peopleById } from "../versions/author-hydration";
 
 import type { ContentEventKind } from "./kinds";
 
@@ -31,15 +31,6 @@ export const TAKEOVER_CONTENT_EVENT_KIND = {
   payload: z.object({ fromId: z.string().min(1) }).strict(),
 } as const satisfies ContentEventKind;
 
-/** A person's display name by id, as the users table keeps it. */
-export type PeopleNamesById = (
-  ids: string[]
-) => Promise<{ id: string; name: string | null }[]>;
-
-/** Names from the user service: its projection carries no email. */
-const userNames: PeopleNamesById = ids =>
-  getService("userService").listUsersByIds(ids);
-
 /** The displaced holder's id, when this event is a takeover that names one. */
 function fromIdOf(event: {
   kind: string;
@@ -54,32 +45,30 @@ function fromIdOf(event: {
  * Each takeover in `events` with its displaced holder's name added to its
  * payload as `fromName`: their name, or null when they have none, their
  * account is gone or the lookup failed. Every other event is returned as it
- * was. One lookup for the page.
- *
- * A failed lookup names nobody rather than failing the read: the name
- * decorates a history the caller may already read.
+ * was. One lookup for the page; a failed one names nobody rather than
+ * failing the read, since the name decorates a history the caller may
+ * already read.
  *
  * @experimental
  */
 export async function nameTakeoverHolders<
   T extends { kind: string; payload: Record<string, unknown> | null },
->(events: T[], names: PeopleNamesById = userNames): Promise<T[]> {
-  const ids = [...new Set(events.flatMap(event => fromIdOf(event) ?? []))];
+>(events: T[]): Promise<T[]> {
+  const ids = events.flatMap(event => fromIdOf(event) ?? []);
   if (ids.length === 0) return events;
-  const byId = new Map<string, string>();
-  try {
-    for (const person of await names(ids)) {
-      if (person.name) byId.set(person.id, person.name);
-    }
-  } catch {
-    // Named by nobody: the row says the previous editor is unavailable.
-  }
+  // The one lookup that names a person on a read already granted, so the
+  // takeover row and the version list never name someone differently. It
+  // reads the name and nothing else, and leaves out whoever it cannot name.
+  const people = await peopleById(ids);
   return events.map(event => {
     const fromId = fromIdOf(event);
     if (fromId === null) return event;
     return {
       ...event,
-      payload: { ...event.payload, fromName: byId.get(fromId) ?? null },
+      payload: {
+        ...event.payload,
+        fromName: people.get(fromId)?.name || null,
+      },
     };
   });
 }
