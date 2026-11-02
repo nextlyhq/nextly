@@ -81,6 +81,8 @@ describe.each(getConfiguredTestDialects())(
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
         marksNoTransaction: () => Promise.resolve(false),
+        // Read only by --applied.
+        fileChecksum: () => Promise.reject(new Error("not read by this mode")),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       expect(result).toEqual({

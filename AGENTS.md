@@ -297,8 +297,8 @@ pnpm worktree remove <branch>
 ```
 
 Stopping the test containers is safe and cheap — `docker start` by name brings
-them back with their data, which is why the start commands in the
-`running-builds-and-tests` skill are `start` rather than `compose up`.
+them back (empty: run `pnpm worktree provision`), which is why the start
+commands in the `running-builds-and-tests` skill are `start`, not `compose up`.
 
 ## A whole-file write is a delete plus a create
 

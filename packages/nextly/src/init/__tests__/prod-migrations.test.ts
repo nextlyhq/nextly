@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { CliError } from "../../cli/errors";
 import { NextlyError } from "../../errors";
 import {
   _resetBootMigrationsGateForTest,
@@ -225,6 +226,32 @@ describe("runProdMigrationsIfEnabled", () => {
     await expect(
       runProdMigrationsIfEnabled(a as never)
     ).resolves.toBeUndefined();
+  });
+
+  it("still starts when an applied file was edited, logging the refusal", async () => {
+    // The refusal `nextly migrate` exits 2 on: at boot it stops the
+    // migrations, not the site, as any failed migration does.
+    process.env.NODE_ENV = "production";
+    const errors: string[] = [];
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new CliError("MIGRATION_TAMPERED", {
+          what: "`20261102_000001_add_posts.sql` has changed since it was applied, so `nextly migrate` ran nothing.",
+          why: "edited",
+          next: "restore it",
+        });
+      }),
+    });
+    a.logger.error = (m: string) => {
+      errors.push(m);
+    };
+
+    await expect(
+      runProdMigrationsIfEnabled(a as never)
+    ).resolves.toBeUndefined();
+    expect(errors.join("\n")).toContain(
+      "20261102_000001_add_posts.sql` has changed since it was applied"
+    );
   });
 
   it("skips unless NODE_ENV=production", async () => {

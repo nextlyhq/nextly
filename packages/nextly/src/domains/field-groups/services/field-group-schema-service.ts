@@ -65,6 +65,7 @@ import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
@@ -335,7 +336,12 @@ export class FieldGroupSchemaService {
       const indexName = `idx_${tableName}_${columnName}`;
 
       indexStatements.push(
-        this.createIndexSql(indexName, tableName, columnName)
+        this.createIndexSql(
+          indexName,
+          tableName,
+          columnName,
+          this.columnTypeFor(field) ?? ""
+        )
       );
     }
 
@@ -1226,15 +1232,26 @@ export class FieldGroupSchemaService {
     );
   }
 
-  /** A plain index on one column, in this dialect's spelling. */
+  /**
+   * A plain index on one column, in this dialect's spelling. Rendered by the schema pipeline's own
+   * rule, so a MySQL TEXT/BLOB column, which MySQL refuses to index whole, is keyed by the same
+   * prefix a collection's column is.
+   */
   private createIndexSql(
     indexName: string,
     tableName: string,
-    columnName: string
+    columnName: string,
+    columnType: string
   ): string {
-    // MySQL has no IF NOT EXISTS for CREATE INDEX.
-    const ifNotExists = this.dialect === "mysql" ? "" : "IF NOT EXISTS ";
-    return `CREATE INDEX ${ifNotExists}${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`;
+    const sql = columnIndexSql(
+      tableName,
+      indexName,
+      columnName,
+      columnType,
+      this.dialect,
+      name => `${this.q}${name}${this.q}`
+    );
+    return `${sql};`;
   }
 
   private buildFieldMap(fields: FieldConfig[]): Map<string, DataFieldConfig> {

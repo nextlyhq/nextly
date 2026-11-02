@@ -23,17 +23,60 @@ import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
  * floating. The rail selects; it never opens a second panel beside the first.
  */
 export const LEFT_PANELS = [
-  "insert",
+  "add",
   "layers",
-  "components",
-  "tokens",
-  "classes",
-  "fonts",
   "pages",
+  "components",
+  "design",
   "settings",
 ] as const;
 
 export type LeftPanel = (typeof LEFT_PANELS)[number];
+
+/**
+ * The rail's two groups, in the order an author meets them: the daily tools at
+ * the top, and the page's settings at the bottom with Help, which opens a
+ * dialog rather than a panel and so is not one of these.
+ */
+export const RAIL_GROUPS: {
+  readonly top: readonly LeftPanel[];
+  readonly bottom: readonly LeftPanel[];
+} = {
+  top: ["add", "layers", "pages", "components", "design"],
+  bottom: ["settings"],
+};
+
+/**
+ * Where a panel stored under an id from before the rail was relabelled lives
+ * now: Insert became Add, and Tokens, Classes and Fonts became the tabs of one
+ * Design panel. Mapped explicitly rather than dropped as unknown, which would
+ * close the panel an author left open.
+ */
+const RENAMED_PANELS: Readonly<
+  Record<string, { panel: LeftPanel; view: string | null }>
+> = {
+  insert: { panel: "add", view: null },
+  tokens: { panel: "design", view: "variables" },
+  classes: { panel: "design", view: "classes" },
+  fonts: { panel: "design", view: "fonts" },
+};
+
+/** The panel and view a stored preference names, renamed ids included. */
+function storedPanel(
+  panel: unknown,
+  view: unknown
+): { panel: LeftPanel | null; view: string | null } {
+  if (isLeftPanel(panel)) {
+    return { panel, view: typeof view === "string" ? view : null };
+  }
+  if (typeof panel === "string" && Object.hasOwn(RENAMED_PANELS, panel)) {
+    return RENAMED_PANELS[panel];
+  }
+  // No panel open, or one this shell no longer has: the part an author last
+  // chose is kept, so the panel reopens on it, as it does when a panel is
+  // closed and opened again in one session.
+  return { panel: null, view: typeof view === "string" ? view : null };
+}
 
 /**
  * Whether a stored value still names a panel.
@@ -76,8 +119,13 @@ export const PANEL_BOUNDS = {
   inspector: { min: 280, max: 520, initial: 320 },
 } as const;
 
-/** The rail's fixed width in CSS pixels (PB-D17: 48px, icons only). */
-export const RAIL_WIDTH = 48;
+/**
+ * The rail's fixed width in CSS pixels: wide enough for the longest label,
+ * "Components", under its icon at the 12px the admin's text never goes below.
+ * At the narrowest supported shell, with both panels open at their initial
+ * widths, the canvas keeps 576px — above its own floor.
+ */
+export const RAIL_WIDTH = 84;
 
 /**
  * The narrowest the canvas may become before a drag stops taking from it.
@@ -150,6 +198,12 @@ export function fitsFullShell(width: number): boolean {
  */
 export interface ShellPreferences {
   leftPanel: LeftPanel | null;
+  /**
+   * Which part of a panel is showing, for a panel with parts — the Design
+   * panel's tab. The host decides what the names mean; the shell only keeps
+   * the one the author last chose.
+   */
+  leftPanelView: string | null;
   leftPinned: boolean;
   /**
    * How large the canvas draws the page, as the author last left it.
@@ -269,6 +323,7 @@ export function topologyKey(panelIds: readonly string[]): string {
 
 export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
+  leftPanelView: null,
   leftPinned: true,
   zoom: FIT_ZOOM,
   editingBreakpoint: null,
@@ -380,8 +435,10 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
   if (typeof raw !== "object" || raw === null) return DEFAULT_PREFERENCES;
   const record = raw as Record<string, unknown>;
 
+  const left = storedPanel(record.leftPanel, record.leftPanelView);
   return {
-    leftPanel: isLeftPanel(record.leftPanel) ? record.leftPanel : null,
+    leftPanel: left.panel,
+    leftPanelView: left.view,
     leftPinned:
       typeof record.leftPinned === "boolean"
         ? record.leftPinned

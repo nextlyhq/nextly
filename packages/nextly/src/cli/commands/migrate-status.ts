@@ -24,7 +24,6 @@
  * ```
  */
 
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -32,6 +31,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import {
+  isPluginLedgerRow,
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
@@ -44,6 +44,10 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
+import {
+  checksumOf,
+  isRecordedChecksum,
+} from "../../domains/schema/migrate/applied-checksums";
 import {
   migrationChecksum,
   compareModuleNames,
@@ -453,7 +457,7 @@ function parseMigrationFile(
   filePath: string,
   content: string
 ): ParsedMigration {
-  const checksum = createHash("sha256").update(content).digest("hex");
+  const checksum = checksumOf(content);
 
   const collectionsMatch = content.match(/^-- Collections?:\s*(.+)$/m);
   const collections = collectionsMatch
@@ -740,7 +744,13 @@ export function buildMigrationStatuses(
       file.transaction === false ? { outsideTransaction: true as const } : {};
 
     if (record) {
-      const checksumMismatch = record.sha256 !== file.checksum;
+      // An app file is modified only against a checksum the ledger records:
+      // a row an earlier version wrote without one reads as matching, as
+      // `nextly migrate` takes it, and its next run records one. A plugin's
+      // module keeps its own rule, the recorded value compared as it is.
+      const checksumMismatch = isPluginLedgerRow(record.filename)
+        ? record.sha256 !== file.checksum
+        : isRecordedChecksum(record.sha256) && record.sha256 !== file.checksum;
       let status: MigrationStatus["status"];
       if (record.status !== "applied") {
         status = record.status;

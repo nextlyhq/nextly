@@ -37,6 +37,9 @@ const askedFor: string[] = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
+  // Every panel the shell knows, so the renderer can be asked about each.
+  const { LEFT_PANELS } = await import("@nextlyhq/builder");
+  const view = { current: null, choose: () => {} };
   const nothing = (): null => null;
   const passthrough = ({
     children,
@@ -56,13 +59,21 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       availablePanels,
       topBar,
     }: {
-      renderPanel?: (panel: string) => React.ReactNode;
+      renderPanel?: (
+        panel: string,
+        view: { current: string | null; choose: (view: string) => void }
+      ) => React.ReactNode;
       availablePanels?: readonly string[];
       topBar?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
-        <div data-testid="panel">{renderPanel?.("settings")}</div>
+        <div data-testid="filled">
+          {LEFT_PANELS.filter(
+            panel => (renderPanel?.(panel, view) ?? null) !== null
+          ).join(",")}
+        </div>
+        <div data-testid="panel">{renderPanel?.("settings", view)}</div>
         <div data-testid="topbar">{topBar}</div>
       </div>
     ),
@@ -246,12 +257,29 @@ describe("offering the Settings panel", () => {
     openEditor();
     const withSettings = rail();
 
-    for (const panel of ["insert", "layers", "tokens", "fonts", "classes"]) {
+    for (const panel of ["add", "layers", "design"]) {
       expect(withoutSettings).toContain(panel);
       expect(withSettings).toContain(panel);
     }
     // And the two differ by exactly the one slot under test.
     expect(withSettings).not.toBe(withoutSettings);
+  });
+
+  it("offers exactly the panels it fills, in both states", () => {
+    // The rail leaves out what the host does not offer, so a panel the
+    // renderer fills but the list forgets is unreachable, and one the list
+    // offers but the renderer leaves empty opens blank. Asked of every panel
+    // the shell knows, rather than of the ones this file expects.
+    const filled = (): string => screen.getByTestId("filled").textContent ?? "";
+    entryFields = null;
+    openEditor();
+    expect(filled()).toBe(rail());
+    expect(rail()).not.toBe("");
+    cleanup();
+
+    entryFields = <p>fields</p>;
+    openEditor();
+    expect(filled()).toBe(rail());
   });
 
   it("asks about the builder field's OWN path, so it is never offered itself", () => {
