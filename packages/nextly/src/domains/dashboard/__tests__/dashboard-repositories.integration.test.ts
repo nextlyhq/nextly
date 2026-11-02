@@ -119,6 +119,42 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toThrow(/at most 255 characters/);
     });
 
+    it("changes a reader's value one change at a time, so two at once both count", async () => {
+      const t = await boot();
+      const preferences = new DashboardPreferences(t.adapter as never);
+      const ana = await account(t, "ana@example.com");
+      // Each change adds its own slug to the list it finds stored.
+      const adding = (slug: string) => (stored: string | undefined) =>
+        JSON.stringify([
+          ...(stored ? (JSON.parse(stored) as string[]) : []),
+          slug,
+        ]);
+
+      const written = await Promise.all([
+        preferences.update(ana, "new-type", adding("posts")),
+        preferences.update(ana, "new-type", adding("pages")),
+      ]);
+      // Neither change lost the other's: whichever ran second found the
+      // first's value and built on it.
+      const stored = JSON.parse(
+        (await preferences.get(ana, "new-type")) ?? "[]"
+      ) as string[];
+      expect([...stored].sort()).toEqual(["pages", "posts"]);
+      expect(written).toContain(await preferences.get(ana, "new-type"));
+
+      // A value longer than a preference holds is refused, and nothing changes.
+      await expect(
+        preferences.update(ana, "new-type", () => "x".repeat(256))
+      ).rejects.toThrow(/at most 255 characters/);
+      expect(
+        [
+          ...(JSON.parse(
+            (await preferences.get(ana, "new-type")) ?? "[]"
+          ) as string[]),
+        ].sort()
+      ).toEqual(["pages", "posts"]);
+    });
+
     it("deletes a reader's pins and preferences with the reader", async () => {
       const t = await boot();
       const pins = new DashboardPins(t.adapter as never);

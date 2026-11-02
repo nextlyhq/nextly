@@ -1515,6 +1515,53 @@ describe("one screen's callers", () => {
     expect(permissionAsks()).toBe(asked + 1);
   });
 
+  it("keep the answer they hold while the next screen asks again, so nothing it allowed leaves for the re-ask", async () => {
+    // 🔴 The next screen's re-ask is not news that the answer is wrong. Taken as
+    // such (the answer invalidated), every caller read no permission at all
+    // until it arrived: a return to the dashboard drew its first frame without
+    // the card that needs one (Upcoming releases) and put it back a moment
+    // later, moving every card under it.
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+
+    let release = () => {};
+    server.permissionsGate = new Promise<void>(done => {
+      release = done;
+    });
+    // What the next screen's answer will say, held back until released.
+    server.permissions = { ...EDITOR, permissions: ["read-posts"] };
+    onScreen.pathname = "/admin/collections/posts";
+    shell.rerender();
+    // The re-ask is on its way, held: the answer kept still counts, for the
+    // callers already drawn and for one that mounts meanwhile, as the screen
+    // returned to mounts its own (the dashboard's cards).
+    await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    shell.rerender();
+    const card = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    for (const caller of [shell, card]) {
+      expect(caller.result.current.hasAnswer).toBe(true);
+      expect(caller.result.current.isLoading).toBe(false);
+      expect(caller.result.current.hasPermission("read-posts")).toBe(true);
+      expect(caller.result.current.hasPermission("update-posts")).toBe(true);
+    }
+
+    // The new answer replaces it once it arrives.
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(shell.result.current.hasPermission("update-posts")).toBe(false)
+    );
+    expect(shell.result.current.hasPermission("read-posts")).toBe(true);
+  });
+
   it("ask again when the admin regains focus, on the same screen", async () => {
     // An answer kept for the screen is never stale, so a focus refetch that
     // waits for staleness would keep a role granted or revoked elsewhere until

@@ -9,6 +9,12 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The header's New button reads collections and permissions of its own,
+// which this test does not set up; it is a marker here.
+vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
+  NewSplitButton: () => <div data-testid="dashboard-new" />,
+}));
+
 vi.mock("@admin/components/features/dashboard/WelcomeHeader", () => ({
   WelcomeHeader: () => <h1>Welcome, Ada</h1>,
 }));

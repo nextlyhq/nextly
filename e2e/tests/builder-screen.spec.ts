@@ -104,9 +104,13 @@ test.describe("the Page Builder's own screen", () => {
     // Back twice: the second leaves the page, and asks.
     await page.goBack({ waitUntil: "commit" });
     await expect(page).toHaveURL(FORM_URL);
-    await page.goBack({ waitUntil: "commit" });
+    // Started as the browser's button starts it, not by Playwright's `goBack`,
+    // which waits for a navigation: the guard cancels this one before it moves.
+    await page.evaluate(() => window.history.back());
     const question = page.getByRole("alertdialog");
     await expect(question).toBeVisible();
+    // Asked on the page Back would have left: it has not moved.
+    await expect(page).toHaveURL(FORM_URL);
     await question.getByRole("button", { name: "Keep Editing" }).click();
     await expect(page).toHaveURL(FORM_URL);
   });

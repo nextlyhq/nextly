@@ -33,8 +33,10 @@ import type { EmailService } from "../../domains/email/services/email-service";
 import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
+import { createMediaFinalizeDeletesJob } from "../../domains/media/finalize-deletes-job";
 import { pluginSettingsSecrets } from "../../domains/plugins/settings-service";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
+import { createReleaseNoticeEmailJob } from "../../domains/releases/release-notice-email";
 import { createReleasesDrainJob } from "../../domains/releases/releases-drain-job";
 import {
   IN_PASS_DRAIN_BOUNDS,
@@ -194,6 +196,16 @@ export function registerJobServices(ctx: RegistrationContext): void {
         onOutcome: result => reportReleasesOutcome(logger, result),
       })
     );
+    // A release notice's email: handed on in the notice's own transaction, and
+    // queued through core's queued send once that has committed.
+    registry.register(
+      createReleaseNoticeEmailJob(() => ({
+        db: adapter,
+        email: container.has("emailService")
+          ? container.get<EmailService>("emailService")
+          : null,
+      }))
+    );
 
     // Advisory document locks. A lapsed row is already ignored by every
     // reader, so this buys space rather than correctness: without it the table
@@ -251,6 +263,18 @@ export function registerJobServices(ctx: RegistrationContext): void {
     // records' retention, so a held message is gone seven days after it
     // settles.
     registry.register(createQueuedEmailPruneJob(() => adapter));
+    // A media delete's finish once its Undo window ends: queued with the
+    // delete's marks, so it completes on the next jobs run even when the
+    // worker that took the delete is gone. The marks are assembled per run,
+    // judged at the run's own instant, and loaded only when one runs.
+    registry.register(
+      createMediaFinalizeDeletesJob(async now => {
+        const { bootedPendingDeletes } = await import(
+          "../../domains/media/booted-pending-deletes"
+        );
+        return bootedPendingDeletes(() => now);
+      })
+    );
 
     // Job types the application and its plugins declared. Registered AFTER the
     // built-ins so a plugin cannot shadow one: `collectJobs` already refuses a

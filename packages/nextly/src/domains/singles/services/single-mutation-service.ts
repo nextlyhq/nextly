@@ -160,6 +160,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionFoundMissing,
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
@@ -229,6 +230,7 @@ import {
   readsSingleInEveryLanguage,
   type PromoteGateContext,
 } from "./promote-gate";
+import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -398,6 +400,34 @@ export class SingleMutationService extends BaseService {
    */
   private get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
     return this.queryService.fieldRuleVisitor;
+  }
+
+  /**
+   * The grants a refusal over shared fields names the caller's readable
+   * fields by, from inside the write's transaction: those resolved before it
+   * opened where the promotion gate asks, and otherwise read on `tx`. A
+   * trusted write resolves none beforehand, yet a routed one still answers to
+   * the field read rules, and a read on the pool would run outside the
+   * transaction and, for a visitor's Public role, wait on the connection the
+   * transaction holds.
+   */
+  private sharedConflictGrants(
+    tx: TransactionContext,
+    options: {
+      user?: Record<string, unknown>;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    resolved: (() => Promise<CallerGrants>) | undefined
+  ): () => Promise<CallerGrants> {
+    return (
+      resolved ??
+      callerAccessGrants(
+        options.user,
+        options.authenticatedScope,
+        tx.getDrizzle(),
+        this.fieldRuleVisitor
+      )
+    );
   }
 
   // ============================================================
@@ -1332,6 +1362,64 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * Rebuild the record of which media items a Single uses, from what its
+   * tables hold, for `nextly media reindex-usage`. Returns whether the Single
+   * has a document to read: one that has never been saved has none.
+   */
+  async rebuildMediaUsage(slug: string): Promise<boolean> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger
+    );
+    if (!singleMeta) return false;
+    const row = await this.adapter.selectOne<{ id: string }>(
+      singleMeta.tableName,
+      { columns: ["id"] }
+    );
+    if (!row) return false;
+    const companion = this.translationsOf(singleMeta);
+    // Resolved here, off the transaction, and remembered for the read inside
+    // it, which may only read what is remembered.
+    if (companion) {
+      await resolveCompanionReadiness(this.adapter, {
+        companionTableName: companion.companionTableName,
+        mainTableName: singleMeta.tableName,
+        localizedColumns: companion.localizedFields.map(f => f.column),
+      });
+    }
+    // Loaded when a Single's usage is recorded, not with the service.
+    const { recordSingleMediaUsage } = await import("./single-media-usage");
+    const { lockDocument } = await import(
+      "../../media/usage/media-usage-store"
+    );
+    await this.adapter.transaction(async tx => {
+      // Locked before anything is read, so a save in flight is read as it
+      // leaves the Single (`lockDocument`).
+      await lockDocument(tx, singleMeta.tableName, String(row.id));
+      await recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
+        slug,
+        rowId: row.id,
+        tableName: singleMeta.tableName,
+        fields: singleMeta.fields ?? [],
+        companion,
+      });
+    });
+    return true;
+  }
+
+  /** What recording a Single's media usage reads from this service. */
+  private mediaUsageDeps(): SingleMediaUsageDeps {
+    return {
+      adapter: this.adapter,
+      logger: this.logger,
+      fieldGroupDataService: this.fieldGroupDataService,
+      localization: this.localizationSource,
+    };
+  }
+
+  /**
    * What judging this Single's promotion in `locale` reads before its
    * transaction opens: its record, its translations' table, the language the
    * write keeps, and its field groups' schemas. `null` for a Single with no
@@ -1602,6 +1690,10 @@ export class SingleMutationService extends BaseService {
     // revalidation opt-outs — the durable-write signal the retention pass keys
     // off, so a Single that opts out of BOTH still triggers write-path cleanup.
     let committedWrite = false;
+    // This Single's translation table and the language written, once known,
+    // for the catch: a table dropped after its `ready` verdict was remembered
+    // fails any read or write of it, before the transaction or inside it.
+    let translations: { table: string; locale?: string } | undefined;
     // Whether the outbox event was actually appended: false when the Single
     // opted out of recording (`webhooks: false`), so the post-commit drain is
     // scheduled only for a write that recorded something. The three single.*
@@ -1932,6 +2024,12 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      if (companion) {
+        translations = {
+          table: companion.companionTableName,
+          locale: writeLocale,
+        };
+      }
       // The locale this write's content belongs to. `writeLocale` covers the
       // Single's own translations; when it has none, embedded components may
       // still be localized. Those were written at the requested locale, or at
@@ -2962,8 +3060,12 @@ export class SingleMutationService extends BaseService {
                       overrideAccess:
                         options.overrideAccess && !options.routeAuthorized,
                       authenticatedScope: options.authenticatedScope,
-                      // Resolved before the transaction opened.
-                      grants: promoteGrants,
+                      // Resolved before the transaction opened, or read on it.
+                      grants: this.sharedConflictGrants(
+                        tx,
+                        options,
+                        promoteGrants
+                      ),
                     });
                   }
                 }
@@ -3945,6 +4047,21 @@ export class SingleMutationService extends BaseService {
               });
             }
 
+            // Which media items the Single uses now, from what this save
+            // stored: its row, its translation and its field groups are all
+            // written above. A held edit's media count once it is published.
+            const { recordSingleMediaUsage } = await import(
+              "./single-media-usage"
+            );
+            await recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
+              slug,
+              rowId: existingDoc.id,
+              tableName: singleMeta.tableName,
+              fields: fieldConfigs,
+              companion,
+              heldDraft: holdEdit,
+            });
+
             // component subtrees form the snapshot.
             const versionsConfig = singleMeta.versions;
             // A held edit was recorded above, as a draft version of the save;
@@ -4805,6 +4922,19 @@ export class SingleMutationService extends BaseService {
       if (transitionDeniedResult) {
         return transitionDeniedResult;
       }
+      // A translation table dropped after its `ready` verdict was remembered,
+      // met before the transaction or inside it: answered, for a write that
+      // did not commit, as the check before the write answers a table that is
+      // not there. A later step's failure keeps its own answer below.
+      const translationsGone = committedWrite
+        ? undefined
+        : this.translationsGoneRefusal(slug, translations, error);
+      if (translationsGone) {
+        return buildSingleErrorResult(
+          translationsGone,
+          "Failed to update Single document"
+        );
+      }
       this.logger.error("Failed to update Single document", { slug, error });
       // A post-commit step (afterChange/afterUpdate hook, response expansion)
       // can throw after the event is already durable; carry `eventRecorded` so
@@ -4826,6 +4956,42 @@ export class SingleMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The refusal for a write that `error` failed because this Single's translation table is
+   * missing (`companionFoundMissing`, which forgets the table's `ready` verdict), or `undefined`
+   * for any other failure. The same 409, with the same remedy, as the check before a write gives
+   * a table it finds is not there. The table's name comes from the Single's own metadata, read
+   * before the write, so nothing is read again here.
+   */
+  private translationsGoneRefusal(
+    slug: string,
+    translations: { table: string; locale?: string } | undefined,
+    error: unknown
+  ): NextlyError | undefined {
+    if (!translations || !this.localization) return undefined;
+    if (
+      !companionFoundMissing(
+        this.adapter,
+        this.adapter.dialect,
+        translations.table,
+        error
+      )
+    ) {
+      return undefined;
+    }
+    return NextlyError.conflict({
+      reason: "state",
+      message: companionNotReadyMessage("single"),
+      logContext: {
+        cause: "localized-write-without-companion",
+        single: slug,
+        locale: translations.locale,
+        defaultLocale: this.localization.defaultLocale,
+        companionTable: translations.table,
+      },
+    });
   }
 
   /**

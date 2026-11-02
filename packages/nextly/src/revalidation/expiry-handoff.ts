@@ -120,6 +120,29 @@ export function holdForNextFlush(tags: string[]): void {
 }
 
 /**
+ * Tags an installed hand-off took that Next.js's own cache has still to
+ * expire. The hand-off records them for nextly's cache handlers, and a cache
+ * other than theirs never reads that record, so the next flush inside a request
+ * in this process expires them there too. Kept apart from the tags a hand-off
+ * failed to take: these are not handed off again.
+ */
+const globalForRequest = globalThis as unknown as {
+  __nextly_expiry_for_request?: PendingExpiryHandoff;
+};
+
+/** Keeps handed-off tags for Next.js's own cache, for the next flush inside a request. */
+export function holdForNextRequest(tags: string[]): void {
+  if (tags.length === 0) return;
+  globalForRequest.__nextly_expiry_for_request ??= new PendingExpiryHandoff();
+  globalForRequest.__nextly_expiry_for_request.handOff(tags, "");
+}
+
+/** The tags {@link holdForNextRequest} kept, drained. */
+export function takeHeldForNextRequest(): string[] {
+  return globalForRequest.__nextly_expiry_for_request?.take() ?? [];
+}
+
+/**
  * The tags this process holds, drained: the in-process default's, and those an
  * installed hand-off failed to take.
  */

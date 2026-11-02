@@ -26,8 +26,14 @@ import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
+import {
+  isRemovedFromCode,
+  removedEntityHasNoTable,
+} from "@admin/components/features/entries/removed-from-code-notice";
+import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
+import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
 import {
   SingleForm,
   type SingleSchema,
@@ -253,6 +259,20 @@ export default function SingleEditPage({
     lifecycleEnabled: schema?.status,
     onDefaultLocale: !isNonDefaultLocale,
   });
+  // The Publish split's other way to publish: at a time, in a release of its
+  // own named after the Single.
+  const schedule = useSchedulePublishAction({
+    scopeKind: "single",
+    scopeSlug: slug,
+    entryId: document?.id,
+    lifecycleEnabled: schema?.status,
+    onDefaultLocale: !isNonDefaultLocale,
+    // A Single is named by its schema, not by a field the form holds.
+    documentTitle: () => schema?.label || slug,
+    // With no drafts, a save of a live Single is published at once.
+    savesGoLive:
+      schema?.draftsEnabled !== true && document?.status === "published",
+  });
 
   // Update mutation — routes the save to the active language's companion row.
   const { mutateAsync: updateDocument, isPending: isUpdating } =
@@ -306,10 +326,36 @@ export default function SingleEditPage({
     return <SingleEditPageSkeleton />;
   }
 
+  // A Single removed from code is named, with its next step, above whatever
+  // else this page has to say; where its table is gone, in place of the
+  // failed read, which says nothing the notice does not.
+  const removedFromCode = isRemovedFromCode(schema);
+  const removedNotice =
+    schema && removedFromCode ? (
+      <RemovedFromCodeNotice
+        entity={{ kind: "single", label: schema.label || slug, slug }}
+        state={schema.removedFromCodeState}
+      />
+    ) : null;
+
+  if (error && removedEntityHasNoTable(schema)) {
+    return (
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice}
+        <div className="mt-6">
+          <Link href={ROUTES.BUILDER_SINGLES}>
+            <Button variant="outline">← Back to Singles</Button>
+          </Link>
+        </div>
+      </PageContainer>
+    );
+  }
+
   // Error state
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice ? <div className="mb-6">{removedNotice}</div> : null}
         <Alert variant="destructive">
           {/* The server's message as it is: it already says what went wrong
               ("Not found.", "You can't see Home."). */}
@@ -398,22 +444,34 @@ export default function SingleEditPage({
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame>
           {release.dialog}
+          {schedule.dialog}
           <SingleForm
             /* Under the editor's header, for the reason the entry editor
              gives. */
             documentBanner={
-              <ScheduledReleaseBanner
-                document={
-                  slug
-                    ? {
-                        scopeKind: "single",
-                        scopeSlug: slug,
-                        entryId: document.id,
-                      }
-                    : undefined
-                }
-                onDefaultLocale={!isNonDefaultLocale}
-              />
+              <>
+                {/* First in the banner order: it changes what every control
+                    below means, as nothing here can be changed. */}
+                {removedFromCode ? (
+                  <RemovedFromCodeNotice
+                    entity={{ kind: "single", label: singleLabel, slug }}
+                    state={schema.removedFromCodeState}
+                    variant="strip"
+                  />
+                ) : null}
+                <ScheduledReleaseBanner
+                  document={
+                    slug
+                      ? {
+                          scopeKind: "single",
+                          scopeSlug: slug,
+                          entryId: document.id,
+                        }
+                      : undefined
+                  }
+                  onDefaultLocale={!isNonDefaultLocale}
+                />
+              </>
             }
             // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
             // expects FieldConfig[] (discriminated). The runtime payload is the
@@ -425,10 +483,19 @@ export default function SingleEditPage({
              omitting this control here would leave the Single half reachable
              only through the API. With the form's own actions, matching the
              collection editor. */
-            documentActions={[
-              ...(release.contributed === null ? [] : [release.contributed]),
-              ...(pin === null ? [] : [pin]),
-            ]}
+            documentActions={
+              removedFromCode
+                ? []
+                : [
+                    ...(schedule.contributed === null
+                      ? []
+                      : [schedule.contributed]),
+                    ...(release.contributed === null
+                      ? []
+                      : [release.contributed]),
+                    ...(pin === null ? [] : [pin]),
+                  ]
+            }
             onSubmit={handleSubmit}
             isSubmitting={isUpdating}
             onCancel={handleCancel}

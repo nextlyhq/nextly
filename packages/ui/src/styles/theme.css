@@ -772,6 +772,12 @@
   --nx-success-solid: oklch(0.53 0.17 149.2);
   --nx-success-foreground: oklch(1 0 0);
   /* white */
+  /* A success toast's surface and text, which the Toaster hands to its toasts.
+   * The surface is the toast library's own pale green; the text is darkened
+   * from the library's green, which read at 4.26:1 on it, to about 5.2:1. */
+  --nx-toast-success-bg: oklch(0.9788 0.0221 160.24);
+  --nx-toast-success-text: oklch(0.5048 0.1506 146.87);
+
   /* Darkened from amber-500 so it reads as text on white at WCAG 4.5:1 (was
    * 2.15:1); its light shades still tint badge/alert surfaces. */
   --nx-warning: oklch(0.529 0.1646 70.11);
@@ -1063,6 +1069,9 @@
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);
   /* white */
+  /* The toast library's own dark success surface and text, kept: about 12.3:1. */
+  --nx-toast-success-bg: oklch(0.2107 0.0498 157.43);
+  --nx-toast-success-text: oklch(0.8635 0.1699 157.75);
   --nx-warning: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);

@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { schemaEventsTables } from "../../../schemas/schema-events";
@@ -23,7 +23,7 @@ import type {
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
 
-import { newestEvent } from "./newest-event";
+import { standingOf } from "./migration-state";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
@@ -146,7 +146,8 @@ export class SchemaEventsRepository {
 
   /**
    * The start time for an event being recorded NOW, strictly after every event
-   * already recorded for the same file.
+   * already recorded for the same file, and for the same scope (a collection's,
+   * a Single's or a component's schema change).
    *
    * "Is this file applied?" is answered by the file's newest event, so two
    * events for one file must never share a `startedAt`: the ledger is read
@@ -155,19 +156,46 @@ export class SchemaEventsRepository {
    * answer. Guaranteeing the order where events are WRITTEN makes every
    * reader agree without each inventing a tie-break. The columns hold
    * milliseconds on all three dialects, so one millisecond is enough.
+   *
+   * A scope's schema changes are read the same way: whether a collection's
+   * last change failed is answered by its newest, so a failed save and the
+   * retry that fixed it, recorded in the same millisecond, must not tie
+   * either. Ids are random UUIDs, so the table keeps no insertion order of
+   * its own to break the tie with on read.
    */
   private async startAfterNewest(
-    filename: string | null | undefined
+    filename: string | null | undefined,
+    scope?: {
+      kind: SchemaEventScopeKind | null | undefined;
+      slug: string | null | undefined;
+    }
   ): Promise<Date> {
     const now = new Date();
-    if (filename === undefined || filename === null) return now;
-    const rows = (await this.db
-      .select()
-      .from(this.table)
-      .where(eq(this.table.filename, filename))) as { startedAt: Date }[];
     let newest = Number.NEGATIVE_INFINITY;
-    for (const row of rows) {
-      newest = Math.max(newest, new Date(row.startedAt).getTime());
+    if (filename !== undefined && filename !== null) {
+      const rows = (await this.db
+        .select()
+        .from(this.table)
+        .where(eq(this.table.filename, filename))) as { startedAt: Date }[];
+      for (const row of rows) {
+        newest = Math.max(newest, new Date(row.startedAt).getTime());
+      }
+    }
+    if (typeof scope?.kind === "string" && typeof scope.slug === "string") {
+      const [row] = (await this.db
+        .select()
+        .from(this.table)
+        .where(
+          and(
+            eq(this.table.scopeKind, scope.kind),
+            eq(this.table.scopeSlug, scope.slug)
+          )
+        )
+        .orderBy(desc(this.table.startedAt))
+        .limit(1)) as { startedAt: Date }[];
+      if (row !== undefined) {
+        newest = Math.max(newest, new Date(row.startedAt).getTime());
+      }
     }
     return newest >= now.getTime() ? new Date(newest + 1) : now;
   }
@@ -180,7 +208,10 @@ export class SchemaEventsRepository {
       eventType: input.eventType,
       status: "in_progress",
       source: input.source,
-      startedAt: await this.startAfterNewest(input.filename),
+      startedAt: await this.startAfterNewest(input.filename, {
+        kind: input.scopeKind,
+        slug: input.scopeSlug,
+      }),
     };
     if (input.filename !== undefined) values.filename = input.filename;
     if (input.sha256 !== undefined) values.sha256 = input.sha256;
@@ -195,7 +226,7 @@ export class SchemaEventsRepository {
    * Insert an already-terminal event in one shot.
    *
    * Without a `startedAt` the event is being recorded now, and is stamped
-   * after the file's newest event as `recordStart` is. An explicit one is
+   * after its file's or its scope's newest event as `recordStart` is. An explicit one is
    * kept as given: the upgrade backfill imports history whose times are facts,
    * not "now".
    */
@@ -204,7 +235,14 @@ export class SchemaEventsRepository {
     const startedAt =
       values.startedAt ??
       (await this.startAfterNewest(
-        typeof values.filename === "string" ? values.filename : undefined
+        typeof values.filename === "string" ? values.filename : undefined,
+        {
+          kind:
+            typeof values.scopeKind === "string"
+              ? (values.scopeKind as SchemaEventScopeKind)
+              : null,
+          slug: typeof values.scopeSlug === "string" ? values.scopeSlug : null,
+        }
       ));
     await this.db.insert(this.table).values({ id, ...values, startedAt });
     return id;
@@ -303,14 +341,15 @@ export class SchemaEventsRepository {
   }
 
   /**
-   * True iff the file's MOST RECENT `file_apply` event is `applied`. Latest
-   * wins: a later `rolled_back` (or `failed`) event un-applies the file so the
-   * next `migrate` re-runs it. Mirrors the event-sourced model the resolve
-   * command uses (see newest-event.ts).
+   * Whether the migration is applied: for an app migration, its latest
+   * outcome says so, and a record that is not an outcome (an attempt failed or
+   * stopped) leaves it as it was; a later `rolled_back` outcome un-applies it
+   * so the next `migrate` re-runs it. A plugin module keeps its history's
+   * rule, its newest record (`standingOf`).
    */
   async isFileApplied(filename: string): Promise<boolean> {
     const rows = await this.findFileApplies(filename);
-    return newestEvent(rows)?.status === "applied";
+    return standingOf(filename, rows).state === "applied";
   }
 
   /** Find a row by id. */
@@ -400,8 +439,11 @@ export class SchemaEventsRepository {
   }
 
   /**
-   * Every `file_rollback` row: rollbacks that failed. Kept apart from
-   * `listFileApplies`, whose rows alone decide whether a migration is applied.
+   * Every `file_rollback` row: rollbacks that failed, and rollbacks started
+   * where part of a DOWN can commit before it ends, whose row stays
+   * `in_progress` when the process stops before an outcome is recorded. Kept
+   * apart from `listFileApplies`, whose outcomes alone decide whether a
+   * migration is applied.
    */
   async listFailedRollbacks(): Promise<SchemaEventRow[]> {
     return (await this.db

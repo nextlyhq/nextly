@@ -11,9 +11,21 @@
 
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 
-import type { ArchetypeBody } from "../archetypes/types";
-
-type CardQuery = Parameters<ArchetypeBody>[1]["query"];
+/**
+ * The read a card's rows came from, as the card that draws them describes it:
+ * its source, op, filter, sort and lifecycle, in the shape of a widget query.
+ * Declared by the parts read here, so a card building its own link names only
+ * what the list view takes.
+ */
+type CardQuery =
+  | {
+      source?: string;
+      op?: string;
+      where?: unknown;
+      sort?: unknown;
+      status?: string;
+    }
+  | undefined;
 
 /** The prefix of a source id that names one collection: `collection:<slug>`. */
 const COLLECTION_SOURCE = "collection:";
@@ -34,9 +46,7 @@ export function listViewHref(query: CardQuery): string | undefined {
 }
 
 /** The collection a `collection:<slug>` source id names, or `undefined` for any other source. */
-export function collectionSlugOf(
-  source: string | undefined
-): string | undefined {
+function collectionSlugOf(source: string | undefined): string | undefined {
   if (!source?.startsWith(COLLECTION_SOURCE)) return undefined;
   const slug = source.slice(COLLECTION_SOURCE.length);
   return slug === "" ? undefined : slug;

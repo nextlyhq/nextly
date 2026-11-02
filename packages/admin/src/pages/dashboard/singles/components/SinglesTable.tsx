@@ -15,6 +15,14 @@ import { Eye, FileEdit, Pencil, Plus, Trash2 } from "lucide-react";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
+import {
+  isRemovedFromCode,
+  type RemovedEntity,
+} from "@admin/components/features/entries/removed-from-code-notice";
+import {
+  RemovedFromCodeDescription,
+  RemovedFromCodeMark,
+} from "@admin/components/features/entries/RemovedFromCodeNotice";
 import * as Icons from "@admin/components/icons";
 import {
   Code,
@@ -55,6 +63,15 @@ import type {
 } from "@admin/types/entities";
 
 import { SinglesTableSkeleton } from "./SinglesTableSkeleton";
+
+/** A Single as the removed-from-code notice names it. */
+function removedSingle(single: ApiSingle): RemovedEntity {
+  return {
+    kind: "single",
+    label: single.label || single.slug,
+    slug: single.slug,
+  };
+}
 
 /** Source badge label + icon. */
 function getSourceBadge(source?: SingleSource): {
@@ -292,6 +309,21 @@ export default function SinglesTable({
                       <p>Locked: Cannot be edited or deleted from UI</p>
                     </TooltipContent>
                   </Tooltip>
+                )}
+                {/* Listed, and marked, once the configuration no longer
+                    declares it; the notice with its next step is read out. */}
+                {isRemovedFromCode(row) && (
+                  <>
+                    <RemovedFromCodeMark
+                      entity={removedSingle(row)}
+                      state={row.removedFromCodeState}
+                      className="ml-0"
+                    />
+                    <RemovedFromCodeDescription
+                      entity={removedSingle(row)}
+                      state={row.removedFromCodeState}
+                    />
+                  </>
                 )}
               </div>
               <span className="truncate text-xs text-muted-foreground">

@@ -192,16 +192,16 @@ function collectAdminEntries(
     ...(admin.documentViews ?? []).map(view =>
       entry(view.component, owner, "document view")
     ),
-    ...collectWidgetEntries(admin.widgets, owner),
     ...collectAdminSlotPaths(admin).map(tagged("slot")),
   ];
 }
 
 /**
  * The component each widget declared under `contributes.dashboard` draws
- * with, for the same reason as today's shape: the map is the only importer
- * the admin's registry can rely on. A widget drawn by one of core's views
- * ships no component.
+ * with: being pre-bundled by this map is what puts a component in the
+ * registry the admin draws from, since the registry's runtime fallback cannot
+ * resolve a bare package specifier in a bundled browser. A widget drawn by
+ * one of core's views ships no component.
  *
  * Read as plain JavaScript hands it over, since generation runs before
  * startup checks anything: an entry that names no component is skipped here
@@ -303,29 +303,6 @@ function collectCollectionViewPaths(
     }
   }
   return paths;
-}
-
-/**
- * Every widget component a plugin declares.
- *
- * Being pre-bundled by this map is what puts a component in the registry
- * `PluginSlot` reads; the registry's runtime fallback cannot resolve a bare
- * package specifier in a bundled browser. So while widgets were excluded here,
- * a `custom` widget drew its card and then nothing inside it, unless the plugin
- * called `registerComponents` itself from its admin entry -- which the
- * documented contract never asked it to do.
- */
-function collectWidgetEntries(
-  widgets: PluginAdminContributions["widgets"],
-  owner: string
-): ComponentMapEntry[] {
-  // Optional now: a declarative widget names an archetype and a query and ships
-  // no component at all, so only the ones that HAVE a path contribute one.
-  return (widgets ?? []).flatMap((widget): ComponentMapEntry[] =>
-    widget.component
-      ? [{ path: widget.component, owner, use: "widget", widget: widget.id }]
-      : []
-  );
 }
 
 /**

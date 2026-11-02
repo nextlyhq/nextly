@@ -23,9 +23,18 @@
  * charge the whole sweep an attempt for one document's problem, and eventually
  * fail the sweep permanently over a single unrunnable member.
  *
+ * ## Why overdue releases are told first
+ *
+ * Before it runs anything, the pass tells the owner of each release that is
+ * overdue as it starts (`recordOverdueReleases`). First, so a release the pass
+ * then fails to run, or a pass that dies part-way, still leaves its owner
+ * told; and contained, so a sweep that fails is logged and never stops the
+ * releases due now from running.
+ *
  * @module domains/releases/releases-drain-job
  */
 
+import { getNextlyLogger } from "../../observability/logger";
 import type { RunAsDeps } from "../../shared/lib/resolve-run-as";
 import { rowLockServer } from "../audit/audit-log-writer";
 import type { JobContentSource } from "../jobs/job-content-api";
@@ -72,6 +81,8 @@ export function createReleasesDrainJob(deps: {
     sweep: true,
     handler: async (_input, context) => {
       const startedAt = Date.now();
+      const repository = new ReleasesRepository(deps.db);
+      await tellOverdueOwners(repository, context.now);
       const result = await applyDueReleases({
         // ONE origin for both sides of the pass's `now() >= deadline` test.
         // `context.now` is the instant the runner is treating as now and does
@@ -92,7 +103,7 @@ export function createReleasesDrainJob(deps: {
         // rather than a whole tick, and taking a fixed budget anyway means
         // outliving the invocation and being killed part-way.
         deadline: context.deadline,
-        repository: new ReleasesRepository(deps.db),
+        repository,
         mutations: createReleaseMutations({
           contentApi: deps.contentApi,
           lockServer: rowLockServer(deps.db, deps.db.dialect),
@@ -102,4 +113,21 @@ export function createReleasesDrainJob(deps: {
       await deps.onOutcome(result);
     },
   });
+}
+
+/** Tell overdue releases' owners, logging rather than throwing a failure. */
+async function tellOverdueOwners(
+  repository: ReleasesRepository,
+  now: Date
+): Promise<void> {
+  try {
+    await repository.recordOverdueReleases(now);
+  } catch (error) {
+    getNextlyLogger().warn({
+      kind: "release-overdue-notices-failed",
+      message:
+        "Overdue releases' owners could not be told; the next pass tries again",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

@@ -8,11 +8,9 @@
  *
  * Whether a card actually shows a state is not decided here either: it is the
  * outcome the dashboard itself resolves for that slot (`resolveWidgetOutcome`),
- * compared with the state asked for. A card that asks for no data (a text or
- * actions card) never loads or fails, and a card that draws itself (core's own
- * sections) draws its loading state with its own data; for both the outcome
- * differs from the state asked, and the page says so in the card's place
- * rather than mounting a component that would read live data.
+ * compared with the state asked for. Where the outcome differs from the state
+ * asked, the page says so in the card's place rather than mounting a component
+ * that would read live data.
  *
  * @module components/features/widgets/preview/preview-states
  */
@@ -21,7 +19,6 @@ import type { WidgetResult, WidgetSlot } from "nextly/widget-result";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import type { CellSlotLookup } from "../archetypes/types";
 import { resolveWidgetOutcome, type WidgetOutcome } from "../outcome";
 
 /** A frame state the page draws every card in, beside its ready cases. */
@@ -54,15 +51,14 @@ export const PREVIEW_STATE_LABELS: Readonly<Record<PreviewStateName, string>> =
  */
 const FAILED_MESSAGE = "An unexpected error occurred.";
 
-/** What a card asks with: its own slot, and each cell's for a card of several. */
+/** What a card is drawn with: its answer, as the batch would hand it one. */
 export interface PreviewAnswer {
   slot: WidgetSlot | undefined;
-  slotFor: CellSlotLookup;
 }
 
-/** One answer for the card and for every cell of it. */
+/** The answer for the card. */
 function answerOf(slot: WidgetSlot | undefined): PreviewAnswer {
-  return { slot, slotFor: () => slot };
+  return { slot };
 }
 
 /** The answer a case's ready state is drawn from: its data, as a real answer is carried. */
@@ -117,6 +113,6 @@ export function cardShows(
   state: PreviewStateName,
   answer: PreviewAnswer
 ): boolean {
-  const outcome = resolveWidgetOutcome(definition, answer.slot, answer.slotFor);
+  const outcome = resolveWidgetOutcome(definition, answer.slot);
   return OUTCOMES[state].includes(outcome.state);
 }

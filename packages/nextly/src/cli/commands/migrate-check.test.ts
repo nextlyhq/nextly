@@ -181,6 +181,41 @@ describe("runChecks (F11 PR 4)", () => {
     });
   });
 
+  describe("a new address the rule refuses", () => {
+    it("names it, then exits 1 through the error shape", async () => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        // `admin` is a reserved slug, and with no migrations yet it is new.
+        entities: {
+          collections: [{ slug: "admin", tableName: "dc_admin", fields: [] }],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      // What the check says about the address is unchanged: the refusal and
+      // what to do about it, on the command's log.
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringMatching(/^SLUG_RESERVED: .*admin/)
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Give each refused address one the rule accepts"
+        )
+      );
+      // Then it ends as every other failed check does: the error shape, here
+      // the code migrate:create ends the same refusal with, and exit 1.
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(CONFIG_INVALID)")
+      );
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.success).not.toHaveBeenCalled();
+    });
+  });
+
   describe("CHECKSUM_MISMATCH", () => {
     it("exits 1 when a .sql file is edited after generation", async () => {
       const original = "CREATE TABLE foo (id text);";

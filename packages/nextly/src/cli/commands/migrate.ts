@@ -40,7 +40,6 @@ import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/stora
 import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
   isLocalizationIntentRefusal,
-  LOCALIZATION_INTENT_HEADER,
   parseLocalizationIntent,
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
@@ -58,10 +57,9 @@ import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
   assertNotPartiallyApplied,
-  failedAttemptMayBePartial,
-  markAppliedOrRefuse,
+  applyFailedError,
   reconcileFile,
-  recordAttemptFailed,
+  runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
   outsideTransactionNotice,
@@ -93,6 +91,7 @@ import {
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
+import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import {
   mergeContributions,
   narrowToContributions,
@@ -740,7 +739,8 @@ export interface MigrateCoreDeps {
    * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
    * rather than apply it as written.
    *
-   * `nextly migrate` passes it. Off by default because the development boot
+   * `nextly migrate` and the production boot (`db.runMigrationsOnBoot`) pass
+   * it. Off by default because the development boot
    * runs this core too, over the files the Builder writes into the project as
    * it saves: there the Builder has already applied the change, and refusing
    * would stop every later migration of a development server.
@@ -886,6 +886,45 @@ export async function previewMigrate(args: {
         `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
+  }
+  await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/**
+ * What a real run does with the retired image-sizes column and table: keeps
+ * both, always. `nextly migrate` runs before a new release takes traffic,
+ * while the release before it still reads and writes them, so their drop is
+ * a step of its own once the new release is serving. Said only while the
+ * database has either, read with the helpers that drop decides with.
+ */
+export async function previewRetiredImageSizes(
+  db: unknown,
+  dialect: SupportedDialect,
+  logger: Pick<CommandContext["logger"], "info">
+): Promise<void> {
+  const [{ readRetiredObjects }, { DROP_SIZES_COMMAND, REMOVE_SIZES_COMMAND }] =
+    await Promise.all([
+      import("../../domains/media/retired-image-sizes-store"),
+      import("../../domains/media/retired-image-sizes-constants"),
+    ]);
+  const objects = await readRetiredObjects(db, dialect);
+  // Each named only where the database has it: after a drop that stopped
+  // between the two, the column can be there without the table.
+  const retired = [
+    ...(objects.column ? ["column media.sizes"] : []),
+    ...(objects.tableRows !== null ? ["table image_sizes"] : []),
+  ];
+  if (retired.length > 0) {
+    logger.info(
+      `  • would keep the retired ${retired.join(" and ")}: \`nextly migrate\` never drops ${retired.length === 1 ? "it" : "them"}. Once this release is serving, run \`${REMOVE_SIZES_COMMAND}\`, then \`${DROP_SIZES_COMMAND}\`.`
+    );
+  }
+  // A table of that name not shown to be the retired one is never called
+  // so, and nothing drops it.
+  if (objects.keptTable !== null) {
+    logger.info(
+      `  • would keep the table image_sizes, which is not shown to be the one image sizes left (${objects.keptTable}): nothing drops it.`
+    );
   }
 }
 
@@ -2026,10 +2065,6 @@ export async function runFileMigrations(args: {
       liveTables: await readLiveTables(db, dialect, [upStatements]),
       liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
     });
-    const unit: MigrationUnit = {
-      source: filename,
-      transaction: m.transaction,
-    };
     assertRunnableStatements(upStatements, dialect, filename, {
       transaction: m.transaction,
       unit: "file",
@@ -2062,30 +2097,25 @@ export async function runFileMigrations(args: {
           ? sharedFileRecoveryAdvice(filename, m.localization.spec)
           : undefined
       );
-      const id = await repo.recordStart({
-        eventType: "file_apply",
-        source: "cli-migrate",
-        filename,
-        sha256: m.checksum,
-      });
-      const partial = failedAttemptMayBePartial(m, dialect);
+      // Recorded as the reconcile records a file it runs, with the attempt
+      // before the first statement or inside the file's transaction. A
+      // statement's own failure is named with its file, as the reconcile
+      // names it; a refusal of the run's own already says what it refused.
       try {
-        // Recorded applied inside the file's transaction when it has one, so
-        // the row commits or rolls back with its statements; another run
-        // having recorded the file first rolls them back too.
-        await executeSql(m.upSql, unit, async (handle, n) => {
-          await markAppliedOrRefuse(repo.boundTo(handle), id, {
+        await runRecordedAttempt({
+          file: {
             filename,
-            statementsExecuted: n,
-            partial,
-          });
+            sql: m.upSql,
+            path: m.filePath,
+            sha256: m.checksum,
+            transaction: m.transaction,
+          },
+          dialect,
+          repo,
+          executeSql,
         });
       } catch (err) {
-        // Recorded as the reconcile records it, bounded and without
-        // logContext: a lost race rolled back whole leaves no row, anything
-        // else a failed one.
-        await recordAttemptFailed(repo, id, err, partial);
-        throw err;
+        throw NextlyError.is(err) ? err : applyFailedError(filename, err);
       }
       applied++;
       logger.success(`Applied ${filename}`);
@@ -2227,66 +2257,6 @@ function parseMigrationFile(
     source,
     transaction: !marksNoTransaction(content),
     ...(localization === null ? {} : { localization }),
-  };
-}
-
-export function parseSqlSections(content: string): {
-  upSql: string;
-  downSql: string;
-} {
-  const lines = content.split("\n");
-
-  let upLines: string[] = [];
-  const downLines: string[] = [];
-  let currentSection: "none" | "up" | "down" = "none";
-
-  for (const line of lines) {
-    const trimmedLine = line.trim();
-
-    // Handle both "-- UP" and "-- UP:" formats
-    if (
-      trimmedLine === "-- UP" ||
-      trimmedLine.startsWith("-- UP ") ||
-      trimmedLine.startsWith("-- UP:")
-    ) {
-      currentSection = "up";
-      continue;
-    }
-    // Handle both "-- DOWN" and "-- DOWN:" formats
-    if (
-      trimmedLine === "-- DOWN" ||
-      trimmedLine.startsWith("-- DOWN ") ||
-      trimmedLine.startsWith("-- DOWN:")
-    ) {
-      currentSection = "down";
-      continue;
-    }
-
-    if (currentSection === "up") {
-      upLines.push(line);
-    } else if (currentSection === "down") {
-      downLines.push(line);
-    }
-  }
-
-  if (upLines.length === 0 && downLines.length === 0) {
-    upLines = lines.filter(
-      line =>
-        !line.trim().startsWith("-- Migration:") &&
-        !line.trim().startsWith("-- Generated") &&
-        !line.trim().startsWith("-- Dialect:") &&
-        !line.trim().startsWith("-- Checksum:") &&
-        !line.trim().startsWith("-- Collections:") &&
-        !line.trim().startsWith("-- Singles:") &&
-        // Only reached by a file with no `-- UP` marker at all. Without this the declared intent
-        // would be handed to the SQL splitter as though it were a statement.
-        !line.trim().startsWith(LOCALIZATION_INTENT_HEADER)
-    );
-  }
-
-  return {
-    upSql: upLines.join("\n").trim(),
-    downSql: downLines.join("\n").trim(),
   };
 }
 

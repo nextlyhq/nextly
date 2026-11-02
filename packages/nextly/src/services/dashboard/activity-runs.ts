@@ -15,9 +15,12 @@
  * @module services/dashboard/activity-runs
  */
 
-import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
-
-import { changedFieldsOf, changesStatus, publishes } from "./activity-changes";
+import {
+  changesStatus,
+  isSettingsChange,
+  publishes,
+  updateLeavesOperationOpen,
+} from "./activity-changes";
 
 /** The longest gap between two saves of one run: ten minutes. */
 export const RUN_GAP_MS = 10 * 60 * 1000;
@@ -30,25 +33,6 @@ export interface ActivityRun {
   oldest: Record<string, unknown>;
   /** How many rows of the trail this one stands for. */
   count: number;
-}
-
-/** Whether `slug` is a namespace install-level settings changes are filed under. */
-export function isSettingsNamespace(slug: string): boolean {
-  return (SETTINGS_ACTIVITY_NAMESPACES as readonly string[]).includes(slug);
-}
-
-/**
- * Whether a row is an install-level settings change rather than a document's:
- * it says so, or it predates the kind being recorded and is filed under a
- * settings namespace.
- */
-function isSettingsChange(row: Record<string, unknown>): boolean {
-  if (row.subjectKind === "settings") return true;
-  return (
-    (row.subjectKind ?? null) === null &&
-    typeof row.collection === "string" &&
-    isSettingsNamespace(row.collection)
-  );
 }
 
 /** `value` as milliseconds since the epoch, or undefined when it is not an instant. */
@@ -86,12 +70,8 @@ export function runKeyOf(row: Record<string, unknown>): string | undefined {
   }
   if (isSettingsChange(row)) return undefined;
   if (changesStatus(row.metadata) || publishes(row.metadata)) return undefined;
-  if (
-    row.subjectKind !== "single" &&
-    changedFieldsOf(row.metadata) === undefined
-  ) {
-    return undefined;
-  }
+  // It cannot show it was not a publish or an unpublish, so a run would hide one if it was.
+  if (updateLeavesOperationOpen(row)) return undefined;
   return JSON.stringify([
     row.actorType ?? "user",
     row.userId,

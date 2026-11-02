@@ -36,6 +36,7 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
@@ -506,8 +507,18 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const items = result.data.map(s =>
         injectSingleDefaultFields(s as unknown as SingleWithFields)
       );
+      // A Single removed from code stays listed, marked, so the admin can say
+      // so and name the step that retires it. The mark is loaded on first use
+      // rather than with the dispatcher, so a module that imports the
+      // dispatcher and never lists does not load it.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
       return respondList(
-        items,
+        await withRemovedFromCodeMarks(
+          "single",
+          items as unknown as Record<string, unknown>[]
+        ),
         offsetPaginationToMeta({
           total: result.total,
           limit,
@@ -829,7 +840,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
 
       // Code-first Singles are locked and cannot be deleted via API.
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const single = await svc.registry.getSingleForWrite(slug);
       consoleLogger.info(`[deleteSingle] getSingleBySlug returned`, {
         detail: single ? `found (tableName: ${single.tableName})` : "null",
       });
@@ -918,12 +930,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema record IS the doc here, so the admin Schema Builder
       // reads slug/fields/admin off the response body directly without
       // an envelope wrapper.
-      return respondDoc({
-        ...injectSingleDefaultFields(
-          enrichedData as unknown as SingleWithFields
-        ),
-        ...draftSplitResponseFields(draftSplit),
-      });
+      // Marked as the listing marks it, so the Single's own screen shows the
+      // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      const [marked] = await withRemovedFromCodeMarks("single", [
+        {
+          ...injectSingleDefaultFields(
+            enrichedData as unknown as SingleWithFields
+          ),
+          ...draftSplitResponseFields(draftSplit),
+        } as Record<string, unknown>,
+      ]);
+      return respondDoc(marked);
     },
   },
 
@@ -959,7 +979,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!b) throw new Error("Update data is required");
 
-      const existing = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const existing = await svc.registry.getSingleForWrite(slug);
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
@@ -1148,7 +1169,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   applySingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: its schema version is checked and advanced below.
+      const single = await svc.registry.getSingleForWrite(slug);
       if (!single) throw new Error("Single not found");
       refuseChangeDefinedInCode(single, "Single", slug);
 
@@ -1350,6 +1372,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
+        // Written past the registry service, so the cached registry row is cleared here.
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
