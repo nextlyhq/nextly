@@ -73,7 +73,7 @@ import {
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import type { Resolution } from "../pipeline/resolution/types";
 import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-recovery";
-import type { DesiredCollection } from "../pipeline/types";
+import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { toSnakeCase } from "./field-column-descriptor";
@@ -223,6 +223,12 @@ export interface CollectionSchemaChange {
    * renames. The dialog asks the admin.
    */
   dropAndAddUnansweredRenames?: boolean;
+  /**
+   * The Required fields the change adds over rows, each with the value the rows already there are
+   * filled with. Pushed optional, filled, then pushed Required: a fill answered to the push itself
+   * would run before the column it fills exists.
+   */
+  fills?: ReadonlyArray<{ field: string; value: unknown }>;
 }
 
 /**
@@ -254,12 +260,8 @@ export async function applyCollectionSchemaChange(
   );
 }
 
-/** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
-async function applyHoldingSchemaLock(
-  change: CollectionSchemaChange
-): Promise<Extract<ApplyResult, { success: true }>> {
-  const { slug, collection, fields, wasLocalized, isLocalized } = change;
-  const { tableName } = collection;
+/** The registry and the adapter, which a schema change cannot run without. */
+function requireSchemaChangeDeps(slug: string) {
   const registry = getCollectionRegistryFromDI();
   if (!registry) {
     throw NextlyError.internal({
@@ -272,12 +274,20 @@ async function applyHoldingSchemaLock(
       logContext: { reason: "adapter-not-initialized", slug },
     });
   }
+  return { registry, adapter };
+}
 
-  // The FULL desired schema (collections, singles and field groups), so drizzle-kit sees every
-  // managed table: without the others, tables of other entity types in the live database are
-  // absent from the desired snapshot and are offered as rename candidates for this collection.
-  const desired = await buildFullDesiredSchema();
+type SchemaChangeDeps = ReturnType<typeof requireSchemaChangeDeps>;
+type ApplyDesired = ReturnType<typeof createApplyDesiredSchema>;
 
+/**
+ * The pipeline's apply for this change, answering from the change itself, and the dispatcher that
+ * watched what another table's drift did to it.
+ */
+function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
+  const { slug } = change;
+  const { tableName } = change.collection;
+  const { adapter, registry } = deps;
   // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
   const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
@@ -286,7 +296,6 @@ async function applyHoldingSchemaLock(
       ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
       : undefined;
   const defaultLocale = appLocalization()?.defaultLocale ?? "en";
-
   // The answers arrive with the change, so nothing is asked mid-apply: the dialog collected them
   // from the admin, and the save makes them itself.
   const promptDispatcher = new DriftWatchingDispatcher(
@@ -344,6 +353,129 @@ async function applyHoldingSchemaLock(
       return out;
     },
   });
+  return { apply, promptDispatcher, defaultLocale };
+}
+
+/**
+ * The refusal of an apply the pipeline did not complete: another table's drift named, with the
+ * way on, or else the push's own words, under the code its status already was.
+ */
+function refusedApply(
+  slug: string,
+  drifted: readonly string[],
+  message: string
+): NextlyError {
+  // Another table stopped it: named, with what differs and the way on, so the change is not
+  // taken for the one refused.
+  if (drifted.length > 0) {
+    return new NextlyError({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage:
+        `This change was not applied, because another table differs from what was recorded ` +
+        `for it: ${drifted.join("; ")}. Bring that table in step first, by applying its own ` +
+        `change in its editor or running \`nextly db:sync\`, then save this change again.`,
+      logContext: { collection: slug, drifted },
+    });
+  }
+  // What a refused apply tells the admin is the only account of it they get.
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: message,
+  });
+}
+
+/** `desired` with this collection's fields replaced, as a new schema the pipeline has not seen. */
+function withFields(
+  desired: DesiredSchema,
+  slug: string,
+  fields: readonly FieldDefinition[]
+): DesiredSchema {
+  return {
+    ...desired,
+    collections: {
+      ...desired.collections,
+      [slug]: {
+        ...desired.collections[slug],
+        fields: fields as DesiredCollection["fields"],
+      },
+    },
+  };
+}
+
+/**
+ * A SQLite table rebuild an earlier apply was stopped in the middle of, finished or undone before
+ * anything reads the live schema: the push would otherwise meet the rebuild's copy as a table of
+ * its own. What it did is logged, for whoever later wonders where a table went.
+ */
+async function recoverSqliteRebuilds(
+  adapter: SchemaChangeDeps["adapter"],
+  desired: DesiredSchema,
+  slug: string
+): Promise<void> {
+  if (adapter.dialect !== "sqlite") return;
+  const recovered = await recoverInterruptedSqliteRebuilds(
+    adapter.getDrizzle(),
+    expectedCollectionColumns(desired, adapter.dialect)
+  );
+  const logger = getLoggerFromDI() ?? consoleLogger;
+  for (const line of recovered) {
+    logger.warn(`Before applying the change to "${slug}": ${line}.`, {
+      collection: slug,
+    });
+  }
+}
+
+/**
+ * The Required fields the change adds over rows, filled and then made Required: the first push
+ * added them optional, so each column exists and holds NULL; it is filled with its bound value,
+ * and `push` applies the fields as the change states them.
+ */
+async function fillAddedRequiredFields(args: {
+  adapter: SchemaChangeDeps["adapter"];
+  tableName: string;
+  fills: readonly { field: string; value: unknown }[];
+  push: () => Promise<ApplyResult>;
+}): Promise<ApplyResult | undefined> {
+  if (args.fills.length === 0) return undefined;
+  const { adapter, tableName } = args;
+  const db = adapter.getDrizzle();
+  for (const { field, value } of args.fills) {
+    const column = sql.identifier(toSnakeCase(field));
+    await runStatement(
+      db,
+      adapter.dialect,
+      sql`UPDATE ${sql.identifier(tableName)} SET ${column} = ${value} WHERE ${column} IS NULL`
+    );
+  }
+  return args.push();
+}
+
+/** `fields` with the named ones optional, for a push that adds them before they are filled. */
+function withFillsOptional(
+  fields: readonly FieldDefinition[],
+  fills: readonly { field: string }[]
+): FieldDefinition[] {
+  const filled = new Set(fills.map(fill => fill.field));
+  return fields.map(field =>
+    filled.has(field.name) ? { ...field, required: false } : field
+  );
+}
+
+/** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
+async function applyHoldingSchemaLock(
+  change: CollectionSchemaChange
+): Promise<Extract<ApplyResult, { success: true }>> {
+  const { slug, collection, fields, wasLocalized, isLocalized } = change;
+  const { tableName } = collection;
+  const deps = requireSchemaChangeDeps(slug);
+  const { adapter } = deps;
+  const dialect = adapter.dialect;
+
+  // The FULL desired schema (collections, singles and field groups), so drizzle-kit sees every
+  // managed table: without the others, tables of other entity types in the live database are
+  // absent from the desired snapshot and are offered as rename candidates for this collection.
+  const desired = await buildFullDesiredSchema();
+  const { apply, promptDispatcher, defaultLocale } = changeApply(change, deps);
 
   const oldFields = (collection.fields ?? []) as unknown as FieldDefinition[];
   // The answer on a translated field's rename, refused when it does not say, before anything
@@ -370,12 +502,15 @@ async function applyHoldingSchemaLock(
     isLocalized,
     renamed: companionRename,
   });
+  const settled = settingsDeferred ?? fields;
+  const fills = change.fills ?? [];
 
-  // This collection as the change leaves it, over any registry entry for the same slug.
+  // This collection as the change leaves it, over any registry entry for the same slug, with a
+  // Required field it adds over rows optional until it is filled.
   desired.collections[slug] = {
     slug,
     tableName,
-    fields: (settingsDeferred ?? fields) as DesiredCollection["fields"],
+    fields: withFillsOptional(settled, fills) as DesiredCollection["fields"],
     status: change.status,
     // The translatable columns live in the companion, provisioned below, so the push omits them
     // from the main table.
@@ -385,23 +520,7 @@ async function applyHoldingSchemaLock(
     recordedFields: recordedFieldsOf(collection),
   };
 
-  // A SQLite table rebuild an earlier apply was stopped in the middle of is finished or undone
-  // first, before anything reads the live schema: the push would otherwise meet the rebuild's copy
-  // as a table of its own.
-  if (dialect === "sqlite") {
-    const recovered = await recoverInterruptedSqliteRebuilds(
-      db,
-      managedTablesOf(desired)
-    );
-    // A table dropped or renamed outside the change asked for is said, for whoever later wonders
-    // where it went.
-    const logger = getLoggerFromDI() ?? consoleLogger;
-    for (const line of recovered) {
-      logger.warn(`Before applying the change to "${slug}": ${line}.`, {
-        collection: slug,
-      });
-    }
-  }
+  await recoverSqliteRebuilds(adapter, desired, slug);
   // An index the change declares whose name another index already holds is refused before
   // anything changes, naming it.
   await refuseIndexNamesTaken(adapter, desired.collections[slug]);
@@ -426,120 +545,35 @@ async function applyHoldingSchemaLock(
 
   const result = await apply(desired, "ui", { promptChannel: "auto" });
   if (!result.success) {
-    // Another table stopped it: named, with what differs and the way on, so the change is not
-    // taken for the one refused.
-    if (promptDispatcher.drifted.length > 0) {
-      throw new NextlyError({
-        code: "NEXTLY_MIGRATION_APPLY_FAILED",
-        publicMessage:
-          `This change was not applied, because another table differs from what was recorded ` +
-          `for it: ${promptDispatcher.drifted.join("; ")}. Bring that table in step first, by ` +
-          `applying its own change in its editor or running \`nextly db:sync\`, then save ` +
-          `this change again.`,
-        logContext: { collection: slug, drifted: promptDispatcher.drifted },
-      });
-    }
-    // The push's own words, under the code its status already was: what a refused apply tells
-    // the admin is the only account of it they get.
-    throw new NextlyError({
-      code: "NEXTLY_MIGRATION_APPLY_FAILED",
-      publicMessage: result.error.message,
-    });
+    throw refusedApply(slug, promptDispatcher.drifted, result.error.message);
+  }
+  const filled = await fillAddedRequiredFields({
+    adapter,
+    tableName,
+    fills,
+    push: () =>
+      apply(withFields(desired, slug, settled), "ui", {
+        promptChannel: "auto",
+      }),
+  });
+  if (filled !== undefined && !filled.success) {
+    throw refusedApply(slug, promptDispatcher.drifted, filled.error.message);
   }
 
   // The push excludes companion `_locales` tables from its diff: the localization layer owns
   // them. So the companion is reconciled here for any localization change, in this process.
   if (wasLocalized || isLocalized) {
-    try {
-      const companionExists = await adapter.tableExists(`${tableName}_locales`);
-      const companionHasStatus =
-        companionExists && wasLocalized && isLocalized
-          ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
-          : undefined;
-      const plan = buildCompanionTransitionStatements({
-        // The companion mirrors the main table, which the Schema Builder's collection creator made.
-        builtBy: "collection" as const,
-        slug,
-        kind: "collection",
-        tableName,
-        dialect,
-        defaultLocale,
-        status: change.status,
-        wasLocalized,
-        isLocalized,
-        // The status before the change, which decides whether main carried `status` and the
-        // companion `_status` before this apply.
-        wasStatus: change.wasStatus,
-        oldFields,
-        newFields: fields,
-        companionExists,
-        companionHasStatus,
-        // Added to the companion, with their values, by the apply before its drop.
-        joinedBefore: movedOnto(result, tableName),
-        renamed: companionRename ?? undefined,
-        holdLeavingDrops: settingsDeferred !== undefined,
-        // What this database holds now, so a re-apply after a part-applied one finishes it.
-        ...(await liveCompanionShape(adapter, {
-          tableName,
-          oldFields,
-          newFields: fields,
-          builtBy: "collection",
-          companionExists,
-        })),
-      });
-      // The settings the first push left off, once the shared columns hold the default language's
-      // values, and only then the leaving fields' companion columns dropped. A new desired schema
-      // rather than an edit of the first: the pipeline keeps the last one it applied, by
-      // reference, to skip a push that changes nothing.
-      await applyCompanionTransition({
-        adapter,
-        plan,
-        settleLeaving: settingsDeferred
-          ? leavingSettingsStep({
-              adapter,
-              entity: slug,
-              tableName,
-              builtBy: "collection",
-              oldFields,
-              newFields: fields,
-              renamed: companionRename,
-              push: () =>
-                apply(
-                  {
-                    ...desired,
-                    collections: {
-                      ...desired.collections,
-                      [slug]: {
-                        ...desired.collections[slug],
-                        fields: fields as DesiredCollection["fields"],
-                      },
-                    },
-                  },
-                  "ui",
-                  { promptChannel: "auto" }
-                ),
-            })
-          : undefined,
-        kind: "collection",
-        slug,
-        tableName,
-      });
-    } catch (err) {
-      // A refused setting names the field, and nothing has been dropped by then, so it is passed
-      // on as it is rather than as a companion out of step.
-      if (isLeavingSettingsRefusal(err)) throw err;
-      // The main-table apply already committed, so this is surfaced loudly rather than leaving
-      // the collection half-migrated in silence.
-      throw NextlyError.internal({
-        cause: err instanceof Error ? err : undefined,
-        logContext: {
-          op: "companionReconcile",
-          collection: slug,
-          detail: err instanceof Error ? err.message : String(err),
-          note: "main table updated but localized companion out of sync; re-apply to retry",
-        },
-      });
-    }
+    await reconcileCompanion({
+      change,
+      adapter,
+      desired,
+      apply,
+      result,
+      oldFields,
+      companionRename,
+      settingsDeferred,
+      defaultLocale,
+    });
   }
   // The unique index a field that stops being unique still has under a name the push does not
   // declare, as an older table carries, or one an earlier save took on as the field's: dropped,
@@ -553,18 +587,121 @@ async function applyHoldingSchemaLock(
   return result;
 }
 
-/** Every table the desired schema manages, by name. */
-function managedTablesOf(desired: {
-  collections: Record<string, { tableName: string }>;
-  singles: Record<string, { tableName: string }>;
-  components: Record<string, { tableName: string }>;
-}): ReadonlySet<string> {
-  return new Set(
-    [
-      ...Object.values(desired.collections),
-      ...Object.values(desired.singles),
-      ...Object.values(desired.components),
-    ].map(entry => entry.tableName)
+/**
+ * The companion brought in step with the main table the push left, and the leaving fields'
+ * settings pushed once their values are shared.
+ */
+async function reconcileCompanion(args: {
+  change: CollectionSchemaChange;
+  adapter: SchemaChangeDeps["adapter"];
+  desired: DesiredSchema;
+  apply: ApplyDesired;
+  result: Extract<ApplyResult, { success: true }>;
+  oldFields: FieldDefinition[];
+  companionRename: Awaited<ReturnType<typeof resolveCompanionRename>>;
+  settingsDeferred: ReturnType<typeof fieldsWithLeavingSettingsDeferred>;
+  defaultLocale: string;
+}): Promise<void> {
+  const { change, adapter, desired, apply, oldFields } = args;
+  const { slug, fields, wasLocalized, isLocalized } = change;
+  const { tableName } = change.collection;
+  try {
+    const companionExists = await adapter.tableExists(`${tableName}_locales`);
+    const companionHasStatus =
+      companionExists && wasLocalized && isLocalized
+        ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
+        : undefined;
+    const plan = buildCompanionTransitionStatements({
+      // The companion mirrors the main table, which the Schema Builder's collection creator made.
+      builtBy: "collection" as const,
+      slug,
+      kind: "collection",
+      tableName,
+      dialect: adapter.dialect,
+      defaultLocale: args.defaultLocale,
+      status: change.status,
+      wasLocalized,
+      isLocalized,
+      // The status before the change, which decides whether main carried `status` and the
+      // companion `_status` before this apply.
+      wasStatus: change.wasStatus,
+      oldFields,
+      newFields: fields,
+      companionExists,
+      companionHasStatus,
+      // Added to the companion, with their values, by the apply before its drop.
+      joinedBefore: movedOnto(args.result, tableName),
+      renamed: args.companionRename ?? undefined,
+      holdLeavingDrops: args.settingsDeferred !== undefined,
+      // What this database holds now, so a re-apply after a part-applied one finishes it.
+      ...(await liveCompanionShape(adapter, {
+        tableName,
+        oldFields,
+        newFields: fields,
+        builtBy: "collection",
+        companionExists,
+      })),
+    });
+    // The settings the first push left off, once the shared columns hold the default language's
+    // values, and only then the leaving fields' companion columns dropped. A new desired schema
+    // rather than an edit of the first: the pipeline keeps the last one it applied, by
+    // reference, to skip a push that changes nothing.
+    await applyCompanionTransition({
+      adapter,
+      plan,
+      settleLeaving: args.settingsDeferred
+        ? leavingSettingsStep({
+            adapter,
+            entity: slug,
+            tableName,
+            builtBy: "collection",
+            oldFields,
+            newFields: fields,
+            renamed: args.companionRename,
+            push: () =>
+              apply(withFields(desired, slug, fields), "ui", {
+                promptChannel: "auto",
+              }),
+          })
+        : undefined,
+      kind: "collection",
+      slug,
+      tableName,
+    });
+  } catch (err) {
+    // A refused setting names the field, and nothing has been dropped by then, so it is passed
+    // on as it is rather than as a companion out of step.
+    if (isLeavingSettingsRefusal(err)) throw err;
+    // The main-table apply already committed, so this is surfaced loudly rather than leaving
+    // the collection half-migrated in silence.
+    throw NextlyError.internal({
+      cause: err instanceof Error ? err : undefined,
+      logContext: {
+        op: "companionReconcile",
+        collection: slug,
+        detail: err instanceof Error ? err.message : String(err),
+        note: "main table updated but localized companion out of sync; re-apply to retry",
+      },
+    });
+  }
+}
+
+/**
+ * Every collection table the desired schema manages, with the columns it is meant to have: what a
+ * rebuild of it creates, so the SQLite recovery can tell its copy from another owner's table.
+ */
+function expectedCollectionColumns(
+  desired: { collections: Record<string, DesiredCollection> },
+  dialect: Parameters<typeof desiredCollectionTable>[1]
+): ReadonlyMap<string, ReadonlySet<string>> {
+  return new Map(
+    Object.values(desired.collections).map(collection => {
+      const table = desiredCollectionTable(collection, dialect);
+      return [
+        table.name,
+        new Set(table.columns.map(column => column.name)),
+      ] as const;
+    })
   );
 }
 

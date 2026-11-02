@@ -976,6 +976,7 @@ export class DynamicCollectionService extends BaseService {
   ): {
     renameResolutions: BrowserRenameResolution[];
     legacyResolutions: LegacyResolutionsBundle;
+    fills: Array<{ field: string; value: unknown }>;
   } {
     // The fields with a column on the main table, so a field that keeps its name and loses its
     // column (a relationship becoming many-to-many, a field becoming a group) is a removed column,
@@ -1040,16 +1041,19 @@ export class DynamicCollectionService extends BaseService {
         if (!without.has(name)) byFieldName[name] = { action: "confirm_drop" };
       }
     }
+    // A Required field added over rows is filled by the apply between its two pushes: added
+    // optional, filled with this value, then made Required. A fill answered to the push itself
+    // would run before the column it fills exists.
+    const fills: Array<{ field: string; value: unknown }> = [];
     for (const field of added) {
       if (field.required !== true) continue;
       const value = this.schemaService.addedColumnFillValue(field, now);
-      if (value !== undefined) {
-        byFieldName[field.name] = { action: "provide_default", value };
-      }
+      if (value !== undefined) fills.push({ field: field.name, value });
     }
     return {
       renameResolutions,
       legacyResolutions: { tableName, byFieldName },
+      fills,
     };
   }
 
@@ -1213,6 +1217,8 @@ export class DynamicCollectionService extends BaseService {
     pushAnswers: {
       renameResolutions: BrowserRenameResolution[];
       legacyResolutions: LegacyResolutionsBundle;
+      /** What each Required field the save adds fills the rows already there with. */
+      fills: Array<{ field: string; value: unknown }>;
     };
     migrationFileName: string | null;
     /**

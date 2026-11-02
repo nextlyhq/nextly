@@ -12,8 +12,11 @@
  * - **Only the copy there:** it stopped between the drop and the rename, so the copy holds every
  *   row and takes the table's name.
  *
- * Asked before the apply reads the live schema, and only of the tables the desired schema
- * manages, while the caller holds the schema lock, so no rebuild is in flight beside it.
+ * Asked before the apply reads the live schema, while the caller holds the schema lock, so no
+ * rebuild is in flight beside it. The name alone proves nothing, since a project or a plugin can
+ * own a table called `__new_<table>`, so a copy is recovered only when its columns are exactly
+ * the ones the managed table is meant to have, which is what a rebuild of it creates. Any other
+ * table is left as it is.
  *
  * @module domains/schema/pipeline/sqlite-rebuild-recovery
  */
@@ -35,7 +38,8 @@ interface SqliteAll {
  */
 export async function recoverInterruptedSqliteRebuilds(
   db: unknown,
-  managedTables: ReadonlySet<string>
+  /** Each managed table this may recover, with the columns it is meant to have. */
+  expectedColumns: ReadonlyMap<string, ReadonlySet<string>>
 ): Promise<string[]> {
   const rows = (await (db as SqliteAll).all(
     sql`SELECT name FROM sqlite_master WHERE type = 'table'`
@@ -45,7 +49,9 @@ export async function recoverInterruptedSqliteRebuilds(
   for (const name of present) {
     if (!name.startsWith(REBUILD_COPY_PREFIX)) continue;
     const table = name.slice(REBUILD_COPY_PREFIX.length);
-    if (!managedTables.has(table)) continue;
+    const expected = expectedColumns.get(table);
+    if (expected === undefined) continue;
+    if (!sameColumns(await columnsOf(db, name), expected)) continue;
     if (present.has(table)) {
       await runStatement(db, "sqlite", sql`DROP TABLE ${sql.identifier(name)}`);
       done.push(`dropped ${name}, a copy of ${table} its rebuild never used`);
@@ -59,4 +65,21 @@ export async function recoverInterruptedSqliteRebuilds(
     }
   }
   return done;
+}
+
+/** The column names a SQLite table has. */
+async function columnsOf(db: unknown, table: string): Promise<Set<string>> {
+  const rows = (await (db as SqliteAll).all(
+    sql`SELECT name FROM pragma_table_info(${table})`
+  )) as Array<{ name: string }>;
+  return new Set(rows.map(row => row.name));
+}
+
+function sameColumns(
+  actual: ReadonlySet<string>,
+  expected: ReadonlySet<string>
+): boolean {
+  return (
+    actual.size === expected.size && [...expected].every(c => actual.has(c))
+  );
 }

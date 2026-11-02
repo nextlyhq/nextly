@@ -885,6 +885,7 @@ export class CollectionMetadataService extends BaseService {
               renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
               eventResolutions: [],
               legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+              fills: updateArtifacts.pushAnswers.fills,
               // The save detects its own renames; every other pair is a drop and an add.
               dropAndAddUnansweredRenames: true,
             });
