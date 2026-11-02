@@ -455,24 +455,37 @@ describe("dark values for every kind", () => {
     expect(darkOf()).toBeUndefined();
   });
 
-  it("gives a type size and its line height each a Light and a Dark", async () => {
+  it("lays a type size out as one pair: two Light values, one action for both darks", async () => {
     const onChange = vi.fn();
     render(<Hosted tokens={SITE} onChange={onChange} />);
     const editor = await openEditor(/^Body/);
-    const lineHeight = within(editor).getByRole("group", {
-      name: "Line height",
-    });
-    fireEvent.click(
-      within(lineHeight).getByRole("button", { name: "Add dark value" })
+    const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(within(editor).getByLabelText("Size, light")).toHaveProperty(
+      "value",
+      "16px"
     );
-    enter(within(lineHeight).getByLabelText("Dark"), "30px");
-    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
-    expect(saved.tokens[3]?.values).toEqual({ light: "26px", dark: "30px" });
+    expect(within(editor).getByLabelText("Line height, light")).toHaveProperty(
+      "value",
+      "26px"
+    );
+    // One line and one action for the pair while neither has a dark value.
+    expect(within(editor).getAllByText("Same as light")).toHaveLength(1);
     expect(
-      within(
-        within(editor).getByRole("group", { name: "Size" })
-      ).getByLabelText("Light")
-    ).toHaveProperty("value", "16px");
+      within(editor).queryAllByRole("button", { name: /^Add dark value/ })
+    ).toHaveLength(1);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Add dark values" })
+    );
+    expect(saved().tokens[2]?.values).toEqual({ light: "16px", dark: "16px" });
+    expect(saved().tokens[3]?.values).toEqual({ light: "26px", dark: "26px" });
+    enter(within(editor).getByLabelText("Line height, dark"), "30px");
+    expect(saved().tokens[3]?.values).toEqual({ light: "26px", dark: "30px" });
+    expect(within(editor).getByLabelText("Size, dark")).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Use light values" })
+    );
+    expect(saved().tokens[2]?.values).toEqual({ light: "16px" });
+    expect(saved().tokens[3]?.values).toEqual({ light: "26px" });
   });
 });
 
@@ -650,5 +663,86 @@ describe("a clean export after a refusal", () => {
     );
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(screen.getByRole("status").textContent).toMatch(/Saved/);
+  });
+});
+
+describe("the type specimen's font", () => {
+  it("is the body font found by identity, so a renamed one still draws", () => {
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              id: "font.body",
+              name: "font.brand",
+              kind: "fontFamily",
+              values: { light: "Georgia" },
+            },
+          ],
+        }}
+      />
+    );
+    const specimen = row(/^Body/).querySelector(
+      ".nx-vars__specimen"
+    ) as HTMLElement;
+    expect(specimen.style.fontFamily).toBe("Georgia");
+  });
+});
+
+describe("the preview's first mode", () => {
+  it("is the device's: Dark on a device that prefers dark, and it follows a change", () => {
+    let listener: ((event: { matches: boolean }) => void) | undefined;
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === "(prefers-color-scheme: dark)",
+      media: query,
+      addEventListener: (_: string, next: typeof listener) => {
+        listener = next;
+      },
+      removeEventListener: () => undefined,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render(<Hosted tokens={SITE} />);
+      const preview = screen.getByRole("group", { name: "Preview" });
+      expect(
+        within(preview).getByRole("button", { name: "Dark" })
+      ).toHaveProperty("ariaPressed", "true");
+      act(() => listener?.({ matches: false }));
+      expect(
+        within(preview).getByRole("button", { name: "Light" })
+      ).toHaveProperty("ariaPressed", "true");
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+});
+
+describe("a type size whose halves come from different places", () => {
+  it("can remove the half the site added, and reset the half its code supplies", async () => {
+    const onChange = vi.fn();
+    const supplied: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "18px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={SITE} supplied={supplied} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    expect(within(editor).getByRole("button", { name: "Reset" })).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Remove line height" })
+    );
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Remove line height of Body" })
+    );
+    const names = (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens.map(
+      t => t.name
+    );
+    expect(names).toContain("font-size.body");
+    expect(names).not.toContain("line-height.body");
   });
 });

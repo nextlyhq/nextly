@@ -56,6 +56,7 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { usePrefersDark } from "./prefers-dark";
 import { colourHexOf } from "./style-colour";
 import {
   addVariable,
@@ -91,7 +92,10 @@ export interface TokensPanelProps {
   supplied?: SiteTokenSet;
   /** What the last save said, when it failed. */
   issue?: string;
-  /** Whether the device prefers dark, which the preview starts on. */
+  /**
+   * Start the preview on Dark whatever the device says. Without it the
+   * preview follows the device's scheme, as the canvas does.
+   */
   prefersDark?: boolean;
   /** Why there are no variables to show: a read in flight, or one that failed. */
   absence?: "pending" | "failed";
@@ -118,9 +122,12 @@ export function TokensPanel({
   readOnly = false,
   headerActions,
 }: TokensPanelProps): React.JSX.Element {
-  const [mode, setMode] = React.useState<TokenMode>(
-    prefersDark ? "dark" : "light"
+  // The device's scheme until the author picks one, as the canvas shows it.
+  const device = usePrefersDark();
+  const [picked, setMode] = React.useState<TokenMode | null>(
+    prefersDark ? "dark" : null
   );
+  const mode: TokenMode = picked ?? (device ? "dark" : "light");
   const [query, setQuery] = React.useState("");
   const { root, openKey, toggle, add, forget } = useOpenVariable({
     tokens,
@@ -773,7 +780,11 @@ function specimenSize(value: string): number {
 
 /** The site's body font, when it names a family this panel can draw. */
 function siteFamily(tokens: SiteTokenSet, mode: TokenMode): string | undefined {
-  const body = tokens.tokens.find(token => token.name === "font.body");
+  // By identity, the one a rename leaves alone: the body font keeps drawing
+  // after an author renames it.
+  const body = tokens.tokens.find(
+    token => tokenIdentity(token) === "font.body"
+  );
   const family = valueFor(body, mode);
   return family === "" || /var\s*\(/i.test(family) ? undefined : family;
 }

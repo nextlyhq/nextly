@@ -154,19 +154,133 @@ function Values({
   if (lineHeight === undefined || lineToken === undefined) {
     return pair(row.at, token);
   }
-  // A type size is two variables shown as one: each half keeps its own light
-  // and dark value, grouped under its own name.
   return (
-    <>
-      <fieldset className="nx-vars-editor__group">
-        <legend className="nx-vars-editor__legend">Size</legend>
-        {pair(row.at, token)}
-      </fieldset>
-      <fieldset className="nx-vars-editor__group">
-        <legend className="nx-vars-editor__legend">Line height</legend>
-        {pair(lineHeight.at, lineToken)}
-      </fieldset>
-    </>
+    <TypePair
+      size={token}
+      sizeAt={row.at}
+      line={lineToken}
+      lineAt={lineHeight.at}
+      tokens={tokens}
+      readOnly={readOnly}
+      onChange={onChange}
+    />
+  );
+}
+
+/**
+ * A type size and its line height, laid out as one pair so the editor stays
+ * short: the two Light values side by side, then either one "Same as light"
+ * line with one action for both, or the two Dark values side by side with one
+ * action to drop both.
+ */
+function TypePair({
+  size,
+  sizeAt,
+  line,
+  lineAt,
+  tokens,
+  readOnly,
+  onChange,
+}: {
+  size: SiteToken;
+  sizeAt: number;
+  line: SiteToken;
+  lineAt: number;
+  tokens: SiteTokenSet;
+  readOnly: boolean;
+  onChange: (tokens: SiteTokenSet) => void;
+}): React.JSX.Element {
+  const write = (at: number, mode: "light" | "dark", value: string): void =>
+    onChange(setTokenValue(tokens, at, mode, value.trim()));
+  const hasDark =
+    size.values.dark !== undefined || line.values.dark !== undefined;
+  const halves = [
+    { name: "Size", at: sizeAt, token: size },
+    { name: "Line height", at: lineAt, token: line },
+  ];
+  return (
+    <div className="nx-vars-editor__field">
+      <div className="nx-vars-editor__pair">
+        <span aria-hidden="true" />
+        {halves.map(half => (
+          <span
+            key={half.name}
+            className="nx-vars-editor__label"
+            aria-hidden="true"
+          >
+            {half.name}
+          </span>
+        ))}
+        <span className="nx-vars-editor__label" aria-hidden="true">
+          Light
+        </span>
+        {halves.map(half => (
+          <CommitInput
+            key={half.name}
+            label={`${half.name}, light`}
+            value={half.token.values.light}
+            readOnly={readOnly}
+            onCommit={value => write(half.at, "light", value)}
+          />
+        ))}
+        {hasDark ? (
+          <>
+            <span className="nx-vars-editor__label" aria-hidden="true">
+              Dark
+            </span>
+            {halves.map(half => (
+              <CommitInput
+                key={half.name}
+                label={`${half.name}, dark`}
+                value={half.token.values.dark ?? ""}
+                placeholder={half.token.values.light}
+                readOnly={readOnly}
+                onCommit={value => write(half.at, "dark", value)}
+              />
+            ))}
+          </>
+        ) : null}
+      </div>
+      {hasDark ? (
+        readOnly ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="nx-vars-editor__button nx-vars-editor__inline-action"
+            onClick={() =>
+              onChange(clearDarkValue(clearDarkValue(tokens, sizeAt), lineAt))
+            }
+          >
+            Use light values
+          </Button>
+        )
+      ) : (
+        <div className="nx-vars-editor__same">
+          <span>Same as light</span>
+          {readOnly ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="nx-vars-editor__button"
+              onClick={() =>
+                onChange(
+                  setTokenValue(
+                    setTokenValue(tokens, sizeAt, "dark", size.values.light),
+                    lineAt,
+                    "dark",
+                    line.values.light
+                  )
+                )
+              }
+            >
+              Add dark values
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -218,6 +332,41 @@ function TextValue({
   onCommit: (value: string) => void;
 }): React.JSX.Element {
   const id = React.useId();
+  return (
+    <div className="nx-vars-editor__field">
+      <label className="nx-vars-editor__label" htmlFor={id}>
+        {label}
+      </label>
+      <CommitInput
+        id={id}
+        value={value}
+        readOnly={readOnly}
+        onCommit={onCommit}
+      />
+    </div>
+  );
+}
+
+/**
+ * A value field that commits on blur or Enter, and only a real change: an
+ * empty field or the value it already holds writes nothing.
+ */
+function CommitInput({
+  id,
+  label,
+  value,
+  placeholder,
+  readOnly,
+  onCommit,
+}: {
+  id?: string;
+  /** The field's name where no visible label points at it. */
+  label?: string;
+  value: string;
+  placeholder?: string;
+  readOnly: boolean;
+  onCommit: (value: string) => void;
+}): React.JSX.Element {
   const [draft, setDraft] = useDraft(value);
   const commit = (next: string): void => {
     if (!readOnly && next.trim() !== "" && next.trim() !== value) {
@@ -225,22 +374,19 @@ function TextValue({
     }
   };
   return (
-    <div className="nx-vars-editor__field">
-      <label className="nx-vars-editor__label" htmlFor={id}>
-        {label}
-      </label>
-      <Input
-        id={id}
-        className="nx-vars-editor__mono"
-        value={draft}
-        onChange={event => setDraft(event.currentTarget.value)}
-        readOnly={readOnly}
-        onBlur={event => commit(event.currentTarget.value)}
-        onKeyDown={event => {
-          if (event.key === "Enter") commit(event.currentTarget.value);
-        }}
-      />
-    </div>
+    <Input
+      id={id}
+      aria-label={label}
+      className="nx-vars-editor__mono"
+      value={draft}
+      placeholder={placeholder}
+      onChange={event => setDraft(event.currentTarget.value)}
+      readOnly={readOnly}
+      onBlur={event => commit(event.currentTarget.value)}
+      onKeyDown={event => {
+        if (event.key === "Enter") commit(event.currentTarget.value);
+      }}
+    />
   );
 }
 
@@ -366,7 +512,13 @@ function DarkValue({
           <span>Same as light</span>
           {readOnly ? null : (
             // Outlined, so the action reads as one at rest, not only on hover.
-            <Button type="button" variant="outline" size="sm" onClick={onAdd}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="nx-vars-editor__button"
+              onClick={onAdd}
+            >
               Add dark value
             </Button>
           )}
@@ -388,7 +540,7 @@ function DarkValue({
           type="button"
           variant="outline"
           size="sm"
-          className="nx-vars-editor__inline-action"
+          className="nx-vars-editor__button nx-vars-editor__inline-action"
           onClick={onClear}
         >
           Use light value
@@ -399,10 +551,13 @@ function DarkValue({
 }
 
 /**
- * Reset for a variable the site's code supplies and the author changed;
- * Remove, behind a confirm naming it, for one the site added. A supplied
- * variable cannot be removed: the stored tier holds overrides, so removing one
- * would merge straight back on the next read.
+ * Reset and Remove, each half of a type size by its own provenance.
+ *
+ * A half the site's code supplies can be reset when the author changed it,
+ * and cannot be removed: the stored tier holds overrides, so removing it would
+ * merge straight back on the next read. A half the site added can be removed,
+ * behind a confirm naming it. A type size can be one of each, so both actions
+ * can show at once.
  */
 function Actions({
   entry,
@@ -420,33 +575,65 @@ function Actions({
   onRemoved: () => void;
 }): React.JSX.Element | null {
   const [confirming, setConfirming] = React.useState(false);
-  // The row and, for a type size, its line height: the line height has no row
-  // of its own, so its override is reset from here or from nowhere.
-  const parts = [
-    { at: entry.row.at, held: token, from: suppliedOf(entry.row.identity) },
-    ...(entry.lineHeight === undefined
-      ? []
-      : [
-          {
-            at: entry.lineHeight.at,
-            held: tokens.tokens[entry.lineHeight.at],
-            from: suppliedOf(entry.lineHeight.identity),
-          },
-        ]),
-  ];
-  if (parts.some(part => part.from !== undefined)) {
-    const changed = parts.filter(
-      part =>
-        part.from !== undefined &&
-        (part.held === undefined || !sameSiteToken(part.held, part.from))
-    );
-    if (changed.length === 0) return null;
+  const parts = partsOf(entry, token, tokens, suppliedOf);
+  const changed = parts.filter(
+    part =>
+      part.from !== undefined &&
+      (part.held === undefined || !sameSiteToken(part.held, part.from))
+  );
+  const removable = parts.filter(part => part.from === undefined);
+  // The whole variable when every half is the site's own; otherwise only the
+  // half that is, named, since the other stays.
+  const whole = removable.length === parts.length;
+  const what = whole
+    ? entry.label
+    : `${removable.map(part => part.name).join(" and ")} of ${entry.label}`;
+  if (confirming && removable.length > 0) {
     return (
-      <div className="nx-vars-editor__actions">
+      <div
+        className="nx-vars-editor__confirm"
+        role="group"
+        aria-label={`Remove ${what}`}
+      >
+        <p>
+          Remove <strong>{what}</strong>? Any block using it loses that style.
+          The page still renders.
+        </p>
+        <div className="nx-vars-editor__actions">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="nx-vars-editor__button"
+            onClick={() => setConfirming(false)}
+          >
+            Keep
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            className="nx-vars-editor__button"
+            onClick={() => {
+              onChange(withoutParts(tokens, removable));
+              onRemoved();
+            }}
+          >
+            Remove {what}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  if (changed.length === 0 && removable.length === 0) return null;
+  return (
+    <div className="nx-vars-editor__actions">
+      {changed.length === 0 ? null : (
         <Button
           type="button"
           variant="outline"
           size="sm"
+          className="nx-vars-editor__button"
           onClick={() => {
             const next = [...tokens.tokens];
             for (const part of changed) {
@@ -457,69 +644,69 @@ function Actions({
         >
           Reset
         </Button>
-      </div>
-    );
-  }
-  if (confirming) {
-    return (
-      <div
-        className="nx-vars-editor__confirm"
-        role="group"
-        aria-label={`Remove ${entry.label}`}
-      >
-        <p>
-          Remove <strong>{entry.label}</strong>? Any block using it loses that
-          style. The page still renders.
-        </p>
-        <div className="nx-vars-editor__actions">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setConfirming(false)}
-          >
-            Keep
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={() => {
-              onChange(withoutEntry(tokens, entry));
-              onRemoved();
-            }}
-          >
-            Remove {entry.label}
-          </Button>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="nx-vars-editor__actions">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="nx-vars-editor__remove"
-        onClick={() => setConfirming(true)}
-      >
-        Remove
-      </Button>
+      )}
+      {removable.length === 0 ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="nx-vars-editor__button nx-vars-editor__remove"
+          onClick={() => setConfirming(true)}
+        >
+          {whole
+            ? "Remove"
+            : `Remove ${removable.map(part => part.name).join(" and ")}`}
+        </Button>
+      )}
     </div>
   );
 }
 
-/** The set without this row, and without a type size's line height too. */
-function withoutEntry(
+/** One stored variable behind an entry, with what the site's code supplies. */
+interface Part {
+  name: string;
+  at: number;
+  held: SiteToken | undefined;
+  from: SiteToken | undefined;
+}
+
+/**
+ * The variables behind an entry: the row and, for a type size, its line
+ * height, which has no row of its own and is acted on from here or nowhere.
+ */
+function partsOf(
+  entry: VariableEntry,
+  token: SiteToken,
   tokens: SiteTokenSet,
-  entry: VariableEntry
+  suppliedOf: (identity: string) => SiteToken | undefined
+): Part[] {
+  const own: Part = {
+    name: "size",
+    at: entry.row.at,
+    held: token,
+    from: suppliedOf(entry.row.identity),
+  };
+  if (entry.lineHeight === undefined) return [own];
+  return [
+    own,
+    {
+      name: "line height",
+      at: entry.lineHeight.at,
+      held: tokens.tokens[entry.lineHeight.at],
+      from: suppliedOf(entry.lineHeight.identity),
+    },
+  ];
+}
+
+/** The set without these variables, the later positions first. */
+function withoutParts(
+  tokens: SiteTokenSet,
+  parts: readonly Part[]
 ): SiteTokenSet {
-  // The later position first, so removing it does not move the other.
-  const positions = [entry.row.at, entry.lineHeight?.at]
-    .filter((at): at is number => at !== undefined)
-    .sort((a, b) => b - a);
-  return positions.reduce(removeToken, tokens);
+  return parts
+    .map(part => part.at)
+    .sort((a, b) => b - a)
+    .reduce(removeToken, tokens);
 }
 
 /** A swatch painted through a custom property, or the empty swatch. */

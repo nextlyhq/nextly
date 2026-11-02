@@ -6,6 +6,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { openEditorWith } from "./canvas/editor-driver";
+import { expectNoAxeViolations } from "./support/axe";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -142,6 +143,22 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(row()).toBeFocused();
+
+    // The editor meets WCAG AA in the admin's light and dark themes, its
+    // destructive Remove included.
+    await row().click();
+    await expect(page.getByRole("dialog", { name: "Edit Sea" })).toBeVisible();
+    await expectNoAxeViolations(page, { include: ".nx-vars-editor" });
+    await page.evaluate(() => document.documentElement.classList.add("dark"));
+    try {
+      await expectNoAxeViolations(page, { include: ".nx-vars-editor" });
+    } finally {
+      await page.evaluate(() =>
+        document.documentElement.classList.remove("dark")
+      );
+    }
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
 
     // The compiled sheet carries the dark value under the guarded device
     // block, and the browser applies it only when the device prefers dark.

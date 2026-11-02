@@ -2939,24 +2939,6 @@
   color: var(--nx-muted-foreground);
 }
 
-/* A type size's two halves, each with its light and dark value. */
-.nx-vars-editor__group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.nx-vars-editor__legend {
-  padding: 0;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--nx-muted-foreground);
-}
-
 .nx-vars-editor__inline-action {
   align-self: flex-start;
 }
@@ -2980,8 +2962,30 @@
   border-top: 1px solid var(--nx-border);
 }
 
+/*
+ * Destructive TEXT, drawn from the admin's red mixed a third of the way toward
+ * the page's text colour: darker on a light theme and lighter on a dark one,
+ * which is what lifts the red, a fill colour, to AA as text on either.
+ */
 .nx-vars-editor__remove {
-  color: var(--nx-destructive);
+  color: color-mix(in oklch, var(--nx-destructive), var(--nx-foreground) 35%);
+}
+
+/* The editor's buttons at the panel's small text size, like its other small
+   controls. Two classes, to outrank the button's own text size. */
+.nx-vars-editor .nx-vars-editor__button {
+  height: 1.75rem;
+  padding-inline: 0.625rem;
+  font-size: var(--text-xs);
+}
+
+/* A type size's values: a label column, then Size and Line height side by
+   side, so the pair takes one row per mode rather than four field groups. */
+.nx-vars-editor__pair {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem;
 }
 
 .nx-vars-editor__confirm {
