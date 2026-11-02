@@ -441,29 +441,35 @@ describeEachDialect("a collection's Builder save", dialect => {
     expect(rows.map(row => row.b)).toEqual(["new", "new"]);
   }, 120_000);
 
-  it("drops a relationship's column when it becomes many-to-many", async () => {
-    // The field keeps its name and loses its column to a junction table, so the save answers the
-    // column's drop itself, as it does a removed field's.
-    await seeded();
-    expect(await itemColumns()).toContain("owner");
+  // Not on SQLite, which refuses taking a relationship's column off a table up front
+  // (`FOREIGN_KEY_DROP_UNSUPPORTED`): its foreign key goes only with a rebuild of the table.
+  it.skipIf(dialect === "sqlite")(
+    "drops a relationship's column when it becomes many-to-many",
+    async () => {
+      // The field keeps its name and loses its column to a junction table, so the save answers the
+      // column's drop itself, as it does a removed field's.
+      await seeded();
+      expect(await itemColumns()).toContain("owner");
 
-    const saved = await handler().updateCollection(
-      { collectionName: "items" },
-      {
-        fields: [
-          ...BEFORE.filter(field => field.name !== "owner"),
-          {
-            name: "owner",
-            type: "relationship",
-            options: { target: "people", relationType: "manyToMany" },
-          },
-        ],
-      }
-    );
+      const saved = await handler().updateCollection(
+        { collectionName: "items" },
+        {
+          fields: [
+            ...BEFORE.filter(field => field.name !== "owner"),
+            {
+              name: "owner",
+              type: "relationship",
+              options: { target: "people", relationType: "manyToMany" },
+            },
+          ],
+        }
+      );
 
-    expect(saved.success, JSON.stringify(saved)).toBe(true);
-    expect(await itemColumns()).not.toContain("owner");
-  }, 120_000);
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      expect(await itemColumns()).not.toContain("owner");
+    },
+    120_000
+  );
 
   it("fills the entries already there from a Required JSON field's default", async () => {
     await seeded();

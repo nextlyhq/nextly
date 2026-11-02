@@ -1793,7 +1793,13 @@ export class DynamicCollectionService extends BaseService {
         isLocalized: collectionIsLocalized,
         wasStatus,
         hasStatus,
-        renamed: renamedField,
+        // The main table's rename, decided on its own columns as its diff and the refusals above
+        // decide it: on every field, a translated field added beside a renamed shared one makes
+        // the rename read as a drop and two adds, and the push would drop the column the file
+        // renames.
+        renamed: fieldRenameOf(
+          this.schemaService.detectFieldRename(mainBefore, mainAfter)
+        ),
       });
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 

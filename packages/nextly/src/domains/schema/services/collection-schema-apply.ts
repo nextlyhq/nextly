@@ -32,12 +32,14 @@ import { NextlyError } from "../../../errors";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { appLocalization } from "../../i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsWithLeavingSettingsDeferred,
 } from "../../i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../i18n/migration/companion-rename";
+import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import {
@@ -464,6 +466,25 @@ function withFillsOptional(
   );
 }
 
+/**
+ * On turning translation off, `fields` with the formerly translated ones' Required and Unique
+ * held back, or undefined when nothing is held: their columns reach the main table empty and are
+ * filled by the companion's restore, so a setting applied with the column would refuse it.
+ */
+function translatedSettingsDeferred(
+  oldFields: readonly FieldDefinition[],
+  fields: readonly FieldDefinition[],
+  wasLocalized: boolean,
+  isLocalized: boolean
+): FieldDefinition[] | undefined {
+  if (!wasLocalized || isLocalized) return undefined;
+  const translated = new Set(resolveLocalizedFieldNames([...oldFields], true));
+  const deferred = withoutLeavingConstraints(fields, translated);
+  return deferred.some((field, index) => field !== fields[index])
+    ? deferred
+    : undefined;
+}
+
 /** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
 async function applyHoldingSchemaLock(
   change: CollectionSchemaChange
@@ -498,13 +519,19 @@ async function applyHoldingSchemaLock(
   // A Required or Unique field leaving translation is pushed without its setting first, and the
   // setting is pushed once the companion transition has copied its values in, before its companion
   // column is dropped.
-  const settingsDeferred = fieldsWithLeavingSettingsDeferred({
-    oldFields,
-    newFields: fields,
-    wasLocalized,
-    isLocalized,
-    renamed: companionRename,
-  });
+  //
+  // Turning translation off moves every translated field onto the main table at once: their
+  // columns are added without the settings too, filled by the companion's restore, and given
+  // them by the same second push.
+  const settingsDeferred =
+    fieldsWithLeavingSettingsDeferred({
+      oldFields,
+      newFields: fields,
+      wasLocalized,
+      isLocalized,
+      renamed: companionRename,
+    }) ??
+    translatedSettingsDeferred(oldFields, fields, wasLocalized, isLocalized);
   const settled = settingsDeferred ?? fields;
   const fills = change.fills ?? [];
 
