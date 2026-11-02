@@ -118,13 +118,13 @@ import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
+import { createContext, type CommandContext } from "../context";
 import {
   migrationCreateCancelled,
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
 import { exitWithError } from "../errors/index";
-import { createContext, type CommandContext } from "../context";
 import {
   type CLIDatabaseAdapter,
   createCliAdapter,

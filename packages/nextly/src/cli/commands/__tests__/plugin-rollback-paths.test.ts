@@ -24,6 +24,7 @@ import {
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
+import { installRegistryResolver } from "../../utils/registry-resolver";
 import { runMigrateDown } from "../migrate-down";
 import {
   runPluginInstall,
@@ -285,6 +286,10 @@ async function applied(): Promise<void> {
 beforeEach(async () => {
   const adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
+  // The static resolver every production adapter carries: the schema lock seeds
+  // its row through a transaction insert, which an adapter refuses for a table
+  // its resolver does not hold.
+  installRegistryResolver(adapter);
   state.adapter = adapter as unknown as typeof state.adapter;
   state.db = adapter.getDrizzle();
   state.sqlite = adapter.getDrizzle<{ $client: Database.Database }>().$client;
