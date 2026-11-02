@@ -1879,3 +1879,50 @@ describe("an import that changes only a variable's vendor data", () => {
     });
   });
 });
+
+describe("an import that leaves out a variable's optional fields", () => {
+  const stored: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.ink",
+        label: "Ink",
+        kind: "color",
+        values: { light: "#111111" },
+        extensions: { "com.figma.variableId": "VariableID:1:1" },
+      },
+    ],
+  };
+  const sparse = (values: { light: string; dark?: string }) =>
+    exportDtcg({
+      tokens: [{ name: "color.ink", kind: "color", values }],
+    }).text;
+
+  it("is unchanged when nothing it does state differs", () => {
+    const plan = planImport(
+      [{ name: "ink.tokens.json", text: sparse({ light: "#111111" }) }],
+      stored
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged.map(t => t.name)).toEqual(["color.ink"]);
+    expect(plan.changed).toEqual([]);
+  });
+
+  it("keeps the site's label and vendor data when it changes something else", () => {
+    const plan = planImport(
+      [
+        {
+          name: "ink.tokens.json",
+          text: sparse({ light: "#111111", dark: "#eeeeee" }),
+        },
+      ],
+      stored
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, stored, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.tokens.tokens[0]).toEqual({
+      ...stored.tokens[0],
+      values: { light: "#111111", dark: "#eeeeee" },
+    });
+  });
+});

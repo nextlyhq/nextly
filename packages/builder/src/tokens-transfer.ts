@@ -259,9 +259,13 @@ function planned(
   incoming: readonly SiteToken[],
   into: SiteTokenSet
 ): ReturnType<typeof sortAgainst> & { labelClashes: string[] } {
+  const sorted = sortAgainst(incoming, into);
   return {
-    ...sortAgainst(incoming, into),
-    labelClashes: newLabelClashes(into, mergeById(into, incoming).tokens),
+    ...sorted,
+    labelClashes: newLabelClashes(
+      into,
+      mergeById(into, sorted.incoming).tokens
+    ),
   };
 }
 
@@ -314,9 +318,13 @@ function sortAgainst(
   const changed: SiteToken[] = [];
   const unchanged: SiteToken[] = [];
   const conflicts: ImportConflict[] = [];
-  for (const imported of incoming) {
-    const identity = tokenIdentity(imported);
+  const laid: SiteToken[] = [];
+  for (const stated of incoming) {
+    const identity = tokenIdentity(stated);
     const held = mine.get(identity);
+    // What applying would store: the file's token laid onto the site's.
+    const imported = held === undefined ? stated : laidOnto(held, stated);
+    laid.push(imported);
     if (held === undefined) {
       added.push(imported);
       continue;
@@ -325,13 +333,41 @@ function sortAgainst(
     if (fields.length > 0) {
       conflicts.push({ identity, mine: held, imported, fields });
     } else if (sameSiteToken(held, imported)) {
-      // The engine's one answer to "has this token changed", vendor data
-      // included: a file adding only another tool's metadata is a change, or
-      // it is dropped and the next export loses it.
+      // Asked of the token applying would store, with the engine's one
+      // comparison, vendor data included: another tool's metadata arriving
+      // is a change, and a field the file merely leaves out is not.
       unchanged.push(imported);
     } else changed.push(imported);
   }
-  return { added, changed, unchanged, conflicts, incoming };
+  return { added, changed, unchanged, conflicts, incoming: laid };
+}
+
+/**
+ * A file's token laid onto the site's: a field the file states replaces the
+ * stored one, and an optional field it leaves out (a dark value, a label, a
+ * description, another tool's data) keeps the stored value rather than being
+ * deleted by an import that never mentioned it.
+ */
+function laidOnto(held: SiteToken, stated: SiteToken): SiteToken {
+  const dark = stated.values.dark ?? held.values.dark;
+  const id = stated.id ?? held.id;
+  const label = stated.label ?? held.label;
+  const description = stated.description ?? held.description;
+  const extensions = stated.extensions ?? held.extensions;
+  const unreadExtension = stated.unreadExtension ?? held.unreadExtension;
+  return {
+    ...(id === undefined ? {} : { id }),
+    name: stated.name,
+    ...(label === undefined ? {} : { label }),
+    kind: stated.kind,
+    values:
+      dark === undefined
+        ? { light: stated.values.light }
+        : { light: stated.values.light, dark },
+    ...(description === undefined ? {} : { description }),
+    ...(extensions === undefined ? {} : { extensions }),
+    ...(unreadExtension === undefined ? {} : { unreadExtension }),
+  };
 }
 
 /**
