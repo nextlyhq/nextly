@@ -30,7 +30,7 @@ import type { DocumentLockClaimant } from "./document-lock-repository";
 import type { DocumentRef } from "./types";
 
 /** Register the takeover kind, when it is not registered already. */
-export function ensureTakeoverContentEventKind(): void {
+function ensureTakeoverContentEventKind(): void {
   if (!contentEventKind(TAKEOVER_CONTENT_EVENT_KIND.name)) {
     registerContentEventKind(TAKEOVER_CONTENT_EVENT_KIND);
   }

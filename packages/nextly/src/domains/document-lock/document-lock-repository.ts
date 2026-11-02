@@ -298,15 +298,24 @@ function lockRowVanished(key: string): never {
 }
 
 /**
- * Whether replacing this claim displaces somebody: a live claim of another
- * person, which only a takeover may replace. A lapsed claim, and the
- * caller's own from another tab (one person is one holder), displace nobody.
+ * Record a takeover in the document's history when replacing `existing`
+ * displaced somebody: a live claim of another person, which only a takeover
+ * may replace. A lapsed claim, and the caller's own from another tab (one
+ * person is one holder), displace nobody and record nothing.
+ *
+ * 🔴 On `ctx`, the transaction that replaced the claim, never a second one:
+ * an event that cannot be written throws here and rolls the claim back with
+ * it, so the holder keeps the document and no takeover stands unrecorded.
  */
-function displacesHolder(
-  existing: LockRow,
-  claimant: DocumentLockClaimant
-): boolean {
-  return existing.live && existing.ownerId !== claimant.ownerId;
+async function recordIfDisplaced(
+  ctx: TransactionContext,
+  adapter: DrizzleAdapter,
+  ref: DocumentRef,
+  claimant: DocumentLockClaimant,
+  existing: LockRow
+): Promise<void> {
+  if (!existing.live || existing.ownerId === claimant.ownerId) return;
+  await recordTakeoverEvent(ctx, adapter, ref, claimant, existing.ownerId);
 }
 
 /** Whether this existing claim may be replaced by the caller's. */
@@ -475,13 +484,7 @@ export async function acquireDocumentLock(
     if (after.claimToken !== claimToken || !after.usable) {
       return await refuse(ctx, dialect, key, after, requestAccess);
     }
-    // 🔴 On `ctx`, the transaction that replaced the claim, never a second
-    // one: an event that cannot be written throws here and rolls the claim
-    // back with it, so the holder keeps the document and no takeover stands
-    // unrecorded.
-    if (displacesHolder(existing, claimant)) {
-      await recordTakeoverEvent(ctx, adapter, ref, claimant, existing.ownerId);
-    }
+    await recordIfDisplaced(ctx, adapter, ref, claimant, existing);
     return { status: "acquired", holder: toHolder(after), claimToken };
   });
 }
