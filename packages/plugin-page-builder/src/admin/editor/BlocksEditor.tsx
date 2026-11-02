@@ -57,6 +57,7 @@ import { HistoryButtons } from "./history-buttons";
 import { PreviewButton } from "./preview-button";
 import {
   ConnectStyleHistoryContext,
+  RemountOnStyleReplay,
   StyleRevisionContext,
   useSiteStyleHistory,
 } from "./site-style-history";
@@ -243,11 +244,13 @@ function editorTopBar(view: EditorView): {
          * `undefined` comparison is true on success too — the same mistake
          * that once withheld the provenance trace unconditionally.
          */}
-        <BreakpointManager
-          value={canvasRender.styleContext.breakpoints}
-          onSave={saveBreakpoints}
-          status={siteStyleStatus(siteStylePending, siteStyleError)}
-        />
+        <RemountOnStyleReplay>
+          <BreakpointManager
+            value={canvasRender.styleContext.breakpoints}
+            onSave={saveBreakpoints}
+            status={siteStyleStatus(siteStylePending, siteStyleError)}
+          />
+        </RemountOnStyleReplay>
         {/*
          * Beside the manager, and gated on the same read for the same
          * reason it is: until the stored style has answered, the set in

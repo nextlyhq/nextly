@@ -17,7 +17,7 @@
  * @module admin/site-style-client.test
  */
 import type { ValidationIssue } from "@nextlyhq/plugin-sdk/admin";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import type * as React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -284,7 +284,7 @@ describe("a save inside the editor, as a step of its history", () => {
           steps.splice(steps.indexOf(step), 1);
         };
       },
-      written: new Map(),
+      settled: new Map(),
     };
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <SiteStyleHistoryContext.Provider value={value}>
@@ -425,6 +425,8 @@ describe("a save inside the editor, as a step of its history", () => {
       saving = result.current.save("tokens", { tokens: [] });
     });
     expect(steps).toHaveLength(1);
+    // The write starts once the writes before it have answered.
+    await waitFor(() => expect(writes).toHaveLength(1));
     await act(async () => {
       land({ id: "1" });
       await saving;
@@ -445,10 +447,89 @@ describe("a save inside the editor, as a step of its history", () => {
       saving = result.current.save("tokens", { tokens: [] });
     });
     expect(steps).toHaveLength(1);
+    await waitFor(() => expect(writes).toHaveLength(1));
     await act(async () => {
       refuse(new Error("refused"));
       await saving;
     });
     expect(steps).toEqual([]);
+  });
+
+  it("builds on the newest save still in flight when an older one lands", async () => {
+    // A and B are in flight; A lands, then C is made while B is still
+    // pending. Undoing C must return the section to B, not to A.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const pending: Array<(value: unknown) => void> = [];
+    writeBehaviour = () =>
+      new Promise(resolve => {
+        pending.push(resolve);
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const a = [{ id: "a", slug: "a" }];
+    const b = [...a, { id: "b", slug: "b" }];
+    const c = [...b, { id: "c", slug: "c" }];
+    let saves: Promise<unknown>[] = [];
+    act(() => {
+      saves = [
+        result.current.save("classes", a),
+        result.current.save("classes", b),
+      ];
+    });
+    // Writes go one at a time: A's lands, then B's starts and stays pending.
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => {
+      pending[0]?.({ id: "1" });
+      await saves[0];
+    });
+    await waitFor(() => expect(pending).toHaveLength(2));
+    act(() => {
+      saves.push(result.current.save("classes", c));
+    });
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      pending[1]?.({ id: "1" });
+      await Promise.all(saves);
+    });
+    await act(async () => {
+      await steps[2]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: b });
+  });
+
+  it("undoes a later save to what was stored, when the save before it was refused", async () => {
+    // A is refused and B is stored: what stood before B is the section from
+    // before A, so undoing B must not store the refused A after all.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const answers: Array<{
+      ok: (v: unknown) => void;
+      no: (r: unknown) => void;
+    }> = [];
+    writeBehaviour = () =>
+      new Promise((ok, no) => {
+        answers.push({ ok, no });
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const a = [{ id: "a", slug: "a" }];
+    const b = [{ id: "b", slug: "b" }];
+    let saves: Promise<unknown>[] = [];
+    act(() => {
+      saves = [
+        result.current.save("classes", a),
+        result.current.save("classes", b),
+      ];
+    });
+    await waitFor(() => expect(answers).toHaveLength(1));
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      answers[0]?.no(new Error("refused"));
+      await Promise.all(saves);
+    });
+    expect(steps).toHaveLength(1);
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: [] });
   });
 });

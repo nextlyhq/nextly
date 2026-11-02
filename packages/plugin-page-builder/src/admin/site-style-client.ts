@@ -187,15 +187,17 @@ export interface SiteStyleStep {
  * Where saves made inside the editor become steps of its history.
  *
  * A style is stored the moment it changes, so undoing one is another write:
- * the section as it was before. `written` holds what each section was last
- * written with in this editor, shared by every studio, because the read only
- * catches up after a save comes back through the cache: two saves before it
- * does would otherwise both remember the value from before the first.
+ * the section as it was before. `settled` holds, per section, what it will
+ * hold once every write already made in this editor has answered: a stored
+ * write's value, or for a refused one what stood before it. Shared by every
+ * studio, and every write joins it in turn, so a step's "before" is what was
+ * really there, whichever saves were in flight or refused, which the read
+ * cannot say until it catches up.
  */
 export interface SiteStyleHistory {
   /** Records a step; answers a function that withdraws it. */
   readonly record: (step: SiteStyleStep) => () => void;
-  readonly written: Map<SiteStyleSection, unknown>;
+  readonly settled: Map<SiteStyleSection, Promise<unknown>>;
 }
 
 /** Null outside the editor, where a save joins no history. */
@@ -250,7 +252,6 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     ): Promise<SiteStyleSaveResult> => {
       try {
         await mutation.mutateAsync({ [section]: value });
-        history?.written.set(section, value);
         return { saved: true, issues: {} };
       } catch (reason) {
         // Caught rather than propagated, because a studio needs the reason
@@ -272,7 +273,35 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return { saved: false, issues };
       }
     },
-    [mutation, history]
+    [mutation]
+  );
+
+  /**
+   * Write a section after every write already made to it in this editor, and
+   * hand on what it then holds. `value` is read only once those have
+   * answered, so an undo can write back a "before" that is still settling.
+   */
+  const inTurn = useCallback(
+    (
+      settled: Map<SiteStyleSection, Promise<unknown>>,
+      section: SiteStyleSection,
+      value: (before: unknown) => unknown
+    ) => {
+      const before =
+        settled.get(section) ??
+        Promise.resolve(storedSection(stored.current, section));
+      const done = before.then(async held => {
+        const next = await value(held);
+        const result = await write(section, next);
+        return { result, holds: result.saved ? next : held };
+      });
+      settled.set(
+        section,
+        done.then(({ holds }) => holds)
+      );
+      return { before, done };
+    },
+    [write]
   );
 
   /*
@@ -280,9 +309,6 @@ export function useSaveSiteStyle(): SiteStyleWrite {
    * author makes the change rather than when it is stored: the studios save
    * without waiting, and a page edit made meanwhile comes after it. A refused
    * save changed nothing, so its step is withdrawn.
-   *
-   * The section is taken as written at once, so a second save made before this
-   * one is stored builds its step on this value rather than on the one before.
    */
   const save = useCallback(
     async (
@@ -290,24 +316,19 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       value: unknown
     ): Promise<SiteStyleSaveResult> => {
       if (history === null) return write(section, value);
-      const before = history.written.has(section)
-        ? history.written.get(section)
-        : storedSection(stored.current, section);
-      history.written.set(section, value);
-      const to = (next: unknown) => async () =>
-        (await write(section, next)).saved;
-      const withdraw = history.record({ undo: to(before), redo: to(value) });
-      const result = await write(section, value);
-      if (!result.saved) {
-        withdraw();
-        // Back to what the section holds, unless a later save has moved it.
-        if (history.written.get(section) === value) {
-          history.written.set(section, before);
-        }
-      }
+      const { settled } = history;
+      const { before, done } = inTurn(settled, section, () => value);
+      const replay = (target: () => unknown) => async () =>
+        (await inTurn(settled, section, target).done).result.saved;
+      const withdraw = history.record({
+        undo: replay(() => before),
+        redo: replay(() => value),
+      });
+      const { result } = await done;
+      if (!result.saved) withdraw();
       return result;
     },
-    [write, history]
+    [write, history, inTurn]
   );
 
   return { save, saving: mutation.isPending };

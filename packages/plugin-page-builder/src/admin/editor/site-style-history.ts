@@ -18,13 +18,17 @@
 import { toast } from "@nextlyhq/ui";
 import {
   createContext,
-  useCallback,
+  createElement,
+  Fragment,
   useContext,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type Context,
+  type JSX,
+  type ReactNode,
 } from "react";
 
 import type {
@@ -35,6 +39,23 @@ import type {
 
 /** How many times a style step has been replayed; the Design panel's key. */
 export const StyleRevisionContext: Context<number> = createContext(0);
+
+/**
+ * Mounts its children afresh each time a style step is undone or redone.
+ *
+ * For a surface that holds its own copy of a section while it is open: the
+ * Design panel's tabs, and the breakpoint manager with its draft and the save
+ * it holds the read against. A write made behind its back would otherwise be
+ * overwritten by its next edit, or left looking stale for good.
+ */
+export function RemountOnStyleReplay({
+  children,
+}: {
+  children: ReactNode;
+}): JSX.Element {
+  const revision = useContext(StyleRevisionContext);
+  return createElement(Fragment, { key: revision }, children);
+}
 
 /** The editor's history, as far as a style step needs it. */
 type RecordStep = (step: SiteStyleStep) => () => void;
@@ -51,7 +72,7 @@ export function useSiteStyleHistory(): {
   connect: (record: RecordStep | null) => void;
 } {
   const [revision, setRevision] = useState(0);
-  const written = useRef(new Map<SiteStyleSection, unknown>()).current;
+  const settled = useRef(new Map<SiteStyleSection, Promise<unknown>>()).current;
   const recorder = useRef<RecordStep | null>(null);
   const connect = useCallback((record: RecordStep | null) => {
     recorder.current = record;
@@ -69,14 +90,14 @@ export function useSiteStyleHistory(): {
         return stored;
       };
     return {
-      written,
+      settled,
       record: step =>
         recorder.current?.({
           undo: replay(step.undo, "undone"),
           redo: replay(step.redo, "redone"),
         }) ?? (() => {}),
     };
-  }, [written]);
+  }, [settled]);
   return { history, revision, connect };
 }
 

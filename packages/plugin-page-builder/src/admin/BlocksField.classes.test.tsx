@@ -40,6 +40,8 @@ let storedRead: { data: unknown; isPending: boolean; error: unknown };
 /** What a save answers, and what it was handed. */
 let saveResult: { success: boolean } | Error;
 const saved: Array<Record<string, unknown>> = [];
+/** How many times the top bar's breakpoint manager has been mounted. */
+let managerMounts = 0;
 /** The steps the editor's history was handed. */
 const recorded: Array<{
   undo: () => Promise<boolean>;
@@ -81,7 +83,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       seen.inspector = props;
       return <div data-recorder="inspector" />;
     },
-    BreakpointManager: nothing,
+    // Counts its mounts: it holds its own draft of the breakpoints, so a
+    // style step undone or redone has to mount it afresh.
+    BreakpointManager: (): null => {
+      React.useEffect(() => {
+        managerMounts += 1;
+      }, []);
+      return null;
+    },
     BreakpointSwitcher: nothing,
     Canvas: nothing,
     BlockKeyboardActions: passthrough,
@@ -234,6 +243,7 @@ beforeEach(() => {
   saveResult = { success: true };
   saved.length = 0;
   recorded.length = 0;
+  managerMounts = 0;
 });
 
 afterEach(cleanup);
@@ -459,5 +469,17 @@ describe("undoing a class created from the editor", () => {
     openEditor();
     await classProps().onCreateClass!("call-to-action");
     expect(recorded).toEqual([]);
+  });
+
+  it("mounts the breakpoint manager afresh when a style step is undone", async () => {
+    // It holds its own draft and the save it is waiting on the read for, and
+    // would otherwise keep showing the set the undo took back.
+    openEditor();
+    await classProps().onCreateClass!("call-to-action");
+    const before = managerMounts;
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    expect(managerMounts).toBe(before + 1);
   });
 });

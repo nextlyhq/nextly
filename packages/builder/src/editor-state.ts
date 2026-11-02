@@ -101,17 +101,6 @@ function reversed(step: HistoryStep): HistoryStep {
   return { undo: step.redo, redo: step.undo };
 }
 
-/**
- * Drop the oldest entry of a full stack: the oldest recorded step when there
- * is one, else the oldest edit. A step goes first because dropping a document
- * edit moves the depth a save point is measured by, and a page saved before a
- * run of style changes would then read as unsaved.
- */
-function evictOldest(stack: HistoryEntry[]): void {
-  const step = stack.findIndex(entry => entry.kind === "step");
-  stack.splice(step >= 0 ? step : 0, 1);
-}
-
 /** How many entries change the document, which is what a save point counts. */
 function documentEntries(stack: readonly HistoryEntry[]): number {
   return stack.filter(entry => entry.kind === "ops").length;
@@ -183,8 +172,14 @@ export interface EditorState {
    * holds reads these, so it holds what `apply` refuses.
    */
   lockDefinitions: SlotDefaultSource;
-  undo: () => void;
-  redo: () => void;
+  /**
+   * Take back the newest step, and answer whether it took effect: at once for
+   * a document edit, and as a promise for a recorded step, once its own undo
+   * has answered. So a surface says "Undone" only for a change that was undone.
+   */
+  undo: () => boolean | Promise<boolean>;
+  /** Repeat the newest undone step, answering as `undo` does. */
+  redo: () => boolean | Promise<boolean>;
   /**
    * Record a change made outside the document as one step of this history,
    * when the author makes it, so it takes its place in order among the page's
@@ -740,11 +735,18 @@ function useHistoryStacks(): {
   // undo button disabled after the first edit, because a ref mutation does not
   // schedule a render.
   const [depths, setDepths] = useState({ undo: 0, redo: 0, document: 0 });
+  /*
+   * Document edits dropped off the old end. The save point measures the
+   * document's position in its history, and that position does not move
+   * because the history forgets how it got there: counted in, a page saved
+   * before a run of style changes stays saved once its edit falls off.
+   */
+  const forgotten = useRef(0);
   const sync = useCallback(() => {
     setDepths({
       undo: undoStack.current.length,
       redo: redoStack.current.length,
-      document: documentEntries(undoStack.current),
+      document: documentEntries(undoStack.current) + forgotten.current,
     });
   }, []);
   const push = useCallback(
@@ -758,8 +760,10 @@ function useHistoryStacks(): {
         // Bounded from the OLD end. Dropping the newest would make the most
         // recent edit unrepeatable, which is the one an author is most likely
         // to want back.
-        if (undoStack.current.length > MAX_HISTORY)
-          evictOldest(undoStack.current);
+        if (undoStack.current.length > MAX_HISTORY) {
+          const dropped = undoStack.current.shift();
+          if (dropped?.kind === "ops") forgotten.current += 1;
+        }
         // A new edit invalidates the redo branch: those inverses were computed
         // against a document that no longer exists, so replaying one would
         // apply an edit derived from a tree that has since changed.
@@ -799,14 +803,18 @@ function replayStep(
   into: "undo" | "redo",
   push: (entry: HistoryEntry, into: "undo" | "redo") => void,
   remove: (entry: HistoryEntry) => void
-): void {
+): Promise<boolean> {
   const moved: HistoryEntry = { kind: "step", step: reversed(step) };
   push(moved, into);
-  step.undo().then(
+  return step.undo().then(
     took => {
       if (!took) remove(moved);
+      return took;
     },
-    () => remove(moved)
+    () => {
+      remove(moved);
+      return false;
+    }
   );
 }
 
@@ -1029,12 +1037,14 @@ export function useEditorState({
    * does nothing and never clears.
    */
   const replay = useCallback(
-    (from: "undo" | "redo") => {
+    (from: "undo" | "redo"): boolean | Promise<boolean> => {
       const entry = pop(from);
-      if (entry === undefined) return;
+      if (entry === undefined) return false;
       const into = from === "undo" ? "redo" : "undo";
-      if (entry.kind === "step") replayStep(entry.step, into, push, remove);
-      else run(entry.ops, into);
+      if (entry.kind === "step") {
+        return replayStep(entry.step, into, push, remove);
+      }
+      return run(entry.ops, into) !== null;
     },
     [pop, push, remove, run]
   );

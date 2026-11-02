@@ -498,13 +498,23 @@ describe("undo and redo", () => {
       }
     });
 
-    // Asserted as the CAP, not merely "some number": a stack that dropped the
-    // newest instead would also stay bounded, and would make the last edit the
-    // one an author cannot take back.
-    expect(result.current.undoDepth).toBe(MAX_HISTORY);
+    // The most recent insert is what comes off first, and exactly the
+    // bound's worth can be taken back: the five oldest stay. Counted by
+    // undoing rather than by a depth, which measures the document's position
+    // and keeps counting past the bound.
     act(() => result.current.undo());
-    // The most recent insert is what comes off first.
     expect(ids(result.current.document)).not.toContain(`n${MAX_HISTORY + 4}`);
+    act(() => {
+      for (let i = 1; i < MAX_HISTORY; i += 1) result.current.undo();
+    });
+    expect(result.current.canUndo).toBe(false);
+    expect(ids(result.current.document)).toEqual([
+      "n0",
+      "n1",
+      "n2",
+      "n3",
+      "n4",
+    ]);
   });
 });
 
@@ -1585,9 +1595,9 @@ describe("a step recorded from outside the document", () => {
     expect(result.current.canRedo).toBe(false);
   });
 
-  it("gives way to page edits at the history's bound, so the save point does not move", () => {
-    // A page saved at depth 1 stays saved however many style steps follow:
-    // the oldest step is dropped at the bound, never the page's own edit.
+  it("keeps the page's save point where it was when style steps pass the bound", () => {
+    // A page saved at depth 1 stays saved however many style steps follow,
+    // though its edit falls off the old end of the history.
     const calls: string[] = [];
     const { result } = renderHook(() =>
       useEditorState({ initialDocument: doc([]) })
@@ -1599,7 +1609,48 @@ describe("a step recorded from outside the document", () => {
       }
     });
     expect(result.current.undoDepth).toBe(1);
-    expect(result.current.canUndo).toBe(true);
+  });
+
+  it("drops the oldest entry at the bound, never the newest step", async () => {
+    // A full history of page edits, then a style change: undo takes back the
+    // style change first, as the author made it last.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([]) })
+    );
+    act(() => {
+      for (let i = 0; i < MAX_HISTORY; i += 1) {
+        result.current.apply(insert(`n${i}`, i));
+      }
+      result.current.recordStep(step(calls, "style"));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    expect(calls).toEqual(["undo style"]);
+    expect(ids(result.current.document)).toHaveLength(MAX_HISTORY);
+  });
+
+  it("answers whether an undo or redo of a step took effect", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.recordStep(step(calls, "kept", true));
+    });
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await result.current.undo();
+    });
+    expect(undone).toBe(true);
+    act(() => {
+      result.current.recordStep(step(calls, "refused", false));
+    });
+    await act(async () => {
+      undone = await result.current.undo();
+    });
+    expect(undone).toBe(false);
   });
 
   it("can be withdrawn before it is replayed, as a refused save is", () => {

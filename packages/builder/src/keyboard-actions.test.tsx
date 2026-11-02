@@ -11,7 +11,7 @@
  *
  * @module keyboard-actions.test
  */
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -71,8 +71,8 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorSpy {
     select: vi.fn(),
     apply: vi.fn(() => doc),
     applyAll: vi.fn(() => doc),
-    undo: vi.fn(),
-    redo: vi.fn(),
+    undo: vi.fn(() => Promise.resolve(true)),
+    redo: vi.fn(() => Promise.resolve(true)),
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
@@ -1023,7 +1023,7 @@ describe("useBlockKeyboardActions", () => {
   // `ctrlKey`, not `metaKey`: the manager resolves `mod` from the platform, and
   // this environment is not macOS — so a Command press here matches nothing and
   // would report the binding as missing when it is the fixture that is wrong.
-  it("undoes, and says so", () => {
+  it("undoes, and says so", async () => {
     const editor = editorSpy(pair(), "a");
     (editor as { canUndo: boolean }).canUndo = true;
     mount(editor);
@@ -1031,7 +1031,29 @@ describe("useBlockKeyboardActions", () => {
     press("z", { ctrlKey: true });
 
     expect(editor.undo).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("status").textContent).toContain("Undone");
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Undone")
+    );
+  });
+
+  it("says nothing of an undo that did not take effect", async () => {
+    // A shared style change is undone by a write; a refused one leaves the
+    // style as it was, so announcing "Undone" would be a false report.
+    const editor = editorSpy(pair(), "a");
+    (editor as { canUndo: boolean }).canUndo = true;
+    (editor as { undo: () => Promise<boolean> }).undo = vi.fn(() =>
+      Promise.resolve(false)
+    );
+    mount(editor);
+
+    press("z", { ctrlKey: true });
+    // Let the undo's answer arrive and anything it says render.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    expect(editor.undo).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status").textContent).not.toContain("Undone");
   });
 
   it("does not undo when there is nothing to undo", () => {

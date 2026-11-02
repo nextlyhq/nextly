@@ -17,9 +17,9 @@
  */
 import type { PanelView } from "@nextlyhq/builder";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
-import * as React from "react";
+import type * as React from "react";
 
-import { StyleRevisionContext } from "./site-style-history";
+import { RemountOnStyleReplay } from "./site-style-history";
 
 /** The panel's tabs, in the order the rail's Design item shows them. */
 const DESIGN_VIEWS = [
@@ -48,9 +48,6 @@ export function DesignPanel({
   tabs: Record<DesignView, () => React.ReactNode>;
 }): React.JSX.Element {
   const current = designViewOf(view.current);
-  // A style change undone or redone is written behind the open tab's back, so
-  // the tab is mounted afresh to read it rather than keep its own copy.
-  const revision = React.useContext(StyleRevisionContext);
   return (
     <Tabs value={current} onValueChange={view.choose}>
       <TabsList aria-label="Design">
@@ -62,10 +59,10 @@ export function DesignPanel({
       </TabsList>
       {DESIGN_VIEWS.map(entry => (
         <TabsContent key={entry.value} value={entry.value}>
+          {/* A style change undone or redone is written behind the open
+              tab's back, so the tab is mounted afresh to read it. */}
           {entry.value === current ? (
-            <React.Fragment key={revision}>
-              {tabs[entry.value]()}
-            </React.Fragment>
+            <RemountOnStyleReplay>{tabs[entry.value]()}</RemountOnStyleReplay>
           ) : null}
         </TabsContent>
       ))}
