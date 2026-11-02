@@ -80,6 +80,10 @@ import type {
 } from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginLimits } from "./limits/plugin-limits";
+import {
+  ownCollectionReads,
+  type PluginOwnCollectionReads,
+} from "./own-collection-reads";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
@@ -496,6 +500,13 @@ export interface PluginContext {
      * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system.
      */
     collections: PluginCollectionService;
+    /**
+     * @experimental Reads of the collections THIS plugin declared, shaped by no
+     * configured read hook or list-query filter, as the system. Never return
+     * the result to a person: a site's read hooks may be what keeps one
+     * tenant's rows from another.
+     */
+    ownCollections: PluginOwnCollectionReads;
     /**
      * User service for user management.
      *
@@ -2079,9 +2090,19 @@ export function createPluginContext(
     },
   };
 
+  // Resolved once: `ctx.self` names the collections, and the own-collection
+  // grant is issued for exactly those, so the two cannot disagree.
+  const self: PluginSelf = plugin
+    ? resolvePluginSelf(plugin)
+    : { name: "", collections: {}, singles: {} };
+
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
+      ownCollections: ownCollectionReads(
+        collectionService,
+        Object.values(self.collections)
+      ),
       // The plugin view, refusing the writes that decide who administers the
       // site; core's own callers keep the unrestricted instance. Resolved on
       // access like `versions` below, so a context built by a caller that
@@ -2137,9 +2158,7 @@ export function createPluginContext(
     logger,
     events,
     nextlyVersion: getCoreVersion(),
-    self: plugin
-      ? resolvePluginSelf(plugin)
-      : { name: "", collections: {}, singles: {} },
+    self,
     config: pluginConfigView(config),
     hooks: pluginHooks,
     filters: pluginFilters,

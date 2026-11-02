@@ -63,6 +63,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import type { HookExemptRead } from "../../shared/lib/hook-exempt-read";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -312,6 +313,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
       refusedFilter(params.where) ??
@@ -352,6 +355,8 @@ export class CollectionEntryService extends BaseService {
      * one thing nobody re-checks is an option that appears not to exist.
      */
     status?: "published" | "draft" | "all";
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??
@@ -448,6 +453,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }) {
     return withRuleLanguage(this.readLanguages(params), () =>
       this.queryService.getEntry(params)
