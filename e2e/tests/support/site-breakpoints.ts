@@ -21,14 +21,14 @@ export async function storeSiteBreakpoints(
   request: APIRequestContext,
   breakpoints: SiteBreakpoints
 ): Promise<void> {
-  const { token } = (await (
-    await request.get("/admin/api/auth/csrf")
-  ).json()) as {
-    token: string;
-  };
+  const csrf = await request.get("/admin/api/auth/csrf");
+  const { token } = (await csrf.json()) as { token: string };
+  // A plugin route checks a cookie-authenticated write's origin, which a
+  // browser sends and an API request does not: named here as the site's own.
+  const origin = new URL(csrf.url()).origin;
   const stored = await request.post(ROUTE, {
     data: { breakpoints },
-    headers: { "x-csrf-token": token },
+    headers: { "x-csrf-token": token, origin },
   });
   expect(
     stored.ok(),

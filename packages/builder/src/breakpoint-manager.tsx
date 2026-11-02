@@ -16,6 +16,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import { Check } from "lucide-react";
 import * as React from "react";
 
 import { BreakpointEditor } from "./breakpoint-editor";
@@ -215,8 +216,16 @@ export function BreakpointManager({
         </Button>
         {/* After a save, in the save chip's word, beside what made it; a
             refused save stays in the editor with its reason. */}
-        <span role="status" className="text-sm text-muted-foreground">
-          {saved ? "Saved" : ""}
+        <span
+          role="status"
+          className="flex items-center gap-1.5 text-sm text-muted-foreground"
+        >
+          {saved ? (
+            <>
+              <Check className="size-4 text-success" aria-hidden="true" />
+              Saved
+            </>
+          ) : null}
         </span>
       </div>
     </div>

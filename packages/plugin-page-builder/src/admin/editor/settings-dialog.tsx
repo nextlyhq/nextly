@@ -25,6 +25,8 @@ import {
 } from "@nextlyhq/builder/shell";
 import { usePluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import {
+  Alert,
+  AlertDescription,
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -278,10 +280,12 @@ function SiteSettings({
 }): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
-      <p className="flex items-center gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm font-medium text-warning-foreground">
-        <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
-        Changes here apply to the live site immediately.
-      </p>
+      <Alert variant="warning">
+        <TriangleAlert className="size-4" aria-hidden="true" />
+        <AlertDescription>
+          Changes here apply to the live site immediately.
+        </AlertDescription>
+      </Alert>
       <section
         aria-labelledby="settings-breakpoints-title"
         className="space-y-2"
@@ -289,10 +293,6 @@ function SiteSettings({
         <h3 id="settings-breakpoints-title" className="text-sm font-semibold">
           Breakpoints
         </h3>
-        <p className="text-sm text-muted-foreground">
-          The device buttons in the top bar are these. A style set under a
-          breakpoint applies up to its width.
-        </p>
         <BreakpointManager
           {...breakpoints}
           onEditingChange={onEditingBreakpoints}
