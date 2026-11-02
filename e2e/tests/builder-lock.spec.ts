@@ -17,7 +17,11 @@ import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
-import { secondEditor } from "./support/two-editors";
+import {
+  claimedBy,
+  secondEditor,
+  type LockedDocument,
+} from "./support/two-editors";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.usersRoles] });
@@ -31,6 +35,15 @@ function heading(id: string, text: string) {
 
 function block(page: Page, id: string) {
   return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
+}
+
+/** The homepage, as the document-lock route names it. */
+async function homepage(page: Page): Promise<LockedDocument> {
+  const read = await page.request.get(HOMEPAGE_API);
+  expect(read.ok(), await read.text()).toBe(true);
+  // A Single's read is the bare document, not a mutation's `{ item }`.
+  const { id } = (await read.json()) as { id: string };
+  return { scopeKind: "single", slug: "homepage", entryId: id };
 }
 
 async function openBuilder(page: Page): Promise<void> {
@@ -75,6 +88,9 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
   }) => {
     await openBuilder(page);
     await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
+    // The canvas draws before the claim lands; a second editor arriving first
+    // would claim the page themself.
+    await claimedBy(page.request, await homepage(page));
 
     const other = await secondEditor(browser, page, baseURL);
     try {
@@ -109,6 +125,8 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
     await block(page, "second").click();
     await page.keyboard.press("Delete");
     await expect(block(page, "second")).toHaveCount(0);
+    // As above: the second editor arrives once the first one's claim has.
+    await claimedBy(page.request, await homepage(page));
 
     const other = await secondEditor(browser, page, baseURL);
     try {
