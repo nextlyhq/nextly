@@ -21,19 +21,20 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 
+import { EDITOR_WORDS } from "./editor-words";
 import { RAIL_GROUPS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
 
-/** Each panel's name and icon, kept beside each other. */
+/** Each panel's name, from the editor's words, and its icon, side by side. */
 const PANEL_CHROME: Record<
   LeftPanel,
   { label: string; Icon: React.ComponentType<{ className?: string }> }
 > = {
-  add: { label: "Add", Icon: Plus },
-  layers: { label: "Layers", Icon: Layers },
-  pages: { label: "Pages", Icon: FileText },
-  components: { label: "Components", Icon: Blocks },
-  design: { label: "Design", Icon: Palette },
-  settings: { label: "Settings", Icon: Settings },
+  add: { label: EDITOR_WORDS.add, Icon: Plus },
+  layers: { label: EDITOR_WORDS.layers, Icon: Layers },
+  pages: { label: EDITOR_WORDS.pages, Icon: FileText },
+  components: { label: EDITOR_WORDS.components, Icon: Blocks },
+  design: { label: EDITOR_WORDS.design, Icon: Palette },
+  settings: { label: EDITOR_WORDS.settings, Icon: Settings },
 };
 
 /** A panel's name, as the rail shows it and the open panel's region is named. */
@@ -128,7 +129,7 @@ export function EditorRail({
         {RAIL_GROUPS.bottom.filter(isAvailable).map(item)}
         <li>
           <RailItem
-            label="Help"
+            label={EDITOR_WORDS.help}
             Icon={CircleHelp}
             onClick={onHelp}
             data-rail-action="help"

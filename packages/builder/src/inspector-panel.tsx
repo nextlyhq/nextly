@@ -55,6 +55,7 @@ import {
 } from "./content-controls";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
@@ -280,9 +281,14 @@ export interface ComponentLibrary {
  * where an author looking for an anchor id goes after the block's own fields.
  */
 const INSPECTOR_TABS = [
-  { value: "content", label: "Content" },
-  { value: "style", label: "Style" },
+  { value: "content", label: EDITOR_WORDS.content },
+  { value: "style", label: EDITOR_WORDS.style },
 ] as const;
+
+/** The inspector's tab names, in order, as an author reads them. */
+export function inspectorTabLabels(): string[] {
+  return INSPECTOR_TABS.map(tab => tab.label);
+}
 
 /**
  * The Style tab's own handler for a change of tab.
