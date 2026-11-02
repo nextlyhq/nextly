@@ -42,6 +42,7 @@ import {
   PANEL_BOUNDS,
   panelAfterRailClick,
   readPreferences,
+  SHELL_PREFERENCES_KEY,
   topologyKey,
   writePreferences,
   type LeftPanel,
@@ -289,8 +290,6 @@ export interface BuilderShellProps {
   store?: PreferenceStore;
   className?: string;
 }
-
-const STORAGE_KEY = "nextly.builder.shell";
 
 /**
  * Whether the shell's own CONTAINER can carry the full layout, as it changes.
@@ -1558,7 +1557,7 @@ export function BuilderShell({
   // swaps stores — signing into a second workspace, promoting a memory store to
   // a persisted one — went on reading and writing the store it had replaced.
   const fallbackStore = React.useRef<PreferenceStore | null>(null);
-  fallbackStore.current ??= browserStore(STORAGE_KEY);
+  fallbackStore.current ??= browserStore(SHELL_PREFERENCES_KEY);
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount, loadedFromCurrentStore] =
     usePreferences(resolvedStore);
