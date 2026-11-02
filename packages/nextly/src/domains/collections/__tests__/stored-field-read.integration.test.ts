@@ -8,6 +8,7 @@
  * batch wrote is seen; `draft` is the working draft a preview shows; and it is
  * scoped to the validator's own field type, refused by name otherwise.
  */
+import { getTableName } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionConfig } from "../../../collections/config/define-collection";
@@ -24,6 +25,22 @@ import {
   entryWriteContext,
   type StoredFieldConnection,
 } from "../services/stored-field-read";
+
+/** The executor each component-schema resolution was handed, in order. */
+const schemaExecutors = vi.hoisted(() => [] as unknown[]);
+vi.mock("../../versions/restore-version", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../versions/restore-version")>();
+  return {
+    ...real,
+    resolveComponentSchemas: (
+      ...args: Parameters<typeof real.resolveComponentSchemas>
+    ) => {
+      schemaExecutors.push(args[1]);
+      return real.resolveComponentSchemas(...args);
+    },
+  };
+});
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -176,6 +193,15 @@ async function bootLanguages(dialect: TestDialect): Promise<TestNextly> {
         slug: "flagged",
         fields: [{ name: "body", type: "probe", localized: true }],
       } as unknown as CollectionConfig,
+      {
+        slug: "staged",
+        localized: true,
+        status: true,
+        fields: [
+          { name: "title", type: "text" },
+          { name: "body", type: "probe", localized: true },
+        ],
+      } as unknown as CollectionConfig,
     ],
     singles: [
       {
@@ -287,6 +313,54 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       ).toEqual({ kind: "value", value: { v: "pending" } });
     });
 
+    it("resolves a working draft's component schemas on the write's own transaction", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "drafted", {
+        title: "a",
+        body: { v: "live" },
+        status: "published",
+      });
+      await t.nextly.update({
+        collection: "drafted",
+        id,
+        data: { body: { v: "pending" } },
+        overrideAccess: true,
+      });
+      schemaExecutors.length = 0;
+
+      // Inside a transaction a pooled read could wait behind the very
+      // connection the transaction holds, so every read stays on it.
+      const executors: unknown[] = [];
+      await t.adapter.transaction(async tx => {
+        const executor = (
+          tx as unknown as { getDrizzle(): unknown }
+        ).getDrizzle();
+        executors.push(executor);
+        const write = entryWriteContext({
+          kind: "collection",
+          slug: "drafted",
+          connection: {
+            db: tx as unknown as VersionsDbApi,
+            executor,
+            defaultLocale: null,
+          },
+        });
+        expect(
+          await write.readStored("probe", {
+            collection: "drafted",
+            id,
+            field: "body",
+            form: "draft",
+          })
+        ).toEqual({ kind: "value", value: { v: "pending" } });
+      });
+
+      expect(schemaExecutors.length).toBeGreaterThan(0);
+      for (const handed of schemaExecutors) {
+        expect(handed).toBe(executors[0]);
+      }
+    });
+
     it("refuses, by name, a field of another type, or one of its own collection's other fields", async () => {
       const t = await boot(dialect);
       const id = await created(t, "plain", {
@@ -384,6 +458,98 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       expect(await at("de")).toEqual({ kind: "value", value: { said: "de" } });
       expect(await at("en")).toEqual({ kind: "value", value: { said: "en" } });
       expect(await at()).toEqual({ kind: "value", value: { said: "en" } });
+    });
+
+    it("reads one language's value by selecting that one column, not the whole translation row", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "worded", {
+        title: "a",
+        body: { said: "en" },
+      });
+      // Every select a read on the pool makes, with the table it reads. A bare
+      // select of the translation table loads every translated column of the
+      // row, which a save then pays for each stored form it reads.
+      const selects: { projection: unknown; table?: string }[] = [];
+      const adapter = t.adapter as unknown as { getDrizzle(): object };
+      const drizzle = adapter.getDrizzle();
+      vi.spyOn(adapter, "getDrizzle").mockReturnValue(
+        new Proxy(drizzle, {
+          get(target, property, receiver) {
+            const value: unknown = Reflect.get(target, property, receiver);
+            if (property !== "select" || typeof value !== "function") {
+              return value;
+            }
+            return (...args: unknown[]) => {
+              const seen: { projection: unknown; table?: string } = {
+                projection: args[0],
+              };
+              selects.push(seen);
+              const builder = (value as (...a: unknown[]) => object).apply(
+                target,
+                args
+              ) as { from(table: unknown): unknown };
+              const from = builder.from.bind(builder);
+              builder.from = (table: unknown) => {
+                seen.table = getTableName(table as never);
+                return from(table);
+              };
+              return builder;
+            };
+          },
+        })
+      );
+
+      const read = await languagesReader(
+        t,
+        "probe"
+      )({
+        collection: "worded",
+        id,
+        field: "body",
+        form: "published",
+        locale: "en",
+      } as never);
+
+      expect(read).toEqual({ kind: "value", value: { said: "en" } });
+      const companionReads = selects.filter(seen =>
+        seen.table?.endsWith("_locales")
+      );
+      expect(companionReads.length).toBeGreaterThan(0);
+      for (const seen of companionReads) {
+        expect(Object.keys((seen.projection ?? {}) as object)).toEqual([
+          "value",
+        ]);
+      }
+    });
+
+    it("reads a language's value as stored, whatever that language's status", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "staged", {
+        title: "a",
+        body: { said: "en" },
+        status: "published",
+      });
+      // A translation kept as a draft: its row is stored with a draft status.
+      await t.nextly.update({
+        collection: "staged",
+        id,
+        locale: "de",
+        data: { body: { said: "de" }, status: "draft" },
+        overrideAccess: true,
+      } as never);
+
+      expect(
+        await languagesReader(
+          t,
+          "probe"
+        )({
+          collection: "staged",
+          id,
+          field: "body",
+          form: "published",
+          locale: "de",
+        } as never)
+      ).toEqual({ kind: "value", value: { said: "de" } });
     });
 
     it("answers absent for a language that stores nothing, rather than another language's value", async () => {

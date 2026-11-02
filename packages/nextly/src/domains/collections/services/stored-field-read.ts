@@ -25,6 +25,8 @@
  *
  * @module domains/collections/services/stored-field-read
  */
+import { and, eq } from "drizzle-orm";
+
 import type {
   DynamicCollectionRecord,
   FieldDefinition,
@@ -38,10 +40,7 @@ import type {
   PluginStoredValueTarget,
 } from "../../../plugins/contributions";
 import type { EntryWriteContext } from "../../../shared/lib/entry-validation";
-import {
-  populateCompanionFields,
-  type LocalizedFieldRef,
-} from "../../i18n/companion-join";
+import type { LocalizedFieldRef } from "../../i18n/companion-join";
 import {
   buildCompanionSchema,
   type CompanionSchema,
@@ -101,6 +100,7 @@ export function entryWriteContext(args: {
     slug: args.slug,
     ...(args.id === undefined ? {} : { id: args.id }),
     ...(args.locale === undefined ? {} : { locale: args.locale }),
+    defaultLocale: args.connection.defaultLocale,
     // The executor is the transaction's own, and it is handed only for one.
     inTransaction: args.connection.executor !== undefined,
     readStored: (allowedType, target) =>
@@ -266,6 +266,17 @@ async function storedEntity(
   };
 }
 
+/** The select surface a companion read needs, on a Drizzle executor. */
+interface CompanionSelect {
+  select(projection: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<{ value?: unknown }[]>;
+      };
+    };
+  };
+}
+
 /** A field kept per language, with the companion table that holds it. */
 interface CompanionField {
   readonly companion: CompanionSchema;
@@ -357,25 +368,23 @@ async function languageValue(
       "is kept per language, and that store is not ready"
     );
   }
-  const rows: Record<string, unknown>[] = [{ id }];
-  await populateCompanionFields({
-    db: (connection.executor ?? adapter.getDrizzle()) as Parameters<
-      typeof populateCompanionFields
-    >[0]["db"],
-    companionTable: companion.table,
-    localizedFields: [field],
-    rows,
-    localeChain: [locale],
-    // The published form reads only a published translation where the status
-    // is kept per language; the draft form reads whatever the language holds.
-    ...(companion.hasStatus && target.form === "published"
-      ? { statusValues: ["published"] }
-      : {}),
-    readiness,
-  });
-  // The join answers null both where the language has no row and where its
-  // row holds nothing for the field: either way the language stores nothing.
-  const value = rows[0][field.name];
+  // Only the field asked for, of the one row for this entry and language: a
+  // translation row can hold every other large value of the page, and a save
+  // reads this for each stored form. Read as stored, whatever the language's
+  // status, as the main row is for a field kept there.
+  const table = companion.table as Record<string, unknown>;
+  const rows = await (
+    (connection.executor ?? adapter.getDrizzle()) as CompanionSelect
+  )
+    .select({ value: table[field.column] })
+    .from(companion.table)
+    .where(
+      and(eq(table._parent as never, id), eq(table._locale as never, locale))
+    )
+    .limit(1);
+  // No row, or a row holding nothing for the field: either way the language
+  // stores nothing.
+  const value = rows[0]?.value;
   return value === null || value === undefined ? undefined : { value };
 }
 
@@ -430,7 +439,10 @@ async function workingDraftValue(
 
   // The confirming half, against resolved schemas: a draft nothing could promote
   // is not one the preview shows.
-  if (!overlay(await resolveComponentSchemas(fields)).overlay) return undefined;
+  // On the write's own connection: inside a transaction a pooled read could
+  // wait behind the very connection the transaction holds.
+  const schemas = await resolveComponentSchemas(fields, connection.executor);
+  if (!overlay(schemas).overlay) return undefined;
 
   const snapshot = draft.snapshot;
   if (typeof snapshot !== "object" || snapshot === null) return undefined;
