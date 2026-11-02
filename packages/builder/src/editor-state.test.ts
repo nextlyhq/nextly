@@ -12,13 +12,15 @@
  * @module editor-state.test
  */
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useEditorState, MAX_HISTORY } from "./editor-state";
 import {
-  DEFAULT_LIMITS,
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
+  DEFAULT_LIMITS,
   registerBlocks,
+  resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -815,6 +817,501 @@ describe("selecting what was just inserted", () => {
     // measuring a selection that was refused for the right reason.
     expect(ids(result.current.document)).toEqual(["a", "brand-new"]);
     expect(result.current.selectedId).toBe("brand-new");
+  });
+});
+
+describe("the locks an edit is held to", () => {
+  // Every surface reaches the document through this apply, so the lock is
+  // judged here exactly as a save judges it: an edit that adds a break is
+  // refused and the host told why in the lock's words; an edit that leaves a
+  // stored break as it was, or only changes content, applies.
+  const base = {
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    render: () => null,
+  };
+
+  beforeEach(() => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/headline",
+          props: {
+            text: { type: "text", role: "content" },
+            align: { type: "select" },
+          },
+          defaultProps: { text: "Title", align: "left" },
+        },
+        {
+          ...base,
+          name: "acme/fixed-row",
+          slots: {
+            items: { defaultBlock: [{ type: "acme/headline" }], lock: "all" },
+          },
+        },
+        {
+          ...base,
+          name: "acme/sealed-card",
+          slots: {
+            body: {
+              defaultBlock: [{ type: "acme/headline" }],
+              lock: "contentOnly",
+            },
+          },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  const headline = (id: string, align = "left"): BlockNode => ({
+    id,
+    type: "acme/headline",
+    version: 1,
+    props: { text: "Title", align },
+  });
+  const holding = (type: string, slot: string, children: BlockNode[]) => ({
+    id: "holder",
+    type,
+    version: 1,
+    props: {},
+    slots: { [slot]: children },
+  });
+
+  it("asks its lock questions again when the host swaps the lock sources", () => {
+    // A surface keyed on the store (the repair notice, the inserter's cache)
+    // must not keep answers judged against the source the host replaced.
+    const first = { get: () => undefined };
+    const second = { get: () => undefined };
+    // Opened once, as a host holds it: a new document is a new baseline.
+    const opened = doc([headline("h")]);
+    const { result, rerender } = renderHook(
+      ({ definitions }) =>
+        useEditorState({ initialDocument: opened, locks: { definitions } }),
+      { initialProps: { definitions: first } }
+    );
+    const before = result.current;
+
+    rerender({ definitions: first });
+    expect(result.current.lockRefusalFor).toBe(before.lockRefusalFor);
+
+    rerender({ definitions: second });
+    expect(result.current.lockRefusalFor).not.toBe(before.lockRefusalFor);
+    expect(result.current.planRepair).not.toBe(before.planRepair);
+    expect(result.current).not.toBe(before);
+  });
+
+  it("refuses an insert into a slot locked all, tells the host why, and commits nothing", () => {
+    const onLockRefused = vi.fn();
+    // Room refusals keep their own callback and shape.
+    const onRoom = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          holding("acme/fixed-row", "items", [headline("h1")]),
+        ]),
+        onRefused: onRoom,
+        onLockRefused,
+      })
+    );
+
+    let outcome: BlockDocument | null = null;
+    act(() => {
+      outcome = result.current.apply({
+        kind: "insert",
+        node: headline("h2"),
+        at: { parentId: "holder", slot: "items", index: 1 },
+      });
+    });
+
+    expect(outcome).toBeNull();
+    expect(result.current.undoDepth).toBe(0);
+    expect(onLockRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "locked",
+        sentence:
+          "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
+      })
+    );
+    expect(onRoom).not.toHaveBeenCalled();
+  });
+
+  it("refuses a design change inside contentOnly and applies a content change", () => {
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          holding("acme/sealed-card", "body", [headline("h1")]),
+        ]),
+        onLockRefused,
+      })
+    );
+
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "h1",
+          patch: { props: { text: "Spring sale", align: "left" } },
+        })
+      ).not.toBeNull();
+    });
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "h1",
+          patch: { props: { text: "Spring sale", align: "right" } },
+        })
+      ).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenCalledTimes(1);
+    expect(onLockRefused.mock.calls[0]?.[0].sentence).toMatch(
+      /locked to its content/
+    );
+  });
+
+  it("applies an edit that leaves a stored break as it was", () => {
+    // Stored before locks were enforced: the row holds a headline more.
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          holding("acme/fixed-row", "items", [headline("h1"), headline("h2")]),
+        ]),
+        onLockRefused,
+      })
+    );
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "h1",
+          patch: { props: { text: "Spring sale", align: "left" } },
+        })
+      ).not.toBeNull();
+    });
+    expect(onLockRefused).not.toHaveBeenCalled();
+  });
+
+  it("judges against the document as last SAVED, so a break a saved repair removed is refused again", () => {
+    // Opened with the headline aligned right, against today's defaults. The
+    // author puts it back as it starts and saves: the stored copy now holds
+    // "left", so a save refuses "right" again, and the editor must agree.
+    const opened = doc([
+      holding("acme/sealed-card", "body", [headline("h1", "right")]),
+    ]);
+    const repaired = doc([
+      holding("acme/sealed-card", "body", [headline("h1", "left")]),
+    ]);
+    const set = (align: string) => ({
+      kind: "update" as const,
+      id: "h1",
+      patch: { props: { text: "Title", align } },
+    });
+    const { result, rerender } = renderHook(
+      ({ stored }) => useEditorState({ initialDocument: opened, stored }),
+      { initialProps: { stored: opened } }
+    );
+
+    act(() => {
+      expect(result.current.apply(set("left"))).not.toBeNull();
+    });
+    // Not saved yet: the stored copy still holds "right", so it is allowed.
+    act(() => {
+      expect(result.current.apply(set("right"))).not.toBeNull();
+    });
+    act(() => {
+      expect(result.current.apply(set("left"))).not.toBeNull();
+    });
+    // Saved: the stored copy is the repaired document.
+    rerender({ stored: repaired });
+    act(() => {
+      expect(result.current.apply(set("right"))).toBeNull();
+    });
+  });
+
+  it("answers ahead of time what apply would refuse, and applies nothing", () => {
+    // The question a drop indicator, the inserter or a toolbar asks before an
+    // action: the same answer apply then gives, with nothing committed.
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          holding("acme/fixed-row", "items", [headline("h1")]),
+          headline("loose"),
+        ]),
+      })
+    );
+    const insert = {
+      kind: "insert" as const,
+      node: headline("h2"),
+      at: { parentId: "holder", slot: "items", index: 1 },
+    };
+    expect(result.current.lockRefusalFor([insert])).toEqual(
+      expect.objectContaining({
+        code: "locked-slot-altered",
+        holderId: "holder",
+      })
+    );
+    expect(result.current.undoDepth).toBe(0);
+    expect(result.current.document.nodes[0]!.slots!.items).toHaveLength(1);
+    // Allowed: moving a top-level headline ahead of the row, which no lock
+    // holds. A real change, so "allowed" is an answer and not an empty edit.
+    expect(
+      result.current.lockRefusalFor([
+        { kind: "move", id: "loose", to: { index: 0 } },
+      ])
+    ).toBeUndefined();
+    act(() => {
+      expect(result.current.apply(insert)).toBeNull();
+    });
+  });
+
+  it("keeps a design value the document was opened with, after an edit in between", () => {
+    // Opened with the headline aligned right. Putting it back as it started
+    // and then back to "right" again returns to what the stored page holds.
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          holding("acme/sealed-card", "body", [headline("h1", "right")]),
+        ]),
+      })
+    );
+    for (const align of ["left", "right"]) {
+      act(() => {
+        expect(
+          result.current.apply({
+            kind: "update",
+            id: "h1",
+            patch: { props: { text: "Title", align } },
+          })
+        ).not.toBeNull();
+      });
+    }
+  });
+
+  it("hands out the composed page, where a placement's content keeps its own id", () => {
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [holding("acme/fixed-row", "items", [headline("own")])],
+      slots: { extra: { label: "Extra", nodeId: "holder", slot: "items" } },
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+            slots: { extra: [headline("given")] },
+          } as BlockNode,
+        ]),
+        definitions: new Map([["promo", promo]]),
+      })
+    );
+    const ids: string[] = [];
+    const walk = (nodes: readonly BlockNode[]) => {
+      for (const node of nodes) {
+        ids.push(node.id);
+        for (const children of Object.values(node.slots ?? {})) walk(children);
+      }
+    };
+    walk(result.current.composed()?.nodes ?? []);
+
+    // Inside the component's own row, beside the row's own headline.
+    expect(ids).toContain("given");
+    expect(ids).not.toContain("i1");
+    // No library, nothing composed.
+    const bare = renderHook(() =>
+      useEditorState({ initialDocument: doc([headline("h")]) })
+    );
+    expect(bare.result.current.composed()).toBeUndefined();
+  });
+
+  it("refuses content a placement gives a component's locked slot, judged on the composed page", () => {
+    // The component exposes its own row, locked "all", for each placement to
+    // fill. One headline is what the row starts with; a second is a block the
+    // lock refuses, though the page alone shows only a placement holding two.
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [holding("acme/fixed-row", "items", [headline("own")])],
+      slots: { extra: { label: "Extra", nodeId: "holder", slot: "items" } },
+    } as unknown as BlockDocument;
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+          } as BlockNode,
+        ]),
+        definitions: new Map([["promo", promo]]),
+        onLockRefused,
+      })
+    );
+    const give = (id: string) => ({
+      kind: "insert" as const,
+      node: headline(id),
+      at: { parentId: "i1", slot: "extra", index: 0 },
+    });
+
+    act(() => {
+      expect(result.current.apply(give("first"))).not.toBeNull();
+    });
+    expect(result.current.lockRefusalFor([give("second")])).toEqual(
+      expect.objectContaining({ code: "locked-slot-altered", instanceId: "i1" })
+    );
+    act(() => {
+      expect(result.current.apply(give("second"))).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sentence:
+          "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
+      })
+    );
+  });
+
+  it("allows an unrelated edit while a placement already breaks a component's lock", () => {
+    // Stored before locks were enforced: the placement gives the component's
+    // row two headlines. The editor refuses only a break an edit adds, so an
+    // edit elsewhere on the page applies.
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [holding("acme/fixed-row", "items", [headline("own")])],
+      slots: { extra: { label: "Extra", nodeId: "holder", slot: "items" } },
+    } as unknown as BlockDocument;
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+            slots: { extra: [headline("one"), headline("two")] },
+          } as BlockNode,
+          headline("loose"),
+        ]),
+        definitions: new Map([["promo", promo]]),
+        onLockRefused,
+      })
+    );
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "loose",
+          patch: { props: { text: "Spring sale", align: "left" } },
+        })
+      ).not.toBeNull();
+    });
+    expect(onLockRefused).not.toHaveBeenCalled();
+  });
+
+  it("composes each document once: an edit composes only the document it makes", () => {
+    // The room check and the lock check both read the composed page. Each
+    // composition is counted by the lookups it makes; one composition of the
+    // edited page, measured on its own, is what an edit may cost once the
+    // document before it and the saved one were composed.
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [holding("acme/fixed-row", "items", [headline("own")])],
+      slots: { extra: { label: "Extra", nodeId: "holder", slot: "items" } },
+    } as unknown as BlockDocument;
+    const known = new Map([["promo", promo]]);
+    let asked = 0;
+    const counting = {
+      has: (id: string) => (asked++, known.has(id)),
+      get: (id: string) => (asked++, known.get(id)),
+    };
+    const page = doc([
+      {
+        id: "i1",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "promo" },
+      } as BlockNode,
+      headline("loose"),
+    ]);
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page, definitions: counting })
+    );
+    const rename = (text: string) => ({
+      kind: "update" as const,
+      id: "loose",
+      patch: { props: { text, align: "left" } },
+    });
+    act(() => {
+      result.current.apply(rename("One"));
+    });
+
+    asked = 0;
+    resolveComponentInstances(result.current.document, counting);
+    const oneComposition = asked;
+    expect(oneComposition).toBeGreaterThan(0);
+
+    asked = 0;
+    act(() => {
+      expect(result.current.apply(rename("Two"))).not.toBeNull();
+    });
+    expect(asked).toBe(oneComposition);
+  });
+
+  it("plans the repair of a break the document holds, against the same baseline", () => {
+    // The row holds a headline more, which the repair takes out to just after
+    // the row.
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          holding("acme/fixed-row", "items", [headline("h1"), headline("h2")]),
+        ]),
+      })
+    );
+
+    const plan = result.current.planRepair();
+    expect(plan.steps).toEqual([
+      expect.objectContaining({ kind: "move", nodeId: "h2", after: "holder" }),
+    ]);
+    expect(plan.result.nodes.map(node => node.id)).toEqual(["holder", "h2"]);
+    // Asked, not applied.
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("plans nothing for a design value the saved page holds, which the save keeps", () => {
+    // "Starting or stored": the save accepts a contentOnly value the stored
+    // copy holds, so there is nothing to repair. Planned without the stored
+    // copy, the same document would have its alignment put back.
+    const opened = doc([
+      holding("acme/sealed-card", "body", [headline("h1", "right")]),
+    ]);
+    const { result, rerender } = renderHook(
+      ({ stored }) => useEditorState({ initialDocument: opened, stored }),
+      { initialProps: { stored: opened } }
+    );
+    expect(result.current.planRepair().steps).toEqual([]);
+
+    rerender({
+      stored: doc([holding("acme/sealed-card", "body", [headline("h1")])]),
+    });
+    expect(result.current.planRepair().steps).toEqual([
+      expect.objectContaining({ kind: "reset", nodeId: "h1" }),
+    ]);
   });
 });
 

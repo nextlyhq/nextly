@@ -21,6 +21,7 @@ import { Checkbox, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
+import { HeldByLock } from "./held-by-lock";
 import { lockOp, renameOp, type BlockIdentity } from "./inspector";
 import { useStoredDraft } from "./stored-draft";
 
@@ -28,10 +29,18 @@ export function IdentityFields({
   nodeId,
   identity,
   editor,
+  heldBy,
 }: {
   nodeId: string;
   identity: BlockIdentity;
   editor: EditorState;
+  /**
+   * The lock reason's element id, when the block sits inside an area locked
+   * to its content. Its own lock is then held, since the area fixes it; its
+   * name is the editor's label for it, which the page never draws, so it stays
+   * editable.
+   */
+  heldBy?: string | undefined;
 }): React.JSX.Element {
   const [draft, setDraft] = useStoredDraft(identity.name);
   // Unique per mount, for the reason the exposed rows' are: two editors on one
@@ -73,19 +82,21 @@ export function IdentityFields({
         />
       </div>
 
-      <div className="nx-inspector__field nx-inspector__field--inline">
-        <Checkbox
-          id={lockId}
-          checked={identity.locked}
-          // Immediately, with no blur to wait for. There is nothing to coalesce
-          // in a checkbox, and waiting would leave the canvas disagreeing with a
-          // control the author has already changed.
-          onCheckedChange={checked =>
-            editor.apply(lockOp(nodeId, checked === true))
-          }
-        />
-        <Label htmlFor={lockId}>Lock this block</Label>
-      </div>
+      <HeldByLock reasonId={heldBy}>
+        <div className="nx-inspector__field nx-inspector__field--inline">
+          <Checkbox
+            id={lockId}
+            checked={identity.locked}
+            // Immediately, with no blur to wait for. There is nothing to coalesce
+            // in a checkbox, and waiting would leave the canvas disagreeing with a
+            // control the author has already changed.
+            onCheckedChange={checked =>
+              editor.apply(lockOp(nodeId, checked === true))
+            }
+          />
+          <Label htmlFor={lockId}>Lock this block</Label>
+        </div>
+      </HeldByLock>
     </div>
   );
 }

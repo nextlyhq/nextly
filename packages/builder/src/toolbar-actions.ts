@@ -49,8 +49,44 @@ import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
 import { keyboardMovePosition } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
+import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
-import { isRefusal, selectionMove } from "./selection-ops";
+import { refusalAnnouncement } from "./move-refusal";
+import type { BuilderOp } from "./ops";
+import {
+  isRefusal,
+  selectionDeletion,
+  selectionDuplication,
+  selectionMove,
+} from "./selection-ops";
+
+/** The editor's own lock question, asked of the ops a verb would apply. */
+type LockQuestion = (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
+
+/**
+ * Why a slot's lock refuses the ops, in the words every lock refusal uses, or
+ * undefined when it does not, or when the caller asked nothing.
+ */
+function lockReason(
+  ask: LockQuestion | undefined,
+  ops: readonly BuilderOp[]
+): string | undefined {
+  const found = ask?.(ops);
+  return found === undefined
+    ? undefined
+    : refusalAnnouncement(lockRefusalWording(found));
+}
+
+/** An action enabled, or dimmed with the lock's reason when one refuses it. */
+function heldByLock(
+  action: ToolbarAction,
+  ask: LockQuestion | undefined,
+  ops: readonly BuilderOp[] | undefined
+): ToolbarAction {
+  if (!action.enabled || ops === undefined) return action;
+  const reason = lockReason(ask, ops);
+  return reason === undefined ? action : { ...action, enabled: false, reason };
+}
 
 /** The verbs the bar offers, in the order it draws them. */
 export type ToolbarActionId =
@@ -115,13 +151,14 @@ function moveAction(
   ids: readonly string[],
   id: "move-up" | "move-down",
   label: string,
-  direction: "up" | "down"
+  direction: "up" | "down",
+  ask?: LockQuestion
 ): ToolbarAction {
   const plan = selectionMove(document, ids, direction);
   if (plan === null) return { id, label, enabled: false };
   if (isRefusal(plan))
     return { id, label, enabled: false, reason: plan.reason };
-  return { id, label, enabled: true };
+  return heldByLock({ id, label, enabled: true }, ask, plan.ops);
 }
 
 /**
@@ -223,7 +260,8 @@ function manyBlockActions(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  mayCreate: boolean
+  mayCreate: boolean,
+  ask?: LockQuestion
 ): ToolbarAction[] {
   const many = `Only one block at a time. ${ids.length} are selected.`;
   const deleteLock = ids
@@ -237,14 +275,22 @@ function manyBlockActions(
       enabled: false,
       reason: many,
     },
-    moveAction(document, ids, "move-up", "Move up", "up"),
-    moveAction(document, ids, "move-down", "Move down", "down"),
-    // A lock never stops a duplication, for a set as for one block: the
-    // originals stay where they are.
-    { id: "duplicate", label: "Duplicate", enabled: true },
+    moveAction(document, ids, "move-up", "Move up", "up", ask),
+    moveAction(document, ids, "move-down", "Move down", "down", ask),
+    // A node's lock never stops a duplication, for a set as for one block:
+    // the originals stay where they are. A slot's lock can.
+    heldByLock(
+      { id: "duplicate", label: "Duplicate", enabled: true },
+      ask,
+      opsOf(selectionDuplication(document, ids))
+    ),
     saveAction(document, ids, nesting, mayCreate),
     deleteLock === undefined
-      ? { id: "delete", label: "Delete", enabled: true }
+      ? heldByLock(
+          { id: "delete", label: "Delete", enabled: true },
+          ask,
+          opsOf(selectionDeletion(document, ids))
+        )
       : {
           id: "delete",
           label: "Delete",
@@ -299,7 +345,13 @@ export function toolbarActions(
    * the late refusal that already happens; a wrong `false` hides a feature the
    * author has, and there is nothing on the canvas to explain it.
    */
-  mayCreatePattern: boolean = true
+  mayCreatePattern: boolean = true,
+  /**
+   * The editor's `lockRefusalFor`, so a verb a slot's lock refuses is dimmed
+   * with the lock's reason before it is pressed. Optional for a caller that
+   * holds no editor; the editor's apply refuses the same ops regardless.
+   */
+  lockRefusalFor?: LockQuestion
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -309,27 +361,48 @@ export function toolbarActions(
   const rules = nesting ?? registryNestingSource();
   const ids = selectedIds ?? [selectedId];
   if (ids.length > 1)
-    return manyBlockActions(document, ids, rules, mayCreatePattern);
+    return manyBlockActions(
+      document,
+      ids,
+      rules,
+      mayCreatePattern,
+      lockRefusalFor
+    );
 
   const moveLock = lockBlockingMove(document, selectedId);
   const deleteLock = lockBlockingDelete(document, selectedId);
-
-  const canMove = (direction: "up" | "down"): boolean =>
-    keyboardMovePosition(document.nodes, selectedId, direction) !== null;
 
   const move = (
     id: "move-up" | "move-down",
     label: string,
     direction: "up" | "down"
-  ): ToolbarAction =>
-    moveLock === undefined
-      ? { id, label, enabled: canMove(direction) }
-      : {
-          id,
-          label,
-          enabled: false,
-          reason: lockedBy(moveLock, selectedId),
-        };
+  ): ToolbarAction => {
+    if (moveLock !== undefined) {
+      return {
+        id,
+        label,
+        enabled: false,
+        reason: lockedBy(moveLock, selectedId),
+      };
+    }
+    const to = keyboardMovePosition(document.nodes, selectedId, direction);
+    return heldByLock(
+      { id, label, enabled: to !== null },
+      lockRefusalFor,
+      to === null
+        ? undefined
+        : [
+            {
+              kind: "move",
+              id: selectedId,
+              to: to.to,
+              dropSlotIfEmpty: to.dropSlotIfEmpty,
+            },
+          ]
+    );
+  };
+  const duplication = blockDuplication(document, selectedId);
+  const deletion = blockDeletion(document, selectedId);
 
   return [
     {
@@ -341,22 +414,33 @@ export function toolbarActions(
     },
     move("move-up", "Move up", "up"),
     move("move-down", "Move down", "down"),
-    {
-      id: "duplicate",
-      label: "Duplicate",
-      // A lock deliberately does not stop this. Duplicating neither moves nor
-      // removes the original, and refusing would mean an author could not take
-      // a copy of the one block they had most deliberately protected — the same
-      // reading the keyboard duplicate takes.
-      enabled: blockDuplication(document, selectedId) !== null,
-    },
+    // A node's lock deliberately does not stop this. Duplicating neither moves
+    // nor removes the original, and refusing would mean an author could not
+    // take a copy of the one block they had most deliberately protected — the
+    // same reading the keyboard duplicate takes. A slot's lock is another
+    // matter: a copy changes what a slot whose blocks are fixed holds.
+    heldByLock(
+      { id: "duplicate", label: "Duplicate", enabled: duplication !== null },
+      lockRefusalFor,
+      duplication === null
+        ? undefined
+        : [{ kind: "insert", node: duplication.node, at: duplication.at }]
+    ),
     saveAction(document, ids, rules, mayCreatePattern),
     deleteLock === undefined
-      ? {
-          id: "delete",
-          label: "Delete",
-          enabled: blockDeletion(document, selectedId) !== null,
-        }
+      ? heldByLock(
+          { id: "delete", label: "Delete", enabled: deletion !== null },
+          lockRefusalFor,
+          deletion === null
+            ? undefined
+            : [
+                {
+                  kind: "remove",
+                  id: deletion.id,
+                  dropSlotIfEmpty: deletion.dropSlotIfEmpty,
+                },
+              ]
+        )
       : {
           id: "delete",
           label: "Delete",
@@ -450,4 +534,14 @@ export function toolbarPlacement(
   const x = maxX <= 0 ? 0 : Math.min(Math.max(block.x, 0), maxX);
 
   return { x, y: side === "above" ? above : below, side };
+}
+
+/** A plan's ops, or undefined for no plan or a refusal. */
+function opsOf(
+  plan:
+    | { readonly ops: readonly BuilderOp[] }
+    | { readonly reason: string }
+    | null
+): readonly BuilderOp[] | undefined {
+  return plan === null || !("ops" in plan) ? undefined : plan.ops;
 }
