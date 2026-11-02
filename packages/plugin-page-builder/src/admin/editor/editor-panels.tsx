@@ -313,7 +313,9 @@ export function useEditorPanels(
    * form has a renderer, so a gate on the renderer's existence is true even for
    * a collection whose only fields are its title, its slug and this one.
    */
-  const entryFields = useEntryFieldsPanel(name);
+  // Flat, for the Settings dialog that frames them: no section cards, the
+  // slug read as the page's address.
+  const entryFields = useEntryFieldsPanel(name, { presentation: "dialog" });
 
   /*
    * The getting-started card, and the host's switch for it.

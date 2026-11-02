@@ -293,6 +293,10 @@ function SiteSettings({
         <h3 id="settings-breakpoints-title" className="text-sm font-semibold">
           Breakpoints
         </h3>
+        <p className="text-sm text-muted-foreground">
+          Widths your styles can change at. Each applies at that width and
+          below.
+        </p>
         <BreakpointManager
           {...breakpoints}
           onEditingChange={onEditingBreakpoints}

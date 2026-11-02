@@ -6,9 +6,7 @@ import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import * as React from "react";
 
 import {
-  BASE_BREAKPOINT,
   BREAKPOINT_AXES,
-  inCascadeOrder,
   storedLimitFor,
   validateBreakpoints,
   type BreakpointAxis,
@@ -17,17 +15,33 @@ import {
   type BreakpointSet,
 } from "./breakpoints";
 
-/** What each axis is called and what it responds to, in the author's terms. */
-const AXIS_COPY: Record<BreakpointAxis, { title: string; hint: string }> = {
-  viewport: {
-    title: "Viewport",
-    hint: "Responds to the width of the browser window.",
-  },
-  container: {
-    title: "Container",
-    hint: "Responds to the width of the element a block sits in, so one block can adapt wherever it is placed.",
-  },
-};
+/** What the container axis is called, where a site uses it. */
+const CONTAINER_TITLE = "Container widths";
+
+/** A new breakpoint's id, made from its name: styles are filed under it. */
+function idFromName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Where a breakpoint applies, in the device buttons' words: from one more
+ * than the next narrower breakpoint up to its own width.
+ */
+function rangeOf(rows: readonly DraftRow[], row: DraftRow): string {
+  const width = Number(row.width);
+  if (row.width.trim() === "" || !Number.isFinite(width) || width <= 0) {
+    return "";
+  }
+  const narrower = rows
+    .map(other => Number(other.width))
+    .filter(other => Number.isFinite(other) && other > 0 && other < width);
+  if (narrower.length === 0) return `up to ${width}px`;
+  return `${Math.max(...narrower) + 1}–${width}px`;
+}
 
 /**
  * Props for BreakpointEditor.
@@ -327,83 +341,57 @@ export function BreakpointEditor({
 
   return (
     <div className="space-y-4" data-breakpoint-editor="">
-      <p className="text-sm text-muted-foreground">
-        The widths your styles can respond to. Each one is an upper bound, so a
-        style set at a breakpoint applies at that width and below.
-      </p>
-
-      <div className="space-y-8">
-        {BREAKPOINT_AXES.map(axis => {
+      <div className="space-y-6">
+        {BREAKPOINT_AXES.filter(
+          // The container axis only on a site that already uses it: most
+          // sites style by the window's width alone.
+          axis => axis === "viewport" || draft[axis].length > 0
+        ).map(axis => {
           const rows = draft[axis];
-          const limit = storedLimitFor(axis);
-          const atLimit = rows.length >= limit;
-
+          const left = storedLimitFor(axis) - rows.length;
           return (
-            <section key={axis} className="space-y-3">
-              <div>
-                <h3 className="text-sm font-medium">{AXIS_COPY[axis].title}</h3>
-                <p className="text-muted-foreground text-xs">
-                  {AXIS_COPY[axis].hint}
-                </p>
-              </div>
-
-              {axis === "viewport" && (
-                <p className="text-muted-foreground border-border rounded-md border border-dashed px-3 py-2 text-xs">
-                  <span className="font-mono">{BASE_BREAKPOINT}</span> is built
-                  in and always applies. It uses one of this axis&rsquo;s{" "}
-                  {limit + 1} slots, leaving {limit}.
-                </p>
-              )}
-
-              <div className="space-y-2">
+            <section key={axis} className="space-y-2">
+              {axis === "container" ? (
+                <h4 className="text-sm font-medium">{CONTAINER_TITLE}</h4>
+              ) : null}
+              <div className="divide-y divide-border rounded-md border border-border">
+                {axis === "viewport" ? (
+                  <div className="flex items-center gap-2 px-3 py-2 text-sm">
+                    <span className="font-medium">Desktop</span>
+                    <span className="text-muted-foreground">
+                      the base, always applies
+                    </span>
+                  </div>
+                ) : null}
                 {rows.map((row, index) => {
                   const rowIssues = issuesForRow(issues, axis, index);
                   return (
                     <div
                       key={row.key}
-                      // Stacked until there is room for four columns. At a
-                      // phone width the fixed grid left Name and Id about
-                      // 48px each, which is unreadable for an existing id and
-                      // unusable for typing a new one.
-                      className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[1fr_1fr_7rem_auto]"
+                      className="grid grid-cols-[1fr_8rem_7rem_auto] items-start gap-2 px-3 py-2"
                     >
                       <Field
                         id={`${fieldId}-${row.key}-label`}
                         readOnly={saving}
                         label="Name"
-                        hideLabel={index > 0}
+                        hideLabel
                         value={row.label}
                         placeholder="Tablet"
-                        error={rowIssues.label}
-                        onChange={label => updateRow(axis, row.key, { label })}
-                      />
-                      <Field
-                        id={`${fieldId}-${row.key}-id`}
-                        label="Id"
-                        hideLabel={index > 0}
-                        value={row.id}
-                        placeholder="tablet"
-                        error={rowIssues.id}
-                        className="font-mono"
-                        // Fixed once saved. The id is the key every stored
-                        // style is filed under, and saving carries only the
-                        // breakpoint set — so a rename here would detach
-                        // every style on every page that uses it, silently.
-                        // Removing the breakpoint and adding a new one is
-                        // the same operation with the loss made visible.
-                        readOnly={!row.isNew || saving}
-                        hint={
-                          row.isNew
-                            ? undefined
-                            : "Fixed once saved — styles are filed under it."
+                        // The id is the name's, and shown nowhere: a clash is
+                        // said about the name, in plain words.
+                        error={rowIssues.label ?? rowIssues.id}
+                        onChange={label =>
+                          updateRow(axis, row.key, {
+                            label,
+                            ...(row.isNew ? { id: idFromName(label) } : {}),
+                          })
                         }
-                        onChange={id => updateRow(axis, row.key, { id })}
                       />
                       <Field
                         id={`${fieldId}-${row.key}-width`}
                         readOnly={saving}
                         label="Up to"
-                        hideLabel={index > 0}
+                        hideLabel
                         value={row.width}
                         placeholder={axis === "container" ? "any" : "991"}
                         inputMode="numeric"
@@ -411,14 +399,13 @@ export function BreakpointEditor({
                         error={rowIssues.maxWidth}
                         onChange={width => updateRow(axis, row.key, { width })}
                       />
+                      <span className="pt-2 text-sm text-muted-foreground tabular-nums">
+                        {rangeOf(rows, row)}
+                      </span>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className={cn(
-                          "justify-self-end",
-                          index === 0 && "sm:mt-6"
-                        )}
                         aria-label={`Remove ${row.label.trim() || "breakpoint"}`}
                         disabled={saving}
                         onClick={() => removeRow(axis, row.key)}
@@ -429,31 +416,27 @@ export function BreakpointEditor({
                   );
                 })}
               </div>
-
               <div className="flex items-center gap-3">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={atLimit || saving}
+                  disabled={left <= 0 || saving}
                   onClick={() => addRow(axis)}
                 >
                   <Plus className="size-4" />
                   Add breakpoint
                 </Button>
-                {atLimit && (
-                  <span className="text-muted-foreground text-xs">
-                    {limit} is the most this axis can hold.
-                  </span>
-                )}
+                <span className="text-xs text-muted-foreground">
+                  {left <= 0
+                    ? "That is as many as a site can have."
+                    : `You can add up to ${left} more.`}
+                </span>
               </div>
-
-              <CascadePreview rows={rows} />
             </section>
           );
         })}
       </div>
-
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p
           className={cn(
@@ -586,30 +569,5 @@ function Field({
         </p>
       )}
     </div>
-  );
-}
-
-/**
- * The order the compiler will apply these in.
- *
- * Stored order is not application order — the compiler sorts widest first — so
- * an author reading the list top to bottom would otherwise infer a cascade that
- * runs the other way.
- */
-function CascadePreview({ rows }: { rows: DraftRow[] }) {
-  const named = rows.filter(row => row.label.trim() !== "");
-  if (named.length < 2) return null;
-
-  const ordered = inCascadeOrder(named.map(toDef));
-  return (
-    <p className="text-muted-foreground text-xs">
-      Applied in this order:{" "}
-      {ordered.map((def, index) => (
-        <React.Fragment key={`${def.id}-${index}`}>
-          {index > 0 && " → "}
-          <span className="text-foreground">{def.label}</span>
-        </React.Fragment>
-      ))}
-    </p>
   );
 }

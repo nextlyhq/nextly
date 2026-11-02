@@ -339,10 +339,52 @@ describe("a saved breakpoint's id", () => {
     // `onSave` carries only the breakpoint set. A rename here would leave every
     // NodeStyles entry keyed by the old id, and the compiler would stop
     // emitting those styles on every page that used them, reporting nothing.
-    open(stored());
-    const id = screen.getByDisplayValue("tablet") as HTMLInputElement;
+    // The id is shown nowhere, and renaming a stored breakpoint keeps it.
+    const onSave = open(stored());
+    expect(screen.queryByDisplayValue("tablet")).toBeNull();
+    fireEvent.change(screen.getByDisplayValue("Tablet"), {
+      target: { value: "Small screens" },
+    });
+    fireEvent.click(saveButton());
 
-    expect(id.readOnly).toBe(true);
+    const saved = onSave.mock.calls[0]?.[0] as BreakpointSet;
+    expect(saved.viewport[0]).toMatchObject({
+      id: "tablet",
+      label: "Small screens",
+    });
+  });
+
+  it("names a new breakpoint's id after it, and says a clash in plain words", () => {
+    const onSave = open(stored());
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    const names = screen.getAllByLabelText("Name");
+    fireEvent.change(names[names.length - 1] as HTMLElement, {
+      target: { value: "Wide Phone" },
+    });
+    const widths = screen.getAllByLabelText("Up to");
+    fireEvent.change(widths[widths.length - 1] as HTMLElement, {
+      target: { value: "700" },
+    });
+    fireEvent.click(saveButton());
+    const saved = onSave.mock.calls[0]?.[0] as BreakpointSet;
+    expect(saved.viewport.map(def => def.id)).toContain("wide-phone");
+
+    // A second new row with the same name would file styles under one id.
+    cleanup();
+    open(stored());
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    const again = screen.getAllByLabelText("Name");
+    fireEvent.change(again[again.length - 1] as HTMLElement, {
+      target: { value: "Tablet" },
+    });
+    expect(saveButton().disabled).toBe(true);
+    expect(
+      (again[again.length - 1] as HTMLElement).getAttribute("aria-invalid")
+    ).toBe("true");
   });
 
   it("survives an unrelated edit byte for byte", () => {
@@ -393,5 +435,21 @@ describe("the draft", () => {
     });
 
     expect(value.viewport[0]?.maxWidth).toBe(991);
+  });
+});
+
+describe("where each breakpoint applies", () => {
+  it("says it in the device buttons' words, from the next narrower one up", () => {
+    open({
+      viewport: [
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "mobile", label: "Mobile", maxWidth: 575 },
+      ],
+      container: [],
+    });
+    expect(screen.getByText("576–991px")).toBeTruthy();
+    expect(screen.getByText("up to 575px")).toBeTruthy();
+    // The base is the fixed first row, not an editable one.
+    expect(screen.getByText("the base, always applies")).toBeTruthy();
   });
 });

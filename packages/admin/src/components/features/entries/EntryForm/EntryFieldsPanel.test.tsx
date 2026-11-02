@@ -13,6 +13,8 @@
  */
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { FieldConfig } from "nextly/config";
+import type * as React from "react";
+import { FormProvider, useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
 
 /*
@@ -30,6 +32,11 @@ vi.mock("./EntryFormContent", () => ({
   }) => (
     <>
       <span>{fields.map(f => f.name).join(",")}</span>
+      <span data-testid="labels">
+        {fields
+          .map(f => String((f as { label?: unknown }).label ?? ""))
+          .join(",")}
+      </span>
       {/*
         REAL controls, not a text summary. The Enter guard below is about what
         an implicit submission does, and that is a property of the elements —
@@ -333,5 +340,54 @@ describe("the panel a takeover surface offers back", () => {
       </div>
     );
     expect(noticeProps).toEqual([]);
+  });
+
+  it("draws the fields flat for a dialog: no section cards, the slug read as the address", () => {
+    function Host(): React.JSX.Element {
+      const form = useForm({
+        defaultValues: { title: "About us", slug: "about-us" },
+      });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(minimal, "body", {
+            presentation: "dialog",
+            urlTemplate: "/pages/{slug}",
+          })}
+        </FormProvider>
+      );
+    }
+    render(<Host />);
+    expect(screen.getByRole("heading", { name: "Page" })).toBeTruthy();
+    // The panel's section framing is the form's, not the dialog's.
+    expect(
+      screen.queryByText("How this document is identified and addressed.")
+    ).toBeNull();
+    expect(screen.getAllByTestId("labels")[0]?.textContent).toBe(",Address");
+    expect(screen.getByText(/\/pages\/about-us$/)).toBeTruthy();
+  });
+
+  it("warns about the address in a dialog only where it is already live", () => {
+    function Host({ live }: { live: boolean }): React.JSX.Element {
+      const form = useForm({ defaultValues: { slug: "about-us" } });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(minimal, "body", {
+            presentation: "dialog",
+            hasPublicAddress: live,
+          })}
+        </FormProvider>
+      );
+    }
+    noticeProps.length = 0;
+    const { unmount } = render(<Host live={false} />);
+    expect(noticeProps).toEqual([]);
+    unmount();
+    render(<Host live />);
+    // Rendered again as the address line follows the form; what it was handed
+    // is what matters.
+    expect(noticeProps.length).toBeGreaterThan(0);
+    expect(new Set(noticeProps.map(props => JSON.stringify(props)))).toEqual(
+      new Set([JSON.stringify({ slugName: "slug", active: true })])
+    );
   });
 });
