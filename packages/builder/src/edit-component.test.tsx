@@ -73,6 +73,27 @@ describe("the toolbar's Edit component", () => {
     ).toContain("edit-component");
   });
 
+  it("is not offered for a placement naming no component", () => {
+    const empty: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ ...placed, id: "blank", props: {} }],
+    };
+    expect(
+      ids(
+        toolbarActions(
+          empty,
+          "blank",
+          ["blank"],
+          undefined,
+          true,
+          undefined,
+          true
+        )
+      )
+    ).not.toContain("edit-component");
+  });
+
   it("is not offered for an ordinary block, several blocks, or without a host", () => {
     expect(
       ids(toolbarActions(page, "h", ["h"], undefined, true, undefined, true))

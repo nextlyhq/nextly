@@ -87,6 +87,22 @@ export function checkedAdminPath(value: string | null): string | undefined {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
+/**
+ * Whether the document is a row of the component store: an entry of the
+ * collection component definitions live in. Another collection may declare a
+ * field of component documents, and its ids name nothing in the store.
+ */
+export function isStoreRow(
+  identity: { readonly kind: string; readonly slug: string } | null | undefined,
+  store: { readonly collection: string } | undefined
+): boolean {
+  return (
+    store !== undefined &&
+    identity?.kind === "collection" &&
+    identity.slug === store.collection
+  );
+}
+
 /** Where a component view goes back to, read from its own address. */
 export function returnFromSearch(search: string): string | undefined {
   return checkedAdminPath(new URLSearchParams(search).get(RETURN_PARAM));

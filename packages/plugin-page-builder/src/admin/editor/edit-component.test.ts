@@ -13,6 +13,7 @@ import {
   checkedAdminPath,
   componentEditorAddress,
   hereAddress,
+  isStoreRow,
   openDocument,
   returnFromSearch,
 } from "./edit-component";
@@ -103,5 +104,28 @@ describe("opening another document", () => {
     expect(assign.mock.calls).toEqual([
       ["/admin/collections/components/c1/builder"],
     ]);
+  });
+});
+
+describe("a row of the component store", () => {
+  const store = { collection: "components" };
+
+  it("is an entry of the collection definitions live in", () => {
+    expect(isStoreRow({ kind: "collection", slug: "components" }, store)).toBe(
+      true
+    );
+  });
+
+  it("is not an entry of another collection, a Single, or anything unknown", () => {
+    expect(isStoreRow({ kind: "collection", slug: "widgets" }, store)).toBe(
+      false
+    );
+    expect(isStoreRow({ kind: "single", slug: "components" }, store)).toBe(
+      false
+    );
+    expect(isStoreRow(null, store)).toBe(false);
+    expect(
+      isStoreRow({ kind: "collection", slug: "components" }, undefined)
+    ).toBe(false);
   });
 });

@@ -36,8 +36,6 @@
  */
 
 import {
-  findNode,
-  isComponentInstance,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
@@ -49,6 +47,7 @@ import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
+import { placedComponentId } from "./instance-inspector";
 import { keyboardMovePosition } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
@@ -470,9 +469,11 @@ function editComponentAction(
   selectedId: string,
   offered: boolean
 ): ToolbarAction[] {
-  if (!offered) return [];
-  const node = findNode(document.nodes, selectedId);
-  if (node === undefined || !isComponentInstance(node)) return [];
+  // Asked as the verb asks: a placement naming no component has nothing to
+  // open, so it is not offered a control that would do nothing.
+  if (!offered || placedComponentId(document, selectedId) === undefined) {
+    return [];
+  }
   return [{ id: "edit-component", label: "Edit component", enabled: true }];
 }
 

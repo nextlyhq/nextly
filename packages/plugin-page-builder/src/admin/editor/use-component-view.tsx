@@ -25,8 +25,10 @@ import { useCallback, useState, type JSX } from "react";
 
 import { useComponentFacts } from "../component-facts-client";
 import type { ComponentLibraryRead } from "../component-library-client";
+import { useComponentEditing } from "../pattern-capability-client";
 
 import {
+  isStoreRow,
   openDocument,
   returnFromSearch,
   useEditComponent,
@@ -66,6 +68,11 @@ export function useComponentView({
     ? identity?.documentId
     : undefined;
   const componentFacts = useComponentFacts(componentId);
+  // The banner speaks for a row of the component STORE only. Another
+  // collection may declare a field of component documents, and its entry ids
+  // name nothing in the store.
+  const editing = useComponentEditing();
+  const inStore = isStoreRow(identity, editing);
   // Read once, as the view opens: the address it came from, checked to be an
   // admin path. A later change to the address is the author's own moving.
   const [returnTo] = useState(() =>
@@ -74,7 +81,7 @@ export function useComponentView({
       : returnFromSearch(window.location.search)
   );
   const banner =
-    componentId === undefined ? null : (
+    componentId === undefined || !inStore ? null : (
       <ComponentBanner
         name={
           componentLibrary.components.find(row => row.id === componentId)?.title
