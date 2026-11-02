@@ -39,11 +39,13 @@
  * @module fields/blocks-composition
  */
 import {
+  componentIdsIn,
   compositionFaults,
   contentOnlyExposures,
   MAX_COMPOSED_DEPTH,
   contentModelKeyOf,
   nodeLocks,
+  placementValueIssues,
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
@@ -56,6 +58,7 @@ import {
   type DocumentLimits,
   type LockedExposure,
   type NodeLock,
+  type PlacementValueProblem,
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -524,6 +527,76 @@ async function judgeOwnComposition(args: {
   );
   for (const fault of faults) {
     report.add(fault.code, fault.message);
+  }
+  await judgePlacementValues({
+    document,
+    library,
+    read,
+    limits: setup.limits,
+    stored: args.stored,
+    report,
+  });
+}
+
+/** The issue code for each way a placement's value is refused. */
+const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
+  "unknown-field": "PLACEMENT_VALUE_UNKNOWN_FIELD",
+  "wrong-type": "PLACEMENT_VALUE_WRONG_TYPE",
+  "too-many-values": "PLACEMENT_VALUE_TOO_MANY",
+};
+
+/**
+ * Refuse a value the write sets on a placement that its component does not
+ * accept: an id the component does not expose, or a value of the wrong type
+ * for its field. Judged against the definitions this form composes with, so
+ * every write path that validates the field, an import included, is held to
+ * what the inspector can write.
+ *
+ * A value the stored document already holds is kept, so a field removed from
+ * a component, or one written to under its id with another type, does not
+ * make every page placing it unsavable; the stored forms are read only once
+ * something is found. Where they cannot be read (a localized field whose
+ * language is not ready), any value found may be one the stored document
+ * already held, so none is refused, as a placement break there is not.
+ */
+async function judgePlacementValues(args: {
+  document: BlockDocument;
+  library: HeldLibrary;
+  read: BoundedReader;
+  limits: DocumentLimits;
+  stored: () => Promise<StoredRead>;
+  report: Report;
+}): Promise<void> {
+  const { document, library, limits, report } = args;
+  // A placement the composition never expanded (one a condition gates) still
+  // stores its values, and is served with them once the condition lifts, so
+  // its component is read too.
+  for (const id of componentIdsIn(document.nodes, limits.maxNodes)) {
+    if (library.held.has(id) || library.missing.has(id)) continue;
+    const answer = await args.read(id);
+    if (answer.kind === "document") library.held.set(id, answer.document);
+    else library.missing.add(id);
+  }
+  // Past the reader's bound a definition reads as unreadable and its
+  // placement would go unjudged, so the save is refused as unchecked instead.
+  if (args.read.exhausted()) {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  const components = lookupOf(library);
+  if (placementValueIssues(document, components, [], limits).length === 0) {
+    return;
+  }
+  const stored = await args.stored();
+  if (!stored.readable) return;
+  const issues = placementValueIssues(
+    document,
+    components,
+    stored.forms,
+    limits
+  );
+  for (const issue of issues) {
+    report.add(PLACEMENT_VALUE_CODES[issue.problem], issue.message);
   }
 }
 
