@@ -180,5 +180,3 @@ export function repairColumnsAction(
     ).catch((error: unknown) => exitWithError(context.logger, error));
   };
 }
-
-export { registerRepairColumnsCommand } from "./repair-columns.command";

@@ -575,6 +575,9 @@ export async function mediaReindexUsageAction(
     const loaded = await projectConfig(
       cwd,
       context.configPath,
+      // From here it connects as `runMediaCommand` does, but keeps the whole
+      // loaded config and sets up no media storage, so the two stay separate.
+      // fallow-ignore-next-line code-duplication
       REINDEX_USAGE,
       context.logger
     );
@@ -601,8 +604,6 @@ export async function mediaReindexUsageAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { createMediaCommand } from "./media.command";
 
 /** What a `nextly media` command runs against, once the project is entered. */
 interface MediaCommandRun {

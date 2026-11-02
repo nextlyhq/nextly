@@ -79,45 +79,51 @@ function median(values) {
     : sorted[middle];
 }
 
+/** Why a run that did not finish failed, or `undefined` when it finished. */
+function unfinished(run) {
+  if (run.error) return `did not finish: ${run.error.message}`;
+  if (run.signal) return `stopped by ${run.signal}`;
+  return undefined;
+}
+
+/**
+ * `args` run `RUNS` times in `folder`: the reason it failed (a wrong answer,
+ * a run that did not finish, or a median over the budget), or `undefined`.
+ */
+function measure(args, folder, wrongAnswer) {
+  const name = `nextly ${args.join(" ")}`;
+  const times = [];
+  for (let index = 0; index < RUNS; index += 1) {
+    const { ms, run } = timed(args, folder);
+    const wrong = unfinished(run) ?? wrongAnswer(args, run);
+    if (wrong) return `${name}: ${wrong}`;
+    times.push(ms);
+  }
+  const answer = median(times);
+  const over = answer > BUDGET_MS;
+  console.log(
+    `${over ? "FAIL" : "ok  "} ${answer.toFixed(0).padStart(5)} ms  ${name}`
+  );
+  return over
+    ? `${name}: median ${answer.toFixed(0)} ms, over ${BUDGET_MS} ms`
+    : undefined;
+}
+
 async function main() {
   if (!existsSync(BIN)) {
     console.error(`No built CLI at ${BIN}: build nextly first.`);
     process.exit(1);
   }
   const { invocations, wrongAnswer } = await loadSource();
+  console.log(
+    `answer-only invocations: ${invocations.length}, ${RUNS} runs each, budget ${BUDGET_MS} ms (median)`
+  );
   const folder = mkdtempSync(join(tmpdir(), "nextly-startup-"));
-  const failures = [];
+  let failures;
   try {
-    console.log(
-      `answer-only invocations: ${invocations.length}, ${RUNS} runs each, budget ${BUDGET_MS} ms (median)`
-    );
-    for (const args of invocations) {
-      const times = [];
-      for (let index = 0; index < RUNS; index += 1) {
-        const { ms, run } = timed(args, folder);
-        const wrong = run.error
-          ? `did not finish: ${run.error.message}`
-          : run.signal
-            ? `stopped by ${run.signal}`
-            : wrongAnswer(args, run);
-        if (wrong) {
-          failures.push(`nextly ${args.join(" ")}: ${wrong}`);
-          break;
-        }
-        times.push(ms);
-      }
-      if (times.length < RUNS) continue;
-      const answer = median(times);
-      const over = answer > BUDGET_MS;
-      console.log(
-        `${over ? "FAIL" : "ok  "} ${answer.toFixed(0).padStart(5)} ms  nextly ${args.join(" ")}`
-      );
-      if (over) {
-        failures.push(
-          `nextly ${args.join(" ")}: median ${answer.toFixed(0)} ms, over ${BUDGET_MS} ms`
-        );
-      }
-    }
+    failures = invocations
+      .map(args => measure(args, folder, wrongAnswer))
+      .filter(failure => failure !== undefined);
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }

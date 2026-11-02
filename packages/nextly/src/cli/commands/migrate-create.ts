@@ -117,7 +117,7 @@ import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { createContext, type CommandContext } from "../context";
+import type { CommandContext } from "../context";
 import {
   migrationCreateCancelled,
   migrationNameRequired,
@@ -137,6 +137,8 @@ import {
 import { bundleAndRequire } from "../utils/config-bundler";
 import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
+
+import { commandRun } from "./command-run";
 
 // ============================================================================
 // Types
@@ -1478,16 +1480,8 @@ export async function migrateCreateAction(
   cmdOptions: MigrateCreateCommandOptions,
   cmd: Command
 ): Promise<void> {
-  const globalOpts = cmd.optsWithGlobals();
-  const context = createContext(globalOpts);
-
-  const resolvedOptions: ResolvedMigrateCreateOptions = {
-    ...cmdOptions,
-    config: globalOpts.config,
-    verbose: globalOpts.verbose,
-    quiet: globalOpts.quiet,
-    cwd: globalOpts.cwd,
-  };
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateCreateOptions = options;
 
   try {
     await runMigrateCreate(positionalName, resolvedOptions, context);

@@ -245,5 +245,3 @@ export async function migrateFieldGroupsAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerMigrateFieldGroupsCommand } from "./migrate-field-groups.command";

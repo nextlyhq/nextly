@@ -8,8 +8,6 @@ import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
-export { createPermissionsCleanupCommand } from "./permissions-cleanup.command";
-
 /** The action of `nextly permissions:cleanup`, loaded when it runs. */
 export async function permissionsCleanupAction(
   _cmdOptions: Record<string, unknown>,

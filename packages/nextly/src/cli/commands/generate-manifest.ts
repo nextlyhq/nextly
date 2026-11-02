@@ -234,5 +234,3 @@ export async function generateManifestAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerGenerateManifestCommand } from "./generate-manifest.command";

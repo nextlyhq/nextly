@@ -705,5 +705,3 @@ export async function initAction(cmdOptions: InitCommandOptions, cmd: Command) {
     exitWithError(context.logger, error);
   }
 }
-
-export { registerInitCommand } from "./init.command";

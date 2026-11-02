@@ -811,5 +811,3 @@ export async function migrateBaselineAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerMigrateBaselineCommand } from "./migrate-baseline.command";

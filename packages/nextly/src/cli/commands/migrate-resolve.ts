@@ -32,11 +32,12 @@ import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-
 import { NextlyError } from "../../errors/index";
 import { exitWithError } from "../errors";
 import { resolveModeRequired } from "../errors/areas/migrations";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
+import { commandRun } from "./command-run";
 import { maybeForceUnlock } from "./migrate";
 
 interface ResolveCommandOptions {
@@ -291,15 +292,8 @@ export async function migrateResolveAction(
   cmdOptions: ResolveCommandOptions,
   cmd: Command
 ): Promise<void> {
-  const globalOpts = cmd.optsWithGlobals();
-  const context = createContext(globalOpts);
-  const resolvedOptions: ResolvedOptions = {
-    ...cmdOptions,
-    config: globalOpts.config,
-    verbose: globalOpts.verbose,
-    quiet: globalOpts.quiet,
-    cwd: globalOpts.cwd,
-  };
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedOptions = options;
   try {
     await runMigrateResolve(resolvedOptions, context);
   } catch (error) {

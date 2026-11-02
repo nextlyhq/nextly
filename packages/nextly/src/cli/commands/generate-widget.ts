@@ -132,5 +132,3 @@ export async function generateWidgetAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerGenerateWidgetCommand } from "./generate-widget.command";

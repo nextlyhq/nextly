@@ -34,8 +34,6 @@ import {
 } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
-export { registerWebhooksPruneCommand } from "./webhooks-prune.command";
-
 interface WebhooksPruneCommandOptions {
   dryRun?: boolean;
   config?: string;

@@ -632,5 +632,3 @@ export async function migrateCheckAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerMigrateCheckCommand } from "./migrate-check.command";

@@ -194,5 +194,3 @@ export async function i18nRestoreAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerI18nRestoreCommand } from "./i18n-restore.command";

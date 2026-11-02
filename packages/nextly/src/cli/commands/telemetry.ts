@@ -8,8 +8,6 @@ import * as telemetry from "@nextlyhq/telemetry";
 
 import { CLI_VERSION } from "../program";
 
-export { registerTelemetryCommand } from "./telemetry.command";
-
 const REASONS: Record<string, string> = {
   DO_NOT_TRACK: "DO_NOT_TRACK=1 is set",
   "env-var": "NEXTLY_TELEMETRY_DISABLED=1 is set",

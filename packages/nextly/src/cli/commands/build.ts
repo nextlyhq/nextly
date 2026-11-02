@@ -1004,5 +1004,3 @@ export async function buildAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerBuildCommand } from "./build.command";

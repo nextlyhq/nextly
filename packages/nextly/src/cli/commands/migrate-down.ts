@@ -86,7 +86,7 @@ import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   type CLIDatabaseAdapter,
@@ -101,6 +101,7 @@ import {
 } from "../utils/data-loss-consent";
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
+import { commandRun } from "./command-run";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -1205,15 +1206,8 @@ export async function migrateDownAction(
   cmdOptions: MigrateDownCommandOptions,
   cmd: Command
 ): Promise<void> {
-  const globalOpts = cmd.optsWithGlobals();
-  const context = createContext(globalOpts);
-  const resolvedOptions: ResolvedDownOptions = {
-    ...cmdOptions,
-    config: globalOpts.config,
-    verbose: globalOpts.verbose,
-    quiet: globalOpts.quiet,
-    cwd: globalOpts.cwd,
-  };
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedDownOptions = options;
   try {
     await runMigrateDown(resolvedOptions, context);
   } catch (error) {

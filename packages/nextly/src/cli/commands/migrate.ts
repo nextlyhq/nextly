@@ -132,7 +132,7 @@ import { UserFieldDefinitionService } from "../../domains/users/services/user-fi
 import { NextlyError, describeError } from "../../errors";
 import type { UserConfig } from "../../users/config/types";
 import { exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   getDialectDisplayName,
@@ -157,6 +157,7 @@ import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
+import { commandRun } from "./command-run";
 import {
   storedPasswordsNotice,
   storedPasswordsOn,
@@ -2278,16 +2279,8 @@ export async function migrateAction(
   cmdOptions: MigrateCommandOptions,
   cmd: Command
 ): Promise<void> {
-  const globalOpts = cmd.optsWithGlobals();
-  const context = createContext(globalOpts);
-
-  const resolvedOptions: ResolvedMigrateOptions = {
-    ...cmdOptions,
-    config: globalOpts.config,
-    verbose: globalOpts.verbose,
-    quiet: globalOpts.quiet,
-    cwd: globalOpts.cwd,
-  };
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateOptions = options;
 
   try {
     await runMigrate(resolvedOptions, context);

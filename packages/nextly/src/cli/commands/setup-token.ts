@@ -35,8 +35,6 @@ import type { CommandContext, GlobalOptions } from "../program";
 import { withAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
-export { registerSetupTokenCommand } from "./setup-token.command";
-
 /**
  * What the command concluded, for its shell to print and exit on: the lines
  * to print, or the refusal the command ends with.

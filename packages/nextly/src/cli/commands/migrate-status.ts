@@ -64,7 +64,7 @@ import type {
   MigrationRecordStatus,
 } from "../../schemas/dynamic-collections/types";
 import { databaseEnvError, exitWithError, exitWithJsonError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   validateDatabaseEnv,
@@ -81,6 +81,7 @@ import {
 } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
+import { commandRun } from "./command-run";
 import {
   NO_TRANSACTION_ROLLBACK_NOTE,
   PARTIAL_ROLLBACK_NOTE,
@@ -1048,16 +1049,8 @@ export async function migrateStatusAction(
   cmdOptions: MigrateStatusCommandOptions,
   cmd: Command
 ): Promise<void> {
-  const globalOpts = cmd.optsWithGlobals();
-  const context = createContext(globalOpts);
-
-  const resolvedOptions: ResolvedMigrateStatusOptions = {
-    ...cmdOptions,
-    config: globalOpts.config,
-    verbose: globalOpts.verbose,
-    quiet: globalOpts.quiet,
-    cwd: globalOpts.cwd,
-  };
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateStatusOptions = options;
 
   try {
     await runMigrateStatus(resolvedOptions, context);
@@ -1065,5 +1058,3 @@ export async function migrateStatusAction(
     endWithError(resolvedOptions, context.logger, describeError(error), error);
   }
 }
-
-export { registerMigrateStatusCommand } from "./migrate-status.command";

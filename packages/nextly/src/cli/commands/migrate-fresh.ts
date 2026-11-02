@@ -49,7 +49,7 @@ import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
 import { dataLossRefusal, exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   getDialectDisplayName,
@@ -66,6 +66,7 @@ import {
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
 
+import { commandRun } from "./command-run";
 import { runMigrate } from "./migrate";
 
 // ============================================================================
@@ -589,16 +590,8 @@ export async function migrateFreshAction(
   cmdOptions: MigrateFreshCommandOptions,
   cmd: Command
 ): Promise<void> {
-  const globalOpts = cmd.optsWithGlobals();
-  const context = createContext(globalOpts);
-
-  const resolvedOptions: ResolvedMigrateFreshOptions = {
-    ...cmdOptions,
-    config: globalOpts.config,
-    verbose: globalOpts.verbose,
-    quiet: globalOpts.quiet,
-    cwd: globalOpts.cwd,
-  };
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateFreshOptions = options;
 
   try {
     await runMigrateFresh(resolvedOptions, context);

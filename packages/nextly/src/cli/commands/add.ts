@@ -171,5 +171,3 @@ export async function addAction(
     exitWithError(context.logger, error);
   }
 }
-
-export { registerAddCommand } from "./add.command";
