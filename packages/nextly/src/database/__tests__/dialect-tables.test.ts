@@ -26,7 +26,13 @@ beforeEach(() => {
   }
   vi.resetModules();
   vi.doMock("@nextlyhq/adapter-mysql", () => ({
-    createMySqlAdapter: () => ({ connect: async () => undefined }),
+    // What `createCliAdapter` asks of an adapter after connecting: its dialect,
+    // and a place for the table registry it installs.
+    createMySqlAdapter: () => ({
+      connect: async () => undefined,
+      getCapabilities: () => ({ dialect: "mysql" }),
+      setTableResolver: () => undefined,
+    }),
   }));
 });
 
