@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 import { addFieldToArray, addFieldToGroup } from "../field-transformers";
-import { insertField } from "../insert-field";
+import { insertField, positionAfter } from "../insert-field";
 
 const f = (id: string, over: Partial<BuilderField> = {}): BuilderField => ({
   id,
@@ -188,5 +188,67 @@ describe("addFieldToArray and addFieldToGroup", () => {
     ]);
     expect(addFieldToGroup(TREE, "links", NEW)).toBe(TREE);
     expect(addFieldToGroup(TREE, "gone", NEW)).toBe(TREE);
+  });
+});
+
+// "/" on a field adds right after it: before its next sibling in the list that
+// drew it, or that list's end after its last field.
+describe("positionAfter", () => {
+  const details = TREE[1];
+  const links = details.fields![1];
+  it.each([
+    [
+      "a top-level field",
+      TREE,
+      "title",
+      undefined,
+      { beforeFieldId: "details" },
+    ],
+    ["the last top-level field", TREE, "body", undefined, {}],
+    [
+      "a field inside a group",
+      details.fields!,
+      "subtitle",
+      "details",
+      { parentFieldId: "details", beforeFieldId: "links" },
+    ],
+    [
+      "the last field inside a group",
+      details.fields!,
+      "links",
+      "details",
+      { parentFieldId: "details" },
+    ],
+    [
+      "a field two levels down",
+      links.fields!,
+      "url",
+      "links",
+      { parentFieldId: "links", beforeFieldId: "label" },
+    ],
+  ])("after %s", (_name, siblings, fieldId, parentFieldId, expected) => {
+    expect(positionAfter(siblings, fieldId, parentFieldId)).toEqual(expected);
+  });
+
+  it("has no position after a field that is not in the list", () => {
+    expect(positionAfter(TREE, "subtitle")).toBeNull();
+  });
+
+  it("stays in the container that drew the field when a copy shares its ids", () => {
+    // A duplicated group: its fields keep the original fields' ids.
+    const copy = { ...details, id: "details_copy", name: "details_copy" };
+    const tree = [...TREE, copy];
+    const at = positionAfter(copy.fields!, "subtitle", copy.id);
+    expect(at).toEqual({
+      parentFieldId: "details_copy",
+      beforeFieldId: "links",
+    });
+    const placed = insertField(tree, NEW, at!);
+    expect(
+      placed?.find(f => f.id === "details")?.fields?.map(f => f.id)
+    ).toEqual(["subtitle", "links"]);
+    expect(
+      placed?.find(f => f.id === "details_copy")?.fields?.map(f => f.id)
+    ).toEqual(["subtitle", "new", "links"]);
   });
 });

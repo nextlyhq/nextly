@@ -313,7 +313,7 @@ export function LayersPanel({
 
       {tree.length === 0 ? (
         <p className="nx-layers-panel__note">
-          This page has no blocks yet. Add one from the Insert panel.
+          This page has no blocks yet. Open Add in the rail to place one.
         </p>
       ) : nodes.length === 0 ? (
         <p className="nx-layers-panel__note">No blocks match “{query}”.</p>

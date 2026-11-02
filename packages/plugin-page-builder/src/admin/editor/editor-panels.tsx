@@ -2,8 +2,8 @@
 
 /**
  * The editor's left panels: which are offered, what fills each, the requests
- * that open one from elsewhere on the surface, and the library the insert
- * panel may offer.
+ * that open one from elsewhere on the surface, and the library the Add panel
+ * may offer.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
@@ -41,6 +41,7 @@ import {
   type LibraryReadState,
 } from "../pattern-library-client";
 
+import { DesignPanel } from "./design-panel";
 import {
   withoutSelf,
   withoutSelfPatterns,
@@ -57,31 +58,24 @@ import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
 /**
- * Every left panel the editor can fill today.
+ * Every left panel the editor can fill today: Add, Layers, and Design with
+ * the site's variables, classes and fonts. Pages and Components are not built.
  *
- * The inserter, the layers tree and the tokens studio; the rest are not built.
- * The shell draws all seven regardless and disables the ones nothing fills, so
- * the rail describes the editor's shape while never opening a region with
- * nothing in it. Listing a panel here that renders nothing would reserve space
- * and shrink the canvas to show it, which is why this grows one entry at a time
- * rather than being declared ahead of the panels.
+ * The shell offers only what is listed, so the rail never holds an item that
+ * opens a region with nothing in it. Listing a panel here that renders nothing
+ * would reserve space and shrink the canvas to show it, which is why this
+ * grows one entry at a time rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = [
-  "insert",
-  "layers",
-  "tokens",
-  "fonts",
-  "classes",
-] as const;
+const AVAILABLE_PANELS = ["add", "layers", "design"] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
  *
- * Derived rather than declared twice: the shell draws a panel outside
- * `availablePanels` as disabled and "coming soon", and warns against OPENING
- * one nothing renders into — reserving width to display nothing reads as a
- * broken control rather than an absent feature. So the list and the renderer
- * move together by construction, and the rail cannot disagree with the body.
+ * Derived rather than declared twice: the shell leaves a panel outside
+ * `availablePanels` off the rail, and opening one nothing renders into
+ * reserves width to display nothing, which reads as a broken control. So the
+ * list and the renderer move together by construction, and the rail cannot
+ * disagree with the body.
  */
 const AVAILABLE_PANELS_WITH_SETTINGS: readonly [
   ...typeof AVAILABLE_PANELS,
@@ -249,8 +243,10 @@ function useOfferedLibrary({
 
 /** What `usePanelRequests` returns. */
 type PanelRequests = {
-  openPanelRequest: { panel: LeftPanel; count: number } | undefined;
-  requestPanel: (panel: LeftPanel) => void;
+  openPanelRequest:
+    | { panel: LeftPanel; view?: string; count: number }
+    | undefined;
+  requestPanel: (panel: LeftPanel, view?: string) => void;
   openInsertPanel: () => void;
   showEmptyElements: boolean;
   setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
@@ -272,20 +268,21 @@ function usePanelRequests(): PanelRequests {
   /*
    * A request to open one panel, carrying its own count so the shell can tell a
    * second press from the first. One piece of state for every panel that asks:
-   * the appender opens `insert`, and the fonts panel sends an author to
-   * `tokens` to fix a typeface the site does not provide.
+   * the appender opens Add, and the fonts tab sends an author to Design's
+   * variables to fix a typeface the site does not provide.
    */
   const [openPanelRequest, setOpenPanelRequest] = useState<
-    { panel: LeftPanel; count: number } | undefined
+    { panel: LeftPanel; view?: string; count: number } | undefined
   >(undefined);
-  const requestPanel = useCallback((panel: LeftPanel): void => {
+  const requestPanel = useCallback((panel: LeftPanel, view?: string): void => {
     setOpenPanelRequest(current => ({
       panel,
+      ...(view === undefined ? {} : { view }),
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
   const openInsertPanel = useCallback((): void => {
-    requestPanel("insert");
+    requestPanel("add");
   }, [requestPanel]);
 
   /*
@@ -412,17 +409,17 @@ export function editorPanelRenderer({
     EditorPanels,
     "offered" | "offerablePatterns" | "requestPanel" | "entryFields"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
-  return panel => {
+  return (panel, view) => {
     /*
             A lookup rather than a chain of comparisons, so the arrow answers
             in one step and adding a panel is one entry rather than one more
             branch. It also states the pairing the shell needs: every key here
             is a panel this file can fill, and `AVAILABLE_PANELS` is what the
-            rail offers — reading them side by side is how a panel that is
-            offered and renders nothing gets noticed.
+            rail offers — a test holds the two to each other, so a panel that
+            is offered and renders nothing cannot ship.
           */
-    const panels: Partial<Record<string, () => React.ReactNode>> = {
-      insert: () => (
+    const panels: Partial<Record<LeftPanel, () => React.ReactNode>> = {
+      add: () => (
         <InsertPanelWithLibrary
           editor={editor}
           categoryOrder={CORE_CATEGORIES}
@@ -439,68 +436,77 @@ export function editorPanelRenderer({
               both. Passed as a fact rather than inferred.
             */
       layers: () => <LayersPanel editor={editor} moveHints />,
-      tokens: () => (
-        <TokensStudio
-          merged={offerableTokens(
-            canvasSiteStyle,
-            siteStylePending,
-            siteStyleError
-          )}
-          supplied={configSiteStyle?.tokens}
-          pending={siteStylePending}
-        />
-      ),
-      classes: () => (
-        <ClassManagerPanel
-          absence={classes.absence}
-          pendingSlugs={classes.pendingSlugs}
-          documentClassIds={documentClasses.ids}
-          /*
-                  Whether that walk reached the whole document. It stops at the
-                  node ceiling, and a class applied past it is missing from the
-                  list — which the panel must not read as "not on this page".
-                */
-          documentScan={documentClasses.complete ? "complete" : "partial"}
-          library={classes.library}
-          styleContext={classSummaryContext}
-          onRename={classes.rename}
-          currentRenameAttempt={classes.currentRenameAttempt}
-          /*
-                  No `usage`, and no `onDelete`. The usage index is a
-                  collection and this surface has no read for one, so the panel
-                  reports that nothing was read rather than reporting an empty
-                  index — which would say every class is unused. Deleting needs
-                  that same reach plus a write stripping the class from every
-                  document holding it, so it is withheld entirely rather than
-                  offered as a control that cannot keep its promise.
-                */
-          suppliedClassIds={configSiteStyle?.classes?.map(entry => entry.id)}
-        />
-      ),
-      fonts: () => (
-        <FontsPanelWithUpload
-          faces={offerableFaces(
-            canvasSiteStyle,
-            siteStylePending,
-            siteStyleError
-          )}
-          tokens={renderedTokens(
-            canvasSiteStyle,
-            siteStylePending,
-            siteStyleError
-          )}
-          absence={siteStyleError !== null ? "failed" : "pending"}
-          /*
-                  The fix for a token naming a family this site does not provide
-                  is to edit that token, and editing belongs to the studio. This
-                  shell offers one, so the jump is wired: without the callback
-                  the panel suppresses the action and an author is left to find
-                  the right panel and the right row themselves.
-                */
-          onOpenTokens={() => requestPanel("tokens")}
-          storedFaces={storedSiteStyle?.fonts}
-          storedPending={siteStylePending}
-          unreadableFonts={unreadableStoredFonts}
+      design: () => (
+        <DesignPanel
+          view={view}
+          tabs={{
+            variables: () => (
+              <TokensStudio
+                merged={offerableTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                supplied={configSiteStyle?.tokens}
+                pending={siteStylePending}
+              />
+            ),
+            classes: () => (
+              <ClassManagerPanel
+                absence={classes.absence}
+                pendingSlugs={classes.pendingSlugs}
+                documentClassIds={documentClasses.ids}
+                /*
+                      Whether that walk reached the whole document. It stops at the
+                      node ceiling, and a class applied past it is missing from the
+                      list — which the panel must not read as "not on this page".
+                    */
+                documentScan={documentClasses.complete ? "complete" : "partial"}
+                library={classes.library}
+                styleContext={classSummaryContext}
+                onRename={classes.rename}
+                currentRenameAttempt={classes.currentRenameAttempt}
+                /*
+                      No `usage`, and no `onDelete`. The usage index is a
+                      collection and this surface has no read for one, so the panel
+                      reports that nothing was read rather than reporting an empty
+                      index — which would say every class is unused. Deleting needs
+                      that same reach plus a write stripping the class from every
+                      document holding it, so it is withheld entirely rather than
+                      offered as a control that cannot keep its promise.
+                    */
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+              />
+            ),
+            fonts: () => (
+              <FontsPanelWithUpload
+                faces={offerableFaces(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                absence={siteStyleError !== null ? "failed" : "pending"}
+                /*
+                      The fix for a token naming a family this site does not provide
+                      is to edit that token, and editing belongs to the studio. This
+                      shell offers one, so the jump is wired: without the callback
+                      the panel suppresses the action and an author is left to find
+                      the right panel and the right row themselves.
+                    */
+                onOpenTokens={() => requestPanel("design", "variables")}
+                storedFaces={storedSiteStyle?.fonts}
+                storedPending={siteStylePending}
+                unreadableFonts={unreadableStoredFonts}
+              />
+            ),
+          }}
         />
       ),
       /*
