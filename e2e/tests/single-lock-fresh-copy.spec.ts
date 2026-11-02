@@ -88,8 +88,13 @@ test.describe(
     let before = "";
     test.beforeEach(async ({ page }) => {
       before = `Tagline before ${uniqueTag()}`;
+      // Its site name is required, so a form save is refused while it is
+      // empty, as it is in a fresh database. Kept when it is already set.
+      const read = await page.request.get(SINGLE_API);
+      expect(read.ok(), await read.text()).toBe(true);
+      const { siteName } = (await read.json()) as { siteName?: string | null };
       const stored = await page.request.patch(SINGLE_API, {
-        data: { tagline: before },
+        data: { tagline: before, siteName: siteName || "Nextly" },
       });
       expect(stored.ok(), await stored.text()).toBe(true);
     });
@@ -121,7 +126,7 @@ test.describe(
               response.request().method() === "PATCH",
             { timeout: 30_000 }
           );
-          await page.getByRole("button", { name: /save draft/i }).click();
+          await page.getByRole("button", { name: "Save", exact: true }).click();
           expect((await stored).ok(), "A's save must be stored").toBe(true);
 
           const reads = await holdSingleReads(other.page);
