@@ -31,7 +31,7 @@
 
 `nextly/runtime` exports `createPublicReader` (`@experimental`): the read a published
 page's lists should go through. It takes a list's query as data (typed filter rows, sort
-keys, `limit`, `offset`, `page`, `select`, `populate`) and fixes the access options:
+keys, `limit`, `offset`, `page`, `select`) and fixes the access options:
 published entries only, the anonymous visitor's read rules, no field the public may not
 read, and unknown sort keys refused. Any option that would widen the read is refused by
 name, and the read runs detached from any request in flight. `find` answers the canonical

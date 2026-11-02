@@ -895,6 +895,26 @@ export function hasPasswordField(fields: NamedField[]): boolean {
 }
 
 /**
+ * Whether the top-level field a query key names is a password, or a container
+ * holding one at any depth, in any spelling the key may arrive in.
+ *
+ * Wider than {@link isPasswordFieldName} on purpose: a filter on a group or
+ * repeater matches against its stored JSON, so `contains` on the container
+ * probes the hash of the password inside it without naming it.
+ */
+export function queriesPassword(fields: NamedField[], key: string): boolean {
+  const head = key.split(".")[0] ?? key;
+  const wanted = new Set([head, toCamelCase(head), toSnakeCase(head)]);
+  return fields.some(
+    field =>
+      Boolean(field.name) &&
+      wanted.has(field.name!) &&
+      (field.type === "password" ||
+        (Boolean(field.fields) && hasPasswordField(field.fields!)))
+  );
+}
+
+/**
  * Whether a name addresses a password field, in any spelling it may arrive in.
  *
  * A caller naming one is asking for a value this module exists to make sure

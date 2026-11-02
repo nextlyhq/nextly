@@ -127,6 +127,7 @@ import {
   type FieldGroupReach,
   hiddenColumnMatcher,
   isPasswordFieldName,
+  queriesPassword,
   reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
@@ -1274,6 +1275,51 @@ export class CollectionQueryService extends BaseService {
    * it). Shape: `{ _translated: { locale, state } }`, state ∈ missing|translated|draft|published.
    */
   /**
+   * Refuse an untrusted filter or sort that names a password field, or a
+   * container holding one.
+   *
+   * A password's guarantee comes from its type, not from an `access.read`
+   * rule, so the field-rule guards below never see it, and the strip that
+   * hides its value works on rows after they are selected. A filter or an
+   * ordering on it runs before that: which rows match, and in what order,
+   * would disclose the stored hash one probe at a time.
+   */
+  private async assertNoPasswordQueried(params: {
+    collectionName: string;
+    where?: WhereFilter;
+    sort?: string | readonly string[];
+    overrideAccess?: boolean;
+    enforceFieldAccess?: boolean;
+    frameworkFilter?: boolean;
+  }): Promise<void> {
+    if (fieldTrustOf(params)) return;
+    const filtered = params.frameworkFilter
+      ? []
+      : [...filterKeys(params.where)];
+    const sorted = parseSortKeys(params.sort).map(key => key.field);
+    if (filtered.length === 0 && sorted.length === 0) return;
+    const fields = collectionFieldsFor(
+      await this.collectionService.getCollection(params.collectionName)
+    );
+    const refused = [
+      ...filtered
+        .filter(key => queriesPassword(fields, key))
+        .map(key => ({ path: `where.${key}`, code: "FIELD_NOT_FILTERABLE" })),
+      ...sorted
+        .filter(key => queriesPassword(fields, key))
+        .map(key => ({ path: `sort.${key}`, code: "FIELD_NOT_SORTABLE" })),
+    ];
+    if (refused.length === 0) return;
+    throw NextlyError.validation({
+      errors: refused.map(error => ({
+        ...error,
+        message:
+          "A password field cannot be filtered or sorted on. Its stored value never leaves the server, and which rows match would disclose it.",
+      })),
+    });
+  }
+
+  /**
    * What a caller may select and order by, asked once for both read verbs.
    *
    * `listEntries` and `countEntries` ask the same question of the same request,
@@ -1300,6 +1346,7 @@ export class CollectionQueryService extends BaseService {
     // a refusal after it would come after those effects. The condition is
     // judged again where it is built, for one a trusted hook adds.
     await this.assertReleaseFilterReadable(params);
+    await this.assertNoPasswordQueried(params);
     // The settled filter a list forwards to its own count already passed this
     // check as the caller's, and what a read hook added to it is trusted
     // server code, which may scope by the column its own plugin contributed.

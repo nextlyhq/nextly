@@ -67,10 +67,12 @@ export interface PublicReadQuery {
   page?: number;
   /** The route's language; a different one is refused. */
   locale?: string;
-  /** The fields each row carries, besides its id. */
+  /**
+   * The fields each row carries, besides its id. A relationship comes back
+   * as the related id: filling it with its entry is not part of a public
+   * list's query yet.
+   */
   select?: readonly string[];
-  /** Relationship fields to fill with their entry, one level deep. */
-  populate?: readonly string[];
 }
 
 /** The canonical list envelope: the page of rows and its pagination. */
@@ -106,7 +108,6 @@ const QUERY_KEYS: ReadonlySet<string> = new Set([
   "page",
   "locale",
   "select",
-  "populate",
 ]);
 
 /** Core's operator for each public one. */
@@ -162,7 +163,6 @@ const QUERY_SHAPE = z.object({
   page: z.number().optional(),
   locale: z.string().optional(),
   select: z.array(z.string()).optional(),
-  populate: z.array(z.string()).optional(),
 });
 
 function assertShape(query: object): void {
@@ -185,6 +185,26 @@ function assertShape(query: object): void {
 function sortKeys(sort: string | readonly string[] | undefined): string[] {
   const parts = typeof sort === "string" ? sort.split(",") : [...(sort ?? [])];
   return parts.map(key => key.trim()).filter(key => key !== "");
+}
+
+const COUNT_KEYS: ReadonlySet<string> = new Set([
+  "collection",
+  "filters",
+  "locale",
+]);
+
+function assertCountKeys(query: object): void {
+  if (query === null || typeof query !== "object") {
+    refuse("query-invalid", "A count query must be an object.");
+  }
+  const extra = Object.keys(query).filter(key => !COUNT_KEYS.has(key));
+  if (extra.length > 0) {
+    refuse(
+      "option-refused",
+      `A public count takes a collection, filters and a language only, not ${extra.map(key => `"${key}"`).join(", ")}.`,
+      { keys: extra }
+    );
+  }
 }
 
 function assertQueryKeys(query: object): void {
@@ -236,6 +256,28 @@ function isScalar(value: unknown): value is FilterScalar {
   );
 }
 
+/**
+ * Whether a row's value is the kind its operator takes. `in` needs a value
+ * to match; an empty `not_in` excludes nothing and is a well-formed list.
+ */
+function valueFits(op: PublicFilterOp, value: unknown): boolean {
+  if (op === "in" || op === "not_in") {
+    return (
+      Array.isArray(value) &&
+      value.every(isScalar) &&
+      (op === "not_in" || value.length > 0)
+    );
+  }
+  return op === "exists" ? typeof value === "boolean" : isScalar(value);
+}
+
+/** What {@link valueFits} wants, in words, for the refusal. */
+function expectedValue(op: PublicFilterOp): string {
+  if (op === "in") return "a list of at least one value";
+  if (op === "not_in") return "a list of values";
+  return op === "exists" ? "true or false" : "one value";
+}
+
 /** One filter row as core's `where`, refused when it is not well formed. */
 function toCondition(row: PublicFilter): Record<string, unknown> {
   assertFieldName(row.field, "A filter");
@@ -245,16 +287,10 @@ function toCondition(row: PublicFilter): Record<string, unknown> {
       `"${String(row.op)}" is not a filter operator. Use one of: ${PUBLIC_FILTER_OPS.join(", ")}.`
     );
   }
-  const list = row.op === "in" || row.op === "not_in";
-  const valid = list
-    ? Array.isArray(row.value) && row.value.every(isScalar)
-    : row.op === "exists"
-      ? typeof row.value === "boolean"
-      : isScalar(row.value);
-  if (!valid) {
+  if (!valueFits(row.op, row.value)) {
     refuse(
       "value-invalid",
-      `The value for "${row.field}" ${row.op} must be ${list ? "a list of values" : row.op === "exists" ? "true or false" : "one value"}.`
+      `The value for "${row.field}" ${row.op} must be ${expectedValue(row.op)}.`
     );
   }
   return { [row.field]: { [CORE_OP[row.op]]: row.value } };
@@ -284,7 +320,7 @@ function assertPublicQuery(
   assertWholeNumber("offset", query.offset, 0);
   assertWholeNumber("page", query.page, 1);
   assertLocale(query.locale, binding.locale);
-  for (const field of [...(query.select ?? []), ...(query.populate ?? [])]) {
+  for (const field of query.select ?? []) {
     assertFieldName(field, "A list's fields");
   }
 }
@@ -303,7 +339,7 @@ function assertLocale(
 
 /** The fields each row carries, with its id; none named means every public one. */
 function selectOf(query: PublicReadQuery): FindArgs["select"] | undefined {
-  const fields = [...(query.select ?? []), ...(query.populate ?? [])];
+  const fields = query.select ?? [];
   if (fields.length === 0) return undefined;
   return Object.fromEntries([
     ["id", true],
@@ -323,6 +359,16 @@ export function toPublicFind(
 ): FindArgs {
   assertPublicQuery(query, binding);
   const limit = query.limit ?? DEFAULT_LIMIT;
+  // One start: core never receives both a page and an offset. Each part is a
+  // safe whole number, but their sum need not be.
+  const offset = (query.offset ?? 0) + ((query.page ?? 1) - 1) * limit;
+  if (!Number.isSafeInteger(offset)) {
+    refuse(
+      "offset-invalid",
+      "offset and page together start past the last row any list can reach.",
+      { offset: query.offset, page: query.page, limit }
+    );
+  }
   const where = toWhere(query.filters);
   const select = selectOf(query);
   const locale = binding.locale ?? query.locale;
@@ -333,11 +379,11 @@ export function toPublicFind(
     // order, the same on every read.
     sort: sortKeys(query.sort),
     limit,
-    // One start: core never receives both a page and an offset.
-    offset: (query.offset ?? 0) + ((query.page ?? 1) - 1) * limit,
+    offset,
     ...(locale === undefined ? {} : { locale }),
     ...(select === undefined ? {} : { select }),
-    depth: (query.populate?.length ?? 0) > 0 ? 1 : 0,
+    // Relationships come back as ids: nothing related is read for a list.
+    depth: 0,
     // The boundary, fixed: published only, the anonymous caller's rules,
     // and no key a list cannot know the meaning of.
     status: "published",
@@ -381,6 +427,9 @@ export function createPublicReader(
       return { items: result.items, meta: result.meta };
     },
     async count(query: PublicCountQuery): Promise<number> {
+      // Only what narrows a count: a sort, a window or a selection would be
+      // judged, and could fail, for a read whose rows nobody sees.
+      assertCountKeys(query);
       const result = await read(
         toPublicFind({ ...query, limit: 1, select: ["id"] }, binding)
       );
