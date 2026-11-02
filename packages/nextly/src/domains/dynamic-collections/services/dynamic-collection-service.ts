@@ -767,6 +767,13 @@ export class DynamicCollectionService extends BaseService {
     // dropped first because they are never stored, so they make no pair with anything.
     assertNoNewSiblingClashes({ kind: "collection", slug }, declared, stored);
     const userDefinedFields = namesKeptFromStored(declared, stored ?? []);
+    // And again as they will be stored: a field sent under a spelling of a stored one keeps the
+    // stored name, so two fields apart as sent (`metatitle`, `meta_title`) can arrive at one.
+    assertNoNewSiblingClashes(
+      { kind: "collection", slug },
+      userDefinedFields,
+      stored
+    );
     this.validationService.validateFieldNames(userDefinedFields);
     this.validationService.validateJunctionOwnership(userDefinedFields, field =>
       this.schemaService.junctionTableNameFor(tableName, field)
