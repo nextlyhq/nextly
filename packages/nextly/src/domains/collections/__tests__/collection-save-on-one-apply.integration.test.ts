@@ -414,6 +414,33 @@ describeEachDialect("a collection's Builder save", dialect => {
     expect(await recordedFields()).toEqual(recordedBefore);
   }, 120_000);
 
+  it("fills the entries already there from an optional field's stated default, as the migration file does", async () => {
+    // The file adds the column with its DEFAULT, so every database built from
+    // it has the value in the rows already there; this database must too.
+    await seeded();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "items" },
+      {
+        fields: [
+          ...BEFORE,
+          {
+            name: "badge",
+            type: "text",
+            default: "new",
+            options: { variant: "short" },
+          },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await query<{ b: unknown }>(
+      `SELECT ${q("badge")} AS b FROM ${q("dc_items")}`
+    );
+    expect(rows.map(row => row.b)).toEqual(["new", "new"]);
+  }, 120_000);
+
   it("drops a relationship's column when it becomes many-to-many", async () => {
     // The field keeps its name and loses its column to a junction table, so the save answers the
     // column's drop itself, as it does a removed field's.

@@ -999,7 +999,7 @@ export class DynamicCollectionService extends BaseService {
   ): {
     renameResolutions: BrowserRenameResolution[];
     legacyResolutions: LegacyResolutionsBundle;
-    fills: Array<{ field: string; value: unknown }>;
+    fills: Array<{ field: string; value: unknown; required: boolean }>;
   } {
     // The fields with a column on the main table, so a field that keeps its name and loses its
     // column (a relationship becoming many-to-many, a field becoming a group) is a removed column,
@@ -1072,11 +1072,18 @@ export class DynamicCollectionService extends BaseService {
     // translation, or every translated field when translation is turned off) gets its values from
     // the companion's restore, which a fill made NOT NULL first would refuse.
     const known = new Set(change.oldFields.map(f => f.name));
-    const fills: Array<{ field: string; value: unknown }> = [];
+    //
+    // An optional field that states a default fills them too: the file adds its column with that
+    // DEFAULT, so every database built from it has the value in the rows already there.
+    const fills: Array<{ field: string; value: unknown; required: boolean }> =
+      [];
     for (const field of added) {
-      if (field.required !== true || known.has(field.name)) continue;
+      if (known.has(field.name)) continue;
+      const required = field.required === true;
+      if (!required && field.default === undefined) continue;
       const value = this.schemaService.addedColumnFillValue(field, now);
-      if (value !== undefined) fills.push({ field: field.name, value });
+      if (value !== undefined)
+        fills.push({ field: field.name, value, required });
     }
     return {
       renameResolutions,
@@ -1245,8 +1252,11 @@ export class DynamicCollectionService extends BaseService {
     pushAnswers: {
       renameResolutions: BrowserRenameResolution[];
       legacyResolutions: LegacyResolutionsBundle;
-      /** What each Required field the save adds fills the rows already there with. */
-      fills: Array<{ field: string; value: unknown }>;
+      /**
+       * What each field the save adds fills the rows already there with: a Required one, and
+       * one that states a default, which the migration file's ADD gives every row it replays on.
+       */
+      fills: Array<{ field: string; value: unknown; required: boolean }>;
     };
     migrationFileName: string | null;
     /**

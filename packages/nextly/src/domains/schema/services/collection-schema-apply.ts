@@ -228,7 +228,7 @@ export interface CollectionSchemaChange {
    * filled with. Pushed optional, filled, then pushed Required: a fill answered to the push itself
    * would run before the column it fills exists.
    */
-  fills?: ReadonlyArray<{ field: string; value: unknown }>;
+  fills?: ReadonlyArray<{ field: string; value: unknown; required: boolean }>;
 }
 
 /**
@@ -426,14 +426,14 @@ async function recoverSqliteRebuilds(
 }
 
 /**
- * The Required fields the change adds over rows, filled and then made Required: the first push
- * added them optional, so each column exists and holds NULL; it is filled with its bound value,
- * and `push` applies the fields as the change states them.
+ * The fields the change adds over rows, filled: the first push added each column, optional, so
+ * it holds NULL; it is filled with its bound value, a Required field's or a stated default's, and
+ * where one is Required, `push` applies the fields as the change states them.
  */
-async function fillAddedRequiredFields(args: {
+async function fillAddedFields(args: {
   adapter: SchemaChangeDeps["adapter"];
   tableName: string;
-  fills: readonly { field: string; value: unknown }[];
+  fills: readonly { field: string; value: unknown; required: boolean }[];
   push: () => Promise<ApplyResult>;
 }): Promise<ApplyResult | undefined> {
   if (args.fills.length === 0) return undefined;
@@ -447,15 +447,18 @@ async function fillAddedRequiredFields(args: {
       sql`UPDATE ${sql.identifier(tableName)} SET ${column} = ${value} WHERE ${column} IS NULL`
     );
   }
-  return args.push();
+  // Made Required once filled, where one of them is; an optional one is done.
+  return args.fills.some(fill => fill.required) ? args.push() : undefined;
 }
 
 /** `fields` with the named ones optional, for a push that adds them before they are filled. */
 function withFillsOptional(
   fields: readonly FieldDefinition[],
-  fills: readonly { field: string }[]
+  fills: readonly { field: string; required: boolean }[]
 ): FieldDefinition[] {
-  const filled = new Set(fills.map(fill => fill.field));
+  const filled = new Set(
+    fills.filter(fill => fill.required).map(fill => fill.field)
+  );
   return fields.map(field =>
     filled.has(field.name) ? { ...field, required: false } : field
   );
@@ -547,7 +550,7 @@ async function applyHoldingSchemaLock(
   if (!result.success) {
     throw refusedApply(slug, promptDispatcher.drifted, result.error.message);
   }
-  const filled = await fillAddedRequiredFields({
+  const filled = await fillAddedFields({
     adapter,
     tableName,
     fills,
