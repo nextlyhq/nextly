@@ -22,7 +22,9 @@
  * @module content-controls
  */
 
+import { isRichTextValue, richTextToPlainText } from "@nextlyhq/blocks-engine";
 import {
+  Button,
   Checkbox,
   Input,
   Label,
@@ -42,8 +44,38 @@ import {
 } from "./content-control-types";
 import { fieldLabel, type EditableProp } from "./inspector";
 import { useStoredDraft } from "./stored-draft";
+import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
 
 export { CONTENT_CONTROL_TYPES };
+
+/** One item the host's media picker returned. Only its id is ever stored. */
+export interface PickedMedia {
+  readonly id: string;
+  readonly url?: string | null;
+  readonly filename?: string;
+}
+
+/** What the content controls hand the host's media picker. */
+export interface MediaPickerProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (media: PickedMedia[]) => void;
+  title?: string;
+}
+
+/**
+ * What the host lends the Content tab: the parts of the admin this package
+ * cannot reach itself. Each is optional, and a control whose service is absent
+ * says so rather than offering a button that does nothing.
+ *
+ * @experimental Grows with the controls registry.
+ */
+export interface ContentServices {
+  /** The admin's media library, as a dialog the control opens. */
+  readonly MediaPicker?: React.ComponentType<MediaPickerProps>;
+  /** The shared rich-text editor, loaded when a passage is first focused. */
+  readonly loadRichTextEditor?: InlineRichTextEditorLoader;
+}
 
 /** What every content control is given. */
 export interface ContentControlProps {
@@ -52,8 +84,10 @@ export interface ContentControlProps {
   readonly prop: EditableProp;
   /** Whether the prop may not be changed here: a lock, or a `contentOnly` area. */
   readonly disabled: boolean;
-  /** Set the prop, through the editor's one write path. */
+  /** Set the prop, through the editor's one write path; `undefined` removes it. */
   readonly onCommit: (name: string, value: unknown) => void;
+  /** What the host lends, for the controls that need the admin. */
+  readonly services?: ContentServices | undefined;
 }
 
 /** A content control: a label and the field it names. */
@@ -198,6 +232,202 @@ function SelectControl({
   );
 }
 
+/**
+ * A media item, chosen from the host's library. Only the id is stored: the
+ * page resolves it to the file's current address when it draws, so a file
+ * moved or renamed in the library stays right on the page.
+ */
+function MediaControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  services,
+}: ContentControlProps): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  // What the last pick was called, for this session; a stored id shows as set.
+  const [picked, setPicked] = React.useState<PickedMedia | null>(null);
+  const label = fieldLabel(prop.name);
+  const stored =
+    typeof prop.value === "string" && prop.value !== "" ? prop.value : null;
+  const Picker = services?.MediaPicker;
+  const name = picked?.id === stored ? picked?.filename : undefined;
+  return (
+    <div className="nx-inspector__field" data-content-control="media">
+      <p className="nx-inspector__field-name" id={`${id}-label`}>
+        {label}
+      </p>
+      <div
+        className="nx-inspector__media"
+        role="group"
+        aria-labelledby={`${id}-label`}
+      >
+        <p className="nx-inspector__note">
+          {stored === null
+            ? "Nothing chosen."
+            : (name ?? "A file from the media library.")}
+        </p>
+        {Picker === undefined ? (
+          <p className="nx-inspector__note">
+            The media library is not available here.
+          </p>
+        ) : (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={disabled}
+              aria-label={`Choose ${label}`}
+              onClick={() => setOpen(true)}
+            >
+              {stored === null ? "Choose" : "Replace"}
+            </Button>
+            <Picker
+              open={open}
+              onOpenChange={setOpen}
+              title={`Choose ${label.toLowerCase()}`}
+              onSelect={media => {
+                const first = media[0];
+                if (first === undefined) return;
+                setPicked(first);
+                onCommit(prop.name, first.id);
+              }}
+            />
+          </>
+        )}
+        {stored === null ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={disabled}
+            aria-label={`Remove ${label}`}
+            onClick={() => onCommit(prop.name, undefined)}
+          >
+            Remove
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The live attachment of the shared editor to this field, while focused. */
+interface RichTextSession {
+  read(): unknown;
+  detach(): void;
+}
+
+/**
+ * A rich-text passage, edited in the inspector with the admin's one rich-text
+ * editor.
+ *
+ * The editor is attached when the field is focused, loaded with the stored
+ * passage, and what it reads is committed once when the field is left, so an
+ * edit is one entry in the history. There is one editor for the whole admin:
+ * while it is held on the canvas the field says so and writes nothing.
+ *
+ * Read-only is passed to the element itself: a disabled fieldset does not
+ * stop typing in a `contenteditable`.
+ */
+function RichTextControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  services,
+}: ContentControlProps): React.JSX.Element {
+  const field = React.useRef<HTMLDivElement>(null);
+  const session = React.useRef<RichTextSession | null>(null);
+  const [refused, setRefused] = React.useState<"held" | "unsupported" | null>(
+    null
+  );
+  const label = fieldLabel(prop.name);
+  const load = services?.loadRichTextEditor;
+
+  const attach = async (): Promise<void> => {
+    const element = field.current;
+    if (
+      disabled ||
+      load === undefined ||
+      element === null ||
+      session.current !== null
+    )
+      return;
+    const editor = await load();
+    const attachment = editor.attach(element, prop.value);
+    if (attachment.status === "refused") {
+      setRefused(attachment.reason);
+      return;
+    }
+    setRefused(null);
+    session.current = attachment.session;
+  };
+
+  const finish = (): void => {
+    const live = session.current;
+    if (live === null) return;
+    session.current = null;
+    const value = live.read();
+    live.detach();
+    onCommit(prop.name, value);
+  };
+
+  // While no editor is attached, the field shows the passage's words, set on
+  // the element rather than rendered as children: the editor takes the
+  // element's contents over once attached, and React must not own them.
+  const preview = isRichTextValue(prop.value)
+    ? richTextToPlainText(prop.value)
+    : "";
+  React.useEffect(() => {
+    if (session.current === null && field.current !== null) {
+      field.current.textContent = preview;
+    }
+  }, [preview]);
+
+  // A passage left open when the block changes or the panel goes is finished,
+  // so nothing typed is lost and the shared editor is never left held. Read
+  // through a ref so the cleanup commits with this render's write path.
+  const latestFinish = React.useRef(finish);
+  latestFinish.current = finish;
+  React.useEffect(() => () => latestFinish.current(), []);
+
+  return (
+    <div className="nx-inspector__field" data-content-control="richText">
+      <p className="nx-inspector__field-name" id={`${id}-label`}>
+        {label}
+      </p>
+      <div
+        id={id}
+        ref={field}
+        className="nx-inspector__rich-text"
+        role="textbox"
+        aria-multiline="true"
+        aria-labelledby={`${id}-label`}
+        aria-readonly={disabled || load === undefined}
+        contentEditable={!disabled && load !== undefined}
+        suppressContentEditableWarning
+        tabIndex={0}
+        onFocus={() => void attach()}
+        onBlur={finish}
+      />
+      {refused === null ? null : (
+        <p className="nx-inspector__note" role="status">
+          {refused === "held"
+            ? "This passage is being edited on the canvas. Finish there first."
+            : "This passage can't be edited here."}
+        </p>
+      )}
+      {load === undefined ? (
+        <p className="nx-inspector__note">
+          Rich text is edited on the canvas here.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextishControl,
@@ -206,6 +436,8 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   number: TextishControl,
   checkbox: CheckboxControl,
   select: SelectControl,
+  media: MediaControl,
+  richText: RichTextControl,
 };
 
 /**

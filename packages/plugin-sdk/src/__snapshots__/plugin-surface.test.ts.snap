@@ -95,6 +95,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "JsonObject (type)",
   "JsonValue (type)",
   "Label (value)",
+  "MediaPickerDialog (value)",
+  "MediaPickerDialogProps (type)",
   "NextlyColumn (type)",
   "NextlyFieldSchema (type)",
   "NextlyFieldType (type)",

@@ -150,6 +150,8 @@ describe("inspectSelection", () => {
       "number",
       "checkbox",
       "select",
+      "media",
+      "richText",
     ]);
   });
 

@@ -28,6 +28,10 @@ import {
   SelectionBreadcrumb,
   SpacingOverlay,
 } from "@nextlyhq/builder/shell";
+import {
+  loadInlineRichTextEditor,
+  MediaPickerDialog,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { useState, type ComponentProps, type JSX } from "react";
 import type { Control, FieldValues, Path } from "react-hook-form";
@@ -266,6 +270,25 @@ function editorTopBar(view: EditorView): React.JSX.Element {
   );
 }
 
+type ContentServices = ComponentProps<typeof InspectorPanel>["contentServices"];
+
+let contentServices: ContentServices;
+
+/**
+ * What the inspector's Content tab borrows from the admin: the media library,
+ * to choose an image, and the shared rich-text editor. Built on first use and
+ * kept for the module's life, so the panel never sees a new object on a
+ * render, and loading this module reads nothing from the admin's surface
+ * until an editor is drawn.
+ */
+function borrowedServices(): ContentServices {
+  contentServices ??= {
+    MediaPicker: MediaPickerDialog,
+    loadRichTextEditor: loadInlineRichTextEditor,
+  };
+  return contentServices;
+}
+
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
 type CardVerbs = ComponentProps<typeof InspectorPanel>["verbs"];
 
@@ -312,6 +335,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
+      contentServices={borrowedServices()}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}

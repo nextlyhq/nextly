@@ -624,6 +624,16 @@ export type {
 export { useUploadMedia } from "@nextlyhq/admin";
 
 /**
+ * @experimental The media library as a dialog a plugin can open: browse,
+ * search and upload, then hand back the chosen items. The page builder's
+ * inspector opens it to choose an image; a plugin's own inspector may do the
+ * same. Store the chosen item's `id`, which stays right when the file is moved
+ * or renamed, rather than its `url`, which does not.
+ */
+export { MediaPickerDialog } from "@nextlyhq/admin";
+export type { MediaPickerDialogProps } from "@nextlyhq/admin";
+
+/**
  * @experimental Reads the `clientConfig` this plugin declared in
  * `contributes.admin.clientConfig`, which is how a plugin's server-side
  * configuration reaches its browser components.

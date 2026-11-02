@@ -17,6 +17,8 @@ export const CONTENT_CONTROL_TYPES = [
   "number",
   "checkbox",
   "select",
+  "media",
+  "richText",
 ] as const;
 
 export type ContentControlType = (typeof CONTENT_CONTROL_TYPES)[number];

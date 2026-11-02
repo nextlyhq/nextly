@@ -65,6 +65,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // Present because the mock REPLACES the module wholesale: an export the
   // subject imports and this omits is a missing-export error rather than an
   // unused stub.
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => undefined,
   // A saved page around the field, so the card has the builder's address to

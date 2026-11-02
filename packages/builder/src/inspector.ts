@@ -574,6 +574,12 @@ export function propPatch(
   name: string,
   value: unknown
 ): NodePatch {
+  // `undefined` REMOVES the prop rather than storing it: a document holds no
+  // undefined values, and an absent prop is what "not set" already means.
+  if (value === undefined) {
+    const { [name]: _removed, ...rest } = node.props;
+    return { props: rest };
+  }
   return { props: { ...node.props, [name]: value } };
 }
 

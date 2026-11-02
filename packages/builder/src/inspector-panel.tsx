@@ -47,7 +47,7 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
-import { contentControlFor } from "./content-controls";
+import { contentControlFor, type ContentServices } from "./content-controls";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import type { SavedComponent } from "./inserter";
@@ -246,6 +246,13 @@ export interface InspectorPanelProps {
    * provider. Omitted, the menu offers Rename and Lock alone.
    */
   verbs?: CardVerbs;
+  /**
+   * What the host lends the Content tab: the media library and the shared
+   * rich-text editor. A control whose service is absent says so.
+   *
+   * @experimental Grows with the controls registry.
+   */
+  contentServices?: ContentServices;
 }
 
 /** What the inspector needs of the host's component read. */
@@ -435,6 +442,7 @@ export function InspectorPanel({
   componentLibrary,
   inspectors,
   verbs,
+  contentServices,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: InspectorPanelProps): React.JSX.Element {
@@ -551,6 +559,7 @@ export function InspectorPanel({
             editor={editor}
             onCommit={commit}
             inspectors={inspectors}
+            services={contentServices}
             blocks={blocks}
             onScreen={tab === "content"}
           />
@@ -583,6 +592,7 @@ function ContentTab({
   editor,
   onCommit: commit,
   inspectors,
+  services,
   blocks,
   onScreen,
 }: {
@@ -590,6 +600,7 @@ function ContentTab({
   editor: EditorState;
   onCommit: (name: string, value: unknown) => void;
   inspectors: BlockInspectorResolver | undefined;
+  services: ContentServices | undefined;
   blocks: BlockResolver | undefined;
   /** Whether the Content tab is the one showing. */
   onScreen: boolean;
@@ -609,6 +620,7 @@ function ContentTab({
         editor={editor}
         onCommit={commit}
         inspectors={inspectors}
+        services={services}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*
@@ -783,16 +795,19 @@ function ContentSurface({
   editor,
   onCommit,
   inspectors,
+  services,
 }: {
   inspection: BlockInspection;
   editor: EditorState;
   onCommit: (name: string, value: unknown) => void;
   inspectors: BlockInspectorResolver | undefined;
+  services: ContentServices | undefined;
 }): React.JSX.Element {
   const generated = (
     <ContentFields
       inspection={inspection}
       onCommit={onCommit}
+      services={services}
       writable={name =>
         propIsWritable(editor.document, inspection.nodeId, name)
       }
@@ -909,10 +924,12 @@ class CustomInspectorBoundary extends React.Component<
 function ContentFields({
   inspection,
   onCommit,
+  services,
   writable,
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => void;
+  services: ContentServices | undefined;
   /**
    * Whether one prop may be set: not on a locked block, and inside a
    * `contentOnly` area only for content props. The same rule the commit and
@@ -939,6 +956,7 @@ function ContentFields({
           prop={prop}
           disabled={!writable(prop.name)}
           onCommit={onCommit}
+          services={services}
         />
       ))}
     </div>
@@ -949,10 +967,12 @@ function PropField({
   prop,
   disabled,
   onCommit,
+  services,
 }: {
   prop: EditableProp;
   disabled: boolean;
   onCommit: (name: string, value: unknown) => void;
+  services: ContentServices | undefined;
 }): React.JSX.Element {
   // Unique per mount, so two editors on one page never share a field id and a
   // label never points at the other editor's control.
@@ -981,7 +1001,13 @@ function PropField({
   }
 
   return (
-    <Control id={id} prop={prop} disabled={disabled} onCommit={onCommit} />
+    <Control
+      id={id}
+      prop={prop}
+      disabled={disabled}
+      onCommit={onCommit}
+      services={services}
+    />
   );
 }
 
