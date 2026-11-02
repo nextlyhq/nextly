@@ -18,6 +18,7 @@ import {
   defineSingle,
   fieldGroup,
   number,
+  relationship,
   text,
   textarea,
 } from "../../../config";
@@ -408,6 +409,48 @@ describe.each(getConfiguredTestDialects())(
         }
       }
     );
+
+    // A related entry is populated with its translatable values too, from its own companion.
+    it("populates a related entry's translatable fields", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        collections: [
+          defineCollection({
+            slug: "writers",
+            fields: [text({ name: "name" }), number({ name: "age" })],
+          }),
+          defineCollection({
+            slug: "stories",
+            fields: [
+              text({ name: "headline" }),
+              relationship({ name: "writer", relationTo: "writers" }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      const writer = await t.nextly.create({
+        collection: "writers",
+        data: { name: "Ada", age: 36 },
+      });
+      const writerId = (writer.item as { id: string }).id;
+      const story = await t.nextly.create({
+        collection: "stories",
+        data: { headline: "Told", writer: writerId },
+      });
+      const id = (story.item as { id: string }).id;
+
+      expect(
+        await t.nextly.findByID({ collection: "stories", id, depth: 1 })
+      ).toMatchObject({ writer: { id: writerId, name: "Ada", age: 36 } });
+      const list = await t.nextly.find({ collection: "stories", depth: 1 });
+      expect(list.items).toEqual([
+        expect.objectContaining({
+          writer: expect.objectContaining({ name: "Ada", age: 36 }),
+        }),
+      ]);
+    });
 
     it("stores as it always has with the setting off", async () => {
       const t = await boot(dialect, false);
