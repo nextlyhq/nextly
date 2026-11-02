@@ -35,7 +35,6 @@ import {
   previewContainerName,
   previewStateClass,
   resolveTokenPrefix,
-  statedTokenPrefix,
   statePropagatesToAncestors,
   STYLE_STATES,
   tokenCustomProperty,
@@ -182,17 +181,23 @@ const SITE_FONT_TOKEN = "font.body";
  * A `var()` naming the site's body font, under the prefix the site sheet emits
  * its tokens with, or undefined when the host serves no site sheet.
  *
- * The prefix comes from the same two calls the sheet compiler makes —
- * `statedTokenPrefix` for which of the input's two prefixes applies, and
- * `resolveTokenPrefix` for what is actually written — so a site under
- * `--brand-` is read as `--brand-font-body` rather than as a property nothing
- * declares.
+ * The prefix is the one the renderer compiles the sheet under:
+ * `sharedStyleInputs` reconciles the site's own prefixes with the route
+ * context's, exactly as `PageRenderer` does before emitting the sheet, and
+ * `resolveTokenPrefix` gives what is actually written. So a site under
+ * `--brand-`, or a route context naming the prefix for a site that states
+ * none, is read under that prefix rather than as a property nothing declares.
  */
 function siteFontReference(
+  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>
 ): string | undefined {
   if (typeof siteStyles !== "object") return undefined;
-  const { prefix } = resolveTokenPrefix(statedTokenPrefix(siteStyles));
+  const stated = sharedStyleInputs(
+    render?.styleContext,
+    siteStyles
+  ).tokenPrefix;
+  const { prefix } = resolveTokenPrefix(stated ?? undefined);
   return `var(${tokenCustomProperty(SITE_FONT_TOKEN, prefix)}, system-ui)`;
 }
 
@@ -2040,7 +2045,7 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
-  const siteFont = siteFontReference(siteStyles);
+  const siteFont = siteFontReference(render, siteStyles);
   const siteFontStyle: Record<`--${string}`, string> =
     siteFont === undefined ? {} : { [SITE_FONT_PROPERTY]: siteFont };
   const rootStyle: React.CSSProperties = { ...boxStyle, ...siteFontStyle };

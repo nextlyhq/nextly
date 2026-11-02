@@ -136,6 +136,12 @@
   /* How far a block in mid-drag fades where it sits, on the canvas and in
      Layers alike, so the thing in hand reads the same on both. */
   --nx-builder-drag-source-opacity: 0.4;
+  /*
+   * The admin's colour scheme, as a value chrome can be handed back: chrome
+   * drawn inside the canvas sits under the page's own scheme and takes the
+   * admin's from here.
+   */
+  --nx-builder-scheme: light;
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
@@ -184,8 +190,11 @@
  * Keyed on the admin's `.dark` class wherever it sits, on an ancestor or on the
  * scope itself, exactly as the admin's own tokens are.
  */
-.dark :is(.nx-builder-tokens, .nx-builder-chrome),
-:is(.nx-builder-tokens, .nx-builder-chrome).dark {
+.dark .nx-builder-tokens,
+.dark .nx-builder-chrome,
+.nx-builder-tokens.dark,
+.nx-builder-chrome.dark {
+  --nx-builder-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
@@ -1744,25 +1753,21 @@
  * the drop line are chrome too but take no pointer events, so they are named
  * here rather than given that marker, which would change what a click does.
  *
- * Inside `:where()` so they weigh nothing: a chrome rule that states its own
- * colour, such as the refusal notice's destructive foreground, still wins, and
- * only what would otherwise be inherited from the page is replaced. The dark
- * rule comes second and has equal weight, so order decides it.
+ * In the BASE layer, so it yields to everything the chrome states for itself:
+ * any unlayered rule, such as the refusal notice's destructive foreground, and
+ * any utility class, wins whatever its weight, and only what would otherwise
+ * be inherited from the page is replaced. The scheme is the admin's token
+ * rather than a light rule and a `.dark` twin, so the theme decides it in the
+ * one place the other builder tokens are picked.
  */
-:where(
-  .nx-canvas :is([data-nx-chrome], .nx-spacing-overlay, .nx-drop-indicator)
-) {
-  color-scheme: light;
-  color: var(--nx-builder-text);
-  font-family: var(--font-sans, system-ui, sans-serif);
-}
-
-:where(
-  .dark
-    .nx-canvas
-    :is([data-nx-chrome], .nx-spacing-overlay, .nx-drop-indicator)
-) {
-  color-scheme: dark;
+@layer base {
+  .nx-canvas [data-nx-chrome],
+  .nx-canvas .nx-spacing-overlay,
+  .nx-canvas .nx-drop-indicator {
+    color-scheme: var(--nx-builder-scheme);
+    color: var(--nx-builder-text);
+    font-family: var(--font-sans, system-ui, sans-serif);
+  }
 }
 
 /*

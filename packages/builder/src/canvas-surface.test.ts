@@ -257,47 +257,65 @@ describe("a site that darkens with the visitor's system", () => {
 });
 
 describe("the editor's chrome on the canvas keeps the admin's theme", () => {
-  /** A selector with its line breaks and inner padding collapsed. */
-  const flat = (selector: string): string =>
-    selector.replace(/\s+/g, " ").replace(/\(\s/g, "(").replace(/\s\)/g, ")");
-
-  /** The one rule whose flattened selector is `selector`. */
-  function chromeRule(selector: string): string {
-    const found = canvasRules().filter(
-      rule => flat(rule.selector) === selector
-    );
-    expect(found.length, `exactly one rule for \`${selector}\``).toBe(1);
-    return found[0]?.body ?? "";
-  }
-
   /*
    * EVERY piece of chrome the editor draws inside the page, in one list: the
    * controls marked as chrome, and the spacing overlay and drop line, which
    * take no pointer events and so carry no chrome marker. The overlay's value
    * chips are text, and without this they were set in the site's face.
    */
-  const MEMBERS = "[data-nx-chrome], .nx-spacing-overlay, .nx-drop-indicator";
-  const LIGHT = `:where(.nx-canvas :is(${MEMBERS}))`;
-  const DARK = `:where(.dark .nx-canvas :is(${MEMBERS}))`;
+  const MEMBERS = [
+    "[data-nx-chrome]",
+    ".nx-spacing-overlay",
+    ".nx-drop-indicator",
+  ];
 
-  it("hands chrome back the admin's text colour, scheme and face, weighing nothing", () => {
+  /** The `@layer base` block holding the chrome reset, as rule bodies by selector. */
+  function chromeLayer(): Map<string, string> {
+    const layers = CHROME.split("\n@layer base {").slice(1);
+    const holding = layers.filter(layer =>
+      layer.includes(".nx-canvas [data-nx-chrome]")
+    );
+    expect(holding.length, "exactly one base layer holds the reset").toBe(1);
+    const block = (holding[0] ?? "").slice(
+      0,
+      (holding[0] ?? "").indexOf("\n}")
+    );
+    const rules = new Map<string, string>();
+    for (const match of block.matchAll(/\n {2}([^{}]+?)\s*\{([^{}]*)\}/g)) {
+      rules.set((match[1] ?? "").replace(/\s+/g, " ").trim(), match[2] ?? "");
+    }
+    return rules;
+  }
+
+  it("hands chrome back the admin's text colour, scheme and face, below everything chrome states", () => {
     /*
-     * The canvas now states the site's scheme, text colour and face, and all
-     * three inherit into chrome drawn on the page. Inside `:where()` so a
-     * chrome rule that states its own colour still wins.
+     * The canvas states the site's scheme, text colour and face, and all three
+     * inherit into chrome drawn on the page. In the base layer so any rule a
+     * piece of chrome states for itself, and any utility class, still wins.
      */
-    const light = chromeRule(LIGHT);
-    expect(declared(light, "color-scheme")).toBe("light");
-    expect(declared(light, "color")).toBe("var(--nx-builder-text)");
-    expect(declared(light, "font-family")).toBe(
+    const rules = chromeLayer();
+    const light = rules.get(
+      MEMBERS.map(member => `.nx-canvas ${member}`).join(", ")
+    );
+    expect(light, "the light reset names every member").toBeDefined();
+    expect(declared(light ?? "", "color-scheme")).toBe(
+      "var(--nx-builder-scheme)"
+    );
+    expect(declared(light ?? "", "color")).toBe("var(--nx-builder-text)");
+    expect(declared(light ?? "", "font-family")).toBe(
       "var(--font-sans, system-ui, sans-serif)"
     );
-    expect(declared(chromeRule(DARK), "color-scheme")).toBe("dark");
-    const order = canvasRules().map(rule => flat(rule.selector));
+    /*
+     * The scheme is the admin's, picked by the admin's theme where every
+     * other builder token is: light at rest, dark under `.dark`.
+     */
     expect(
-      order.indexOf(DARK),
-      "equal weight, so the dark rule has to come second"
-    ).toBeGreaterThan(order.indexOf(LIGHT));
+      declared(
+        ruleFor(".nx-builder-tokens,\n.nx-builder-chrome"),
+        "--nx-builder-scheme"
+      )
+    ).toBe("light");
+    expect(declared(ruleFor(ADMIN_DARK), "--nx-builder-scheme")).toBe("dark");
   });
 });
 
@@ -328,7 +346,7 @@ function hexOf(body: string, property: string): string {
 
 const CONSTANTS = ".nx-builder-tokens,\n.nx-builder-chrome,\n.nx-canvas";
 const ADMIN_DARK =
-  ".dark :is(.nx-builder-tokens, .nx-builder-chrome),\n:is(.nx-builder-tokens, .nx-builder-chrome).dark";
+  ".dark .nx-builder-tokens,\n.dark .nx-builder-chrome,\n.nx-builder-tokens.dark,\n.nx-builder-chrome.dark";
 
 describe("the editing colours drawn on the page", () => {
   it("are builder tokens, never the admin's black-or-white primary", () => {

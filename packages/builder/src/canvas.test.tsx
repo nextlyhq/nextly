@@ -3275,9 +3275,22 @@ describe("the site's body font on the canvas root", () => {
   const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
   const breakpoints = { viewport: [], container: [] };
 
-  function fontOf(siteStyles: SiteSheetInput | false): string {
+  function fontOf(
+    siteStyles: SiteSheetInput | false,
+    routePrefix?: string
+  ): string {
     const { container } = render(
-      <Canvas document={page} siteStyles={siteStyles} />
+      <Canvas
+        document={page}
+        siteStyles={siteStyles}
+        {...(routePrefix === undefined
+          ? {}
+          : {
+              render: {
+                styleContext: { breakpoints, tokenPrefix: routePrefix },
+              },
+            })}
+      />
     );
     const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
     return root?.style.getPropertyValue("--nx-canvas-site-font") ?? "";
@@ -3297,6 +3310,24 @@ describe("the site's body font on the canvas root", () => {
         tokens: { tokens: [], prefix: "--brand-" },
       })
     ).toBe("var(--acme-font-body, system-ui)");
+  });
+
+  it("takes the route context's prefix when the site states none, as the renderer does", () => {
+    /*
+     * The renderer reconciles the route's prefix into the sheet it emits when
+     * the site states none, so the body font is declared under it. Reading the
+     * site input alone named `--site-font-body`, which nothing declared.
+     */
+    expect(fontOf({ breakpoints }, "--route-")).toBe(
+      "var(--route-font-body, system-ui)"
+    );
+    // The site's own prefix still outranks the route's, as in the sheet.
+    expect(
+      fontOf(
+        { breakpoints, tokens: { tokens: [], prefix: "--brand-" } },
+        "--route-"
+      )
+    ).toBe("var(--brand-font-body, system-ui)");
   });
 
   it("uses the default prefix when the site states none", () => {

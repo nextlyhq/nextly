@@ -297,24 +297,6 @@ function emitContentWidth(
 }
 
 /**
- * The token prefix a site sheet is compiled under, as the input states it: the
- * sheet's own `tokenPrefix`, else the token set's.
- *
- * Unresolved, exactly as the compile below carries it — `resolveTokenPrefix`
- * turns it into the prefix actually written. Exported so a surface that
- * REFERENCES a site token outside the compiled sheet (an editor canvas naming
- * the body font) asks the same question the sheet answered, rather than a
- * second `tokenPrefix ?? tokens.prefix` that could disagree with it.
- *
- * @experimental
- */
-export function statedTokenPrefix(
-  input: Pick<SiteSheetInput, "tokenPrefix" | "tokens">
-): string | undefined {
-  return input.tokenPrefix ?? input.tokens?.prefix;
-}
-
-/**
  * The tiers that do not read `breakpoints`: font faces, tokens, content width.
  *
  * Separated because these three are compilable when the site's breakpoints are unknown and the
@@ -350,7 +332,7 @@ function compileBreakpointIndependentTiers(
   // `--site-color-primary` while its pages asked for `var(--brand-color-primary)`. Nothing
   // errors: the reference resolves to nothing and the value silently does not apply. Deriving it
   // once here is what makes that impossible rather than merely unlikely.
-  const tokenPrefix = statedTokenPrefix(input);
+  const tokenPrefix = input.tokenPrefix ?? input.tokens?.prefix;
 
   // What the token emitter actually WROTE, carried forward rather than
   // re-derived. `emitTokenBlocks` refuses a token on five separate conditions
