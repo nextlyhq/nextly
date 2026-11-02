@@ -11,16 +11,21 @@
  *
  * @module tests/builder-help.spec
  */
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
+import { test } from "./support/test";
+
+// The editor opens on the homepage Single, which other files edit.
+test.describe.configure({ lock: [LOCK.homepage] });
 
 /** The control that opens the page builder, in either of its wordings. */
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 
 async function openEditor(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("button", { name: OPEN_BUILDER_ACTION }).click();
+  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   await expect(
     page.getByRole("navigation", { name: "Editor panels" })
   ).toBeVisible({ timeout: 30_000 });
@@ -62,7 +67,9 @@ test.describe("the editor's rail and Help", () => {
     page,
   }) => {
     await openEditor(page);
-    const help = page.getByRole("button", { name: "Help", exact: true });
+    const help = page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Help", exact: true });
     await help.click();
 
     const dialog = page.getByRole("dialog", { name: "Help" });
@@ -82,7 +89,10 @@ test.describe("the editor's rail and Help", () => {
     page,
   }) => {
     await openEditor(page);
-    await page.getByRole("button", { name: "Help", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Help", exact: true })
+      .click();
 
     const [docs] = await Promise.all([
       page.waitForEvent("popup"),

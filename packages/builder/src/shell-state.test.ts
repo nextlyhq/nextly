@@ -118,7 +118,7 @@ describe("the bounds the library is handed", () => {
   it("declares a canvas floor that per-panel bounds cannot express", () => {
     // This is the number that decided the design, kept as an assertion so the
     // reasoning cannot quietly stop being true. Both panels at their individual
-    // maximums on the minimum supported viewport leave the canvas at 200px —
+    // maximums on the minimum supported viewport leave the canvas at 196px —
     // narrower than either panel — with no per-panel bound violated.
     const canvasIfPanelsMaxed =
       MIN_SHELL_WIDTH -

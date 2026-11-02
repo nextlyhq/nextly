@@ -42,7 +42,7 @@ export function panelLabel(panel: LeftPanel): string {
 }
 
 const ITEM_CLASS =
-  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md px-0.5 py-1.5 text-xs leading-tight focus-visible:ring-2 focus-visible:outline-none";
+  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md py-1.5 text-xs leading-tight focus-visible:ring-2 focus-visible:outline-none";
 
 function RailItem({
   label,

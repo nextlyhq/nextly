@@ -38,4 +38,4 @@ For hosts of `@nextlyhq/builder` (experimental API):
 - The panel ids changed: `insert` is now `add`, and `tokens`, `classes` and `fonts` are now the tabs of one `design` panel. A stored preference naming an old id opens the panel and tab it became.
 - `renderPanel` receives a second argument, a `PanelView` (`current` and `choose`), for a panel with parts.
 - `openPanelRequest` takes an optional `view`.
-- `RAIL_WIDTH` is 80.
+- `RAIL_WIDTH` is 84.
