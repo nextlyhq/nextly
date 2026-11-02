@@ -67,12 +67,17 @@ import {
   type DefaultLayoutSetup,
 } from "./default-layout/install";
 import { makeDefaultRoute } from "./default-layout/make-default-route";
-import { pageBuilderSettingsSingle } from "./default-layout/settings-single";
+import {
+  PAGE_BUILDER_SETTINGS_SLUG,
+  pageBuilderSettingsSingle,
+} from "./default-layout/settings-single";
 import { entriesRoute } from "./entries-route";
 import type { CompositionSetup } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { layoutChoicesRoute } from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
+import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
   componentLibraryRoute,
@@ -1015,6 +1020,16 @@ export const pageBuilder = (
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       registerReadinessNotice(ctx, opts);
+      // A page published naming a Layout that is not: it is served inside the
+      // site's default until its own is published, and the author is told.
+      registerLayoutReadinessNotice({
+        ctx,
+        pages: ctx.self.collections.pages ?? "pages",
+        layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+        settings:
+          ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+          PAGE_BUILDER_SETTINGS_SLUG,
+      });
       // A component's removed fields: recorded when the definition dropping
       // them is published, and their values stripped from every later write.
       // On the store pages are composed against, so a host that redirected it
@@ -1185,6 +1200,9 @@ export const pageBuilder = (
         // preconditions (the Layout is published, the caller may publish
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
+        // The Layouts an author may choose for a page, with the published
+        // regions the editor draws around it, read as the author.
+        layoutChoicesRoute(),
       ],
       // The grant that lets a role choose the site's default Layout, read by
       // the make-default route. A permission of its own rather than

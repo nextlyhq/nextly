@@ -531,6 +531,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // box actually got rather than from what it was offered.
             preview={canvasPreview}
             dragHandlers={drag.handlers}
+            // The regions of the page's Layout, drawn locked around it from
+            // the published Layout, as a visitor gets them.
+            regions={view.canvasRegions}
             // The same object those handlers came from, forwarded whole.
             // The canvas draws what the pointer currently means — which
             // block is in flight, which container is receiving it, and why
@@ -709,7 +712,10 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   const style = useSiteStyleInputs(mount.clientConfig);
   const canvas = useCanvasInputs(mount, style);
-  const panels = useEditorPanels(mount, name);
+  const panels = useEditorPanels(mount, name, {
+    control,
+    canvasRoot: canvas.canvasElement,
+  });
   const { done } = useHostCommit({
     name,
     control,

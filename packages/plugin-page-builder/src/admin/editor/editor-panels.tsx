@@ -20,12 +20,15 @@ import {
   LayersPanel,
   useBuilderChecklist,
   type BuilderShell,
+  type CanvasRegion,
+  type LayersRegionRow,
   type LibraryTierState,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
+import { FormSection } from "@nextlyhq/ui";
 import {
   useCallback,
   useMemo,
@@ -34,8 +37,10 @@ import {
   type ReactNode,
   type Dispatch,
 } from "react";
+import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
+import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
@@ -313,11 +318,24 @@ function usePanelRequests(): PanelRequests {
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
-export function useEditorPanels(
+export function useEditorPanels<TFieldValues extends FieldValues>(
   mount: EditorMount,
-  name: string
+  name: string,
+  /**
+   * The entry's form, and the canvas the Layout's regions are scrolled to.
+   * The page's Layout is part of the panels: its picker heads Settings and
+   * its regions are rows in Layers, drawn on the canvas beside them.
+   */
+  page: {
+    control: Control<TFieldValues>;
+    canvasRoot: HTMLElement | null;
+  }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
+  // The picker, or null for a form that is not a page drawn in a Layout.
+  const layoutPicker = usePageLayoutSettings(page.control);
+  // From the form's unsaved values, so a change of Layout redraws at once.
+  const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -327,7 +345,31 @@ export function useEditorPanels(
    * form has a renderer, so a gate on the renderer's existence is true even for
    * a collection whose only fields are its title, its slug and this one.
    */
-  const entryFields = useEntryFieldsPanel(name);
+  const formFields = useEntryFieldsPanel(name);
+  /*
+   * The Layout picker first: it decides what surrounds the page, which is
+   * the first thing an author settles about it. One element, so the rail's
+   * availability below still reads one value.
+   */
+  const entryFields =
+    layoutPicker === null ? (
+      formFields
+    ) : (
+      <div className="flex flex-col">
+        {/* The form's own panel pads itself, so only the top and sides here:
+            the two sections then sit one panel-gap apart. */}
+        <div className="px-4 pt-4">
+          {/* A section of its own, as the form's own groups are drawn. */}
+          <FormSection
+            label="Header and footer"
+            description="Which Layout this page is drawn inside."
+          >
+            {layoutPicker}
+          </FormSection>
+        </div>
+        {formFields}
+      </div>
+    );
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -350,6 +392,8 @@ export function useEditorPanels(
     // offered that renders nothing.
     availablePanels:
       entryFields === null ? AVAILABLE_PANELS : AVAILABLE_PANELS_WITH_SETTINGS,
+    canvasRegions: layoutRegions.canvas,
+    layersRegions: layoutRegions.layers,
     ...library,
     ...requests,
   };
@@ -365,6 +409,10 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
+    /** The regions of the page's Layout, drawn locked around the page. */
+    canvasRegions: readonly CanvasRegion[];
+    /** The same regions, as read-only rows in Layers. */
+    layersRegions: readonly LayersRegionRow[];
     availablePanels:
       | typeof AVAILABLE_PANELS
       | typeof AVAILABLE_PANELS_WITH_SETTINGS;
@@ -379,6 +427,7 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  layersRegions,
   drag,
   offered,
   offerablePatterns,
@@ -393,8 +442,10 @@ export function editorPanelRenderer({
   classSummaryContext,
   requestPanel,
   entryFields,
-}: Pick<EditorMount, "editor"> &
-  Pick<
+}: Pick<EditorMount, "editor"> & {
+  /** The regions of the page's Layout, as read-only rows in Layers. */
+  layersRegions?: readonly LayersRegionRow[];
+} & Pick<
     SiteStyleInputs,
     | "canvasSiteStyle"
     | "siteStylePending"
@@ -443,6 +494,7 @@ export function editorPanelRenderer({
           editor={editor}
           moveHints
           definitions={offered.definitions}
+          regions={layersRegions}
         />
       ),
       design: () => (
