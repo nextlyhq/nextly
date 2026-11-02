@@ -23,7 +23,7 @@ import { Check } from "lucide-react";
 import * as React from "react";
 
 import type { ContentControlProps, FoundEntry } from "./content-controls";
-import { fieldLabel } from "./inspector";
+import { propLabel } from "./inspector";
 
 /** How long typing pauses before the matches are read again. */
 const SEARCH_PAUSE_MS = 200;
@@ -147,7 +147,7 @@ export function RelationControl({
   services,
   label: labelOverride,
 }: ContentControlProps): React.JSX.Element {
-  const label = labelOverride ?? fieldLabel(prop.name);
+  const label = labelOverride ?? propLabel(prop.name, prop.schema);
   const collection =
     typeof prop.schema.relationTo === "string" && prop.schema.relationTo !== ""
       ? prop.schema.relationTo

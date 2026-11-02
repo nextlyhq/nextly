@@ -170,7 +170,7 @@ describe("a list of records", () => {
       { label: "Your email", type: "email" },
     ]);
     // The other controls drew too.
-    expect(second.getByRole("checkbox", { name: "Required" })).toBeDefined();
+    expect(second.getByRole("switch", { name: "Required" })).toBeDefined();
     expect(second.getByRole("combobox", { name: "Type" })).toBeDefined();
   });
 

@@ -75,7 +75,7 @@ const RICH_TEXT = {
 
 const CONTAINED = (stored: boolean): Edit => ({
   kind: "check",
-  label: "Contained",
+  label: "Constrain content width",
   prop: "contained",
   stored,
 });
@@ -184,7 +184,7 @@ const CASES: readonly Case[] = [
     props: { kind: "unordered", items: ["First", "Second"] },
     edit: {
       kind: "type",
-      label: "Start",
+      label: "Start number",
       prop: "start",
       value: "3",
       stored: 3,
@@ -196,7 +196,7 @@ const CASES: readonly Case[] = [
     props: { src: "/example.jpg", alt: "An example image" },
     edit: {
       kind: "type",
-      label: "Alt",
+      label: "Alt text",
       prop: "alt",
       value: "An edited description",
       stored: "An edited description",
@@ -224,7 +224,7 @@ const CASES: readonly Case[] = [
     },
     edit: {
       kind: "type",
-      label: "Submit text",
+      label: "Submit button text",
       prop: "submitText",
       value: "Send it",
       stored: "Send it",
@@ -259,7 +259,7 @@ const CASES: readonly Case[] = [
     props: { src: "https://example.com/player", title: "A product demo" },
     edit: {
       kind: "type",
-      label: "Title",
+      label: "Title for screen readers",
       prop: "title",
       value: "An edited demo",
       stored: "An edited demo",
@@ -272,7 +272,7 @@ const CASES: readonly Case[] = [
     slots: true,
     edit: {
       kind: "type",
-      label: "Limit",
+      label: "Number of items",
       prop: "limit",
       value: "5",
       stored: 5,

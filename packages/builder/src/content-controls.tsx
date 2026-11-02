@@ -25,7 +25,6 @@
 import { isRichTextValue, richTextToPlainText } from "@nextlyhq/blocks-engine";
 import {
   Button,
-  Checkbox,
   Input,
   Label,
   Select,
@@ -33,6 +32,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Textarea,
 } from "@nextlyhq/ui";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
@@ -43,7 +43,7 @@ import {
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
-import { fieldLabel, type EditableProp } from "./inspector";
+import { optionLabel, propLabel, type EditableProp } from "./inspector";
 import { RelationControl } from "./relation-control";
 import { useStoredDraft } from "./stored-draft";
 import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
@@ -186,7 +186,7 @@ function TextishControl({
       className="nx-inspector__field"
       data-content-control={prop.schema.type}
     >
-      <Label htmlFor={id}>{label ?? fieldLabel(prop.name)}</Label>
+      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
       {prop.schema.type === "textarea" ? (
         <Textarea {...shared} rows={3} />
       ) : (
@@ -209,7 +209,10 @@ function TextishControl({
   );
 }
 
-/** A yes-or-no prop, committed the moment it changes. */
+/**
+ * A yes-or-no prop, as a switch whose label says what "on" does ("Open by
+ * default"), committed the moment it changes.
+ */
 function CheckboxControl({
   id,
   prop,
@@ -222,13 +225,13 @@ function CheckboxControl({
       className="nx-inspector__field nx-inspector__field--inline"
       data-content-control="checkbox"
     >
-      <Checkbox
+      <Switch
         id={id}
         disabled={disabled}
         checked={prop.value === true}
-        onCheckedChange={checked => onCommit(prop.name, checked === true)}
+        onCheckedChange={checked => onCommit(prop.name, checked)}
       />
-      <Label htmlFor={id}>{label ?? fieldLabel(prop.name)}</Label>
+      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
     </div>
   );
 }
@@ -243,7 +246,7 @@ function SelectControl({
 }: ContentControlProps): React.JSX.Element {
   return (
     <div className="nx-inspector__field" data-content-control="select">
-      <Label htmlFor={id}>{label ?? fieldLabel(prop.name)}</Label>
+      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
       <Select
         disabled={disabled}
         value={typeof prop.value === "string" ? prop.value : undefined}
@@ -255,7 +258,7 @@ function SelectControl({
         <SelectContent>
           {prop.options.map(option => (
             <SelectItem key={option} value={option}>
-              {option}
+              {optionLabel(prop.schema, option)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -279,7 +282,7 @@ function MediaControl({
   const [open, setOpen] = React.useState(false);
   // What the last pick was called, for this session; a stored id shows as set.
   const [picked, setPicked] = React.useState<PickedMedia | null>(null);
-  const label = fieldLabel(prop.name);
+  const label = propLabel(prop.name, prop.schema);
   const stored =
     typeof prop.value === "string" && prop.value !== "" ? prop.value : null;
   const Picker = services?.MediaPicker;
@@ -380,7 +383,7 @@ function RichTextControl({
   const [refused, setRefused] = React.useState<"held" | "unsupported" | null>(
     null
   );
-  const label = fieldLabel(prop.name);
+  const label = propLabel(prop.name, prop.schema);
   const load = services?.loadRichTextEditor;
   const editable = !disabled && load !== undefined;
 
@@ -541,7 +544,7 @@ function ArrayControl({
   onCommit,
   services,
 }: ContentControlProps): React.JSX.Element {
-  const label = fieldLabel(prop.name);
+  const label = propLabel(prop.name, prop.schema);
   const list = Array.isArray(prop.value) ? prop.value : [];
   const records = prop.schema.of === "object";
   const fields = records ? itemSchemaOf(prop.schema) : undefined;

@@ -56,7 +56,7 @@ import type { SavedComponent } from "./inserter";
 import {
   blockIsReadOnly,
   designReadOnlyReason,
-  fieldLabel,
+  propLabel,
   inspectSelection,
   lockOp,
   lockStateOf,
@@ -1044,7 +1044,9 @@ function PropField({
           one pointing at nothing reads to a screen reader as a field nobody
           can reach.
         */}
-        <p className="nx-inspector__field-name">{fieldLabel(prop.name)}</p>
+        <p className="nx-inspector__field-name">
+          {propLabel(prop.name, prop.schema)}
+        </p>
         <p className="nx-inspector__note">
           Not editable here ({prop.schema.type}).
         </p>

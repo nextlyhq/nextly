@@ -164,3 +164,56 @@ describe("every label names a drawn control", () => {
     expect(container.textContent).toContain("acme-unknown");
   });
 });
+
+describe("what an author reads", () => {
+  /** One block whose props carry, or leave out, the author's words. */
+  function registerWorded(): void {
+    registerBlocks(
+      [
+        {
+          name: "acme/every",
+          version: 1,
+          description: "Worded props.",
+          example: { props: {} },
+          editor: { label: "Every" },
+          props: {
+            alt: { type: "text", label: "Alt text" },
+            plain: { type: "text" },
+            loading: {
+              type: "select",
+              label: "Loading",
+              options: ["lazy", "eager"],
+              optionLabels: { lazy: "Load when near the screen" },
+            },
+            open: { type: "checkbox", label: "Open by default" },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "content-controls-test" }
+    );
+  }
+
+  it("labels a field with the words its block gives, and its name otherwise", () => {
+    registerWorded();
+    const document = documentOf();
+    (document.nodes[0] as BlockNode).props = { loading: "lazy" };
+    const { getByLabelText, getByText } = render(
+      <InspectorPanel editor={editorFor(document)} />
+    );
+    expect(getByLabelText("Alt text")).toBeDefined();
+    // The control: a prop with no words of its own keeps its spaced name.
+    expect(getByLabelText("Plain")).toBeDefined();
+    // The option's words, not the stored value, on the select.
+    expect(getByText("Load when near the screen")).toBeDefined();
+  });
+
+  it("draws an on/off prop as a switch that says what on does", () => {
+    registerWorded();
+    const { getByRole, queryByRole } = render(
+      <InspectorPanel editor={editorFor(documentOf())} />
+    );
+    expect(getByRole("switch", { name: "Open by default" })).toBeDefined();
+    expect(queryByRole("checkbox")).toBeNull();
+  });
+});

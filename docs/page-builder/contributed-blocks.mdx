@@ -91,7 +91,7 @@ The inspector's Content tab draws one control per prop, from the prop's `type`:
 | `textarea` | A multi-line field.                                                                                |
 | `url`      | A field for a link.                                                                                |
 | `number`   | A number field.                                                                                    |
-| `checkbox` | A checkbox.                                                                                        |
+| `checkbox` | A switch.                                                                                          |
 | `select`   | A list of the strings in the prop's `options`.                                                     |
 | `media`    | A button that opens the media library. The prop stores the chosen file's id.                       |
 | `richText` | The admin's rich-text editor.                                                                      |
@@ -100,6 +100,23 @@ The inspector's Content tab draws one control per prop, from the prop's `type`:
 
 Text fields save when you leave them, so one edit is one step in Undo. A prop of any other
 type is listed with a note that it is not editable here.
+
+Give each prop the words an author reads. `label` names the control, and for a
+`checkbox` it says what "on" does. `optionLabels` names a select's options by
+their stored value. Without them a control shows the prop's name and the raw values.
+
+```ts
+props: {
+  alt: { type: "text", label: "Alt text", role: "content" },
+  loading: {
+    type: "select",
+    label: "Loading",
+    options: ["lazy", "eager"],
+    optionLabels: { lazy: "Load when near the screen", eager: "Load immediately" },
+  },
+  decorative: { type: "checkbox", label: "Decorative (no alt text)" },
+},
+```
 
 A `relation` prop names its collection in `relationTo`:
 

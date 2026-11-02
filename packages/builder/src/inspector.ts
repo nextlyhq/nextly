@@ -237,6 +237,25 @@ export function fieldLabel(name: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
+/**
+ * What an author calls a prop: the label its block gives it, or its name,
+ * spaced and capitalised, when the block gives none.
+ */
+export function propLabel(name: string, schema: PropSchema): string {
+  const given = schema.label;
+  return typeof given === "string" && given.trim() !== ""
+    ? given
+    : fieldLabel(name);
+}
+
+/** What an author calls one of a select's options, or the option itself. */
+export function optionLabel(schema: PropSchema, option: string): string {
+  const named = schema.optionLabels;
+  if (typeof named !== "object" || named === null) return option;
+  const given = (named as Record<string, unknown>)[option];
+  return typeof given === "string" && given.trim() !== "" ? given : option;
+}
+
 /** Read a schema's `options`, which is untyped by construction. */
 function optionsOf(schema: PropSchema): readonly string[] {
   const declared = schema.options;
