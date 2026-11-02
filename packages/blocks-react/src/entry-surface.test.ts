@@ -122,8 +122,10 @@ const SOURCE_MODULES: ReadonlyArray<{
     // from the engine, which is the same walk the CMS uses, rather than a
     // second one here. These are exported only so their own test can drive
     // them at a depth React's renderer could not reach, and at the
-    // partition's bound from both sides.
+    // partition's bound from both sides. `drawsInteractive` is shared with the
+    // rich-text block's content model in this package, not offered outside it.
     internal: [
+      "drawsInteractive",
       "holdsBlockContent",
       "holdsInteractive",
       "MAX_PARTITION_DEPTH",

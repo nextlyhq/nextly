@@ -157,5 +157,12 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
       children: {},
     },
     supports: ACCORDION_ITEM_SUPPORTS,
+    // A `<details>` is interactive content, so nothing that refuses
+    // interactive content may hold one, and like any element but a plain box it
+    // refuses a main beneath it.
+    contentModel: () => ({
+      is: ["flow", "interactive"],
+      accepts: { without: ["main"] },
+    }),
     render: renderAccordionItem,
   });

@@ -11,7 +11,11 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -48,5 +52,7 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       children: {},
     },
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   });
