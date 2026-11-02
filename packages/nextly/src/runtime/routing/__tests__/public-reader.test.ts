@@ -215,6 +215,17 @@ describe("toPublicFind", () => {
     expect(toPublicFind({ collection: "posts" }).depth).toBe(0);
   });
 
+  it("refuses __proto__ as a field name", () => {
+    expect(
+      refusal(() =>
+        toPublicFind({
+          collection: "posts",
+          filters: [{ field: "__proto__", op: "equals", value: 1 }],
+        })
+      )
+    ).toContain("public-read-field-invalid");
+  });
+
   it("refuses an empty in list, and keeps an empty not_in", () => {
     expect(
       refusal(() =>
