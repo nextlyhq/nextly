@@ -54,6 +54,11 @@ describe("pageBuilderLayouts", () => {
       slug: PAGE_BUILDER_SETTINGS_SLUG,
       overrideAccess: true,
     });
+    // Both identity channels stated and empty: an omitted one is filled from
+    // the instance's defaults, and the answer is cached for every visitor.
+    const asked = site.asked[0] ?? {};
+    expect("user" in asked && asked.user === undefined).toBe(true);
+    expect("req" in asked && asked.req === undefined).toBe(true);
   });
 
   it("reads a populated reference as its id", async () => {

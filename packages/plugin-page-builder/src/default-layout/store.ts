@@ -77,6 +77,13 @@ export async function readLayoutSettings(
     depth: 0,
     overrideAccess: true,
     createIfMissing: false,
+    // Both identity channels cleared, as every system read a published page
+    // makes clears them: an omitted one is filled from the instance's own
+    // defaults, so a reader booted with a user would hand that user to the
+    // Single's read hooks, and a page render caches what this answers for
+    // every visitor.
+    user: undefined,
+    req: undefined,
   });
   return {
     defaultLayout: relationId(doc?.defaultLayout),
