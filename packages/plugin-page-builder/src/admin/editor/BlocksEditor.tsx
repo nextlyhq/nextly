@@ -542,6 +542,20 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
 }
 
 /**
+ * The document's title as the author has it right now, for the top bar: the
+ * form's `title` value while it is text, and nothing otherwise.
+ */
+function usePageTitle<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>
+): string | undefined {
+  const title: unknown = useWatch({
+    control,
+    name: "title" as Path<TFieldValues>,
+  });
+  return typeof title === "string" ? title : undefined;
+}
+
+/**
  * The editor itself, mounted only while open.
  *
  * Separate component so the hooks below — editor state, and the chrome request
@@ -610,10 +624,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     savePoint,
   });
 
-  const pageTitle: unknown = useWatch({
-    control,
-    name: "title" as Path<TFieldValues>,
-  });
+  const pageTitle = usePageTitle(control);
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
@@ -675,7 +686,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         {...editorTopBar(view)}
         // The document's title, read-only, as the author has it in the form
         // right now. Nothing for a document with no title field.
-        title={typeof pageTitle === "string" ? pageTitle : undefined}
+        title={pageTitle}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears
