@@ -22,6 +22,8 @@ import {
   baseWidth,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
+  editingBreakpointOf,
+  previewWidth,
   widthForBreakpoint,
   offeredTiers,
 } from "./canvas-width";
@@ -361,5 +363,71 @@ describe("the width at which the UNCONDITIONAL tier applies", () => {
         container: [{ id: "narrow", label: "Narrow", maxWidth: 1600 }],
       })
     ).toBe(992);
+  });
+});
+
+describe("the width a device is previewed at", () => {
+  it("shows the base breakpoint, Desktop, at 1280", () => {
+    expect(previewWidth(site(), BASE_BREAKPOINT)).toBe(1280);
+  });
+
+  it("shows a bounded breakpoint at its own bound, not a device's width", () => {
+    expect(previewWidth(site(), "tablet")).toBe(991);
+    expect(previewWidth(site(), "mobile")).toBe(575);
+  });
+
+  it("keeps the base outside the widest breakpoint on a site with a wide one", () => {
+    // At 1280 a site whose widest bound is 1439 would put the base preview
+    // inside that breakpoint, so editing "Desktop" would style the wider tier.
+    const wide: BreakpointSet = {
+      viewport: [{ id: "laptop", label: "Laptop", maxWidth: 1439 }],
+      container: [],
+    };
+    expect(previewWidth(wide, BASE_BREAKPOINT)).toBe(1440);
+    expect(editedBreakpointAtWidth(wide, 1440)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("previews nothing for a breakpoint the site does not define", () => {
+    expect(previewWidth(site(), "watch")).toBeUndefined();
+  });
+
+  it("previews nothing on a site with no viewport breakpoints", () => {
+    // Nothing to simulate: the canvas fills its region.
+    const none: BreakpointSet = { viewport: [], container: [] };
+    expect(previewWidth(none, BASE_BREAKPOINT)).toBeUndefined();
+  });
+
+  it("previews each bounded breakpoint at a width that edits that breakpoint", () => {
+    for (const tier of offeredTiers(site())) {
+      const width = previewWidth(site(), tier.id);
+      expect(editedBreakpointAtWidth(site(), width)).toBe(tier.id);
+    }
+  });
+});
+
+describe("the device an edit goes to", () => {
+  it("is the base breakpoint when none was chosen", () => {
+    expect(editingBreakpointOf(site(), null)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("is the breakpoint the author chose", () => {
+    expect(editingBreakpointOf(site(), "tablet")).toBe("tablet");
+    expect(editingBreakpointOf(site(), BASE_BREAKPOINT)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("falls back to the base breakpoint when the chosen one was removed", () => {
+    // Deterministic, and never a breakpoint the site no longer defines: an
+    // edit stored under that would never be drawn.
+    expect(editingBreakpointOf(site(), "watch")).toBe(BASE_BREAKPOINT);
+    const none: BreakpointSet = { viewport: [], container: [] };
+    expect(editingBreakpointOf(none, "tablet")).toBe(BASE_BREAKPOINT);
+  });
+
+  it("never edits a container breakpoint as a device", () => {
+    const withContainer: BreakpointSet = {
+      viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+      container: [{ id: "card", label: "Card", maxWidth: 400 }],
+    };
+    expect(editingBreakpointOf(withContainer, "card")).toBe(BASE_BREAKPOINT);
   });
 });

@@ -160,6 +160,20 @@ export interface ShellPreferences {
    */
   zoom: CanvasZoom;
   /**
+   * The breakpoint the author is styling, as they last chose it: an id from the
+   * site's breakpoints, or null for the base one, which is named Desktop.
+   *
+   * A choice, never a reading. Taking it from the width the canvas measured
+   * made opening a panel, or a narrower window, move every edit to a narrower
+   * breakpoint the author never picked. Opening and closing panels changes
+   * only how far the canvas is zoomed to fit.
+   *
+   * Stored as the author left it even when the site no longer defines that
+   * breakpoint: the host resolves an unknown id to the base one, so removing a
+   * breakpoint and adding it back does not lose the choice.
+   */
+  editingBreakpoint: string | null;
+  /**
    * Layouts, one per PANEL TOPOLOGY.
    *
    * Keyed rather than singular because a layout only means anything alongside
@@ -257,6 +271,7 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
   leftPinned: true,
   zoom: FIT_ZOOM,
+  editingBreakpoint: null,
   layouts: {},
   showEmptyElements: true,
 };
@@ -376,6 +391,11 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
     // bounds rather than painting the canvas somewhere the control cannot be
     // reached to undo it.
     zoom: readZoom(record.zoom) ?? DEFAULT_PREFERENCES.zoom,
+    editingBreakpoint:
+      typeof record.editingBreakpoint === "string" &&
+      record.editingBreakpoint !== ""
+        ? record.editingBreakpoint
+        : DEFAULT_PREFERENCES.editingBreakpoint,
     layouts: readLayouts(record.layouts),
     showEmptyElements:
       typeof record.showEmptyElements === "boolean"

@@ -34,8 +34,8 @@ import {
   useNoticeQueue,
   type NoticeQueue,
 } from "./builder-notices";
-import type { CanvasZoom } from "./canvas-zoom";
-import { CanvasZoomControl } from "./canvas-zoom-control";
+import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
+import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
@@ -192,6 +192,30 @@ export interface BuilderShellProps {
    * value, so a host never has to assume the default.
    */
   onZoomChange?: (zoom: CanvasZoom) => void;
+  /**
+   * Asks the shell to edit at a breakpoint: an id from the site's breakpoints,
+   * or null for the base one.
+   *
+   * A count travels with it for the reason `openPanelRequest` carries one: the
+   * same device asked for twice is two requests, and a value that repeated
+   * itself would look unchanged. The shell stores the choice with the author's
+   * other preferences and, when it is a different device from the one being
+   * edited, puts the zoom back to fitting, since a zoom chosen for one width
+   * rarely suits another.
+   */
+  editingBreakpointRequest?: {
+    readonly breakpoint: string | null;
+    readonly count: number;
+  };
+  /**
+   * Reports the breakpoint being edited, including the one restored on load
+   * and the base one (null) a new author starts on.
+   *
+   * The host draws the canvas at that breakpoint's width and sends edits to
+   * it. It is the author's choice alone: nothing the shell does to the layout,
+   * opening a panel or a narrower window, changes it.
+   */
+  onEditingBreakpointChange?: (breakpoint: string | null) => void;
   /**
    * The scale the canvas is actually painting at, for the zoom control.
    *
@@ -488,6 +512,7 @@ function shallowEqualPreferences(
     a.leftPanel !== b.leftPanel ||
     a.leftPinned !== b.leftPinned ||
     a.showEmptyElements !== b.showEmptyElements ||
+    a.editingBreakpoint !== b.editingBreakpoint ||
     !sameZoom(a.zoom, b.zoom)
   ) {
     return false;
@@ -815,6 +840,7 @@ function ShellRegions({
   // all — the chrome header sits outside every region but inside this.
   const chromeRef = React.useRef<HTMLDivElement | null>(null);
   useRegionCycling(regionRefs, chromeRef, active);
+  useZoomShortcuts(onZoomPick, active);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
   // Pairs the header's visibility-toggle label with its switch. Generated
@@ -1239,6 +1265,8 @@ export function BuilderShell({
   openPanelRequest,
   onShowEmptyElementsChange,
   onZoomChange,
+  editingBreakpointRequest,
+  onEditingBreakpointChange,
   appliedScale = 1,
   notices: supplied,
   ...props
@@ -1319,6 +1347,26 @@ export function BuilderShell({
   }, [openPanelRequest, update, loadedFromCurrentStore]);
 
   /*
+   * Applies an `editingBreakpointRequest` at most once per count, and only
+   * once this store's own preferences have loaded, for the reasons the panel
+   * request above waits: applied earlier it would write the defaults, or
+   * another store's record, over the author's own.
+   */
+  const handledDeviceRequest = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (editingBreakpointRequest === undefined) return;
+    if (!loadedFromCurrentStore) return;
+    if (handledDeviceRequest.current === editingBreakpointRequest.count) return;
+    handledDeviceRequest.current = editingBreakpointRequest.count;
+    const breakpoint = editingBreakpointRequest.breakpoint;
+    update(current =>
+      current.editingBreakpoint === breakpoint
+        ? current
+        : { ...current, editingBreakpoint: breakpoint, zoom: FIT_ZOOM }
+    );
+  }, [editingBreakpointRequest, update, loadedFromCurrentStore]);
+
+  /*
    * The read half of the same gap: told on every value `showEmptyElements`
    * takes, including the first, so a host answers "should my own overlay be
    * showing" honestly from the start rather than assuming the default and
@@ -1389,6 +1437,16 @@ export function BuilderShell({
   React.useEffect(() => {
     onZoomChangeRef.current?.(preferences.zoom);
   }, [reportingZoom, preferences.zoom]);
+
+  // The device, reported the way the zoom is and for the same reasons.
+  const onEditingBreakpointChangeRef = React.useRef(onEditingBreakpointChange);
+  React.useEffect(() => {
+    onEditingBreakpointChangeRef.current = onEditingBreakpointChange;
+  });
+  const reportingDevice = onEditingBreakpointChange !== undefined;
+  React.useEffect(() => {
+    onEditingBreakpointChangeRef.current?.(preferences.editingBreakpoint);
+  }, [reportingDevice, preferences.editingBreakpoint]);
 
   /*
    * Where overlays inside this shell portal to. State rather than a ref,

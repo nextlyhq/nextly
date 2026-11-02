@@ -148,16 +148,27 @@ Breakpoints are desktop-first. The `base` breakpoint applies at every width. Eac
 breakpoint has a `maxWidth`, and the values a block is given for it apply at that width
 and below, as an `@media (max-width: …)` rule.
 
-In the editor, the breakpoint switcher sizes the canvas to a breakpoint's width, and the
-Style tab edits the values for the breakpoint the canvas is sized to. The breakpoint
-manager beside it adds, changes and removes the site's breakpoints.
+In the editor, the device buttons choose which breakpoint you are styling. The base
+breakpoint is named **Desktop**. The chosen device shows the width the canvas lays the
+page out at: Desktop at 1280px (or one pixel past your widest breakpoint, if that is
+wider), and every other breakpoint at its own `maxWidth`, so "Tablet · 1024px". The Style
+tab edits the values for that breakpoint. The breakpoint manager beside the buttons adds,
+changes and removes the site's breakpoints.
+
+The device is your choice alone. Opening or closing a panel, or a narrower window, changes
+only how far the canvas is zoomed to fit; the zoom menu reads "Fit · 72%" while it fits.
+Choose a fixed zoom from the menu, press <kbd>Ctrl</kbd>+<kbd>0</kbd> (<kbd>⌘</kbd>+<kbd>0</kbd>
+on a Mac) for actual size, or <kbd>Shift</kbd>+<kbd>1</kbd> to fit again. Choosing another
+device goes back to fitting. The editor remembers the device and the zoom you left, in the
+same browser. If the breakpoint you were styling has been removed, the editor goes back to
+Desktop.
 
 ### Limits
 
 - **Styles only.** What changes per breakpoint is what the Style tab sets. A block's
   content and settings are the same at every width.
-- **A width, not a device.** The switcher sizes the canvas; it does not show the page as a
-  phone or tablet would. The canvas is not an iframe, so sizes in `vw` or `vh`, `@media`
+- **A width, not a device.** The device buttons choose a breakpoint and lay the canvas out
+  at its width; they do not show the page as a particular phone or tablet would. The canvas is not an iframe, so sizes in `vw` or `vh`, `@media`
   rules you write yourself and code that reads the window's width follow the admin
   window, not the canvas.
 - **Saved breakpoints reach a page only when its route reads them.** Breakpoints you save

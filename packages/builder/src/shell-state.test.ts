@@ -174,6 +174,8 @@ describe("preferences round-trip", () => {
     // sense of what was stored — so a round trip carrying fit would pass
     // whether the value survived or was discarded.
     zoom: { kind: "fixed", scale: 1.5 },
+    // Non-default as well: null, the base breakpoint, is the default.
+    editingBreakpoint: "tablet",
   };
 
   it("restores what was written", () => {
@@ -192,6 +194,17 @@ describe("preferences round-trip", () => {
     for (const bad of [undefined, "1.5", 0, 99, null]) {
       const store = memoryStore(JSON.stringify({ ...stored, zoom: bad }));
       expect(readPreferences(store).zoom).toEqual(DEFAULT_PREFERENCES.zoom);
+    }
+  });
+
+  it("starts on the base breakpoint when the stored device is not a name", () => {
+    // Preferences from before there was a device have no such field; an empty
+    // or non-string value names no breakpoint either.
+    for (const bad of [undefined, "", 3, null]) {
+      const store = memoryStore(
+        JSON.stringify({ ...stored, editingBreakpoint: bad })
+      );
+      expect(readPreferences(store).editingBreakpoint).toBeNull();
     }
   });
 
@@ -240,6 +253,7 @@ describe("preferences round-trip", () => {
       // `leftPinned` does here rather than surfacing as `undefined`.
       showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
       zoom: DEFAULT_PREFERENCES.zoom,
+      editingBreakpoint: DEFAULT_PREFERENCES.editingBreakpoint,
     });
   });
 
