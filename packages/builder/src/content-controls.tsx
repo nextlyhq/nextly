@@ -35,6 +35,7 @@ import {
   SelectValue,
   Textarea,
 } from "@nextlyhq/ui";
+import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -554,7 +555,10 @@ function ArrayControl({
   };
 
   return (
-    <div className="nx-inspector__field" data-content-control="array">
+    <div
+      className="nx-inspector__field nx-inspector__field--stacked"
+      data-content-control="array"
+    >
       <p className="nx-inspector__field-name" id={`${id}-label`}>
         {label}
       </p>
@@ -577,78 +581,80 @@ function ArrayControl({
                 role="group"
                 aria-label={position(index)}
               >
-                {fields === undefined ? (
-                  <TextishControl
-                    id={`${id}-${index}`}
-                    prop={itemProp(
-                      `${prop.name}.${index}`,
-                      { type: "text" },
-                      item
-                    )}
-                    label={position(index)}
-                    disabled={disabled}
-                    onCommit={(_, value) =>
-                      write(
-                        list.map((each, at) => (at === index ? value : each))
-                      )
-                    }
-                  />
-                ) : (
-                  fields.map(([name, schema]) => {
-                    const Control = contentControlFor(schema.type);
-                    const record = recordOf(item);
-                    return Control === undefined ? null : (
-                      <Control
-                        key={name}
-                        id={`${id}-${index}-${name}`}
-                        prop={itemProp(name, schema, record[name])}
-                        disabled={disabled}
-                        services={services}
-                        onCommit={(field, value) =>
-                          write(
-                            list.map((each, at) => {
-                              if (at !== index) return each;
-                              const next = { ...recordOf(each) };
-                              if (value === undefined) delete next[field];
-                              else next[field] = value;
-                              return next;
-                            })
-                          )
-                        }
-                      />
-                    );
-                  })
-                )}
+                <div className="nx-inspector__array-fields">
+                  {fields === undefined ? (
+                    <TextishControl
+                      id={`${id}-${index}`}
+                      prop={itemProp(
+                        `${prop.name}.${index}`,
+                        { type: "text" },
+                        item
+                      )}
+                      label={position(index)}
+                      disabled={disabled}
+                      onCommit={(_, value) =>
+                        write(
+                          list.map((each, at) => (at === index ? value : each))
+                        )
+                      }
+                    />
+                  ) : (
+                    fields.map(([name, schema]) => {
+                      const Control = contentControlFor(schema.type);
+                      const record = recordOf(item);
+                      return Control === undefined ? null : (
+                        <Control
+                          key={name}
+                          id={`${id}-${index}-${name}`}
+                          prop={itemProp(name, schema, record[name])}
+                          disabled={disabled}
+                          services={services}
+                          onCommit={(field, value) =>
+                            write(
+                              list.map((each, at) => {
+                                if (at !== index) return each;
+                                const next = { ...recordOf(each) };
+                                if (value === undefined) delete next[field];
+                                else next[field] = value;
+                                return next;
+                              })
+                            )
+                          }
+                        />
+                      );
+                    })
+                  )}
+                </div>
                 <div className="nx-inspector__array-actions">
                   <Button
                     type="button"
-                    size="sm"
+                    size="icon-sm"
                     variant="ghost"
                     disabled={disabled || index === 0}
                     aria-label={`Move ${position(index)} up`}
                     onClick={() => move(index, -1)}
                   >
-                    Up
+                    <ArrowUp aria-hidden="true" />
                   </Button>
                   <Button
                     type="button"
-                    size="sm"
+                    size="icon-sm"
                     variant="ghost"
                     disabled={disabled || index === list.length - 1}
                     aria-label={`Move ${position(index)} down`}
                     onClick={() => move(index, 1)}
                   >
-                    Down
+                    <ArrowDown aria-hidden="true" />
                   </Button>
                   <Button
                     type="button"
-                    size="sm"
+                    size="icon-sm"
                     variant="ghost"
                     disabled={disabled}
                     aria-label={`Remove ${position(index)}`}
                     onClick={() => write(list.filter((_, at) => at !== index))}
                   >
-                    Remove
+                    <Trash2 aria-hidden="true" />
                   </Button>
                 </div>
               </div>

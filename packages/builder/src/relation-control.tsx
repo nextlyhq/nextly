@@ -19,6 +19,7 @@
  */
 
 import { Button, Input } from "@nextlyhq/ui";
+import { Check } from "lucide-react";
 import * as React from "react";
 
 import type { ContentControlProps, FoundEntry } from "./content-controls";
@@ -168,7 +169,10 @@ export function RelationControl({
         ? "Entries can't be searched here."
         : undefined;
   return (
-    <div className="nx-inspector__field" data-content-control="relation">
+    <div
+      className="nx-inspector__field nx-inspector__field--stacked"
+      data-content-control="relation"
+    >
       <p className="nx-inspector__field-name" id={`${id}-label`}>
         {label}
       </p>
@@ -177,9 +181,23 @@ export function RelationControl({
         role="group"
         aria-labelledby={`${id}-label`}
       >
-        <p className="nx-inspector__note" data-relation-chosen="">
-          {chosenWords(stored, title)}
-        </p>
+        <div className="nx-inspector__relation-chosen">
+          <p className="nx-inspector__note" data-relation-chosen="">
+            {chosenWords(stored, title)}
+          </p>
+          {stored === null ? null : (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={disabled}
+              aria-label={`Clear ${label}`}
+              onClick={() => onCommit(prop.name, undefined)}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
         {unavailable === undefined ? (
           <>
             <Input
@@ -204,18 +222,6 @@ export function RelationControl({
           </>
         ) : (
           <p className="nx-inspector__note">{unavailable}</p>
-        )}
-        {stored === null ? null : (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={disabled}
-            aria-label={`Clear ${label}`}
-            onClick={() => onCommit(prop.name, undefined)}
-          >
-            Clear
-          </Button>
         )}
       </div>
     </div>
@@ -266,9 +272,17 @@ function MatchList({
             variant="ghost"
             disabled={disabled}
             aria-pressed={entry.id === stored}
+            // The whole title on hover, since a long one is cut to the row.
+            title={entry.title}
             onClick={() => onChoose(entry)}
           >
-            {entry.title}
+            <span className="nx-inspector__relation-title">{entry.title}</span>
+            {entry.id === stored ? (
+              <Check
+                aria-hidden="true"
+                className="nx-inspector__relation-tick"
+              />
+            ) : null}
           </Button>
         </li>
       ))}
