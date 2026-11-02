@@ -436,7 +436,9 @@ function publicReaderFor(
             config.cacheScope ?? "",
             JSON.stringify(args),
           ],
-          revalidate: await releaseBoundedRevalidate(undefined),
+          // The route's own window bounds it too, so a list read never
+          // outlives the page around it.
+          revalidate: await releaseBoundedRevalidate(config.revalidate),
         }),
     },
     locale === undefined ? {} : { locale }

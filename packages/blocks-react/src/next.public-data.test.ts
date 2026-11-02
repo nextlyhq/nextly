@@ -12,6 +12,23 @@ import type { PublicReader, PublicReadQuery } from "nextly/runtime";
 import type { ReactElement } from "react";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
+// The real cache helper, watched, so a test can read what each list read is
+// cached under. Outside a Next request it runs the read directly.
+const cached = vi.hoisted(() => ({ calls: [] as unknown[] }));
+vi.mock("nextly/runtime", async importOriginal => {
+  const actual = await importOriginal<typeof import("nextly/runtime")>();
+  return {
+    ...actual,
+    cachedFind: (
+      read: () => Promise<unknown>,
+      options: Parameters<typeof actual.cachedFind>[1]
+    ) => {
+      cached.calls.push(options);
+      return actual.cachedFind(read, options);
+    },
+  };
+});
+
 import { throughBoundary } from "./__tests__/through-boundary";
 import {
   createDefaultDataProvider,
@@ -96,6 +113,37 @@ describe("a routed page's lists", () => {
       unknownSort: "refuse",
     });
     expect("user" in args && args.user === undefined).toBe(true);
+  });
+
+  it("are cached under the route's scope and the whole read, tagged by collection, within the route's window", async () => {
+    cached.calls.length = 0;
+    const nextly = instance();
+    const context = await renderContext(
+      {
+        collections: ["pages"],
+        field: "content",
+        revalidate: 60,
+        cacheScope: "tenant-a",
+      },
+      nextly
+    );
+    await context.data?.find({ collection: "posts", limit: 5 });
+    const options = cached.calls.at(-1) as {
+      tags: string[];
+      keyParts: string[];
+      revalidate: number | false;
+    };
+    expect(options.revalidate).toBe(60);
+    expect(options.tags.some(tag => tag.includes("posts"))).toBe(true);
+    expect(options.keyParts.slice(0, 2)).toEqual([
+      "nextly-public-list",
+      "tenant-a",
+    ]);
+    expect(JSON.parse(options.keyParts[2] ?? "{}")).toMatchObject({
+      collection: "posts",
+      limit: 5,
+      status: "published",
+    });
   });
 
   it("refuse a query that tries to widen the read, whatever the provider passes on", async () => {
