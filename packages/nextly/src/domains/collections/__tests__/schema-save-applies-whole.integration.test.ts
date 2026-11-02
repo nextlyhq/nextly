@@ -265,70 +265,60 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     );
   });
 
-  // Not on SQLite, whose unique index is created `IF NOT EXISTS`: a name already taken is skipped
-  // there rather than refused, so this save cannot be made to fail part-way the same way.
-  it.skipIf(dialect === "sqlite")(
-    "finishes a change the database refused part-way when it is saved again",
-    async () => {
-      // Something no precondition foresees: an index already holding the name the new unique
-      // index takes. PostgreSQL rolls the whole save back; MySQL has added the column by then,
-      // since it commits each schema statement, and the next save has to finish from there.
-      await postsWith(
-        [{ name: "heading", type: "text" }],
-        [{ heading: "One" }, { heading: "Two" }]
-      );
-      const q = (name: string) =>
-        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-      const blocking = uniqueIndexNameForColumn("dc_posts", "code");
-      await query(
-        `CREATE INDEX ${q(blocking)} ON ${q("dc_posts")} (${q("id")})`
-      );
-      const fields = [
-        { name: "heading", type: "text" },
-        // Short, so MySQL can index it.
-        {
-          name: "code",
-          type: "text",
-          unique: true,
-          options: { variant: "short" },
-          validation: { maxLength: 64 },
-        },
-      ];
+  it("refuses a unique field whose index's name another index holds, before anything changes, and saves once it is gone", async () => {
+    // An index already holding the name the new unique index takes, on another column. The
+    // apply creates an index only where its name is free, so it is refused before anything
+    // changes, naming the index, rather than recorded unique with nothing enforcing it.
+    await postsWith(
+      [{ name: "heading", type: "text" }],
+      [{ heading: "One" }, { heading: "Two" }]
+    );
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const blocking = uniqueIndexNameForColumn("dc_posts", "code");
+    await query(`CREATE INDEX ${q(blocking)} ON ${q("dc_posts")} (${q("id")})`);
+    const fields = [
+      { name: "heading", type: "text" },
+      // Short, so MySQL can index it.
+      {
+        name: "code",
+        type: "text",
+        unique: true,
+        options: { variant: "short" },
+        validation: { maxLength: 64 },
+      },
+    ];
 
-      const refused = await handler().updateCollection(
-        { collectionName: "posts" },
-        { fields }
-      );
+    const refused = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields }
+    );
 
-      expect(refused.success, JSON.stringify(refused)).toBe(false);
-      expect(refused.message).toMatch(
-        dialect === "mysql"
-          ? /^The database refused statement \d+ of \d+ of this schema change\./
-          : /^The database refused this schema change, so nothing was changed\./
-      );
-      expect(await registeredFields("posts")).not.toContain("code");
+    expect(refused.success, JSON.stringify(refused)).toBe(false);
+    expect(JSON.stringify(refused)).toContain(blocking);
+    expect(await columnsOf("dc_posts")).not.toContain("code");
+    expect(await registeredFields("posts")).not.toContain("code");
 
-      await query(
-        dialect === "mysql"
-          ? `DROP INDEX ${q(blocking)} ON ${q("dc_posts")}`
-          : `DROP INDEX ${q(blocking)}`
-      );
-      const saved = await handler().updateCollection(
-        { collectionName: "posts" },
-        { fields }
-      );
+    await query(
+      dialect === "mysql"
+        ? `DROP INDEX ${q(blocking)} ON ${q("dc_posts")}`
+        : `DROP INDEX ${q(blocking)}`
+    );
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields }
+    );
 
-      expect(saved.success, JSON.stringify(saved)).toBe(true);
-      expect(await columnsOf("dc_posts")).toContain("code");
-      expect(await registeredFields("posts")).toContain("code");
-      expect((await createPost({ heading: "Three", code: "X" })).success).toBe(
-        true
-      );
-      expect((await createPost({ heading: "Four", code: "X" })).success).toBe(
-        false
-      );
-    }
-  );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await columnsOf("dc_posts")).toContain("code");
+    expect(await registeredFields("posts")).toContain("code");
+    expect((await createPost({ heading: "Three", code: "X" })).success).toBe(
+      true
+    );
+    expect((await createPost({ heading: "Four", code: "X" })).success).toBe(
+      false
+    );
+  });
 
   it.skipIf(dialect === "sqlite")(
     "refuses again, rather than recording a uniqueness it cannot enforce, while the name is taken",

@@ -19,6 +19,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { DrizzleStatementExecutor } from "../../schema/services/drizzle-statement-executor";
 import { withSchemaLock } from "../../schema/pipeline/schema-lock";
 
 interface CollectionsHandler {
@@ -67,9 +68,6 @@ const AFTER = [
   { name: "note", type: "text", index: true },
   relationTo("owner", "teams"),
 ];
-
-/** Every statement a schema change writes with, by its leading keyword. */
-const WRITES = /^\s*(ALTER|CREATE|DROP|UPDATE|INSERT|DELETE|RENAME)\b/i;
 
 describeEachDialect("a collection's Builder save", dialect => {
   let current: TestNextly;
@@ -168,55 +166,30 @@ describeEachDialect("a collection's Builder save", dialect => {
   }
 
   /**
-   * Count every writing statement the adapter's Drizzle handle runs, and fail the `failAt`-th
-   * one when given: on the handle and on any transaction opened from it.
+   * Count every schema statement the apply runs, and fail the `failAt`-th one when given, where
+   * the apply's executor runs it: a failure there is the database refusing that statement, after
+   * the ones before it ran. Watched at the executor rather than the connection, so the apply's
+   * own transactions are opened where they always are.
    */
   function watchStatements(failAt?: number): { count: () => number } {
     let seen = 0;
-    const adapter = current.adapter as unknown as {
-      getDrizzle(...args: unknown[]): unknown;
-    };
-    const real = adapter.getDrizzle.bind(adapter);
-    const textOf = (statement: unknown) =>
-      typeof statement === "string"
-        ? statement
-        : (
-            (statement as { queryChunks?: { value?: unknown }[] })
-              .queryChunks ?? []
-          )
-            .map(chunk =>
-              Array.isArray(chunk.value) ? chunk.value.join("") : ""
-            )
-            .join("");
-    const wrap = (db: object): object =>
-      new Proxy(db, {
-        get(target, property, receiver) {
-          const value: unknown = Reflect.get(target, property, receiver);
-          if (typeof value !== "function") return value;
-          if (property === "execute" || property === "run") {
-            return (statement: unknown, ...rest: unknown[]) => {
-              if (WRITES.test(textOf(statement))) {
-                seen += 1;
-                if (seen === failAt) {
-                  throw new Error(`injected failure at statement ${seen}`);
-                }
-              }
-              return Reflect.apply(value, target, [statement, ...rest]);
-            };
-          }
-          if (property === "transaction") {
-            return (run: (tx: object) => unknown, ...rest: unknown[]) =>
-              Reflect.apply(value, target, [
-                (tx: object) => run(wrap(tx)),
-                ...rest,
-              ]);
-          }
-          return value.bind(target);
-        },
-      });
-    vi.spyOn(adapter, "getDrizzle").mockImplementation((...args: unknown[]) =>
-      wrap(real(...args) as object)
-    );
+    const run = DrizzleStatementExecutor.prototype.executeStatements;
+    vi.spyOn(
+      DrizzleStatementExecutor.prototype,
+      "executeStatements"
+    ).mockImplementation(async function (
+      this: DrizzleStatementExecutor,
+      tx: unknown,
+      statements: string[]
+    ) {
+      for (const statement of statements) {
+        seen += 1;
+        if (seen === failAt) {
+          throw new Error(`injected failure at statement ${seen}`);
+        }
+        await run.call(this, tx, [statement]);
+      }
+    });
     return { count: () => seen };
   }
 
