@@ -109,6 +109,8 @@ function InsertPanelWithLibrary({
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
   categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
+  /** The container to add inside, when its "+" asked for it. */
+  inside?: string;
   /**
    * The component tier, read by the EDITOR rather than here.
    *
@@ -247,13 +249,19 @@ type PanelRequests = {
     | { panel: LeftPanel; view?: string; count: number }
     | undefined;
   requestPanel: (panel: LeftPanel, view?: string) => void;
-  openInsertPanel: () => void;
+  /**
+   * Open Add; given a container, add inside it (its empty-container "+"),
+   * which is never implied by selecting it.
+   */
+  openInsertPanel: (inside?: string) => void;
+  /** The container the last "+" chose to add inside, if any. */
+  insertInside: string | undefined;
   showEmptyElements: boolean;
   setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
 };
 
 /** Requests to open a panel from the canvas, and the empty-chrome switch. */
-function usePanelRequests(): PanelRequests {
+function usePanelRequests(selectedId: string | null): PanelRequests {
   /*
    * Opens the insert panel from the canvas itself, for the empty-container
    * appender: pressing its "+" must select the container AND show the panel
@@ -281,9 +289,25 @@ function usePanelRequests(): PanelRequests {
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const openInsertPanel = useCallback((): void => {
-    requestPanel("add");
-  }, [requestPanel]);
+  const [insideRequest, setInsideRequest] = useState<string | undefined>(
+    undefined
+  );
+  const openInsertPanel = useCallback(
+    (inside?: string): void => {
+      setInsideRequest(inside);
+      requestPanel("add");
+    },
+    [requestPanel]
+  );
+  /*
+   * A "+"'s choice lasts while its container stays selected. Selecting
+   * anything else, the block just added included, ends it, so selecting the
+   * container again later adds after it, as any selection does.
+   */
+  if (insideRequest !== undefined && selectedId !== insideRequest) {
+    setInsideRequest(undefined);
+  }
+  const insertInside = insideRequest === selectedId ? insideRequest : undefined;
 
   /*
    * Whether the author wants empty-container chrome showing at all, mirrored
@@ -304,6 +328,7 @@ function usePanelRequests(): PanelRequests {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
+    insertInside,
     showEmptyElements,
     setShowEmptyElements,
   };
@@ -342,7 +367,7 @@ export function useEditorPanels(
   });
 
   const library = useOfferedLibrary(mount);
-  const requests = usePanelRequests();
+  const requests = usePanelRequests(editor.selectedId);
   return {
     entryFields,
     checklist,
@@ -392,6 +417,7 @@ export function editorPanelRenderer({
   documentClasses,
   classSummaryContext,
   requestPanel,
+  insertInside,
   entryFields,
 }: Pick<EditorMount, "editor"> &
   Pick<
@@ -407,7 +433,11 @@ export function editorPanelRenderer({
   Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "entryFields"
+    | "offered"
+    | "offerablePatterns"
+    | "requestPanel"
+    | "insertInside"
+    | "entryFields"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -426,6 +456,8 @@ export function editorPanelRenderer({
           beginInsertDrag={drag.beginInsertDrag}
           components={offered}
           offerablePatterns={offerablePatterns}
+          // Inside the container a "+" chose, while it is the selection.
+          {...(insertInside === undefined ? {} : { inside: insertInside })}
         />
       ),
       /*
