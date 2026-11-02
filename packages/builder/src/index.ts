@@ -453,6 +453,7 @@ export {
   toolbarActions,
   toolbarPlacement,
   unionRect,
+  type ComponentVerbsOffer,
   type ToolbarAction,
   type ToolbarActionId,
   type ToolbarPlacement,

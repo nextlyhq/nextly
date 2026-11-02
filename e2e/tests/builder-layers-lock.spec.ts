@@ -140,7 +140,7 @@ async function toolbarButton(page: Page, name: string) {
 /** The card menu's Unlock, for the selected block. */
 async function unlockFromCard(page: Page, title: string): Promise<void> {
   await page.getByRole("button", { name: `Actions for ${title}` }).click();
-  await page.getByRole("menuitem", { name: "Unlock" }).click();
+  await page.getByRole("menuitem", { name: "Unlock", exact: true }).click();
   await expect(page.locator('[data-lock="layers"]')).toHaveCount(0);
 }
 

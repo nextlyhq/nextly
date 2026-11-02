@@ -34,11 +34,14 @@
  * @module capability-route
  */
 
+import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { isHostStore } from "./component-from-selection-route";
 import {
   CAPABILITY_ROUTE_PATH,
   type PatternCapabilityResponse,
 } from "./library-contract";
+import type { ComponentStore } from "./library-route";
 import { SAVED_PATTERN_STATUS } from "./save-pattern-route";
 
 /**
@@ -89,6 +92,25 @@ export async function readPatternCapability(
 }
 
 /**
+ * Whether this caller may make a component from a selection: `create` and
+ * `publish` on the plugin's own components (under the host's name for them),
+ * since the component is created published. Never where the host keeps its
+ * components in a store of its own, which the route refuses.
+ */
+export async function mayCreateComponent(
+  ctx: CapabilityRouteContext,
+  store: Pick<ComponentStore, "collection"> = {}
+): Promise<boolean> {
+  // A host's own store is not one this plugin makes components in.
+  if (ctx.caller === null || isHostStore(ctx, store)) return false;
+  const slug = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+  return (
+    (await ctx.caller.can("create", slug)) &&
+    (await ctx.caller.can("publish", slug))
+  );
+}
+
+/**
  * The route declaration.
  *
  * No `public: true`, so it is authenticated: the answer is about the caller and
@@ -97,7 +119,9 @@ export async function readPatternCapability(
  * question on the answer would return 403 to exactly the authors this exists to
  * tell "no" gracefully.
  */
-export function patternCapabilityRoute(): {
+export function patternCapabilityRoute(
+  store: Pick<ComponentStore, "collection"> = {}
+): {
   method: "GET";
   path: string;
   handler: (req: Request, ctx: CapabilityRouteContext) => Promise<Response>;
@@ -106,6 +130,9 @@ export function patternCapabilityRoute(): {
     method: "GET",
     path: CAPABILITY_ROUTE_PATH,
     handler: async (_req, ctx) =>
-      Response.json(await readPatternCapability(ctx)),
+      Response.json({
+        ...(await readPatternCapability(ctx)),
+        mayCreateComponent: await mayCreateComponent(ctx, store),
+      } satisfies PatternCapabilityResponse),
   };
 }

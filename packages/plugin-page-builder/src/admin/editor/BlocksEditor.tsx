@@ -46,6 +46,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
@@ -748,6 +749,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentLibrary,
     savePattern,
     mayCreatePattern,
+    makeComponent,
+    componentVerbs,
     checklist,
     availablePanels,
     openPanelRequest,
@@ -853,6 +856,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             this plugin's business, not the canvas's.
           */
           mayCreatePattern={mayCreatePattern}
+          components={componentVerbs}
           onShareVerbs={setCardVerbs}
         >
           {/*
@@ -880,6 +884,13 @@ function EditorBody<TFieldValues extends FieldValues>({
             selectedIds={editor.selection.ids}
             onClose={savePattern.close}
             returnFocusTo={savePattern.returnFocusTo}
+          />
+          <ComponentFromSelectionPrompt
+            request={makeComponent.request}
+            editor={editor}
+            library={componentLibrary}
+            onClose={makeComponent.close}
+            returnFocusTo={makeComponent.returnFocusTo}
           />
         </BlockKeyboardActions>
       </BuilderShell>

@@ -57,6 +57,7 @@ import {
   depthMoveActions,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
+  type ComponentVerbsOffer,
   type DepthMoveAction,
   type MoveJudge,
   type MovePosition,
@@ -194,6 +195,13 @@ export interface BlockActions {
    * opens a modal belongs to the host's own key map rather than to the canvas.
    */
   readonly saveAsPattern: () => void;
+  /**
+   * Begin saving the selection as a component, or converting it into one.
+   * Like `saveAsPattern`, these hand the gesture to the host, which owns the
+   * form and the write. Absent where the host offers no components.
+   */
+  readonly saveAsComponent?: () => void;
+  readonly convertToComponent?: () => void;
 }
 
 /**
@@ -402,6 +410,22 @@ export interface BlockKeyboardActionsOptions {
    * all, rather than one that presses and does nothing.
    */
   onEditText?: (nodeId: string) => boolean;
+  /**
+   * Making components from a selection, where the host has a component
+   * library: whether the author may, and the gestures that open the host's
+   * forms. Absent, neither verb is offered.
+   */
+  components?: ComponentVerbsHost;
+}
+
+/**
+ * The host's side of "Save as component" and "Convert to component".
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ComponentVerbsHost extends ComponentVerbsOffer {
+  readonly onSaveAsComponent: () => void;
+  readonly onConvertToComponent: () => void;
 }
 
 /** What the hook hands back: the region's text, and the verbs behind the keys. */
@@ -458,6 +482,7 @@ export function useBlockKeyboardActions({
   nesting,
   definitions,
   onSaveAsPattern,
+  components,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
@@ -1001,6 +1026,51 @@ export function useBlockKeyboardActions({
   ]);
 
   /*
+   * The component verbs, refused in words before the host is asked: the
+   * toolbar keeps a dimmed verb focusable, so a press of one still lands here.
+   * The reason is the one the action list carries, so the two cannot differ.
+   */
+  const componentOffer = React.useMemo(
+    () =>
+      components === undefined
+        ? undefined
+        : { mayCreate: components.mayCreate },
+    [components]
+  );
+  const runComponentVerb = React.useCallback(
+    (id: "save-as-component" | "convert-to-component") => {
+      if (components === undefined) return;
+      const offered = toolbarActions(
+        editor.document,
+        editor.selectedId,
+        editor.selection.ids,
+        nestingSource,
+        mayCreatePattern,
+        editor.lockRefusalFor,
+        componentOffer
+      ).find(action => action.id === id);
+      if (offered === undefined) return;
+      if (!offered.enabled) {
+        if (offered.reason !== undefined) announce(offered.reason);
+        return;
+      }
+      if (id === "save-as-component") components.onSaveAsComponent();
+      else components.onConvertToComponent();
+    },
+    [
+      components,
+      componentOffer,
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids,
+      editor.lockRefusalFor,
+      nestingSource,
+      mayCreatePattern,
+      announce,
+    ]
+  );
+
+  /*
    * The verb list, computed ONCE for every surface below.
    *
    * See {@link SelectionActionsContext}: the save preflight builds the document
@@ -1015,7 +1085,8 @@ export function useBlockKeyboardActions({
         editor.selection.ids,
         nestingSource,
         mayCreatePattern,
-        editor.lockRefusalFor
+        editor.lockRefusalFor,
+        componentOffer
       ),
     [
       editor.document,
@@ -1024,6 +1095,7 @@ export function useBlockKeyboardActions({
       nestingSource,
       mayCreatePattern,
       editor.lockRefusalFor,
+      componentOffer,
     ]
   );
 
@@ -1034,6 +1106,8 @@ export function useBlockKeyboardActions({
       duplicate: duplicateSelected,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
+      saveAsComponent: () => runComponentVerb("save-as-component"),
+      convertToComponent: () => runComponentVerb("convert-to-component"),
     }),
     [
       moveSelected,
@@ -1041,6 +1115,7 @@ export function useBlockKeyboardActions({
       duplicateSelected,
       selectParent,
       saveSelectionAsPattern,
+      runComponentVerb,
     ]
   );
 
@@ -1097,6 +1172,7 @@ export function BlockKeyboardActions({
   definitions,
   onSaveAsPattern,
   mayCreatePattern,
+  components,
   onShareVerbs,
   children,
 }: BlockKeyboardActionsOptions & {
@@ -1121,6 +1197,7 @@ export function BlockKeyboardActions({
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
     ...(definitions === undefined ? {} : { definitions }),
+    ...(components === undefined ? {} : { components }),
   });
 
   /*
