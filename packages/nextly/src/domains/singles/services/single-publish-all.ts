@@ -132,6 +132,7 @@ import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
   promoteCallerFor,
+  readsSingleInEveryLanguage,
 } from "./promote-gate";
 import {
   checkSingleAccess,
@@ -302,6 +303,13 @@ export class SinglePublishAllService extends BaseService {
         options.authenticatedScope,
         this.fieldRuleVisitor
       );
+      // Whether the caller may read the Single, which decides what a refusal
+      // of the promotion may name; asked here for the same reason. Trusted
+      // code is told every issue, so it is not asked.
+      const promoteReads =
+        options.overrideAccess === true
+          ? undefined
+          : await this.readsSingle(plan.slug, options);
 
       // Every component type's readiness, resolved before the transaction:
       // the drafts' component values are written inside it, where a verdict
@@ -321,7 +329,8 @@ export class SinglePublishAllService extends BaseService {
             options,
             refused,
             askedLanguages,
-            promoteGrants
+            promoteGrants,
+            promoteReads
           )
         )
       );
@@ -537,6 +546,25 @@ export class SinglePublishAllService extends BaseService {
    * Checked directly rather than through a transition, since this publishes
    * companion locales even when the main row is already published.
    */
+  /**
+   * Whether `options`' caller may read the Single in every language; see
+   * `readsSingleInEveryLanguage`.
+   */
+  private async readsSingle(
+    slug: string,
+    options: PublishAllSingleLocalesOptions
+  ): Promise<boolean> {
+    return readsSingleInEveryLanguage({
+      slug,
+      user: options.user,
+      authenticatedScope: options.authenticatedScope,
+      rbacAccessControlService: this.rbacAccessControlService,
+      visitor: this.fieldRuleVisitor,
+      logger: this.logger,
+      localization: this.localization,
+    });
+  }
+
   private async authorizePublish(
     plan: PublishPlan,
     options: PublishAllSingleLocalesOptions
@@ -716,7 +744,9 @@ export class SinglePublishAllService extends BaseService {
     /** The languages the publish rule was asked about before this transaction. */
     askedLanguages: readonly string[],
     /** Resolved before this transaction opened; see `publishAllLocales`. */
-    promoteGrants?: () => Promise<CallerGrants>
+    promoteGrants?: () => Promise<CallerGrants>,
+    /** Whether the caller may read the Single, asked with `promoteGrants`. */
+    promoteReads?: boolean
   ): Promise<PublishOutcome> {
     const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
 
@@ -798,7 +828,8 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       judged,
       options,
-      promoteGrants
+      promoteGrants,
+      promoteReads
     );
 
     // The components as they stood before the drafts are promoted, for each
@@ -1020,7 +1051,8 @@ export class SinglePublishAllService extends BaseService {
     lockedRow: Record<string, unknown>,
     pending: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
     options: PublishAllSingleLocalesOptions,
-    promoteGrants?: () => Promise<CallerGrants>
+    promoteGrants?: () => Promise<CallerGrants>,
+    promoteReads?: boolean
   ): Promise<void> {
     // Nothing goes live that was not live already: nothing to judge.
     if (pending.length === 0) return;
@@ -1056,6 +1088,9 @@ export class SinglePublishAllService extends BaseService {
         componentFields,
         options,
         grants: promoteGrants,
+        readsEntry: promoteReads,
+        localization: this.localization,
+        tableName: singleMeta.tableName,
       }),
       entryId: existingDoc.id,
       toLogical: doc =>
