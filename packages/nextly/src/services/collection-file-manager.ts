@@ -5,7 +5,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
 import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
-import { storesPerLanguage } from "../domains/i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import type { CompanionSchema } from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
@@ -338,7 +341,8 @@ export class CollectionFileManager {
       true
     ).map(name => ({ name, column: toSnakeCase(name) }));
     if (localizedFields.length === 0) return null;
-    const hasStatus = metadata.status === true; // i18n M6: per-locale `_status` column
+    // A per-language `_status` only where the collection publishes each language on its own.
+    const hasStatus = publishesPerLanguage(metadata);
     // `_updated_at`: unconditional, unlike `_status` -- every companion's declared shape carries
     // `_updated_at`, so there is no metadata flag to read it from. Stated at each
     // construction rather than defaulted in the type, so adding a further structural column

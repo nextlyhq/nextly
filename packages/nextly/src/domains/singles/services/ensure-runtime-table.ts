@@ -41,7 +41,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { resolveCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
@@ -229,7 +232,8 @@ export async function ensureSingleRuntimeTable(
         fields,
         dialect,
         localized: true,
-        status,
+        // A per-language `_status` only where the Single publishes each language on its own.
+        status: publishesPerLanguage(singleMeta),
       });
       if (companion) {
         resolver.registerDynamicSchema(

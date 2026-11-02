@@ -138,7 +138,10 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -1407,7 +1410,7 @@ export class SingleQueryService extends BaseService {
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
   }
 
@@ -1602,7 +1605,7 @@ export class SingleQueryService extends BaseService {
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
     if (!companion) return;
     // Which languages hold a pending change. One document here, but the same
@@ -2058,7 +2061,7 @@ export class SingleQueryService extends BaseService {
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
   }
 

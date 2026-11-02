@@ -46,6 +46,7 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { applyCompanionTransition } from "../../domains/i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { publishesPerLanguage } from "../../domains/i18n/per-language-storage";
 import {
   companionHasStatusColumn,
   liveCompanionShape,
@@ -1259,7 +1260,7 @@ const COLLECTIONS_METHODS: Record<
             fields: fields as FieldDefinition[],
             dialect,
             localized: true,
-            status: collection.status === true,
+            status: publishesPerLanguage(collection),
           });
           if (companion) {
             getCollectionsHandlerFromDI()?.refreshCollectionSchema(

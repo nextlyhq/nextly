@@ -4,6 +4,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import {
   assertPerLanguageStorageUnchanged,
   perLanguageStorageEnabled,
+  publishesPerLanguage,
   setPerLanguageStorage,
   storesPerLanguage,
 } from "../per-language-storage";
@@ -46,6 +47,20 @@ describe("per-language storage", () => {
     booted.setPerLanguageStorage(false);
     booted.adoptPerLanguageStorage(true);
     expect(booted.perLanguageStorageEnabled()).toBe(false);
+  });
+
+  it("publishes each language on its own only for a translatable entity with Draft/Published", () => {
+    expect(publishesPerLanguage({ localized: true, status: true })).toBe(true);
+    expect(publishesPerLanguage({ localized: true, status: false })).toBe(
+      false
+    );
+    // Stored per language without being translatable: it publishes as a document, whatever the setting.
+    setPerLanguageStorage(true);
+    expect(publishesPerLanguage({ localized: false, status: true })).toBe(
+      false
+    );
+    expect(publishesPerLanguage({ status: true })).toBe(false);
+    expect(publishesPerLanguage(undefined)).toBe(false);
   });
 
   it("refuses a reloaded config that turns it on or off, and accepts one that keeps it", () => {

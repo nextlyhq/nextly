@@ -28,7 +28,10 @@ import {
   beginI18nTransition,
   settleI18nTransition,
 } from "../../domains/i18n/migration/transition-state";
-import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import {
   deleteEntityRegistryRow,
@@ -1030,7 +1033,8 @@ export async function ensureLocalizedCompanions(
         tableName,
         fields: entity.fields ?? [],
         dialect,
-        status: entity.status === true,
+        // A per-language `_status` only where the entity publishes each language on its own.
+        status: publishesPerLanguage(entity),
       };
 
       // How both companion calls report a failure, differing only in what they were doing and

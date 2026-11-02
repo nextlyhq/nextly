@@ -42,7 +42,10 @@ import {
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   companionColumnNames,
   companionHasColumn,
@@ -594,7 +597,8 @@ export class DynamicCollectionService extends BaseService {
     const withCompanion = storesPerLanguage(data)
       ? this.appendCompanionCreateSQL(migrationSQL, normalizedName, tableName, {
           fields: userDefinedFields,
-          status: data.status === true,
+          // A per-language `_status` only where the collection publishes each language on its own.
+          status: publishesPerLanguage(data),
         })
       : migrationSQL;
 

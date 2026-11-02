@@ -47,6 +47,7 @@ import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-stora
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import {
   assertPerLanguageStorageUnchanged,
+  publishesPerLanguage,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
@@ -1234,7 +1235,7 @@ async function ensureLocalizedCompanionsForReload(
           tableName,
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
-          status: entity.status === true,
+          status: publishesPerLanguage(entity),
           // Turns creation into a transition: content already on the main table is
           // copied in as this locale's rows, instead of being left behind an empty
           // companion that reads null.
@@ -1308,7 +1309,7 @@ async function ensureLocalizedCompanionsForReload(
           tableName: resolveTableName(entity),
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
-          status: entity.status === true,
+          status: publishesPerLanguage(entity),
           // Decides whether `_updated_at` can be seeded from version history for this
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
@@ -2944,7 +2945,7 @@ async function applyReloadHolding(
             // companion carries a per-locale `_status` column when the
             // collection has Draft/Published (mirrors loadCompanionSchema). M9.
             localized: true,
-            status: c.status === true,
+            status: publishesPerLanguage(c),
           });
           if (companion) {
             companionFreshTables.set(
@@ -2973,7 +2974,7 @@ async function applyReloadHolding(
             fields: s.fields as { name: string; type: string }[],
             dialect,
             localized: true,
-            status: s.status === true,
+            status: publishesPerLanguage(s),
           });
           if (companion) {
             companionFreshTables.set(

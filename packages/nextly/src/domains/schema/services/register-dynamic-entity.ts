@@ -26,7 +26,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { SchemaRegistry } from "../../../database/schema-registry";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { builtByFor } from "../pipeline/registered-collections";
 
 export interface RegisterDynamicEntityArgs {
@@ -62,6 +65,11 @@ export async function registerDynamicEntitySchema(
   } = args;
   // Where its translatable columns live, for its table and its companion alike.
   const localized = storesPerLanguage({ localized: entityLocalized });
+  // A per-language `_status` only where the entity publishes each language on its own.
+  const companionStatus = publishesPerLanguage({
+    localized: entityLocalized,
+    status,
+  });
 
   const { generateRuntimeSchema } = await import("./runtime-schema-generator");
   // A localized entity omits its translatable columns from the main runtime
@@ -85,7 +93,7 @@ export async function registerDynamicEntitySchema(
     tableName,
     fields,
     dialect,
-    status,
+    status: companionStatus,
   });
 
   const { buildCompanionRuntimeTable } = await import(
@@ -99,7 +107,7 @@ export async function registerDynamicEntitySchema(
     localized: true,
     // Carries `_status`, so a Draft/Published localized entity's registered
     // companion matches what `loadCompanionSchema` expects.
-    status,
+    status: companionStatus,
   });
   if (companion) {
     registry.registerDynamicSchema(

@@ -145,7 +145,10 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -515,7 +518,7 @@ export class SingleMutationService extends BaseService {
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
   }
 
@@ -1428,7 +1431,7 @@ export class SingleMutationService extends BaseService {
             tableName: meta.tableName,
             fields: meta.fields as { name: string; type: string }[],
             dialect: this.adapter.dialect,
-            status: true,
+            status: publishesPerLanguage(meta),
           })
         : null;
     const writeLocale =
@@ -1906,7 +1909,7 @@ export class SingleMutationService extends BaseService {
               tableName: singleMeta.tableName,
               fields: singleMeta.fields as { name: string; type: string }[],
               dialect: this.adapter.dialect,
-              status: (singleMeta as { status?: boolean }).status === true,
+              status: publishesPerLanguage(singleMeta),
             })
           : null;
       const writeLocale =

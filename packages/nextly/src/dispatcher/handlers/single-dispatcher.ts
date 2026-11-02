@@ -45,6 +45,7 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { publishesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
@@ -1401,7 +1402,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             fields: fields as FieldDefinition[],
             dialect,
             localized: true,
-            status: single.status === true,
+            status: publishesPerLanguage(single),
           });
           if (companion) {
             getSchemaRegistryFromDI()?.registerDynamicSchema(

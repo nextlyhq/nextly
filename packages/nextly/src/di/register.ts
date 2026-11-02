@@ -78,6 +78,7 @@ import {
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
+  publishesPerLanguage,
   setPerLanguageStorage,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
@@ -3665,7 +3666,7 @@ async function syncCodeFirstCollections(
               tableName,
               fields,
               dialect: syncDialect,
-              status: desired.status === true,
+              status: publishesPerLanguage(desired),
             });
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
@@ -3676,7 +3677,7 @@ async function syncCodeFirstCollections(
               fields,
               dialect: syncDialect,
               localized: true,
-              status: desired.status === true,
+              status: publishesPerLanguage(desired),
             });
             if (companion) {
               resolver.registerDynamicSchema(
@@ -4113,7 +4114,10 @@ async function reconcileSingleTablesForBoot(
               tableName: single.tableName,
               fields: fields,
               dialect,
-              status: hasStatus,
+              status: publishesPerLanguage({
+                localized: entityLocalized,
+                status: hasStatus,
+              }),
             });
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
@@ -4124,7 +4128,10 @@ async function reconcileSingleTablesForBoot(
               fields: fields,
               dialect,
               localized: true,
-              status: hasStatus,
+              status: publishesPerLanguage({
+                localized: entityLocalized,
+                status: hasStatus,
+              }),
             });
             if (companion) {
               resolver.registerDynamicSchema(

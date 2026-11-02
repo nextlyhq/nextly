@@ -64,7 +64,10 @@ import type {
   LocalizedColumnSpec,
 } from "../../i18n/migration/types";
 import { writeCompanionMigrationFile } from "../../i18n/migration/write-migration-file";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -742,7 +745,7 @@ function buildDisableSpec(
     defaultLocale,
     parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
     columns,
-    status: entity.status === true,
+    status: publishesPerLanguage(entity),
   };
 }
 
@@ -857,7 +860,8 @@ function planCompanionMigrations(
       dialect,
       defaultLocale,
       collectionLocalized: true,
-      status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
+      // A per-language `_status` only where the entity publishes each language on its own.
+      status: publishesPerLanguage(c),
     });
 
     // the DISABLE transition (localized `true → false`).
@@ -1530,7 +1534,7 @@ function withLocalizedMarker(
     dialect,
     defaultLocale: "en",
     collectionLocalized: true,
-    status: entity.status === true,
+    status: publishesPerLanguage(entity),
   });
   // Each column is recorded with what it stores, so the migration that later removes or renames
   // one can still key the index its DOWN recreates the way this one keyed it.

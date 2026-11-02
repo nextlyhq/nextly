@@ -48,6 +48,19 @@ export function storesPerLanguage(
 }
 
 /**
+ * Whether an entity publishes each language on its own, so its companion carries a per-language
+ * `_status`: a translatable entity with Draft/Published. One whose values are stored per language
+ * without its being translatable publishes as a document, and its companion holds values only.
+ * Where every companion belongs to a translatable entity, as without the setting, this is the
+ * entity's Draft/Published flag.
+ */
+export function publishesPerLanguage(
+  entity: { localized?: unknown; status?: unknown } | null | undefined
+): boolean {
+  return entity?.localized === true && entity?.status === true;
+}
+
+/**
  * Refuses a reloaded config that turns per-language storage on or off: the tables the running
  * site reads and writes were laid out for the choice it started with.
  */

@@ -15,7 +15,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { SchemaRegistry } from "../database/schema-registry";
-import { storesPerLanguage } from "../domains/i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -56,7 +59,8 @@ export function registerEntityRuntimeTables(
     localized: true,
     // Carried so a Draft/Published entity's companion has `_status`, as the
     // companion the migrations create does.
-    status: entity.status,
+    // A per-language `_status` only where the entity publishes each language on its own.
+    status: publishesPerLanguage(entity),
   });
   if (companion) {
     registry.registerDynamicSchema(
