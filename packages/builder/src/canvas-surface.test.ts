@@ -426,6 +426,18 @@ describe("the editing colours drawn on the page", () => {
     expect(declared(layer, "position")).toBe("absolute");
     expect(declared(layer, "pointer-events")).toBe("none");
     /*
+     * Above the page by order, not by a number: the page is one stacking
+     * context, so no z-index a site gives its content can rise past the layer,
+     * and a fixed number here would be a guess at what the page uses.
+     */
+    expect(declared(layer, "z-index")).toBeUndefined();
+    const page = ruleFor(".nx-canvas > .nx-pb-page");
+    expect(declared(page, "isolation")).toBe("isolate");
+    // The ground a blended block in the page mixes with, as published.
+    expect(declared(page, "background-color")).toBe(
+      "var(--nx-canvas-site-ground, Canvas)"
+    );
+    /*
      * On the editor's own element: the ring redrawn as the element carries
      * it, with the white band as an inset shadow beneath, so the two stay
      * adjacent at any zoom. Read off the halo's rule, never a page element's.

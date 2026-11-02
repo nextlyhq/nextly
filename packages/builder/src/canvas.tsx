@@ -71,21 +71,31 @@ import {
   useState,
 } from "react";
 
+import { scaleCornerRadii, type CornerRadii } from "./border-radii";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
+import { watchCanvasFor } from "./canvas-geometry-watch";
 import { guardCanvasNavigation } from "./canvas-link-guard";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
+import type { Rect } from "./geometry";
 import {
   canvasContentRect,
+  canvasRootFrom,
   canvasScroller,
+  clippedByAncestor,
+  layoutFragments,
+  renderedScale,
   scrollEventTarget,
+  usedRadiiOf,
+  viewportPositioned,
   visibleBandOf,
 } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -608,26 +618,6 @@ export function nodeElement(root: HTMLElement, id: string): Element | null {
   // instance is replaced rather than rendered — but the precedence states which
   // answer is the node's rather than leaving it to iteration order.
   return own ?? hosted;
-}
-
-/**
- * Every element the renderer marked as a node, in document order.
- *
- * Beside {@link nodeElement} because both answer from the same marker, and a
- * caller that needs all of them should not walk the tree with its own selector.
- *
- * Chrome drawn INSIDE the canvas root carries no node marker, so it is excluded
- * by construction rather than by a filter that would have to be kept in step
- * with whatever chrome arrives next.
- */
-export function nodeElements(root: HTMLElement): readonly Element[] {
-  const found: Element[] = [];
-  // `forEach` for the reason given in `nodeElement`: a `NodeList` is only
-  // iterable under a lib this package does not compile with.
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    found.push(element);
-  });
-  return found;
 }
 
 /**
@@ -2405,6 +2395,11 @@ export function Canvas({
       onPointerDown={pointerDown}
     >
       {page}
+      {/*
+       * The white halo inside every selected rendering's ring, part of what
+       * selecting a block draws, so every host of this canvas has it.
+       */}
+      <SelectionHalos active={marked.length > 0} />
       {overlay}
       {refusalDrawn === null ? null : (
         <DropRefusalNotice
@@ -2423,6 +2418,165 @@ export function Canvas({
           }
         />
       )}
+    </div>
+  );
+}
+
+/** One selected rendering, measured in the canvas's content coordinates. */
+interface Halo extends Rect {
+  /** The primary selection, whose ring is the full width. */
+  readonly primary: boolean;
+  /** A component placement, whose ring is the component colour. */
+  readonly component: boolean;
+  /** The block's own corners, in the canvas's content coordinates. */
+  readonly radii: CornerRadii;
+}
+
+const NO_HALOS: readonly Halo[] = [];
+
+function sameHalos(a: readonly Halo[], b: readonly Halo[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((halo, index) => {
+      const other = b[index];
+      return (
+        other !== undefined &&
+        halo.primary === other.primary &&
+        halo.component === other.component &&
+        halo.x === other.x &&
+        halo.y === other.y &&
+        halo.width === other.width &&
+        halo.height === other.height &&
+        borderRadiusOf(halo.radii) === borderRadiusOf(other.radii)
+      );
+    })
+  );
+}
+
+/** Corner radii as the `border-radius` shorthand writes them, both axes. */
+function borderRadiusOf(radii: CornerRadii): string {
+  const { topLeft, topRight, bottomRight, bottomLeft } = radii;
+  const px = (value: number): string => `${String(value)}px`;
+  return (
+    `${px(topLeft.x)} ${px(topRight.x)} ${px(bottomRight.x)} ${px(bottomLeft.x)} / ` +
+    `${px(topLeft.y)} ${px(topRight.y)} ${px(bottomRight.y)} ${px(bottomLeft.y)}`
+  );
+}
+
+/**
+ * The halo for one selected element, or `undefined` where this layer cannot
+ * draw the element's shape — and the element's own outline ring then stands
+ * alone, which is always correct.
+ *
+ * Declined for the cases every overlay drawn in the canvas's content
+ * coordinates declines, asked of the same `geometry-dom` decisions the spacing
+ * overlay asks: no box or an inline box broken across lines, a box positioned
+ * against the viewport (sticky or fixed, which moves without the content the
+ * halo is drawn in), a rotation, skew, reflection or perspective, and a box an
+ * ancestor cuts off.
+ */
+function haloFor(selected: Element, root: HTMLElement): Halo | undefined {
+  const style = selected.ownerDocument.defaultView?.getComputedStyle(selected);
+  if (style === undefined) return undefined;
+  if (layoutFragments(selected) !== 1) return undefined;
+  if (viewportPositioned(selected)) return undefined;
+  const scale = renderedScale(selected, root);
+  if (!scale.describable) return undefined;
+  // Through `canvasContentRect`, the one place this package reads a rectangle,
+  // so the halo and every other overlay agree at any scroll.
+  const rect = canvasContentRect(selected, root);
+  const radii = usedRadiiOf(style, rect, scale);
+  if (radii === undefined) return undefined;
+  // Into the canvas's coordinates, where the halo is drawn: the element's
+  // corners scale with every transform between it and the root.
+  const drawn = scaleCornerRadii(radii, { x: scale.x, y: scale.y });
+  if (clippedByAncestor(selected, root, drawn)) return undefined;
+  return {
+    ...rect,
+    radii: drawn,
+    primary: selected.getAttribute(SELECTED_ATTRIBUTE) === "primary",
+    component: selected.hasAttribute(INSTANCE_ATTRIBUTE),
+  };
+}
+
+/**
+ * The white halo just inside every selected rendering's ring, drawn by the
+ * editor.
+ *
+ * The ring is an outline on the selected element, which the page never sets
+ * and so cannot lose. The halo is the second tone that keeps the ring readable
+ * on the page's own colours — the select blue vanishes on a blue section, and
+ * the white carries it there — and it is drawn HERE, as positioned elements of
+ * the canvas's own, rather than as anything on the page's elements: a
+ * `box-shadow` replaced the block's own shadow, and an `anchor-name` replaced
+ * the block's own anchor and could mark only one of the elements a selection
+ * renders. Measured, the canvas leaves the page exactly as the page styles it.
+ *
+ * EVERY selected rendering gets one: each member of a multi-selection, and each
+ * copy of a node a block draws more than once — `core/collection-loop` draws
+ * its children once per entry, and the canvas marks every copy. It reads WHICH
+ * elements from those marks rather than deciding again, so the halo and the
+ * ring cannot disagree. The marks are written after this layer renders, so the
+ * geometry watch — which hears attribute changes on the page — draws the first
+ * halo, as well as moving every halo with the layout.
+ */
+function SelectionHalos({ active }: { active: boolean }): JSX.Element {
+  const layer = useRef<HTMLDivElement | null>(null);
+  const [halos, setHalos] = useState<readonly Halo[]>(NO_HALOS);
+
+  const measure = useCallback(() => {
+    const element = layer.current;
+    const root =
+      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
+    const next: Halo[] = [];
+    if (active && root !== null) {
+      root.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`).forEach(selected => {
+        // Another canvas's selection is that canvas's to draw.
+        if (!ownedByCanvas(selected, root)) return;
+        const halo = haloFor(selected, root);
+        if (halo !== undefined) next.push(halo);
+      });
+    }
+    setHalos(current => (sameHalos(current, next) ? current : next));
+  }, [active]);
+
+  // Before paint, so a halo never shows where the block was a render ago.
+  useIsomorphicLayoutEffect(() => {
+    measure();
+  });
+
+  // Every later move: a selection mark changing, an image loading, a resize, a
+  // scroll. The layer is how the watch finds the root and ignores its own
+  // writes, so drawing a halo does not schedule the next measurement.
+  // Only while something is selected: with nothing to draw there is nothing to
+  // re-measure, and a canvas with no selection observes nothing for it.
+  useEffect(
+    () => (active ? watchCanvasFor(() => layer.current, measure) : undefined),
+    [active, measure]
+  );
+
+  return (
+    <div ref={layer} className="nx-selection-halos" aria-hidden="true">
+      {halos.map((halo, index) => (
+        <div
+          // By position in document order: the halos carry no identity of their
+          // own, and a re-measure replaces them all.
+          key={index}
+          className="nx-selection-halo"
+          data-primary={halo.primary ? "" : undefined}
+          data-component={halo.component ? "" : undefined}
+          // The element's own rectangle and corners: the ring and band are drawn
+          // inside it by the stylesheet, from the same edge the element's ring
+          // uses, and follow its curve.
+          style={{
+            left: halo.x,
+            top: halo.y,
+            width: halo.width,
+            height: halo.height,
+            borderRadius: borderRadiusOf(halo.radii),
+          }}
+        />
+      ))}
     </div>
   );
 }

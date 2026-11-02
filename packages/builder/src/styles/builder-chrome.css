@@ -562,16 +562,37 @@
 
 /*
  * The halos' layer: a full-bleed sheet over the canvas root's content box, so
- * the rectangles `SelectionHalos` measures in canvas content coordinates land
- * on the blocks they were measured from. Never a pointer target, so a press
- * travels through to the block underneath.
+ * the rectangles the canvas measures in its content coordinates land on the
+ * blocks they were measured from. Never a pointer target, so a press travels
+ * through to the block underneath.
+ *
+ * No z-index of its own. It comes after the page in the canvas, and the page
+ * is its own stacking context (below), so it paints above everything the page
+ * draws however high a site stacks its own content — and under the editor's
+ * other overlays, which state theirs.
  */
 .nx-selection-halos {
   position: absolute;
   inset: 0;
-  /* Under the drop indicator and the toolbar, beside the spacing bands. */
-  z-index: 1;
   pointer-events: none;
+}
+
+/*
+ * The rendered page as ONE stacking context inside the canvas, so a site's
+ * `z-index: 5` orders the page's own content among itself and cannot rise
+ * above the editor's layers drawn over it.
+ *
+ * Isolation changes nothing about the page's own stacking: its layers keep
+ * their order relative to each other. What it does change is the backdrop a
+ * `mix-blend-mode` inside the page blends with — an isolated group starts
+ * from its own background — so the page root carries the same ground the
+ * canvas paints behind it, and a blended block mixes with the site's ground
+ * here exactly as it does with the published page's. A ground the page's own
+ * styles give the root outweighs this rule, as it should.
+ */
+.nx-canvas > .nx-pb-page {
+  isolation: isolate;
+  background-color: var(--nx-canvas-site-ground, Canvas);
 }
 
 /*

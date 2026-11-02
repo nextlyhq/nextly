@@ -456,3 +456,130 @@ test.describe("selecting a block", () => {
     ).toEqual(before);
   });
 });
+
+/**
+ * The colours a screenshot of a page region shows, decoded by the browser —
+ * the suite carries no image decoder of its own, and the engine that painted
+ * the pixels is the one to read them.
+ */
+async function pixelsIn(
+  page: Page,
+  clip: { x: number; y: number; width: number; height: number }
+): Promise<[number, number, number][]> {
+  const png = (await page.screenshot({ clip })).toString("base64");
+  return page.evaluate(async encoded => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${encoded}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("No 2d context");
+    context.drawImage(image, 0, 0);
+    const data = context.getImageData(0, 0, image.width, image.height).data;
+    const out: [number, number, number][] = [];
+    for (let index = 0; index < data.length; index += 4) {
+      out.push([data[index] ?? 0, data[index + 1] ?? 0, data[index + 2] ?? 0]);
+    }
+    return out;
+  }, png);
+}
+
+test.describe("the selection halo", () => {
+  /*
+   * Opens the editor with `css` styling the card the way a page's own
+   * stylesheet would, selects an ordinary block first — whose halo proves the
+   * layer is measuring — then the card.
+   */
+  async function selectCardWith(page: Page, css: string): Promise<Locator> {
+    await openBuilder(page, "light");
+    await page.addStyleTag({ content: css });
+    await canvasText(page).click();
+    await expect(page.locator(".nx-canvas .nx-selection-halo")).toHaveCount(1);
+    const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+    await card.click();
+    await expect(card).toHaveAttribute("data-nx-selected", "primary");
+    return card;
+  }
+
+  test("follows the block's own rounded corners", async ({ page }) => {
+    test.slow();
+    const card = await selectCardWith(
+      page,
+      ".nx-pb-page p[data-nx-node='card'] { border-radius: 12px; }"
+    );
+    const halo = page.locator(".nx-canvas .nx-selection-halo");
+    await expect(halo).toHaveCount(1);
+    const radius = (locator: Locator) =>
+      locator.evaluate(
+        element => getComputedStyle(element).borderTopLeftRadius
+      );
+    expect(await radius(card)).toBe("12px");
+    await expect
+      .poll(() => radius(halo), { message: "the halo's corner is the block's" })
+      .toBe("12px");
+  });
+
+  for (const [name, css] of [
+    [
+      "rotated, skewed or reflected",
+      ".nx-pb-page p[data-nx-node='card'] { transform: rotate(4deg); }",
+    ],
+    [
+      "cut off by an ancestor",
+      ".nx-pb-page { overflow: hidden; } .nx-pb-page p[data-nx-node='card'] { margin-left: -48px; }",
+    ],
+  ] as const) {
+    test(`declines a block ${name}, leaving its own ring`, async ({ page }) => {
+      /*
+       * A shape the layer's upright rectangle cannot reproduce. Declined as
+       * the spacing overlay declines it, so the block's own outline ring shows
+       * alone rather than a halo drawn where the block is not.
+       */
+      test.slow();
+      const card = await selectCardWith(page, css);
+      await expect(page.locator(".nx-canvas .nx-selection-halo")).toHaveCount(
+        0
+      );
+      expect(
+        await card.evaluate(element => getComputedStyle(element).outlineStyle),
+        "the block's own ring still marks it"
+      ).toBe("solid");
+    });
+  }
+
+  test("stays above page content a site stacks high", async ({ page }) => {
+    /*
+     * A site's `z-index: 5` used to lift its block over the halo layer. The
+     * page is one stacking context now, so the band still shows on top.
+     */
+    test.slow();
+    const card = await selectCardWith(
+      page,
+      ".nx-pb-page p[data-nx-node='card'] { position: relative; z-index: 5; background: #2563eb; }"
+    );
+    await expect(page.locator(".nx-canvas .nx-selection-halo")).toHaveCount(1);
+    const box = await card.boundingBox();
+    expect(box, "the card is measurable").not.toBeNull();
+    if (box === null) return;
+    // A short column across the top edge: ring, then band, then the card.
+    // Near the left end rather than the middle, where the spacing overlay's
+    // value chip sits over the edge.
+    const column = await pixelsIn(page, {
+      x: Math.round(box.x + box.width / 4),
+      y: Math.floor(box.y),
+      width: 1,
+      height: 6,
+    });
+    /*
+     * Near white rather than pure: the spacing overlay's padding band, which
+     * the editor draws over the selected block, tints everything under it. The
+     * card itself is a saturated blue, so a light pixel can only be the band.
+     */
+    expect(
+      column.some(([r, g, b]) => Math.min(r, g, b) > 180),
+      `the white band shows over the card: ${JSON.stringify(column)}`
+    ).toBe(true);
+  });
+});

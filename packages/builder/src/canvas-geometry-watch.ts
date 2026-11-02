@@ -37,9 +37,9 @@
  * @module canvas-geometry-watch
  */
 
-import { nodeElements } from "./canvas";
 import { isElement } from "./dom-kind";
 import { canvasRootFrom } from "./geometry-dom";
+import { nodeElements } from "./rendered-nodes";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
