@@ -649,6 +649,17 @@ function RichTextControl({
   React.useEffect(
     () => () => {
       latestFinish.current();
+      // A passage the document refused stays open while its field is on
+      // screen, where the author can shorten it or press Escape. Once the
+      // field is gone it has no one to finish it, so it is let go rather
+      // than left holding the shared editor and the unsaved state.
+      const refused = session.current;
+      if (refused !== null) {
+        release.current?.();
+        release.current = null;
+        session.current = null;
+        refused.detach();
+      }
     },
     []
   );
