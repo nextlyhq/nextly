@@ -11,7 +11,8 @@
  * @module editor-words.surfaces.test
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
-import { cleanup, render, screen } from "@testing-library/react";
+import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as React from "react";
 
@@ -33,6 +34,9 @@ const { useEditorState } = await import("./editor-state");
 const { HelpDialog } = await import("./help-dialog");
 
 afterEach(cleanup);
+
+// jsdom draws no layout, and the palette scrolls its highlighted tile into view.
+Element.prototype.scrollIntoView ??= () => {};
 
 // One block, so the Layers tree has a row to draw.
 const PAGE = {
@@ -65,6 +69,36 @@ describe("the editor's surfaces read the catalogue", () => {
     expect(screen.getByRole("tab", { name: "«blocks»" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "«sections»" })).toBeTruthy();
     expect(screen.getByRole("tree", { name: "«layers»" })).toBeTruthy();
+  });
+
+  it("words the Add panel's search, headings and empty tab from it", () => {
+    // The test block declares no category, so it sits under "More blocks".
+    registerBlocks(
+      [
+        {
+          name: "acme/text",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: () => null,
+        },
+      ] as never,
+      { source: "words" }
+    );
+    render(<Panels />);
+
+    expect(
+      screen
+        .getByRole("combobox", { name: "Insert a block" })
+        .getAttribute("placeholder")
+    ).toBe("Search «blocks» and «components»");
+    expect(screen.getByText("More «blocks»")).toBeTruthy();
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "«sections»" }), {
+      button: 0,
+    });
+    expect(screen.getByText("No «sections» are saved yet.")).toBeTruthy();
+    clearBlocks();
   });
 
   it("titles the Help dialog from it", () => {
