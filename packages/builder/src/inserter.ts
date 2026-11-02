@@ -1194,12 +1194,15 @@ export interface InsertionCandidate {
 /**
  * Where a click in the Add panel may put a block, in the order they are tried.
  *
- * As the editor's rule says (after the selection, never inside it):
+ * As the editor's rule says (after the selection; inside it only last):
  * - nothing selected, or a selection the document no longer holds: the end of
  *   the page;
  * - otherwise after the selected block, in its own region, then after each
  *   block it sits in, out to the page, so a block the selection's region
- *   refuses goes after the nearest container that can hold it;
+ *   refuses goes after the nearest container that can hold it; and last,
+ *   inside the selection when it is a container, so a block that only
+ *   belongs inside one (an accordion's item, say) goes where the author
+ *   pointed once nothing after it would take it;
  * - `inside`, a container the author chose to add into (its "+"): that
  *   container's region alone, at its end.
  *
@@ -1233,7 +1236,11 @@ export function insertionCandidates(
     candidates.push(after);
     current = location.parent?.id;
   }
-  return candidates.length === 0 ? [end] : candidates;
+  if (candidates.length === 0) return [end];
+  return [
+    ...candidates,
+    ...insideCandidates(document, selectedId, options.slots),
+  ];
 }
 
 /** The end of a container's region the author chose to add into, if it has one. */

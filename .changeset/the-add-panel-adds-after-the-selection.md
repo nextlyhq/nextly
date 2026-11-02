@@ -32,11 +32,14 @@
 Page builder: the Add panel adds a block after the selected one, or at the end of the page
 when nothing is selected, so five clicks make five blocks in a row. When the selection's
 container cannot take a block, the click adds it after the nearest block that can, and the
-block's tile says where it will go. Adding inside a container is explicit: its "+" when it
-is empty. The panel opens with nothing highlighted, in Blocks and Sections tabs, under a
+block's tile says where it will go. A block that only belongs inside a container, such as
+an accordion's item, goes inside the selected container once nothing after it would take it;
+anywhere else its tile says, in one sentence, where it goes and what to do ("Goes inside an
+Accordion. Select an Accordion first, or drag this into one."). An empty container's "+"
+adds inside it. The panel opens with nothing highlighted, in Blocks and Sections tabs, under a
 line naming where the next block goes. Tiles are grouped as Layout, Text, Media,
 Interactive, Your components and More blocks, most used first; Divider now sits under
 Layout, beside Spacer. A popover describes the tile under the
 pointer or the arrow keys. A block that cannot go anywhere from here stays listed, greyed,
-with the reason. Every core block now describes itself in one plain line. The relation
+with the reason. A library notice shows in the tab that offers that tier. Every core block now describes itself in one plain line. The relation
 search reads only for blocks the editor can draw.

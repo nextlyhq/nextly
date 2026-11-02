@@ -760,22 +760,37 @@ describe("insertionCandidates and insertionFor", () => {
     ]);
   });
 
-  it("puts a block after a selected container, never inside it", () => {
+  it("puts a block after a selected container, and inside it only as the last place", () => {
     const document = documentOf([
       {
         id: "box",
         type: "acme/columns",
         version: 1,
         props: {},
-        slots: { children: [] },
+        slots: { children: [text("held")] },
       },
     ]);
-    // An empty container too: adding inside is the container's own "+".
-    expect(insertionCandidates(document, "box")[0]).toMatchObject({
+    const places = insertionCandidates(document, "box");
+    // After it first, so a block that fits beside it goes there.
+    expect(places[0]).toMatchObject({
       kind: "after-selection",
       at: { index: 1 },
       afterId: "box",
     });
+    // Inside it last, at the end of its region: what a block that only
+    // belongs inside such a container needs, once nothing after it takes it.
+    expect(places.at(-1)).toEqual({
+      kind: "inside",
+      at: { parentId: "box", slot: "children", index: 1 },
+      target: { kind: "slot", parentType: "acme/columns", slot: "children" },
+      insideId: "box",
+    });
+    const beside = insertionFor(places, () => "ok");
+    expect(beside?.candidate.kind).toBe("after-selection");
+    const within = insertionFor(places, place =>
+      place.kind === "inside" ? "ok" : undefined
+    );
+    expect(within?.candidate.kind).toBe("inside");
   });
 
   it("goes inside a container only when asked to, at the end of its region", () => {

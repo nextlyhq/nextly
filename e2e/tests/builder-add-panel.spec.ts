@@ -208,7 +208,10 @@ test.describe("the Add panel", () => {
     // use from here is one.
     const item = tile(page, "Accordion item");
     await expect(item).toHaveAttribute("data-refused", "true");
-    await expect(item).toHaveAccessibleDescription(/\S/);
+    // One plain instruction, generated from where the rule lets it go.
+    await expect(item).toHaveAccessibleDescription(
+      /^Goes inside an Accordion\. Select an Accordion first, or drag this into one\./
+    );
     await item.click();
     await expect(placementLine(page)).toHaveText("Adding after Heading");
 

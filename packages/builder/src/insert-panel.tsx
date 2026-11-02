@@ -60,7 +60,9 @@
 
 import {
   allBlocks,
+  asPermittedList,
   findNode,
+  permittedLabel,
   placementSiteIn,
   planInsertPattern,
   registryNestingSource,
@@ -103,6 +105,7 @@ import {
 } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
 import {
+  blockLabel,
   blockSourceFor,
   catalogFrom,
   categoryHeading,
@@ -360,15 +363,20 @@ const NO_DEFINITIONS: ComponentLookup = new Map();
  */
 function LibraryNotices({
   library,
+  tab,
 }: {
   library: InsertPanelProps["library"];
+  tab: PanelTab;
 }): React.JSX.Element {
   return (
     <>
-      <CutNotice tiers={tiersIn(library, "cut")} />
-      <StaleNotice tiers={tiersIn(library, "stale")} retry={library?.retry} />
+      <CutNotice tiers={tiersIn(library, "cut", tab)} />
+      <StaleNotice
+        tiers={tiersIn(library, "stale", tab)}
+        retry={library?.retry}
+      />
       <UnavailableNotice
-        tiers={tiersIn(library, "unavailable")}
+        tiers={tiersIn(library, "unavailable", tab)}
         retry={library?.retry}
       />
     </>
@@ -453,19 +461,18 @@ function RetryButton({
 }
 
 /**
- * The tiers in one state, as the words a sentence names them with — or
- * nothing when no tier is in that state.
+ * The tab's own tier when it is in one state, as the word a sentence names it
+ * with — or nothing. Each tab reports only the tier it offers: components
+ * among the blocks, patterns as sections, so a tab never reports content
+ * that could not appear in it.
  */
 function tiersIn(
   library: InsertPanelProps["library"],
-  state: LibraryTierState
-): string | undefined {
-  const patterns = library?.patterns === state;
-  const components = library?.components === state;
-  if (patterns && components) return "patterns and components";
-  if (patterns) return "patterns";
-  if (components) return "components";
-  return undefined;
+  state: LibraryTierState,
+  tab: PanelTab
+): "patterns" | "components" | undefined {
+  const tier = tab === "sections" ? "patterns" : "components";
+  return library?.[tier] === state ? tier : undefined;
 }
 
 /**
@@ -1125,7 +1132,7 @@ export function InsertPanel({
         placeholder={SEARCH_PLACEHOLDERS[tab]}
       />
       <PlacementLine document={editor.document} candidate={firstPlace} />
-      <LibraryNotices library={library} />
+      <LibraryNotices library={library} tab={tab} />
       <CommandList
         className="nx-insert-panel__list"
         // A pointer that leaves the tiles returns the panel to rest; a
@@ -1489,7 +1496,10 @@ function refusalAt(
     context.placement
   );
   if (!verdict.allowed) {
-    return refusalAnnouncement(placementRefusal(verdict, entry, candidate));
+    return (
+      belongsInsideWording(verdict, entry) ??
+      refusalAnnouncement(placementRefusal(verdict, entry, candidate))
+    );
   }
   const lock =
     entry.kind === "block"
@@ -1546,6 +1556,49 @@ function placementRefusal(
     subjectTypeOf(entry),
     regionType
   );
+}
+
+/**
+ * A refusal whose rule names the containers an entry belongs inside, said as
+ * one plain instruction: "Goes inside an Accordion. Select an Accordion
+ * first, or drag this into one."
+ *
+ * Generated from the rule, never per block: the containers are the rule's
+ * own permitted list, and the second sentence offers only what the tile can
+ * do (a block can be dragged; a pattern or a component cannot). Selecting
+ * such a container works because a click falls back to inside the selection.
+ * Anything else, or a rule about a block nested within the entry, keeps the
+ * shared refusal wording.
+ */
+function belongsInsideWording(
+  verdict: Exclude<NestingVerdict | PlacementVerdict, { allowed: true }>,
+  entry: InsertEntry
+): string | undefined {
+  if (
+    verdict.reason !== "restricted-at-root" &&
+    verdict.reason !== "wrong-parent"
+  ) {
+    return undefined;
+  }
+  if ("blockType" in verdict && verdict.blockType !== subjectTypeOf(entry)) {
+    return undefined;
+  }
+  const containers = verdict.permitted.map(name =>
+    withArticle(permittedLabel(name, blockLabel))
+  );
+  if (containers.length === 0) return undefined;
+  const select =
+    containers.length === 1
+      ? `Select ${containers[0]} first`
+      : "Select one first";
+  const drag = entry.kind === "block" ? ", or drag this into one." : ".";
+  return `Goes inside ${asPermittedList(containers, "or")}. ${select}${drag}`;
+}
+
+/** "an Accordion", "a Card"; a namespace's "any acme block" as it is. */
+function withArticle(label: string): string {
+  if (label.startsWith("any ")) return label;
+  return `${/^[aeiou]/i.test(label) ? "an" : "a"} ${label}`;
 }
 
 /** The block type an entry is named by in a refusal. */

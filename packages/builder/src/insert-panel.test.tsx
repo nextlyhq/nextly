@@ -566,8 +566,9 @@ describe("InsertPanel", () => {
 
     const column = tile("Column");
     expect(column.getAttribute("data-refused")).toBe("true");
+    // One plain instruction, generated from the rule's permitted parents.
     expect(describedBy(column)).toContain(
-      "Column has to sit inside a container."
+      "Goes inside a Columns. Select a Columns first, or drag this into one."
     );
     fireEvent.click(column);
     expect(editor.apply).not.toHaveBeenCalled();
@@ -579,7 +580,7 @@ describe("InsertPanel", () => {
     expect(search.getAttribute("aria-activedescendant")).toBe(column.id);
     expect(popoverName()).toBe("Column");
     expect(popover()?.textContent).toContain(
-      "Column has to sit inside a container."
+      "Goes inside a Columns. Select a Columns first, or drag this into one."
     );
     expect(popover()?.textContent).not.toContain("Click to add");
 
@@ -587,6 +588,63 @@ describe("InsertPanel", () => {
     expect(tile("Columns").getAttribute("data-refused")).toBeNull();
     fireEvent.click(tile("Columns"));
     expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds a block that only belongs inside the selected container inside it, as its refusal says", () => {
+    // "Select a Columns first" has to be true: with the Columns selected, a
+    // Column goes inside it, while a block that fits beside it still goes
+    // after it.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/columns",
+          editor: { label: "Columns" },
+          slots: { children: { allow: ["acme/column"] } },
+        },
+        {
+          ...base,
+          name: "acme/column",
+          parent: ["acme/columns"],
+          editor: { label: "Column" },
+        },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = selecting(
+      editorSpy(
+        documentOf([
+          {
+            id: "cols",
+            type: "acme/columns",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                { id: "c1", type: "acme/column", version: 1, props: {} },
+              ],
+            },
+          },
+        ] as never)
+      ),
+      "cols"
+    );
+    render(<InsertPanel editor={editor} />);
+
+    expect(placementLine()).toBe("Adding after Columns");
+    expect(tile("Column").getAttribute("data-refused")).toBeNull();
+    expect(describedBy(tile("Column"))).toContain("Goes inside Columns.");
+    fireEvent.click(tile("Column"));
+    fireEvent.click(tile("Text"));
+
+    expect(editor.apply.mock.calls[0][0].at).toEqual({
+      parentId: "cols",
+      slot: "children",
+      index: 1,
+    });
+    // The control: a block the page takes goes after the selection.
+    expect(editor.apply.mock.calls[1][0].at).toEqual({ index: 1 });
   });
 
   it("inserts a block the selection's region refuses after the nearest block that takes it", () => {
@@ -1788,7 +1846,11 @@ describe("the component tier", () => {
     expect(tile("Header").getAttribute("data-refused")).toBeNull();
     const card = tile("Column card");
     expect(card.getAttribute("data-refused")).toBe("true");
-    expect(describedBy(card)).toContain("Column has to sit inside");
+    // A component is not dragged, so the instruction offers only selecting.
+    expect(describedBy(card)).toContain(
+      "Goes inside a Columns. Select a Columns first."
+    );
+    expect(describedBy(card)).not.toContain("drag");
     fireEvent.click(card);
     expect(editor.apply).not.toHaveBeenCalled();
   });
@@ -1947,13 +2009,17 @@ describe("when the library was cut, or could not be read", () => {
         library={{ patterns: "cut" }}
       />
     );
+    // Patterns are offered on the Sections tab, so that is where it is said.
+    openTab("Sections");
 
     const [status] = notices();
     expect(status?.textContent).toContain("some patterns are not offered");
     expect(status?.textContent).not.toContain("could not be loaded");
   });
 
-  it("names both tiers in one sentence when both were cut", () => {
+  it("says each tier's state in the tab that offers it, and only there", () => {
+    // Components are among the blocks and patterns are sections, so a tab
+    // never reports content that could not appear in it.
     render(
       <InsertPanel
         editor={editorSpy(documentOf())}
@@ -1961,9 +2027,18 @@ describe("when the library was cut, or could not be read", () => {
       />
     );
 
+    expect(notices()).toHaveLength(1);
     expect(notices()[0]?.textContent).toContain(
-      "some patterns and components are not offered"
+      "some components are not offered"
     );
+    expect(notices()[0]?.textContent).not.toContain("patterns");
+
+    openTab("Sections");
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]?.textContent).toContain(
+      "some patterns are not offered"
+    );
+    expect(notices()[0]?.textContent).not.toContain("components");
   });
 
   it("says when a tier could not be read at all, apart from a cut one, and offers the retry", () => {
@@ -1978,13 +2053,16 @@ describe("when the library was cut, or could not be read", () => {
       />
     );
 
-    const [cut, unavailable] = notices();
-    expect(cut?.textContent).toContain("some patterns are not offered");
+    const [unavailable] = notices();
     expect(unavailable?.textContent).toContain(
       "components could not be loaded, so none are offered"
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retry).toHaveBeenCalledTimes(1);
+
+    openTab("Sections");
+    const [cut] = notices();
+    expect(cut?.textContent).toContain("some patterns are not offered");
   });
 
   it("says when a tier could not be RE-read, apart from one never read, and offers the retry", () => {
@@ -2002,7 +2080,7 @@ describe("when the library was cut, or could not be read", () => {
 
     const [stale] = notices();
     expect(stale?.textContent).toContain(
-      "patterns and components could not be reloaded, so those offered may be out of date"
+      "components could not be reloaded, so those offered may be out of date"
     );
     expect(stale?.textContent).toContain("draws as it was");
     expect(stale?.textContent).not.toContain("none are offered");
@@ -2017,6 +2095,7 @@ describe("when the library was cut, or could not be read", () => {
         library={{ patterns: "stale" }}
       />
     );
+    openTab("Sections");
 
     expect(notices()[0]?.textContent).toContain(
       "patterns could not be reloaded"
