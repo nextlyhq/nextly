@@ -126,25 +126,18 @@ export interface ColourToken {
 /**
  * Which mode's value a token resolves to on the canvas right now.
  *
- * `emitTokenBlocks` writes a second block for every token carrying a dark
- * value, and WHEN it applies is the site's strategy: `media` wraps it in
- * `@media (prefers-color-scheme:dark)`, so a viewer whose system prefers dark
+ * The site sheet writes every dark value under
+ * `@media (prefers-color-scheme:dark)`, so a viewer whose device prefers dark
  * sees the dark value with nothing else having to happen. A control resolving
  * `values.light` regardless would then paint a swatch and report a ratio for a
  * colour the canvas is not showing — the one failure this module exists to
  * prevent, reached through the mode rather than through the notation.
  *
- * `attribute` — the default — answers `light`, and that is a STATED LIMIT
- * rather than a claim. The dark block is written under
- * `[data-nx-theme="dark"]`, which the HOST sets on an ancestor of its choosing;
- * nothing tells this panel whether it did. Reading the DOM to find out would
- * make a pure projection depend on where the canvas happens to be mounted.
+ * The sheet also honours a `data-nx-theme` marker, which the editor does not
+ * set on its canvas, so the device preference is the whole answer here.
  */
-export function activeTokenMode(
-  tokens: SiteTokenSet | undefined,
-  prefersDark: boolean
-): TokenMode {
-  return tokens?.darkMode === "media" && prefersDark ? "dark" : "light";
+export function activeTokenMode(prefersDark: boolean): TokenMode {
+  return prefersDark ? "dark" : "light";
 }
 
 /**

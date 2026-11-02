@@ -2983,7 +2983,7 @@ function ColourField({
   const { draft, setDraft, edited, reset } = useDraft(stored);
 
   const reference = isTokenRef(stored) ? stored.$token : null;
-  const mode = activeTokenMode(tokens, prefersDark);
+  const mode = activeTokenMode(prefersDark);
   const choices = colourTokensFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.

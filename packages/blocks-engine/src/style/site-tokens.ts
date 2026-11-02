@@ -17,11 +17,10 @@
  *
  * ## Modes are in the model from the start
  *
- * Not because dark mode is being built here, but because retrofitting a second
- * value onto a one-value token is a data migration, and adding it now costs one
- * optional field. What activates a mode is the HOST's decision — it owns the
- * document, and it may already have a theme toggle — so this emits the values
- * under a strategy and takes no position on who flips it.
+ * A token may carry a dark value beside its light one. The emitted sheet
+ * applies dark values when the visitor's device prefers dark, and a host can
+ * override that either way with the `data-nx-theme` marker, so a site works
+ * with no setup and a host with its own theme toggle keeps control.
  *
  * ## Identity is `id` when there is one, and the name otherwise
  *
@@ -77,13 +76,14 @@ export type TokenMode = "light" | "dark";
 export const TOKEN_MODES: readonly TokenMode[] = ["light", "dark"];
 
 /**
- * How a dark-mode token block is made to apply.
+ * How a dark-mode token block was once chosen to apply.
  *
- * `attribute` is the default because it is the only one the site can control:
- * a host with a theme toggle sets `data-nx-theme="dark"` and the values follow.
- * `media` follows the operating system instead, which is right for a site with
- * no toggle and wrong for one that has it — hence a choice rather than a
- * constant.
+ * @deprecated Dark values are now always written twice: under
+ * `@media (prefers-color-scheme:dark)`, so a visitor's device decides with no
+ * setup, and under `[data-nx-theme="dark"]`, so a host's own switch still
+ * works. The `data-nx-theme="light"` marker pins light on a dark device. A
+ * stored strategy is still accepted, so existing records stay valid, and it no
+ * longer changes the emitted sheet.
  */
 export type DarkModeStrategy = "attribute" | "media";
 
@@ -154,6 +154,10 @@ export interface SiteTokenSet {
   tokens: readonly SiteToken[];
   /** Custom-property prefix; `--site-` when unset. */
   prefix?: string;
+  /**
+   * @deprecated Accepted for stored records and ignored by the emitter: see
+   * {@link DarkModeStrategy}.
+   */
   darkMode?: DarkModeStrategy;
 }
 
@@ -233,7 +237,11 @@ export interface FontFaceDef {
 }
 
 /**
- * The attribute a host sets to activate dark values.
+ * The marker a host sets to choose a mode: `"dark"` or `"light"`.
+ *
+ * Without it the visitor's device decides. With it the marker wins both ways:
+ * `"dark"` shows dark values on a light device and `"light"` keeps light values
+ * on a dark one.
  *
  * Named rather than themed: it says what it selects and belongs to no design
  * system, so a host wiring its own toggle to it is not adopting anything else.
@@ -279,7 +287,27 @@ function darkSelectorFor(selector: string, dark: readonly string[]): string {
   return `[${DARK_MODE_ATTRIBUTE}="dark"] ${scoped},${scoped}[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
 }
 
-/** The `format()` hints a face may declare: plain keywords, nothing else. */
+/**
+ * The dark block written for the visitor's device preference.
+ *
+ * Guarded by a `not` on the light marker, so a host (or the editor's preview)
+ * can keep light values on a device that prefers dark. On `:root` the guard
+ * reads the root element alone, because nothing sits above it; a scoped
+ * selector is guarded against the marker on itself or on any ancestor, which
+ * is where a host puts the switch for a scoped sheet.
+ *
+ * Wrapped in `:is()` for the same reason as the attribute form: the selector
+ * may be a list, and `:not()` appended to it would guard only its last member.
+ */
+function deviceDarkBlockFor(selector: string, dark: readonly string[]): string {
+  const light = `[${DARK_MODE_ATTRIBUTE}="light"]`;
+  const guarded =
+    selector === ROOT_TOKEN_SELECTOR
+      ? `${ROOT_TOKEN_SELECTOR}:not(${light})`
+      : `:is(${selector}):not(${light},${light} *)`;
+  return `@media (prefers-color-scheme:dark){${guarded}{${dark.join(";")}}}`;
+}
+
 /**
  * The longest font format this engine will write.
  *
@@ -1181,12 +1209,12 @@ export function emitTokenBlocks(
   if (light.length === 0) return { css: "", issues, emitted: [] };
 
   let css = `${selector}{${light.join(";")}}`;
+  // Both forms, always, and in this order. The device block makes dark values
+  // work with no setup; the marker block after it lets a host choose dark on a
+  // light device. `set.darkMode` is deliberately not read: it once picked one
+  // of the two, and its default picked the form nothing set.
   if (dark.length > 0) {
-    const body = `${selector}{${dark.join(";")}}`;
-    css +=
-      (set.darkMode ?? "attribute") === "media"
-        ? `@media (prefers-color-scheme:dark){${body}}`
-        : darkSelectorFor(selector, dark);
+    css += deviceDarkBlockFor(selector, dark) + darkSelectorFor(selector, dark);
   }
   return { css, issues, emitted };
 }

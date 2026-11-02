@@ -566,10 +566,34 @@ describe("emitTokenBlocks", () => {
     expect(css).toContain(":root{--site-color-text:#111}");
   });
 
-  it("follows the operating system when the site asks for that instead", () => {
+  it("follows the device's dark preference unless the marker pins light", () => {
+    // Dark values have to work with no setup: a visitor whose device prefers
+    // dark sees them, and nothing on the page has to be scripted for that. The
+    // guard is what lets the marker override the device in the other
+    // direction, so a host (or the editor's preview) can pin light on a dark
+    // device.
     const { css } = emitTokenBlocks(
       {
-        darkMode: "media",
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ":root"
+    );
+    expect(css).toBe(
+      ":root{--site-color-text:#111}" +
+        `@media (prefers-color-scheme:dark){:root:not([${DARK_MODE_ATTRIBUTE}="light"]){--site-color-text:#eee}}` +
+        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}`
+    );
+  });
+
+  it("guards a scoped selector's media block against a light marker at or above it", () => {
+    const { css } = emitTokenBlocks(
+      {
         tokens: [
           {
             name: "color.text",
@@ -580,8 +604,29 @@ describe("emitTokenBlocks", () => {
       },
       SCOPE
     );
-    expect(css).toContain("@media (prefers-color-scheme:dark)");
-    expect(css).not.toContain(DARK_MODE_ATTRIBUTE);
+    expect(css).toContain(
+      `@media (prefers-color-scheme:dark){:is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] *){--site-color-text:#eee}}`
+    );
+  });
+
+  it("writes the same sheet whichever deprecated darkMode a set still names", () => {
+    // `darkMode` once chose ONE of the two forms, and the default chose the one
+    // nothing set, so a default site never showed its dark values. Both forms
+    // are now always written; a stored strategy is accepted and changes nothing.
+    const tokens: SiteToken[] = [
+      {
+        name: "color.text",
+        kind: "color",
+        values: { light: "#111", dark: "#eee" },
+      },
+    ];
+    const plain = emitTokenBlocks({ tokens }, ":root").css;
+    expect(emitTokenBlocks({ tokens, darkMode: "media" }, ":root").css).toBe(
+      plain
+    );
+    expect(
+      emitTokenBlocks({ tokens, darkMode: "attribute" }, ":root").css
+    ).toBe(plain);
   });
 
   it("writes no dark block when nothing differs in dark", () => {
