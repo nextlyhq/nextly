@@ -1,0 +1,177 @@
+/**
+ * Variables in the Design panel, end to end: an author creates a variable with
+ * a dark value, it is in the panel after a reload, and the compiled sheet
+ * applies its dark value when the device prefers dark — and only then.
+ */
+import { expect, type Page } from "@playwright/test";
+
+import { openEditorWith } from "./canvas/editor-driver";
+import { LOCK } from "./support/locks";
+import { test } from "./support/test";
+
+// The homepage Single is reseeded and the site's variables are changed and
+// restored, as the other builder files do.
+test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
+
+const SITE_STYLE = "/admin/api/singles/site-style";
+const LIGHT = "#1b7f5c";
+const DARK = "#8fe3c0";
+const PROPERTY = "--site-color-sea";
+const NODES = [
+  {
+    id: "variables-text",
+    type: "core/text",
+    version: 1,
+    props: { text: "A page beside the site's variables" },
+  },
+];
+
+/**
+ * The dark block a device preference applies, guarded so the light marker can
+ * still pin light. Spelled out rather than imported: the marker is published
+ * contract, so a rename on the engine side must fail here.
+ */
+const DEVICE_DARK_OPENING =
+  /@media \(prefers-color-scheme:dark\)\{:root:not\(\[data-nx-theme="light"\]\)\{[^{}]*$/;
+
+async function storedTokens(page: Page): Promise<unknown> {
+  const response = await page.request.get(SITE_STYLE);
+  expect(response.ok(), `reading the site style: ${response.status()}`).toBe(
+    true
+  );
+  const body = (await response.json()) as Record<string, unknown>;
+  const item = (body.item ?? body) as Record<string, unknown>;
+  return item.tokens ?? null;
+}
+
+function styleWrite(page: Page) {
+  return page.waitForResponse(
+    response =>
+      new URL(response.url()).pathname === SITE_STYLE &&
+      ["PATCH", "PUT"].includes(response.request().method()) &&
+      response.ok()
+  );
+}
+
+/**
+ * Show the Design panel. The editor remembers the open panel per author, and
+ * the rail button toggles, so after a reload it may already be open.
+ */
+async function openDesign(page: Page): Promise<void> {
+  const panel = page.getByRole("region", { name: "Design panel" });
+  await page.getByRole("navigation", { name: "Editor panels" }).waitFor();
+  // A remembered panel is restored with the editor; give it the chance.
+  const restored = await panel
+    .waitFor({ timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (restored) return;
+  await page
+    .getByRole("navigation", { name: "Editor panels" })
+    .getByRole("button", { name: "Design", exact: true })
+    .click();
+  await expect(panel).toBeVisible();
+}
+
+/** Fill one field of the open editor and wait for the save it makes. */
+async function commit(
+  page: Page,
+  field: ReturnType<Page["getByLabel"]>,
+  value: string
+): Promise<void> {
+  const saved = styleWrite(page);
+  await field.fill(value);
+  await field.press("Enter");
+  await saved;
+}
+
+test("a new variable with a dark value is kept, and the sheet applies it on a dark device", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const before = await storedTokens(page);
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.emulateMedia({ colorScheme: "light" });
+    await openEditorWith(page, NODES, "variables-text");
+    await openDesign(page);
+
+    // "+" opens the new variable's editor with focus on its name.
+    const added = styleWrite(page);
+    await page.getByRole("button", { name: "Add colour" }).click();
+    await added;
+    await expect(
+      page.getByRole("dialog", { name: "Edit New colour" })
+    ).toBeVisible();
+    // Addressed without its name from here, since naming it renames it.
+    const editor = page.getByRole("dialog");
+    const name = editor.getByLabel("Name", { exact: true });
+    await expect(name).toBeFocused();
+    await commit(page, name, "Sea");
+    await commit(page, editor.getByLabel("Light", { exact: true }), LIGHT);
+    const darkAdded = styleWrite(page);
+    await editor.getByRole("button", { name: "Add dark value" }).click();
+    await darkAdded;
+    await commit(page, editor.getByLabel("Dark", { exact: true }), DARK);
+    // Closing names its code after the label it was given.
+    const named = styleWrite(page);
+    await page.keyboard.press("Escape");
+    await named;
+
+    const row = () =>
+      page.getByRole("button", {
+        name: `Sea, light ${LIGHT}, dark ${DARK}`,
+      });
+    await expect(row()).toBeVisible();
+    expect(JSON.stringify(await storedTokens(page))).toContain('"color.sea"');
+
+    // Kept across a reload.
+    await page.reload();
+    await openDesign(page);
+    await expect(row()).toBeVisible();
+
+    // By keyboard: Enter on the row opens its editor on Name, and Escape
+    // closes it back onto the row.
+    await row().focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("dialog", { name: "Edit Sea" }).getByLabel("Name", {
+        exact: true,
+      })
+    ).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(row()).toBeFocused();
+
+    // The compiled sheet carries the dark value under the guarded device
+    // block, and the browser applies it only when the device prefers dark.
+    const sheet = await page.evaluate(() =>
+      [...document.querySelectorAll("style")]
+        .map(style => style.textContent ?? "")
+        .join("\n")
+    );
+    const at = sheet.indexOf(`${PROPERTY}:${DARK}`);
+    expect(at).toBeGreaterThan(-1);
+    expect(sheet.slice(sheet.lastIndexOf("}", at) + 1, at)).toMatch(
+      DEVICE_DARK_OPENING
+    );
+    const resolved = () =>
+      page.evaluate(
+        property =>
+          getComputedStyle(document.documentElement)
+            .getPropertyValue(property)
+            .trim(),
+        PROPERTY
+      );
+    expect(await resolved()).toBe(LIGHT);
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect.poll(resolved).toBe(DARK);
+  } finally {
+    const restored = await page.request.patch(SITE_STYLE, {
+      data: { tokens: before },
+    });
+    expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
+      true
+    );
+  }
+});
