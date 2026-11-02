@@ -142,6 +142,8 @@ export interface DocumentActionBindingsInput {
    * action is told when it is chosen.
    */
   currentValues?: () => Record<string, unknown>;
+  /** Whether the form holds unsaved edits, told to a contributed action with its values. */
+  currentDirty?: () => boolean;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -420,6 +422,7 @@ export function useDocumentActionBindings({
   writesRefused = false,
   contributedActions = [],
   currentValues,
+  currentDirty,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -581,7 +584,8 @@ export function useDocumentActionBindings({
     isReadingHistory || writesRefused
       ? []
       : heldUnderLock(contributedActions, documentLocked),
-    currentValues
+    currentValues,
+    currentDirty
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>

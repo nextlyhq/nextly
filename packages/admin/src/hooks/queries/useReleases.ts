@@ -525,9 +525,25 @@ export function useScheduleDocument(
     mutationKey: releaseKeys.scheduling(document),
     mutationFn: (payload: ScheduleDocumentPayload) => scheduleDocument(payload),
     onSettled: result => refresh(result?.item.release.id),
-    onSuccess: result => {
-      const at = formatScheduledAt(result.item.release);
-      toast.success(at ? `Scheduled to go live ${at}.` : "Scheduled.");
+    // Said as what happened on the path taken: scheduled on its own, added to
+    // a release, or added to a release just made, which is scheduled from its
+    // own page.
+    onSuccess: (result, payload) => {
+      const release = result.item.release;
+      if (payload.into === "existing") {
+        toast.success(`Added to ${release.title}.`);
+        return;
+      }
+      if (payload.into === "new") {
+        toast.success(
+          `Created ${release.title} and added this document. Schedule the release from its page.`
+        );
+        return;
+      }
+      const at = formatScheduledAt(release);
+      const happens =
+        payload.document.action === "unpublish" ? "comes down" : "goes live";
+      toast.success(at ? `Scheduled. It ${happens} ${at}.` : "Scheduled.");
     },
   });
 }
