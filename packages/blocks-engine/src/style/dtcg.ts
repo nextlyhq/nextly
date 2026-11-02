@@ -187,23 +187,13 @@ function exportableValue(
   token: SiteToken,
   issues: ValidationIssue[]
 ): { type: string; value: unknown } | undefined {
-  const naming = tokenNamingProblem(token);
+  const naming = exportNamingRefusal(token, "it was not exported");
   if (naming !== undefined) {
     // One rule, phrased for this gate. The identity carries the cap and the
     // display name carries only the grammar, so a renamed token with a long
     // label exports normally — refusing it here would drop a working token from
     // the file while Nextly went on rendering it.
-    issues.push(
-      issue(
-        naming.reason === "depth"
-          ? `"${String(token.name)}" is nested too deeply, so it was not exported. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`
-          : naming.reason === "length"
-            ? `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was not exported. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
-            : naming.field === "name"
-              ? `"${token.name}" is not a token name, so it was not exported.`
-              : `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
-      )
-    );
+    issues.push(issue(naming));
     return undefined;
   }
   // The id is covered by the same answer above, and refused rather than
@@ -223,6 +213,28 @@ function exportableValue(
     return undefined;
   }
   return { type, value };
+}
+
+/**
+ * Why a token's name or id keeps it out of an exported file, in words, or
+ * nothing when both can be written. `outcome` says what happened to it ("it
+ * was not exported"), so every exporter phrases the one verdict alike.
+ */
+export function exportNamingRefusal(
+  token: SiteToken,
+  outcome: string
+): string | undefined {
+  const naming = tokenNamingProblem(token);
+  if (naming === undefined) return undefined;
+  if (naming.reason === "depth") {
+    return `"${String(token.name)}" is nested too deeply, so ${outcome}. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+  }
+  if (naming.reason === "length") {
+    return `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so ${outcome}. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
+  }
+  return naming.field === "name"
+    ? `"${String(token.name)}" is not a token name, so ${outcome}.`
+    : `"${String(token.name)}" has an id that is not a token name, so ${outcome}. Its value is still here in Nextly.`;
 }
 
 /** The node for a token already established as writable. */
