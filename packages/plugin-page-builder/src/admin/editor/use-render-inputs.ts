@@ -9,6 +9,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-render-inputs
  */
 import {
+  BASE_BREAKPOINT,
   previewContainerFor,
   registryNestingSource,
   getBlock,
@@ -27,17 +28,18 @@ import {
 } from "@nextlyhq/builder";
 import {
   breakpointsAtWidth,
-  editedBreakpointAtWidth,
+  editingBreakpointOf,
   pageStyleTrace,
+  previewWidth,
   selectionIsInspectable,
   useCanvasDrag,
-  widthForBreakpoint,
   type CanvasDrag,
   type CanvasPreview,
   type CanvasZoom,
   type SpacingScrubContext,
 } from "@nextlyhq/builder/shell";
 import {
+  useCallback,
   useId,
   useMemo,
   useRef,
@@ -408,19 +410,22 @@ function useCanvasRender({
 
 /** What `useCanvasViewport` returns. */
 type CanvasViewport = {
-  setRequestedTier: Dispatch<SetStateAction<string | undefined>>;
+  /** Asks the shell to edit at a breakpoint; the base one is null. */
+  chooseDevice: (breakpoint: BreakpointId | null) => void;
+  /** The latest of those requests, for the shell to apply. */
+  deviceRequest: { breakpoint: string | null; count: number } | undefined;
+  /** Where the shell reports the device it holds, restored ones included. */
+  setChosenDevice: Dispatch<SetStateAction<string | null>>;
   zoom: CanvasZoom;
   setZoom: Dispatch<SetStateAction<CanvasZoom>>;
   appliedScale: number;
   setAppliedScale: Dispatch<SetStateAction<number>>;
-  measuredWidth: number | undefined;
   editedBreakpoint: string;
-  requestedWidth: number | undefined;
   canvasPreview: CanvasPreview | undefined;
   liveBreakpoints: string[];
 };
 
-/** The width the box is asked for and the width it got, and the zoom. */
+/** The device being edited, the width it is shown at, and the zoom. */
 function useCanvasViewport({
   canvasRender,
   canvasPreviewContainer,
@@ -428,98 +433,69 @@ function useCanvasViewport({
   CanvasRender,
   "canvasRender" | "canvasPreviewContainer"
 >): CanvasViewport {
+  const breakpoints = canvasRender.styleContext.breakpoints;
   /*
-   * The two widths, which are two facts and not one.
+   * The device the SHELL holds, mirrored here to draw the canvas with it.
    *
-   * `requestedWidth` is what the author asked the switcher for — a ceiling, and
-   * `undefined` for the full region. `measuredWidth` is what the box actually
-   * got, reported by the canvas: the editor region may be narrower than the
-   * tier requested, and what the container queries resolve against is the width
-   * the box has, not the width it was offered.
-   *
-   * Only the MEASURED one decides which tier is edited. Deriving that from the
-   * request would tell an author they are editing the tier they picked while
-   * the box is in a narrower one, which is the disagreement between what you
-   * see and what you edit that this control exists to remove.
+   * The shell owns it because it owns the author's preferences, and it stores
+   * it with them, so the device an author left is the one they come back to.
+   * Requests travel down with a count, as the panel requests do; the shell
+   * reports what it holds back up, including the device it restored on load.
+   * Nothing here writes the mirror except that report, so the two cannot
+   * disagree about which device is being edited.
    */
-  const [requestedTier, setRequestedTier] = useState<BreakpointId | undefined>(
-    undefined
+  const [chosenDevice, setChosenDevice] = useState<string | null>(
+    DEFAULT_PREFERENCES.editingBreakpoint
   );
+  const [deviceRequest, setDeviceRequest] = useState<
+    { breakpoint: string | null; count: number } | undefined
+  >(undefined);
+  const chooseDevice = useCallback((breakpoint: BreakpointId | null): void => {
+    // The base breakpoint is stored as null, its name for "no breakpoint".
+    const stored = breakpoint === BASE_BREAKPOINT ? null : breakpoint;
+    setDeviceRequest(current => ({
+      breakpoint: stored,
+      count: (current?.count ?? 0) + 1,
+    }));
+  }, []);
+
   /*
-   * The zoom, and the scale it produces, held apart.
+   * Which breakpoint an edit lands in: the device the author chose, and
+   * nothing else.
    *
-   * The first is what the author ASKED for and the shell persists it. The
-   * second is what the canvas is painting at, which while fitting is derived
-   * from a region only the canvas measures — so it is reported back rather
-   * than computed here, where a second derivation would disagree with the
-   * screen for exactly the frame after a panel opens.
+   * Never the width the canvas measured. The region the canvas sits in
+   * narrows as panels open and with the window, and reading the breakpoint
+   * off it sent every edit to a narrower breakpoint the author never picked
+   * (at the 1280px minimum, the region alone was already narrower than a
+   * 991px tablet's base). The canvas instead lays the page out at the
+   * device's own width, and the zoom shrinks it to fit.
+   *
+   * A device the site no longer defines resolves to the base breakpoint, so
+   * an edit is never stored under a breakpoint nothing draws.
    */
+  const editedBreakpoint = editingBreakpointOf(breakpoints, chosenDevice);
+  const requestedWidth = previewWidth(breakpoints, editedBreakpoint);
+
   /*
-   * The zoom the SHELL owns, mirrored here only to draw the canvas with it.
-   *
-   * Nothing writes it from this side. The shell persists the choice and reports
-   * it, including the value restored on load; this holds the last report so the
-   * canvas can be scaled by it. Holding it as a second source of truth and
-   * syncing BACK is what produced an oscillating write of `fit, 2, fit, 2` on
-   * every open — two owners, each correcting the other.
-   *
-   * Seeded with the same default the shell starts from, so there is no absent
-   * state for the canvas to interpret. That is safe only because this direction
-   * is one-way: with nothing sending a zoom back, a default held here can never
-   * reach the store to overwrite what the author chose.
+   * The zoom the SHELL owns, mirrored here only to draw the canvas with it,
+   * one-way for the reason the device is: holding it as a second source of
+   * truth and syncing BACK produced an oscillating write on every open.
    */
   const [zoom, setZoom] = useState<CanvasZoom>(DEFAULT_PREFERENCES.zoom);
   const [appliedScale, setAppliedScale] = useState(1);
+  /*
+   * What the box actually got, for which breakpoints the page applies there.
+   * The box is laid out at the device's width whatever the region's, so this
+   * agrees with the device; it is read rather than assumed so the inspector
+   * describes the box on screen.
+   */
   const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
     undefined
   );
 
   /*
-   * Which tier an edit lands in, and which tiers the box is applying.
-   *
-   * Both derived from the MEASURED width and from the one breakpoint set above,
-   * so the inspector cannot disagree with the canvas about either. Memoised
-   * because `breakpointsAtWidth` builds a fresh array: passed inline it would be
-   * a new identity every render, and the panel re-derives on it.
-   */
-  const editedBreakpoint = editedBreakpointAtWidth(
-    canvasRender.styleContext.breakpoints,
-    measuredWidth
-  );
-
-  /*
-   * Release a requested width the site no longer offers.
-   *
-   * The switcher renders nothing once a site defines no viewport tiers, and it
-   * cannot clear state it does not own — so an author who selects a tier and
-   * then deletes it, or deletes the last one, is left with a canvas pinned to a
-   * bound the stylesheet no longer has and no control on screen to release it.
-   * The only way out would be to close the editor and reopen it.
-   *
-   * Compared against `selectableTiers`, which is the same list the switcher
-   * builds its options from, so "a width this control could have set" has one
-   * definition rather than two that can disagree.
-   *
-   * It has to be that list and not the bounded tiers alone. The unconditional
-   * tier is offered at the width it applies FROM, which is not any tier's
-   * bound — checked against the bounds this cleared it on the render after it
-   * was chosen, so the canvas returned to filling the region and the one option
-   * that reaches the base tier silently did nothing.
-   */
-  const requestedWidth =
-    requestedTier === undefined
-      ? undefined
-      : widthForBreakpoint(
-          canvasRender.styleContext.breakpoints,
-          requestedTier
-        );
-
-  /*
-   * The box's own inputs, as one object.
-   *
-   * Memoised because the canvas takes them as a group: rebuilt inline it would
-   * be a fresh object every render, and the measurement effect behind it
-   * re-subscribes on the reporter's identity.
+   * The box's own inputs, as one object. Memoised because the canvas takes
+   * them as a group, and its measurement effect re-subscribes on identity.
    */
   const canvasPreview = useMemo(
     () =>
@@ -534,20 +510,19 @@ function useCanvasViewport({
   );
 
   const liveBreakpoints = useMemo(
-    () =>
-      breakpointsAtWidth(canvasRender.styleContext.breakpoints, measuredWidth),
-    [canvasRender, measuredWidth]
+    () => breakpointsAtWidth(breakpoints, measuredWidth ?? requestedWidth),
+    [breakpoints, measuredWidth, requestedWidth]
   );
 
   return {
-    setRequestedTier,
+    chooseDevice,
+    deviceRequest,
+    setChosenDevice,
     zoom,
     setZoom,
     appliedScale,
     setAppliedScale,
-    measuredWidth,
     editedBreakpoint,
-    requestedWidth,
     canvasPreview,
     liveBreakpoints,
   };
@@ -723,7 +698,7 @@ function useStyleReadings({
     | "stylePolicy"
   > &
   Pick<CanvasRender, "canvasRender" | "canvasPreviewContainer"> & {
-    editedBreakpoint: ReturnType<typeof editedBreakpointAtWidth>;
+    editedBreakpoint: BreakpointId;
     shownStyleState: StyleState;
   }): StyleReadings {
   /*

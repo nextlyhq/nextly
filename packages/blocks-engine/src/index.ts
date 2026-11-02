@@ -403,6 +403,35 @@ export type {
 // designer meets the lock where the exposure is made, not on every page.
 export { contentOnlyExposures, nodeLocks } from "./content-only-exposures";
 export type { LockedExposure, NodeLock } from "./content-only-exposures";
+// Editing an existing component's exposed fields, for its own view: expose,
+// rename, point elsewhere, remove. And the one rule for taking a removed
+// field's values out of every document that places the component. Both
+// `@experimental` until the component editor that consumes them ships.
+export {
+  exposureTypeForProp,
+  planExposeProperty,
+  planRemoveExposedSlot,
+  planRemoveExposure,
+  planRenameExposure,
+  planRetargetExposure,
+  VISIBILITY_PROP_PATH,
+} from "./exposure-planners";
+export type {
+  ExposeRequest,
+  ExposureEdit,
+  ExposureEditProblem,
+  ExposureEditRefusal,
+  ExposureEditResult,
+  ExposureSources,
+  ExposureTarget,
+  PrunedVariant,
+} from "./exposure-planners";
+export { stripRetiredExposures } from "./retired-exposures";
+export type {
+  RetiredByComponent,
+  RetiredExposures,
+  StrippedDocument,
+} from "./retired-exposures";
 // The lock judgement as the editor asks it before an action: every break a
 // document holds, located, and the one an edit would add, by the rules a save
 // applies. And the one repair planner, run as a list of rules so a later rule
@@ -430,6 +459,7 @@ export type { ActiveSlotLock } from "./slot-lock";
 export type { ByteMeasurement } from "./measure-bytes";
 export {
   componentEnvelopeIssues,
+  isErrorIssue,
   validate,
   validateDocument,
   ISSUE_CODES,
