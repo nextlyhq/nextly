@@ -394,7 +394,12 @@ export function catalogFrom(
   for (const definition of byLabel) {
     const editor = definition.editor;
     const category = editor?.category ?? UNCATEGORISED;
-    const keywords = editor?.keywords ?? [];
+    // A plugin block that names no keywords is still found by its own name,
+    // which is the one word an author searching for it will type.
+    const keywords =
+      editor?.keywords === undefined || editor.keywords.length === 0
+        ? [labelOf(definition)]
+        : editor.keywords;
     // The block's DEFAULTS, overlaid by its EXAMPLE.
     //
     // Defaults alone are what an author was getting, and they are deliberately
@@ -423,7 +428,12 @@ export function catalogFrom(
       id: definition.name,
       blockName: definition.name,
       label: labelOf(definition),
-      description: definition.description,
+      // The engine refuses an empty description at registration; a blank one
+      // still says nothing, so the block's name stands in rather than a gap.
+      description:
+        definition.description.trim() === ""
+          ? labelOf(definition)
+          : definition.description,
       category,
       keywords,
       icon: editor?.icon,

@@ -277,6 +277,20 @@ describe("filterEntries", () => {
     ]);
   });
 
+  it("finds a block that names no keywords by its own name, and describes it by name when blank", () => {
+    // A plugin block without palette metadata still reads as itself.
+    const [entry] = catalogFrom([
+      {
+        ...base,
+        name: "acme/teaser",
+        description: "   ",
+        editor: { label: "Teaser" },
+      } as never,
+    ]);
+    expect(entry?.keywords).toEqual(["Teaser"]);
+    expect(entry?.description).toBe("Teaser");
+  });
+
   it("matches the description", () => {
     expect(filterEntries(entries(), "picture").map(e => e.id)).toEqual([
       "acme/image",
