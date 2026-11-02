@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The ancestor breadcrumb: where the selected block sits, and one click to each
- * container holding it.
+ * The bottom bar: where the selected block sits on the page, one click to each
+ * container holding it, and a hint at the keys that work from there.
  *
  * The canvas answers "what does this look like" and the layers panel answers
  * "what is the whole page". Neither answers the question an author has while
@@ -29,34 +29,60 @@ import { ChevronRight } from "lucide-react";
 import type * as React from "react";
 
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
+import { firstInlineProp } from "./inline-target";
+import { keyHint } from "./key-hint";
 import { pathTo } from "./layers";
 
 export interface SelectionBreadcrumbProps {
   /** The editor whose selection this describes and changes. */
   editor: EditorState;
+  /**
+   * The keys the host has bound, so the hint offers only what works:
+   * `editText` when Enter begins editing a block's text on the canvas,
+   * `commandPalette` when the command palette opens with the modifier and K.
+   */
+  hints?: { readonly editText?: boolean; readonly commandPalette?: boolean };
+}
+
+/** One crumb: a block, or the page itself at the trail's root. */
+interface Crumb {
+  readonly key: string;
+  readonly label: string;
+  readonly select: () => void;
 }
 
 export function SelectionBreadcrumb({
   editor,
-}: SelectionBreadcrumbProps): React.JSX.Element | null {
-  const path = pathTo(editor.document, editor.selectedId);
-
+  hints = {},
+}: SelectionBreadcrumbProps): React.JSX.Element {
   /*
-   * Nothing selected, or a selection the document no longer holds.
+   * The page first, always, then the selected block's ancestors.
    *
-   * Renders NOTHING rather than an empty bar. The bar would reserve height for
-   * a trail that is not there, so the canvas would resize every time a
-   * selection was cleared — and an undo that removes the selected node clears
-   * it, which is a routine action rather than an edge case.
+   * With nothing selected, or a selection the document no longer holds (an
+   * undo can remove the selected node), the trail is the page alone, marked
+   * as the current position: the bar always says where the author is.
    */
-  if (path.length === 0) return null;
+  const path = pathTo(editor.document, editor.selectedId);
+  const crumbs: Crumb[] = [
+    {
+      key: "page",
+      label: EDITOR_WORDS.page,
+      select: () => editor.select(null),
+    },
+    ...path.map(node => ({
+      key: node.id,
+      label: node.label,
+      select: () => editor.select(node.id),
+    })),
+  ];
+  const selected = path.length > 0 ? editor.selectedId : null;
 
   return (
-    <ol className="nx-breadcrumb" aria-label="Selected block's ancestors">
-      {path.map((node, index) => {
-        const isCurrent = index === path.length - 1;
-        return (
-          <li className="nx-breadcrumb__item" key={node.id}>
+    <div className="nx-bottom-bar">
+      <ol className="nx-breadcrumb" aria-label="Selected block's ancestors">
+        {crumbs.map((crumb, index) => (
+          <li className="nx-breadcrumb__item" key={crumb.key}>
             {index > 0 ? (
               <ChevronRight
                 className="nx-breadcrumb__separator"
@@ -72,14 +98,42 @@ export function SelectionBreadcrumb({
               // clickable and marked current: pressing it is harmless, and
               // disabling it would take the trail's end out of the tab order
               // for no gain.
-              aria-current={isCurrent ? "true" : undefined}
-              onClick={() => editor.select(node.id)}
+              aria-current={index === crumbs.length - 1 ? "true" : undefined}
+              onClick={crumb.select}
             >
-              {node.label}
+              {crumb.label}
             </button>
           </li>
-        );
-      })}
-    </ol>
+        ))}
+      </ol>
+      <p className="nx-bottom-bar__hint">{hintFor(editor, selected, hints)}</p>
+    </div>
   );
+}
+
+/**
+ * The bar's hint, from the keys that work right now: Enter where the host
+ * edits text and the selected block has some, Escape to go up a level from
+ * any selection, and the command palette where the host has one.
+ */
+function hintFor(
+  editor: EditorState,
+  selected: string | null,
+  hints: NonNullable<SelectionBreadcrumbProps["hints"]>
+): string {
+  const parts: string[] = [];
+  if (selected === null) {
+    parts.push("Click a block to select it");
+  } else {
+    if (
+      hints.editText === true &&
+      firstInlineProp(editor.document, selected) !== null
+    ) {
+      parts.push("Enter to edit text");
+    }
+    parts.push("Esc to go up");
+  }
+  const palette = hints.commandPalette === true ? keyHint("mod+k") : null;
+  if (palette !== null) parts.push(`${palette} for anything`);
+  return parts.join(" · ");
 }

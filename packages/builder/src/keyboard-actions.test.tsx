@@ -1257,6 +1257,30 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     expect(hostCancel).not.toHaveBeenCalled();
   });
 
+  it("goes up a level from a block inside a container, and does NOT reach the page's cancel", () => {
+    // The bottom bar's hint says "Esc to go up": from a nested block the key
+    // selects the block holding it, walking up the trail the bar shows.
+    const nested = documentOf([
+      {
+        id: "box",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "inner", type: "acme/text", version: 1, props: {} }],
+        },
+      },
+    ]);
+    const editor = editorSpy(nested, "inner");
+    const hostCancel = mountWithHostEscape(editor);
+
+    press("Escape");
+
+    expect(editor.select).toHaveBeenCalledWith("box");
+    expect(editor.select).not.toHaveBeenCalledWith(null);
+    expect(hostCancel).not.toHaveBeenCalled();
+  });
+
   it("holds the key even with NOTHING selected", () => {
     /*
      * THE case, and the one a rule written around what Escape ACHIEVES would

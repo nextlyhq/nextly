@@ -951,7 +951,8 @@ export function useBlockKeyboardActions({
     [
       {
         keys: "Escape",
-        description: "Clear the block selection",
+        description:
+          "Select the block holding this one, or clear the selection",
         // The one case the editor declines. `when` rather than a branch in
         // `run`, because declining has to leave the key UNCONSUMED for the
         // dialog to receive it, and a binding that runs has already taken it.
@@ -966,7 +967,10 @@ export function useBlockKeyboardActions({
           );
           if (outcome !== "deselect") return;
           if (editorNow.selectedId === null) return;
-          editorNow.select(null);
+          // Up a level: the block holding the selection, as the bottom bar's
+          // trail shows it, or nothing once the selection is at the top.
+          const trail = pathTo(editorNow.document, editorNow.selectedId);
+          editorNow.select(trail.at(-2)?.id ?? null);
         },
       },
     ],

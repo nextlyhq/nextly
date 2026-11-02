@@ -2268,6 +2268,28 @@
  * and a deep selection would otherwise grow it and shrink the canvas every time
  * an author selected something nested.
  */
+/*
+ * The bar's two halves: the trail at the start, the hint at the end, as the
+ * agreed design draws it. The trail gives way first, scrolling rather than
+ * pushing the hint off the bar.
+ */
+.nx-bottom-bar {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.nx-bottom-bar__hint {
+  flex: none;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+  white-space: nowrap;
+}
+
 .nx-breadcrumb {
   display: flex;
   align-items: center;
