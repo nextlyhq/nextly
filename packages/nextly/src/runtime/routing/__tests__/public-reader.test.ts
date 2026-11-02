@@ -215,7 +215,7 @@ describe("toPublicFind", () => {
     expect(toPublicFind({ collection: "posts" }).depth).toBe(0);
   });
 
-  it.each(["-", "title,-", ["title", " - "]])(
+  it.each(["-", "title,-", ["title", " - "], ["title,-"]])(
     "refuses a sort key that is only a sign: %j",
     sort => {
       expect(
@@ -245,6 +245,12 @@ describe("toPublicFind", () => {
       ).toEqual({ and: [{ featured: { equals: true } }] });
     }
   );
+
+  it("splits each sort element on commas, as core does", () => {
+    expect(
+      toPublicFind({ collection: "posts", sort: ["title, -date", "rank"] }).sort
+    ).toEqual(["title", "-date", "rank"]);
+  });
 
   it("refuses __proto__ as a field name", () => {
     expect(

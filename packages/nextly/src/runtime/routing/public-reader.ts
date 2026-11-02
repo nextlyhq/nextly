@@ -183,7 +183,11 @@ function assertShape(query: object): void {
  * the read keeps its id order instead of reaching core with no order at all.
  */
 function sortKeys(sort: string | readonly string[] | undefined): string[] {
-  const parts = typeof sort === "string" ? sort.split(",") : [...(sort ?? [])];
+  // Every element split on commas, as core splits each one, so the keys
+  // judged here are the keys core would order by.
+  const parts = (typeof sort === "string" ? [sort] : [...(sort ?? [])]).flatMap(
+    part => part.split(",")
+  );
   const keys = parts.map(key => key.trim()).filter(key => key !== "");
   // A sign with no field after it is a malformed key, not an absent one:
   // core's parser would drop it, and the refusal of unknown keys never see it.
