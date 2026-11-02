@@ -33,6 +33,7 @@ Page builder: the bottom bar now starts at **Page**, then each block holding the
 and choosing **Page** clears the selection. On its right a hint names the keys that work
 from there: Enter to edit the selected block's text, Esc to go up, and the command
 palette's key. Escape now goes up to the block holding the selection, and clears the
-selection only from a top-level block. The editor's words are read from one catalogue,
+selection only from a top-level block; `escapeOutcome` now answers `"navigate-selection"` for the
+key the editor consumes, where it answered `"deselect"`. The editor's words are read from one catalogue,
 `EDITOR_WORDS`, exported from `@nextlyhq/builder/shell`. The zoom and device menus no
 longer hide the rest of the editor from assistive technology while open.
