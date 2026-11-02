@@ -26,7 +26,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useNoticeQueue, useNoticeSink } from "./builder-notices";
-import { BuilderShell } from "./builder-shell";
+import { BuilderShell, type SettingsDialogState } from "./builder-shell";
 import { CommandPalette } from "./command-palette";
 import {
   DEFAULT_PREFERENCES,
@@ -424,6 +424,67 @@ describe("Help", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     act(() => stubContainerFits(true));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("Settings, as the host's dialog", () => {
+  /** A host's Settings: a dialog while open, recording what it was handed. */
+  function settingsHost() {
+    const handed: SettingsDialogState[] = [];
+    const renderSettings = (dialog: SettingsDialogState) => {
+      handed.push(dialog);
+      return dialog.open ? (
+        <div role="dialog" aria-label="Settings">
+          <button type="button" onClick={() => dialog.onOpenChange(false)}>
+            Done
+          </button>
+        </div>
+      ) : null;
+    };
+    return { handed, renderSettings };
+  }
+
+  it("opens the host's dialog from the rail, shown pressed, and never as a panel", () => {
+    const { renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const item = within(rail).getByRole("button", { name: "Settings" });
+    expect(item.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(item);
+
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+    expect(item.getAttribute("aria-pressed")).toBe("true");
+    // No left panel opened for it: the dialog is the whole of Settings.
+    expect(item.getAttribute("data-rail-action")).toBe("settings");
+    expect(
+      within(rail).getAllByRole("button", { name: "Settings" })
+    ).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(item.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("hands the dialog the rail's item to return focus to", () => {
+    const { handed, renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    const item = screen.getByRole("button", { name: "Settings" });
+    fireEvent.click(item);
+    expect(handed.at(-1)?.returnFocus()).toBe(item);
+  });
+
+  it("closes when the editor gives way to its narrow-window notice", async () => {
+    const { renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    act(() => stubContainerFits(false));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+    );
   });
 });
 
