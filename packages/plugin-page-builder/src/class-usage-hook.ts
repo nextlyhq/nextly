@@ -156,6 +156,12 @@ export function registerClassUsageMaintenance(args: {
   locales: () => readonly string[];
   /** The bounds rows are derived under, read per call. */
   limits: () => DocumentLimits;
+  /**
+   * Record that a maintenance write failed, so health reports the index as
+   * not whole until a backfill run started after the failure has walked every
+   * document again. Absent, a failure is only raised and logged.
+   */
+  markDirty?: () => Promise<void>;
 }): void {
   const handler = (context: UnknownRecord) => maintain(args, context);
   for (const phase of MAINTAINED_PHASES) {
@@ -177,6 +183,43 @@ export function registerClassUsageMaintenance(args: {
  * fails, which is exactly when they would want it.
  */
 async function maintain(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  context: UnknownRecord
+): Promise<void> {
+  try {
+    await maintainOrRaise(args, context);
+  } catch (failure) {
+    await markIndexDirty(args, failure);
+    throw failure;
+  }
+}
+
+/**
+ * Mark the index dirty after a failed maintenance write, then let the caller
+ * raise the failure as before.
+ *
+ * A failed write leaves this document's rows stale, and nothing about a later
+ * save of another document repairs them, so until a full rebuild has walked it
+ * again no count may read as exact. A mark that cannot be written is logged:
+ * the failure itself is still raised, and the caller still told.
+ */
+async function markIndexDirty(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  failure: unknown
+): Promise<void> {
+  if (args.markDirty === undefined) return;
+  try {
+    await args.markDirty();
+  } catch (markFailure) {
+    args.ctx.logger?.error?.(
+      "[page-builder] a usage index write failed and the index could not be marked dirty; counts may read as exact until the next full rebuild",
+      { error: markFailure, cause: failure }
+    );
+  }
+}
+
+/** One write's maintenance, raising when any subject could not be reconciled. */
+async function maintainOrRaise(
   args: Parameters<typeof registerClassUsageMaintenance>[0],
   context: UnknownRecord
 ): Promise<void> {
@@ -276,6 +319,7 @@ async function forget(
         "they count towards their classes until a rebuild runs",
       { collection: target.slug, documentId: target.documentId, error: failure }
     );
+    await markIndexDirty(args, failure);
     throw new Error(
       `[page-builder] class-usage could not forget "${target.slug}" ` +
         `${target.documentId}. Its rows still count towards their classes ` +

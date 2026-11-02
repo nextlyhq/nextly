@@ -210,9 +210,11 @@ is still frozen and still typed readonly.
 ### Transactions
 
 ```ts
-ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>): Promise<T>;
+ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>, options?: { isolation?: "snapshot" }): Promise<T>;
 // PluginTransaction = PluginDatabase without `transaction`; calling one rejects (INVALID_INPUT, nested-plugin-transaction)
 // insert / insertReturning take PluginInsert<T>: InferInsert<T> with the col.id() key optional; ctx.db fills a UUIDv7
+// options.isolation "snapshot": read-only, every read sees one moment (REPEATABLE READ on PostgreSQL and MySQL;
+// SQLite's transactions are serial already); a write through tx rejects (INVALID_INPUT, write-in-snapshot-transaction)
 
 ctx.db.raw.transaction(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
 // PluginRawDatabase: the fluent builder; the live Drizzle instance with rawSql granted

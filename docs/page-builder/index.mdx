@@ -63,6 +63,13 @@ boot refuses to start:
 npx nextly plugins install @nextlyhq/plugin-page-builder
 ```
 
+The plugin keeps the bookkeeping behind its usage counts (how far the background job
+has indexed existing pages, and whether an index write has failed) in two tables of
+its own, `page_builder__usage_runs` and `page_builder__usage_progress`. No admin
+screen or API reaches them. Installing creates them; a site upgrading from a version
+without them runs `npx nextly migrate` before it starts on the new version, since a
+production boot refuses a plugin whose tables are behind it.
+
 Last, run `npx nextly generate:types`. It writes the file that registers the builder's
 screen with the admin, and that file also loads the editor's styles, so there is nothing
 to import by hand. In a project created before that file existed, import the generated
