@@ -43,4 +43,11 @@ export const noteWidget = defineWidget({
     message: "Nothing written yet.",
     action: { label: "Write a note", opens: "settings" },
   },
+  // A made-up note, for the add gallery's tile and the preview page.
+  preview: [
+    {
+      name: "A short note",
+      data: { text: "**This week:** review the drafts before Friday." },
+    },
+  ],
 });

@@ -8,7 +8,8 @@ import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin"
 import * as _p0 from "../../src/dashboard/site-notes";
 import * as _p1 from "@/plugins/block-fixture/editor";
 import * as _p2 from "@/plugins/widget-kit-fixture/admin";
-import * as _p3 from "@nextlyhq/plugin-page-builder/admin";
+import * as _p3 from "@nextlyhq/plugin-form-builder/admin";
+import * as _p4 from "@nextlyhq/plugin-page-builder/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 import type { DeclaredComponentMap } from "nextly";
 import type * as siteConfig from "../../nextly.config";
@@ -19,8 +20,9 @@ const registered = {
   "@/plugins/widget-kit-fixture/admin#KitCard": _p2.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
   "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p2.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
   "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p2.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
-  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p3.BlocksField,
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p3.PageBuilderView,
+  "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p3.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p4.BlocksField,
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p4.PageBuilderView,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
 /** The modules exporting each plugin's block definitions, for the page builder's editor. */

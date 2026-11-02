@@ -9,12 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
 import * as loggerModule from "../../../observability/logger";
-import { allWidgets, placedByDefault, sizeFacts } from "../canonical";
-import {
-  CORE_DECLARATIONS,
-  CORE_WIDGET_IDS,
-  CORE_WIDGETS,
-} from "../core-widgets";
+import { allWidgets, sizeFacts } from "../canonical";
+import { CORE_DECLARATIONS, CORE_WIDGET_IDS } from "../core-widgets";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import { noteWidget } from "../core-widgets/note";
 import { declaredWidget } from "../declaration/declared-widgets";
 import { widgetDeclarationFaults } from "../declaration/validate";
@@ -70,21 +67,17 @@ describe("core's Note, declared", () => {
     expect(isEmpty(await answerFor("  \n\t"))).toBe(true);
   });
 
-  it("is one of core's ids, in core's order, and no longer one of its definitions", () => {
+  it("is one of core's ids and declarations, in core's order", () => {
     expect(CORE_DECLARATIONS.map(widget => widget.id)).toContain("core/note");
     expect(CORE_WIDGET_IDS).toContain("core/note");
     // Where it always sorted: after Breakdown, before Recent entries.
     const at = CORE_WIDGET_IDS.indexOf("core/note");
     expect(CORE_WIDGET_IDS[at - 1]).toBe("core/breakdown");
     expect(CORE_WIDGET_IDS[at + 1]).toBe("core/recent-entries");
-    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain("core/note");
-    // Every core widget is in exactly one of the two lists.
-    expect(
-      [
-        ...CORE_WIDGETS.map(widget => widget.id),
-        ...CORE_DECLARATIONS.map(widget => widget.id),
-      ].sort()
-    ).toEqual([...CORE_WIDGET_IDS].sort());
+    // Every core widget is declared, and every declaration is one of core's ids.
+    expect(CORE_DECLARATIONS.map(widget => widget.id).sort()).toEqual(
+      [...CORE_WIDGET_IDS].sort()
+    );
   });
 
   it("is published under core as a card answered on the server", () => {
@@ -95,7 +88,6 @@ describe("core's Note, declared", () => {
     expect(published).toMatchObject({
       archetype: "custom",
       component: "core#Note",
-      serverData: true,
       allowsSeveral: true,
       empty: {
         message: "Nothing written yet.",
@@ -117,7 +109,9 @@ describe("core's Note, declared", () => {
     const canonical = allWidgets().find(widget => widget.id === "core/note");
     expect(canonical).toBeDefined();
     if (canonical === undefined) return;
-    expect(placedByDefault(canonical)).toBe(false);
+    expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
+      "core/note"
+    );
     expect(sizeFacts(canonical).allowsSeveral).toBe(true);
   });
 });

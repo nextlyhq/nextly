@@ -23,6 +23,7 @@ import { collectHookPoints } from "../../../plugins/hook-points";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { assertPluginConsent } from "../../../plugins/plugin-consent";
 import { permissionCollisionError } from "../../../plugins/permission-error";
+import { assertNoRemovedWidgetKeys } from "../../../plugins/removed-widget-keys";
 import { resolutionError } from "../../../plugins/resolution-error";
 import { collectPluginRoutes } from "../../../plugins/routes/collect-routes";
 import { routeInvalidMountError } from "../../../plugins/routes/route-error";
@@ -172,10 +173,20 @@ export const PLUGIN_CONFIG_CASES = {
       ["app", "reports"],
       "duplicate-permission"
     ),
-  // `plugins/validate-admin-widgets.ts`, for a widget whose query holds a bigint.
+  // `plugins/removed-widget-keys.ts`, through the startup check, for a plugin that still
+  // declares a widget data source under `contributes.widgetSources`.
+  NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL: () =>
+    thrown(() =>
+      assertNoRemovedWidgetKeys([
+        plugin("reviews", {
+          contributes: { widgetSources: [] },
+        } as unknown as Partial<PluginDefinition>),
+      ])
+    ),
+  // `plugins/admin-widget-error.ts`, for a widget whose query holds a bigint.
   PLUGIN_ADMIN_WIDGET_NOT_JSON: () =>
     adminWidgetError("reviews", "stats", ["query"]),
-  // `plugins/validate-admin-widgets.ts`, with the reason `undrawableReason` gives.
+  // `plugins/admin-widget-error.ts`, with a reason a widget's shape check gives.
   PLUGIN_ADMIN_WIDGET_UNDRAWABLE: () =>
     adminWidgetShapeError(
       "reviews",

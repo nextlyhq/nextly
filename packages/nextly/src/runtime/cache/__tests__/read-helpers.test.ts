@@ -100,6 +100,26 @@ describe("applyCache (passthrough without Next)", () => {
   });
 });
 
+describe("applyCache — the tags handed to the cache", () => {
+  it("leaves out tags too long for Next.js, so they cannot crowd out a valid one", async () => {
+    let handed: string[] | undefined;
+    const capture: UnstableCache = (cb, _keyParts, options) => {
+      handed = options.tags;
+      return cb;
+    };
+    // Each one over the 256 characters Next.js accepts on a tag.
+    const overlong = Array.from(
+      { length: 200 },
+      (_, i) => `app:${"x".repeat(256)}-${i}`
+    );
+    await applyCache(capture, async () => ({ id: "x" }), {
+      tags: [...overlong, "nextly:posts"],
+      keyParts: ["posts", "list"],
+    });
+    expect(handed).toEqual(["nextly:posts"]);
+  });
+});
+
 describe("applyCache — key forwarding and per-caller isolation", () => {
   // A fake unstable_cache that memoises by keyParts, so the test can observe
   // exactly how cache identity is derived (the real thing needs a Next runtime).

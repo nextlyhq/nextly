@@ -23,6 +23,7 @@ import {
   databaseCatalogUnreadable,
   mediaApplyOutsideProject,
   mediaConfigOutsideProject,
+  mediaReindexOutsideProject,
   mediaStorageUnlistable,
   mediaThumbnailsNotRemoved,
   packageInstallFailed,
@@ -33,6 +34,7 @@ import {
   setupInProgress,
   setupTokenSetByEnv,
   componentMapOutOfDate,
+  widgetGenerateCancelled,
 } from "../../errors/areas/commands";
 
 import { PROJECT, type ErrorCases } from "./types";
@@ -86,6 +88,7 @@ export const COMMAND_CASES = {
   MEDIA_CONFIG_OUTSIDE_PROJECT: () =>
     mediaConfigOutsideProject("../other-project/nextly.config.ts", PROJECT),
   MEDIA_APPLY_OUTSIDE_PROJECT: () => mediaApplyOutsideProject(PROJECT),
+  MEDIA_REINDEX_OUTSIDE_PROJECT: () => mediaReindexOutsideProject(PROJECT),
   SETUP_IN_PROGRESS: () => setupInProgress("setup-token"),
   SETUP_ALREADY_COMPLETE: () => setupAlreadyComplete("users:create-admin"),
   SETUP_TOKEN_SET_BY_ENV: () => setupTokenSetByEnv("NEXTLY_SETUP_TOKEN"),
@@ -110,4 +113,5 @@ export const COMMAND_CASES = {
         "- no longer declared: @gone/old/admin#Chart",
       ],
     }),
+  WIDGET_GENERATE_CANCELLED: () => widgetGenerateCancelled(),
 } satisfies ErrorCases;
