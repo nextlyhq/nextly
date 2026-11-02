@@ -44,6 +44,7 @@ import type {
   ReferentialAction,
 } from "../../schema/pipeline/diff/types";
 import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
   addForeignKeySql,
   changeForeignKeyActionStatements,
@@ -900,29 +901,28 @@ export class DynamicCollectionSchemaService {
   /**
    * `CREATE INDEX` for one column, in the spelling the dialect accepts.
    *
-   * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
-   * outright, so a text-backed column is indexed by prefix. 191 characters is the longest prefix
-   * that fits the 767-byte index limit under utf8mb4 on every InnoDB row format, including the
-   * compact ones where a longer prefix is refused. PostgreSQL and SQLite index the whole value.
+   * MySQL cannot index a `BLOB`/`TEXT` column of any size without a key length and rejects the
+   * statement outright, so a text-backed column is indexed by prefix. Rendered by the schema
+   * pipeline's own rule, so the prefix and the types it applies to are the ones a migration file
+   * and the dev push use. PostgreSQL and SQLite index the whole value.
    */
   private createIndexSql(
     tableName: string,
     column: string,
     columnType: string
   ): string | null {
-    const name = this.quoteIdentifier(indexNameForColumn(tableName, column));
-    const table = this.quoteIdentifier(tableName);
-    const quoted = this.quoteIdentifier(column);
     // Asked through the shared rule, which the desired schema reads too: an index only one of
     // them believes in is proposed by every diff and refused by every apply.
     if (!columnTypeIsIndexable(columnType, this.dialect)) return null;
-    if (this.dialect === "mysql") {
-      const target = /\b(text|blob)\b/i.test(columnType)
-        ? `${quoted}(191)`
-        : quoted;
-      return `CREATE INDEX ${name} ON ${table}(${target});`;
-    }
-    return `CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${quoted});`;
+    const sql = columnIndexSql(
+      tableName,
+      indexNameForColumn(tableName, column),
+      column,
+      columnType,
+      this.dialect,
+      name => this.quoteIdentifier(name)
+    );
+    return `${sql};`;
   }
 
   /**
