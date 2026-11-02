@@ -385,6 +385,44 @@ export function browserStore(key: string): PreferenceStore {
 }
 
 /**
+ * Where the shell keeps its preferences in a browser: under this key alone
+ * for a host that names no user, and under this key and the user's id for
+ * one that does.
+ */
+export const SHELL_PREFERENCES_KEY = "nextly.builder.shell";
+
+/**
+ * The shell's preferences for one signed-in user, so two authors of one
+ * browser each get their own panel, device and zoom.
+ *
+ * Preferences stored before they were kept per user sit under the shell's key
+ * alone. The first user to load with no record of their own takes that one:
+ * it is copied to theirs and removed, so it moves once and no second author
+ * inherits it. With no user known (signed out, or not read yet), nothing is
+ * remembered: a record kept for a guess would be read by the wrong author.
+ *
+ * @param userId - the signed-in user's id, or null when there is none
+ * @returns a store under that user's own key, or one that keeps nothing
+ */
+export function userPreferenceStore(userId: string | null): PreferenceStore {
+  if (userId === null || typeof window === "undefined") return NO_STORAGE;
+  const own = browserStore(`${SHELL_PREFERENCES_KEY}:${userId}`);
+  const before = browserStore(SHELL_PREFERENCES_KEY);
+  return {
+    read: () => {
+      const kept = own.read();
+      if (kept !== null) return kept;
+      const moved = before.read();
+      if (moved === null) return null;
+      own.write(moved);
+      window.localStorage.removeItem(SHELL_PREFERENCES_KEY);
+      return moved;
+    },
+    write: own.write,
+  };
+}
+
+/**
  * A stored layout, accepted only if every entry is a usable percentage.
  *
  * Partial acceptance would be worse than rejection here: the library

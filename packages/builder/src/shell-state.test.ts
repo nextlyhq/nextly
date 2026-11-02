@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The shell's decisions, asserted where they can be measured.
  *
@@ -6,7 +7,7 @@
  * zero-sized, so an assertion about a panel's width passes whatever the CSS
  * does — and is verified in a real browser instead.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   CANVAS_GUTTER,
@@ -22,6 +23,8 @@ import {
   PANEL_BOUNDS,
   RAIL_WIDTH,
   readPreferences,
+  SHELL_PREFERENCES_KEY,
+  userPreferenceStore,
   writePreferences,
 } from "./shell-state";
 import type { PreferenceStore, ShellPreferences } from "./shell-state";
@@ -401,5 +404,53 @@ describe("a panel stored under an id from before the rail was relabelled", () =>
       memoryStore(JSON.stringify({ leftPanel: "design", leftPanelView: 4 }))
     );
     expect(read.leftPanelView).toBeNull();
+  });
+});
+
+describe("preferences kept per signed-in user", () => {
+  // The shell's preferences as a browser stored them before they were kept
+  // per user, under the one key every author on the browser shared.
+  const LEGACY = JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 });
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("keeps two users of one browser apart", () => {
+    userPreferenceStore("ada").write("ada's");
+    userPreferenceStore("grace").write("grace's");
+    expect(userPreferenceStore("ada").read()).toBe("ada's");
+    expect(userPreferenceStore("grace").read()).toBe("grace's");
+  });
+
+  it("stores each user's under the shell's key with their id", () => {
+    userPreferenceStore("ada").write("ada's");
+    expect(window.localStorage.getItem(`${SHELL_PREFERENCES_KEY}:ada`)).toBe(
+      "ada's"
+    );
+  });
+
+  it("moves the record from before, once, to the first user who loads it", () => {
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    expect(userPreferenceStore("ada").read()).toBe(LEGACY);
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBeNull();
+    // The next author starts from the defaults rather than inheriting it.
+    expect(userPreferenceStore("grace").read()).toBeNull();
+    expect(userPreferenceStore("ada").read()).toBe(LEGACY);
+  });
+
+  it("keeps a user's own record over the one from before", () => {
+    window.localStorage.setItem(`${SHELL_PREFERENCES_KEY}:ada`, "ada's");
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    expect(userPreferenceStore("ada").read()).toBe("ada's");
+    // Left for an author who has no record of their own yet.
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBe(LEGACY);
+  });
+
+  it("remembers nothing for no one", () => {
+    // Unknown, signed out or unread: nothing is kept for a guess.
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    const store = userPreferenceStore(null);
+    store.write("whose?");
+    expect(store.read()).toBeNull();
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBe(LEGACY);
   });
 });

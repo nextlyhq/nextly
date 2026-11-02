@@ -22,10 +22,13 @@ import {
   useEditorState,
   useInlineEditing,
   useNoticeQueue,
+  userPreferenceStore,
+  type BuilderShellProps,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
+  useCurrentUserId,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
@@ -277,6 +280,15 @@ export function useEditorMount(
    */
   const mayCreatePattern = useMayCreatePattern();
 
+  /*
+   * Where the shell keeps this author's panel, device and zoom: under their
+   * own id, so two authors of one browser each get their own. While no one is
+   * known it keeps nothing; the shell moves to the author's store once their
+   * id arrives.
+   */
+  const userId = useCurrentUserId();
+  const preferenceStore = useMemo(() => userPreferenceStore(userId), [userId]);
+
   return {
     initialDocument,
     clientConfig,
@@ -287,6 +299,7 @@ export function useEditorMount(
     inline,
     savePattern,
     mayCreatePattern,
+    preferenceStore,
   };
 }
 
@@ -301,6 +314,8 @@ export type EditorMount = {
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
+  /** Where the shell keeps the signed-in author's preferences. */
+  preferenceStore: NonNullable<BuilderShellProps["store"]>;
 };
 
 /**
