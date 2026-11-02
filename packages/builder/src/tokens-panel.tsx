@@ -596,12 +596,14 @@ function VariableRow({
             type="button"
             className="nx-vars__row"
             data-variable-key={entry.row.key}
+            // The visible name first, then the values the swatches show, so
+            // a screen reader hears both and speech input still matches.
+            aria-label={`${entry.label}${describe(entry, token, tokens)}`}
             data-kind={entry.row.kind}
           >
             <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
             <span className="nx-vars__name">{entry.label}</span>
             <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
-            <span className="nx-sr-only">{describe(entry, token, tokens)}</span>
           </button>
         </PopoverTrigger>
         <PopoverContent

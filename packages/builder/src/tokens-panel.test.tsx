@@ -93,8 +93,13 @@ describe("the rows", () => {
     const brand = row(/^Brand/);
     expect(brand.textContent).toContain("Brand");
     expect(brand.textContent).not.toContain("color.brand");
-    expect(brand.textContent).toMatch(/light #1d2b6b, dark #8fa7ff/);
-    expect(row(/^Text/).textContent).toMatch(/dark same as light/);
+    // Named as one phrase, the visible name first.
+    expect(brand.getAttribute("aria-label")).toBe(
+      "Brand, light #1d2b6b, dark #8fa7ff"
+    );
+    expect(row(/^Text/).getAttribute("aria-label")).toBe(
+      "Text, light #3b3f46, dark same as light"
+    );
     // A type size and its line height are one row, written "16 / 26".
     expect(row(/^Body/).textContent).toContain("16 / 26");
     expect(screen.queryByText(/used by|uses/i)).toBeNull();
