@@ -49,8 +49,8 @@ const REMOVED: readonly RegExp[] = [
 const LIST_CARDS: ReadonlyArray<
   readonly [string, "ListCard" | "EntityRow" | "WidgetTable"]
 > = [
-  ["dashboard/RecentlyEdited.tsx", "ListCard"],
-  ["dashboard/RecentActivity.tsx", "ListCard"],
+  ["dashboard/ContinueCard.tsx", "ListCard"],
+  ["dashboard/TeamActivity.tsx", "ListCard"],
   ["dashboard/RecentEntriesCard.tsx", "WidgetTable"],
   ["dashboard/UpcomingReleases.tsx", "ListCard"],
   ["widgets/archetypes/tiered-rows.tsx", "ListCard"],

@@ -89,6 +89,13 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * It came down to 72 when five CLI tests that drive one command's core (the
  * two migrate commands', both of upgrade's and plugin rollback's) stopped
  * loading the command graph through `cli/program`: 69 measured.
+ * The tail mean's pin rose to 1,291 when the service registry grew a few
+ * modules with each of some twenty features: 1,258 measured with three more
+ * files over the heavy line (the boot refusal, the visitor's cold boot and
+ * the CLI's error shape). Those three now mock empty what their tests never
+ * reach, which brings the heavy files back to the pinned list at 69, and the
+ * tail measured 1,257 with the same heavy files and chains; 1,291 holds
+ * whether CI measures one fewer.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -96,7 +103,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 72, tailMeanModules: 1_255 };
+export const BUDGET = { heavyFiles: 72, tailMeanModules: 1_291 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

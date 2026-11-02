@@ -681,7 +681,6 @@ describe("a reader who leaves gives a declared card up", () => {
 
 interface WorkspaceWidget {
   id: string;
-  serverData?: true;
   empty?: { message?: string; action?: { label: string } };
   [field: string]: unknown;
 }
@@ -713,7 +712,7 @@ describe("what the workspace payload and the layout read say of a declared widge
       widget => widget.id === "acme/open-orders"
     );
     expect(asRead).toMatchObject({
-      serverData: true,
+      id: "acme/open-orders",
       empty: { message: "No open orders" },
     });
     // Withheld on the server: the payload is JSON, and reading it is the bypass.

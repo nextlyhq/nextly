@@ -23,6 +23,7 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { toSnakeName } from "@admin/lib/builder";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { startingFields } from "@admin/lib/builder/starting-field";
@@ -119,9 +120,13 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
           })();
         },
         onError: err => {
-          const error = err as { message?: string };
+          // A refused address names its reason per field; the envelope's own message is only
+          // "Validation failed.", which says neither what was refused nor why.
           toast.error(
-            error?.message || "Could not create collection. Please try again."
+            apiErrorMessage(
+              err,
+              "Could not create collection. Please try again."
+            )
           );
         },
       }

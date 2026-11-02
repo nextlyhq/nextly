@@ -16,8 +16,11 @@
  * @module domains/versions/entity-teardown
  */
 
+import type { RevalidationIntent } from "../../revalidation/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { deletePinsOfTarget } from "../dashboard/dashboard-pins";
+import type { DashboardLogger, TableProbe } from "../dashboard/table-presence";
+import { deletedEntityIntent } from "../flush-content-change";
 
 import type { VersionsDbApi } from "./db-api";
 import { REGISTRY_TABLES } from "./history-locks";
@@ -26,20 +29,42 @@ import { deleteViewsForDocument, deleteViewsForEntity } from "./version-views";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /**
- * Which of the dashboard's tables a sweep may write, asked by the caller
- * BEFORE its transaction opens (`dashboardPinsPresent`): a table that does not
- * exist yet (a site that has not run `nextly migrate`) is skipped, since a
- * statement against it would abort the whole transaction on PostgreSQL.
- * Required, so no delete path can leave a deleted entity's pins behind by
+ * Which of the dashboard's and the media library's tables a sweep may write,
+ * asked by the caller BEFORE its transaction opens (`dashboardPinsPresent`,
+ * `mediaUsagePresent`): a table that does not exist yet (a site that has not
+ * run `nextly migrate`) is skipped, since a statement against it would abort
+ * the whole transaction on PostgreSQL. Required, so no delete path can leave
+ * a deleted entity's pins, or the record of the media it used, behind by
  * forgetting to ask.
  */
 export interface DashboardTables {
   dashboardPinsPresent: boolean;
+  mediaUsagePresent: boolean;
+}
+
+/**
+ * Whether the media usage table is there, for {@link DashboardTables} and for
+ * a write about to record what it uses: the record's code is loaded when a
+ * write or a delete asks, not with the services that make them. Asked `via`
+ * the connection of a transaction the caller holds, when given.
+ */
+export async function mediaUsageTablePresent(
+  db: TableProbe,
+  logger?: DashboardLogger,
+  via?: TableProbe
+): Promise<boolean> {
+  const { mediaUsagePresent } = await import(
+    "../media/usage/media-usage-store"
+  );
+  return mediaUsagePresent(db, logger, via);
 }
 
 /**
  * Delete an entity's registry row, then its autosaves, version pins and
- * readers' dashboard pins, on the caller's transaction. Returns how many registry rows were deleted.
+ * readers' dashboard pins, on the caller's transaction. Returns how many registry rows were deleted,
+ * and the intent that expires the entity's cached reads: read from the row's own `revalidate`
+ * setting on this transaction, so it is the current one and not a cached copy, and `undefined` when
+ * nothing was deleted or the entity opts out. The caller flushes it once the transaction commits.
  *
  * The row goes FIRST. A pin locks this row before it writes, so deleting it
  * first takes the same lock in the same order: a pin under way finishes, and
@@ -53,9 +78,17 @@ export async function deleteEntityRegistryRow(
   scopeKind: VersionScopeKind,
   scopeSlug: string,
   tables: DashboardTables
-): Promise<number> {
+): Promise<DeletedEntity> {
   const registry = REGISTRY_TABLES[scopeKind];
-  if (registry === undefined) return 0;
+  if (registry === undefined) return { deleted: 0, expire: undefined };
+  // Read before the delete, on the same transaction and locking the row, so
+  // the setting is the latest committed one and nothing changes it before
+  // the delete (a plain read on MySQL would see the transaction's snapshot).
+  const [row] = await tx.select<{ revalidate: unknown }>(registry, {
+    columns: ["revalidate"],
+    where: { and: [{ column: "slug", op: "=" as const, value: scopeSlug }] },
+    forUpdate: true,
+  });
   const deleted = await tx.delete(registry, {
     and: [{ column: "slug", op: "=" as const, value: scopeSlug }],
   });
@@ -73,7 +106,30 @@ export async function deleteEntityRegistryRow(
       targetSlug: scopeSlug,
     });
   }
-  return deleted;
+  // The record of the media its documents used: every entry of a collection,
+  // or the Single itself. A page's media is recorded as its collection's.
+  if (scopeKind !== "page" && tables.mediaUsagePresent) {
+    const { removeEntityUsage } = await import(
+      "../media/usage/media-usage-store"
+    );
+    await removeEntityUsage(tx, { kind: scopeKind, slug: scopeSlug });
+  }
+  const expire =
+    deleted > 0 && row !== undefined && isCached(scopeKind)
+      ? deletedEntityIntent(scopeKind, scopeSlug, row.revalidate)
+      : undefined;
+  return { deleted, expire };
+}
+
+/** What deleting an entity's registry row did. */
+export interface DeletedEntity {
+  deleted: number;
+  expire: RevalidationIntent | undefined;
+}
+
+/** Whether nextly tags cached reads of this kind of entity. */
+function isCached(kind: VersionScopeKind): kind is "collection" | "single" {
+  return kind === "collection" || kind === "single";
 }
 
 /**
@@ -96,6 +152,17 @@ export async function sweepDeletedDocument(
       targetType: ref.scopeKind,
       targetSlug: ref.scopeSlug,
       entryId: ref.scopeKind === "collection" ? ref.entryId : "",
+    });
+  }
+  // The record of the media the document used: it uses nothing now.
+  if (ref.scopeKind !== "page" && tables.mediaUsagePresent) {
+    const { removeDocumentUsage } = await import(
+      "../media/usage/media-usage-store"
+    );
+    await removeDocumentUsage(tx, {
+      kind: ref.scopeKind,
+      slug: ref.scopeSlug,
+      documentId: ref.scopeKind === "collection" ? ref.entryId : "",
     });
   }
 }

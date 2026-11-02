@@ -31,7 +31,6 @@
 
 import type { WidgetPlacement } from "./layout";
 import {
-  drivesQuery,
   namedCollection,
   resolveWidgetSettings,
   type AnyWidgetSetting,
@@ -45,24 +44,14 @@ export function collectionWidgets(
   widgets: readonly {
     id: string;
     collectionSetting?: AnyWidgetSetting;
-    knobQueries?: readonly unknown[];
   }[]
 ): ReadonlyMap<string, AnyWidgetSetting> {
   const found = new Map<string, AnyWidgetSetting>();
   for (const widget of widgets) {
     const setting = widget.collectionSetting;
     if (setting === undefined) continue;
-    // 🔴 Only a setting a knob drives on the widget's effective query names
-    // the collection its card reads. A registration that overrides a
-    // contribution's query can leave its Collection setting reaching nothing:
-    // judged by the setting alone, the card would be withheld, and its write
-    // refused, for a collection it never reads.
-    if (
-      widget.knobQueries !== undefined &&
-      !widget.knobQueries.some(query => drivesQuery(setting, query))
-    ) {
-      continue;
-    }
+    // A declared widget's Collection setting reaches its `load`, so it names
+    // the collection its card reads.
     found.set(widget.id, setting);
   }
   return found;

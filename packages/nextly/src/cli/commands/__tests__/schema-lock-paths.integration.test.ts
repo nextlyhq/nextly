@@ -18,6 +18,8 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { addRetiredImageSizes } from "../../../__tests__/helpers/retired-image-sizes";
+import { readRetiredObjects } from "../../../domains/media/retired-image-sizes-store";
 import { runFieldGroupMigration } from "../../../domains/field-groups/migration/run";
 import { FieldGroupMetadataService } from "../../../domains/field-groups/services/field-group-metadata-service";
 import { FieldGroupRegistryService } from "../../../domains/field-groups/services/field-group-registry-service";
@@ -34,7 +36,9 @@ import { SingleRegistryService } from "../../../domains/singles/services/single-
 import { NextlyError } from "../../../errors/nextly-error";
 import { runProdMigrationsIfEnabled } from "../../../init/prod-migrations";
 import type { Logger } from "../../../shared/types";
+import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
 import { createLogger } from "../../utils/logger";
+import { dropSizesUnderSchemaLock, runRemoveSizes } from "../media";
 import { baselineCore } from "../migrate-baseline";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 import { migrateCore } from "../migrate";
@@ -265,6 +269,45 @@ describe.each(LOCK_DIALECTS)("a held schema lock on %s", dialect => {
       "NEXTLY_MIGRATE_LOCK_BUSY"
     );
     expect(stepRan).toBe(false);
+  }, 90_000);
+
+  it("refuses remove-sizes --apply --drop, dropping neither the sizes column nor the image_sizes table", async () => {
+    await migrate();
+    await addRetiredImageSizes(dialect, statement =>
+      adapter.executeQuery(statement)
+    );
+    const retiredBefore = await readRetiredObjects(
+      adapter.getDrizzle(),
+      dialect
+    );
+    // The control: both are there, and no item names a size file, so only
+    // the lock stands between the run and both drops.
+    expect(retiredBefore).toEqual({
+      column: true,
+      tableRows: 1,
+      keptTable: null,
+    });
+    await refusedWhileHeld(
+      () =>
+        runRemoveSizes({
+          db: adapter.getDrizzle(),
+          dialect,
+          storage: new LocalStorageAdapter({
+            basePath: migrationsDir,
+            baseUrl: "/uploads",
+          }),
+          apply: true,
+          drop: true,
+          referencedNow: async () => new Set(),
+          executeSql: statement => adapter.executeQuery(statement),
+          dropUnderLock: dropSizesUnderSchemaLock(adapter, 1_000),
+          say: () => {},
+        }),
+      "NEXTLY_MIGRATE_LOCK_BUSY"
+    );
+    expect(await readRetiredObjects(adapter.getDrizzle(), dialect)).toEqual(
+      retiredBefore
+    );
   }, 90_000);
 
   it("refuses migrate:field-groups --apply, changing nothing", async () => {

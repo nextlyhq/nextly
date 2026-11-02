@@ -10,6 +10,7 @@ import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-re
 import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
 import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import { NextlyError } from "../errors/nextly-error";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import { consoleLogger } from "../shared/types";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -152,13 +153,40 @@ export class CollectionFileManager {
     await fs.writeFile(migrationPath, migrationSQL);
   }
 
+  /**
+   * Write a delete's drop migration, refusing a name already taken: two
+   * deletes of the same collections in the same millisecond name the same
+   * file, and the second overwriting it would let its withdrawal, should it
+   * fail, remove the file the first delete still needs.
+   */
   async saveDropMigration(
     migrationSQL: string,
     migrationFileName: string
   ): Promise<void> {
     await fs.mkdir(this.migrationsDir, { recursive: true });
     const migrationPath = path.join(this.migrationsDir, migrationFileName);
-    await fs.writeFile(migrationPath, migrationSQL);
+    try {
+      await fs.writeFile(migrationPath, migrationSQL, { flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      throw NextlyError.conflict({
+        reason: "state",
+        message: `The drop migration ${migrationFileName} already exists: another delete of the same collections wrote it. Nothing was removed; try the delete again.`,
+        cause: error as Error,
+        logContext: { migrationFileName },
+      });
+    }
+  }
+
+  /**
+   * Remove a drop migration `saveDropMigration` wrote, for a delete that then
+   * failed: left behind, the next `nextly migrate` would drop the tables of
+   * collections that are still registered. Gone already is the same as removed.
+   */
+  async removeDropMigration(migrationFileName: string): Promise<void> {
+    await fs.rm(path.join(this.migrationsDir, migrationFileName), {
+      force: true,
+    });
   }
 
   /**

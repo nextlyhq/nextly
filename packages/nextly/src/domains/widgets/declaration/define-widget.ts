@@ -182,6 +182,24 @@ export interface WidgetReadServices {
        * @experimental
        */
       total?: true;
+      /**
+       * `0` to answer each link (a relationship or an upload) as the id it
+       * stores, unexpanded. Absent, links are expanded as they are today, as
+       * core's own read expands them by default. `0` is the only depth a read
+       * may name.
+       *
+       * @experimental
+       */
+      depth?: 0;
+      /**
+       * Handed to the collection's hooks as their `context`, as core's own
+       * read takes it: for a hook that does work only a display needs, such
+       * as a computed count, to see that this read does not need it and skip
+       * it. Plain values only; it decides nothing about who may read what.
+       *
+       * @experimental
+       */
+      context?: Readonly<Record<string, unknown>>;
       signal?: AbortSignal;
     }
   ): Promise<{
@@ -392,6 +410,17 @@ export type WidgetAccess =
   | ((input: { user: UserContext }) => unknown);
 
 /**
+ * A summary's count as a widget answers it: a number, or the number with
+ * `atLeast` where the widget counted only so far and there may be more, which
+ * the header then shows as a floor ("1,000+").
+ *
+ * @experimental
+ */
+export type WidgetSummaryCount =
+  | number
+  | { readonly count: number; readonly atLeast?: boolean };
+
+/**
  * What a widget's summary counts for the dashboard's header: a label, and a
  * count run as the person asking.
  *
@@ -399,9 +428,17 @@ export type WidgetAccess =
  */
 export interface WidgetSummary {
   label: string;
+  /**
+   * Handed `scope` as a `load` is, so a scan the card's data and the count
+   * both need can be asked for under one key and run once where both are
+   * answered together.
+   */
   count: (
-    input: Pick<WidgetDataInput<unknown>, "user" | "signal" | "services">
-  ) => Promise<number>;
+    input: Pick<
+      WidgetDataInput<unknown>,
+      "user" | "signal" | "services" | "scope"
+    >
+  ) => Promise<WidgetSummaryCount>;
 }
 
 /**
@@ -525,9 +562,8 @@ export interface WidgetDeclarationInput<
    */
   preview?: PreviewFor<DisplayOf<View>, Preview, SettingValues<S>>;
   /**
-   * A label and a count for the dashboard's header. Typed for the release
-   * whose header reads it: until then a declaration using it is refused at
-   * startup, rather than started with a summary nothing shows.
+   * A label and a count for the dashboard's header, counted as the reader for
+   * each card of the widget they are shown, and left out of the line at none.
    *
    * @experimental
    */

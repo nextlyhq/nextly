@@ -17,10 +17,12 @@
  * away first stays recorded, and declaring it again never grants it back.
  *
  * Then what Public does not hold yet and visitors may be relying on is
- * listed, at every boot while Public lacks it: a read with no rule, which a
- * visitor has by default, a read whose rule answers neither `true` nor
- * `false`, a write whose rule answers `true`, and any rule that failed or
- * gave no answer when asked.
+ * listed, at every boot while Public lacks it: a read whose rule answers
+ * neither `true` nor `false`, a write whose rule answers `true`, and any rule
+ * that failed or gave no answer when asked. A read with no rule is not: a
+ * collection left private that way is ordinary. A site set up before visitors
+ * were judged by the Public role, whose visitors read every collection with no
+ * read rule, is told once instead which reads its visitors lost.
  *
  * @module domains/auth/services/public-read-grant
  */
@@ -31,6 +33,7 @@ import {
   plainRule,
   type AccessTarget,
 } from "../../../auth/access/decide";
+import { mayAnswerFilter, ruleAnswer } from "../../../auth/access/rule-answer";
 import {
   everyLanguage,
   languagesOfContent,
@@ -54,6 +57,16 @@ import type { Logger } from "../../../services/shared";
  * role made again has a new id, so either is granted afresh.
  */
 const PUBLIC_GRANTED_META_KEY = "public-role-granted";
+
+/**
+ * The `nextly_meta` key saying whether this site is told, once, which reads
+ * its visitors lost when they came to be judged by the Public role: `"due"`
+ * until a boot tells it, then `"shown"`, or `"not-due"` for a site not to be
+ * told. See {@link recordPublicReadNotice}.
+ */
+export const PUBLIC_READ_NOTICE_META_KEY = "public-read-upgrade-notice";
+
+type NoticeState = "due" | "not-due" | "shown";
 
 /**
  * How long a rule may take to answer at boot before it is taken as giving
@@ -465,7 +478,6 @@ interface Asked {
 
 /** The groups the startup listing names, each with how it is introduced. */
 const LISTED = {
-  "no-rule": "Read with no read rule, which visitors have by default",
   "not-true": "Read whose rule answers neither true nor false",
   write: "Write whose rule answers true for anyone",
   failed:
@@ -474,8 +486,12 @@ const LISTED = {
 
 type Listed = keyof typeof LISTED;
 
-/** Where a read Public lacks is listed, if at all. */
-function listedRead(read: Answer): Listed | null {
+/**
+ * What a read Public lacks is, if anything visitors may miss: a read with no
+ * rule, which the startup listing leaves to the once-only notice, or a group
+ * the listing names.
+ */
+function listedRead(read: Answer): Listed | "no-rule" | null {
   if (read.kind === "no-rule") return "no-rule";
   if (read.kind === "failed") return "failed";
   return read.value === true || read.value === false ? null : "not-true";
@@ -496,7 +512,8 @@ function listing(asked: readonly Asked[], held: Set<string>): string | null {
     named.set(group, [...(named.get(group) ?? []), permission]);
   };
   for (const { target, read, writes } of asked) {
-    name(listedRead(read), "read", target.slug);
+    const group = listedRead(read);
+    name(group === "no-rule" ? null : group, "read", target.slug);
     for (const { action, answer } of writes) {
       name(listedWrite(answer), action, target.slug);
     }
@@ -506,10 +523,111 @@ function listing(asked: readonly Asked[], held: Set<string>): string | null {
     .filter(group => named.has(group))
     .map(group => `  - ${LISTED[group]}: ${named.get(group)!.join(", ")}.`);
   return [
-    "[Nextly] In an upcoming release, what visitors may do is what the Public role holds, and it does not hold these yet:",
+    "[Nextly] What visitors may do is what the Public role holds, and it does not hold these yet:",
     ...lines,
-    "Grant the Public role each permission visitors should keep, under Roles. This is repeated at each start while the Public role lacks any of them.",
+    "Grant the Public role each permission visitors should have, under Roles. This is repeated at each start while the Public role lacks any of them.",
   ].join("\n");
+}
+
+/**
+ * How visitors read a target before the Public role judged them, where the
+ * notice names it: every entry where it has no read rule (`"no-rule"`), or
+ * the entries a well-formed filter its read rule answers matches, where the
+ * target may answer one (`"filter"`). `null` for every other read: one its
+ * rule allows outright, which boot grants, and one its rule refuses, with
+ * `false`, `null`, `undefined` or a filter that is not well formed or that a
+ * Single may not answer, which visitors never had. Read through
+ * {@link ruleAnswer}, as a visitor's request reads the answer.
+ */
+function lostRead(
+  target: AccessTarget,
+  read: Answer
+): "no-rule" | "filter" | null {
+  if (read.kind === "no-rule") return "no-rule";
+  if (read.kind !== "answered" || !mayAnswerFilter(target.kind, "read")) {
+    return null;
+  }
+  return ruleAnswer(read.value).kind === "filter" ? "filter" : null;
+}
+
+/**
+ * The once-only notice of the reads visitors had before the Public role judged
+ * them and have no longer, each read Public does not hold that
+ * {@link lostRead} names, with how to give it back: a read with no rule by
+ * declaring that anyone may read or granting Public the read, and a filtered
+ * one by granting Public the read alone, which keeps the filter, since
+ * declaring that anyone may read would open the entries it leaves out.
+ * `null` where there is none.
+ */
+function lostReadsNotice(
+  asked: readonly Asked[],
+  held: Set<string>
+): string | null {
+  const lines = asked.flatMap(({ target, read }) => {
+    const lost = lostRead(target, read);
+    const permission = permissionSlug("read", target.slug);
+    if (lost === null || held.has(permission)) return [];
+    const kind = target.kind === "single" ? "Single" : "collection";
+    return [
+      lost === "no-rule"
+        ? `  - ${kind} "${target.slug}" (no read rule): declare \`access: { read: () => true }\` on it, or grant the Public role \`${permission}\` under Roles.`
+        : `  - ${kind} "${target.slug}" (its read rule answers visitors with a filter): grant the Public role \`${permission}\` under Roles, and the filter still applies to them.`,
+    ];
+  });
+  if (lines.length === 0) return null;
+  return [
+    "[Nextly] Visitors who aren't signed in now read only what the Public role holds. Before this upgrade they could read these, and now can't:",
+    ...lines,
+    "A read declared with `() => true` is granted to the Public role at the next start. Leave one that should stay private as it is. This notice is shown once.",
+  ].join("\n");
+}
+
+/**
+ * Decides, once per site, whether it is told which reads its visitors lost:
+ * due where an earlier boot seeded this database and the Public role is not
+ * made yet, so that boot ran a release from before visitors were judged by
+ * it. A new install's first boot finds nothing seeded, so it is not told.
+ * Neither is a site whose Public role was made before this was recorded, as
+ * what its visitors read then can no longer be told. Recorded at the start of
+ * the first boot's seeding, the one time the two can be told apart, and never
+ * changed after.
+ */
+export async function recordPublicReadNotice({
+  meta,
+  publicRoleMade,
+  seededBefore,
+}: {
+  meta: Pick<PublicReadGrantSeeding["meta"], "get" | "insertIfAbsent">;
+  publicRoleMade: () => Promise<boolean>;
+  /** Whether a boot before this one seeded the database. */
+  seededBefore: () => Promise<boolean>;
+}): Promise<void> {
+  if ((await meta.get<NoticeState>(PUBLIC_READ_NOTICE_META_KEY)) !== null) {
+    return;
+  }
+  const due = !(await publicRoleMade()) && (await seededBefore());
+  const state: NoticeState = due ? "due" : "not-due";
+  await meta.insertIfAbsent(PUBLIC_READ_NOTICE_META_KEY, state);
+}
+
+/**
+ * Tells a site due the notice which reads its visitors lost, once: marked
+ * shown before it is logged, so of two boots at once only one logs it. Marked
+ * shown even where nothing was lost, so a collection added later is not named.
+ */
+async function tellLostReadsOnce(
+  asked: readonly Asked[],
+  held: Set<string>,
+  { meta, logger }: Pick<PublicReadGrantSeeding, "meta" | "logger">
+): Promise<void> {
+  const state = await meta.get<NoticeState>(PUBLIC_READ_NOTICE_META_KEY);
+  if (state !== "due") return;
+  const shown: NoticeState = "shown";
+  if (!(await meta.compareAndSet(PUBLIC_READ_NOTICE_META_KEY, state, shown))) {
+    return;
+  }
+  const notice = lostReadsNotice(asked, held);
+  if (notice !== null) logger.warn(notice);
 }
 
 /** What a boot grants Public and takes back from it, with its rules' answers. */
@@ -618,7 +736,8 @@ export async function withdrawUndeclaredPluginGrants(
 /**
  * Grants Public each read code opens to anyone and each permission plugins
  * declare for it, once, takes back each plugin grant no enabled plugin
- * declares any longer, then lists what Public still lacks that visitors may be relying on.
+ * declares any longer, tells a site due it which reads its visitors lost, and
+ * then lists what Public still lacks that visitors may be relying on.
  */
 export async function seedPublicReadGrants(
   deps: PublicReadGrantSeeding
@@ -645,6 +764,9 @@ export async function seedPublicReadGrants(
     )
   );
 
-  const said = listing(asked, await publicHolds(roleId));
+  // Read once the grants are made, so neither names a read just granted.
+  const held = await publicHolds(roleId);
+  await tellLostReadsOnce(asked, held, { meta, logger });
+  const said = listing(asked, held);
   if (said !== null) logger.warn(said);
 }

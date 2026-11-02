@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SITE_URL } from "@/lib/site-url";
@@ -11,6 +12,10 @@ import { SITE_URL } from "@/lib/site-url";
  * panel and the docs. Server Component — fetches setup-status so the
  * primary button label flips between "Set up admin" (no super-admin
  * yet) and "Open admin" (super-admin exists).
+ *
+ * The app runs with Cache Components on, so the page is prerendered as a
+ * static shell and the setup-status read, made per request, sits inside a
+ * `<Suspense>` boundary: the shell shows "Open admin" until it resolves.
  *
  * If the auth API fails for any reason (DB not migrated, network),
  * the button defaults to "Open admin" / /admin since /admin already
@@ -37,12 +42,42 @@ async function fetchSetupStatus(): Promise<SetupStatus | null> {
   }
 }
 
-export default async function HomePage() {
+/** The primary button, linking to the admin with the label and target it needs. */
+function AdminButton({ label, href }: { label: string; href: string }) {
+  return (
+    <Link href={href} className="btn-primary">
+      <span>{label}</span>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="lucide lucide-arrow-right"
+      >
+        <path d="M5 12h14" />
+        <path d="m12 5 7 7-7 7" />
+      </svg>
+    </Link>
+  );
+}
+
+/** The button once setup-status answers: "Set up admin" while there is no super-admin. */
+async function SetupAwareAdminButton() {
   const status = await fetchSetupStatus();
   const needsSetup = status?.requiresInitialUser ?? false;
-  const adminLabel = needsSetup ? "Set up admin" : "Open admin";
-  const adminHref = needsSetup ? "/admin/setup" : "/admin";
+  return needsSetup ? (
+    <AdminButton label="Set up admin" href="/admin/setup" />
+  ) : (
+    <AdminButton label="Open admin" href="/admin" />
+  );
+}
 
+export default function HomePage() {
   return (
     <main className="relative min-h-screen flex flex-col items-center justify-center p-6 bg-background text-foreground font-display selection:bg-foreground/10">
       <ThemeToggle />
@@ -85,24 +120,11 @@ export default async function HomePage() {
         </p>
 
         <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
-          <Link href={adminHref} className="btn-primary">
-            <span>{adminLabel}</span>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="lucide lucide-arrow-right"
-            >
-              <path d="M5 12h14" />
-              <path d="m12 5 7 7-7 7" />
-            </svg>
-          </Link>
+          {/* "/admin" redirects to setup while there is no super-admin, so the
+              fallback link works before the read answers. */}
+          <Suspense fallback={<AdminButton label="Open admin" href="/admin" />}>
+            <SetupAwareAdminButton />
+          </Suspense>
           <Link href="https://nextlyhq.com/docs" className="btn-secondary">
             <span>Read documentation</span>
             <svg

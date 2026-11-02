@@ -30,6 +30,7 @@ import {
 } from "../layout-editor";
 import { sizeName } from "../sizes";
 
+import { discardOpenPanels } from "./settings-panel-registry";
 import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
 import { useCardHighlight, type CardHighlight } from "./useCardHighlight";
 import type { DashboardFocus } from "./useDashboardFocus";
@@ -55,6 +56,12 @@ export interface ArrangedWidget {
    * the widget's declaration, which lives with the widget, not here.
    */
   config?: Record<string, unknown>;
+  /**
+   * The title the reader gave this card, as stored, or absent while it is
+   * titled automatically. Named for whose title it is: `widget.title` is the
+   * widget's own.
+   */
+  ownTitle?: string;
 }
 
 export interface DashboardArrangement {
@@ -141,6 +148,7 @@ function arrangedRows(
       widget,
       size: { w: placement.w, h: placement.h },
       ...(placement.config === undefined ? {} : { config: placement.config }),
+      ...(placement.title === undefined ? {} : { ownTitle: placement.title }),
     });
   }
   return rows;
@@ -165,6 +173,9 @@ function useCustomiseLifecycle(
   }, [editor, announce, focus]);
 
   const cancel = useCallback(() => {
+    // An open settings panel's change is discarded with the draft: Save keeps the two together,
+    // so Cancel drops them together, and no panel is left holding a change Done could keep.
+    discardOpenPanels();
     editor.cancel();
     announce.discarded();
     focus.request({ kind: "customize" });
