@@ -281,6 +281,38 @@ describe("InsertPanel", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("lets a block refused at every click place still be dragged, as its tile says", () => {
+    // "Drag this into one" has to be reachable: the click places refuse the
+    // Column, but a Columns on the canvas would take it, and judging a drop
+    // is the canvas's question, asked where the block lands.
+    registerBlocks(
+      [
+        { ...base, name: "acme/columns", editor: { label: "Columns" } },
+        {
+          ...base,
+          name: "acme/column",
+          parent: ["acme/columns"],
+          editor: { label: "Column" },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    const beginInsertDrag = vi.fn();
+    render(<InsertPanel editor={editor} beginInsertDrag={beginInsertDrag} />);
+
+    const column = tile("Column");
+    expect(column.getAttribute("data-refused")).toBe("true");
+    expect(describedBy(column)).toContain("drag this into one");
+    fireEvent.pointerDown(column, { button: 0, pointerId: 1 });
+
+    expect(beginInsertDrag).toHaveBeenCalledTimes(1);
+    expect(beginInsertDrag.mock.calls[0][1].blockName).toBe("acme/column");
+    // A click still adds nothing: no place it may use takes the block.
+    fireEvent.click(column);
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
   it("still inserts on click when no drag was supplied", () => {
     // The control, and the accessible path: a host with no canvas passes no
     // drag, and the row must behave exactly as it did before it could be

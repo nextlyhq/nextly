@@ -783,13 +783,15 @@ function placementWords(
  *
  * Blocks only. A drag carries ONE node to a drop target, and a pattern is a
  * forest placed as a group — so there is no node to hand the drag, and
- * offering the gesture would start something that cannot finish. A refused
- * block is not dragged either: the tile says it cannot go here.
+ * offering the gesture would start something that cannot finish.
+ *
+ * A block the click places refuse is still dragged. Its tile says where it
+ * belongs ("drag this into one"), and where a drop may land is the canvas's
+ * question, judged at the destination, not the panel's.
  */
 function dragTile(
   event: Parameters<NonNullable<InsertPanelProps["beginInsertDrag"]>>[0],
   entry: InsertEntry,
-  refusal: string | undefined,
   drag: {
     begin: InsertPanelProps["beginInsertDrag"];
     definitions: Parameters<typeof nodeForEntry>[1];
@@ -797,7 +799,7 @@ function dragTile(
     onInserted: InsertPanelProps["onInsert"];
   }
 ): void {
-  if (entry.kind !== "block" || refusal !== undefined) return;
+  if (entry.kind !== "block") return;
   drag.begin?.(event, {
     blockName: entry.blockName,
     makeNode: () => nodeForEntry(entry, drag.definitions, drag.nesting),
@@ -1249,7 +1251,7 @@ export function InsertPanel({
                     event.currentTarget.dispatchEvent(
                       new PointerEvent("pointermove", { bubbles: true })
                     );
-                    dragTile(event, entry, refusal, {
+                    dragTile(event, entry, {
                       begin: beginInsertDrag,
                       definitions: blockSource,
                       nesting,
