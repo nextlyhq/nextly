@@ -664,6 +664,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         notices={notices}
         onExit={done}
+        // The signed-in author's own preferences, not the browser's.
+        store={mount.preferenceStore}
         availablePanels={availablePanels}
         // Forces the insert panel open from the empty-container appender,
         // which lives on the canvas below rather than beside the rail that

@@ -161,6 +161,23 @@ runs committed migration files, of which a fresh app has none yet. You should
 see it connect and finish successfully. (With SQLite this creates a local
 database file — nothing else to set up.)
 
+**Upgrading an app that already has the plugin?** Newer versions add schema
+your database does not have yet: for example each page's **Layout** and **No
+header or footer** columns, and the `page-builder-settings` Single that records
+the site's default Layout. They reach an existing database only through a
+migration:
+
+```bash
+npx nextly migrate:create add_page_layouts
+npx nextly migrate
+```
+
+(`npx nextly db:sync` also applies them in development.) Until then, saving a
+page fails on the missing columns. After the upgrade the plugin creates a
+published **Default (site)** Layout and makes it the default. Layouts are
+experimental: pages store their Layout and the switch, but the page route does
+not draw Layouts yet; see `docs/page-builder/layouts.mdx`.
+
 ---
 
 ## Step 5 — Start the app
