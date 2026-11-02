@@ -197,6 +197,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,

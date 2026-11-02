@@ -101,7 +101,11 @@ async function makeDefault(
   const body = await readBody(req);
   const id = ctx.params.id ?? "";
   await requirePublishedLayout(nextly, slugs, id);
-  const previous = (await readLayoutSettings(nextly, slugs)).defaultLayout;
+  // Both read BEFORE this request writes, so a refusal below can put back the
+  // previous default together with whoever chose it, rather than leaving the
+  // refused caller named as the author of a default they did not set.
+  const before = await readLayoutSettings(nextly, slugs);
+  const previous = before.defaultLayout;
 
   if (body.dryRun === true) {
     return respondMutation<MakeDefaultResult>(
@@ -116,7 +120,11 @@ async function makeDefault(
     defaultLayout: id,
     defaultLayoutChangedBy: userId,
   });
-  await restoreIfUnpublished(nextly, slugs, ctx, { id, previous });
+  await restoreIfUnpublished(nextly, slugs, ctx, {
+    id,
+    previous,
+    previousChangedBy: before.defaultLayoutChangedBy,
+  });
 
   return respondMutation<MakeDefaultResult>("The default Layout was changed.", {
     defaultLayout: id,
@@ -160,7 +168,8 @@ async function requireLayoutPublisher(
 /**
  * The post-write check described in the module docblock: when the Layout
  * stopped being published while it was being made the default, refuse, and
- * write the previous default back if the default is still this request's.
+ * write the previous default back if the default is still this request's,
+ * together with whoever chose it: the refused caller made no default.
  *
  * The settings are read again first, and the previous default is restored only
  * while they still name `id`. A newer make-default that landed after this
@@ -174,14 +183,22 @@ async function restoreIfUnpublished(
   nextly: DefaultLayoutDirectApi,
   slugs: DefaultLayoutSlugs,
   ctx: MakeDefaultRouteContext,
-  change: { id: string; previous: string | null }
+  change: {
+    id: string;
+    previous: string | null;
+    /** Who chose `previous`, restored with it. */
+    previousChangedBy: string | null;
+  }
 ): Promise<void> {
-  const { id, previous } = change;
+  const { id, previous, previousChangedBy } = change;
   if ((await publishedLayoutIds(nextly, slugs, [id])).has(id)) return;
   const stillOurs =
     (await readLayoutSettings(nextly, slugs)).defaultLayout === id;
   if (stillOurs) {
-    await writeLayoutSettings(nextly, slugs, { defaultLayout: previous });
+    await writeLayoutSettings(nextly, slugs, {
+      defaultLayout: previous,
+      defaultLayoutChangedBy: previousChangedBy,
+    });
   }
   ctx.logger.warn(
     stillOurs

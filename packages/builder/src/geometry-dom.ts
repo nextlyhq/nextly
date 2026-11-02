@@ -368,9 +368,13 @@ export function scrollableAncestor(root: HTMLElement): HTMLElement | null {
 export function containerEdges(root: HTMLElement): {
   top: number;
   bottom: number;
+  left: number;
+  right: number;
 } {
   const box = root.getBoundingClientRect();
-  return { top: box.top, bottom: box.bottom };
+  // The sides as well, for a caller placing something just outside the
+  // container on screen, such as a note drawn beside a panel rather than on it.
+  return { top: box.top, bottom: box.bottom, left: box.left, right: box.right };
 }
 
 /**

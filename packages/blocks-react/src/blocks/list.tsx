@@ -137,9 +137,14 @@ export const list: BlockDefinition<ListProps, PageContext> = defineBlock({
   },
   baseStyles: LIST_BASE_STYLES,
   props: {
-    kind: { type: "select", options: [...LIST_KINDS] },
-    items: { role: "content", type: "array", of: "text" },
-    start: { type: "number", min: 1 },
+    kind: {
+      label: "Kind",
+      optionLabels: { unordered: "Bulleted", ordered: "Numbered" },
+      type: "select",
+      options: [...LIST_KINDS],
+    },
+    items: { label: "Items", role: "content", type: "array", of: "text" },
+    start: { label: "Start number", type: "number", min: 1 },
   },
   defaultProps: { kind: "unordered", items: [] },
   example: { props: { kind: "unordered", items: ["First", "Second"] } },

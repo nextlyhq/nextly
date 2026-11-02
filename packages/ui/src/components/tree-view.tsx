@@ -104,7 +104,18 @@ interface TreeRow {
 }
 
 const ROW_HEIGHT = 28;
-const INDENT_PER_LEVEL = 12;
+
+/**
+ * How far each level of the tree is indented, in pixels.
+ *
+ * Exported because a consumer that lets rows be dragged to a depth has to step
+ * by the same distance the rows are drawn at: an editor reading a pointer's x
+ * as a depth draws its drop line where a row at that depth would start, and
+ * two separate numbers would put the line a level away from the hand.
+ *
+ * @experimental
+ */
+export const TREE_INDENT_PX = 20;
 
 /** The text a row can be typed to, falling back to a string label. */
 function textOf(node: TreeNode): string {
@@ -667,7 +678,7 @@ const TreeView: React.ForwardRefExoticComponent<
                 style={{
                   height: item.size,
                   transform: `translateY(${item.start}px)`,
-                  paddingLeft: 4 + row.level * INDENT_PER_LEVEL,
+                  paddingLeft: 4 + row.level * TREE_INDENT_PX,
                 }}
               >
                 <span

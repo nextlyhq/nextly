@@ -16,7 +16,13 @@
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { renderToStaticMarkup } from "react-dom/server";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as React from "react";
 
@@ -30,6 +36,7 @@ import {
 
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
+import { LAYERS_DEPTH_PX } from "./layers-drop";
 import { LayersPanel } from "./layers-panel";
 import { useEditorState, type EditorState } from "./editor-state";
 
@@ -510,6 +517,34 @@ describe("LayersPanel", () => {
     expect(screen.getAllByRole("treeitem")[0]?.textContent ?? "").toMatch(
       /locked/i
     );
+  });
+
+  it("offers to open only the rows that hold something", () => {
+    // A row that opens onto nothing would show a twisty that does nothing,
+    // and announce itself as a closed branch to a screen reader.
+    renderPanel();
+    const row = (name: string) =>
+      screen
+        .getAllByRole("treeitem")
+        .find(element => element.textContent?.includes(name));
+    expect(row("Hero")?.getAttribute("aria-expanded")).toBe("false");
+    expect(row("Footnote")?.hasAttribute("aria-expanded")).toBe(false);
+  });
+
+  it("indents a level by exactly the distance a drag moves to nest one level", () => {
+    // The drop line is drawn at a depth by the tree's indent, and the pointer
+    // reaches that depth by the drag's step: two different numbers would put
+    // the line a level away from where the hand is.
+    renderPanel();
+    // Selecting the inner block opens the box, so both rows are drawn.
+    act(() => editorRef?.select("inner"));
+    const padding = (name: string): number => {
+      const row = screen
+        .getAllByRole("treeitem")
+        .find(element => element.textContent?.includes(name));
+      return Number.parseFloat(row?.style.paddingLeft ?? "NaN");
+    };
+    expect(padding("Title") - padding("Hero")).toBe(LAYERS_DEPTH_PX);
   });
 
   it("points an empty document at the panel that fills it", () => {
