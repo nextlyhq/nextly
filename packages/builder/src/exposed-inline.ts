@@ -62,7 +62,7 @@ export type ComposedTextAnswer =
  * What the canvas may do with a value of a composed node, or `null` when the
  * node is the page's own and the ordinary inline edit answers for it.
  *
- * Exposed plain text on an unlocked placement is editable. Anything else in a
+ * Text a `text` exposure feeds, on an unlocked placement, is editable. Anything else in a
  * component is "part of" it: text it does not expose, a placement locked in
  * Layers, a prop that is not content inside an area locked to its content
  * (the panel holds that row read-only, with the reason), and rich text, which
@@ -82,29 +82,17 @@ export function composedTextAt(
   locks: SlotDefaultSource = registryBlockSource()
 ): ComposedTextAnswer | null {
   if (composed === undefined) return null;
-  // Read as a composed node: the composition is the resolver's output, whose
-  // nodes carry `instanceOf` and the exposure map.
-  const node: ResolvedBlockNode | undefined = findNode(composed.nodes, nodeId);
-  const placementId = node?.instanceOf;
-  if (node === undefined || typeof placementId !== "string") return null;
-  const placement = findNode(document.nodes, placementId);
-  if (placement === undefined || !isComponentInstance(placement)) return null;
-
-  const partOf: ComposedTextAnswer = { kind: "part-of", placementId };
-  const fed = node.exposedProps;
-  const exposureId =
-    fed !== undefined && Object.hasOwn(fed, prop) ? fed[prop] : undefined;
-  if (typeof exposureId !== "string" || isLocked(placement)) return partOf;
+  const found = placedNode(document, composed, nodeId);
+  if (found === null) return null;
+  const { node, placement } = found;
+  const exposureId = textExposureOf(node, prop, placement);
   const schema = getBlock(node.type)?.props?.[prop];
-  if (inlinePropKind(schema) !== "plain") return partOf;
-  // The rule the store applies on the composed page: inside a `contentOnly`
-  // area only a prop declared `role: "content"` may change.
-  const held = nodeLocks(composed.nodes, locks).get(nodeId);
   if (
-    held?.area !== undefined &&
-    !contentPropsOf(locks.get(node.type)?.props).has(prop)
+    exposureId === undefined ||
+    inlinePropKind(schema) !== "plain" ||
+    heldByContentLock(composed, node, prop, locks)
   ) {
-    return partOf;
+    return { kind: "part-of", placementId: placement.id };
   }
   const shown: unknown = (node.props as Record<string, unknown> | undefined)?.[
     prop
@@ -114,12 +102,66 @@ export function composedTextAt(
     target: {
       nodeId,
       prop,
-      placementId,
+      placementId: placement.id,
       exposureId,
       multiline: schema?.type === "textarea",
       value: typeof shown === "string" ? shown : "",
     },
   };
+}
+
+/**
+ * The composed node and the page's placement it came from, or `null` when the
+ * node is not one a placement contributed.
+ */
+function placedNode(
+  document: BlockDocument,
+  composed: BlockDocument,
+  nodeId: string
+): { node: ResolvedBlockNode; placement: BlockNode } | null {
+  // Read as a composed node: the composition is the resolver's output, whose
+  // nodes carry `instanceOf` and the exposure map.
+  const node: ResolvedBlockNode | undefined = findNode(composed.nodes, nodeId);
+  const placementId = node?.instanceOf;
+  if (node === undefined || typeof placementId !== "string") return null;
+  const placement = findNode(document.nodes, placementId);
+  if (placement === undefined || !isComponentInstance(placement)) return null;
+  return { node, placement };
+}
+
+/**
+ * The id of the `text` exposure feeding this prop, when the placement may
+ * change it. Free text only through a text exposure: a choice or a link aimed
+ * at a text prop is edited in the panel, where its control keeps it valid.
+ */
+function textExposureOf(
+  node: ResolvedBlockNode,
+  prop: string,
+  placement: BlockNode
+): string | undefined {
+  const fed = node.exposedProps;
+  const exposure =
+    fed !== undefined && Object.hasOwn(fed, prop) ? fed[prop] : undefined;
+  if (exposure?.type !== "text" || isLocked(placement)) return undefined;
+  return exposure.id;
+}
+
+/**
+ * Whether the rule the store applies on the composed page holds this prop:
+ * inside a `contentOnly` area only a prop declared `role: "content"` may
+ * change.
+ */
+function heldByContentLock(
+  composed: BlockDocument,
+  node: ResolvedBlockNode,
+  prop: string,
+  locks: SlotDefaultSource
+): boolean {
+  const held = nodeLocks(composed.nodes, locks).get(node.id);
+  return (
+    held?.area !== undefined &&
+    !contentPropsOf(locks.get(node.type)?.props).has(prop)
+  );
 }
 
 /**

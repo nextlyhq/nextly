@@ -241,6 +241,39 @@ describe("exposed text inside an area locked to its content", () => {
   });
 });
 
+describe("a text prop another kind of exposure feeds", () => {
+  it("is not typed into on the canvas: a choice keeps its options in the panel", () => {
+    const toned: ComponentDocument = {
+      ...HEADER,
+      exposed: [
+        {
+          id: "tone",
+          label: "Tone",
+          nodeId: "h",
+          propPath: "kicker",
+          type: "select",
+          options: [{ value: "Welcome", label: "Welcome" }],
+        },
+      ],
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [placed("p1")],
+    };
+    const composed = resolveComponentInstances(
+      document,
+      new Map([["header", toned as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    const id = composed.nodes[0]?.id ?? "";
+    expect(composedTextAt(document, composed, id, "kicker")).toEqual({
+      kind: "part-of",
+      placementId: "p1",
+    });
+  });
+});
+
 describe("exposedTextOp", () => {
   it("stores the typed text on that placement only, leaving the component and its other placement alone", () => {
     const { document, composed, headingOf } = setUp(placed("p1"), placed("p2"));

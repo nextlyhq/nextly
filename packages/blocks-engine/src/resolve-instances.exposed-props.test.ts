@@ -96,7 +96,10 @@ describe("the exposure map on composed nodes", () => {
     );
     const title = nodeShowing(document.nodes, "title");
     expect(title?.instanceOf).toBe("p1");
-    expect(title?.exposedProps).toEqual({ text: "headline", tone: "tone" });
+    expect(title?.exposedProps).toEqual({
+      text: { id: "headline", type: "text" },
+      tone: { id: "tone", type: "select" },
+    });
     // Visibility drives no prop, and the subtitle has nothing else exposed.
     expect(nodeShowing(document.nodes, "subtitle")?.exposedProps).toBe(
       undefined
@@ -117,7 +120,10 @@ describe("the exposure map on composed nodes", () => {
   it("drops a map stored on a definition's node, in a render and in the editor", () => {
     // A stored node carrying a field the stored format does not declare, as
     // an import or a hand edit can leave one.
-    const plain = { ...text("plain"), exposedProps: { text: "x" } };
+    const plain = {
+      ...text("plain"),
+      exposedProps: { text: { id: "x", type: "text" } },
+    };
     const forged = component(
       [text("title"), plain as BlockNode],
       [exposure("headline", "title", "text")]
@@ -150,7 +156,7 @@ describe("the exposure map on composed nodes", () => {
         props.overrides === undefined
           ? "title"
           : String(Object.values(props.overrides as object)[0])
-      )?.exposedProps?.text;
+      )?.exposedProps?.text?.id;
 
     // Neither set: the last declared is the one an edit makes visible.
     expect(read({})).toBe("second");
@@ -176,7 +182,7 @@ describe("the exposure map on composed nodes", () => {
       { exposures: true }
     );
     expect(nodeShowing(document.nodes, "outer")?.exposedProps).toEqual({
-      text: "outerText",
+      text: { id: "outerText", type: "text" },
     });
     const nested = nodeShowing(document.nodes, "inner");
     expect(nested?.instanceOf).toBe("p1");
@@ -204,7 +210,7 @@ describe("the exposure map on composed nodes", () => {
       { exposures: true }
     ).document;
     expect(nodeShowing(mapped.nodes, "inner")?.exposedProps).toEqual({
-      text: "outerText",
+      text: { id: "outerText", type: "text" },
     });
 
     // And the host exposure's value is what that node shows.
@@ -214,7 +220,7 @@ describe("the exposure map on composed nodes", () => {
       { exposures: true }
     ).document;
     expect(nodeShowing(edited.nodes, "Set")?.exposedProps).toEqual({
-      text: "outerText",
+      text: { id: "outerText", type: "text" },
     });
   });
 
@@ -234,6 +240,6 @@ describe("the exposure map on composed nodes", () => {
     );
     const title = nodeShowing(document.nodes, "title");
     expect(title?.instanceOf).toBe("p2");
-    expect(title?.exposedProps?.text).toBe("headline");
+    expect(title?.exposedProps?.text?.id).toBe("headline");
   });
 });

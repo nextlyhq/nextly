@@ -37,14 +37,18 @@ import { boundedOwnKeys, ownEntry } from "./safe-record";
 import { isLinkableUrl } from "./url-policy";
 
 /** Why a placement's value was refused. */
-export type PlacementValueProblem = "unknown-field" | "wrong-type";
+export type PlacementValueProblem =
+  | "unknown-field"
+  | "wrong-type"
+  /** More values than the envelope cap, which the resolver reads none of. */
+  | "too-many-values";
 
 /** One value a write sets that its placement's component does not accept. */
 export interface PlacementValueIssue {
   /** The placement's node id. */
   readonly nodeId: string;
   readonly componentId: string;
-  /** The exposure id the value is stored under. */
+  /** The exposure id the value is stored under; empty for `too-many-values`. */
   readonly exposureId: string;
   readonly problem: PlacementValueProblem;
   /** A sentence naming the field and what it needs. */
@@ -82,9 +86,23 @@ export function placementValueIssues(
     if (!isPlainRecord(overrides)) return;
     const definition = readableDefinition(definitions.get(componentId));
     if (definition === undefined) return;
-    const keys = boundedOwnKeys(overrides, MAX_ENVELOPE_ENTRIES);
-    if (keys === null) return;
     const kept = before.get(placementKey(node.id, componentId)) ?? [];
+    const keys = boundedOwnKeys(overrides, MAX_ENVELOPE_ENTRIES);
+    if (keys === null) {
+      // Past the cap the resolver applies none of them, so they cannot be
+      // judged one by one and would be stored unread. Kept only as the stored
+      // document already held them.
+      if (!kept.some(form => sameValue(form, overrides))) {
+        issues.push({
+          nodeId: node.id,
+          componentId,
+          exposureId: "",
+          problem: "too-many-values",
+          message: `A placement of component "${componentId}" stores more than ${String(MAX_ENVELOPE_ENTRIES)} values, more than a component can expose. Remove the values its component does not expose.`,
+        });
+      }
+      return;
+    }
     const exposures = exposuresById(definition);
     for (const key of keys) {
       const value = ownEntry(overrides, key);

@@ -15,6 +15,7 @@ import {
   type BlockNode,
   type ComponentDocument,
 } from "./document";
+import { MAX_ENVELOPE_ENTRIES } from "./limits";
 import { exposedValueFits, placementValueIssues } from "./placement-values";
 
 const HEADER: ComponentDocument = {
@@ -176,6 +177,21 @@ describe("placementValueIssues", () => {
         published,
         draft,
       ])
+    ).toEqual([]);
+  });
+
+  it("refuses more values than the resolver reads, unless the stored page held them", () => {
+    const many = Object.fromEntries(
+      Array.from({ length: MAX_ENVELOPE_ENTRIES + 1 }, (_, i) => [
+        `k${String(i)}`,
+        "x",
+      ])
+    );
+    expect(placementValueIssues(page(placed(many)), LOOKUP)).toEqual([
+      expect.objectContaining({ problem: "too-many-values", exposureId: "" }),
+    ]);
+    expect(
+      placementValueIssues(page(placed(many)), LOOKUP, [page(placed(many))])
     ).toEqual([]);
   });
 

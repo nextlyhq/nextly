@@ -55,6 +55,7 @@ import {
   type ComponentDocument,
   type NodeVisibility,
   type ExposedProperty,
+  type ExposedPropertyType,
   type OverrideValue,
 } from "./document";
 import { walkForest } from "./forest-walk";
@@ -176,8 +177,18 @@ export interface ResolvedBlockNode extends BlockNode {
    * component nested inside it is reached through that component's own
    * fields, never directly.
    */
-  exposedProps?: Readonly<Record<string, string>>;
+  exposedProps?: Readonly<Record<string, PropExposure>>;
   slots?: Record<string, ResolvedBlockNode[]>;
+}
+
+/**
+ * The host placement's exposure that feeds one prop of a composed node: its
+ * id, which the placement's value is stored under, and its type, which says
+ * what an editor may write there (free text only through a `text` exposure).
+ */
+export interface PropExposure {
+  readonly id: string;
+  readonly type: ExposedPropertyType;
 }
 
 /** A document whose component instances have been resolved. */
@@ -1646,7 +1657,7 @@ function expandInstance(
   depth: number,
   presupplied?: Record<string, ResolvedBlockNode[]>,
   owner?: string,
-  relay?: ReadonlyMap<string, string>
+  relay?: ReadonlyMap<string, PropExposure>
 ): ResolvedBlockNode[] {
   // Asked before anything else, including whether the instance is even well
   // formed. A gated node is not served, so composing it is work nobody
@@ -1738,7 +1749,7 @@ interface InstancePlacement {
    * placement's component drives, by the host exposure's id. See
    * {@link relayOf}.
    */
-  relay?: ReadonlyMap<string, string>;
+  relay?: ReadonlyMap<string, PropExposure>;
 }
 
 /**
@@ -2389,7 +2400,7 @@ interface NodePlan {
   /** Instance content, keyed by the slot NAME on this node. */
   slots?: Map<string, PlannedSlot>;
   /** Prop path to the host placement's exposure that feeds it, in editor mode. */
-  exposedProps?: Record<string, string>;
+  exposedProps?: Record<string, PropExposure>;
 }
 
 /**
@@ -2438,14 +2449,17 @@ function planExposedProps(
   instance: ResolvedBlockNode,
   plans: Map<string, NodePlan>,
   /** For a nested instance: its exposure ids to the host's that drive them. */
-  relay?: ReadonlyMap<string, string>
+  relay?: ReadonlyMap<string, PropExposure>
 ): void {
   const set = effectiveOverrides(definition, instance);
-  const chosen = new Map<string, { id: string; set: boolean }>();
+  const chosen = new Map<string, { fed: PropExposure; set: boolean }>();
   for (const property of usableExposures(definition.exposed)) {
     if (property.type === "visibility") continue;
-    const hostId = relay === undefined ? property.id : relay.get(property.id);
-    if (hostId === undefined) continue;
+    const fed: PropExposure | undefined =
+      relay === undefined
+        ? { id: property.id, type: property.type }
+        : relay.get(property.id);
+    if (fed === undefined) continue;
     if (property.nodeId === "" || !isUsablePropPath(property.propPath)) {
       continue;
     }
@@ -2453,12 +2467,12 @@ function planExposedProps(
     const isSet = set.has(property.id);
     const held = chosen.get(key);
     if (held !== undefined && held.set && !isSet) continue;
-    chosen.set(key, { id: hostId, set: isSet });
+    chosen.set(key, { fed, set: isSet });
   }
-  for (const [key, { id }] of chosen) {
+  for (const [key, { fed }] of chosen) {
     const [nodeId = "", path = ""] = key.split("\u0000");
     const plan = planFor(plans, nodeId);
-    plan.exposedProps = { ...plan.exposedProps, [path]: id };
+    plan.exposedProps = { ...plan.exposedProps, [path]: fed };
   }
 }
 
@@ -2470,17 +2484,17 @@ function planExposedProps(
  * none is driven, which leaves the nested component's nodes unmapped.
  */
 function relayOf(
-  fed: Readonly<Record<string, string>> | undefined
-): ReadonlyMap<string, string> | undefined {
+  fed: Readonly<Record<string, PropExposure>> | undefined
+): ReadonlyMap<string, PropExposure> | undefined {
   if (fed === undefined) return undefined;
-  const relay = new Map<string, string>();
+  const relay = new Map<string, PropExposure>();
   for (const path of Object.keys(fed)) {
     const [head, inner, ...rest] = path.split(".");
     if (head !== "overrides" || inner === undefined || rest.length > 0) {
       continue;
     }
-    const hostId = fed[path];
-    if (typeof hostId === "string") relay.set(inner, hostId);
+    const host = fed[path];
+    if (host !== undefined) relay.set(inner, host);
   }
   return relay.size === 0 ? undefined : relay;
 }

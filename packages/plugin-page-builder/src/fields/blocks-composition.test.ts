@@ -2051,6 +2051,19 @@ describe("a placement's own values", () => {
     ).toEqual([]);
   });
 
+  it("judges a placement a condition gates, which the composition never expands", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    const gated = placing("p", "header", {
+      props: { componentId: "header", overrides: { title: 7 } },
+      visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+    });
+    expect(
+      codes(await judge(page([gated]), write(readStored, "pages", "home")))
+    ).toEqual(["PLACEMENT_VALUE_WRONG_TYPE"]);
+  });
+
   it("accepts a cleared field and a value of the field's type", async () => {
     const { readStored } = storeOf({
       [COMPONENTS]: { header: { published: header } },

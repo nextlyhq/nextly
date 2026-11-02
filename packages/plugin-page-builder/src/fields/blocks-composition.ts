@@ -39,6 +39,7 @@
  * @module fields/blocks-composition
  */
 import {
+  componentIdsIn,
   compositionFaults,
   contentOnlyExposures,
   MAX_COMPOSED_DEPTH,
@@ -510,7 +511,8 @@ async function judgeOwnComposition(args: {
   }
   await judgePlacementValues({
     document,
-    components: lookupOf(library),
+    library,
+    read,
     limits: setup.limits,
     stored: args.stored,
     report,
@@ -521,6 +523,7 @@ async function judgeOwnComposition(args: {
 const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
   "unknown-field": "PLACEMENT_VALUE_UNKNOWN_FIELD",
   "wrong-type": "PLACEMENT_VALUE_WRONG_TYPE",
+  "too-many-values": "PLACEMENT_VALUE_TOO_MANY",
 };
 
 /**
@@ -539,12 +542,23 @@ const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
  */
 async function judgePlacementValues(args: {
   document: BlockDocument;
-  components: ComponentLookup;
+  library: HeldLibrary;
+  read: BoundedReader;
   limits: DocumentLimits;
   stored: () => Promise<StoredRead>;
   report: Report;
 }): Promise<void> {
-  const { document, components, limits, report } = args;
+  const { document, library, limits, report } = args;
+  // A placement the composition never expanded (one a condition gates) still
+  // stores its values, and is served with them once the condition lifts, so
+  // its component is read too.
+  for (const id of componentIdsIn(document.nodes, limits.maxNodes)) {
+    if (library.held.has(id) || library.missing.has(id)) continue;
+    const answer = await args.read(id);
+    if (answer.kind === "document") library.held.set(id, answer.document);
+    else library.missing.add(id);
+  }
+  const components = lookupOf(library);
   if (placementValueIssues(document, components, [], limits).length === 0) {
     return;
   }

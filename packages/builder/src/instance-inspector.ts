@@ -309,7 +309,7 @@ function heldRows(
     const fed = composedNode.exposedProps;
     if (fed === undefined) continue;
     for (const path of Object.keys(fed)) {
-      const id = fed[path];
+      const id = fed[path]?.id;
       if (typeof id === "string") targets.set(id, { node: composedNode, path });
     }
   }
