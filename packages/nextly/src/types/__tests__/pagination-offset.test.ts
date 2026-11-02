@@ -38,6 +38,18 @@ describe("buildPaginatedResponse with an offset", () => {
     expect(meta.nextPage).toBeNull();
   });
 
+  it("decides there are more from the window read, not from what a hook left of it", () => {
+    // Offset 14 of 20 with limit 6 read the last six rows; an afterRead hook
+    // dropped one, so five came back. Nothing follows the window.
+    const meta = buildPaginatedResponse(rows(5), {
+      total: 20,
+      page: 1,
+      limit: 6,
+      offset: 14,
+    });
+    expect(meta.hasNextPage).toBe(false);
+  });
+
   it("CONTROL: a read by page answers as before", () => {
     const meta = buildPaginatedResponse(rows(6), {
       total: 20,

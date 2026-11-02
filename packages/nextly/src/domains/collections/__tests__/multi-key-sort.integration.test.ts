@@ -232,6 +232,45 @@ describe.each(getConfiguredTestDialects())(
       ).resolves.toBeDefined();
     });
 
+    it("judges and sorts by one reading of the sort, however the array answers later", async () => {
+      // An array that answers "title" when first read and "-secret" after:
+      // judged on one reading and sorted on another, the order of the rows
+      // would compare a field the caller may not read.
+      // Descending by secret puts "b" first; ascending by title puts "a" first.
+      await t.nextly.create({
+        collection: RULED,
+        data: { title: "a", secret: "a" },
+      });
+      await t.nextly.create({
+        collection: RULED,
+        data: { title: "b", secret: "z" },
+      });
+      let reads = 0;
+      const shifting = new Proxy(["title"], {
+        get(target, prop, receiver) {
+          if (prop === "0") return reads++ === 0 ? "title" : "-secret";
+          return Reflect.get(target, prop, receiver) as unknown;
+        },
+      });
+      // Straight to the handler: the Direct API copies its arguments first,
+      // and the read must hold whoever calls it.
+      const handler = t.getService("collectionsHandler") as unknown as {
+        listEntries(params: Record<string, unknown>): Promise<{
+          success: boolean;
+          data?: { docs: Record<string, unknown>[] };
+        }>;
+      };
+      const read = await handler.listEntries({
+        collectionName: RULED,
+        sort: shifting,
+        overrideAccess: false,
+        limit: 50,
+      });
+      expect(read.success).toBe(true);
+      const titles = (read.data?.docs ?? []).map(item => String(item.title));
+      expect(titles).toEqual([...titles].sort());
+    });
+
     it("refuses an offset given together with a page", async () => {
       await expect(
         t.nextly.find({ collection: SLUG, offset: 5, page: 2 })

@@ -3197,6 +3197,16 @@ export class CollectionQueryService extends BaseService {
       // An offset that names no row, or one beside a page, is refused before
       // anything is read or any hook runs.
       assertReadOffset(params.offset, params.page);
+      // One reading of the sort for the whole read: the guard that judges
+      // which fields may be sorted on and the ORDER BY then see the same keys,
+      // whatever a caller's array answers if read again.
+      params = {
+        ...params,
+        sort:
+          params.sort === undefined || typeof params.sort === "string"
+            ? params.sort
+            : Object.freeze([...params.sort]),
+      };
 
       // Determine the effective user for access control
       // When overrideAccess is true, skip all access checks even if user is provided

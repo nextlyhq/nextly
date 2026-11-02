@@ -133,7 +133,9 @@ export function buildPaginatedResponse<T>(
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const startPage = Math.floor(offset / limit) + 1;
     const hasPrevPage = offset > 0;
-    const hasNextPage = offset + docs.length < total;
+    // From the window read, not from the rows returned: an afterRead hook may
+    // hand back fewer or more than the database read.
+    const hasNextPage = offset + limit < total;
     return {
       docs,
       totalDocs: total,
