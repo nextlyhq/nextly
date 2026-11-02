@@ -11,7 +11,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReadAccessCaller } from "../../../auth/entity-read-access";
-import { setContributedWidgets } from "../canonical";
 import { clearWidgets, registerWidget } from "../registry";
 import { setSiteDashboardRules } from "../site-rules";
 import { clearSources, registerSource } from "../sources";
@@ -53,14 +52,13 @@ function register(id: string, patch: Record<string, unknown> = {}): void {
   const definition = {
     id,
     title: id,
-    archetype: "text",
+    archetype: "metric",
     size: { default: { w: 4, h: 3 } },
-    content: `notes for ${id}`,
     ...patch,
   };
   // A key set to `undefined` is one JSON drops, and a registration carrying
-  // one is not one the admin may receive -- so a patch that unsets the base
-  // fixture's `content` removes the key rather than voiding it.
+  // one is not one the admin may receive -- so a patch that unsets a key
+  // removes it rather than voiding it.
   registerWidget(
     withoutUndefined(definition) as Parameters<typeof registerWidget>[0]
   );
@@ -77,14 +75,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearWidgets();
   clearSources();
-  setContributedWidgets([]);
   reader([]);
 });
 
 afterEach(() => {
   clearWidgets();
   clearSources();
-  setContributedWidgets([]);
   setSiteDashboardRules(NO_SITE_RULES);
 });
 
@@ -99,16 +95,13 @@ const ids = (widgets: readonly { id: string }[]) =>
   widgets.map(widget => widget.id);
 
 describe("visibleWidgets", () => {
-  it("withholds a declared widget whose gate this reader fails, from either channel", async () => {
-    // 🔴 The disclosure. A declaration is its whole content -- a text widget's
-    // prose travels with it -- so a reader the gate refuses must not be told
-    // the card exists, whether a plugin contributed it or an app registered
-    // it. The ungated card and the one whose gate holds are the controls:
-    // without them a filter that returns nothing satisfies the refusal.
-    setContributedWidgets([
-      { id: "acme/runbook", requiredPermission: "manage-settings" },
-      { id: "acme/welcome" },
-    ]);
+  it("withholds a declared widget whose gate this reader fails", async () => {
+    // 🔴 The disclosure. A declaration ships whole, so a reader the gate
+    // refuses must not be told the card exists. The ungated card and the one
+    // whose gate holds are the controls: without them a filter that returns
+    // nothing satisfies the refusal.
+    register("acme/runbook", { requiredPermission: "manage-settings" });
+    register("acme/welcome");
     register("app/secrets", { requiredPermission: "read-secrets" });
     register("app/notes", { requiredPermission: "read-notes" });
     reader(["read-notes"]);
@@ -117,21 +110,6 @@ describe("visibleWidgets", () => {
       "acme/welcome",
       "app/notes",
     ]);
-  });
-
-  it("gates a colliding pair on the one gate the canonical merge keeps", async () => {
-    // A registration that TIGHTENED the permission on a contributed id gates
-    // both copies. The contribution carries no gate of its own, and shipping
-    // it on that basis would hand the reader the prose the registration was
-    // written to withhold.
-    setContributedWidgets([{ id: "acme/runbook" }]);
-    register("acme/runbook", { requiredPermission: "manage-settings" });
-    reader([]);
-
-    expect(ids(await visibleWidgets(CALLER))).toEqual([]);
-
-    reader(["manage-settings"]);
-    expect(ids(await visibleWidgets(CALLER))).toEqual(["acme/runbook"]);
   });
 
   it("denies when the permission decision itself rejects", async () => {
@@ -161,7 +139,7 @@ describe("what the site config keeps off the dashboard", () => {
   it("is visible to nobody: a hidden widget, a built-in an alternative replaces, and an alternative no replace names", async () => {
     for (const id of [
       "core/team",
-      "core/recently-edited",
+      "core/continue",
       "acme/recent-orders",
       "acme/other-alternative",
       "acme/kept",
@@ -171,7 +149,7 @@ describe("what the site config keeps off the dashboard", () => {
     setSiteDashboardRules({
       ...NO_SITE_RULES,
       hidden: new Set(["core/team"]),
-      replaced: new Map([["core/recently-edited", "acme/recent-orders"]]),
+      replaced: new Map([["core/continue", "acme/recent-orders"]]),
       alternatives: new Set(["acme/recent-orders", "acme/other-alternative"]),
     });
 
@@ -205,9 +183,6 @@ describe("widgetAudience", () => {
     // and gate stays as it was.
     const pinned = (name: string) =>
       register("acme/pinned", {
-        archetype: "metric",
-        content: undefined,
-        query: { source: "collection:posts", op: "count" },
         settings: [{ name, type: "collection", label: "Collection" }],
       });
     registerSource(source("posts"));
@@ -220,10 +195,10 @@ describe("widgetAudience", () => {
     expect((await widgetAudience(CALLER)).token).not.toBe(before);
   });
 
-  it("declares every visible widget, from either channel, and nothing beside them", async () => {
-    // The workspace payload matches both channels' declarations against
+  it("declares every visible widget, and nothing beside them", async () => {
+    // The workspace payload matches the published widgets against
     // `declared`; a sourced collection adds nothing for it to ship.
-    setContributedWidgets([{ id: "acme/welcome" }]);
+    register("acme/welcome");
     register("app/notes");
     registerSource(source("posts"));
     reader([], ["posts"]);
@@ -235,33 +210,21 @@ describe("widgetAudience", () => {
     expect(audience).not.toHaveProperty("generated");
   });
 
-  it("answers for the gates INSIDE a visible declaration, from either channel", async () => {
-    // 🔴 An `actions` widget's shortcuts each carry a gate of their own, and
-    // a shortcut is a label and an href. The card's gate alone let the whole
-    // list ship and left the browser to hide the protected ones -- readable
-    // from the payload regardless. The verdicts here are what the payload
-    // withholds them with, resolved for the actions a registration and a
-    // contribution declare.
-    register("app/shortcuts", {
-      archetype: "actions",
-      content: undefined,
-      actions: [
-        { label: "Open", href: "/admin/open" },
-        {
-          label: "Publish",
-          href: "/admin/publish",
-          requiredPermission: "publish-notes",
-        },
-        {
-          label: "Purge",
-          href: "/admin/purge",
-          requiredPermission: "purge-notes",
-        },
-      ],
+  it("answers for the gates INSIDE a visible declaration", async () => {
+    // 🔴 A declared widget's empty-state action carries a gate of its own,
+    // and the action is a label and a link. The card's gate alone would let
+    // it ship and leave the browser to hide it -- readable from the payload
+    // regardless. The verdicts here are what the payload withholds it with,
+    // resolved for the action each declares.
+    const emptyAction = (requiredPermission: string) => ({
+      empty: {
+        message: "Nothing yet",
+        action: { label: "Act", link: "/admin/act", requiredPermission },
+      },
     });
-    setContributedWidgets([
-      { id: "acme/links", actionGates: [undefined, "export-notes"] },
-    ]);
+    register("app/publish", emptyAction("publish-notes"));
+    register("app/purge", emptyAction("purge-notes"));
+    register("acme/export", emptyAction("export-notes"));
     reader(["publish-notes", "export-notes"]);
 
     const audience = await widgetAudience(CALLER);
@@ -278,15 +241,17 @@ describe("widgetAudience", () => {
   });
 
   it("does not resolve the gates inside a card the reader cannot see", async () => {
-    // A withheld card ships no actions to gate, and asking about its inner
-    // gates would be a permission check for a decision nobody will take.
+    // A withheld card ships no action to gate, and asking about its inner
+    // gate would be a permission check for a decision nobody will take.
     register("app/secrets", {
-      archetype: "actions",
-      content: undefined,
       requiredPermission: "read-secrets",
-      actions: [
-        { label: "Rotate", href: "/x", requiredPermission: "rotate-secrets" },
-      ],
+      empty: {
+        action: {
+          label: "Rotate",
+          link: "/x",
+          requiredPermission: "rotate-secrets",
+        },
+      },
     });
     reader([]);
 

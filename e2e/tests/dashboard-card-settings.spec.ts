@@ -1,8 +1,11 @@
 /**
  * A card's settings in a browser: the quick setting on the card, saved at once for the reader
- * and announced, at each reference width; and the settings sheet opened from the card menu,
- * beside a live preview, saving on Done at rest, restoring on Cancel, and holding its change
- * with the dashboard's other unsaved changes while customising.
+ * and announced, at each reference width; the quick popover, opened from the card's title,
+ * applying a change at once with Undo; the card menu at rest, with Settings, Size, Refresh and
+ * Remove; and the More settings panel, opened through the popover's More settings, beside a
+ * dashboard that stays usable, with a live preview at the card's own tier, saving on Done at
+ * rest (the card's own title with it), restoring on Cancel, and holding its change with the
+ * dashboard's other unsaved changes while customising.
  *
  * Drawn with the style fixture's settings card (`style-fixture/recent`), which the suite's
  * server switches on: a list of posts with a Rows setting and one quick setting, Accent. No
@@ -17,9 +20,10 @@ import {
 } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { ownSeat, test } from "./support/test";
 import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -37,6 +41,7 @@ interface Layout {
     h: number;
     removed?: boolean;
     config?: Record<string, unknown>;
+    title?: string;
   }>;
 }
 
@@ -99,6 +104,31 @@ function rowsIn(within: Locator) {
   );
 }
 
+/** The card's own placement, as the reader's stored layout holds it now. */
+async function storedCard(page: Page) {
+  return (await readLayout(page)).placements.find(p => p.id === "e2e-settings");
+}
+
+/** The card's quick popover, opened from the card's title. */
+async function openPopover(page: Page) {
+  await cell(page).getByRole("button", { name: TITLE, exact: true }).click();
+  const popover = page.getByRole("dialog", {
+    name: `Quick settings for ${TITLE}`,
+  });
+  await expect(popover).toBeVisible();
+  return popover;
+}
+
+/** The card's menu at rest, opened. */
+async function openCardMenu(page: Page) {
+  await cell(page)
+    .getByRole("button", { name: `Card menu for ${TITLE}` })
+    .click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
 /** The rows the card draws. */
 function rows(page: Page) {
   return rowsIn(cell(page));
@@ -130,18 +160,19 @@ function queriesAfterWrite(sent: readonly Request[]): Request[] {
   return write === -1 ? [] : sent.slice(write + 1).filter(isQuery);
 }
 
+// A test here spends about fifty REST reads (two dashboard loads, and the layout reads around
+// them), so the file's sixteen run through four seats (`ownSeat`), none spending more than about
+// 300 of its 500 a minute. The first group, the quick setting at each width, keeps seat 0.
+
 test.beforeEach(async ({ page }) => {
   await gotoAdmin(page, "/");
   await enoughPosts(page, 4);
   await placeCard(page);
 });
 
+// Asserted: a reset that fails names itself here, not as a later spec's stray card.
 test.afterEach(async ({ page }) => {
-  const body = await readLayout(page);
-  if (body.version === 0) return;
-  await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
+  await resetToDefault(page);
 });
 
 const WIDTHS = [
@@ -151,7 +182,7 @@ const WIDTHS = [
 ];
 
 for (const viewport of WIDTHS) {
-  test(`the quick setting saves at once, asks no other card, and is announced (${viewport.name})`, async ({
+  test(`the quick setting saves at once, asks no other card, and is said once (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -159,13 +190,15 @@ for (const viewport of WIDTHS) {
     await expect(rows(page)).toHaveCount(3);
     const sent = watchRequests(page);
 
-    const accent = cell(page).getByRole("combobox", {
+    // A choice of two is drawn as a segmented control: both options in view.
+    const accent = cell(page).getByRole("radiogroup", {
       name: `Accent for ${TITLE}`,
     });
-    await accent.click();
-    await page.getByRole("option", { name: "Bold" }).click();
+    await accent.getByRole("radio", { name: "Bold" }).click();
 
-    await expect(page.getByTestId("widget-grid-live")).toHaveText(
+    // Said once, by the toast that offers its Undo; the grid's own live region stays silent.
+    await expect(page.getByText(`${TITLE}: Accent set to Bold.`)).toBeVisible();
+    await expect(page.getByTestId("widget-grid-live")).not.toHaveText(
       `${TITLE}: Accent set to Bold.`
     );
     // The setting was kept by its write, so what it asked again went out after that write.
@@ -176,13 +209,13 @@ for (const viewport of WIDTHS) {
     // sent after the write carries this card's question alone.
     const asked = queriesAfterWrite(sent).map(
       request =>
-        (request.postDataJSON() as { queries?: Array<{ source?: string }> })
+        (request.postDataJSON() as { queries?: Array<{ widget?: string }> })
           .queries ?? []
     );
+    // A declared widget's card is asked for by its widget's id.
     expect(
       asked.filter(
-        queries =>
-          queries.length !== 1 || queries[0]?.source !== "collection:posts"
+        queries => queries.length !== 1 || queries[0]?.widget !== CARD
       ),
       `requests that asked other cards: ${JSON.stringify(asked)}`
     ).toEqual([]);
@@ -190,12 +223,154 @@ for (const viewport of WIDTHS) {
     // Saved for this reader: it is there after a reload.
     await page.reload();
     await expect(
-      cell(page).getByRole("combobox", { name: `Accent for ${TITLE}` })
-    ).toHaveText(/Bold/);
+      cell(page)
+        .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
+        .getByRole("radio", { name: "Bold" })
+    ).toHaveAttribute("aria-checked", "true");
   });
 }
 
+test.describe("the quick popover at each width", () => {
+  ownSeat(1);
+
+  for (const viewport of WIDTHS) {
+    test(`the quick popover applies a change at once, and Undo puts back the value before it (${viewport.name})`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.reload();
+      await expect(rows(page)).toHaveCount(3);
+      const sent = watchRequests(page);
+
+      const popover = await openPopover(page);
+      const accent = popover.getByRole("combobox", { name: "Accent" });
+      await expect(accent).toHaveText(/Plain/);
+      await accent.click();
+      await page.getByRole("option", { name: "Bold" }).click();
+
+      // Written on the change itself, with the popover still open and the card in view beside it.
+      await expect.poll(() => sent.filter(isSettingsWrite).length).toBe(1);
+      await expect(popover).toBeVisible();
+      await expect(cell(page)).toBeInViewport({ ratio: 0.25 });
+      await expect
+        .poll(async () => (await storedCard(page))?.config)
+        .toEqual({
+          accent: "bold",
+        });
+
+      // Undo writes back what the card had just before the change: no setting of its own.
+      await page.getByRole("button", { name: "Undo", exact: true }).click();
+      await expect
+        .poll(async () => (await storedCard(page))?.config ?? {})
+        .toEqual({});
+      await page.reload();
+      // The header draws a choice of two as a segmented control.
+      await expect(
+        cell(page)
+          .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
+          .getByRole("radio", { name: "Plain" })
+      ).toHaveAttribute("aria-checked", "true");
+    });
+  }
+});
+
+test.describe("the quick popover and the card menu at rest", () => {
+  ownSeat(2);
+
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.reload();
+    await expect(rows(page)).toHaveCount(3);
+  });
+
+  test("Escape closes the popover, and focus goes back to the title", async ({
+    page,
+  }) => {
+    const popover = await openPopover(page);
+    // Focus moves into the popover as it opens.
+    await expect(
+      popover.getByRole("combobox", { name: "Accent" })
+    ).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(popover).toBeHidden();
+    await expect(
+      cell(page).getByRole("button", { name: TITLE, exact: true })
+    ).toBeFocused();
+  });
+
+  test("Settings in the card menu opens the popover, and Escape returns to the menu's button", async ({
+    page,
+  }) => {
+    const menu = await openCardMenu(page);
+    await menu.getByRole("menuitem", { name: "Settings…" }).click();
+    const popover = page.getByRole("dialog", {
+      name: `Quick settings for ${TITLE}`,
+    });
+    await expect(popover).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(popover).toBeHidden();
+    await expect(
+      cell(page).getByRole("button", { name: `Card menu for ${TITLE}` })
+    ).toBeFocused();
+  });
+
+  test("the card menu lists Settings, Size, Refresh and Remove, in that order", async ({
+    page,
+  }) => {
+    const menu = await openCardMenu(page);
+    const items = (await menu.getByRole("menuitem").allTextContents()).map(
+      item => item.trim()
+    );
+    // The fixture's card has one height, so its Size is its width alone.
+    expect(items).toEqual([
+      "Settings…",
+      expect.stringMatching(/^Width/),
+      "Refresh",
+      "Remove",
+    ]);
+  });
+
+  test("Size in the card menu saves the card's width at once, and Undo puts it back", async ({
+    page,
+  }) => {
+    const before = await storedCard(page);
+    const menu = await openCardMenu(page);
+    // By keyboard: a pointer travelling from the submenu's trigger to its item crosses the menu
+    // and can close the submenu under it, which no reader's pointer does.
+    await menu.getByRole("menuitem", { name: /^Width/ }).press("ArrowRight");
+    const half = page.getByRole("menuitemradio", {
+      name: "Half width, 6 columns",
+    });
+    await expect(half).toBeVisible();
+    await half.press("Enter");
+    await expect.poll(async () => (await storedCard(page))?.w).toBe(6);
+
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect.poll(async () => (await storedCard(page))?.w).toBe(before?.w);
+  });
+
+  test("Remove in the card menu asks nothing, and Undo puts the card back", async ({
+    page,
+  }) => {
+    const menu = await openCardMenu(page);
+    await menu.getByRole("menuitem", { name: "Remove" }).click();
+    await expect(cell(page)).toBeHidden();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    // The card was placed by a layout write, so this reader has an arrangement, and Remove takes
+    // the card out of it rather than marking it removed.
+    await expect.poll(async () => await storedCard(page)).toBeUndefined();
+
+    await page.getByRole("button", { name: `Undo removing ${TITLE}` }).click();
+    await expect(cell(page)).toBeVisible();
+    await expect
+      .poll(async () => (await storedCard(page))?.removed)
+      .toBe(false);
+  });
+});
+
 test.describe("the settings sheet", () => {
+  ownSeat(3);
+
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.reload();
@@ -203,10 +378,13 @@ test.describe("the settings sheet", () => {
   });
 
   async function openSettings(page: Page) {
-    await cell(page)
-      .getByRole("button", { name: `Card menu for ${TITLE}` })
-      .click();
-    await page.getByRole("menuitem", { name: "Settings…" }).click();
+    // Settings opens the card's quick popover, and its More settings the sheet.
+    const menu = await openCardMenu(page);
+    await menu.getByRole("menuitem", { name: "Settings…" }).click();
+    const popover = page.getByRole("dialog", {
+      name: `Quick settings for ${TITLE}`,
+    });
+    await popover.getByRole("button", { name: "More settings" }).click();
     const sheet = page.getByRole("dialog", { name: `${TITLE} settings` });
     await expect(sheet).toBeVisible();
     return sheet;
@@ -218,7 +396,57 @@ test.describe("the settings sheet", () => {
     await field.press("Tab");
   }
 
-  test("shows the card beside the form, as the form's values would draw it", async ({
+  test("leaves the dashboard usable beside it, and previews the card at the tier its width gives it", async ({
+    page,
+  }) => {
+    const sheet = await openSettings(page);
+    const box = await sheet.boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(480);
+    expect(box?.width).toBeLessThanOrEqual(560);
+    // The card is as wide as it may be on a 1,440 px dashboard: drawn large, scaled to fit.
+    const card = cell(page).locator("[data-tier]").first();
+    await expect(card).toHaveAttribute("data-tier", "large");
+    const preview = sheet.getByTestId("settings-preview");
+    await expect(preview.locator("[data-tier]").first()).toHaveAttribute(
+      "data-tier",
+      "large"
+    );
+    expect(Number(await preview.getAttribute("data-scale"))).toBeLessThan(1);
+    // Not modal: a card beside it can still be reached, and reaching it keeps the panel open.
+    // This card is full width, so its own menu sits under the panel: the first card menu clear
+    // of the panel's box is used, found by its test id, not its name, which follows the title.
+    const menus = await page.getByTestId("card-menu").all();
+    let reachable: (typeof menus)[number] | undefined;
+    for (const menu of menus) {
+      const at = await menu.boundingBox();
+      if (at && box && at.width > 0 && at.x + at.width < box.x) {
+        reachable = menu;
+        break;
+      }
+    }
+    if (reachable === undefined)
+      throw new Error("no card menu clear of the panel");
+    await reachable.click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeVisible();
+  });
+
+  test("keeps the card's own title on Done, and draws the card under it", async ({
+    page,
+  }) => {
+    const sheet = await openSettings(page);
+    await sheet.getByLabel("Title").fill("  Posts to review ");
+    await sheet.getByRole("button", { name: "Done" }).click();
+    await expect(sheet).toBeHidden();
+    // The card's own region, found within its cell, is now named by the reader's title.
+    await expect(cell(page).getByRole("region").first()).toHaveAccessibleName(
+      /^Posts to review/
+    );
+    expect((await storedCard(page))?.title).toBe("Posts to review");
+  });
+
+  test("shows the card at the top of the panel, as the panel's values would draw it", async ({
     page,
   }) => {
     const sheet = await openSettings(page);
@@ -247,21 +475,22 @@ test.describe("the settings sheet", () => {
   }) => {
     // 🔴 The sheet's base is not a flex box, so the area below its header took its own height and
     // ran past the screen with nothing to scroll: on a phone the footer, Done included, was off
-    // the bottom and out of reach. The area now scrolls inside the sheet, so Done can be brought
-    // into view, and pressing it keeps the change.
+    // the bottom and out of reach. The area now scrolls inside the sheet, with Cancel and Done
+    // held at its foot, so Done is in reach however far the form runs, and pressing it keeps
+    // the change.
     await page.setViewportSize({ width: 390, height: 400 });
     await page.reload();
     await expect(rows(page)).toHaveCount(3);
     const sheet = await openSettings(page);
-    await chooseRows(sheet, 2);
+    // Guards the guard: the form must be taller than the room it is given, or Done is in reach
+    // whatever the sheet's layout does, and this test would pass on the old one.
+    const overflows = await sheet
+      .locator("form")
+      .evaluate(form => form.scrollHeight > form.clientHeight);
+    expect(overflows, "the form must be taller than its room").toBe(true);
     const done = sheet.getByRole("button", { name: "Done" });
-    // Guards the guard: Done must start below the screen, or it is in view whatever the sheet's
-    // layout does, and this test would pass on the old one.
-    const startsBelow = await done.evaluate(
-      element => element.getBoundingClientRect().bottom > window.innerHeight
-    );
-    expect(startsBelow, "Done must start below the screen").toBe(true);
-    await done.scrollIntoViewIfNeeded();
+    await expect(done).toBeInViewport();
+    await chooseRows(sheet, 2);
     await expect(done).toBeInViewport();
     await done.click();
     await expect(sheet).toBeHidden();
@@ -301,6 +530,11 @@ test.describe("the settings sheet", () => {
       .getByRole("button", { name: `Card actions for ${TITLE}` })
       .click();
     await page.getByRole("menuitem", { name: "Settings" }).click();
+    // Settings opens the card's quick popover, and its More settings the sheet.
+    await page
+      .getByRole("dialog", { name: `Quick settings for ${TITLE}` })
+      .getByRole("button", { name: "More settings" })
+      .click();
     const sheet = page.getByRole("dialog", { name: `${TITLE} settings` });
     await chooseRows(sheet, 2);
     await sheet.getByRole("button", { name: "Done" }).click();

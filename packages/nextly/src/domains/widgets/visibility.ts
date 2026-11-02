@@ -19,6 +19,7 @@
 import {
   authorizationGroups,
   callerHoldsPermission,
+  callerIsSuperAdmin,
   readableEntities,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
@@ -26,6 +27,7 @@ import {
 import { allWidgets, type CanonicalWidget } from "./canonical";
 import { collectionSettingsToken } from "./collection-cards";
 import { refreshContentSources } from "./content-sources";
+import { SUPER_ADMIN_WIDGET_IDS } from "./core-widgets/ids";
 import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 import { visibilityToken } from "./layout";
 import { keptOffBySite } from "./site-rules";
@@ -83,11 +85,8 @@ export async function permissionVerdicts(
  * the query batch: a permission check resolves a session caller through a
  * per-user TTL cache, so firing thirty of them at once makes every one a miss.
  *
- * Judged on the CANONICAL set, so a colliding pair is one card with one gate:
- * a registration that tightened the permission on a contributed id tightens it
- * for both copies, and the workspace payload withholds the contribution's
- * prose along with the registration's rather than shipping the copy that
- * happened to carry no gate of its own.
+ * Judged on the CANONICAL set, the widgets as the admin may receive them, so
+ * the verdict is about the declaration that ships.
  *
  * The verdicts travel out with the cards because {@link widgetAudience} asks
  * about the gates INSIDE them next, and a second pass would be two RBAC reads
@@ -133,10 +132,16 @@ async function decide(caller: ReadAccessCaller): Promise<{
   // the site keeps off the dashboard is kept off it for everyone, before any
   // reader's verdict: hidden, a built-in an alternative replaces, or an
   // alternative not put anywhere.
+  // A widget only a super-admin is told exists, judged by the one
+  // super-admin decision, and asked only when such a widget is registered.
+  const superAdmin = all.some(widget => SUPER_ADMIN_WIDGET_IDS.has(widget.id))
+    ? await callerIsSuperAdmin(caller)
+    : false;
   const visible = all.filter(
     widget =>
       !keptOffBySite(widget.id) &&
-      holdsWidgetPermission(widget.requiredPermission, verdicts)
+      holdsWidgetPermission(widget.requiredPermission, verdicts) &&
+      (superAdmin || !SUPER_ADMIN_WIDGET_IDS.has(widget.id))
   );
   return {
     visible,
@@ -169,7 +174,7 @@ async function decide(caller: ReadAccessCaller): Promise<{
 export interface WidgetAudience {
   /** The cards this reader may see, in canonical order. */
   visible: CanonicalWidget[];
-  /** Ids of the declared widgets -- contributed or registered -- this reader may see. */
+  /** Ids of the declared widgets this reader may see. */
   declared: ReadonlySet<string>;
   /**
    * Whether a gate INSIDE a visible declaration holds for this reader.

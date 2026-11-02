@@ -81,18 +81,11 @@ function guardAdmits(
 }
 
 /** The settings pages a reader sees, and the editing one an editor uses. */
-const SEEN = [
-  ROUTES.SETTINGS,
-  ROUTES.SETTINGS_IMAGE_SIZES,
-  ROUTES.USERS_FIELDS,
-];
-const EDITED = [ROUTES.SETTINGS_IMAGE_SIZES_EDIT, ROUTES.USERS_FIELDS_EDIT];
-const CREATED = [
-  ROUTES.SETTINGS_IMAGE_SIZES_CREATE,
-  ROUTES.USERS_FIELDS_CREATE,
-];
+const SEEN = [ROUTES.SETTINGS, ROUTES.USERS_FIELDS];
+const EDITED = [ROUTES.USERS_FIELDS_EDIT];
+const CREATED = [ROUTES.USERS_FIELDS_CREATE];
 /** The settings nav entries a settings reader is shown. */
-const NAV = ["general", "image-sizes", "user-fields"];
+const NAV = ["general", "user-fields"];
 
 /** The settings nav entries shown, the API-key and webhook entries aside. */
 const navIds = (access: { hasPermission: (slug: string) => boolean }) =>

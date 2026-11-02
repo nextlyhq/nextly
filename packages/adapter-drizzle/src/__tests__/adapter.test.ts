@@ -368,6 +368,42 @@ describe("DrizzleAdapter", () => {
     });
   });
 
+  describe("distinct", () => {
+    /** A Drizzle stub that records which select its query began with. */
+    class RecordingAdapter extends MockAdapter {
+      began: string[] = [];
+      override getDrizzle<U = unknown>(): U {
+        const chain: Record<string, unknown> = {};
+        const self = () => chain;
+        chain.select = () => {
+          this.began.push("select");
+          return chain;
+        };
+        chain.selectDistinct = () => {
+          this.began.push("selectDistinct");
+          return chain;
+        };
+        chain.from = self;
+        chain.where = self;
+        chain.orderBy = self;
+        chain.limit = self;
+        chain.offset = self;
+        chain.then = (resolve: (rows: unknown[]) => unknown) => resolve([]);
+        return chain as U;
+      }
+    }
+
+    it("selects each row once when asked, and every row otherwise", async () => {
+      const recording = new RecordingAdapter();
+      recording.setTableResolver({ getTable: () => ({}) } as never);
+
+      await recording.select("posts", { distinct: true });
+      await recording.select("posts", {});
+
+      expect(recording.began).toEqual(["selectDistinct", "select"]);
+    });
+  });
+
   describe("forUpdate lock safety", () => {
     // A SELECT ... FOR UPDATE row lock only holds for the life of a transaction.
     // Requesting one on the pooled connection is silent false safety — the lock

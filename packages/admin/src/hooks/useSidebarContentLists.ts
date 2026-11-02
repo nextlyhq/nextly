@@ -27,6 +27,16 @@ const PINNED_COLLECTIONS_STORAGE_KEY = "nextly:sidebar:pinned-collections";
 const PINNED_SINGLES_STORAGE_KEY = "nextly:sidebar:pinned-singles";
 const SIDEBAR_PAGE_SIZE = 100;
 
+/**
+ * The collections the reader pinned to the top of the sidebar's Collections
+ * section. Its own hook so a view that orders types as that section does (the
+ * dashboard's New menu) reads the same pins without reading the sidebar's one
+ * page of collections.
+ */
+export function useSidebarCollectionPins(): ReturnType<typeof useSidebarPins> {
+  return useSidebarPins({ storageKey: PINNED_COLLECTIONS_STORAGE_KEY });
+}
+
 /** The collections the sidebar lists, before any search, with their pins. */
 export function useSidebarCollectionList() {
   const { capabilities } = useCurrentUserPermissions();
@@ -34,7 +44,7 @@ export function useSidebarCollectionList() {
   const query = useCollections(NAV_COLLECTIONS_PARAMS, {
     staleTime: 5 * 60 * 1000,
   });
-  const pins = useSidebarPins({ storageKey: PINNED_COLLECTIONS_STORAGE_KEY });
+  const pins = useSidebarCollectionPins();
 
   // The same filter and sort as the /admin/collections redirect, so the
   // sidebar's first item and the landing target agree.

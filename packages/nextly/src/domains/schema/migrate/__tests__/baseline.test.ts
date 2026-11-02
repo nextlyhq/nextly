@@ -6,8 +6,6 @@
  * right. Baselining twice would give a history two starting points, and
  * baselining nothing would record an origin that describes no schema.
  */
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
@@ -231,17 +229,13 @@ describe("the drift error an unadopted database produces", () => {
       "migrations/20260805120000_add_localization.sql"
     );
     expect(error.publicMessage).toContain(
-      join(
-        "migrations",
-        "meta",
-        "20260805120000_add_localization.snapshot.json"
-      )
+      "'migrations/meta/20260805120000_add_localization.snapshot.json'"
     );
     // The removal covers every per-dialect variant of the migration, which are
     // one migration: deleting only the selected file leaves its siblings and
     // `migrate:baseline` refuses the project as `history-not-empty`.
     expect(error.publicMessage).toContain(
-      `'${join("migrations", "20260805120000_add_localization")}'*.sql`
+      "'migrations/20260805120000_add_localization'*.sql"
     );
     // Clearing the WHOLE history is offered first: `migrate:baseline` refuses
     // a project with any migration or snapshot left, so a db:sync project that
@@ -272,10 +266,10 @@ describe("the drift error an unadopted database produces", () => {
     // The literal part is quoted; the `*` stays outside so the glob still
     // expands. Quoting the whole thing would hand `*.sql` to `rm` verbatim.
     expect(error.publicMessage).toContain(
-      `'${join("/Users/a b/site/migrations", "20260805_120000_123_add_subtitle")}'*.sql`
+      "'/Users/a b/site/migrations/20260805_120000_123_add_subtitle'*.sql"
     );
     expect(error.publicMessage).toContain(
-      `'${join("/Users/a b/site/migrations", "meta", "20260805_120000_123_add_subtitle.snapshot.json")}'`
+      "'/Users/a b/site/migrations/meta/20260805_120000_123_add_subtitle.snapshot.json'"
     );
   });
 

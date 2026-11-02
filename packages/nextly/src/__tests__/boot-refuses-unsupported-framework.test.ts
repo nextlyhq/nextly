@@ -9,8 +9,10 @@
  * this file stays under the module budget's heavy line: what a registration
  * does once the gate passes (the service registrations, the plugins' contexts,
  * the extension schema's publish and the code-first collections' sync), the
- * dispatcher that serves a request once services are up, and the config
- * reload, which runs on a change. An empty mock has no exports, so a boot that
+ * dispatcher that serves a request once services are up and the routes it
+ * reaches (versions, webhooks, the dashboard's summary, the auth routes and
+ * the Singles' reads), and the config reload, which runs on a change. An
+ * empty mock has no exports, so a boot that
  * reached any of them before the gate would fail on Vitest's missing-export
  * error rather than the refusal.
  */
@@ -44,6 +46,12 @@ vi.mock("../domains/schema/extension/publish", () => ({}));
 vi.mock("../domains/collections/services/collection-sync-service", () => ({}));
 vi.mock("../dispatcher/dispatcher", () => ({}));
 vi.mock("../init/reload-config", () => ({}));
+vi.mock("../domains/singles/services/single-query-service", () => ({}));
+vi.mock("../domains/singles/services/single-document-access", () => ({}));
+vi.mock("../api/versions-access", () => ({}));
+vi.mock("../auth/handlers/router", () => ({}));
+vi.mock("../api/webhooks", () => ({}));
+vi.mock("../api/dashboard-summary", () => ({}));
 
 const { getNextly } = await import("../init");
 const { createDynamicHandlers } = await import("../routeHandler");

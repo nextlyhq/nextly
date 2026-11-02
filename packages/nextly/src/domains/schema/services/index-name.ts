@@ -43,15 +43,29 @@ export function boundedIdentifier(full: string): string {
 }
 
 /**
- * `full` unchanged when it fits, otherwise its prefix followed by `_<suffix>`.
+ * A stored value bounded to the `maxBytes` of UTF-8 its column holds on every dialect, the way
+ * an identifier is: unchanged when it fits, else as much of its readable prefix as fits followed
+ * by a hash of the WHOLE value, so two long values sharing a prefix stay distinct where a plain
+ * truncation would store them as one.
+ */
+export function boundedValue(full: string, maxBytes: number): string {
+  return fitWithSuffix(full, fnv1a36(full), maxBytes);
+}
+
+/**
+ * `full` unchanged when it fits in `maxBytes`, otherwise its prefix followed by `_<suffix>`.
  *
  * The truncation itself, shared by the two ways a suffix is chosen: a hash of the whole name, or
  * the column-list digest a compound index name already carries.
  */
-function fitWithSuffix(full: string, suffix: string): string {
-  if (identifierBytes(full) <= MAX_INDEX_NAME_LENGTH) return full;
+function fitWithSuffix(
+  full: string,
+  suffix: string,
+  maxBytes: number = MAX_INDEX_NAME_LENGTH
+): string {
+  if (identifierBytes(full) <= maxBytes) return full;
   // The suffix is base-36, so its characters are its bytes.
-  return `${utf8Prefix(full, MAX_INDEX_NAME_LENGTH - suffix.length - 1)}_${suffix}`;
+  return `${utf8Prefix(full, maxBytes - suffix.length - 1)}_${suffix}`;
 }
 
 const utf8 = new TextEncoder();

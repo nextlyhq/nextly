@@ -137,6 +137,26 @@ export const DASHBOARD_PINS_INDEXES = [
   },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const MEDIA_USAGE_INDEXES = [
+  // One row per item per field per language of a document. It also serves
+  // replacing a document's rows, which reads them by its leading columns.
+  {
+    name: "nextly_media_usage_uidx",
+    columns: [
+      "subjectKind",
+      "subjectSlug",
+      "documentId",
+      "fieldPath",
+      "locale",
+      "mediaId",
+    ],
+    unique: true,
+  },
+  // Where one item is used, and whether it is used at all: the Unused view
+  // and its count ask this of every item.
+  { name: "nextly_media_usage_media_idx", columns: ["mediaId"] },
+] as const satisfies readonly CoreIndex<string>[];
+
 export const DASHBOARD_PREFERENCES_INDEXES = [
   // One value per reader per key.
   {

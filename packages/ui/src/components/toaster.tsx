@@ -131,6 +131,10 @@ export function Toaster({
           "--normal-text": "var(--nx-popover-foreground)",
           "--normal-border": "var(--nx-border)",
           "--border-radius": "0px",
+          // A success toast's surface and text, from the theme for each mode,
+          // in place of the library's own: its light text read below 4.5:1.
+          "--success-bg": "var(--nx-toast-success-bg)",
+          "--success-text": "var(--nx-toast-success-text)",
         } as React.CSSProperties
       }
       {...props}

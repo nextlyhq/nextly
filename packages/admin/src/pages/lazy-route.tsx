@@ -18,17 +18,14 @@
  */
 
 import { Button } from "@nextlyhq/ui";
-import { type ComponentType, useCallback, useEffect, useState } from "react";
+import { type ComponentType, useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
+import { useRetryableModule } from "@admin/hooks/useRetryableModule";
+import { retryableModule } from "@admin/lib/retryable-module";
 import type { PageProps } from "@admin/lib/routing";
 
 export type RouteModule = { default: ComponentType<PageProps> };
-
-type RouteLoadState =
-  | { status: "loading" }
-  | { status: "error" }
-  | { status: "ok"; Page: ComponentType<PageProps> };
 
 /** How long a fetch runs before its spinner is drawn. */
 const SPINNER_DELAY_MS = 200;
@@ -103,88 +100,28 @@ export type LazyRouteComponent = ComponentType<PageProps> & {
 export function lazyRoute(
   load: () => Promise<RouteModule>
 ): LazyRouteComponent {
-  // The browser keeps every fetched module until a full reload, so the
-  // resolved page component is remembered here and this route's next mount
-  // starts at `ok` — returning to a visited page shows the page, not the
-  // spinner again. This holds the component function, never a mounted page.
-  let loaded: ComponentType<PageProps> | null = null;
-  // The fetch in flight, shared by a preload and a visit so the two never
-  // download the chunk twice. Cleared when it fails, so the next attempt (a
-  // retry, or a visit after a failed preload) issues a fresh import().
-  let pending: Promise<ComponentType<PageProps>> | null = null;
-
-  function fetchPage(): Promise<ComponentType<PageProps>> {
-    pending ??= load().then(
-      module => {
-        loaded = module.default;
-        return module.default;
-      },
-      (error: unknown) => {
-        pending = null;
-        throw error;
-      }
-    );
-    return pending;
-  }
+  // One fetch shared by a preload and a visit, the page it delivered kept for
+  // a later visit, and a failure forgotten so a retry fetches afresh: the
+  // fetch, held apart from React.lazy (see `retryableModule`).
+  const page = retryableModule(() => load().then(module => module.default));
 
   function LazyRoute(props: PageProps) {
-    const [attempt, setAttempt] = useState(0);
-    const [state, setState] = useState<RouteLoadState>(() =>
-      loaded ? { status: "ok", Page: loaded } : { status: "loading" }
+    const { state, attempt, retry } = useRetryableModule(
+      page,
+      "This page's code"
     );
 
-    useEffect(() => {
-      if (loaded) {
-        // The previous mount's import resolved while this one was rendering:
-        // its promise set `loaded` in the gap between this mount's first
-        // render and this effect, so there is no fetch to start — adopt the
-        // page it delivered.
-        setState({ status: "ok", Page: loaded });
-        return;
-      }
-      let live = true;
-      setState({ status: "loading" });
-      fetchPage()
-        .then(Page => {
-          if (live) setState({ status: "ok", Page });
-        })
-        .catch((error: unknown) => {
-          // Said where a developer looks before the message replaces it: a
-          // missing chunk after a deploy and a module that throws while
-          // loading read the same on screen and differ only here.
-          console.error("[admin] This page's code could not be loaded:", error);
-          if (live) setState({ status: "error" });
-        });
-      return () => {
-        live = false;
-      };
-      // A fresh fetch per attempt: the retry bumps the counter, and `load`
-      // is the module-scope closure the registry declared — it never changes
-      // for this component.
-    }, [attempt]);
-
-    const retry = useCallback(() => setAttempt(attempt => attempt + 1), []);
-
     if (state.status === "loading") return <RouteLoading />;
-    // One retry covers a blipped fetch. Past it, a plain re-import may keep
-    // failing — some browsers cache a failed module load, and a chunk that
-    // fails while EVALUATING stays failed everywhere — so the recovery
-    // becomes a reload, which refetches from scratch and lets a real defect
-    // surface as one instead of posing as a connection problem.
+    // One retry covers a blipped fetch. Past it, the recovery becomes a reload
+    // (`useRetryableModule` says why).
     if (state.status === "error")
       return <RouteLoadError exhausted={attempt > 0} onRetry={retry} />;
 
-    const { Page } = state;
+    const Page = state.value;
     return <Page {...props} />;
   }
 
   // The route table's entries are ComponentType<PageProps>; the wrapper takes
   // the same props and renders nothing but the page once loaded.
-  return Object.assign(LazyRoute, {
-    preload: () => {
-      // A failed preload says nothing: the visit fetches again, and that is
-      // where a failure is logged and shown.
-      if (!loaded) fetchPage().catch(() => {});
-    },
-  });
+  return Object.assign(LazyRoute, { preload: page.preload });
 }

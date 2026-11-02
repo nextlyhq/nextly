@@ -13,12 +13,8 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
-import { getWidget, widgetSource } from "../../registry";
-import {
-  clearDeclaredWidgets,
-  declaredWidget,
-  resetLegacyIdWarnings,
-} from "../declared-widgets";
+import { getWidget, registerWidget, widgetSource } from "../../registry";
+import { clearDeclaredWidgets, declaredWidget } from "../declared-widgets";
 import { dashboard, revenue } from "./plugin/widgets";
 
 function plugin(
@@ -54,7 +50,6 @@ function refusal(run: () => void): string {
 }
 
 beforeEach(() => {
-  resetLegacyIdWarnings();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn: vi.fn(),
     info: vi.fn(),
@@ -69,25 +64,35 @@ describe("startup with plugins that declare widgets", () => {
     expect(declaredWidget("acme/revenue")?.owner).toBe('plugin "@acme/shop"');
     expect(declaredWidget("acme/orders-by-state")).toBeDefined();
     // Published as they are kept: the admin is offered each one, with its data built on the
-    // server from the declaration only core holds, so the definition carries neither.
+    // server from the declaration only core holds, so the definition carries no query and no
+    // data function.
     const published = getWidget("acme/orders-by-state");
-    expect(published).toMatchObject({
-      id: "acme/orders-by-state",
-      serverData: true,
-    });
+    expect(published).toMatchObject({ id: "acme/orders-by-state" });
     expect(published).not.toHaveProperty("query");
     expect(published).not.toHaveProperty("data");
     expect(widgetSource("acme/orders-by-state")).toBe('plugin "@acme/shop"');
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    expect(getWidget("core/continue")).toBeDefined();
   });
 
   it("withdraws what a declaration published when the declarations are cleared, and nothing else", () => {
     resetWidgetRegistries([plugin("@acme/shop", { dashboard })]);
+    // Every core card is a declaration now, so a widget registered as a definition stands in for
+    // what no declaration published.
+    registerWidget({
+      id: "acme/written",
+      title: "Written",
+      description: "A card registered as a definition, not declared.",
+      archetype: "custom",
+      component: "acme#Written",
+      size: { default: { w: 6, h: 4 } },
+    });
     expect(getWidget("acme/orders-by-state")).toBeDefined();
     clearDeclaredWidgets();
     expect(getWidget("acme/orders-by-state")).toBeUndefined();
-    // Core's own cards were never a declaration's, so they stay.
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    // Core's cards are declarations too, so they go with the rest.
+    expect(getWidget("core/continue")).toBeUndefined();
+    // What no declaration published stays.
+    expect(getWidget("acme/written")).toBeDefined();
     // And the same declarations can be made again.
     expect(() =>
       resetWidgetRegistries([plugin("@acme/shop", { dashboard })])
@@ -165,52 +170,5 @@ describe("startup with plugins that declare widgets", () => {
     expect(message).toContain(
       'plugin "@acme/shop", widget "(none)": its dashboard widgets must be a list'
     );
-  });
-
-  it("stops when a declared widget takes an id another plugin uses in today's shape", () => {
-    const message = refusal(() =>
-      resetWidgetRegistries([
-        plugin("@old/stats", {
-          admin: {
-            widgets: [
-              {
-                id: "acme/revenue",
-                title: "Revenue",
-                component: "@old/stats/admin#Revenue",
-              },
-            ],
-          },
-        }),
-        plugin("@acme/shop", { dashboard: { widgets: [revenue] } }),
-      ])
-    );
-    expect(message).toContain(
-      'id "acme/revenue" is already used by plugin "@old/stats", which declares it in the old shape'
-    );
-  });
-
-  it("stops when a plugin uses one of core's declared ids in today's shape, saying it is core's and what to do", () => {
-    // 🔴 One id has one owner: core declares core/note, so the plugin using it
-    // in the old shape is told to remove it or contribute an id of its own.
-    const message = refusal(() =>
-      resetWidgetRegistries([
-        plugin("@old/notes", {
-          admin: {
-            widgets: [
-              {
-                id: "core/note",
-                title: "Note",
-                component: "@old/notes/admin#Note",
-              },
-            ],
-          },
-        }),
-      ])
-    );
-    expect(message).toContain(
-      'plugin "@old/notes" contributes core/note through contributes.admin.widgets; core owns that id. Remove it, or contribute your own id through contributes.dashboard.'
-    );
-    // Filed under the plugin that has to change, not under core.
-    expect(message).toContain('plugin "@old/notes", widget "core/note"');
   });
 });

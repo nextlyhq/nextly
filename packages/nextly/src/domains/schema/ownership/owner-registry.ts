@@ -119,8 +119,11 @@ export function assertNoOwnerChange(
   }
 }
 
-/** How a refusal names each kind of element an owner row can record. */
-const ELEMENT_NOUNS: Record<
+/**
+ * How a refusal names each kind of element an owner row can record. Exported
+ * so every refusal that names another owner's element words its kind alike.
+ */
+export const ELEMENT_NOUNS: Record<
   Exclude<NonNullable<OwnerRecord["elementKind"]>, "table">,
   string
 > = {

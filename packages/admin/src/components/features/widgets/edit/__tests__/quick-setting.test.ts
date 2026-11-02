@@ -4,7 +4,11 @@
 import type { AnyWidgetSetting } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
-import { quickSettingOf, quickValueLabel } from "../quick-setting";
+import {
+  popoverSettingsOf,
+  quickSettingOf,
+  quickValueLabel,
+} from "../quick-setting";
 
 const range: AnyWidgetSetting = {
   name: "range",
@@ -34,5 +38,48 @@ describe("a card's quick setting", () => {
     const mine = { name: "mine", type: "checkbox", quick: true } as const;
     expect(quickValueLabel(mine, true)).toBe("On");
     expect(quickValueLabel(mine, false)).toBe("Off");
+  });
+});
+
+describe("the header's quick setting, among several marked", () => {
+  it("is the first marked one the header can draw, not the first marked", () => {
+    // A quick number is marked first; the header cannot draw it, so the choice after it is drawn.
+    const goal: AnyWidgetSetting = {
+      name: "goal",
+      type: "number",
+      quick: true,
+    };
+    expect(quickSettingOf([goal, range])).toBe(range);
+  });
+});
+
+describe("the quick popover's settings", () => {
+  const choice = (name: string): AnyWidgetSetting => ({
+    name,
+    type: "select",
+    label: name,
+    quick: true,
+    options: [{ label: "One", value: "one" }],
+  });
+  const collection: AnyWidgetSetting = {
+    name: "collection",
+    type: "collection",
+    label: "Collection",
+  };
+
+  it("holds the card's Collection beside the three marked quick, taking none of their places", () => {
+    const marked = [choice("a"), choice("b"), choice("c")];
+    expect(
+      popoverSettingsOf([collection, ...marked]).map(setting => setting.name)
+    ).toEqual(["collection", "a", "b", "c"]);
+  });
+
+  it("holds no more marked settings than core lets a widget mark", () => {
+    const marked = ["a", "b", "c", "d"].map(choice);
+    expect(popoverSettingsOf(marked).map(setting => setting.name)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
   });
 });

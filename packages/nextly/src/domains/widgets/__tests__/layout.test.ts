@@ -9,8 +9,10 @@ import {
   LAYOUT_SCHEMA_VERSION,
   MAX_CONFIG_DEPTH,
   DASHBOARD_FULL_MESSAGE,
+  MAX_CARD_TITLE_LENGTH,
   MAX_PLACEMENTS,
   MAX_STORED_PLACEMENTS,
+  chosenSizeIds,
   dismissalsApplied,
   layoutSizeProblem,
   mergePreservingHidden,
@@ -161,6 +163,31 @@ describe("reading placements", () => {
     ]);
   });
 
+  it("keeps a card's own title trimmed, and one with nothing left as the reader's clearing", () => {
+    const [titled, cleared] = readPlacements([
+      placement({ title: "  Drafts to finish  " }),
+      placement({ id: "p2", title: "   " }),
+    ]);
+    expect(titled?.title).toBe("Drafts to finish");
+    // "", not absent: the reader cleared it, which a default's own title must not undo.
+    expect(cleared?.title).toBe("");
+  });
+
+  it("refuses a title longer than a card's header holds, counted after trimming and in characters", () => {
+    const most = "é".repeat(MAX_CARD_TITLE_LENGTH);
+    expect(placementProblem(placement({ title: ` ${most} ` }))).toBeUndefined();
+    expect(placementProblem(placement({ title: `${most}x` }))).toMatch(
+      /"title" may hold at most 80 characters/
+    );
+    // Code points, not UTF-16 units: 80 emoji are 160 units and still fit.
+    expect(
+      placementProblem(placement({ title: "😀".repeat(MAX_CARD_TITLE_LENGTH) }))
+    ).toBeUndefined();
+    expect(placementProblem(placement({ title: 7 }))).toMatch(
+      /"title", when given, must be text/
+    );
+  });
+
   it("names the index of the offending placement", () => {
     expect(() => readPlacements([placement(), placement({ w: 20 })])).toThrow(
       /placements\[1\]/
@@ -245,6 +272,21 @@ describe("reading a stored row", () => {
       "acme/x",
       "collections/x",
     ]);
+  });
+
+  it("drops a core card retired by id, and keeps its live neighbours", () => {
+    // The Create card's id is retired: creating an entry is the header's New
+    // button. A saved row still holding it reads without it.
+    const row = readRow(
+      JSON.stringify({
+        schemaVersion: LAYOUT_SCHEMA_VERSION,
+        placements: [
+          card("create", "core/quick-create"),
+          card("team", "core/team"),
+        ],
+      })
+    );
+    expect(row.placements.map(p => p.widgetId)).toEqual(["core/team"]);
   });
 
   it("lets a dropped card claim no placement id", () => {
@@ -449,6 +491,45 @@ describe("a row of an earlier format is no saved arrangement", () => {
     expect(dismissalsApplied(defaults, row)).not.toEqual(defaults);
   });
 
+  it("carries a card's own title to the default's card, as its settings are", () => {
+    const row = readStoredLayout(
+      serializeLayout(
+        [card("mine", "core/b", { title: "Drafts", config: { range: "7d" } })],
+        false
+      )
+    );
+    const mine = dismissalsApplied(defaults, row).find(
+      each => each.widgetId === "core/b"
+    );
+    expect(mine).toMatchObject({ title: "Drafts", config: { range: "7d" } });
+  });
+
+  it("keeps a reader's cleared title over a title the default gives the card", () => {
+    const titled = defaults.map(each =>
+      each.widgetId === "core/b" ? { ...each, title: "Site picks" } : each
+    );
+    const cleared = readStoredLayout(
+      serializeLayout([card("mine", "core/b", { title: "  " })], false)
+    );
+    // Cleared, and read again: the reader's empty title, which reads as automatic, not the site's.
+    expect(
+      dismissalsApplied(titled, cleared).find(
+        each => each.widgetId === "core/b"
+      )?.title
+    ).toBe("");
+    // A row from before, which never names a title, keeps following the default's.
+    const before = readStoredLayout(
+      serializeLayout(
+        [card("mine", "core/b", { config: { range: "7d" } })],
+        false
+      )
+    );
+    expect(
+      dismissalsApplied(titled, before).find(each => each.widgetId === "core/b")
+        ?.title
+    ).toBe("Site picks");
+  });
+
   it("keeps each card's own choice where the default places one widget twice", () => {
     const twice = [card("core/a", "core/a"), card("a-second", "core/a")];
     const row = readStoredLayout(
@@ -466,6 +547,103 @@ describe("a row of an earlier format is no saved arrangement", () => {
       [true, { range: "7d" }],
       [false, { range: "30d" }],
     ]);
+  });
+
+  it("carries a stored size only for a card the reader resized, held to its widget's bounds", () => {
+    const defaults = [card("core/a", "core/a", { w: 6, h: 3 })];
+    const bounds = {
+      default: { w: 6, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 8, h: 3 },
+    };
+    const stored = [card("core/a", "core/a", { w: 12, h: 3 })];
+    const resized = readStoredLayout(
+      serializeLayout(stored, false, ["core/a"])
+    );
+    // Not resized: the size the row stored is the default's from then, and the default's now stands.
+    const notResized = readStoredLayout(serializeLayout(stored, false));
+    expect(
+      dismissalsApplied(defaults, notResized, () => bounds)[0]
+    ).toMatchObject({ w: 6 });
+    expect(dismissalsApplied(defaults, resized, () => bounds)[0]).toMatchObject(
+      { w: 8 }
+    );
+    // With nothing to judge a chosen size by, the default's stands.
+    expect(dismissalsApplied(defaults, resized)[0]).toMatchObject({ w: 6 });
+  });
+
+  it("names a card of an unarranged write as resized only where its size differs from the default's", () => {
+    const defaults = [card("core/a", "core/a", { w: 6, h: 3 }), card("core/b")];
+    expect(
+      chosenSizeIds(defaults, [
+        card("core/a", "core/a", { w: 8, h: 3 }),
+        card("core/b"),
+        // A card the default does not hold is not a size chosen against it.
+        card("extra", "core/extra", { w: 4 }),
+      ])
+    ).toEqual(["core/a"]);
+  });
+
+  it("keeps a size the reader chose while the write leaves it as stored, though the default now gives it", () => {
+    // The default caught up with the size the reader chose for core/a.
+    const defaults = [card("core/a", "core/a", { w: 8, h: 3 }), card("core/b")];
+    const row = readRow(
+      serializeLayout(
+        [card("core/a", "core/a", { w: 8, h: 3 }), card("core/b")],
+        false,
+        ["core/a"]
+      )
+    );
+    // An unrelated write: core/a's size is the one stored, so it stays theirs.
+    expect(
+      chosenSizeIds(
+        defaults,
+        [
+          card("core/a", "core/a", { w: 8, h: 3 }),
+          card("core/b", "core/b", { removed: true }),
+        ],
+        row
+      )
+    ).toEqual(["core/a"]);
+    // Resized to anything else at the default's size, or by another widget's card under the
+    // same id, it is not.
+    const elsewhere = [card("core/a", "core/a", { w: 6, h: 3 })];
+    expect(
+      chosenSizeIds([card("core/a", "core/a", { w: 6, h: 3 })], elsewhere, row)
+    ).toEqual([]);
+    expect(
+      chosenSizeIds(
+        [card("core/a", "core/x", { w: 8, h: 3 })],
+        [card("core/a", "core/x", { w: 8, h: 3 })],
+        row
+      )
+    ).toEqual([]);
+    // With no stored row, a size the default gives is not chosen.
+    expect(
+      chosenSizeIds(defaults, [card("core/a", "core/a", { w: 8, h: 3 })])
+    ).toEqual([]);
+  });
+
+  it("keeps a size the reader chose for a card the row stored under another id, matched by its widget", () => {
+    // The row holds core/a's one card under the id an earlier default gave it; the default now
+    // places it under its own id, at the size the reader chose.
+    const defaults = [card("core/a", "core/a", { w: 8, h: 3 })];
+    const row = readRow(
+      serializeLayout([card("old-id", "core/a", { w: 8, h: 3 })], false, [
+        "old-id",
+      ])
+    );
+    expect(
+      chosenSizeIds(defaults, [card("core/a", "core/a", { w: 8, h: 3 })], row)
+    ).toEqual(["core/a"]);
+    // The same card resized to anything else gives the choice up.
+    expect(
+      chosenSizeIds(
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        [card("core/a", "core/a", { w: 6, h: 3 })],
+        row
+      )
+    ).toEqual([]);
   });
 
   it("starts a card afresh when its id was stored for another widget", () => {
@@ -491,6 +669,95 @@ describe("a row of an earlier format is no saved arrangement", () => {
         )
       ).toBeUndefined();
     }
+  });
+});
+
+describe("a card of a widget core renamed", () => {
+  const getStarted = (
+    patch: Partial<WidgetPlacement> = {}
+  ): WidgetPlacement => ({
+    id: "core/get-started",
+    widgetId: "core/get-started",
+    w: 12,
+    h: 4,
+    removed: false,
+    ...patch,
+  });
+  const others = (setup: WidgetPlacement): WidgetPlacement[] => [
+    { id: "a", widgetId: "core/a", w: 6, h: 3, removed: false },
+    setup,
+    { id: "b", widgetId: "core/b", w: 6, h: 3, removed: false },
+  ];
+
+  it("is read as the current widget's, in its place, its id following the widget's own", () => {
+    const row = readStoredLayout(serializeLayout(others(getStarted())));
+    expect(row?.placements).toEqual(
+      others({
+        id: "core/setup",
+        widgetId: "core/setup",
+        w: 12,
+        h: 4,
+        removed: false,
+      })
+    );
+  });
+
+  it("keeps an id that was not the widget's own, and whether it was removed, but not its settings", () => {
+    const row = readStoredLayout(
+      serializeLayout([
+        getStarted({ id: "mine", removed: true, config: { compact: true } }),
+      ])
+    );
+    expect(row?.placements).toEqual([
+      { id: "mine", widgetId: "core/setup", w: 12, h: 4, removed: true },
+    ]);
+  });
+
+  it("gives way to a card of the current widget the row already holds", () => {
+    const current: WidgetPlacement = {
+      id: "core/setup",
+      widgetId: "core/setup",
+      w: 12,
+      h: 2,
+      removed: false,
+    };
+    const row = readStoredLayout(serializeLayout([getStarted(), current]));
+    expect(row?.placements).toEqual([current]);
+  });
+
+  it("carries a size the reader chose for it, on a row that follows the default", () => {
+    const row = readStoredLayout(
+      serializeLayout([getStarted()], false, ["core/get-started"])
+    );
+    expect(row?.sized).toEqual(["core/setup"]);
+  });
+
+  it("moves a chosen size only for the card it renamed, never onto a setup card the row holds", () => {
+    const setup: WidgetPlacement = {
+      id: "core/setup",
+      widgetId: "core/setup",
+      w: 12,
+      h: 2,
+      removed: false,
+    };
+    // The former card was resized and is dropped; the setup card kept was not resized.
+    const both = readStoredLayout(
+      serializeLayout([getStarted(), setup], false, ["core/get-started"])
+    );
+    expect(both?.placements).toEqual([setup]);
+    expect(both?.sized ?? []).not.toContain("core/setup");
+    // A card that only bears the former id as its own opaque id keeps its marker to itself.
+    const other: WidgetPlacement = {
+      id: "core/get-started",
+      widgetId: "core/a",
+      w: 6,
+      h: 3,
+      removed: false,
+    };
+    const unrelated = readStoredLayout(
+      serializeLayout([other], false, ["core/get-started"])
+    );
+    expect(unrelated?.sized).toEqual(["core/get-started"]);
   });
 });
 
