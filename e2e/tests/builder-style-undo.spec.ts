@@ -12,7 +12,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { openEditorWith } from "./canvas/editor-driver";
 import { LOCK } from "./support/locks";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 // The homepage Single is reseeded and edited here, as the other builder files
 // do, and the site's tokens are changed and restored.
@@ -85,7 +85,9 @@ test("Undo saves a changed variable back as it was, and Redo saves it again", as
     expect(JSON.stringify(await storedTokens(page))).toContain(CHANGED);
 
     // A style is stored as it changes: the page holds no unsaved work.
-    await expect(page.getByText("Unsaved changes")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText("Unsaved changes")
+    ).toHaveCount(0);
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before },
