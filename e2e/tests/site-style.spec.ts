@@ -26,9 +26,11 @@
  */
 import { expect, type APIResponse } from "@playwright/test";
 
+import { LOCK } from "./support/locks";
 import { fileAccount, test } from "./support/test";
 
-test.describe.configure({ mode: "serial" });
+// Stores the site's tokens and reads them back from a published page.
+test.describe.configure({ mode: "serial", lock: [LOCK.siteStyle] });
 
 const SITE_STYLE = "/admin/api/singles/site-style";
 const ENTRIES = "/admin/api/collections/block-pages/entries";

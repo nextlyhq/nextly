@@ -19,7 +19,11 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+
+// Reads the site's devices, which a spec storing breakpoints changes.
+test.describe.configure({ lock: [LOCK.siteStyle] });
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];

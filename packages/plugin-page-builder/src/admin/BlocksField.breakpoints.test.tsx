@@ -224,6 +224,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   // Nothing stored, read successfully — so the merged style is the host's
   // config alone and `status` is "ready". A pending read would disable the

@@ -19,6 +19,8 @@ import type { PanelView } from "@nextlyhq/builder";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import type * as React from "react";
 
+import { RemountOnStyleReplay } from "./site-style-history";
+
 /** The panel's tabs, in the order the rail's Design item shows them. */
 const DESIGN_VIEWS = [
   { value: "variables", label: "Variables" },
@@ -57,7 +59,11 @@ export function DesignPanel({
       </TabsList>
       {DESIGN_VIEWS.map(entry => (
         <TabsContent key={entry.value} value={entry.value}>
-          {entry.value === current ? tabs[entry.value]() : null}
+          {/* A style change undone or redone is written behind the open
+              tab's back, so the tab is mounted afresh to read it. */}
+          {entry.value === current ? (
+            <RemountOnStyleReplay>{tabs[entry.value]()}</RemountOnStyleReplay>
+          ) : null}
         </TabsContent>
       ))}
     </Tabs>

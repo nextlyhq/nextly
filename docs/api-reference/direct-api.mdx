@@ -25,7 +25,7 @@ const result = await nextly.find({
   limit: 10,
 });
 
-console.log(result.items);      // Post[]
+console.log(result.items); // Post[]
 console.log(result.meta.total); // number
 ```
 
@@ -91,32 +91,32 @@ const result = await nextly.find({
   depth: 2,
 });
 
-result.items;            // Post[]
-result.meta.total;       // total matching rows
-result.meta.page;        // current page (1-indexed)
-result.meta.limit;       // page size
-result.meta.totalPages;  // total pages
-result.meta.hasNext;     // boolean
-result.meta.hasPrev;     // boolean
+result.items; // Post[]
+result.meta.total; // total matching rows
+result.meta.page; // current page (1-indexed)
+result.meta.limit; // page size
+result.meta.totalPages; // total pages
+result.meta.hasNext; // boolean
+result.meta.hasPrev; // boolean
 ```
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `collection` | `string` | required | Collection slug. |
-| `where` | `WhereFilter` | — | Filter conditions (see [Querying](#querying)). |
-| `limit` | `number` | `10` | Page size. |
-| `page` | `number` | `1` | Page number, 1-indexed. |
-| `sort` | `string` | — | `field` for ascending, `-field` for descending. |
-| `depth` | `number` | `0` | Relationship population depth. |
-| `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
-| `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
-| `pagination` | `boolean` | `true` | Set `false` to return all matching rows without paging. |
-| `status` | `"published" \| "draft" \| "all"` | — | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
-| `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
-| `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
-| `context` | `Record<string, unknown>` | — | Custom data forwarded to hooks via `req.context`. |
-| `disableErrors` | `boolean` | `false` | Return an empty result instead of throwing. |
+| Argument         | Type                                         | Default  | Description                                                                                                                                      |
+| ---------------- | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `collection`     | `string`                                     | required | Collection slug.                                                                                                                                 |
+| `where`          | `WhereFilter`                                | —        | Filter conditions (see [Querying](#querying)).                                                                                                   |
+| `limit`          | `number`                                     | `10`     | Page size.                                                                                                                                       |
+| `page`           | `number`                                     | `1`      | Page number, 1-indexed.                                                                                                                          |
+| `sort`           | `string`                                     | —        | `field` for ascending, `-field` for descending.                                                                                                  |
+| `depth`          | `number`                                     | `0`      | Relationship population depth.                                                                                                                   |
+| `select`         | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                                                   |
+| `populate`       | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                                                    |
+| `pagination`     | `boolean`                                    | `true`   | Set `false` to return all matching rows without paging.                                                                                          |
+| `status`         | `"published" \| "draft" \| "all"`            | —        | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
+| `richTextFormat` | `"json" \| "html" \| "both"`                 | `"json"` | Output format for rich text fields.                                                                                                              |
+| `overrideAccess` | `boolean`                                    | `true`   | Bypass access control.                                                                                                                           |
+| `user`           | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                    |
+| `context`        | `Record<string, unknown>`                    | —        | Custom data forwarded to hooks via `req.context`.                                                                                                |
+| `disableErrors`  | `boolean`                                    | `false`  | Return an empty result instead of throwing.                                                                                                      |
 
 ### findByID
 
@@ -144,19 +144,19 @@ if (post) {
 }
 ```
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `collection` | `string` | required | Collection slug. |
-| `id` | `string` | required | Document ID. |
-| `depth` | `number` | `0` | Relationship population depth. |
-| `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
-| `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
-| `status` | `"published" \| "draft" \| "all"` | — | As on `find`. An untrusted read that states none answers `NOT_FOUND` for a row that was never published, whatever `draft` says. |
-| `draft` | `boolean` | `false` | Overlay the pending working draft on a drafts-enabled collection. Granted outright to a trusted read; for an untrusted one, only when the caller may update the document. |
-| `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
-| `disableErrors` | `boolean` | `false` | Return `null` instead of throwing. |
-| `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
+| Argument         | Type                                         | Default  | Description                                                                                                                                                               |
+| ---------------- | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collection`     | `string`                                     | required | Collection slug.                                                                                                                                                          |
+| `id`             | `string`                                     | required | Document ID.                                                                                                                                                              |
+| `depth`          | `number`                                     | `0`      | Relationship population depth.                                                                                                                                            |
+| `select`         | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                                                                            |
+| `populate`       | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                                                                             |
+| `status`         | `"published" \| "draft" \| "all"`            | —        | As on `find`. An untrusted read that states none answers `NOT_FOUND` for a row that was never published, whatever `draft` says.                                           |
+| `draft`          | `boolean`                                    | `false`  | Overlay the pending working draft on a drafts-enabled collection. Granted outright to a trusted read; for an untrusted one, only when the caller may update the document. |
+| `richTextFormat` | `"json" \| "html" \| "both"`                 | `"json"` | Output format for rich text fields.                                                                                                                                       |
+| `disableErrors`  | `boolean`                                    | `false`  | Return `null` instead of throwing.                                                                                                                                        |
+| `overrideAccess` | `boolean`                                    | `true`   | Bypass access control.                                                                                                                                                    |
+| `user`           | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                                             |
 
 **Returns:** `T | null`.
 
@@ -174,20 +174,20 @@ const created = await nextly.create({
   },
 });
 
-created.message;  // e.g. "Posts created."
-created.item;     // the created Post
+created.message; // e.g. "Posts created."
+created.item; // the created Post
 created.item.id;
 ```
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `collection` | `string` | required | Collection slug. |
-| `data` | `Record<string, unknown>` | required | Document data. |
-| `draft` | `boolean` | `false` | Save as draft. |
-| `disableVerificationEmail` | `boolean` | `false` | Skip the verification email when creating users. |
-| `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
-| `context` | `Record<string, unknown>` | — | Forwarded to hooks. |
+| Argument                   | Type                      | Default  | Description                                                                                                   |
+| -------------------------- | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `collection`               | `string`                  | required | Collection slug.                                                                                              |
+| `data`                     | `Record<string, unknown>` | required | Document data.                                                                                                |
+| `draft`                    | `boolean`                 | `false`  | Save as draft.                                                                                                |
+| `disableVerificationEmail` | `boolean`                 | `false`  | Skip the verification email when creating users.                                                              |
+| `overrideAccess`           | `boolean`                 | `true`   | Bypass access control.                                                                                        |
+| `user`                     | `{ id, role? }`           | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
+| `context`                  | `Record<string, unknown>` | —        | Forwarded to hooks.                                                                                           |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`VALIDATION_ERROR`) when the payload fails validation; the thrown error carries field-level details on `error.publicData.errors`.
 
@@ -203,8 +203,8 @@ const updated = await nextly.update({
   data: { status: "published", publishedAt: new Date() },
 });
 
-updated.item;     // the updated Post
-updated.message;  // "Posts updated."
+updated.item; // the updated Post
+updated.message; // "Posts updated."
 
 // By where (single match path — use bulk endpoints for true bulk semantics)
 const archived = await nextly.update({
@@ -214,15 +214,15 @@ const archived = await nextly.update({
 });
 ```
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `collection` | `string` | required | Collection slug. |
-| `id` | `string` | — | Document ID. Either `id` or `where` is required. |
-| `where` | `WhereFilter` | — | Where clause for the by-query path. |
-| `data` | `Record<string, unknown>` | required | Update payload. |
-| `draft` | `boolean` | `false` | Autosave as draft. |
-| `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
+| Argument         | Type                      | Default  | Description                                                                                                   |
+| ---------------- | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `collection`     | `string`                  | required | Collection slug.                                                                                              |
+| `id`             | `string`                  | —        | Document ID. Either `id` or `where` is required.                                                              |
+| `where`          | `WhereFilter`             | —        | Where clause for the by-query path.                                                                           |
+| `data`           | `Record<string, unknown>` | required | Update payload.                                                                                               |
+| `draft`          | `boolean`                 | `false`  | Autosave as draft.                                                                                            |
+| `overrideAccess` | `boolean`                 | `true`   | Bypass access control.                                                                                        |
+| `user`           | `{ id, role? }`           | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`NOT_FOUND`) when the where clause matches nothing.
 
@@ -253,13 +253,13 @@ if ("ids" in archived) {
 }
 ```
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `collection` | `string` | required | Collection slug. |
-| `id` | `string` | — | Document ID. Either `id` or `where` is required. |
-| `where` | `WhereFilter` | — | Where clause for the bulk-by-query path. |
-| `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
+| Argument         | Type            | Default  | Description                                                                                                   |
+| ---------------- | --------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `collection`     | `string`        | required | Collection slug.                                                                                              |
+| `id`             | `string`        | —        | Document ID. Either `id` or `where` is required.                                                              |
+| `where`          | `WhereFilter`   | —        | Where clause for the bulk-by-query path.                                                                      |
+| `overrideAccess` | `boolean`       | `true`   | Bypass access control.                                                                                        |
+| `user`           | `{ id, role? }` | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<{ id: string }> | DeleteResult`.
 
@@ -375,11 +375,11 @@ const result = await nextly.bulkDelete({
   ids: ["post-1", "post-2", "post-3"],
 });
 
-result.successes;    // [{ id: "post-1" }, { id: "post-2" }]
-result.failures;     // [{ id: "post-3", code: "NOT_FOUND", message: "..." }]
-result.total;        // 3
+result.successes; // [{ id: "post-1" }, { id: "post-2" }]
+result.failures; // [{ id: "post-3", code: "NOT_FOUND", message: "..." }]
+result.total; // 3
 result.successCount; // 2
-result.failedCount;  // 1
+result.failedCount; // 1
 ```
 
 **Returns:** `BulkOperationResult<T>` — `{ successes, failures, total, successCount, failedCount }`. The HTTP request always returns 200 unless the input itself is malformed; per-item errors live in the body's `failures` array.
@@ -395,8 +395,8 @@ const copy = await nextly.duplicate({
   overrides: { title: "Copy of Original Post" },
 });
 
-copy.message;  // "Posts duplicated."
-copy.item.id;  // new id
+copy.message; // "Posts duplicated."
+copy.item.id; // new id
 ```
 
 **Returns:** `MutationResult<T>` (`{ message, item }`).
@@ -418,17 +418,33 @@ const settings = await nextly.findSingle({
 console.log(settings.siteName);
 ```
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `slug` | `string` | required | Single slug. |
-| `depth` | `number` | `0` | Relationship population depth. |
-| `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
-| `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
-| `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Rich text output format. |
-| `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
+| Argument          | Type                                         | Default  | Description                                                                                                              |
+| ----------------- | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `slug`            | `string`                                     | required | Single slug.                                                                                                             |
+| `depth`           | `number`                                     | `0`      | Relationship population depth.                                                                                           |
+| `select`          | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                           |
+| `populate`        | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                            |
+| `richTextFormat`  | `"json" \| "html" \| "both"`                 | `"json"` | Rich text output format.                                                                                                 |
+| `overrideAccess`  | `boolean`                                    | `true`   | Bypass access control.                                                                                                   |
+| `user`            | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.            |
+| `createIfMissing` | `boolean`                                    | `true`   | Whether a read of a single that has never been saved creates its default document. Pass `false` to read without writing. |
 
-**Returns:** the bare single document (`T`).
+**Returns:** the bare single document (`T`). With `createIfMissing: false`, a
+single that has no stored document yet answers `null` (typed `T | null`), and
+nothing is created: no row, no version and no event. Use it where a read must
+not write, such as rendering a page from settings that may never have been
+saved.
+
+```typescript
+const settings = await nextly.findSingle({
+  slug: "site-settings",
+  createIfMissing: false,
+});
+
+if (settings === null) {
+  // Nobody has saved these settings yet; use your defaults.
+}
+```
 
 ### updateSingle
 
@@ -479,14 +495,14 @@ const codeSingles = await nextly.findSingles({ source: "code" });
 const settingsLike = await nextly.findSingles({ search: "settings" });
 ```
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `source` | `"code" \| "ui" \| "built-in"` | — | Filter by definition source. |
-| `migrationStatus` | `"synced" \| "pending" \| "generated" \| "applied" \| "failed"` | — | Filter by current schema state. |
-| `locked` | `boolean` | — | Return only locked or only unlocked singles. |
-| `search` | `string` | — | Substring match on slug or label. |
-| `limit` | `number` | — | Max results. |
-| `offset` | `number` | `0` | Skip count. |
+| Argument          | Type                                                            | Default | Description                                  |
+| ----------------- | --------------------------------------------------------------- | ------- | -------------------------------------------- |
+| `source`          | `"code" \| "ui" \| "built-in"`                                  | —       | Filter by definition source.                 |
+| `migrationStatus` | `"synced" \| "pending" \| "generated" \| "applied" \| "failed"` | —       | Filter by current schema state.              |
+| `locked`          | `boolean`                                                       | —       | Return only locked or only unlocked singles. |
+| `search`          | `string`                                                        | —       | Substring match on slug or label.            |
+| `limit`           | `number`                                                        | —       | Max results.                                 |
+| `offset`          | `number`                                                        | `0`     | Skip count.                                  |
 
 **Returns:** `SingleListResult` — `{ docs: SingleEntry[], totalDocs, limit, offset }`. Each `SingleEntry` is `{ slug, label, data }`.
 
@@ -508,20 +524,20 @@ const result = await nextly.email.send({
   text: "Welcome to Nextly",
 });
 
-result.success;    // boolean
-result.messageId;  // provider-assigned ID (when successful)
-result.error;      // error string (when failed)
+result.success; // boolean
+result.messageId; // provider-assigned ID (when successful)
+result.error; // error string (when failed)
 ```
 
-| Argument | Type | Description |
-|---|---|---|
-| `to` | `string \| string[]` | Recipient(s). |
-| `subject` | `string` | Subject line. |
-| `html` | `string` | HTML body. |
-| `text` | `string` | Plain-text fallback. |
-| `from` | `string` | Override the sender. |
-| `providerId` | `string` | Use a specific provider instead of the default. |
-| `attachments` | `EmailAttachmentInput[]` | Media-library attachments. |
+| Argument      | Type                     | Description                                     |
+| ------------- | ------------------------ | ----------------------------------------------- |
+| `to`          | `string \| string[]`     | Recipient(s).                                   |
+| `subject`     | `string`                 | Subject line.                                   |
+| `html`        | `string`                 | HTML body.                                      |
+| `text`        | `string`                 | Plain-text fallback.                            |
+| `from`        | `string`                 | Override the sender.                            |
+| `providerId`  | `string`                 | Use a specific provider instead of the default. |
+| `attachments` | `EmailAttachmentInput[]` | Media-library attachments.                      |
 
 **Returns:** `SendEmailResult` — `{ success, messageId?, error? }`.
 
@@ -537,13 +553,13 @@ const result = await nextly.email.sendWithTemplate({
 });
 ```
 
-| Argument | Type | Description |
-|---|---|---|
-| `to` | `string \| string[]` | Recipient(s). |
-| `template` | `string` | Template slug. |
-| `variables` | `Record<string, string>` | Substituted into the template. |
-| `from` | `string` | Override the sender. |
-| `providerId` | `string` | Use a specific provider. |
+| Argument      | Type                     | Description                                       |
+| ------------- | ------------------------ | ------------------------------------------------- |
+| `to`          | `string \| string[]`     | Recipient(s).                                     |
+| `template`    | `string`                 | Template slug.                                    |
+| `variables`   | `Record<string, string>` | Substituted into the template.                    |
+| `from`        | `string`                 | Override the sender.                              |
+| `providerId`  | `string`                 | Use a specific provider.                          |
 | `attachments` | `EmailAttachmentInput[]` | Merged with the template's defaults at send time. |
 
 **Returns:** `SendEmailResult` — `{ success, messageId?, error? }`.
@@ -562,9 +578,9 @@ const result = await nextly.login({
   password: "secure-password",
 });
 
-result.user;   // { id, email, name, image, ... }
-result.token;  // string (JWT)
-result.exp;    // unix timestamp
+result.user; // { id, email, name, image, ... }
+result.token; // string (JWT)
+result.exp; // unix timestamp
 ```
 
 **Returns:** `LoginResult` — `{ user, token, exp }`. Throws `NextlyError` (`AUTH_INVALID_CREDENTIALS`) on bad credentials.
@@ -673,19 +689,19 @@ await nextly.verifyEmail({ token: "verification-token" });
 
 The Direct API also exposes typed namespaces for users, media, forms, field groups, email providers + templates, RBAC, API keys, and access checks. They follow the same `find` / `findByID` / `create` / `update` / `delete` shape and use the canonical `ListResult<T>` and `MutationResult<T>` envelopes:
 
-| Namespace | Purpose | Key methods |
-|---|---|---|
-| `nextly.users` | User records | `find`, `findOne`, `findByID`, `create`, `update`, `delete` |
-| `nextly.media` | Media library | `upload`, `find`, `findByID`, `update`, `delete`, `bulkDelete`, `folders.list`, `folders.create` |
-| `nextly.forms` | Form-builder forms | `find`, `findBySlug`, `submit`, `submissions` |
-| `nextly.fieldGroups` | Reusable field group definitions | `find`, `findBySlug`, `create`, `update`, `delete` |
-| `nextly.emailProviders` | Provider CRUD | `find`, `findByID`, `create`, `update`, `delete`, `setDefault`, `test` |
+| Namespace               | Purpose                          | Key methods                                                                                            |
+| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `nextly.users`          | User records                     | `find`, `findOne`, `findByID`, `create`, `update`, `delete`                                            |
+| `nextly.media`          | Media library                    | `upload`, `find`, `findByID`, `update`, `delete`, `bulkDelete`, `folders.list`, `folders.create`       |
+| `nextly.forms`          | Form-builder forms               | `find`, `findBySlug`, `submit`, `submissions`                                                          |
+| `nextly.fieldGroups`    | Reusable field group definitions | `find`, `findBySlug`, `create`, `update`, `delete`                                                     |
+| `nextly.emailProviders` | Provider CRUD                    | `find`, `findByID`, `create`, `update`, `delete`, `setDefault`, `test`                                 |
 | `nextly.emailTemplates` | Template CRUD + preview + layout | `find`, `findByID`, `findBySlug`, `create`, `update`, `delete`, `preview`, `getLayout`, `updateLayout` |
-| `nextly.userFields` | Custom user field definitions | `find`, `findByID`, `create`, `update`, `delete`, `reorder` |
-| `nextly.roles` | RBAC roles | `find`, `findByID`, `create`, `update`, `delete`, `getPermissions`, `setPermissions` |
-| `nextly.permissions` | RBAC permissions | `find`, `findByID`, `create`, `delete` |
-| `nextly.access` | Permission checks | `check`, `checkApiKey` |
-| `nextly.apiKeys` | API keys | `list`, `findByID`, `create`, `update`, `revoke` |
+| `nextly.userFields`     | Custom user field definitions    | `find`, `findByID`, `create`, `update`, `delete`, `reorder`                                            |
+| `nextly.roles`          | RBAC roles                       | `find`, `findByID`, `create`, `update`, `delete`, `getPermissions`, `setPermissions`                   |
+| `nextly.permissions`    | RBAC permissions                 | `find`, `findByID`, `create`, `delete`                                                                 |
+| `nextly.access`         | Permission checks                | `check`, `checkApiKey`                                                                                 |
+| `nextly.apiKeys`        | API keys                         | `list`, `findByID`, `create`, `update`, `revoke`                                                       |
 
 `nextly.apiKeys`, on the module-level `nextly` and on `await getNextly()` alike, honours `overrideAccess: false`, set on the call or on the instance (`new Nextly({ overrideAccess: false, user })`), and judges the `user` the way the admin's API key routes judge them:
 
@@ -713,20 +729,20 @@ The full TypeScript surface is generated from [`packages/nextly/src/direct-api/n
 
 ### Operators
 
-| Operator | Description | Example |
-|---|---|---|
-| `equals` | Exact match | `{ status: { equals: "published" } }` |
-| `not_equals` | Not equal | `{ status: { not_equals: "draft" } }` |
-| `greater_than` | `>` | `{ price: { greater_than: 100 } }` |
-| `greater_than_equal` | `>=` | `{ price: { greater_than_equal: 100 } }` |
-| `less_than` | `<` | `{ price: { less_than: 50 } }` |
-| `less_than_equal` | `<=` | `{ price: { less_than_equal: 50 } }` |
-| `like` | SQL `LIKE` (case-sensitive) | `{ title: { like: "%hello%" } }` |
-| `contains` | Substring, ignoring case on every database; `%` and `_` are matched as typed | `{ title: { contains: "hello" } }` |
-| `search` | Alias for `contains` | `{ title: { search: "hello" } }` |
-| `in` | Value in array | `{ status: { in: ["draft", "published"] } }` |
-| `not_in` | Value not in array | `{ status: { not_in: ["archived"] } }` |
-| `exists` | Field is non-null when `true`, null when `false` | `{ image: { exists: true } }` |
+| Operator             | Description                                                                  | Example                                      |
+| -------------------- | ---------------------------------------------------------------------------- | -------------------------------------------- |
+| `equals`             | Exact match                                                                  | `{ status: { equals: "published" } }`        |
+| `not_equals`         | Not equal                                                                    | `{ status: { not_equals: "draft" } }`        |
+| `greater_than`       | `>`                                                                          | `{ price: { greater_than: 100 } }`           |
+| `greater_than_equal` | `>=`                                                                         | `{ price: { greater_than_equal: 100 } }`     |
+| `less_than`          | `<`                                                                          | `{ price: { less_than: 50 } }`               |
+| `less_than_equal`    | `<=`                                                                         | `{ price: { less_than_equal: 50 } }`         |
+| `like`               | SQL `LIKE` (case-sensitive)                                                  | `{ title: { like: "%hello%" } }`             |
+| `contains`           | Substring, ignoring case on every database; `%` and `_` are matched as typed | `{ title: { contains: "hello" } }`           |
+| `search`             | Alias for `contains`                                                         | `{ title: { search: "hello" } }`             |
+| `in`                 | Value in array                                                               | `{ status: { in: ["draft", "published"] } }` |
+| `not_in`             | Value not in array                                                           | `{ status: { not_in: ["archived"] } }`       |
+| `exists`             | Field is non-null when `true`, null when `false`                             | `{ image: { exists: true } }`                |
 
 Point fields also support `near` and `within` geo operators; these are evaluated in the application layer rather than pushed to the database.
 
@@ -783,7 +799,12 @@ await nextly.find({ collection: "posts", sort: "-featured,-publishedAt" });
 `offset` skips that many entries, whether or not that falls on a page boundary. `offset: 6, limit: 6` returns items 7 to 12:
 
 ```typescript
-await nextly.find({ collection: "posts", sort: "-publishedAt", offset: 6, limit: 6 });
+await nextly.find({
+  collection: "posts",
+  sort: "-publishedAt",
+  offset: 6,
+  limit: 6,
+});
 ```
 
 `offset` is a whole number from 0, and it can't be combined with `page`. `meta.total` stays the full match count, and `hasNext` and `hasPrev` follow the offset. With no `sort`, an offset read is in id order.
