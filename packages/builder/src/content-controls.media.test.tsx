@@ -263,7 +263,73 @@ describe("the rich-text control", () => {
       />
     );
     const field = screen.getByRole("textbox", { name: "Body" });
-    expect(field.getAttribute("contenteditable")).toBe("false");
+    expect(field.getAttribute("contenteditable")).not.toBe("true");
     expect(field.getAttribute("aria-readonly")).toBe("true");
+  });
+
+  /** A loader whose editor arrives only when the test says so. */
+  function slowEditor(
+    attach: (element: HTMLElement, value: unknown) => unknown
+  ) {
+    let arrive: () => void = () => {};
+    const arrived = new Promise<void>(resolve => {
+      arrive = resolve;
+    });
+    const load = vi.fn(async () => {
+      await arrived;
+      return { attach };
+    }) as unknown as ContentServices["loadRichTextEditor"];
+    return { load, arrive };
+  }
+
+  it("takes no typing until the editor attaches, then puts the caret in it", async () => {
+    // Keys typed into the bare element would be replaced by the stored
+    // passage when the editor took it over, so it is not editable until then.
+    register();
+    const focus = vi.fn();
+    const attach = vi.fn(() => ({
+      status: "attached",
+      session: { focus, read: () => ({ root: "stored" }), detach: vi.fn() },
+    }));
+    const { load, arrive } = slowEditor(attach);
+    render(
+      <InspectorPanel
+        editor={editorFor({ body: { root: "stored" } })}
+        contentServices={{ loadRichTextEditor: load }}
+      />
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    fireEvent.focus(field);
+    expect(field.getAttribute("contenteditable")).not.toBe("true");
+    expect(field.getAttribute("aria-busy")).toBe("true");
+    expect(attach).not.toHaveBeenCalled();
+
+    await act(async () => {
+      arrive();
+    });
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(field.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("attaches nothing when the author left before the editor arrived", async () => {
+    // Attached then, the shared editor would sit held on a field nobody is
+    // in, and no blur would come to let it go.
+    register();
+    const attach = vi.fn();
+    const { load, arrive } = slowEditor(attach);
+    render(
+      <InspectorPanel
+        editor={editorFor({ body: { root: "stored" } })}
+        contentServices={{ loadRichTextEditor: load }}
+      />
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    fireEvent.focus(field);
+    fireEvent.blur(field);
+    await act(async () => {
+      arrive();
+    });
+    expect(attach).not.toHaveBeenCalled();
   });
 });

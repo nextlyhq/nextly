@@ -346,6 +346,7 @@ function MediaControl({
 
 /** The live attachment of the shared editor to this field, while focused. */
 interface RichTextSession {
+  focus(at?: number): void;
   read(): unknown;
   detach(): void;
 }
@@ -371,22 +372,37 @@ function RichTextControl({
 }: ContentControlProps): React.JSX.Element {
   const field = React.useRef<HTMLDivElement>(null);
   const session = React.useRef<RichTextSession | null>(null);
+  // Whether the field still has focus, so an editor that finishes loading
+  // after the author has moved on is not attached to a field nobody is in.
+  const focused = React.useRef(false);
+  const [loading, setLoading] = React.useState(false);
   const [refused, setRefused] = React.useState<"held" | "unsupported" | null>(
     null
   );
   const label = fieldLabel(prop.name);
   const load = services?.loadRichTextEditor;
+  const editable = !disabled && load !== undefined;
+
+  // Loaded as soon as the field is drawn, so focusing it attaches at once
+  // rather than after a fetch the author would type through.
+  React.useEffect(() => {
+    if (editable) load().catch(() => undefined);
+  }, [editable, load]);
 
   const attach = async (): Promise<void> => {
     const element = field.current;
-    if (
-      disabled ||
-      load === undefined ||
-      element === null ||
-      session.current !== null
-    )
+    if (!editable || element === null || session.current !== null) return;
+    setLoading(true);
+    let editor: Awaited<ReturnType<typeof load>>;
+    try {
+      editor = await load();
+    } catch {
+      // The editor could not be loaded: the field stays as it is, read-only.
       return;
-    const editor = await load();
+    } finally {
+      setLoading(false);
+    }
+    if (!focused.current || session.current !== null) return;
     const attachment = editor.attach(element, prop.value);
     if (attachment.status === "refused") {
       setRefused(attachment.reason);
@@ -394,9 +410,11 @@ function RichTextControl({
     }
     setRefused(null);
     session.current = attachment.session;
+    attachment.session.focus();
   };
 
   const finish = (): void => {
+    focused.current = false;
     const live = session.current;
     if (live === null) return;
     session.current = null;
@@ -436,11 +454,16 @@ function RichTextControl({
         role="textbox"
         aria-multiline="true"
         aria-labelledby={`${id}-label`}
-        aria-readonly={disabled || load === undefined}
-        contentEditable={!disabled && load !== undefined}
-        suppressContentEditableWarning
+        aria-readonly={!editable}
+        aria-busy={loading}
+        // Not editable until the shared editor attaches and makes it so:
+        // keys typed into the bare element would be replaced by the stored
+        // passage the moment the editor took the element over.
         tabIndex={0}
-        onFocus={() => void attach()}
+        onFocus={() => {
+          focused.current = true;
+          void attach();
+        }}
         onBlur={finish}
       />
       {refused === null ? null : (
