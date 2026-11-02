@@ -41,6 +41,7 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     duplicate: vi.fn(),
     selectParent: vi.fn(),
     saveAsPattern: vi.fn(),
+    editComponent: vi.fn(),
   } as unknown as CommandVerbs & Record<string, ReturnType<typeof vi.fn>>;
 }
 

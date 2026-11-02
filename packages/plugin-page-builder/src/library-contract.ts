@@ -392,6 +392,15 @@ export interface PatternCapabilityResponse {
    * which is worse than the late failure this replaces.
    */
   readonly mayCreate: boolean;
+  /**
+   * Where this caller may open a component in its own view, or `null` when
+   * they may not update components: `update` on the store the definitions
+   * live in, resolved on the server because a host may rename it. The editor
+   * offers "Edit component" only with an answer here.
+   *
+   * @experimental Settles when the component editor ships.
+   */
+  readonly componentEditing?: { readonly collection: string } | null;
 }
 
 /**

@@ -195,6 +195,20 @@ export function inspectInstance(
 }
 
 /**
+ * The component a placement places, or `undefined` for a node that is not a
+ * placement or names no component: what "Edit component" opens.
+ */
+export function placedComponentId(
+  document: BlockDocument,
+  nodeId: string
+): string | undefined {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined || !isComponentInstance(node)) return undefined;
+  const id = storedComponentId(node);
+  return id === "" ? undefined : id;
+}
+
+/**
  * The component id the node stores, or an empty string for a node that names
  * none.
  *

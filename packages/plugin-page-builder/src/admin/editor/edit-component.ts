@@ -1,0 +1,140 @@
+/**
+ * "Edit component": the one way the editor opens a component alone, in its own
+ * Page Builder view, and the way back to where the author came from.
+ *
+ * ## One helper
+ *
+ * The inspector of a placement and the block toolbar both offer it, and both
+ * call {@link useEditComponent}, so the address, the way back and the
+ * permission are decided once.
+ *
+ * ## The way back
+ *
+ * The component's view is opened with `?return=` naming the address the author
+ * left, at the placement when it is a section of the page, so Back lands where
+ * they were. The view reads it back through {@link returnFromSearch}, which
+ * takes an admin path and nothing else: the parameter arrives in an address
+ * anyone can write, and an outside address there would be an open redirect.
+ *
+ * ## A full load, and unsaved changes
+ *
+ * Both moves are to ANOTHER document, so both load the address afresh rather
+ * than moving inside the admin. Moved in place, the admin keeps the view
+ * mounted and hands it the new document's form, while the editor, which reads
+ * its document once as it mounts, goes on showing (and would commit) the one
+ * it came from. A load mounts the new document's editor from its own form.
+ * Leaving with unsaved work asks first: the admin's unsaved-changes guard
+ * answers the load, as it does a reload.
+ *
+ * @module admin/editor/edit-component
+ */
+import { useCallback, useEffect, useRef } from "react";
+
+import { BUILDER_VIEW_PATH } from "../../builder-view";
+import { useComponentEditing } from "../pattern-capability-client";
+
+import { sectionAddress } from "./builder-address";
+
+/** The query parameter naming where the component view goes back to. */
+const RETURN_PARAM = "return";
+
+/** A fixed origin to resolve a path against, which no real address has. */
+const NOWHERE = "http://return.invalid";
+
+/** The address of a component's own Page Builder view. */
+export function componentEditorAddress(
+  collection: string,
+  componentId: string,
+  returnTo: string | undefined
+): string {
+  const base = `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(componentId)}/${BUILDER_VIEW_PATH}`;
+  if (returnTo === undefined) return base;
+  return `${base}?${new URLSearchParams({ [RETURN_PARAM]: returnTo }).toString()}`;
+}
+
+/**
+ * An admin path, as it may be navigated to, or `undefined` for anything else:
+ * an outside or protocol-relative address, one that climbs out of the admin,
+ * one carrying a backslash or a control character.
+ */
+export function checkedAdminPath(value: string | null): string | undefined {
+  if (
+    value === null ||
+    !value.startsWith("/admin/") ||
+    value.startsWith("//")
+  ) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(value, NOWHERE);
+  } catch {
+    return undefined;
+  }
+  // The resolved path must still be the written one: `/admin/../x` starts
+  // with the prefix and resolves outside it, and a backslash or a control
+  // character is rewritten by the parser, so either fails the comparison too.
+  const written = value.split(/[?#]/, 1)[0];
+  if (url.origin !== NOWHERE || url.pathname !== written) return undefined;
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/** Where a component view goes back to, read from its own address. */
+export function returnFromSearch(search: string): string | undefined {
+  return checkedAdminPath(new URLSearchParams(search).get(RETURN_PARAM));
+}
+
+/**
+ * The address the author is at, to come back to: at the placement when it is
+ * a section of the page, so the editor reopens with it selected.
+ */
+export function hereAddress(
+  location: { readonly pathname: string; readonly search: string },
+  sectionId: string | undefined
+): string {
+  const href = `${location.pathname}${location.search}`;
+  return sectionId === undefined ? href : sectionAddress(href, sectionId);
+}
+
+/**
+ * Open a placed component alone, or `undefined` when this author may not
+ * update components, so no surface offers it.
+ *
+ * `isSection` says whether the placement is a top-level block of the page,
+ * asked when the author presses, of the document as it is then.
+ */
+export function useEditComponent(
+  isSection: (nodeId: string) => boolean
+): ((componentId: string, nodeId: string) => void) | undefined {
+  const editing = useComponentEditing();
+  // The latest question, read when the author presses rather than closed over,
+  // so the callback keeps one identity across the page's edits.
+  const asked = useRef(isSection);
+  useEffect(() => {
+    asked.current = isSection;
+  }, [isSection]);
+  const open = useCallback(
+    (componentId: string, nodeId: string) => {
+      if (editing === undefined) return;
+      const back = hereAddress(
+        window.location,
+        asked.current(nodeId) ? nodeId : undefined
+      );
+      openDocument(
+        componentEditorAddress(editing.collection, componentId, back)
+      );
+    },
+    [editing]
+  );
+  return editing === undefined ? undefined : open;
+}
+
+/**
+ * Load another document's address afresh. Only an admin path is loaded; the
+ * way back is checked before it reaches here, and the component's address is
+ * built from the server's answer.
+ */
+export function openDocument(address: string): void {
+  const checked = checkedAdminPath(address);
+  if (checked !== undefined) window.location.assign(checked);
+}

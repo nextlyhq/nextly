@@ -12,7 +12,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readPatternCapability } from "./capability-route";
+import {
+  readEditorCapability,
+  readPatternCapability,
+} from "./capability-route";
+import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 
 /** What was asked, so a test can assert the question and not only the answer. */
@@ -123,5 +127,50 @@ describe("the pattern capability route", () => {
     await expect(
       readPatternCapability({ self: { collections: {} }, caller: null })
     ).resolves.toEqual({ mayCreate: false });
+  });
+});
+
+describe("whether the caller may open a component in its own view", () => {
+  function caller(grants: ReadonlyArray<[string, string]>) {
+    const asked: Array<[string, string]> = [];
+    return {
+      asked,
+      ctx: {
+        // RENAMED, for the reason the pattern fixture is.
+        self: { collections: { [COMPONENTS_SLUG]: "site_components" } },
+        caller: {
+          can: async (action: string, resource: string) => {
+            asked.push([action, resource]);
+            return grants.some(([a, r]) => a === action && r === resource);
+          },
+        },
+      },
+    };
+  }
+
+  it("names the RESOLVED collection to an author who may update it", async () => {
+    const { ctx, asked } = caller([["update", "site_components"]]);
+    const answer = await readEditorCapability(ctx);
+    expect(answer.componentEditing).toEqual({ collection: "site_components" });
+    expect(asked).toContainEqual(["update", "site_components"]);
+  });
+
+  it("names a configured store literally", async () => {
+    const { ctx } = caller([["update", "my_defs"]]);
+    const answer = await readEditorCapability(ctx, { collection: "my_defs" });
+    expect(answer.componentEditing).toEqual({ collection: "my_defs" });
+  });
+
+  it("answers null to an author who may only read components", async () => {
+    const { ctx } = caller([["read", "site_components"]]);
+    expect((await readEditorCapability(ctx)).componentEditing).toBeNull();
+    expect(
+      (
+        await readEditorCapability({
+          self: { collections: {} },
+          caller: null,
+        })
+      ).componentEditing
+    ).toBeNull();
   });
 });

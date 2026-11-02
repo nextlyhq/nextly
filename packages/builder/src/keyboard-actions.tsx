@@ -34,6 +34,7 @@ import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
+import { placedComponentId } from "./instance-inspector";
 import {
   keyboardMovePosition,
   type MoveDirection,
@@ -187,6 +188,12 @@ export interface BlockActions {
    * opens a modal belongs to the host's own key map rather than to the canvas.
    */
   readonly saveAsPattern: () => void;
+  /**
+   * Open the selected placement's component in its own view, through the
+   * host. Like Save as pattern it runs no op: where the component opens, and
+   * whether this author may, are the host's. Silent for any other selection.
+   */
+  readonly editComponent: () => void;
 }
 
 /**
@@ -364,6 +371,13 @@ export interface BlockKeyboardActionsOptions {
    */
   mayCreatePattern?: boolean;
   /**
+   * Open a placed component in its own view, given its id and the
+   * placement's node id. Supplied by the host, which knows where that view is
+   * and whether this author may update components; omitted, "Edit component"
+   * is not offered anywhere.
+   */
+  onEditComponent?: (componentId: string, nodeId: string) => void;
+  /**
    * Whether the bindings are live. Defaults to true.
    *
    * A host that mounts the canvas inside something modal turns them off rather
@@ -434,6 +448,7 @@ export function useBlockKeyboardActions({
   nesting,
   definitions,
   onSaveAsPattern,
+  onEditComponent,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
@@ -974,7 +989,8 @@ export function useBlockKeyboardActions({
         editor.selection.ids,
         nestingSource,
         mayCreatePattern,
-        editor.lockRefusalFor
+        editor.lockRefusalFor,
+        onEditComponent !== undefined
       ),
     [
       editor.document,
@@ -983,8 +999,10 @@ export function useBlockKeyboardActions({
       nestingSource,
       mayCreatePattern,
       editor.lockRefusalFor,
+      onEditComponent,
     ]
   );
+  const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
 
   const actions = React.useMemo<BlockActions>(
     () => ({
@@ -993,6 +1011,7 @@ export function useBlockKeyboardActions({
       duplicate: duplicateSelected,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
+      editComponent: editSelectedComponent,
     }),
     [
       moveSelected,
@@ -1000,6 +1019,7 @@ export function useBlockKeyboardActions({
       duplicateSelected,
       selectParent,
       saveSelectionAsPattern,
+      editSelectedComponent,
     ]
   );
 
@@ -1009,6 +1029,25 @@ export function useBlockKeyboardActions({
     nesting: nestingSource,
     selectionActions,
   };
+}
+
+/**
+ * The "Edit component" verb: hands the selected placement's component to the
+ * host, or does nothing for any other selection, or where no host answers.
+ */
+function useEditComponentVerb(
+  editor: EditorState,
+  onEditComponent: BlockKeyboardActionsOptions["onEditComponent"]
+): () => void {
+  return React.useCallback(() => {
+    if (onEditComponent === undefined) return;
+    const ids = editor.selection.ids;
+    if (ids.length !== 1) return;
+    const nodeId = ids[0];
+    if (nodeId === undefined) return;
+    const componentId = placedComponentId(editor.document, nodeId);
+    if (componentId !== undefined) onEditComponent(componentId, nodeId);
+  }, [editor.document, editor.selection.ids, onEditComponent]);
 }
 
 /**
@@ -1035,6 +1074,7 @@ export function BlockKeyboardActions({
   definitions,
   onSaveAsPattern,
   mayCreatePattern,
+  onEditComponent,
   onShareVerbs,
   children,
 }: BlockKeyboardActionsOptions & {
@@ -1055,6 +1095,7 @@ export function BlockKeyboardActions({
     enabled,
     onSaveAsPattern,
     ...(mayCreatePattern === undefined ? {} : { mayCreatePattern }),
+    ...(onEditComponent === undefined ? {} : { onEditComponent }),
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
     ...(definitions === undefined ? {} : { definitions }),

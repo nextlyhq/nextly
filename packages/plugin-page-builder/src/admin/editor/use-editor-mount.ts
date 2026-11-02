@@ -8,7 +8,6 @@
 import {
   blockLabelFrom,
   getBlock,
-  isComponentDocument,
   placementRefusalMessage,
   type BlockDocument,
   type DocumentKind,
@@ -28,7 +27,6 @@ import {
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
-  useDocumentIdentity,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
@@ -37,7 +35,6 @@ import {
 import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
-import { useComponentFacts } from "../component-facts-client";
 import {
   useComponentLibrary,
   type ComponentLibraryRead,
@@ -47,6 +44,7 @@ import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
+import { useComponentView, type ComponentView } from "./use-component-view";
 import { finishInlineEdit } from "./use-host-commit";
 
 /**
@@ -280,12 +278,14 @@ export function useEditorMount(
    * three places would be three requests answering one question.
    */
   const mayCreatePattern = useMayCreatePattern();
-  // Asked only of a component with a row: what its live definition holds and
-  // how many documents place it, which its own document cannot say.
-  const identity = useDocumentIdentity();
-  const componentFacts = useComponentFacts(
-    isComponentDocument(initialDocument) ? identity?.documentId : undefined
-  );
+  // A component's own view, and the way into one from a placement: what its
+  // live definition holds, how many documents place it, its banner, and
+  // "Edit component".
+  const { componentFacts, ...componentView } = useComponentView({
+    initialDocument,
+    editor,
+    componentLibrary,
+  });
 
   return {
     initialDocument,
@@ -298,6 +298,7 @@ export function useEditorMount(
     savePattern,
     mayCreatePattern,
     componentFacts,
+    componentView,
   };
 }
 
@@ -314,6 +315,8 @@ export type EditorMount = {
   mayCreatePattern: boolean;
   /** What the inspector is told about the component being edited, if any. */
   componentFacts: ComponentFieldsHost | undefined;
+  /** "Edit component", and the banner over a component's own view. */
+  componentView: ComponentView;
 };
 
 /**

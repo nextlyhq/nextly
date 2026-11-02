@@ -36,6 +36,8 @@
  */
 
 import {
+  findNode,
+  isComponentInstance,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
@@ -95,6 +97,7 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
+  | "edit-component"
   | "delete";
 
 /** One button's worth of decision. */
@@ -351,7 +354,13 @@ export function toolbarActions(
    * with the lock's reason before it is pressed. Optional for a caller that
    * holds no editor; the editor's apply refuses the same ops regardless.
    */
-  lockRefusalFor?: LockQuestion
+  lockRefusalFor?: LockQuestion,
+  /**
+   * Whether the host opens a placed component in its own view. Offered only
+   * for one selected placement, and only by a host that answers it; the host
+   * also withholds it from an author who may not update components.
+   */
+  offersEditComponent: boolean = false
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -427,6 +436,7 @@ export function toolbarActions(
         : [{ kind: "insert", node: duplication.node, at: duplication.at }]
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...editComponentAction(document, selectedId, offersEditComponent),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: deletion !== null },
@@ -448,6 +458,22 @@ export function toolbarActions(
           reason: lockedBy(deleteLock, selectedId),
         },
   ];
+}
+
+/**
+ * "Edit component" for a selected placement, where the host offers it; nothing
+ * for any other block, so a bar over a heading does not grow a dimmed button
+ * that could never apply to it.
+ */
+function editComponentAction(
+  document: BlockDocument,
+  selectedId: string,
+  offered: boolean
+): ToolbarAction[] {
+  if (!offered) return [];
+  const node = findNode(document.nodes, selectedId);
+  if (node === undefined || !isComponentInstance(node)) return [];
+  return [{ id: "edit-component", label: "Edit component", enabled: true }];
 }
 
 /**

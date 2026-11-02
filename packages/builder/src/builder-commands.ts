@@ -50,6 +50,12 @@ export interface CommandVerbs {
    * phrase; when there is a second host it can be designed against that.
    */
   readonly saveAsPattern: () => void;
+  /**
+   * Open the selected placement's component in its own view. Silent when the
+   * selection is not one placement or the host does not offer it, so it may
+   * be pressed without asking first.
+   */
+  readonly editComponent: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -110,6 +116,10 @@ const BLOCK_COMMAND_COPY: Record<
     // that before they can find it.
     keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
   },
+  "edit-component": {
+    label: "Edit component",
+    keywords: ["component", "edit", "open", "original", "definition"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -145,6 +155,7 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
+    "edit-component": verbs.editComponent,
     delete: verbs.delete,
   };
 }

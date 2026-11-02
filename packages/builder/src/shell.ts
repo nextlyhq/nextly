@@ -136,6 +136,9 @@ export type {
 } from "./inspector-panel";
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./component-fields";
+// The banner over a component's own view: its name, its reach, and Back.
+export { ComponentBanner } from "./component-banner";
+export type { ComponentBannerProps } from "./component-banner";
 
 /**
  * The Style half of the same inspector.

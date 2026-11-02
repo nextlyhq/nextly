@@ -48,6 +48,7 @@ import {
   Copy,
   CornerLeftUp,
   LayoutTemplate,
+  SquarePen,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -76,6 +77,8 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
+  // A pen on a square, the editing glyph: the component opens to be edited.
+  "edit-component": SquarePen,
   delete: Trash2,
 };
 

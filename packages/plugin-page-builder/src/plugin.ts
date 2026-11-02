@@ -1087,7 +1087,9 @@ export const pageBuilder = (
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
-        patternCapabilityRoute(),
+        // What the editor may offer this caller: saving a pattern, and opening
+        // a component in its own view from the store definitions live in.
+        patternCapabilityRoute(componentStoreOf(opts)),
         // What the component editor needs beside the component's own
         // document: the ids its live definition uses, and the count of
         // documents placing it, read from the usage index the installed host

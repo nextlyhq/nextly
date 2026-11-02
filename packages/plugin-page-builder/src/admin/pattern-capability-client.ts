@@ -55,3 +55,25 @@ export function useMayCreatePattern(): boolean {
   });
   return read.data?.mayCreate ?? true;
 }
+
+/**
+ * Where this author may open a component in its own view, or `undefined`
+ * while that is not known or they may not.
+ *
+ * CLOSED while the read is in flight, the opposite of the pattern verb above,
+ * because what it gates is different: an offer to open a view the author may
+ * not use leads to a screen that refuses them, while a moment's wait before
+ * the offer appears costs nothing. The answer shares the pattern verb's read.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export function useComponentEditing():
+  | { readonly collection: string }
+  | undefined {
+  const read = usePluginRoute<PatternCapabilityResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: CAPABILITY_ROUTE_PATH,
+    staleTime: 0,
+  });
+  return read.data?.componentEditing ?? undefined;
+}
