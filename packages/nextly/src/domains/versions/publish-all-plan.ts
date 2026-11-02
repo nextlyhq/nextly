@@ -441,6 +441,40 @@ export function languageStatusBefore(
 }
 
 /**
+ * The languages a publish of every language tells, each with its status
+ * before: those that go live, and those already live whose pending change
+ * goes live, a change that creates the language's translation row included.
+ * Each one's status before is read as the outcomes read it. Only languages the
+ * app still configures are told: a locale removed from configuration can leave
+ * stale translation rows and changes behind, and an event tagged with a
+ * locale that normal reads and writes reject would mislead a consumer routing
+ * by locale. One answer for every kind of document, so a collection entry and
+ * a Single tell one publish to the same languages.
+ */
+export function languagesTold(args: {
+  /** The configured languages; none configured tells every one. */
+  configured: ReadonlySet<string>;
+  defaultLocale: string;
+  /** Each stored translation's status before the publish. */
+  prior: ReadonlyMap<string, string | null>;
+  /** The languages whose pending change the publish promotes. */
+  promoted: ReadonlySet<string>;
+  /** The document's own status before the publish, on its main row. */
+  mainStatus: unknown;
+}): { locale: string; priorStatus: unknown; promoted: boolean }[] {
+  return [...new Set([...args.prior.keys(), ...args.promoted])]
+    .filter(locale => args.configured.size === 0 || args.configured.has(locale))
+    .map(locale => ({
+      locale,
+      priorStatus: languageStatusBefore(locale, args),
+      promoted: args.promoted.has(locale),
+    }))
+    .filter(
+      language => language.priorStatus !== "published" || language.promoted
+    );
+}
+
+/**
  * Each configured language's outcome, in the order the app configures them.
  *
  * What is kept under no language (a pending change, or its verdict) is the

@@ -94,8 +94,8 @@ import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
   judgeSharedValues,
   type LanguageOutcome,
-  languageStatusBefore,
   languagesGoingLiveAsStored,
+  languagesTold,
   type LiveSharedDocument,
   type NamedVerdict,
   nameVerdict,
@@ -2044,8 +2044,9 @@ export class SinglePublishAllService extends BaseService {
     const defaultCompanionTransitions =
       defaultLocale !== undefined &&
       told.some(
-        ([locale, priorStatus]) =>
-          locale === defaultLocale && priorStatus !== "published"
+        language =>
+          language.locale === defaultLocale &&
+          language.priorStatus !== "published"
       );
 
     const documentRecorded = await this.recordDocumentEvents(tx, {
@@ -2187,51 +2188,23 @@ export class SinglePublishAllService extends BaseService {
     return recorded;
   }
 
-  /**
-   * The languages a publish of every language tells, each with its status
-   * before: those that went live, and those already live whose pending change
-   * went live, a change that creates the language's translation row included.
-   * Each one's status before is read as the outcomes read it.
-   *
-   * Only locales the app still CONFIGURES are told: a locale removed from
-   * configuration can leave stale companion rows behind, and an event tagged
-   * with a locale that normal reads and writes reject would mislead a
-   * locale-routed consumer.
-   */
+  /** The languages this publish tells; see `languagesTold` in the planner. */
   private languagesTold(args: {
     lockedRow: Record<string, unknown>;
     priorCompanionStatuses: Map<string, string | null>;
     promotedLocales: ReadonlySet<string | null>;
-  }): (readonly [string, unknown])[] {
-    const configuredLocales = new Set(
-      this.localization?.locales.map(l => l.code) ?? []
-    );
-    const defaultLocale = this.localization?.defaultLocale ?? "";
-    const candidates = new Set([
-      ...args.priorCompanionStatuses.keys(),
-      ...[...args.promotedLocales].filter(
-        (locale): locale is string => locale !== null
+  }): LanguageTold[] {
+    return languagesTold({
+      configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
+      defaultLocale: this.localization?.defaultLocale ?? "",
+      prior: args.priorCompanionStatuses,
+      promoted: new Set(
+        [...args.promotedLocales].filter(
+          (locale): locale is string => locale !== null
+        )
       ),
-    ]);
-    return [...candidates]
-      .filter(
-        locale => configuredLocales.size === 0 || configuredLocales.has(locale)
-      )
-      .map(
-        locale =>
-          [
-            locale,
-            languageStatusBefore(locale, {
-              defaultLocale,
-              prior: args.priorCompanionStatuses,
-              mainStatus: args.lockedRow.status,
-            }),
-          ] as const
-      )
-      .filter(
-        ([locale, priorStatus]) =>
-          priorStatus !== "published" || args.promotedLocales.has(locale)
-      );
+      mainStatus: args.lockedRow.status,
+    });
   }
 
   /**
@@ -2253,7 +2226,7 @@ export class SinglePublishAllService extends BaseService {
       lockedRow: Record<string, unknown>;
       publishedRow: Record<string, unknown>;
       /** The languages this publish tells, with each one's status before. */
-      told: readonly (readonly [string, unknown])[];
+      told: readonly LanguageTold[];
       webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
       resource: WebhookResource;
       priorComponents: Map<string, Record<string, unknown>>;
@@ -2273,11 +2246,11 @@ export class SinglePublishAllService extends BaseService {
           tx,
           plan.companion,
           plan.existingDoc.id,
-          told.map(([locale]) => locale)
+          told.map(language => language.locale)
         )
       : new Map<string, Record<string, unknown>>();
 
-    for (const [locale, priorStatus] of told) {
+    for (const { locale, priorStatus } of told) {
       const localeValues = after.get(locale) ?? {};
       const data = await this.buildEventDocument(
         tx,
@@ -2363,3 +2336,6 @@ async function publishAllFailure(
     logContext: { reason: "single-publish-all", single: single.slug },
   });
 }
+
+/** A language a publish of every language tells; see `languagesTold`. */
+type LanguageTold = ReturnType<typeof languagesTold>[number];

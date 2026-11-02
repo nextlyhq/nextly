@@ -260,8 +260,8 @@ import { languagesHoldingWorkingDrafts } from "../../versions/held-working-draft
 import {
   judgeSharedValues,
   type LanguageOutcome,
-  languageStatusBefore,
   languagesGoingLiveAsStored,
+  languagesTold,
   type NamedVerdict,
   nameVerdict,
   type PendingChange,
@@ -851,6 +851,22 @@ interface StoredDocument {
   parentRow: Record<string, unknown>;
   components: Record<string, unknown>;
   manyToMany: Record<string, string[]>;
+}
+
+/**
+ * A pending change's language as stored, read before its promotion is judged.
+ * Every change's language is read; one missing is a defect, refused rather
+ * than judged against an empty document, which every field would differ from.
+ */
+function storedLiveOf(
+  stored: ReadonlyMap<string | null, Record<string, unknown>>,
+  locale: string | null
+): Record<string, unknown> {
+  const live = stored.get(locale);
+  if (live) return live;
+  throw NextlyError.internal({
+    logContext: { reason: "publish-all-live-document-unread", locale },
+  });
 }
 
 /**
@@ -7946,66 +7962,44 @@ export class CollectionMutationService extends BaseService {
           // Each language's pending change as the write lands it, judged
           // before anything is written.
           const promotions: PendingPromotion[] = [];
-          // The languages this publish tells, as a publish of each one alone
-          // would: each that goes live, and each already live whose pending
-          // change goes live, a change that creates the language's
-          // translation row included. Every pending change is promoted or the
-          // publish is refused, so the languages promoted are those holding
-          // one. Only those the app still configures: a locale removed from
-          // configuration can leave stale companion rows and changes behind,
-          // and an event tagged with a locale that normal reads and writes
-          // reject would mislead locale-routed consumers. Each one's status
-          // before is read as the outcomes read it.
+          // The languages this publish tells (`languagesTold`). Every pending
+          // change is promoted or the publish is refused, so the languages
+          // promoted are those holding one.
           const promotedLocales = new Set(
             pending.flatMap(change =>
               change.locale === null ? [] : [change.locale]
             )
           );
           const told = publishes
-            ? [
-                ...new Set([
-                  ...priorCompanionStatuses.keys(),
-                  ...promotedLocales,
-                ]),
-              ]
-                .filter(
-                  locale =>
-                    configuredLocales.size === 0 ||
-                    configuredLocales.has(locale)
-                )
-                .map(locale => ({
-                  locale,
-                  priorStatus: languageStatusBefore(locale, {
-                    defaultLocale: defaultLocale ?? "",
-                    prior: priorCompanionStatuses,
-                    mainStatus: lockedRow.status,
-                  }),
-                  promoted: promotedLocales.has(locale),
-                }))
-                .filter(
-                  language =>
-                    language.priorStatus !== direction.nextStatus ||
-                    language.promoted
-                )
+            ? languagesTold({
+                configured: configuredLocales,
+                defaultLocale: defaultLocale ?? "",
+                prior: priorCompanionStatuses,
+                promoted: promotedLocales,
+                mainStatus: lockedRow.status,
+              })
             : [];
           // Each told language, and each pending change's, as stored before
-          // anything is written, in one read for them all: what a change's
-          // promotion is judged against, and what the events report as
-          // `previous`. The promotion rewrites the translation rows, the
-          // shared values and the component tables they would otherwise be
-          // read from afterwards.
-          const storedBefore = await this.languageDocumentsOnTx(tx, {
-            row: preImageRow,
-            collectionName: params.collectionName,
-            entryId: params.entryId,
-            tableName,
-            fields,
-            manyToManyFields,
-            locales: [
-              ...pending.map(change => change.locale),
-              ...told.map(language => language.locale),
-            ],
-          });
+          // anything is written, in one read for them all, once the shared
+          // values refuse nothing: what a change's promotion is judged
+          // against, and what the events report as `previous`. The promotion
+          // rewrites the translation rows, the shared values and the
+          // component tables they would otherwise be read from afterwards.
+          let storedBefore = new Map<string | null, Record<string, unknown>>();
+          const readStoredBefore = async () => {
+            storedBefore = await this.languageDocumentsOnTx(tx, {
+              row: preImageRow,
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              tableName,
+              fields,
+              manyToManyFields,
+              locales: [
+                ...pending.map(change => change.locale),
+                ...told.map(language => language.locale),
+              ],
+            });
+          };
 
           if (publishes) {
             // Everything that goes live, judged on the row this transaction
@@ -8047,6 +8041,7 @@ export class CollectionMutationService extends BaseService {
                       }
                     )
                   : pending;
+              await readStoredBefore();
               promotions.push(
                 ...(await this.promotionsJudgedOnTx(tx, {
                   changes,
@@ -9016,7 +9011,7 @@ export class CollectionMutationService extends BaseService {
             entryId: args.entryId,
             storedId: args.storedId,
             tableName: args.tableName,
-            live: args.storedBefore.get(change.locale) ?? {},
+            live: storedLiveOf(args.storedBefore, change.locale),
             finalData,
             companion: args.companion,
             caller: args.caller,
@@ -9090,6 +9085,9 @@ export class CollectionMutationService extends BaseService {
   async previewPublishAllLocales(
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, as the publish
+    // it previews is.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       const preconditions = await this.lifecycleAllLocalesPreconditions(
         PUBLISH_ALL_LOCALES,
@@ -9107,10 +9105,13 @@ export class CollectionMutationService extends BaseService {
       }
       const ready = preconditions.ready;
       // Resolved before the transaction, as the publish resolves them: they
-      // query the pooled connection.
+      // query the pooled connection. Only where the field read rules name the
+      // fields this answer lists: a trusted caller's are named as stored.
       const grants =
         ready.promotion?.grants ??
-        (await this.resolvedGrants(params.user, params.authenticatedScope));
+        (params.overrideAccess && !params.routeAuthorized
+          ? undefined
+          : await this.resolvedGrants(params.user, params.authenticatedScope));
       const preview = await this.adapter.transaction(tx =>
         this.previewAllLocalesOnTx(tx, ready, params, grants)
       );
@@ -9164,7 +9165,7 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     ready: LifecycleAllLocalesReady,
     params: AllLocalesLifecycleParams,
-    grants: () => Promise<CallerGrants>
+    grants: (() => Promise<CallerGrants>) | undefined
   ): Promise<{ languages: LanguageOutcome[]; blockers: PublishAllBlocker[] }> {
     const {
       schema,
@@ -9597,18 +9598,36 @@ export class CollectionMutationService extends BaseService {
     // published entry). The gate is what keeps the read safe — companion
     // `_status` exists only on collections migrated for per-locale
     // status, and querying it otherwise fails the whole write.
-    const statusByLanguage =
-      localizedUpdate && localizedUpdate.hasStatus && translated.length > 0
-        ? await readCompanionLocaleStatusAll(
-            tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+    const statusByLanguage = new Map<string, string | null>();
+    if (localizedUpdate && localizedUpdate.hasStatus) {
+      const readiness = cachedCompanionReadiness(
+        this.adapter,
+        localizedUpdate.companionTableName
+      );
+      // One language reads its own row, as a write of it always has; several
+      // read every translation's status in one statement.
+      if (translated.length === 1) {
+        statusByLanguage.set(
+          translated[0],
+          await readCompanionLocaleStatus(
+            tx.getDrizzle<Parameters<typeof readCompanionLocaleStatus>[0]>(),
             localizedUpdate.companionTable,
             args.entryId,
-            cachedCompanionReadiness(
-              this.adapter,
-              localizedUpdate.companionTableName
-            )
+            translated[0],
+            readiness
           )
-        : new Map<string, string | null>();
+        );
+      } else if (translated.length > 1) {
+        for (const [locale, status] of await readCompanionLocaleStatusAll(
+          tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+          localizedUpdate.companionTable,
+          args.entryId,
+          readiness
+        )) {
+          statusByLanguage.set(locale, status);
+        }
+      }
+    }
     const passwordReach = await this.passwordReach(
       args.fields,
       tx.getDrizzle()
