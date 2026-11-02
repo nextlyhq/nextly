@@ -79,13 +79,19 @@ export function printCliError(
   return reportCliError(error, { verbose, noColor });
 }
 
-/** Prints `error` in the error shape, with the run's `--verbose` and `--no-color`, and exits 1. */
+/**
+ * Prints `error` in the error shape, with the run's `--verbose` and `--no-color`, and exits with
+ * `status`: 1 unless a command gives a status of its own for this error, as `nextly migrate`
+ * does for an edited migration. The print and the exit stay in one place, so no command can end
+ * on a status without the shape.
+ */
 export function exitWithError(
   logger: Pick<Logger, "getOptions">,
-  error: unknown
+  error: unknown,
+  status: 1 | 2 = 1
 ): never {
   printCliError(logger, error);
-  return process.exit(1);
+  return process.exit(status);
 }
 
 /**

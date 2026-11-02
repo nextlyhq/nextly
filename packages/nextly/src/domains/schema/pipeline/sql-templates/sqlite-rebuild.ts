@@ -211,7 +211,15 @@ export function withoutDropsLeftToRebuild(
 export function sqliteTableRebuildStatements(
   spec: TableSpec,
   /** The operations this rebuild stands in for (see `untrackedConstraintCounts`). */
-  ops: readonly Operation[] = []
+  ops: readonly Operation[] = [],
+  options: {
+    /**
+     * The column sets of the live table's UNIQUE constraints to keep, as `CREATE TABLE` declares
+     * them (a one-to-one's column, which the Builder's DDL makes UNIQUE inline). No spec describes
+     * them, so without this the rebuild refuses a table that has one rather than lose it.
+     */
+    keptUnique?: readonly (readonly string[])[];
+  } = {}
 ): string[] {
   const table = resolvePrimaryKey(spec);
   // Without a key the rebuilt table would silently lose it, and an INTEGER
@@ -237,7 +245,12 @@ export function sqliteTableRebuildStatements(
   const wouldDropTriggers = `rebuilding ${name} would drop the triggers on it`;
   const untracked = untrackedConstraintCounts(table, ops);
   const collations = untrackedCollationCount(table);
-  const indexes = untrackedIndexCount(table);
+  const keptUnique = options.keptUnique ?? [];
+  // Each UNIQUE the rebuild carries over is one the live CREATE counts that isn't lost.
+  const indexes = `(${untrackedIndexCount(table)} - ${String(keptUnique.length)})`;
+  const uniqueLines = keptUnique.map(
+    columns => `  UNIQUE (${columns.map(column => q(column)).join(", ")})`
+  );
   const unreadable = `rebuilding ${name} cannot read its definition past a comment: write this change as a manual migration (nextly migrate:create --blank) that recreates ${name}`;
   return [
     // The guard: one row, checked on insert, before anything is dropped.
@@ -269,7 +282,7 @@ export function sqliteTableRebuildStatements(
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
       `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${generatedColumnsOf(table)}, ${autoincrementIn(table)}, ${conflictClausesIn(table)}, ${commentsIn(table)}`,
     `DROP TABLE ${q(guard)}`,
-    `CREATE TABLE ${q(rebuilt)} (\n${createTableBody(table, q, "  ", "sqlite")}\n)`,
+    `CREATE TABLE ${q(rebuilt)} (\n${[createTableBody(table, q, "  ", "sqlite"), ...uniqueLines].join(",\n")}\n)`,
     `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
     `DROP TABLE ${q(name)}`,
     `ALTER TABLE ${q(rebuilt)} RENAME TO ${q(name)}`,

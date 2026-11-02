@@ -139,7 +139,7 @@ import { UserExtSchemaService } from "../../domains/users/services/user-ext-sche
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
 import type { UserConfig } from "../../users/config/types";
-import { CliError, exitWithError, printCliError } from "../errors";
+import { CliError, exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -480,8 +480,7 @@ export async function runMigrate(
           : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
-      printCliError(logger, err);
-      process.exit(migrateExitCode(err));
+      exitWithError(logger, err, migrateExitCode(err));
     }
 
     // Localization companions, once the schema is in step.

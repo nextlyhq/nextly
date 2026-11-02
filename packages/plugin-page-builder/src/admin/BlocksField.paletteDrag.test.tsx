@@ -74,7 +74,7 @@ let componentError: Error | null = null;
  * The real shell draws one at a time and calls `renderPanel` only for that one,
  * so this is how a case says "the author is looking at something else".
  */
-let shownPanel = "insert";
+let shownPanel = "add";
 
 /** How many times the whole LIBRARY was asked for — the panel's read. */
 let routeReads = 0;
@@ -436,7 +436,7 @@ afterEach(() => {
   componentError = null;
   editorOptions = undefined;
   documentIdentity = null;
-  shownPanel = "insert";
+  shownPanel = "add";
   routeReads = 0;
   componentReads = 0;
   capabilityReads = 0;
@@ -586,8 +586,8 @@ describe("what the editor reads before anyone asks for it", () => {
 
   it("does not read the library while another panel is open", () => {
     // Reading in the editor's own body fetched every saved pattern document on
-    // every editor mount — for authors who open Layers, or Tokens, or no panel
-    // at all, and never visit Insert. The library is the panel's data, so the
+    // every editor mount — for authors who open Layers, or Design, or no panel
+    // at all, and never visit Add. The library is the panel's data, so the
     // panel's mount is when it is asked for.
     shownPanel = "layers";
 
@@ -609,10 +609,10 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(routeReads).toBe(0);
   });
 
-  it("reads it once the insert panel is the one on screen", () => {
+  it("reads it once the Add panel is the one on screen", () => {
     // The control. Without it the assertion above is satisfied by a hook that
     // never reads at all, which is the tier being unreachable again.
-    shownPanel = "insert";
+    shownPanel = "add";
 
     openEditor();
 

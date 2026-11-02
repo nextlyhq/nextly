@@ -83,7 +83,9 @@ async function insertBySearch(
   query: string,
   label: string
 ): Promise<void> {
-  const insert = page.getByRole("button", { name: "Insert", exact: true });
+  const insert = page
+    .getByRole("navigation", { name: "Editor panels" })
+    .getByRole("button", { name: "Add", exact: true });
   if ((await insert.getAttribute("aria-pressed")) !== "true") {
     await insert.click();
   }
