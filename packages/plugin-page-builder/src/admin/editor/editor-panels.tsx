@@ -360,8 +360,12 @@ export function useEditorPanels(
 
   const library = useOfferedLibrary(mount);
   const requests = usePanelRequests(editor.selectedId);
+  // Whether the editor's search is open: ⌘K opens it, and so does the top
+  // bar's button, so the state sits above both.
+  const [searchOpen, setSearchOpen] = useState(false);
   return {
     entryFields,
+    search: { open: searchOpen, setOpen: setSearchOpen },
     checklist,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
@@ -382,6 +386,7 @@ export type EditorPanels = OfferedLibrary &
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
     availablePanels: typeof AVAILABLE_PANELS;
+    search: { open: boolean; setOpen: (open: boolean) => void };
   };
 
 /**

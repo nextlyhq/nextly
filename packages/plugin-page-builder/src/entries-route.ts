@@ -35,15 +35,14 @@
  * `admin.useAsTitle` when it nominates one, or the conventional name the admin
  * falls back to — and that field is the only one selected. Where the title is
  * absent or this caller may not read it, the entry is labelled with the
- * neutral {@link ENTRIES_UNTITLED}, never with another field.
+ * neutral `ENTRIES_UNTITLED`, never with another field.
  *
  * @module entries-route
  */
 import { ITEM_SCHEMA_MAX_DEPTH } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta, type WhereFilter } from "nextly";
-import { entryTitleField, readableTitleText } from "nextly/config";
-import { requireNextly } from "nextly/runtime";
+import { entryTitleField } from "nextly/config";
 import { z } from "nextly/zod";
 
 import { editorVisibleBlocks } from "./blocks/registration-service";
@@ -55,11 +54,10 @@ import {
   ENTRIES_PARAMS,
   ENTRIES_ROUTE_PATH,
   ENTRIES_SEARCH_MAX,
-  ENTRIES_UNTITLED,
   type EntriesResponse,
-  type EntryItem,
 } from "./entries-contract";
-import { readingAsUser } from "./library-route";
+import { entryOf, findAsCaller, type AsCallerPage } from "./entry-reads";
+import { cappedLimit, optionalText, parseRouteQuery } from "./route-query";
 
 /**
  * The longest single id the route accepts.
@@ -92,25 +90,10 @@ export interface EntriesRequest {
  */
 const querySchema = z.object({
   [ENTRIES_PARAMS.collection]: z.string().trim().min(1),
-  [ENTRIES_PARAMS.locale]: z
-    .string()
-    .trim()
-    .max(ENTRIES_LOCALE_MAX)
-    .optional()
-    .transform(value => (value === "" ? undefined : value)),
-  [ENTRIES_PARAMS.search]: z
-    .string()
-    .trim()
-    .max(ENTRIES_SEARCH_MAX)
-    .optional()
-    .transform(value => (value === "" ? undefined : value)),
-  [ENTRIES_PARAMS.limit]: z
-    .string()
-    .regex(/^\d+$/)
-    .transform(Number)
-    .pipe(z.number().int().min(1))
-    .transform(value => Math.min(value, ENTRIES_LIMIT_MAX))
-    .optional(),
+  // The shapes every editor read route shares, from one place.
+  [ENTRIES_PARAMS.locale]: optionalText(ENTRIES_LOCALE_MAX),
+  [ENTRIES_PARAMS.search]: optionalText(ENTRIES_SEARCH_MAX),
+  [ENTRIES_PARAMS.limit]: cappedLimit(ENTRIES_LIMIT_MAX).optional(),
   [ENTRIES_PARAMS.ids]: z
     .string()
     .transform(value =>
@@ -137,25 +120,14 @@ const querySchema = z.object({
  * nowhere but the read it was checked for.
  */
 export function parseEntriesQuery(url: string | URL): EntriesRequest {
-  const params = new URL(url).searchParams;
-  // Only the parameters the route reads, and each once: a repeated parameter
-  // takes its first value, as `URLSearchParams.get` does everywhere.
-  const raw: Record<string, string> = {};
-  for (const name of Object.values(ENTRIES_PARAMS)) {
-    const value = params.get(name);
-    if (value !== null) raw[name] = value;
-  }
-  const parsed = querySchema.safeParse(raw);
-  if (!parsed.success) {
-    throw NextlyError.validation({
-      errors: parsed.error.issues.map(issue => ({
-        path: issue.path.map(String).join(".") || "query",
-        code: "INVALID_QUERY",
-        message: "This parameter is not one the entries route accepts.",
-      })),
-    });
-  }
-  const query = parsed.data;
+  // The shared parse-or-refuse step, so every editor read route refuses a
+  // query the same way.
+  const query = parseRouteQuery(
+    url,
+    Object.values(ENTRIES_PARAMS),
+    querySchema,
+    "This parameter is not one the entries route accepts."
+  );
   const ids = query[ENTRIES_PARAMS.ids];
   const search = query[ENTRIES_PARAMS.search];
   const locale = query[ENTRIES_PARAMS.locale];
@@ -225,11 +197,11 @@ export interface EntriesFindArgs {
   readonly locale?: string;
 }
 
-/** What one list read answers: the rows and the read's pagination. */
-export interface EntriesPage {
-  readonly items: readonly unknown[];
-  readonly meta: PaginationMeta;
-}
+/**
+ * What one list read answers: the rows and the read's pagination. The shared
+ * as-caller read's answer, named for this route.
+ */
+export type EntriesPage = AsCallerPage;
 
 /**
  * What the route reads with, injected so the decisions in {@link readEntries}
@@ -317,7 +289,7 @@ export async function readEntries(
   }
   return {
     items: page.items.flatMap(row => {
-      const item = itemOf(row, titleField);
+      const item = entryOf(row, titleField);
       return item === undefined ? [] : [item];
     }),
     meta: canonicalMeta(page.meta),
@@ -348,8 +320,12 @@ function refusal(collection: string): NextlyError {
  * A declared target whose collection does not exist is refused exactly as an
  * undeclared one is, so the answer never says which of the two it was.
  */
-/** The field that names a collection's entries, and how a search may match it. */
-interface TitleField {
+/**
+ * The field that names a collection's entries, and how a search may match it.
+ * Exported with {@link titleFieldIn} and {@link searchOn} so the pages search
+ * names and searches a page by the same rule this route names an entry.
+ */
+export interface TitleField {
   readonly name: string;
   readonly kind: TitleKind;
 }
@@ -375,6 +351,17 @@ async function titleFieldOf(
     throw error;
   }
   if (typeof record !== "object" || record === null) throw refusal(slug);
+  return titleFieldIn(record);
+}
+
+/**
+ * The title field a collection's configuration names, or `undefined` for none.
+ *
+ * Split from the read above so a caller already holding the configuration (the
+ * pages search reads it from the registry listing) asks the same rule rather
+ * than a second one.
+ */
+export function titleFieldIn(record: object): TitleField | undefined {
   const { admin, fields } = record as { admin?: unknown; fields?: unknown };
   const nominated =
     typeof admin === "object" && admin !== null
@@ -456,8 +443,11 @@ function whereFor(
   return conditions.length === 1 ? conditions[0] : { and: conditions };
 }
 
-/** A search that cannot match anything, answered without a read. */
-const NO_MATCH = Symbol("no match");
+/**
+ * A search that cannot match anything, answered without a read. Exported for
+ * the pages search, which reads {@link searchOn}'s answer the same way.
+ */
+export const NO_MATCH: unique symbol = Symbol("no match");
 
 /**
  * The condition one search puts on the title field.
@@ -465,7 +455,7 @@ const NO_MATCH = Symbol("no match");
  * A text field is matched by `contains`; a number field exactly, and only by
  * a search that is a number; any other kind by nothing. See {@link TitleKind}.
  */
-function searchOn(
+export function searchOn(
   search: string,
   title: TitleField | undefined
 ): WhereFilter | typeof NO_MATCH {
@@ -475,30 +465,6 @@ function searchOn(
   return search.trim() !== "" && Number.isFinite(value)
     ? { [title.name]: { equals: value } }
     : NO_MATCH;
-}
-
-/**
- * One row as the control shows it, or nothing when it carries no usable id.
- *
- * The title is read through core's rule for a title VALUE, so a title of
- * spaces is as untitled here as on every other surface. A row without one —
- * empty, or removed by field-level read access — is labelled neutrally.
- */
-function itemOf(
-  row: unknown,
-  titleField: string | undefined
-): EntryItem | undefined {
-  if (typeof row !== "object" || row === null) return undefined;
-  const record = row as Record<string, unknown>;
-  const id = typeof record.id === "number" ? String(record.id) : record.id;
-  if (typeof id !== "string" || id === "") return undefined;
-  const title =
-    titleField === undefined
-      ? undefined
-      : readableTitleText(
-          Object.hasOwn(record, titleField) ? record[titleField] : undefined
-        );
-  return { id, title: title ?? ENTRIES_UNTITLED };
 }
 
 /**
@@ -557,21 +523,9 @@ function directEntriesReads(ctx: EntriesRouteContext): EntriesReads {
   return {
     targets: () => relationTargets(),
     collection: slug => ctx.services.collections.getCollection(slug, {}),
-    find: async args => {
-      const result = await requireNextly().find({
-        collection: args.collection,
-        ...(await readingAsUser(ctx)),
-        // Every status, as the admin's own relationship picker asks: an
-        // author may point at a post that is not published yet. Which rows
-        // this caller sees is still core's to decide, through the line above.
-        status: "all",
-        ...(args.where === undefined ? {} : { where: args.where }),
-        select: args.select,
-        limit: args.limit,
-        ...(args.locale === undefined ? {} : { locale: args.locale }),
-      });
-      return { items: result.items, meta: result.meta };
-    },
+    // The shared as-caller read, which every status and the caller's own
+    // identity travel through.
+    find: args => findAsCaller(ctx, args),
   };
 }
 
