@@ -72,6 +72,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
   });
+  // The leg runs on the database it is named for: the harness boots SQLite
+  // unless told otherwise.
+  expect(current.adapter.getCapabilities().dialect).toBe(dialect);
   const now = new Date();
   for (const person of [ADA, GRACE]) {
     await current.adapter.insert("users", {
