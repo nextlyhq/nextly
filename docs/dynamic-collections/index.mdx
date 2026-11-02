@@ -68,8 +68,8 @@ code-first collection that has been synced shows read-only in the Schema Builder
   the lock held is refused with nothing written. The apply compares every table the builder
   owns with what was recorded for it, so a table changed outside the builder refuses the save,
   naming that table: bring it in step (apply its own change in its editor, or run
-  `nextly db:sync`) and save again. PostgreSQL and SQLite apply the change whole or not at all.
-  MySQL commits each schema statement as it runs, so a save the database refuses part-way
+  `nextly db:sync`) and save again. PostgreSQL applies the change whole or not at all. MySQL
+  and SQLite apply each schema statement as it runs, so a save the database refuses part-way
   keeps what ran before the refusal; saving again finishes the rest.
 - A Required field added to a table that has rows is filled with its default where it has one,
   and otherwise with its type's empty value; a date with the moment of the save. The column

@@ -166,6 +166,15 @@ class AnsweringDispatcher implements PromptDispatcher {
         .filter(r => r.choice === "rename")
         .map(r => `${r.tableName}::${r.fromColumn}`)
     );
+    // The columns this change removes, by the drops it confirms: only those are
+    // its to trade for a column it adds. A column it never made (one added
+    // outside the Builder) is left unanswered, so the apply refuses rather than
+    // dropping its data.
+    const removing = new Set(
+      Object.entries(this.legacyResolutions?.byFieldName ?? {})
+        .filter(([, answer]) => answer.action === "confirm_drop")
+        .map(([name]) => toSnakeCase(name))
+    );
     const rest: BrowserRenameResolution[] =
       this.ownTable === undefined
         ? []
@@ -173,6 +182,7 @@ class AnsweringDispatcher implements PromptDispatcher {
             .filter(
               c =>
                 c.tableName === this.ownTable &&
+                removing.has(c.fromColumn) &&
                 !answered.has(key(c)) &&
                 !renamedFrom.has(`${c.tableName}::${c.fromColumn}`)
             )
@@ -208,8 +218,9 @@ export interface CollectionSchemaChange {
   eventResolutions: Resolution[];
   legacyResolutions?: LegacyResolutionsBundle;
   /**
-   * Whether every pair of columns on the collection's own table not answered above is a drop and
-   * an add: the Builder save's rule, which detects its own renames. The dialog asks the admin.
+   * Whether every pair on the collection's own table not answered above, from a column the change
+   * confirms dropping, is a drop and an add: the Builder save's rule, which detects its own
+   * renames. The dialog asks the admin.
    */
   dropAndAddUnansweredRenames?: boolean;
 }

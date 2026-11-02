@@ -39,6 +39,8 @@ A Schema Builder save of a collection now changes the database in development th
 - **An index name already taken** by another index on the table refuses the save before anything changes, naming that index, rather than leaving the field recorded unique with nothing enforcing it.
 - **SQLite.** A table rebuild a failed save left part-way (a `__new_<table>` beside or instead of the table) is finished or undone before the next save.
 - **MySQL indexes on long text.** An index added to an existing table on a TEXT column is keyed by its first 191 characters, as a new table's indexes already were, so MySQL accepts it. This applies to the schema dialog and to `migrate:create` files too.
+- **Many-to-many junctions on MySQL** are created with their indexes inside the one `CREATE TABLE IF NOT EXISTS`, so a junction lands whole and a save retried after a part-way failure passes over it. Names are unchanged.
+- **A column added outside the Builder** is no longer dropped when a save adds a field it could be mistaken for: the save is refused instead.
 - **Schema version.** A save moves the collection's schema version on, so a schema dialog open beside it sees the change.
 
 Production is unchanged: a save writes the migration file and runs nothing. On SQLite, that file still does not make a field leaving translation NOT NULL when it is Required or Unique, although the database in development does. A save's migration file stays one combined file with no localization intent header, so history inference and `nextly migrate`'s header-keyed checks don't read it.

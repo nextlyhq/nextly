@@ -367,6 +367,53 @@ describeEachDialect("a collection's Builder save", dialect => {
     }
   }, 120_000);
 
+  it("fills the entries already there from a Required date field's stated default, as its column stores a date", async () => {
+    // SQLite keeps a date as its epoch seconds, so the stated default is bound
+    // as those, as the migration file writes it, not as the text it was typed as.
+    await seeded();
+    const stated = "2026-01-02T03:04:05.000Z";
+
+    const saved = await handler().updateCollection(
+      { collectionName: "items" },
+      {
+        fields: [
+          ...BEFORE,
+          { name: "launchedOn", type: "date", required: true, default: stated },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await query<{ d: unknown }>(
+      `SELECT ${q("launched_on")} AS d FROM ${q("dc_items")}`
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.d).not.toBeNull();
+      if (dialect === "sqlite") {
+        expect(row.d).toBe(Math.floor(Date.parse(stated) / 1000));
+      }
+    }
+  }, 120_000);
+
+  it("keeps a column it never made, rather than trading it for a field the save adds", async () => {
+    // A column added outside the Builder looks to the pipeline like a rename
+    // candidate for a column the save adds. Only the columns the save itself
+    // removes are its to drop, so this one is left, and the save is refused.
+    await seeded();
+    await query(`ALTER TABLE ${q("dc_items")} ADD COLUMN ${q("stray")} TEXT`);
+    const recordedBefore = await recordedFields();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "items" },
+      { fields: [...BEFORE, { name: "subtitle", type: "text" }] }
+    );
+
+    expect(saved.success).toBe(false);
+    expect(await itemColumns()).toContain("stray");
+    expect(await recordedFields()).toEqual(recordedBefore);
+  }, 120_000);
+
   it("drops a relationship's column when it becomes many-to-many", async () => {
     // The field keeps its name and loses its column to a junction table, so the save answers the
     // column's drop itself, as it does a removed field's.

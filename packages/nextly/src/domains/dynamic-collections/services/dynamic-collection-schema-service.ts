@@ -1017,6 +1017,19 @@ export class DynamicCollectionSchemaService {
       if (this.dialect === "sqlite" && typeof value === "boolean") {
         return Number(value);
       }
+      // SQLite keeps a date as its epoch seconds, so a stated date is bound as
+      // those, as `formatDefaultValue` writes it into the migration file.
+      if (this.dialect === "sqlite" && field.type === "date") {
+        const at =
+          value instanceof Date
+            ? value
+            : typeof value === "string"
+              ? new Date(value)
+              : null;
+        if (at !== null && !Number.isNaN(at.getTime())) {
+          return Math.floor(at.getTime() / 1000);
+        }
+      }
       // No driver binds an object or an array as JSON: SQLite refuses one, and PostgreSQL's
       // driver turns an array into an array literal. A JSON default is bound as its text, which
       // every dialect's JSON column reads back as written.
@@ -2876,7 +2889,7 @@ ${allColumnDefs.join(",\n")}
     // declared NOT NULL: a junction created with `set null` could never have
     // enforced it, and would meet the refusal on its first action edit.
     this.refuseJunctionSetNull(field, j);
-    return `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
+    const table = `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
 CREATE TABLE IF NOT EXISTS ${q(j.table)} (
   ${q("id")} ${idType} PRIMARY KEY NOT NULL,
   ${q(j.sourceColumn)} ${idType} NOT NULL,
@@ -2884,12 +2897,24 @@ CREATE TABLE IF NOT EXISTS ${q(j.table)} (
   ${q("created_at")} ${timestampDefault},
   CONSTRAINT ${q(j.fkSource)} FOREIGN KEY (${q(j.sourceColumn)}) REFERENCES ${q(j.sourceTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
   CONSTRAINT ${q(j.fkTarget)} FOREIGN KEY (${q(j.targetColumn)}) REFERENCES ${q(j.targetTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
-  CONSTRAINT ${q(j.uqPair)} UNIQUE (${q(j.sourceColumn)}, ${q(j.targetColumn)})
+  CONSTRAINT ${q(j.uqPair)} UNIQUE (${q(j.sourceColumn)}, ${q(j.targetColumn)})`;
+    // MySQL commits each schema statement alone and has no `IF NOT EXISTS` on
+    // CREATE INDEX, so a junction created by one statement and indexed by two
+    // more could be left half-built, and the next run would stop at the first
+    // index's name. There the indexes are declared inside the table, so the
+    // junction lands whole and a repeated run passes over it.
+    if (this.dialect === "mysql") {
+      return `${table},
+  INDEX ${q(j.idxSource)} (${q(j.sourceColumn)}),
+  INDEX ${q(j.idxTarget)} (${q(j.targetColumn)})
+);`;
+    }
+    return `${table}
 );
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxSource)} ON ${q(j.table)}(${q(j.sourceColumn)});
+CREATE INDEX IF NOT EXISTS ${q(j.idxSource)} ON ${q(j.table)}(${q(j.sourceColumn)});
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn)});`;
+CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn)});`;
   }
 
   /**
