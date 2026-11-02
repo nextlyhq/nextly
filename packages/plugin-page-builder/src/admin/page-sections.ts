@@ -90,7 +90,7 @@ export function pageSections(
   // The pipeline expects a document; anything without a node list draws
   // nothing, which is what the preview shows for it too.
   if (documentNodes(value).length === 0) return [];
-  const prepared = prepareDocumentAsDrawn(value, {
+  const prepared = prepareDocumentAsDrawn(value as BlockDocument, {
     resolver,
     styleContext: render.styleContext,
     ...(render.limits === undefined ? {} : { limits: render.limits }),
