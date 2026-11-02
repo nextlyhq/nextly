@@ -24,18 +24,20 @@
  *
  * @module component-facts-route
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import { isPlainRecord, type RetiredExposures } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { requireNextly } from "nextly/runtime";
+import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import {
   COMPONENT_FACTS_ID_PARAM,
   COMPONENT_FACTS_ROUTE_PATH,
+  COMPONENT_LIBRARY_LOCALE_PARAM,
   type ComponentFactsResponse,
 } from "./library-contract";
 import {
@@ -51,6 +53,11 @@ export interface ComponentFactsSources {
   readonly readLive: (id: string) => Promise<unknown>;
   /** How many documents place the component. */
   readonly countPlacements: (id: string) => Promise<UsageCount>;
+  /**
+   * The ids the component has retired. A failure here fails the answer: the
+   * editor then waits rather than minting without them.
+   */
+  readonly readRetired: (id: string) => Promise<RetiredExposures>;
   /** The field of the row the definition lives in. */
   readonly field: string;
 }
@@ -79,6 +86,10 @@ export function liveIdsOf(
 /**
  * Answer for one component.
  *
+ * The caller's own read comes FIRST, and the count only for a component it
+ * answered: the count reads the index as the system, so asking it of a
+ * component the caller may not read would tell them how widely it is used.
+ *
  * A count that fails leaves `reach` null rather than failing the answer: the
  * count is said to the author, while the live ids keep a draft from reusing an
  * id, which is the part that matters.
@@ -87,15 +98,18 @@ export async function readComponentFacts(
   id: string,
   sources: ComponentFactsSources
 ): Promise<ComponentFactsResponse> {
-  const [row, count] = await Promise.all([
-    sources.readLive(id),
-    sources.countPlacements(id).then(
-      found => found,
-      () => null
-    ),
-  ]);
+  const row = await sources.readLive(id);
+  if (row === null || row === undefined) {
+    return { live: NONE, retired: NONE, reach: null };
+  }
+  const retired = await sources.readRetired(id);
+  const count = await sources.countPlacements(id).then(
+    found => found,
+    () => null
+  );
   return {
     live: liveIdsOf(row, sources.field),
+    retired: { properties: [...retired.properties], slots: [...retired.slots] },
     reach:
       count === null
         ? null
@@ -103,10 +117,52 @@ export async function readComponentFacts(
   };
 }
 
+const NONE: ComponentFactsResponse["live"] = { properties: [], slots: [] };
+
+/**
+ * The query this route reads, parsed at the boundary: the component's id and,
+ * optionally, the language its definition is read in. Bounded, so an outside
+ * value reaches neither read unexamined.
+ */
+const FACTS_QUERY = z.object({
+  [COMPONENT_FACTS_ID_PARAM]: z.string().trim().min(1).max(256),
+  [COMPONENT_LIBRARY_LOCALE_PARAM]: z.string().trim().min(1).max(35).optional(),
+});
+
+/** The parsed query, or the validation error naming what is wrong. */
+export function factsQuery(url: string): {
+  readonly id: string;
+  readonly locale: string | undefined;
+} {
+  const params = new URL(url).searchParams;
+  // An absent or empty language is the app default, as everywhere in the admin.
+  const locale = params.get(COMPONENT_LIBRARY_LOCALE_PARAM);
+  const parsed = FACTS_QUERY.safeParse({
+    [COMPONENT_FACTS_ID_PARAM]:
+      params.get(COMPONENT_FACTS_ID_PARAM) ?? undefined,
+    [COMPONENT_LIBRARY_LOCALE_PARAM]:
+      locale === null || locale === "" ? undefined : locale,
+  });
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: parsed.error.issues.map(issue => ({
+        path: issue.path.join("."),
+        code: "INVALID",
+        message: "Name the component with ?id=, and a language with ?locale=.",
+      })),
+    });
+  }
+  return {
+    id: parsed.data[COMPONENT_FACTS_ID_PARAM],
+    locale: parsed.data[COMPONENT_LIBRARY_LOCALE_PARAM],
+  };
+}
+
 /** The live row, read as the caller; null when it is gone or not theirs. */
 function liveRowReader(
   ctx: Pick<PluginRouteContext, "caller">,
-  slug: string
+  slug: string,
+  locale: string | undefined
 ): (id: string) => Promise<unknown> {
   return async id => {
     try {
@@ -114,6 +170,9 @@ function liveRowReader(
         collection: slug,
         id,
         ...(await asTheCaller(ctx)),
+        // The language being edited: a localized definition can expose
+        // different fields in each.
+        ...(locale === undefined ? {} : { locale }),
         // Every lifecycle state, so a component never published answers too,
         // and NO draft overlay: the live row is the one placements resolve.
         status: "all",
@@ -136,6 +195,9 @@ export function componentFactsRoute(args: {
   countPlacements: (
     ctx: PluginRouteContext
   ) => (id: string) => Promise<UsageCount>;
+  readRetired: (
+    ctx: PluginRouteContext
+  ) => (id: string) => Promise<RetiredExposures>;
 }): {
   method: "GET";
   path: string;
@@ -147,26 +209,16 @@ export function componentFactsRoute(args: {
     path: COMPONENT_FACTS_ROUTE_PATH,
     requiredPermission: componentReadPermission(args.store),
     handler: async (req, ctx) => {
-      const id = new URL(req.url).searchParams.get(COMPONENT_FACTS_ID_PARAM);
-      if (id === null || id === "") {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: COMPONENT_FACTS_ID_PARAM,
-              code: "REQUIRED",
-              message: "Name the component with ?id=.",
-            },
-          ],
-        });
-      }
+      const { id, locale } = factsQuery(req.url);
       const slug =
         args.store.collection ??
         ctx.self.collections[COMPONENTS_SLUG] ??
         COMPONENTS_SLUG;
       return Response.json(
         await readComponentFacts(id, {
-          readLive: liveRowReader(ctx, slug),
+          readLive: liveRowReader(ctx, slug, locale),
           countPlacements: args.countPlacements(ctx),
+          readRetired: args.readRetired(ctx),
           field: args.store.field,
         })
       );

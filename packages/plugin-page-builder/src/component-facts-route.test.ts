@@ -8,7 +8,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { liveIdsOf, readComponentFacts } from "./component-facts-route";
+import {
+  factsQuery,
+  liveIdsOf,
+  readComponentFacts,
+} from "./component-facts-route";
+
+const NO_RETIRED = { properties: [], slots: [] };
 
 const row = {
   id: "hero",
@@ -63,9 +69,11 @@ describe("the answer", () => {
       readLive: async () => row,
       countPlacements: async () => ({ documents: 3, complete: false }),
       field: "content",
+      readRetired: async () => NO_RETIRED,
     });
     expect(facts).toEqual({
       live: { properties: ["title", "cta"], slots: ["body"] },
+      retired: NO_RETIRED,
       reach: { count: 3, complete: false },
     });
   });
@@ -77,6 +85,7 @@ describe("the answer", () => {
         throw new Error("the index is unavailable");
       },
       field: "content",
+      readRetired: async () => NO_RETIRED,
     });
     expect(facts.live.properties).toEqual(["title", "cta"]);
     expect(facts.reach).toBeNull();
@@ -91,7 +100,82 @@ describe("the answer", () => {
       },
       countPlacements: async () => ({ documents: 0, complete: true }),
       field: "content",
+      readRetired: async () => NO_RETIRED,
     });
     expect(asked).toEqual(["hero"]);
+  });
+});
+
+describe("a component the caller may not read", () => {
+  it("is not counted, so its use is not revealed", async () => {
+    let counted = 0;
+    const facts = await readComponentFacts("secret", {
+      readLive: async () => null,
+      countPlacements: async () => {
+        counted += 1;
+        return { documents: 40, complete: true };
+      },
+      field: "content",
+      readRetired: async () => NO_RETIRED,
+    });
+    expect(facts).toEqual({
+      live: NO_RETIRED,
+      retired: NO_RETIRED,
+      reach: null,
+    });
+    expect(counted).toBe(0);
+  });
+});
+
+describe("the query", () => {
+  const at = (query: string) => `http://admin.test/component-facts?${query}`;
+
+  it("names the component, and the language when there is one", () => {
+    expect(factsQuery(at("id=hero"))).toEqual({
+      id: "hero",
+      locale: undefined,
+    });
+    expect(factsQuery(at("id=hero&locale=de"))).toEqual({
+      id: "hero",
+      locale: "de",
+    });
+    expect(factsQuery(at("id=hero&locale="))).toEqual({
+      id: "hero",
+      locale: undefined,
+    });
+  });
+
+  it("is refused without an id, or with one past its bound", () => {
+    expect(() => factsQuery(at(""))).toThrow();
+    expect(() => factsQuery(at("id=%20%20"))).toThrow();
+    expect(() => factsQuery(at(`id=${"x".repeat(257)}`))).toThrow();
+  });
+});
+
+describe("the retired ids", () => {
+  it("travel beside the live ones, so a published removal's id stays reserved", async () => {
+    const facts = await readComponentFacts("hero", {
+      readLive: async () => row,
+      countPlacements: async () => ({ documents: 1, complete: true }),
+      field: "content",
+      readRetired: async () => ({ properties: ["subtitle"], slots: ["aside"] }),
+    });
+    expect(facts.retired).toEqual({
+      properties: ["subtitle"],
+      slots: ["aside"],
+    });
+  });
+
+  it("fail the answer when they cannot be read, so the editor waits", async () => {
+    await expect(
+      readComponentFacts("hero", {
+        readLive: async () => row,
+        countPlacements: async () => ({ documents: 1, complete: true }),
+        field: "content",
+        readRetired: async () => {
+          throw new Error("the table is unavailable");
+        },
+      })
+    ).rejects.toThrow("the table is unavailable");
   });
 });

@@ -414,9 +414,28 @@ export const COMPONENT_FACTS_ROUTE_PATH = "/component-facts";
 /** The query parameter naming the component, by id. */
 export const COMPONENT_FACTS_ID_PARAM = "id";
 
-/** The facts route's path for one component, as the client requests it. */
-export function componentFactsPath(id: string): string {
+/** The query parameter carrying an asker's mount token, which the route ignores. */
+const COMPONENT_FACTS_MOUNT_PARAM = "mount";
+
+/**
+ * The facts route's path for one component, in the language being edited, as
+ * the client requests it. No language is the app default, as everywhere in
+ * the admin.
+ */
+export function componentFactsPath(
+  id: string,
+  locale?: string | null,
+  /**
+   * A token the route ignores, which makes the path, and so the read's cache
+   * key, one asker's own: an editor trusts no answer read before it mounted.
+   */
+  mount?: string
+): string {
   const query = new URLSearchParams({ [COMPONENT_FACTS_ID_PARAM]: id });
+  if (locale !== undefined && locale !== null && locale !== "") {
+    query.set(COMPONENT_LIBRARY_LOCALE_PARAM, locale);
+  }
+  if (mount !== undefined) query.set(COMPONENT_FACTS_MOUNT_PARAM, mount);
   return `${COMPONENT_FACTS_ROUTE_PATH}?${query.toString()}`;
 }
 
@@ -440,8 +459,18 @@ export interface ComponentFactsResponse {
     readonly slots: readonly string[];
   };
   /**
-   * How many documents place the component, from the usage index; `complete`
-   * false makes the number a floor. `null` when the index could not answer.
+   * The field and slot ids the component has retired: removed by a published
+   * definition, and never to be minted again, since a host may still hold a
+   * value under one until it is next written.
+   */
+  readonly retired: {
+    readonly properties: readonly string[];
+    readonly slots: readonly string[];
+  };
+  /**
+   * How many documents place the component directly, from the usage index;
+   * `complete` false makes the number a floor. `null` when the index could not
+   * answer, or the caller may not read the component.
    */
   readonly reach: { readonly count: number; readonly complete: boolean } | null;
 }

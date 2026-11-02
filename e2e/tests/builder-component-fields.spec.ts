@@ -149,11 +149,9 @@ test.describe("a component's exposed fields", () => {
       ["Photo", "Image"],
       ["Call to action", "Link"],
     ] as const) {
-      const item = list
-        .getByRole("listitem")
-        .filter({
-          has: page.getByRole("textbox", { name: `Name of the field ${name}` }),
-        });
+      const item = list.getByRole("listitem").filter({
+        has: page.getByRole("textbox", { name: `Name of the field ${name}` }),
+      });
       await expect(item).toHaveCount(1);
       await expect(item.locator(".nx-exposed-fields__type")).toHaveText(type);
     }
@@ -211,5 +209,57 @@ test.describe("a component's exposed fields", () => {
     await expect(dialog).toHaveCount(0);
     await expect(list.getByRole("listitem")).toHaveCount(0);
     await expect(list).toContainText("Placements can’t change anything");
+  });
+
+  test("never gives a new field the id of one a published removal retired", async ({
+    page,
+  }) => {
+    const headline = {
+      id: "headline",
+      label: "Headline",
+      nodeId: "cf-heading",
+      propPath: "text",
+      type: "text",
+    };
+    const id = await createComponent(page, { exposed: [headline] });
+    const entry = `${COMPONENTS}/${id}`;
+    // Published with the field, then published without it: the removal
+    // retires `headline`, and placements may still hold values under it.
+    for (const exposed of [[headline], []]) {
+      const written = await page.request.patch(entry, {
+        data: {
+          status: "published",
+          content: {
+            formatVersion: 1,
+            kind: "component",
+            nodes: NODES,
+            exposed,
+          },
+        },
+      });
+      expect(written.ok(), `publishing: ${written.status()}`).toBe(true);
+    }
+
+    await openComponent(page, id);
+    await openLayers(page);
+    await select(page, "cf-heading");
+    await expose(page, "text", "Headline");
+    const saved = page.waitForResponse(
+      response =>
+        new URL(response.url()).pathname.endsWith(`/entries/${id}`) &&
+        ["PATCH", "PUT"].includes(response.request().method()) &&
+        response.ok()
+    );
+    await page.getByRole("button", { name: /^Save( draft)?$/ }).click();
+    await saved;
+
+    const stored = await page.request.get(`${entry}?draft=true`);
+    expect(stored.ok(), `reading the draft: ${stored.status()}`).toBe(true);
+    // A read by id answers the entry itself; a wrapped answer is read through.
+    type Stored = { content?: { exposed?: { id: string; label: string }[] } };
+    const body = (await stored.json()) as Stored & { item?: Stored };
+    const fields = (body.item ?? body).content?.exposed ?? [];
+    expect(fields.map(field => field.label)).toEqual(["Headline"]);
+    expect(fields[0]?.id).not.toBe("headline");
   });
 });
