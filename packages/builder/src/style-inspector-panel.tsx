@@ -76,6 +76,7 @@ import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
@@ -738,27 +739,27 @@ export function StyleInspectorPanel({
  * which would take the whole Style tab with it. A viewer already in dark mode
  * sees one frame of light-mode swatches; the alternative is a hydration
  * mismatch, which is worse and harder to see.
+ *
+ * Asked of the CANVAS's window, which is a frame's when the canvas is in one:
+ * the page's own media queries are evaluated there, so that is the window
+ * whose answer the canvas is showing.
  */
 function usePrefersDark(): boolean {
   const [prefersDark, setPrefersDark] = React.useState(false);
+  const view = useCanvasFrame().window;
   React.useEffect(() => {
     // Detected by CALLABILITY, not by presence. `"matchMedia" in window` is
     // true under jsdom while the value is not a function, so the property test
     // passes and the call throws — measured, and it took 85 tests down. A
     // capability check has to ask the question the caller will ask.
-    if (
-      typeof window === "undefined" ||
-      typeof window.matchMedia !== "function"
-    ) {
-      return;
-    }
-    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    if (view === null || typeof view.matchMedia !== "function") return;
+    const query = view.matchMedia("(prefers-color-scheme: dark)");
     setPrefersDark(query.matches);
     const listen = (event: MediaQueryListEvent): void =>
       setPrefersDark(event.matches);
     query.addEventListener("change", listen);
     return () => query.removeEventListener("change", listen);
-  }, []);
+  }, [view]);
   return prefersDark;
 }
 
@@ -805,17 +806,19 @@ function useLiveBreakpoints(
   const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
     matchedBreakpoints(breakpoints, never, options)
   );
+  /*
+   * The CANVAS's window, a frame's when the canvas is in one. A frame is as
+   * wide as the device it previews, so its media queries are the ones the
+   * page's breakpoints answer to; the editor's window is as wide as the
+   * admin, and asking it reports the tiers of a screen nobody is previewing.
+   */
+  const view = useCanvasFrame().window;
   React.useEffect(() => {
     // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
     // records: `"matchMedia" in window` is true under jsdom while the value is
     // not a function, so the property test passes and the call throws.
-    if (
-      typeof window === "undefined" ||
-      typeof window.matchMedia !== "function"
-    ) {
-      return;
-    }
-    const ask = (query: string): boolean => window.matchMedia(query).matches;
+    if (view === null || typeof view.matchMedia !== "function") return;
+    const ask = (query: string): boolean => view.matchMedia(query).matches;
     const read = (): void =>
       setMatches(matchedBreakpoints(breakpoints, ask, options));
     read();
@@ -825,13 +828,13 @@ function useLiveBreakpoints(
      * query change event fires exactly when an answer here would differ.
      */
     const lists = breakpointQueries(breakpoints, options).map(query =>
-      window.matchMedia(query)
+      view.matchMedia(query)
     );
     for (const list of lists) list.addEventListener("change", read);
     return () => {
       for (const list of lists) list.removeEventListener("change", read);
     };
-  }, [breakpoints, options]);
+  }, [breakpoints, options, view]);
   /*
    * Previewing, the window is not the authority and the host is.
    *

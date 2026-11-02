@@ -335,6 +335,27 @@ Startup is refused, naming the plugins involved, when a view's `path`:
 - belongs to a field-type view scoped to a field type the plugin does not
   contribute.
 
+#### The header's controls in your view
+
+> **Experimental.** These may change before they are marked stable.
+
+Your view replaces the header, and the header's save state and Publish with it.
+Place `<DocumentSaveIndicator />` and `<DocumentPrimaryAction />`, from
+`@nextlyhq/plugin-sdk/admin`, wherever your view draws its toolbar:
+
+- `DocumentSaveIndicator` says whether the work is stored: **Saving…**,
+  **Unsaved changes**, **Saved** (when, in its tooltip) or **Not saved** with
+  **Retry**. It keeps the width of its longest state, so nothing beside it
+  moves, and screen readers hear it as they hear the header's. `className`
+  places it.
+- `DocumentPrimaryAction` is the action that leads (**Publish**, **Publish
+  changes** or **Save**, as in the header). Its arrow holds **Save draft**, the
+  other ways to publish, such as **Schedule publish…**, and **Unpublish**. An
+  action that can't run right now is disabled, with the reason it is held.
+
+Both are the admin's own controls, run through the same actions as the
+header. Outside a document they render nothing.
+
 ### Who is signed in
 
 `useCurrentUserId()` from `@nextlyhq/plugin-sdk/admin` answers the signed-in user's id, for a
