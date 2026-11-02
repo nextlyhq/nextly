@@ -574,7 +574,7 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock } from "./block";
+export { BLOCK_ICONS, defineBlock, ITEM_SCHEMA_MAX_DEPTH } from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,

@@ -651,6 +651,16 @@ export type {
 export { useUploadMedia } from "@nextlyhq/admin";
 
 /**
+ * @experimental The media library as a dialog a plugin can open: browse,
+ * search and upload, then hand back the chosen items. The page builder's
+ * inspector opens it to choose an image; a plugin's own inspector may do the
+ * same. Store the chosen item's `id`, which stays right when the file is moved
+ * or renamed, rather than its `url`, which does not.
+ */
+export { MediaPickerDialog } from "@nextlyhq/admin";
+export type { MediaPickerDialogProps } from "@nextlyhq/admin";
+
+/**
  * @experimental Reads the `clientConfig` this plugin declared in
  * `contributes.admin.clientConfig`, which is how a plugin's server-side
  * configuration reaches its browser components.
@@ -684,6 +694,17 @@ export { usePluginClientConfig } from "@nextlyhq/admin";
  * cannot tell them apart draws its empty state over a read in flight.
  */
 export { usePluginRoute } from "@nextlyhq/admin";
+
+/**
+ * @experimental Read a route this plugin contributed once, outside React.
+ *
+ * For a read a hook cannot express: a search an author is typing, each read
+ * cancelling the one it replaces through `signal`. It goes through the same
+ * session handling as `usePluginRoute`, so an expired session is renewed
+ * rather than surfacing as a failure, and a refusal rejects with the admin's
+ * parsed error. Not cached. Answers `undefined` for an empty answer.
+ */
+export { readPluginRoute } from "@nextlyhq/admin";
 
 /**
  * @experimental Write to a route this plugin contributed.

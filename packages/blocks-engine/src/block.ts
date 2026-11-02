@@ -27,6 +27,17 @@ export interface BlockIsland {
 }
 
 /**
+ * How deep a list's `item` schemas nest before the editor stops drawing them:
+ * a list of records holding lists, and so on, this many levels down. Any
+ * reader that walks item schemas the editor draws (which relation targets a
+ * search may read, for one) walks exactly this far, so what is drawn and what
+ * is allowed cannot disagree.
+ *
+ * @experimental
+ */
+export const ITEM_SCHEMA_MAX_DEPTH = 4;
+
+/**
  * A prop's schema entry. Structural on purpose: the engine only needs each
  * prop's declared `type` (for the generated manifest and for deriving editor
  * controls); the full field-configuration vocabulary lives in the field system
@@ -63,6 +74,26 @@ export interface PropSchema {
    * configuration. Registration refuses any other value, naming the prop.
    */
   role?: "content";
+  /**
+   * What an author calls the prop, in plain words: "Image", "Alt text",
+   * "Open in a new tab". The editor's controls are labelled with it, and fall
+   * back to the prop's name, spaced and capitalised, when it is left out.
+   *
+   * For an on/off prop, say what "on" does ("Open by default"), since the
+   * control is a switch and its label is the whole of what it explains.
+   */
+  label?: string;
+  /**
+   * What an author calls each of a select's `options`, keyed by the stored
+   * value: `{ lazy: "Load when near the screen" }`. An option left out is
+   * shown as its value. The stored value never changes with its name.
+   */
+  optionLabels?: Readonly<Record<string, string>>;
+  /**
+   * For a `media` prop, the kinds of file the picker offers, as an `accept`
+   * list (`image/*`), so an image is never given a PDF to draw.
+   */
+  accept?: string;
   [option: string]: unknown;
 }
 

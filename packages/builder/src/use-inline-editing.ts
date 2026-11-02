@@ -25,7 +25,7 @@
 
 import { getBlock, findNode } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { useCallback } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 import type { EditorState } from "./editor-state";
 import { composedTextAt } from "./exposed-inline";
@@ -35,6 +35,7 @@ import {
 } from "./inline-edit-outcome";
 import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
+import type { OpenPassages } from "./open-passages";
 import {
   useInlineRichText,
   type CaretPoint,
@@ -53,6 +54,11 @@ export interface UseInlineEditingResult {
   editing: InlineTextEditing | null;
   /** The passage being edited, or `null`. Never set at the same time as {@link editing}. */
   editingRich: InlineRichTextEditing | null;
+  /**
+   * Whether an inspector field holds a passage open in the shared editor:
+   * unsaved work, as an open passage on the canvas is.
+   */
+  inspecting: boolean;
   /**
    * Start editing a value, reporting whether it could be.
    *
@@ -110,14 +116,26 @@ function markedAt(target: EventTarget | null): {
  * @param onPartOf - told the placement whose text was double-clicked when that
  *   text belongs to the component's design rather than to a field it exposes;
  *   the placement is selected first, and the host says so
+ * @param passages - where inspector fields hold open passages; `commit`
+ *   finishes them first, see {@link OpenPassages}
  * @returns one edit at a time, and the canvas handler that starts it
  */
 export function useInlineEditing(
   editor: EditorState,
   loadRichText?: InlineRichTextEditorLoader,
   onFinished?: InlineRichTextFinished,
-  onPartOf?: (placementId: string) => void
+  onPartOf?: (placementId: string) => void,
+  passages?: OpenPassages
 ): UseInlineEditingResult {
+  const subscribe = useCallback(
+    (listener: () => void) => passages?.subscribe(listener) ?? noSubscription(),
+    [passages]
+  );
+  const inspecting = useSyncExternalStore(
+    subscribe,
+    () => passages?.isOpen() ?? false,
+    () => false
+  );
   const plain = useInlineText(editor);
   /*
    * Passages only. The plain surface commits from its own blur handler and
@@ -194,6 +212,10 @@ export function useInlineEditing(
     // Both are asked, and at most one is open. Asking only the one believed to
     // be open would leave the other's edit hanging whenever that belief was
     // wrong, and each reports nothing when it holds nothing.
+    // The inspector's passages first, through their own commit: their words
+    // are in the shared editor alone, and the document the caller holds is
+    // from before them. What they wrote is the base the rest answers with.
+    const inspected = passages?.finishAll() ?? null;
     const written = plain.commit();
     const passage = rich.commit();
     // The passage's answer wins whenever it has one, because it is the surface
@@ -202,10 +224,11 @@ export function useInlineEditing(
     // open, which is why a plain edit lost to a capped write is a defect of its
     // own rather than something this can translate.
     if (passage.status !== "unchanged") return passage;
-    return written === null
+    const latest = written ?? inspected;
+    return latest === null
       ? INLINE_EDIT_UNCHANGED
-      : { status: "written", document: written };
-  }, [plain, rich]);
+      : { status: "written", document: latest };
+  }, [plain, rich, passages]);
 
   const cancel = useCallback(() => {
     plain.cancel();
@@ -266,9 +289,15 @@ export function useInlineEditing(
   return {
     editing: plain.editing,
     editingRich: rich.editing,
+    inspecting,
     begin,
     commit,
     cancel,
     onDoubleClick,
   };
+}
+
+/** A subscription to nothing, for an editor with no inspector passages. */
+function noSubscription(): () => void {
+  return () => {};
 }

@@ -995,6 +995,19 @@
 }
 
 /*
+ * A prop the panel has no control for is named in plain text rather than by a
+ * label, since there is no control for a label to name. It takes the label's
+ * place and weight, so the row still reads as the field it is.
+ */
+.nx-inspector__field-name {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+/*
  * Below the width where a label and a control can share a row, the field goes
  * back to stacking. Asked of the CONTAINER: the rail can be dragged narrow
  * while the window stays wide, and a media query would answer for the window.
@@ -1260,7 +1273,8 @@
  * state a screen reader reads, so styling from that attribute keeps what is
  * seen and what is announced reading off one value.
  */
-.nx-style-inspector__toggle > button[aria-pressed="true"] {
+.nx-style-inspector__toggle > button[aria-pressed="true"],
+.nx-style-inspector__toggle > button[aria-checked="true"] {
   background: var(--nx-accent);
   color: var(--nx-accent-foreground);
 }
@@ -4002,4 +4016,128 @@ fieldset.nx-inspector__fields {
 .nx-lock-repair__actions {
   display: flex;
   gap: 0.5rem;
+}
+
+/*
+ * A control that holds more than one value (a list's items, a relation's
+ * search and matches) stacks its name above it and takes the panel's whole
+ * width. Beside a 6.5rem label column it was squeezed into what is left, and
+ * a list item's field showed a few letters of its text.
+ */
+.nx-inspector__field.nx-inspector__field--stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-inspector__field.nx-inspector__field--stacked > * {
+  grid-column: 1;
+}
+
+/* A list's items, one quiet row each: its field, then its actions. */
+.nx-inspector__array {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-inspector__array-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.25rem 0.375rem;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+/* An item's fields, one above another, taking the row's width. */
+.nx-inspector__array-fields {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+/* An item's own fields stack too: the row is narrower than a field's columns. */
+.nx-inspector__array-fields .nx-inspector__field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-inspector__array-fields .nx-inspector__field > * {
+  grid-column: 1;
+}
+
+.nx-inspector__array-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.nx-inspector__array-actions svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* A relation: what is chosen and its Clear on one line, then the search. */
+.nx-inspector__relation {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-inspector__relation-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-inspector__relation-chosen > p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The matches: full-width rows, a long title cut with an ellipsis. */
+.nx-inspector__relation-matches {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-inspector__relation-matches button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.375rem;
+  text-align: start;
+}
+
+.nx-inspector__relation-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-inspector__relation-tick {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-inline-start: auto;
+}
+
+.nx-inspector__relation-matches button[aria-pressed="true"] {
+  font-weight: 600;
+}
+
+/*
+ * A chosen option longer than the menu button ("Load when near the screen")
+ * stays on one line, cut with an ellipsis, rather than wrapping the button
+ * to two lines in a row of one-line fields.
+ */
+.nx-inspector__field[data-content-control="select"] [data-slot="select-value"] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
 }
