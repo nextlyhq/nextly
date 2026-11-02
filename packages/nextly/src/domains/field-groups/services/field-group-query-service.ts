@@ -321,7 +321,9 @@ export class FieldGroupQueryService extends BaseService {
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: ComponentFallbackLocale,
-    executor?: unknown
+    executor?: unknown,
+    /** A failed translation read propagates rather than returning shared values. */
+    strict = false
   ): Promise<void> {
     if (
       !this.localization ||
@@ -352,6 +354,7 @@ export class FieldGroupQueryService extends BaseService {
         meta.slug,
         companion.companionTableName,
         executor,
+        strict,
         () =>
           populateCompanionFieldsAllLocales({
             db: (executor ?? this.adapter.getDrizzle()) as Parameters<
@@ -422,6 +425,7 @@ export class FieldGroupQueryService extends BaseService {
       meta.slug,
       companion.companionTableName,
       executor,
+      strict,
       overlay
     );
     if (!ran) return;
@@ -489,9 +493,12 @@ export class FieldGroupQueryService extends BaseService {
     slug: string,
     companionTableName: string,
     executor: unknown,
+    strict: boolean,
     overlay: () => Promise<unknown>
   ): Promise<boolean> {
-    if (executor !== undefined) {
+    // On a transaction a failed read has aborted it, and a strict reader
+    // judges what is stored: either way the failure is the caller's to see.
+    if (executor !== undefined || strict) {
       await overlay();
       return true;
     }
@@ -810,7 +817,8 @@ export class FieldGroupQueryService extends BaseService {
       [data],
       locale,
       fallbackLocale,
-      executor
+      executor,
+      strict
     );
     data = await this.expandComponentRelationships(
       data,
@@ -862,7 +870,8 @@ export class FieldGroupQueryService extends BaseService {
       dataArray,
       locale,
       fallbackLocale,
-      executor
+      executor,
+      strict
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -945,7 +954,8 @@ export class FieldGroupQueryService extends BaseService {
         [data],
         locale,
         fallbackLocale,
-        executor
+        executor,
+        strict
       );
       data = await this.expandComponentRelationships(
         data,
@@ -1030,7 +1040,8 @@ export class FieldGroupQueryService extends BaseService {
       collected.map(c => c.data),
       read.locale,
       read.fallbackLocale,
-      read.executor
+      read.executor,
+      read.strict
     );
 
     const result = new Map<string, unknown>();
@@ -1077,7 +1088,8 @@ export class FieldGroupQueryService extends BaseService {
       entries.map(e => e.data),
       read.locale,
       read.fallbackLocale,
-      read.executor
+      read.executor,
+      read.strict
     );
 
     const grouped = new Map<string, Record<string, unknown>[]>();
@@ -1175,7 +1187,8 @@ export class FieldGroupQueryService extends BaseService {
           [data],
           read.locale,
           read.fallbackLocale,
-          read.executor
+          read.executor,
+          read.strict
         );
         data = await this.expandComponentRelationships(
           data,

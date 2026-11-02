@@ -12,9 +12,9 @@ import { NextlyError } from "../../../../errors";
 import {
   componentsRequiredInDefaultLanguage,
   GoingLiveRelationsBatch,
-  readStoredRelations,
+  readStoredComponents,
+  readStoredManyToMany,
   relationsGoingLive,
-  type StoredRelations,
 } from "../collection-mutation-service";
 
 const HERO = {
@@ -29,54 +29,73 @@ const TAGS = {
 } as unknown as FieldDefinition;
 const TITLE = { name: "title", type: "text" } as unknown as FieldDefinition;
 
-function relations(id: string): StoredRelations {
-  return { components: { hero: { heading: id } }, manyToMany: { tags: [id] } };
+/** A load that answers each document by its id, counting its reads. */
+function countingLoad(version = () => "") {
+  const components = vi.fn(
+    (ids: readonly string[], language: string | undefined) =>
+      Promise.resolve(
+        new Map(
+          ids.map(id => [
+            id,
+            { hero: { heading: `${id}${version()}:${language ?? "-"}` } },
+          ])
+        )
+      )
+  );
+  const manyToMany = vi.fn((ids: readonly string[]) =>
+    Promise.resolve(new Map(ids.map(id => [id, { tags: [id] }])))
+  );
+  return { components, manyToMany };
 }
 
 describe("a batch's stored relations", () => {
-  it("are read once for every document in the batch, per language", async () => {
-    const load = vi.fn((ids: readonly string[]) =>
-      Promise.resolve(new Map(ids.map(id => [id, relations(id)])))
-    );
+  it("are read once for every document in the batch: components per language, links once", async () => {
+    const load = countingLoad();
     const batch = new GoingLiveRelationsBatch(["a", "b", "c"]);
 
     await batch.read("a", "en", load);
-    expect(await batch.read("c", "en", load)).toEqual(relations("c"));
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(load).toHaveBeenLastCalledWith(["a", "b", "c"]);
+    expect(await batch.read("c", "en", load)).toEqual({
+      components: { hero: { heading: "c:en" } },
+      manyToMany: { tags: ["c"] },
+    });
+    expect(load.components).toHaveBeenCalledTimes(1);
+    expect(load.components).toHaveBeenLastCalledWith(["a", "b", "c"], "en");
 
     await batch.read("b", "de", load);
     await batch.read("b", undefined, load);
-    expect(load).toHaveBeenCalledTimes(3);
+    expect(load.components).toHaveBeenCalledTimes(3);
+    // The links are the same in every language: read once for the batch.
+    expect(load.manyToMany).toHaveBeenCalledTimes(1);
   });
 
   it("are read again for a document the batch has written since", async () => {
-    let version = 0;
-    const load = vi.fn((ids: readonly string[]) =>
-      Promise.resolve(
-        new Map(ids.map(id => [id, relations(`${id}${version}`)]))
-      )
-    );
+    let version = "0";
+    const load = countingLoad(() => version);
     const batch = new GoingLiveRelationsBatch(["a", "b"]);
     await batch.read("b", "en", load);
 
-    version = 1;
+    version = "1";
     batch.written("a");
 
-    expect(await batch.read("a", "en", load)).toEqual(relations("a1"));
-    expect(load).toHaveBeenLastCalledWith(["a"]);
+    expect((await batch.read("a", "en", load)).components).toEqual({
+      hero: { heading: "a1:en" },
+    });
+    expect(load.components).toHaveBeenLastCalledWith(["a"], "en");
+    expect(load.manyToMany).toHaveBeenLastCalledWith(["a"]);
     // A document the batch has not written keeps the batch's read.
-    expect(await batch.read("b", "en", load)).toEqual(relations("b0"));
+    expect((await batch.read("b", "en", load)).components).toEqual({
+      hero: { heading: "b0:en" },
+    });
   });
 
   it("are read alone for a document outside the batch", async () => {
-    const load = vi.fn((ids: readonly string[]) =>
-      Promise.resolve(new Map(ids.map(id => [id, relations(id)])))
-    );
+    const load = countingLoad();
     const batch = new GoingLiveRelationsBatch(["a"]);
 
-    expect(await batch.read("z", "en", load)).toEqual(relations("z"));
-    expect(load).toHaveBeenLastCalledWith(["z"]);
+    expect((await batch.read("z", "en", load)).manyToMany).toEqual({
+      tags: ["z"],
+    });
+    expect(load.components).toHaveBeenLastCalledWith(["z"], "en");
   });
 });
 
@@ -90,15 +109,13 @@ describe("reading stored relations", () => {
   };
 
   it("refuses where the collection has components and no field-group service", async () => {
-    const read = readStoredRelations({
+    const read = readStoredComponents({
       entryIds: ["a"],
       collectionName: "pages",
       parentTable: "dc_pages",
       fields: [TITLE, HERO],
-      manyToManyFields: [],
       language: undefined,
       fieldGroups: undefined,
-      relationships,
     });
 
     await expect(read).rejects.toSatisfy(
@@ -110,26 +127,28 @@ describe("reading stored relations", () => {
   });
 
   it("reads a collection without components with no field-group service", async () => {
-    const found = await readStoredRelations({
+    const read = {
       entryIds: ["a", "b"],
       collectionName: "stories",
-      parentTable: "dc_stories",
       fields: [TITLE, TAGS],
+    };
+    expect(
+      await readStoredComponents({
+        ...read,
+        parentTable: "dc_stories",
+        language: undefined,
+        fieldGroups: undefined,
+      })
+    ).toEqual(new Map());
+
+    const links = await readStoredManyToMany({
+      ...read,
       manyToManyFields: [TAGS],
-      language: undefined,
-      fieldGroups: undefined,
       relationships,
     });
-
-    expect(found.get("a")).toEqual({
-      components: {},
-      manyToMany: { tags: ["t1"] },
-    });
+    expect(links.get("a")).toEqual({ tags: ["t1"] });
     // No links is an empty list, which `required` judges, not an absent key.
-    expect(found.get("b")).toEqual({
-      components: {},
-      manyToMany: { tags: [] },
-    });
+    expect(links.get("b")).toEqual({ tags: [] });
   });
 
   it("reads every document's components in one call, in the language and on the connection given", async () => {
@@ -141,16 +160,14 @@ describe("reading stored relations", () => {
     );
     const executor = { connection: "tx" };
 
-    const found = await readStoredRelations({
+    const found = await readStoredComponents({
       entryIds: ["a", "b"],
       collectionName: "pages",
       parentTable: "dc_pages_custom",
       fields: [TITLE, HERO],
-      manyToManyFields: [],
       language: "de",
       executor,
       fieldGroups: { populateComponentDataMany },
-      relationships,
     });
 
     expect(populateComponentDataMany).toHaveBeenCalledTimes(1);
@@ -166,10 +183,44 @@ describe("reading stored relations", () => {
       })
     );
     // The component read's empty value is kept as a key; nothing else is.
-    expect(found.get("b")).toEqual({
-      components: { hero: null },
-      manyToMany: {},
+    expect(found.get("b")).toEqual({ hero: null });
+  });
+
+  it("reads a batch past one statement's parameters in runs of 500 ids", async () => {
+    const ids = Array.from({ length: 1001 }, (_, i) => `e${i}`);
+    const populateComponentDataMany = vi.fn(
+      (params: { entries: Record<string, unknown>[] }) =>
+        Promise.resolve(params.entries.map(entry => ({ ...entry, hero: null })))
+    );
+    const fetchManyToManyTargetIdsOf = vi.fn(
+      (_c: string, chunk: readonly string[]) =>
+        Promise.resolve(new Map(chunk.map(id => [id, [] as string[]])))
+    );
+
+    const components = await readStoredComponents({
+      entryIds: ids,
+      collectionName: "pages",
+      parentTable: "dc_pages",
+      fields: [HERO],
+      language: undefined,
+      fieldGroups: { populateComponentDataMany },
     });
+    const links = await readStoredManyToMany({
+      entryIds: ids,
+      collectionName: "pages",
+      fields: [TAGS],
+      manyToManyFields: [TAGS],
+      relationships: { fetchManyToManyTargetIdsOf },
+    });
+
+    expect(
+      populateComponentDataMany.mock.calls.map(([p]) => p.entries.length)
+    ).toEqual([500, 500, 1]);
+    expect(
+      fetchManyToManyTargetIdsOf.mock.calls.map(([, chunk]) => chunk.length)
+    ).toEqual([500, 500, 1]);
+    expect(components.size).toBe(1001);
+    expect(links.get("e1000")).toEqual({ tags: [] });
   });
 });
 

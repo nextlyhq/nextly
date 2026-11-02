@@ -905,16 +905,47 @@ export interface StoredRelations {
   manyToMany: Record<string, string[]>;
 }
 
-/** Reads these documents' stored relations, keyed by document id. */
-export type StoredRelationsLoad = (
-  entryIds: readonly string[]
-) => Promise<Map<string, StoredRelations>>;
+/**
+ * How a batch's stored relations are read, on the connection the judgement
+ * runs on: components in a language, many-to-many ids the same in every one.
+ */
+export interface StoredRelationsLoad {
+  components(
+    entryIds: readonly string[],
+    language: string | undefined
+  ): Promise<Map<string, Record<string, unknown>>>;
+  manyToMany(
+    entryIds: readonly string[]
+  ): Promise<Map<string, Record<string, string[]>>>;
+}
 
-const NONE: StoredRelations = { components: {}, manyToMany: {} };
+/**
+ * Ids per statement. Each id binds one parameter, and SQLite's default limit of
+ * 999 is the lowest across the supported dialects, so a larger batch is read
+ * in several statements: the size the versions repository deletes in.
+ */
+const RELATION_READ_CHUNK = 500;
+
+/** `read` over `ids` in statement-sized runs, its answers merged. */
+async function inChunks<T>(
+  ids: readonly string[],
+  read: (chunk: readonly string[]) => Promise<Map<string, T>>
+): Promise<Map<string, T>> {
+  const all = new Map<string, T>();
+  for (let at = 0; at < ids.length; at += RELATION_READ_CHUNK) {
+    for (const [id, value] of await read(
+      ids.slice(at, at + RELATION_READ_CHUNK)
+    )) {
+      all.set(id, value);
+    }
+  }
+  return all;
+}
 
 /**
  * The stored relations of a batch of one collection's documents, read for all
- * of them the first time any is asked for, once per language.
+ * of them the first time any is asked for: the components once per language
+ * asked for, the many-to-many ids once.
  *
  * A document the batch writes after that read is read again on its own when
  * it is next asked for (`written`): a batch may name one document twice, and
@@ -925,10 +956,13 @@ const NONE: StoredRelations = { components: {}, manyToMany: {} };
  */
 export class GoingLiveRelationsBatch {
   private readonly entryIds: readonly string[];
-  private readonly byLanguage = new Map<
+  private readonly components = new Map<
     string,
-    Promise<Map<string, StoredRelations>>
+    Promise<Map<string, Record<string, unknown>>>
   >();
+  private manyToMany:
+    | Promise<Map<string, Record<string, string[]>>>
+    | undefined;
   private readonly rewritten = new Set<string>();
 
   constructor(entryIds: readonly string[]) {
@@ -941,8 +975,9 @@ export class GoingLiveRelationsBatch {
   }
 
   /**
-   * One document's stored relations in `language`, through `load`, which
-   * reads on the connection the judgement runs on.
+   * One document's stored relations, its components in `language`, through
+   * `load`. The two reads are awaited in turn: a transaction's connection
+   * runs one statement at a time.
    */
   async read(
     entryId: string,
@@ -950,48 +985,27 @@ export class GoingLiveRelationsBatch {
     load: StoredRelationsLoad
   ): Promise<StoredRelations> {
     if (this.rewritten.has(entryId) || !this.entryIds.includes(entryId)) {
-      return (await load([entryId])).get(entryId) ?? NONE;
+      const components = await load.components([entryId], language);
+      const manyToMany = await load.manyToMany([entryId]);
+      return {
+        components: components.get(entryId) ?? {},
+        manyToMany: manyToMany.get(entryId) ?? {},
+      };
     }
     // `undefined` is the default resolution, a language of its own here.
     const key = language === undefined ? "" : `:${language}`;
-    let batch = this.byLanguage.get(key);
-    if (batch === undefined) {
-      batch = load(this.entryIds);
-      this.byLanguage.set(key, batch);
+    let components = this.components.get(key);
+    if (components === undefined) {
+      components = load.components(this.entryIds, language);
+      this.components.set(key, components);
     }
-    return (await batch).get(entryId) ?? NONE;
+    const ofDocument = (await components).get(entryId) ?? {};
+    this.manyToMany ??= load.manyToMany(this.entryIds);
+    return {
+      components: ofDocument,
+      manyToMany: (await this.manyToMany).get(entryId) ?? {},
+    };
   }
-}
-
-/**
- * These documents' stored relations, one read per component field and one per
- * many-to-many field for them all.
- *
- * Every component field and every many-to-many field gets a key: the
- * component read gives a component missing from storage its empty value
- * (`null` for one, `[]` for a repeatable component or a zone), and the
- * junction read gives a document with no links `[]`. A read that fails
- * refuses rather than reading as empty, and the ids are every stored one, a
- * target since unpublished included, as the write itself reads them.
- *
- * Refused where the collection has component fields and no field-group
- * service is registered: its components cannot be read, and a document judged
- * without them would go live unchecked.
- */
-export async function readStoredRelations(
-  args: StoredRelationsRead
-): Promise<Map<string, StoredRelations>> {
-  const components = await readStoredComponents(args);
-  const manyToMany = await readStoredManyToMany(args);
-  return new Map(
-    args.entryIds.map(id => [
-      id,
-      {
-        components: components.get(id) ?? {},
-        manyToMany: manyToMany.get(id) ?? {},
-      },
-    ])
-  );
 }
 
 /** What reading a batch's stored relations needs. */
@@ -1002,8 +1016,6 @@ interface StoredRelationsRead {
   parentTable: string;
   fields: readonly FieldDefinition[];
   manyToManyFields: readonly FieldDefinition[];
-  /** Read in this language exactly, with no fallback; absent, the default resolution. */
-  language: string | undefined;
   /** The transaction's executor, where the judgement runs inside one. */
   executor?: unknown;
   fieldGroups:
@@ -1016,17 +1028,28 @@ interface StoredRelationsRead {
 }
 
 /**
- * Each document's top-level component values, keyed by document id: one
- * call for the whole batch, which reads each component field once.
+ * Each document's top-level component values, keyed by document id: one read
+ * per component field for every 500 documents. A component missing from
+ * storage reads as its empty value (`null` for one, `[]` for a repeatable
+ * component or a zone), and a read that fails refuses rather than reading as
+ * empty.
+ *
+ * Refused where the collection has component fields and no field-group
+ * service is registered: its components cannot be read, and a document judged
+ * without them would go live unchecked.
  */
-async function readStoredComponents(
-  args: StoredRelationsRead
+export async function readStoredComponents(
+  args: Omit<StoredRelationsRead, "manyToManyFields" | "relationships"> & {
+    /** Read in this language exactly, with no fallback; absent, the default resolution. */
+    language: string | undefined;
+  }
 ): Promise<Map<string, Record<string, unknown>>> {
   const componentFields = args.fields.filter(field =>
     isFieldGroupField(field as unknown as FieldConfig)
   );
   if (componentFields.length === 0) return new Map();
-  if (args.fieldGroups === undefined) {
+  const fieldGroups = args.fieldGroups;
+  if (fieldGroups === undefined) {
     throw NextlyError.configuration({
       logMessage:
         "A collection with component fields cannot be published: no field-group service is registered, so its components cannot be read and judged. Boot with the field-group services registered.",
@@ -1036,51 +1059,57 @@ async function readStoredComponents(
       },
     });
   }
-  const populated = await args.fieldGroups.populateComponentDataMany({
-    entries: args.entryIds.map(id => ({ id })),
-    parentTable: args.parentTable,
-    fields: args.fields as unknown as FieldConfig[],
-    depth: 0,
-    strict: true,
-    ...(args.executor === undefined ? {} : { executor: args.executor }),
-    ...(args.language === undefined
-      ? {}
-      : { locale: args.language, fallbackLocale: false as const }),
+  return inChunks(args.entryIds, async chunk => {
+    const populated = await fieldGroups.populateComponentDataMany({
+      entries: chunk.map(id => ({ id })),
+      parentTable: args.parentTable,
+      fields: args.fields as unknown as FieldConfig[],
+      depth: 0,
+      strict: true,
+      ...(args.executor === undefined ? {} : { executor: args.executor }),
+      ...(args.language === undefined
+        ? {}
+        : { locale: args.language, fallbackLocale: false as const }),
+    });
+    return new Map(
+      populated.map(entry => [
+        String(entry.id),
+        Object.fromEntries(
+          componentFields
+            .filter(field => entry[field.name] !== undefined)
+            .map(field => [field.name, entry[field.name]])
+        ),
+      ])
+    );
   });
-  return new Map(
-    populated.map(entry => [
-      String(entry.id),
-      Object.fromEntries(
-        componentFields
-          .filter(field => entry[field.name] !== undefined)
-          .map(field => [field.name, entry[field.name]])
-      ),
-    ])
-  );
 }
 
 /**
  * Each document's many-to-many ids, keyed by document id: one junction read
- * per field for the whole batch, a document with no links holding `[]`.
+ * per field for every 500 documents, a document with no links holding `[]`.
+ * The ids are every stored one, a target since unpublished included, as the
+ * write itself reads them.
  */
-async function readStoredManyToMany(
-  args: StoredRelationsRead
+export async function readStoredManyToMany(
+  args: Omit<StoredRelationsRead, "parentTable" | "fieldGroups">
 ): Promise<Map<string, Record<string, string[]>>> {
-  const byDocument = new Map<string, Record<string, string[]>>(
-    args.entryIds.map(id => [id, {}])
-  );
-  for (const field of args.manyToManyFields) {
-    const targets = await args.relationships.fetchManyToManyTargetIdsOf(
-      args.collectionName,
-      args.entryIds,
-      field,
-      args.executor as RelationshipDbExecutor | undefined
+  return inChunks(args.entryIds, async chunk => {
+    const byDocument = new Map<string, Record<string, string[]>>(
+      chunk.map(id => [id, {}])
     );
-    for (const [id, links] of byDocument) {
-      links[field.name] = targets.get(id) ?? [];
+    for (const field of args.manyToManyFields) {
+      const targets = await args.relationships.fetchManyToManyTargetIdsOf(
+        args.collectionName,
+        chunk,
+        field,
+        args.executor as RelationshipDbExecutor | undefined
+      );
+      for (const [id, links] of byDocument) {
+        links[field.name] = targets.get(id) ?? [];
+      }
     }
-  }
-  return byDocument;
+    return byDocument;
+  });
 }
 
 /**
@@ -4536,9 +4565,11 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * One document's components and many-to-many ids as stored, in `language`:
-   * from its batch's one read where it publishes with others, else read for
-   * it alone, on `executor`.
+   * One document's components and many-to-many ids as stored, its components
+   * in `language`: from its batch's one read where it publishes with others,
+   * else read for it alone, on `executor`. Components read alike in every
+   * language unless one reaches a localized field group, so only then is each
+   * language read on its own.
    */
   private async storedRelationsOf(args: {
     entryId: string;
@@ -4551,21 +4582,33 @@ export class CollectionMutationService extends BaseService {
       "tableName" | "manyToManyFields" | "batch"
     >;
   }): Promise<StoredRelations> {
-    const load = (entryIds: readonly string[]) =>
-      readStoredRelations({
-        entryIds,
-        collectionName: args.collectionName,
-        parentTable: args.relations.tableName,
-        fields: args.fields,
-        manyToManyFields: args.relations.manyToManyFields,
-        language: args.language,
-        executor: args.executor,
-        fieldGroups: this.fieldGroupDataService,
-        relationships: this.relationshipService,
-      });
+    const read = {
+      collectionName: args.collectionName,
+      parentTable: args.relations.tableName,
+      fields: args.fields,
+      manyToManyFields: args.relations.manyToManyFields,
+      executor: args.executor,
+      fieldGroups: this.fieldGroupDataService,
+      relationships: this.relationshipService,
+    };
+    const load: StoredRelationsLoad = {
+      components: (entryIds, language) =>
+        readStoredComponents({ ...read, entryIds, language }),
+      manyToMany: entryIds => readStoredManyToMany({ ...read, entryIds }),
+    };
+    const service = this.fieldGroupDataService;
+    const byLanguage =
+      service !== undefined &&
+      (await reachesLocalizedFieldGroup(args.fields, slug =>
+        service.getComponentDefinition(slug, args.executor)
+      ));
     const batch =
       args.relations.batch ?? new GoingLiveRelationsBatch([args.entryId]);
-    return batch.read(args.entryId, args.language, load);
+    return batch.read(
+      args.entryId,
+      byLanguage ? args.language : undefined,
+      load
+    );
   }
 
   /**

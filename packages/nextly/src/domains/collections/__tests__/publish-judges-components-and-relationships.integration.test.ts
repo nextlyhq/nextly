@@ -108,6 +108,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         ],
       }),
       defineFieldGroup({ slug: "card", fields: [text({ name: "label" })] }),
+      // Its values are kept per language, in its translations table.
+      defineFieldGroup({
+        slug: "note",
+        localized: true,
+        fields: [text({ name: "body" })],
+      }),
     ],
     collections: [
       // No drafts: what goes live is the stored row.
@@ -157,6 +163,22 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               data.status !== "published" ||
               (value as Doc | null)?.heading !== "draft only" ||
               "this hero cannot go live",
+          }),
+        ],
+      }),
+      // A localized group's value judged as it goes live, by its own rule.
+      defineCollection({
+        slug: "annotated",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({
+            name: "note",
+            component: "note",
+            validate: (value: unknown, { data }: { data: Doc }) =>
+              data.status !== "published" ||
+              (value as Doc | null)?.body !== "draft only" ||
+              "this note cannot go live",
           }),
         ],
       }),
@@ -446,6 +468,16 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
         hero: hero("draft only"),
       });
+      ids.noteDraftOnly = await created(t, "annotated", {
+        title: "draft only note",
+        status: "draft",
+        note: { body: "draft only" },
+      });
+      ids.noteFine = await created(t, "annotated", {
+        title: "fine note",
+        status: "draft",
+        note: { body: "fine" },
+      });
       ids.nested = await created(t, "checked", {
         title: "nested",
         status: "draft",
@@ -686,6 +718,38 @@ describe.each(getConfiguredTestDialects())(
         });
         expect(row?.status).toBe("draft");
       }
+    });
+
+    // Last: it removes the note group's translations table.
+    it("judges a localized group's stored value, and refuses when it cannot be read", async () => {
+      // The rule sees the stored translation, so the publish is refused.
+      const judged = await publish(t, "annotated", ids.noteDraftOnly);
+      expect(judged.success).toBe(false);
+      expect(refusedPaths(judged)).toContain("note");
+
+      const registry = t.getService("fieldGroupRegistryService") as {
+        getComponent(slug: string): Promise<{ tableName: string }>;
+      };
+      const { tableName } = await registry.getComponent("note");
+      await t.adapter.executeQuery(`DROP TABLE ${tableName}_locales`);
+
+      // The read a publish judges with, off any transaction: it is told the
+      // translations could not be read, rather than given the shared values
+      // alone, which the rule would pass.
+      const fieldGroups = t.getService(
+        "fieldGroupDataService"
+      ) as FieldGroupDataService;
+      await expect(
+        fieldGroups.populateComponentDataMany({
+          entries: [{ id: ids.noteFine }],
+          parentTable: "dc_annotated",
+          fields: [fieldGroup({ name: "note", component: "note" })] as never,
+          depth: 0,
+          strict: true,
+          locale: "en",
+          fallbackLocale: false,
+        })
+      ).rejects.toThrow();
     });
   }
 );
