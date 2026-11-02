@@ -649,6 +649,30 @@ describe("what the editor reads before anyone asks for it", () => {
     ).toContain("no room left");
   });
 
+  it("tells the author why an edit was refused for where it put a block", () => {
+    // The op store refuses a placement whichever surface asked for it; until
+    // every surface asks first, this is where the author learns why.
+    openEditor();
+
+    const onPlacementRefused = editorOptions?.onPlacementRefused as (r: {
+      verdict: unknown;
+    }) => void;
+    act(() => {
+      onPlacementRefused({
+        verdict: {
+          allowed: false,
+          reason: "holds-no-blocks",
+          blockType: "core/button",
+          parentType: "core/heading",
+          slot: "children",
+        },
+      });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("Heading can't hold blocks.");
+  });
+
   it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {
     // The insert preflight and the canvas both judge under the site's caps;
     // an editor built under the engine's defaults refuses, silently, an edit
