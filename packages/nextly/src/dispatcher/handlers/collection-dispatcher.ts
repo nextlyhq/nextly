@@ -47,6 +47,7 @@ import {
   recordedFieldsOf,
 } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
+import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { NextlyError } from "../../errors";
@@ -80,6 +81,7 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
+  getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
@@ -723,292 +725,317 @@ const COLLECTIONS_METHODS: Record<
   applySchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");
-      // Registry alone is sufficient as the DI-readiness probe; the
-      // schema-change service is no longer consulted on the apply path.
-      const registry = getCollectionRegistryFromDI();
-      if (!registry) {
-        throw new Error("Collection registry not initialized");
-      }
-      const collection = await registry.getCollectionBySlug(p.collectionName);
-      if (!collection) throw new Error("Collection not found");
-      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
-      const {
-        fields,
-        confirmed,
-        schemaVersion,
-        resolutions,
-        renameResolutions,
-        eventResolutions,
-        hints,
-      } = body as {
-        fields: unknown[];
-        confirmed: boolean;
-        schemaVersion?: number;
-        // i18n: the request's Internationalization flag is read through
-        // `readRequestLocalized` below rather than destructured here, so a
-        // non-boolean is rejected instead of silently coerced.
-        localized?: boolean;
-        // Legacy admin UI shape (per-field, used by the old
-        // SchemaChangeService path). Kept alive while admin dialogs
-        // still send it.
-        resolutions?: Record<string, FieldResolution>;
-        renameResolutions?: BrowserRenameResolution[];
-        // Typed Resolution[] from the new pipeline contract. Optional:
-        // admin UIs that haven't been upgraded send only the legacy
-        // `resolutions` map and the new pipeline emits no events until
-        // the UI is updated to consume ClassifierEvents from preview.
-        eventResolutions?: Resolution[];
-        // RESERVED FIELD: accepted and IGNORED in the current version.
-        // A future revision will implement client-side rename hint
-        // tracking plus server-side auto-confirm so the
-        // SchemaChangeDialog stops asking the admin to re-confirm
-        // renames they already clicked once. Reserved so the future
-        // version can ship as a pure additive change without breaking
-        // older admin clients.
-        // See plans/specs/F10-notifications-and-audit-design.md §6.6.
-        hints?: {
-          renames?: Record<string, string>;
-        };
-      };
-      if (!confirmed) {
-        throw new Error("Schema changes must be confirmed");
-      }
-      if (!fields) throw new Error("fields is required in request body");
-      // Same rules as the ui-schema.json mirror (see api/fields-payload):
-      // an invalid field must fail HERE, not only at the file write, or
-      // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { kind: "collection" });
-      // A pair of sibling fields this save would create is refused before any statement or archive
-      // write; one the entity already holds keeps working. Asked here because this road reaches its
-      // DDL through no shared service that could ask it.
-      assertNoNewSiblingClashes(
-        { kind: "collection", slug: p.collectionName },
-        fields,
-        collection.fields ?? []
-      );
+      // One exclusion around the registry read, the version check, the apply and the registry
+      // write, so no other schema change runs between this dialog's check and its write; the
+      // shared apply's own claim is taken inside it, re-entrantly.
+      return withSchemaChangeExcluded(
+        {
+          adapter: getAdapterFromDI(),
+          logger: getLoggerFromDI() ?? consoleLogger,
+          label: `apply schema changes to collection "${p.collectionName}"`,
+          // This path runs the push pipeline, so it issues DDL and may create the lock table.
+          issuesDdl: true,
+        },
+        async () => {
+          // Registry alone is sufficient as the DI-readiness probe; the
+          // schema-change service is no longer consulted on the apply path.
+          const registry = getCollectionRegistryFromDI();
+          if (!registry) {
+            throw new Error("Collection registry not initialized");
+          }
+          const collection = await registry.getCollectionBySlug(
+            p.collectionName
+          );
+          if (!collection) throw new Error("Collection not found");
+          refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          const {
+            fields,
+            confirmed,
+            schemaVersion,
+            resolutions,
+            renameResolutions,
+            eventResolutions,
+            hints,
+          } = body as {
+            fields: unknown[];
+            confirmed: boolean;
+            schemaVersion?: number;
+            // i18n: the request's Internationalization flag is read through
+            // `readRequestLocalized` below rather than destructured here, so a
+            // non-boolean is rejected instead of silently coerced.
+            localized?: boolean;
+            // Legacy admin UI shape (per-field, used by the old
+            // SchemaChangeService path). Kept alive while admin dialogs
+            // still send it.
+            resolutions?: Record<string, FieldResolution>;
+            renameResolutions?: BrowserRenameResolution[];
+            // Typed Resolution[] from the new pipeline contract. Optional:
+            // admin UIs that haven't been upgraded send only the legacy
+            // `resolutions` map and the new pipeline emits no events until
+            // the UI is updated to consume ClassifierEvents from preview.
+            eventResolutions?: Resolution[];
+            // RESERVED FIELD: accepted and IGNORED in the current version.
+            // A future revision will implement client-side rename hint
+            // tracking plus server-side auto-confirm so the
+            // SchemaChangeDialog stops asking the admin to re-confirm
+            // renames they already clicked once. Reserved so the future
+            // version can ship as a pure additive change without breaking
+            // older admin clients.
+            // See plans/specs/F10-notifications-and-audit-design.md §6.6.
+            hints?: {
+              renames?: Record<string, string>;
+            };
+          };
+          if (!confirmed) {
+            throw new Error("Schema changes must be confirmed");
+          }
+          if (!fields) throw new Error("fields is required in request body");
+          // Same rules as the ui-schema.json mirror (see api/fields-payload):
+          // an invalid field must fail HERE, not only at the file write, or
+          // the DB and the committed manifest diverge silently.
+          assertValidFieldsPayload(fields, { kind: "collection" });
+          // A pair of sibling fields this save would create is refused before any statement or archive
+          // write; one the entity already holds keeps working. Asked here because this road reaches its
+          // DDL through no shared service that could ask it.
+          assertNoNewSiblingClashes(
+            { kind: "collection", slug: p.collectionName },
+            fields,
+            collection.fields ?? []
+          );
 
-      // Log a debug line when hints arrive so we can track adoption
-      // without surprising operators with errors. The current version
-      // ignores the field entirely.
-      if (shouldLogF14HintReceipt(hints)) {
-        consoleLogger.debug(
-          `[F14] hints received but not processed; see plans/specs/F10-notifications-and-audit-design.md §6.6`
-        );
-      }
-
-      // Default legacy rows (schema_version NULL) to 1 so a first save is not
-      // rejected as version-less. The registry types schemaVersion as `number`
-      // via a type assertion, but the DB column is nullable, so the value can
-      // be null at runtime; singles/components apply the same `?? 1` fallback.
-      const currentVersion = collection.schemaVersion ?? 1;
-      // Reject a stale or version-less UI save before any DDL runs. The shared
-      // guard gives all three entity kinds (collections, singles, components)
-      // one optimistic-lock behavior and one error surface.
-      assertSchemaVersionMatch(schemaVersion, currentVersion, p.collectionName);
-      const tableName = collection.tableName;
-
-      // i18n: prefer the request's localized flag over the persisted one, so a simultaneous
-      // toggle+field-change save applies with the NEW state (the persisted flag is only written
-      // after this apply). `wasLocalized` drives enable/disable detection for the companion.
-      const wasLocalized =
-        (collection as { localized?: boolean }).localized === true;
-      // Validated rather than coerced: `localized: "false"` would read as
-      // `false` under `=== true` and turn an ordinary save of a localized
-      // collection into a DISABLE transition, restoring the companion's
-      // columns onto the main table and archiving it.
-      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
-      // i18n: enabling Internationalization needs the app-level
-      // `localization` config — without it the companion reconcile below
-      // would move translatable columns into a table the runtime cannot
-      // address. Gate the false→true transition only.
-      if (!wasLocalized && isLocalized) {
-        assertLocalizationConfigured("collection", p.collectionName);
-      }
-
-      const adapter = getAdapterFromDI();
-      if (!adapter) {
-        throw new Error("Database adapter not initialized");
-      }
-      // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
-      const dialect = adapter.dialect;
-
-      // One apply of the schema pipeline, with the admin's answers from the dialog, then the
-      // companion brought in step: the same path a Builder save of the collection takes. Legacy
-      // per-field answers are translated to typed resolutions inside the prompt dispatcher.
-      const result = await applyCollectionSchemaChange({
-        slug: p.collectionName,
-        collection,
-        fields: fields as unknown as FieldDefinition[],
-        wasLocalized,
-        isLocalized,
-        // The dialog does not change Draft/Published: the persisted status, before and after.
-        status: collection.status === true,
-        wasStatus: collection.status === true,
-        renameResolutions: renameResolutions ?? [],
-        eventResolutions: eventResolutions ?? [],
-        legacyResolutions: resolutions
-          ? { tableName, byFieldName: resolutions }
-          : undefined,
-      });
-
-      // pipeline.apply mutates the live DB (renamed/added/dropped
-      // columns) but does NOT persist the updated `fields` JSON on
-      // `dynamic_collections`. Without this post-apply write, subsequent
-      // admin queries (entry list, entry create form, etc.) build their
-      // column references from the STALE metadata and fail with `no
-      // such column: <oldName>`. End-user symptom: rename succeeds in
-      // the DB but the collection looks empty in the admin UI because
-      // every list query 500s.
-      //
-      // Use `adapter.update` directly (not `registry.updateCollection`)
-      // because the registry helper resets `migration_status` to `"pending"`
-      // on any `fields` change, which is wrong here (the migration is now
-      // `applied`). Advance `schema_version` in this same write so the
-      // optimistic-lock check above sees a new value on the next save;
-      // nothing else persists it, so without this bump the stored version
-      // never changes and a second stale save would pass the guard. The
-      // write is non-fatal (the DDL already succeeded), but track whether it
-      // landed so the response never reports a version the DB did not persist.
-      const newSchemaVersion = currentVersion + 1;
-      let versionPersisted = true;
-      try {
-        await adapter.update(
-          "dynamic_collections",
-          {
-            fields: JSON.stringify(fields),
-            schema_version: newSchemaVersion,
-            // i18n: persist the state this apply actually ran with (mirrors
-            // the singles apply). The DDL above already performed any
-            // false→true transition, so leaving the stored flag behind would
-            // make the settings write that follows read another false→true
-            // transition and reconcile the companion a second time.
-            localized: isLocalized,
-            updated_at: new Date(),
-          },
-          { and: [{ column: "slug", op: "=", value: p.collectionName }] }
-        );
-        // Written past the registry services, so the cached rows are cleared
-        // here: a read during the save may have cached the row from before it.
-        clearRegistryRowCache();
-      } catch (err) {
-        versionPersisted = false;
-        const msg = err instanceof Error ? err.message : String(err);
-        // A localization TRANSITION that reaches this point has already moved
-        // the translatable columns between the main table and the companion.
-        // The stored flag is what every later process reads to decide which
-        // of those two tables a translatable field lives in, so failing to
-        // store it does not leave a cosmetic gap — it leaves the registry
-        // describing a layout the database no longer has, and the next boot
-        // generates runtime schemas against the wrong table. That is the same
-        // half-migrated state the companion reconcile above refuses to return
-        // success for, so it is refused the same way.
-        if (wasLocalized !== isLocalized) {
-          throw NextlyError.internal({
-            cause: err instanceof Error ? err : undefined,
-            logContext: {
-              op: "persistLocalizedFlag",
-              collection: p.collectionName,
-              detail: msg,
-              wasLocalized,
-              isLocalized,
-              note: "columns moved but dynamic_collections.localized was not updated; re-apply to retry",
-            },
-          });
-        }
-        // Otherwise non-fatal: the schema apply itself already succeeded. If
-        // the metadata write fails, the actual DB column was already
-        // renamed and the collection is in a good state structurally;
-        // only the admin's view of the field name is stale, and the version
-        // was not advanced (the response reports the current version so a
-        // retry re-attempts the bump). Log so an operator can diagnose.
-        consoleLogger.warn(
-          `[applySchemaChanges] Post-apply metadata write failed for ` +
-            `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
-            `but admin UI may show stale field names until next reload.`
-        );
-      }
-
-      // After a schema apply (rename, add, drop) two independent in-memory
-      // caches hold Drizzle table objects that are now stale:
-      //
-      //   1. CollectionFileManager.schemaRegistry: used by query-service
-      //      SELECT / JOIN builders (loadDynamicSchema path).
-      //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
-      //      update / delete / select (getTableObject path).
-      //
-      // Both must be refreshed with the same freshly-generated table built
-      // from the apply payload's `fields`. Replacing in-place (rather than
-      // invalidate + lazy-rebuild) avoids the race where a concurrent
-      // request could arrive between the invalidation and the DB write of
-      // the new `dynamic_collections.fields`, picking up the stale schema.
-      try {
-        // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
-        // omits translatable columns (kept in lockstep with the desired snapshot
-        // above), then register the companion `_locales` runtime table too so
-        // per-language reads/writes resolve in THIS process without a restart.
-        const { table: freshTable } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
-          dialect,
-          { localized: isLocalized, status: collection.status === true }
-        );
-        getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-          tableName,
-          freshTable
-        );
-        getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
-        if (isLocalized) {
-          const companion = buildCompanionRuntimeTable({
-            slug: p.collectionName,
-            tableName,
-            fields: fields as FieldDefinition[],
-            dialect,
-            localized: true,
-            status: collection.status === true,
-          });
-          if (companion) {
-            getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-              companion.companionTableName,
-              companion.table
-            );
-            getSchemaRegistryFromDI()?.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
+          // Log a debug line when hints arrive so we can track adoption
+          // without surprising operators with errors. The current version
+          // ignores the field entirely.
+          if (shouldLogF14HintReceipt(hints)) {
+            consoleLogger.debug(
+              `[F14] hints received but not processed; see plans/specs/F10-notifications-and-audit-design.md §6.6`
             );
           }
+
+          // Default legacy rows (schema_version NULL) to 1 so a first save is not
+          // rejected as version-less. The registry types schemaVersion as `number`
+          // via a type assertion, but the DB column is nullable, so the value can
+          // be null at runtime; singles/components apply the same `?? 1` fallback.
+          const currentVersion = collection.schemaVersion ?? 1;
+          // Reject a stale or version-less UI save before any DDL runs. The shared
+          // guard gives all three entity kinds (collections, singles, components)
+          // one optimistic-lock behavior and one error surface.
+          assertSchemaVersionMatch(
+            schemaVersion,
+            currentVersion,
+            p.collectionName
+          );
+          const tableName = collection.tableName;
+
+          // i18n: prefer the request's localized flag over the persisted one, so a simultaneous
+          // toggle+field-change save applies with the NEW state (the persisted flag is only written
+          // after this apply). `wasLocalized` drives enable/disable detection for the companion.
+          const wasLocalized =
+            (collection as { localized?: boolean }).localized === true;
+          // Validated rather than coerced: `localized: "false"` would read as
+          // `false` under `=== true` and turn an ordinary save of a localized
+          // collection into a DISABLE transition, restoring the companion's
+          // columns onto the main table and archiving it.
+          const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+          // i18n: enabling Internationalization needs the app-level
+          // `localization` config — without it the companion reconcile below
+          // would move translatable columns into a table the runtime cannot
+          // address. Gate the false→true transition only.
+          if (!wasLocalized && isLocalized) {
+            assertLocalizationConfigured("collection", p.collectionName);
+          }
+
+          const adapter = getAdapterFromDI();
+          if (!adapter) {
+            throw new Error("Database adapter not initialized");
+          }
+          // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
+          const dialect = adapter.dialect;
+
+          // One apply of the schema pipeline, with the admin's answers from the dialog, then the
+          // companion brought in step: the same path a Builder save of the collection takes. Legacy
+          // per-field answers are translated to typed resolutions inside the prompt dispatcher.
+          const result = await applyCollectionSchemaChange({
+            slug: p.collectionName,
+            collection,
+            fields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            // The dialog does not change Draft/Published: the persisted status, before and after.
+            status: collection.status === true,
+            wasStatus: collection.status === true,
+            renameResolutions: renameResolutions ?? [],
+            eventResolutions: eventResolutions ?? [],
+            legacyResolutions: resolutions
+              ? { tableName, byFieldName: resolutions }
+              : undefined,
+          });
+
+          // pipeline.apply mutates the live DB (renamed/added/dropped
+          // columns) but does NOT persist the updated `fields` JSON on
+          // `dynamic_collections`. Without this post-apply write, subsequent
+          // admin queries (entry list, entry create form, etc.) build their
+          // column references from the STALE metadata and fail with `no
+          // such column: <oldName>`. End-user symptom: rename succeeds in
+          // the DB but the collection looks empty in the admin UI because
+          // every list query 500s.
+          //
+          // Use `adapter.update` directly (not `registry.updateCollection`)
+          // because the registry helper resets `migration_status` to `"pending"`
+          // on any `fields` change, which is wrong here (the migration is now
+          // `applied`). Advance `schema_version` in this same write so the
+          // optimistic-lock check above sees a new value on the next save;
+          // nothing else persists it, so without this bump the stored version
+          // never changes and a second stale save would pass the guard. The
+          // write is non-fatal (the DDL already succeeded), but track whether it
+          // landed so the response never reports a version the DB did not persist.
+          const newSchemaVersion = currentVersion + 1;
+          let versionPersisted = true;
+          try {
+            await adapter.update(
+              "dynamic_collections",
+              {
+                fields: JSON.stringify(fields),
+                schema_version: newSchemaVersion,
+                // i18n: persist the state this apply actually ran with (mirrors
+                // the singles apply). The DDL above already performed any
+                // false→true transition, so leaving the stored flag behind would
+                // make the settings write that follows read another false→true
+                // transition and reconcile the companion a second time.
+                localized: isLocalized,
+                updated_at: new Date(),
+              },
+              { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+            );
+            // Written past the registry services, so the cached rows are cleared
+            // here: a read during the save may have cached the row from before it.
+            clearRegistryRowCache();
+          } catch (err) {
+            versionPersisted = false;
+            const msg = err instanceof Error ? err.message : String(err);
+            // A localization TRANSITION that reaches this point has already moved
+            // the translatable columns between the main table and the companion.
+            // The stored flag is what every later process reads to decide which
+            // of those two tables a translatable field lives in, so failing to
+            // store it does not leave a cosmetic gap — it leaves the registry
+            // describing a layout the database no longer has, and the next boot
+            // generates runtime schemas against the wrong table. That is the same
+            // half-migrated state the companion reconcile above refuses to return
+            // success for, so it is refused the same way.
+            if (wasLocalized !== isLocalized) {
+              throw NextlyError.internal({
+                cause: err instanceof Error ? err : undefined,
+                logContext: {
+                  op: "persistLocalizedFlag",
+                  collection: p.collectionName,
+                  detail: msg,
+                  wasLocalized,
+                  isLocalized,
+                  note: "columns moved but dynamic_collections.localized was not updated; re-apply to retry",
+                },
+              });
+            }
+            // Otherwise non-fatal: the schema apply itself already succeeded. If
+            // the metadata write fails, the actual DB column was already
+            // renamed and the collection is in a good state structurally;
+            // only the admin's view of the field name is stale, and the version
+            // was not advanced (the response reports the current version so a
+            // retry re-attempts the bump). Log so an operator can diagnose.
+            consoleLogger.warn(
+              `[applySchemaChanges] Post-apply metadata write failed for ` +
+                `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
+                `but admin UI may show stale field names until next reload.`
+            );
+          }
+
+          // After a schema apply (rename, add, drop) two independent in-memory
+          // caches hold Drizzle table objects that are now stale:
+          //
+          //   1. CollectionFileManager.schemaRegistry: used by query-service
+          //      SELECT / JOIN builders (loadDynamicSchema path).
+          //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
+          //      update / delete / select (getTableObject path).
+          //
+          // Both must be refreshed with the same freshly-generated table built
+          // from the apply payload's `fields`. Replacing in-place (rather than
+          // invalidate + lazy-rebuild) avoids the race where a concurrent
+          // request could arrive between the invalidation and the DB write of
+          // the new `dynamic_collections.fields`, picking up the stale schema.
+          try {
+            // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
+            // omits translatable columns (kept in lockstep with the desired snapshot
+            // above), then register the companion `_locales` runtime table too so
+            // per-language reads/writes resolve in THIS process without a restart.
+            const { table: freshTable } = generateRuntimeSchema(
+              tableName,
+              fields as FieldDefinition[],
+              dialect,
+              { localized: isLocalized, status: collection.status === true }
+            );
+            getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+              tableName,
+              freshTable
+            );
+            getSchemaRegistryFromDI()?.registerDynamicSchema(
+              tableName,
+              freshTable
+            );
+            if (isLocalized) {
+              const companion = buildCompanionRuntimeTable({
+                slug: p.collectionName,
+                tableName,
+                fields: fields as FieldDefinition[],
+                dialect,
+                localized: true,
+                status: collection.status === true,
+              });
+              if (companion) {
+                getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+                  companion.companionTableName,
+                  companion.table
+                );
+                getSchemaRegistryFromDI()?.registerDynamicSchema(
+                  companion.companionTableName,
+                  companion.table
+                );
+              }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            consoleLogger.warn(
+              `[applySchemaChanges] In-memory schema refresh failed for ` +
+                `'${p.collectionName}': ${msg}. Entry queries may reference ` +
+                `old column names until next server restart.`
+            );
+          }
+
+          // The dispatcher fires bumpSchemaVersion directly after a
+          // successful pipeline apply. The bump only matters for UI-first
+          // applies (sets the X-Schema-Version response header so admin tabs
+          // know to refetch); HMR and boot paths don't need it.
+          try {
+            const { bumpSchemaVersion } = await import("../../routeHandler");
+            bumpSchemaVersion();
+          } catch {
+            // routeHandler may be unavailable in non-server contexts (tests).
+          }
+
+          // applySchemaChanges is a non-CRUD mutation: there's no "item" to
+          // surface. The action result carries the new schema version (so
+          // the admin can update its X-Schema-Version header probe) and a
+          // toast summary string. toastSummary may be undefined when the
+          // pipeline didn't emit diff counts; the conditional spread drops
+          // undefined fields silently.
+          return respondAction(`Schema applied for '${p.collectionName}'`, {
+            newSchemaVersion: versionPersisted
+              ? newSchemaVersion
+              : currentVersion,
+            ...(result.summary
+              ? { toastSummary: formatToastSummary(result.summary) }
+              : {}),
+          });
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        consoleLogger.warn(
-          `[applySchemaChanges] In-memory schema refresh failed for ` +
-            `'${p.collectionName}': ${msg}. Entry queries may reference ` +
-            `old column names until next server restart.`
-        );
-      }
-
-      // The dispatcher fires bumpSchemaVersion directly after a
-      // successful pipeline apply. The bump only matters for UI-first
-      // applies (sets the X-Schema-Version response header so admin tabs
-      // know to refetch); HMR and boot paths don't need it.
-      try {
-        const { bumpSchemaVersion } = await import("../../routeHandler");
-        bumpSchemaVersion();
-      } catch {
-        // routeHandler may be unavailable in non-server contexts (tests).
-      }
-
-      // applySchemaChanges is a non-CRUD mutation: there's no "item" to
-      // surface. The action result carries the new schema version (so
-      // the admin can update its X-Schema-Version header probe) and a
-      // toast summary string. toastSummary may be undefined when the
-      // pipeline didn't emit diff counts; the conditional spread drops
-      // undefined fields silently.
-      return respondAction(`Schema applied for '${p.collectionName}'`, {
-        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
-        ...(result.summary
-          ? { toastSummary: formatToastSummary(result.summary) }
-          : {}),
-      });
+      );
     },
   },
   listEntries: {
