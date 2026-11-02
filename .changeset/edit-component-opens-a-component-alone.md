@@ -37,3 +37,8 @@ the component's view with a checked way back to the page, at the placement,
 and asks first about unsaved changes. A banner over the component's view names
 it, says how many documents place it ("at least" while the count is a floor),
 and offers Back.
+
+`ToolbarActionId` (exported by `@nextlyhq/builder`) gains `"edit-component"`.
+A `Record<ToolbarActionId, …>` or an exhaustive switch over it needs an entry
+for it; `blockActionRunners` already has one, and the new verb is optional on
+`CommandVerbs` and `BlockActions`, so a host that builds those keeps compiling.

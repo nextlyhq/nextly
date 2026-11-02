@@ -108,24 +108,25 @@ describe("opening another document", () => {
 });
 
 describe("a row of the component store", () => {
-  const store = { collection: "components" };
+  const store = { collection: "components", field: "content" };
+  const row = { kind: "collection", slug: "components" };
 
-  it("is an entry of the collection definitions live in", () => {
-    expect(isStoreRow({ kind: "collection", slug: "components" }, store)).toBe(
-      true
-    );
+  it("is an entry of the collection definitions live in, in their field", () => {
+    expect(isStoreRow(row, store, "content")).toBe(true);
+  });
+
+  it("is not another field of the same entry", () => {
+    expect(isStoreRow(row, store, "draftContent")).toBe(false);
   });
 
   it("is not an entry of another collection, a Single, or anything unknown", () => {
-    expect(isStoreRow({ kind: "collection", slug: "widgets" }, store)).toBe(
-      false
-    );
-    expect(isStoreRow({ kind: "single", slug: "components" }, store)).toBe(
-      false
-    );
-    expect(isStoreRow(null, store)).toBe(false);
     expect(
-      isStoreRow({ kind: "collection", slug: "components" }, undefined)
+      isStoreRow({ kind: "collection", slug: "widgets" }, store, "content")
     ).toBe(false);
+    expect(
+      isStoreRow({ kind: "single", slug: "components" }, store, "content")
+    ).toBe(false);
+    expect(isStoreRow(null, store, "content")).toBe(false);
+    expect(isStoreRow(row, undefined, "content")).toBe(false);
   });
 });

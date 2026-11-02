@@ -169,7 +169,9 @@ export function useEditorMount(
    * The field's value as last loaded or saved, which locks keep against;
    * undefined for an entry never saved.
    */
-  savedValue?: unknown
+  savedValue?: unknown,
+  /** The blocks field the editor is bound to, by name. */
+  fieldName?: string
 ): EditorMount {
   // The core blocks and every block a plugin contributed, before anything
   // reads the registry. Inside the component that mounts the editor rather
@@ -285,6 +287,7 @@ export function useEditorMount(
     initialDocument,
     editor,
     componentLibrary,
+    fieldName,
   });
 
   return {

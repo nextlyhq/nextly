@@ -593,7 +593,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const mount = useEditorMount(
     initialValue,
     kinds,
-    valueAtPath(defaultValues, name)
+    valueAtPath(defaultValues, name),
+    name
   );
   const { editor, inline } = mount;
 

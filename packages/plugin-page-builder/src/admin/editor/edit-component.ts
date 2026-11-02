@@ -88,18 +88,22 @@ export function checkedAdminPath(value: string | null): string | undefined {
 }
 
 /**
- * Whether the document is a row of the component store: an entry of the
- * collection component definitions live in. Another collection may declare a
- * field of component documents, and its ids name nothing in the store.
+ * Whether the editor is open on a component of the store: an entry of the
+ * collection component definitions live in, in the field they live in.
+ * Another collection, or another field of the same one, may hold component
+ * documents too, and they are not the definitions placements resolve.
  */
 export function isStoreRow(
   identity: { readonly kind: string; readonly slug: string } | null | undefined,
-  store: { readonly collection: string } | undefined
+  store: { readonly collection: string; readonly field: string } | undefined,
+  /** The blocks field open in the editor: the store's own, or another. */
+  fieldName: string | undefined
 ): boolean {
   return (
     store !== undefined &&
     identity?.kind === "collection" &&
-    identity.slug === store.collection
+    identity.slug === store.collection &&
+    fieldName === store.field
   );
 }
 

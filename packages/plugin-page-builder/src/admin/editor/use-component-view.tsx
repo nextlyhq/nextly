@@ -48,10 +48,13 @@ export function useComponentView({
   initialDocument,
   editor,
   componentLibrary,
+  fieldName,
 }: {
   initialDocument: BlockDocument;
   editor: EditorState;
   componentLibrary: ComponentLibraryRead;
+  /** The blocks field the editor is bound to. */
+  fieldName: string | undefined;
 }): ComponentView & {
   readonly componentFacts: ComponentFieldsHost | undefined;
 } {
@@ -72,7 +75,7 @@ export function useComponentView({
   // collection may declare a field of component documents, and its entry ids
   // name nothing in the store.
   const editing = useComponentEditing();
-  const inStore = isStoreRow(identity, editing);
+  const inStore = isStoreRow(identity, editing, fieldName);
   // Read once, as the view opens: the address it came from, checked to be an
   // admin path. A later change to the address is the author's own moving.
   const [returnTo] = useState(() =>
