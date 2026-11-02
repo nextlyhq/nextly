@@ -444,10 +444,16 @@ describe("the editing colours drawn on the page", () => {
         undefined
       );
     }
-    // Where the ground IS opaque, the page carries it for a blend to mix with.
+    /*
+     * Where the ground IS opaque, the page carries it for a blend to mix with
+     * — inside `:where()`, so it weighs nothing and a background the page's
+     * own styles compile onto `.nx-pb-page.nx-pb-page` (0-2-0) still wins, as
+     * it does when published. Found by the exact selector, so a weighted
+     * spelling of the same rule fails here.
+     */
     expect(
       declared(
-        ruleFor(".nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page"),
+        ruleFor(":where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page)"),
         "background-color"
       )
     ).toBe("var(--nx-canvas-site-ground, Canvas)");

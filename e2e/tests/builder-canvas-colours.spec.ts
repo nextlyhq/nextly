@@ -589,6 +589,48 @@ test.describe("the selection halo", () => {
   });
 });
 
+test.describe("a page's own background", () => {
+  test("wins over the site ground the canvas lays under it", async ({
+    page,
+  }) => {
+    /*
+     * The page's styles compile its background onto the page root. Behind an
+     * opaque site ground the canvas also paints that ground on the page root,
+     * as a weightless fallback, so the page's own background still shows — as
+     * it does when published.
+     */
+    test.slow();
+    const stored = await page.request.patch(HOMEPAGE_API, {
+      data: {
+        layout: {
+          formatVersion: 1,
+          kind: "page",
+          settings: {
+            styles: { base: { base: { backgroundColor: "#fde68a" } } },
+          },
+          nodes: NODES,
+        },
+      },
+    });
+    expect(stored.ok(), `seeding the page: ${stored.status()}`).toBe(true);
+    await gotoAdmin(page, "/singles/homepage", "light");
+    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await expect(canvasText(page)).toBeVisible({ timeout: 30_000 });
+    // The fallback is in play: the default site ground is opaque.
+    await expect(page.locator(".nx-canvas")).toHaveAttribute(
+      "data-nx-site-ground-opaque",
+      ""
+    );
+    await expect
+      .poll(() =>
+        canvasPage(page).evaluate(
+          element => getComputedStyle(element).backgroundColor
+        )
+      )
+      .toBe("rgb(253, 230, 138)");
+  });
+});
+
 test.describe("a translucent site ground", () => {
   test("is composited once over what sits behind the canvas", async ({
     page,

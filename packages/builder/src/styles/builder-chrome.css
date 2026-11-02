@@ -599,10 +599,13 @@
  * site's tokens. Over the canvas's own ground an opaque one looks exactly as
  * it does painted once; a translucent ground would be composited twice and
  * read darker, so there the canvas root's ground is the only one, and a blend
- * inside the page mixes with the page's own content alone. A ground the page's
- * own styles give its root outweighs this rule, as it should.
+ * inside the page mixes with the page's own content alone.
+ *
+ * Inside `:where()` so it weighs nothing: a background the page's own styles
+ * give its root is compiled onto `.nx-pb-page.nx-pb-page`, and must outweigh
+ * this fallback in the editor exactly as it shows when published.
  */
-.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page {
+:where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page) {
   background-color: var(--nx-canvas-site-ground, Canvas);
 }
 

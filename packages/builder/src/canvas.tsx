@@ -328,28 +328,48 @@ function fractionOf(
  * component in the legacy one. `undefined` for anything else, or a call whose
  * shape is neither.
  */
-function colourFunction(
-  text: string
-):
-  | { name: "oklch" | "hsl"; components: string[]; alpha: string | undefined }
-  | undefined {
+function colourFunction(text: string): ColourCall | undefined {
   const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
   if (call === null) return undefined;
   const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
   const body = call[2] ?? "";
-  const slash = body.split("/");
-  if (slash.length > 2) return undefined;
-  const channels = (slash[0] ?? "").trim();
-  if (body.includes(",")) {
-    // The legacy, comma-separated form takes no slash.
-    if (slash.length > 1 || name === "oklch") return undefined;
-    const parts = channels.split(",").map(part => part.trim());
-    if (parts.length !== 3 && parts.length !== 4) return undefined;
-    return { name, components: parts.slice(0, 3), alpha: parts[3] };
-  }
-  const parts = channels.split(/\s+/).filter(part => part !== "");
+  return body.includes(",") ? legacyCall(name, body) : modernCall(name, body);
+}
+
+/** A colour function's name, colour components and alpha, as written. */
+interface ColourCall {
+  readonly name: "oklch" | "hsl";
+  readonly components: readonly string[];
+  readonly alpha: string | undefined;
+}
+
+/**
+ * The legacy, comma-separated form: `hsl(h, s%, l%)` or `hsla(h, s%, l%, a)`.
+ * Only `hsl()` has one, and it takes no slash.
+ */
+function legacyCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  if (name === "oklch" || body.includes("/")) return undefined;
+  const parts = body.split(",").map(part => part.trim());
+  if (parts.length !== 3 && parts.length !== 4) return undefined;
+  return { name, components: parts.slice(0, 3), alpha: parts[3] };
+}
+
+/** The modern, space-separated form, with an optional `/ alpha` after it. */
+function modernCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  const [channels, alpha, ...rest] = body.split("/");
+  if (rest.length > 0) return undefined;
+  const parts = (channels ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(part => part !== "");
   if (parts.length !== 3) return undefined;
-  return { name, components: parts, alpha: slash[1]?.trim() };
+  return { name, components: parts, alpha: alpha?.trim() };
 }
 
 /**
