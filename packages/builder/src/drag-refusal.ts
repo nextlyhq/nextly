@@ -32,7 +32,10 @@
  *
  * @module drag-refusal
  */
-import { placementRefusalWording } from "@nextlyhq/blocks-engine";
+import {
+  placementRefusalWording,
+  type PlacementRefused,
+} from "@nextlyhq/blocks-engine";
 
 import type { DropRefusal } from "./drop-targets";
 import { blockLabel } from "./inserter";
@@ -96,4 +99,22 @@ export function refusalWording(
       ...(regionType === undefined ? {} : { regionType }),
     }
   );
+}
+
+/**
+ * Why a placement the one rule refused will not happen, for any reason it
+ * gives: a slot the container does not declare, a block that holds none, or
+ * HTML's content model, as well as the name rules. Named for the block the
+ * author moved; when the rule refused something inside it, both are named.
+ */
+export function placementWording(
+  verdict: PlacementRefused,
+  movingType: string,
+  regionType: string | undefined
+): RefusalWording {
+  return placementRefusalWording(verdict, {
+    labelOf: blockLabel,
+    movingType,
+    ...(regionType === undefined ? {} : { regionType }),
+  });
 }

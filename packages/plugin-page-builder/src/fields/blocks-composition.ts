@@ -1146,33 +1146,40 @@ function placementFacts(
     definitions: registryBlockSource(),
   };
   const facts = new Set<string>();
-  const visit = (forest: unknown, at: number): void => {
-    if (!Array.isArray(forest) || at > setup.limits.maxDepth + 1) return;
-    for (const entry of forest as BlockNode[]) {
-      if (typeof entry?.type !== "string") continue;
-      facts.add(`${entry.type}|${contentModelKeyOf(entry, sources)}`);
-      for (const children of Object.values(entry.slots ?? {})) {
-        visit(children, at + 1);
-      }
-    }
-  };
-  visit(nodes, 1);
+  eachComposed(nodes, setup, entry => {
+    if (typeof entry?.type !== "string") return;
+    facts.add(`${entry.type}|${contentModelKeyOf(entry, sources)}`);
+  });
   return [...facts].sort().join("\n");
 }
 
 function deepest(nodes: readonly BlockNode[], setup: CompositionSetup): number {
   let most = 0;
+  eachComposed(nodes, setup, (_entry, at) => {
+    most = Math.max(most, at);
+  });
+  return most;
+}
+
+/**
+ * Every node of a composed tree with its depth, to one level past the cap:
+ * the one walk the footprint's measurements share.
+ */
+function eachComposed(
+  nodes: readonly BlockNode[],
+  setup: CompositionSetup,
+  visitNode: (entry: BlockNode, at: number) => void
+): void {
   const visit = (forest: unknown, at: number): void => {
     if (!Array.isArray(forest) || at > setup.limits.maxDepth + 1) return;
-    for (const entry of forest) {
-      most = Math.max(most, at);
+    for (const entry of forest as BlockNode[]) {
+      visitNode(entry, at);
       const slots = (entry as { slots?: unknown }).slots;
       if (typeof slots !== "object" || slots === null) continue;
       for (const children of Object.values(slots)) visit(children, at + 1);
     }
   };
   visit(nodes, 1);
-  return most;
 }
 
 /**
