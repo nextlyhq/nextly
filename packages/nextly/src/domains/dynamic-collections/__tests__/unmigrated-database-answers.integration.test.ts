@@ -532,6 +532,64 @@ async function bannerTitles(): Promise<string[]> {
 describe.each(getConfiguredTestDialects())(
   "a read or write the database is not migrated for (%s)",
   dialect => {
+    it("names the field and the whole table when the table's name holds a space or a dot", async () => {
+      // No driver quotes the table in a qualified missing-column message
+      // (`column legacy posts.subtitle`), so the name is cut at its wording's
+      // lead-in rather than at the space or the dot.
+      // A custom `dbName` is prefixed as a slug is (`dc_<dbName>`).
+      const named = [
+        { slug: "um_spaced", dbName: "um legacy posts" },
+        { slug: "um_dotted", dbName: "um_legacy.posts" },
+      ].map(entity => ({ ...entity, table: `dc_${entity.dbName}` }));
+      current = await createTestNextly({
+        dialect,
+        collections: named.map(({ slug, dbName }) =>
+          defineCollection({
+            slug,
+            dbName,
+            fields: [text({ name: "title" }), text({ name: "subtitle" })],
+          })
+        ),
+      });
+      const ids: string[] = [];
+      for (const { slug } of named) {
+        const created = await direct().create({
+          collection: slug,
+          data: { title: "First", subtitle: "One" },
+        });
+        ids.push(created.item.id);
+      }
+      for (const { table } of named) {
+        await execute(
+          `ALTER TABLE ${quoted(dialect, table)} DROP COLUMN ${quoted(dialect, "subtitle")}`
+        );
+      }
+      for (const [i, { slug, table }] of named.entries()) {
+        const answers = [
+          await viaDirect(() =>
+            direct().find({
+              collection: slug,
+              where: { subtitle: { equals: "One" } },
+            })
+          ),
+          await viaDirect(() =>
+            direct().update({
+              collection: slug,
+              id: ids[i],
+              data: { subtitle: "Uno" },
+            })
+          ),
+        ];
+        for (const answer of answers) {
+          expect.soft(answer, `${table}`).toMatchObject({
+            status: 409,
+            code: "ENTITY_NOT_MIGRATED",
+            data: { reason: "column", slug, table, field: "subtitle" },
+          });
+        }
+      }
+    }, 120_000);
+
     it("names the field whose column is missing, as a skipped migration leaves it", async () => {
       const target = await boot(dialect);
       for (const table of [POSTS_TABLE, BANNER_TABLE]) {
@@ -854,7 +912,7 @@ describe.each(getConfiguredTestDialects())(
 
     // Not on MySQL: transactions in Nextly's MySQL context carry no
     // savepoints, so a caller that catches the refusal and commits keeps the
-    // entry row there (stated in the pull request as a limit).
+    // entry row there, a known limit on that dialect.
     it.skipIf(dialect === "mysql")(
       "keeps no entry row when a create's translation table is unregistered and the caller commits",
       async () => {

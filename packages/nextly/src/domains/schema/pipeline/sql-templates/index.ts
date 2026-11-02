@@ -66,13 +66,21 @@ export { sqliteTableRebuildStatements } from "./sqlite-rebuild";
  * did nothing at all on MySQL. So a consumer that executes statements itself
  * should ask the operation's own renderer for the LIST — see
  * {@link changeForeignKeyActionStatements} — rather than this joined form.
+ *
+ * `tables` is the schema the operation leads to, when the caller has it. MySQL reads it for an
+ * `add_index`, which names only columns, to key a TEXT/BLOB column by prefix; the other dialects
+ * index every column whole and do not read it.
  */
-export function generateSQL(op: Operation, dialect: SupportedDialect): string {
+export function generateSQL(
+  op: Operation,
+  dialect: SupportedDialect,
+  tables: readonly TableSpec[] = []
+): string {
   switch (dialect) {
     case "postgresql":
       return generatePgSQL(op);
     case "mysql":
-      return generateMysqlSQL(op);
+      return generateMysqlSQL(op, tables);
     case "sqlite":
       return generateSqliteSQL(op);
     default: {
@@ -100,7 +108,8 @@ export function generateSQL(op: Operation, dialect: SupportedDialect): string {
  *
  * `tablesAfter` is the schema the list leads TO: the desired snapshot's
  * tables for an up migration, the previous snapshot's for the down that
- * inverts it. PostgreSQL and MySQL do not read it.
+ * inverts it. MySQL reads it only for an index's column types
+ * (`generateSQL`); PostgreSQL does not read it.
  */
 export function generateStatements(
   ops: readonly Operation[],
@@ -115,7 +124,7 @@ export function generateStatements(
   // (`mysql-live-restate.ts`).
   if (dialect === "mysql") {
     return ops.flatMap(
-      op => mysqlLiveStatements(op) ?? [generateSQL(op, dialect)]
+      op => mysqlLiveStatements(op) ?? [generateSQL(op, dialect, tablesAfter)]
     );
   }
   return ops.map(op => generateSQL(op, dialect));
