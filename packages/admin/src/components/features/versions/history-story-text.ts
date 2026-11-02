@@ -110,6 +110,19 @@ export function changeSummary(labels: readonly string[]): string {
  */
 export type PartsLabel = (parts: readonly string[]) => string;
 
+/**
+ * A takeover, from the editor it displaced: "Took over from Ana". The server
+ * names that editor when history is read, by name only; one it cannot name
+ * (no name, or no account any more) is said to be unavailable, as an author
+ * who cannot be named is, rather than guessed or left blank.
+ */
+function takeoverSentence(event: DocumentEvent): string {
+  const from = event.payload?.fromName;
+  return typeof from === "string" && from !== ""
+    ? `Took over from ${from}`
+    : "Took over (previous editor unavailable)";
+}
+
 /** What an event that is a row of its own says happened. */
 export function eventSentence(
   event: DocumentEvent,
@@ -124,6 +137,8 @@ export function eventSentence(
       return `Unpublished${to}`;
     case "draft-discarded":
       return `Discarded the draft${parts ? ` of ${parts}` : ""}`;
+    case "taken-over":
+      return takeoverSentence(event);
     default: {
       // A kind a plugin registered: its name, read as words, then what it
       // applied to, set apart since the name is not a verb we can phrase.
